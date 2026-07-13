@@ -46,6 +46,15 @@
 //! [`run_command`](McpSession::run_command) primitive (so it takes the same
 //! per-RRID / registry gate and output cap as a foreground call).
 //!
+//! P7.3d (`mtui-rs-76e.14`) landed the `notifications/progress` **heartbeats**:
+//! a long-running foreground tool call ([`run_command_with_progress`]) races the
+//! dispatch against a ticker that emits a progress frame every
+//! [`DEFAULT_PROGRESS_INTERVAL`] against a transport-free [`ProgressSink`], so an
+//! MCP client that honours the protocol's progress contract does not time out on
+//! `run`/`update`/`set_repo`/`commit`. The rmcp-backed sink (peer +
+//! `progressToken`) is built in [`crate::server`] from the request context; this
+//! layer stays rmcp-free. A `None` sink takes the original zero-overhead path.
+//!
 //! P7.3c (`mtui-rs-76e.13`) landed [`close`](McpSession::close): the session
 //! teardown the http `SessionRegistry` (P7.10 / `mtui-rs-odq8`) calls on
 //! eviction. For **every** loaded template it releases the report's pool claims
@@ -57,11 +66,9 @@
 //! `shutdown(wait=False)` — the Python machinery existed only to defeat
 //! `Executor.__exit__`'s blocking join, which Rust has no equivalent of.
 //!
-//! **Deferred** to its own follow-up bead (this type grows in place — do not
-//! replace it):
-//!   - `notifications/progress` heartbeats for long calls — `mtui-rs-76e.14`.
-
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -83,6 +90,81 @@ use crate::slim::cap_output;
 /// must not block the http registry's idle-sweep behind it; a close that
 /// overruns this bound is logged and abandoned so `close()` always returns.
 const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Default interval between `notifications/progress` heartbeat frames while a
+/// long-running foreground tool call runs (upstream
+/// `DEFAULT_PROGRESS_INTERVAL_SECONDS = 10.0`).
+///
+/// Not a config key (upstream has none): it is the default the tool layer passes
+/// to [`McpSession::run_command_with_progress`], overridable per call so tests
+/// can drive a sub-second interval.
+pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
+/// A transport-free sink for heartbeat progress frames.
+///
+/// The Rust analogue of the single `ctx.report_progress` coroutine upstream's
+/// `_run_with_heartbeat` consumes. Keeping it a trait (rather than importing the
+/// rmcp `Peer`) keeps this crate's session layer transport-free and unit-testable
+/// with a recording double; the rmcp-backed implementation
+/// (`crate::server::PeerProgressSink`) is built from the request context and sends
+/// a real `notifications/progress`.
+///
+/// Implementors **must not** propagate transport failures: a send error is the
+/// concern of the sink (log at DEBUG and swallow) so a flaky client can never mask
+/// the command's actual outcome (upstream swallows `ctx.report_progress`
+/// exceptions in the loop).
+///
+/// [`report`](ProgressSink::report) returns a boxed future (rather than a native
+/// `async fn`) to keep the trait `dyn`-compatible without pulling `async-trait`
+/// into this always-compiled library layer; the heartbeat loop only ever holds a
+/// `&dyn ProgressSink`.
+pub trait ProgressSink: Send + Sync {
+    /// Emit one progress frame: `progress` elapsed seconds so far, `message` the
+    /// human-readable heartbeat line. `total` is always unknown for a heartbeat.
+    fn report<'a>(
+        &'a self,
+        progress: f64,
+        message: &'a str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+}
+
+/// Drive `fut` to completion while emitting a heartbeat every `interval`.
+///
+/// The Rust analogue of upstream `McpSession._run_with_heartbeat`: instead of a
+/// worker thread raced with `asyncio.wait`, `fut` is already async so we
+/// [`tokio::select!`] it against a ticker. Each tick reports the elapsed seconds
+/// and a `"<command> running (<n>s)…"` message — byte-for-byte the frame shape
+/// upstream emits. Progress values are monotonic (elapsed since start). When `fut`
+/// completes first its output is returned unchanged; a heartbeat is never emitted
+/// after completion.
+///
+/// The sink swallows its own transport errors (see [`ProgressSink`]), so this loop
+/// cannot mask `fut`'s result.
+pub(crate) async fn run_with_heartbeat<F>(
+    fut: F,
+    sink: &dyn ProgressSink,
+    command: &str,
+    interval: Duration,
+) -> F::Output
+where
+    F: Future,
+{
+    let started = Instant::now();
+    tokio::pin!(fut);
+    loop {
+        tokio::select! {
+            // Bias the future so a body that finishes exactly on a tick boundary
+            // returns rather than emitting a spurious final frame.
+            biased;
+            output = &mut fut => return output,
+            () = tokio::time::sleep(interval) => {
+                let elapsed = started.elapsed().as_secs_f64();
+                sink.report(elapsed, &format!("{command} running ({elapsed:.0}s)…"))
+                    .await;
+            }
+        }
+    }
+}
 
 /// A command dispatch that failed under the MCP transport.
 ///
@@ -558,6 +640,36 @@ impl McpSession {
                     stderr,
                     exit_code,
                 })
+            }
+        }
+    }
+
+    /// [`run_command`](Self::run_command) with optional progress heartbeats.
+    ///
+    /// The Rust analogue of upstream `run_command(..., ctx=..., progress_interval)`:
+    /// when `sink` is `Some`, the whole dispatch (including the lock wait, exactly
+    /// as upstream wraps inside `_command_lock`) is raced against a heartbeat that
+    /// fires every `interval` via [`run_with_heartbeat`], so a slow foreground call
+    /// does not time the client out. A `None` sink takes the original zero-overhead
+    /// path — [`run_command`](Self::run_command) verbatim (upstream `ctx is None`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`McpCommandError`] from [`run_command`](Self::run_command)
+    /// unchanged; the heartbeat path never alters the command's result.
+    pub async fn run_command_with_progress(
+        &self,
+        registry: &Registry,
+        name: &str,
+        argv: &[String],
+        sink: Option<&dyn ProgressSink>,
+        interval: Duration,
+    ) -> Result<String, McpCommandError> {
+        match sink {
+            None => self.run_command(registry, name, argv).await,
+            Some(sink) => {
+                run_with_heartbeat(self.run_command(registry, name, argv), sink, name, interval)
+                    .await
             }
         }
     }
@@ -1117,5 +1229,157 @@ mod tests {
             .expect_err("cancelled job raises on job_result");
         assert!(err.stderr.contains("was cancelled"), "got: {err:?}");
         assert_eq!(err.exit_code, 1);
+    }
+
+    // ---- progress heartbeats (bead mtui-rs-76e.14) ------------------------ //
+
+    /// Records every frame `report` receives; the Rust analogue of upstream's
+    /// `_RecordingCtx`.
+    #[derive(Default)]
+    struct RecordingSink {
+        calls: StdMutex<Vec<(f64, String)>>,
+    }
+
+    impl RecordingSink {
+        fn calls(&self) -> Vec<(f64, String)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl ProgressSink for RecordingSink {
+        fn report<'a>(
+            &'a self,
+            progress: f64,
+            message: &'a str,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            let message = message.to_owned();
+            Box::pin(async move {
+                self.calls.lock().unwrap().push((progress, message));
+            })
+        }
+    }
+
+    /// Records the attempt then "fails" — but a `ProgressSink` swallows its own
+    /// transport errors, so from the loop's view this is indistinguishable from a
+    /// working sink. The Rust analogue of upstream `_FailingCtx`: it lets us assert
+    /// the command result survives even when the sink's send would have failed.
+    #[derive(Default)]
+    struct FailingSink {
+        calls: StdMutex<usize>,
+    }
+
+    impl ProgressSink for FailingSink {
+        fn report<'a>(
+            &'a self,
+            _progress: f64,
+            _message: &'a str,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async move {
+                *self.calls.lock().unwrap() += 1;
+                // The real rmcp sink logs at DEBUG and swallows a send error here;
+                // model that by simply not propagating anything.
+            })
+        }
+    }
+
+    /// `sink = None` takes the zero-overhead path: no frames, same stdout as a
+    /// bare `run_command` (upstream `test_ctx_none_emits_no_progress...`).
+    #[tokio::test]
+    async fn run_command_with_progress_none_emits_no_frames() {
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let sess = session(config);
+        let registry = register_all();
+        let sink = RecordingSink::default();
+
+        let out = sess
+            .run_command_with_progress(&registry, "whoami", &[], None, Duration::from_millis(1))
+            .await
+            .expect("whoami succeeds");
+        assert!(out.starts_with("User: testuser"), "got: {out:?}");
+        // The sink we built was never passed, so it recorded nothing.
+        assert!(sink.calls().is_empty(), "no frames on the None path");
+    }
+
+    /// A slow future with a small interval fires >= 1 monotonic frame, each
+    /// carrying the command name; the future's output is returned unchanged
+    /// (upstream `test_heartbeat_fires...` + `..._monotonic`). Driven directly
+    /// over a controlled sleep to keep the timing deterministic.
+    #[tokio::test]
+    async fn run_with_heartbeat_fires_for_slow_future() {
+        let sink = RecordingSink::default();
+        let body = async {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            "done"
+        };
+
+        let out =
+            run_with_heartbeat(body, &sink, "_sleepy_command", Duration::from_millis(50)).await;
+        assert_eq!(out, "done", "future output returned unchanged");
+
+        let calls = sink.calls();
+        assert!(!calls.is_empty(), "at least one heartbeat fired: {calls:?}");
+        for (progress, message) in &calls {
+            assert!(*progress >= 0.0, "progress non-negative");
+            assert!(
+                message.contains("_sleepy_command"),
+                "frame names the command: {message:?}"
+            );
+        }
+        let values: Vec<f64> = calls.iter().map(|(p, _)| *p).collect();
+        let mut sorted = values.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(values, sorted, "progress monotonic: {values:?}");
+    }
+
+    /// A future that finishes well inside the interval fires zero frames
+    /// (upstream `test_no_heartbeat_for_fast_command`).
+    #[tokio::test]
+    async fn run_with_heartbeat_no_frames_for_fast_future() {
+        let sink = RecordingSink::default();
+        let out = run_with_heartbeat(async { 7 }, &sink, "fast", Duration::from_secs(1)).await;
+        assert_eq!(out, 7);
+        assert!(sink.calls().is_empty(), "no frames: {:?}", sink.calls());
+    }
+
+    /// A failing command surfaces `McpCommandError` unchanged through the
+    /// heartbeat path (upstream `test_command_exception_propagates...`).
+    #[tokio::test]
+    async fn run_command_with_progress_propagates_command_error() {
+        let sess = session(Config::default());
+        let registry = register_all();
+        let sink = RecordingSink::default();
+
+        let err = sess
+            .run_command_with_progress(
+                &registry,
+                "no_such_command",
+                &[],
+                Some(&sink),
+                Duration::from_millis(50),
+            )
+            .await
+            .expect_err("unknown command must fail");
+        assert_eq!(err.exit_code, 1, "unknown command is exit 1");
+    }
+
+    /// A sink whose send would fail must not mask the command result: the slow
+    /// future still returns its value and the sink's attempts are recorded
+    /// (upstream `test_progress_send_failure_is_swallowed`).
+    #[tokio::test]
+    async fn run_with_heartbeat_send_failure_does_not_mask_result() {
+        let sink = FailingSink::default();
+        let body = async {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            "ok"
+        };
+
+        let out =
+            run_with_heartbeat(body, &sink, "_sleepy_command", Duration::from_millis(40)).await;
+        assert_eq!(out, "ok", "result survives a failing sink");
+        assert!(
+            *sink.calls.lock().unwrap() >= 1,
+            "at least one heartbeat was attempted"
+        );
     }
 }

@@ -42,7 +42,7 @@ async fn loaded(content: &str) -> (Arc<McpSession>, tempfile::TempDir, std::path
 
 async fn call(session: &McpSession, name: &str, kwargs: Value) -> Value {
     let map: Map<String, Value> = kwargs.as_object().cloned().unwrap_or_default();
-    dispatch_testreport_tool(session, name, &map)
+    dispatch_testreport_tool(session, name, &map, None)
         .await
         .unwrap_or_else(|e| panic!("{name} failed: {e:?}"))
 }
@@ -181,7 +181,7 @@ async fn dispatch_read_traversal_is_refused() {
         .as_object()
         .cloned()
         .unwrap();
-    let err = dispatch_testreport_tool(&session, "testreport_read", &map)
+    let err = dispatch_testreport_tool(&session, "testreport_read", &map, None)
         .await
         .expect_err("traversal refused");
     assert!(err.stderr.contains("escapes"), "{err:?}");

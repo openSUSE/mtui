@@ -30,8 +30,15 @@
 //! Resolution mirrors the auto-generated tools' `-T/--template` contract even
 //! though locking is coarse: `template=<rrid>` selects a loaded report; omitted
 //! with >1 loaded refuses (no client-addressable "active" pointer under MCP);
-//! omitted with 0/1 loaded falls back to the active report. Progress heartbeats
-//! (`ctx`) are bead `mtui-rs-76e.14` and intentionally absent here.
+//! omitted with 0/1 loaded falls back to the active report.
+//!
+//! ## Progress heartbeats (bead `mtui-rs-76e.14`)
+//!
+//! [`dispatch_testreport_tool`] races the tool body against the same heartbeat as
+//! the auto-generated command tools (via [`run_with_heartbeat`]) when the client
+//! supplied a `progressToken`, so a slow file op (a large `testreport_read`/
+//! `testreport_write`) does not time the client out. The frames carry the tool
+//! name; a `None` sink takes the zero-overhead path.
 
 use std::path::{Path, PathBuf};
 
@@ -39,7 +46,9 @@ use mtui_core::Session;
 use mtui_testreport::{TestReport, atomic_write_file};
 use serde_json::{Map, Value, json};
 
-use crate::session::{McpCommandError, McpSession};
+use crate::session::{
+    DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, run_with_heartbeat,
+};
 use crate::slim::cap_output;
 use crate::tools::ToolDescriptor;
 
@@ -766,6 +775,21 @@ pub async fn dispatch_testreport_tool(
     session: &McpSession,
     name: &str,
     kwargs: &Map<String, Value>,
+    sink: Option<&dyn ProgressSink>,
+) -> Result<Value, McpCommandError> {
+    let body = dispatch_testreport_tool_inner(session, name, kwargs);
+    match sink {
+        None => body.await,
+        Some(sink) => run_with_heartbeat(body, sink, name, DEFAULT_PROGRESS_INTERVAL).await,
+    }
+}
+
+/// The undecorated testreport-tool dispatch (no heartbeat), wrapped by
+/// [`dispatch_testreport_tool`].
+async fn dispatch_testreport_tool_inner(
+    session: &McpSession,
+    name: &str,
+    kwargs: &Map<String, Value>,
 ) -> Result<Value, McpCommandError> {
     let template = opt_str(kwargs, "template")?;
     match name {
@@ -1260,7 +1284,7 @@ mod tests {
         load_report(&session, RRID, &path, "a\nb\n").await;
 
         let mut kwargs = Map::new();
-        let res = dispatch_testreport_tool(&session, "testreport_read", &kwargs)
+        let res = dispatch_testreport_tool(&session, "testreport_read", &kwargs, None)
             .await
             .unwrap();
         assert_eq!(res["line_count"], 2);
@@ -1268,12 +1292,12 @@ mod tests {
         kwargs.insert("start_line".into(), json!(1));
         kwargs.insert("end_line".into(), json!(1));
         kwargs.insert("replacement".into(), json!("X"));
-        let patched = dispatch_testreport_tool(&session, "testreport_patch", &kwargs)
+        let patched = dispatch_testreport_tool(&session, "testreport_patch", &kwargs, None)
             .await
             .unwrap();
         assert_eq!(patched["new_line_count"], 2);
 
-        let err = dispatch_testreport_tool(&session, "testreport_bogus", &Map::new())
+        let err = dispatch_testreport_tool(&session, "testreport_bogus", &Map::new(), None)
             .await
             .expect_err("unknown tool");
         assert!(err.stderr.contains("unknown testreport tool"), "{err:?}");

@@ -29,17 +29,21 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
+use std::future::Future;
+use std::pin::Pin;
+
 use mtui_core::Registry;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
-    ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+    ProgressNotificationParam, ProgressToken, ServerCapabilities, ServerInfo, Tool,
+    ToolAnnotations,
 };
 use rmcp::service::RequestContext;
-use rmcp::{ErrorData as McpError, RoleServer};
+use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use serde_json::{Map, Value};
 
-use crate::session::McpSession;
+use crate::session::{McpSession, ProgressSink};
 use crate::testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 use crate::tools::{
     ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_tool_descriptors,
@@ -146,6 +150,36 @@ fn call_arguments(request: &CallToolRequestParams) -> Map<String, Value> {
     request.arguments.clone().unwrap_or_default()
 }
 
+/// The rmcp-backed [`ProgressSink`]: sends `notifications/progress` back to the
+/// client for the in-flight tool call.
+///
+/// Built in [`call_tool`](ServerHandler::call_tool) from the request's
+/// [`RequestContext`] — the cloned [`Peer`] plus the client-supplied
+/// `progressToken`. It exists only when the client actually requested progress
+/// (upstream: `report_progress` is a no-op without a token, so we simply do not
+/// build the sink), and it swallows transport failures so a flaky client can
+/// never mask the command's result.
+struct PeerProgressSink {
+    peer: Peer<RoleServer>,
+    token: ProgressToken,
+}
+
+impl ProgressSink for PeerProgressSink {
+    fn report<'a>(
+        &'a self,
+        progress: f64,
+        message: &'a str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let param = ProgressNotificationParam::new(self.token.clone(), progress)
+                .with_message(message.to_owned());
+            if let Err(err) = self.peer.notify_progress(param).await {
+                tracing::debug!("progress notification failed: {err}");
+            }
+        })
+    }
+}
+
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
@@ -162,10 +196,25 @@ impl ServerHandler for McpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
+
+        // A slow foreground tool call emits `notifications/progress` heartbeats so
+        // the client does not time out. Build the sink only when the client
+        // supplied a `progressToken` (upstream: no token → `report_progress` is a
+        // no-op, so the heartbeat costs nothing). Job-control tools are fast and
+        // stay unwrapped, matching upstream.
+        let sink: Option<PeerProgressSink> =
+            context
+                .meta
+                .get_progress_token()
+                .map(|token| PeerProgressSink {
+                    peer: context.peer.clone(),
+                    token,
+                });
+        let sink = sink.as_ref().map(|s| s as &dyn ProgressSink);
 
         // A job-control tool: poll/control the session's background-job table.
         if self.job_tools.contains(&name) {
@@ -176,7 +225,7 @@ impl ServerHandler for McpServer {
 
         // A hand-written testreport tool: acts directly on the loaded checkout.
         if self.testreport_tools.contains(&name) {
-            let result = dispatch_testreport_tool(&self.session, &name, &kwargs)
+            let result = dispatch_testreport_tool(&self.session, &name, &kwargs, sink)
                 .await
                 // Serialise the JSON object result to a single text block, matching
                 // the command tools' single-content-block wire shape.
@@ -187,7 +236,7 @@ impl ServerHandler for McpServer {
         // A synthesised command tool: dispatch through the shared engine.
         if let Some(route) = self.routes.get(&name) {
             return Ok(render(
-                dispatch_tool(&self.registry, &self.session, route, &kwargs).await,
+                dispatch_tool(&self.registry, &self.session, route, &kwargs, sink).await,
             ));
         }
 

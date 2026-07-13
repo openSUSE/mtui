@@ -33,7 +33,9 @@ use serde_json::{Map, Value, json};
 
 use crate::deny::is_denied;
 use crate::schema::command_input_schema;
-use crate::session::{JobView, McpCommandError, McpSession};
+use crate::session::{
+    DEFAULT_PROGRESS_INTERVAL, JobView, McpCommandError, McpSession, ProgressSink,
+};
 
 /// Commands that touch reference hosts and can run for minutes. These gain a
 /// `background` boolean parameter (see [`dispatch_tool`]). Pinned here, matching
@@ -239,17 +241,21 @@ pub fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
 /// background jobs via [`McpSession::start_jobs`] (one per resolved template) and
 /// returns a "started job(s)" reply naming the ids to poll. Otherwise
 /// reconstructs argv from `kwargs` (honouring the route's `argv_prefix`) and runs
-/// it synchronously through [`McpSession::run_command`].
+/// it synchronously through [`McpSession::run_command_with_progress`], emitting
+/// heartbeats via `sink` (when the client requested progress) so a slow
+/// foreground call does not time the client out.
 ///
 /// # Errors
 ///
 /// Returns [`McpCommandError`] when the command is not registered, or when the
-/// synchronous parse/run fails (propagated from [`McpSession::run_command`]).
+/// synchronous parse/run fails (propagated from
+/// [`McpSession::run_command_with_progress`]).
 pub async fn dispatch_tool(
     registry: &Arc<Registry>,
     session: &Arc<McpSession>,
     route: &ToolRoute,
     kwargs: &Map<String, Value>,
+    sink: Option<&dyn ProgressSink>,
 ) -> Result<String, McpCommandError> {
     let mut kwargs = kwargs.clone();
     let background = if route.slow {
@@ -273,7 +279,15 @@ pub async fn dispatch_tool(
         return Ok(started_jobs_reply(route.command, &job_ids));
     }
 
-    session.run_command(registry, route.command, &argv).await
+    session
+        .run_command_with_progress(
+            registry,
+            route.command,
+            &argv,
+            sink,
+            DEFAULT_PROGRESS_INTERVAL,
+        )
+        .await
 }
 
 /// The client-facing reply after starting one or more background jobs.
@@ -550,9 +564,15 @@ mod tests {
 
         let registry = Arc::new(registry);
         let kwargs = json!({ "attributes": ["session_user"] });
-        let out = dispatch_tool(&registry, &session, route, kwargs.as_object().unwrap())
-            .await
-            .expect("config show succeeds");
+        let out = dispatch_tool(
+            &registry,
+            &session,
+            route,
+            kwargs.as_object().unwrap(),
+            None,
+        )
+        .await
+        .expect("config show succeeds");
         assert!(out.contains("session_user"), "got: {out:?}");
         assert!(out.contains("alice"), "got: {out:?}");
     }
@@ -569,9 +589,15 @@ mod tests {
 
         // `run` needs a command to execute; supply one so argv reconstructs.
         let kwargs = json!({ "background": true, "command": ["true"] });
-        let reply = dispatch_tool(&registry, &session, &route, kwargs.as_object().unwrap())
-            .await
-            .expect("background start returns a reply, not an error");
+        let reply = dispatch_tool(
+            &registry,
+            &session,
+            &route,
+            kwargs.as_object().unwrap(),
+            None,
+        )
+        .await
+        .expect("background start returns a reply, not an error");
         assert!(
             reply.starts_with("started job 'run-1' (`run`);"),
             "single-job reply names the id: {reply:?}"
