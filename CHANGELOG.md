@@ -17,10 +17,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   behaviour notes: OBS TLS is now governed by `[mtui] ssl_verify` rather than
   oscrc's own TLS knobs (`sslcertck`/`cafile`/`capath`/`no_verify`); and the
   new `[obs] request_timeout` (default 180s) is a coarse between-call budget
-  layered over the per-call HTTP timeout, not a hard mid-call kill. The review
-  key must be an Ed25519 private key on disk; ssh-agent, encrypted, and
-  RSA/ECDSA keys are not yet supported. A new `[obs]` config section
-  (`api_url`, `conffile`, `request_timeout`) is introduced.
+  layered over the per-call HTTP timeout, not a hard mid-call kill. All OpenSSH
+  key types are supported — Ed25519, ECDSA and RSA (signed with `rsa-sha2-512`)
+  private-key files, as well as keys held by a running ssh-agent (selected by
+  the oscrc `sshkey` fingerprint, or as the passphrase-protected counterpart of
+  a key file). Under headless `mtui-mcp` the backend never prompts for a
+  passphrase: an encrypted key is used only via the agent, and anything
+  unresolvable fails closed. A new `[obs]` config section (`api_url`,
+  `conffile`, `request_timeout`) is introduced.
 
 - `mtui-mcp` is now much more token-efficient. Tool schemas are automatically
   slimmed of redundant pydantic boilerplate (the per-field `title` keys and the
