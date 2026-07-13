@@ -115,6 +115,13 @@ fn sle15_branches() {
     assert_eq!(out.name, "SLES-LTSS-TERADATA");
     assert_eq!(out.version, "15");
 
+    // Triple-pin: `LTSS-ERICSSON` must match its combined branch before bare
+    // `LTSS`, stripping the whole suffix (upstream sle15.py; ec4174cb/0bdd17b4).
+    let out = normalize_sle15(p("SLE-Product-SLES", "15-SP4-LTSS-ERICSSON", "x86_64"));
+    assert_eq!(out.name, "SLES-LTSS-ERICSSON");
+    assert_eq!(out.version, "15-SP4");
+    assert_eq!(out.arch, "x86_64");
+
     let out = normalize_sle15(p("SLE-Product-SLES", "15-LTSS", "x86_64"));
     assert_eq!(out.name, "SLES-LTSS");
     assert_eq!(out.version, "15");

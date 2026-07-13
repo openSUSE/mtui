@@ -1,8 +1,9 @@
 //! Normalizer for the SLE 15 product family.
 //!
 //! Ported from `mtui/test_reports/products/sle15.py`. The if-chain order is
-//! significant (`LTSS-TERADATA` before bare `LTSS`, etc.) and is preserved
-//! verbatim; every unmatched name falls through to a lowercase rewrite.
+//! significant (`LTSS-TERADATA` and `LTSS-ERICSSON` before bare `LTSS`, etc.)
+//! and is preserved verbatim; every unmatched name falls through to a
+//! lowercase rewrite.
 
 use mtui_types::SystemProduct;
 
@@ -12,6 +13,11 @@ pub fn normalize_sle15(mut x: SystemProduct) -> SystemProduct {
     if x.name == "SLE-Product-SLES" && x.version.contains("LTSS-TERADATA") {
         x.name = "SLES-LTSS-TERADATA".to_string();
         x.version = x.version.replace("-LTSS-TERADATA", "");
+        return x;
+    }
+    if x.name == "SLE-Product-SLES" && x.version.contains("LTSS-ERICSSON") {
+        x.name = "SLES-LTSS-ERICSSON".to_string();
+        x.version = x.version.replace("-LTSS-ERICSSON", "");
         return x;
     }
     if x.name == "SLE-Product-SLES" && x.version.contains("LTSS") {
