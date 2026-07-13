@@ -14,7 +14,6 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Callable
 from logging import DEBUG, getLogger
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from prompt_toolkit import PromptSession
@@ -123,7 +122,6 @@ class CommandPrompt:
             null_factory=lambda: NullTestReport(config, prompter=prompter),
         )
 
-        self.homedir = Path("~").expanduser()
         self.config = config
         self.log = log
 
