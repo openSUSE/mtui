@@ -16,8 +16,9 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed}
 ///
 /// # Errors
 ///
-/// Returns [`UpdateError`] with a reason of "update stack locked",
-/// "Dependency Error", or "RPM Error" per upstream's branch logic. Warnings
+/// Returns [`UpdateError`] with a reason of "package not found" (zypper exit
+/// `104`), "update stack locked", "Dependency Error", or "RPM Error" per
+/// upstream's branch logic. Warnings
 /// (exit `106`, "Additional rpm output", "not supported by its vendor") do not
 /// fail the check; the two output sections are returned as [`Diagnostic`]s for
 /// the caller to render.
@@ -25,7 +26,7 @@ pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     let mut diagnostics = Vec::new();
     if args.stdin.contains("zypper") && args.exitcode == 104 {
         log_failed(args);
-        return Err(UpdateError::new("update stack locked", args.hostname));
+        return Err(UpdateError::new("package not found", args.hostname));
     }
     if args.stdin.contains("zypper") && args.exitcode == 106 {
         tracing::warn!(
@@ -124,9 +125,11 @@ mod tests {
     }
 
     #[test]
-    fn zypper_104_is_stack_locked() {
+    fn zypper_104_is_package_not_found() {
+        // Upstream `checks/update.py:34`: zypper + exit 104 is "package not
+        // found" (ZYPPER_EXIT_INF_CAP_NOT_FOUND), matching the install check.
         let err = zypper(args("zypper -n patch", "", "", 104)).unwrap_err();
-        assert_eq!(err.reason, "update stack locked");
+        assert_eq!(err.reason, "package not found");
     }
 
     #[test]

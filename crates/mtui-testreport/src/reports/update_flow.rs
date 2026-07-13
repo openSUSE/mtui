@@ -1140,8 +1140,8 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_keeps_repos_on_check_failure() {
-        // exit 104 on the updater command ⇒ the update check flags "update stack
-        // locked"; the flow must NOT issue a repo-remove (repos kept for retry).
+        // exit 104 on the updater command ⇒ the update check flags "package not
+        // found"; the flow must NOT issue a repo-remove (repos kept for retry).
         let (t, handle) = sles_target_with_exit("h1", "", 104);
         let mut group = HostsGroup::new(vec![t], false);
 
