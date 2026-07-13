@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 import requests
+import responses
 
 from mtui.data_sources import oscqam
 from mtui.data_sources.obs.oscrc import ObsCredentials
@@ -62,6 +63,13 @@ def test_native_group_none_normalised_to_empty_list(wired):
     assert calls["assign"][-1] == []
 
 
+def test_native_unassign_dispatches(wired):
+    calls, client = wired
+    assert OSC(_config(), RRID).unassign(["qam-sle"]) is True
+    c, _cfg, rrid, user, groups = calls["unassign"]
+    assert (c, rrid, user, groups) == (client, RRID, "qamuser", ["qam-sle"])
+
+
 def test_native_comment_and_reject_signatures(wired):
     calls, client = wired
     OSC(_config(), RRID).comment("hi")
@@ -78,6 +86,12 @@ def test_native_comment_and_reject_signatures(wired):
         ObsConfigError("no oscrc"),
         requests.exceptions.ConnectionError("down"),
         ET.ParseError("bad xml"),
+        # Non-obvious escapes the narrow tuple used to miss: a non-PEM key
+        # (ValueError), Path.expanduser() with no home (RuntimeError), and a
+        # lone surrogate in the body (UnicodeEncodeError, a ValueError).
+        ValueError("Unable to load PEM file"),
+        RuntimeError("Could not determine home directory"),
+        UnicodeEncodeError("utf-8", "\udce9", 0, 1, "surrogates not allowed"),
     ],
 )
 def test_native_never_raises_returns_false(monkeypatch, exc):
@@ -89,6 +103,34 @@ def test_native_never_raises_returns_false(monkeypatch, exc):
 
     monkeypatch.setattr(oscqam.obs_qam, "comment", boom)
     assert OSC(_config(), RRID).comment("x") is False
+
+
+def test_native_surrogate_body_returns_false(monkeypatch):
+    """A lone surrogate in the body (reachable via MCP JSON) yields False.
+
+    End-to-end through the real ObsClient: body.encode('utf-8') raises
+    UnicodeEncodeError before any network call, and the facade must catch it.
+    """
+    monkeypatch.setattr(oscqam, "read_credentials", lambda *a, **k: CREDS)
+    assert OSC(_config(), RRID).comment("bad \udce9 surrogate") is False
+
+
+@responses.activate
+def test_native_binary_key_returns_false(tmp_path, monkeypatch):
+    """A binary/non-PEM key loaded during the 401 handshake yields False."""
+    key = tmp_path / "id_bin"
+    key.write_bytes(bytes(range(256)) * 8)
+    creds = ObsCredentials(
+        apiurl="https://api.suse.de", user="qamuser", source="s", sshkey_path=key
+    )
+    monkeypatch.setattr(oscqam, "read_credentials", lambda *a, **k: creds)
+    responses.add(
+        responses.POST,
+        "https://api.suse.de/comments/request/56789",
+        status=401,
+        headers={"WWW-Authenticate": 'Signature realm="r"'},
+    )
+    assert OSC(_config(), RRID).comment("hello") is False
 
 
 def test_native_credential_error_returns_false(monkeypatch):

@@ -23,7 +23,10 @@ if TYPE_CHECKING:
 
 logger = getLogger("mtui.data_sources.obs.preconditions")
 
-_SUMMARY_RE = re.compile(r"^SUMMARY:\s*(\S+)", re.MULTILINE)
+# Capture the whole trimmed value, not just the first token, so a trailing
+# qualifier ("PASSED with notes") reads as UNKNOWN — matching the plugin's
+# whole-value compare rather than approving/rejecting on the first word.
+_SUMMARY_RE = re.compile(r"^SUMMARY:\s*(.+?)\s*$", re.MULTILINE)
 _COMMENT_RE = re.compile(r"^comment:\s*(.*)$", re.MULTILINE)
 
 

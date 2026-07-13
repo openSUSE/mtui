@@ -24,8 +24,8 @@ from ...support.exceptions import ObsConfigError
 logger = getLogger("mtui.data_sources.obs.oscrc")
 
 # An ``sshkey`` value like ``SHA256:abc...`` names a key held by the ssh
-# agent by fingerprint rather than a file on disk. Agent auth is not yet
-# supported by the native backend (deferred), so such values fail closed.
+# agent by fingerprint rather than a file on disk; the native backend
+# resolves it through the agent at signing time.
 _FINGERPRINT_RE = re.compile(r"^[A-Z0-9]+:")
 
 # credentials_mgr_class values that route credentials through a mechanism
@@ -37,15 +37,18 @@ _UNSUPPORTED_MGR = ("keyring", "transient")
 class ObsCredentials:
     """Resolved OBS Signature-auth credentials for one apiurl.
 
-    Carries no password by construction: the native backend uses SSH
-    signature auth against api.suse.de, so ``pass``/``passx`` are never
-    read for that target.
+    Exactly one of ``sshkey_path`` (a private-key file on disk) or
+    ``sshkey_fingerprint`` (an ssh-agent key's ``SHA256:…`` fingerprint)
+    identifies the signing key. Carries no password by construction: the
+    native backend uses SSH signature auth against api.suse.de, so
+    ``pass``/``passx`` are never read for that target.
     """
 
     apiurl: str
     user: str
-    sshkey_path: Path
     source: str
+    sshkey_path: Path | None = None
+    sshkey_fingerprint: str | None = None
 
 
 def _default_conffile() -> Path:
@@ -53,29 +56,27 @@ def _default_conffile() -> Path:
     return Path("~/.oscrc").expanduser()
 
 
-def _resolve_sshkey(raw: str) -> Path:
-    """Resolve an oscrc ``sshkey`` value to a private-key file path.
+def _resolve_sshkey(raw: str) -> tuple[Path | None, str | None]:
+    """Resolve an oscrc ``sshkey`` value to ``(path, fingerprint)``.
 
-    A bare name (``id_ed25519``) resolves under ``~/.ssh/``; a value
-    containing ``/`` is treated as a literal (``~``-expanded) path.
+    A ``SHA256:…`` (or other ``ALG:…``) value names an ssh-agent key by
+    fingerprint and yields ``(None, fingerprint)``. Otherwise it is a
+    private-key file: a bare name (``id_ed25519``) resolves under
+    ``~/.ssh/``; a value containing ``/`` is a literal (``~``-expanded) path,
+    yielding ``(path, None)``.
 
     Raises:
-        ObsConfigError: If the value is empty, or is an agent fingerprint
-            (``SHA256:…``) — ssh-agent auth is deferred and fails closed.
+        ObsConfigError: If the value is empty.
 
     """
     value = raw.strip()
     if not value:
         raise ObsConfigError("oscrc 'sshkey' is empty")
     if _FINGERPRINT_RE.match(value):
-        raise ObsConfigError(
-            f"oscrc sshkey {value!r} is an ssh-agent fingerprint; the native "
-            "OBS backend does not yet support ssh-agent auth — set 'sshkey' to "
-            "a private-key file name or path instead"
-        )
+        return None, value
     if "/" in value:
-        return Path(value).expanduser()
-    return Path("~/.ssh").expanduser() / value
+        return Path(value).expanduser(), None
+    return Path("~/.ssh").expanduser() / value, None
 
 
 def read_credentials(apiurl: str, conffile: str = "") -> ObsCredentials:
@@ -165,12 +166,25 @@ def read_credentials(apiurl: str, conffile: str = "") -> ObsCredentials:
     # NB: 'pass'/'passx' are intentionally never read for this Signature-only
     # target — see the module docstring.
 
-    key_path = _resolve_sshkey(sshkey)
-    if not key_path.is_file():
+    key_path, fingerprint = _resolve_sshkey(sshkey)
+    if key_path is not None and not _key_available(key_path):
         raise ObsConfigError(
             f"ssh key {key_path} (from oscrc sshkey={sshkey!r}) does not exist"
         )
 
     return ObsCredentials(
-        apiurl=apiurl, user=user, sshkey_path=key_path, source=str(path)
+        apiurl=apiurl,
+        user=user,
+        source=str(path),
+        sshkey_path=key_path,
+        sshkey_fingerprint=fingerprint,
     )
+
+
+def _key_available(key_path: Path) -> bool:
+    """A key is usable if its private file or its ``.pub`` (agent) exists.
+
+    A ``.pub``-only key on disk is signed via an ssh-agent that holds the
+    private half (matched by public blob at auth time).
+    """
+    return key_path.is_file() or Path(f"{key_path}.pub").is_file()

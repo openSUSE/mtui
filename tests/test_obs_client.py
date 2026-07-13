@@ -109,6 +109,11 @@ def test_between_calls_budget_aborts(client):
         ("<status><summary> boom </summary></status>", "boom"),
         ("<status/>", ""),
         ("not xml", ""),
+        # A DTD-bearing error body is skipped (no entity-expansion parsing).
+        (
+            '<!DOCTYPE x [<!ENTITY e "boom">]><status><summary>&e;</summary></status>',
+            "",
+        ),
     ],
 )
 def test_error_summary(body, expected):

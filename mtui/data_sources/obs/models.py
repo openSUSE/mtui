@@ -13,8 +13,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
+from .errors import ObsError
+
 # IBS ignores automation groups when deciding what counts as a QAM group.
 _IGNORED_QAM_GROUPS = frozenset({"qam-auto", "qam-openqa"})
+
+
+def _fromstring(xml: str) -> ET.Element:
+    """Parse OBS XML, refusing any DTD.
+
+    OBS never sends a ``<!DOCTYPE>``/``<!ENTITY>``, so rejecting one before
+    parsing neutralises entity-expansion DoS (billion-laughs / quadratic
+    blowup) from a compromised or MITM'd (``ssl_verify=false``) response,
+    without pulling in a third-party XML parser.
+    """
+    if "<!DOCTYPE" in xml or "<!ENTITY" in xml:
+        raise ObsError("refusing to parse an OBS document that carries a DTD")
+    return ET.fromstring(xml)
+
 
 # The MAINT:RejectReason attribute coordinates.
 REJECT_REASON_NAMESPACE = "MAINT"
@@ -85,18 +101,18 @@ def _parse_request_element(root: ET.Element) -> Request:
 
 def parse_request(xml: str) -> Request:
     """Parse a ``request?withfullhistory=1`` document."""
-    return _parse_request_element(ET.fromstring(xml))
+    return _parse_request_element(_fromstring(xml))
 
 
 def parse_request_collection(xml: str) -> list[Request]:
     """Parse a ``<collection>`` of requests (the previous-reject search)."""
-    root = ET.fromstring(xml)
+    root = _fromstring(xml)
     return [_parse_request_element(r) for r in root.findall("request")]
 
 
 def parse_group_directory(xml: str) -> list[str]:
     """Parse a ``group?login=<user>`` directory into its group names."""
-    root = ET.fromstring(xml)
+    root = _fromstring(xml)
     return [name for e in root.findall("entry") if (name := e.get("name"))]
 
 
@@ -106,7 +122,7 @@ def parse_reject_reason_values(xml: str) -> list[str]:
     Tolerates the empty ``<attributes/>`` OBS returns when the attribute is
     unset (returns ``[]``).
     """
-    root = ET.fromstring(xml)
+    root = _fromstring(xml)
     return [v.text.strip() for v in root.iter("value") if v.text and v.text.strip()]
 
 

@@ -6,15 +6,10 @@ credentials from the user's ``~/.oscrc``. It replaces the historical
 shell-out to the external ``osc qam`` plugin.
 """
 
-import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from logging import getLogger
 
-import paramiko
-import requests
-
 from ..support.config import Config
-from ..support.exceptions import ObsError
 from ..types.rrid import RequestReviewID
 from .obs import qam as obs_qam
 from .obs.client import ObsClient
@@ -43,7 +38,14 @@ class OSC:
         Everything — reading oscrc, loading the key, building the session,
         the authenticated calls, XML parsing — happens here inside one
         try/except, because callers (apicall.py / approve.py) invoke the
-        seam methods bare with no guard of their own.
+        seam methods bare with no guard of their own. The catch is
+        deliberately broad (``Exception``, not a narrow tuple): besides the
+        expected ObsError / requests / paramiko / ElementTree failures, edge
+        inputs raise plain ``ValueError`` (a non-PEM key, a lone surrogate in
+        the body) or ``RuntimeError`` (``Path.expanduser`` with no home), and
+        the never-raise contract must hold for those too. ``BaseException``
+        is intentionally NOT caught, so KeyboardInterrupt/SystemExit
+        propagate.
         """
         try:
             credentials = read_credentials(
@@ -51,12 +53,7 @@ class OSC:
             )
             client = ObsClient(self.config, credentials)
             op(client, credentials.user)
-        except (
-            ObsError,
-            requests.RequestException,
-            paramiko.SSHException,
-            ET.ParseError,
-        ) as e:
+        except Exception as e:  # noqa: BLE001 - documented never-raise seam
             logger.error("OBS operation on %s failed: %s", self.rrid, e)
             return False
         return True

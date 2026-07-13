@@ -85,10 +85,23 @@ def test_unsupported_credentials_manager_raises(tmp_path):
         oscrc.read_credentials(API, conffile=str(conf))
 
 
-def test_agent_fingerprint_sshkey_fails_closed(tmp_path):
+def test_agent_fingerprint_sshkey_is_accepted(tmp_path):
+    """A SHA256: fingerprint yields an agent-key credential (no file)."""
     conf = _write(tmp_path, f"[{API}]\nuser = bob\nsshkey = SHA256:abc123\n")
-    with pytest.raises(ObsConfigError, match="ssh-agent fingerprint"):
-        oscrc.read_credentials(API, conffile=str(conf))
+    creds = oscrc.read_credentials(API, conffile=str(conf))
+    assert creds.sshkey_fingerprint == "SHA256:abc123"
+    assert creds.sshkey_path is None
+    assert creds.user == "bob"
+
+
+def test_pub_only_key_on_disk_is_accepted(tmp_path):
+    """A key present only as <name>.pub is accepted (agent holds the private)."""
+    priv = tmp_path / "id_ed25519"
+    (tmp_path / "id_ed25519.pub").write_text("ssh-ed25519 AAAA comment\n")
+    conf = _write(tmp_path, f"[{API}]\nuser = bob\nsshkey = {priv}\n")
+    creds = oscrc.read_credentials(API, conffile=str(conf))
+    assert creds.sshkey_path == priv
+    assert creds.sshkey_fingerprint is None
 
 
 def test_missing_key_file_raises(tmp_path):
@@ -165,7 +178,11 @@ def test_loose_permissions_warn(tmp_path, caplog):
     ],
 )
 def test_resolve_sshkey_paths(value, expected):
-    assert oscrc._resolve_sshkey(value) == expected
+    assert oscrc._resolve_sshkey(value) == (expected, None)
+
+
+def test_resolve_sshkey_fingerprint():
+    assert oscrc._resolve_sshkey("SHA256:abc123") == (None, "SHA256:abc123")
 
 
 def test_resolve_sshkey_empty_raises():

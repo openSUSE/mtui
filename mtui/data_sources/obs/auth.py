@@ -5,13 +5,19 @@ subprocess): the first request goes out unauthenticated (the session may
 already hold a cookie); on a 401 the ``WWW-Authenticate: Signature`` realm
 is read, an SSHSIG over ``(created): <epoch>`` is built with paramiko, and
 the request is resent exactly once with the ``Authorization: Signature``
-header. Day-one scope is an Ed25519 key from an explicit file; encrypted,
-agent, and non-Ed25519 keys fail closed with a typed :class:`ObsConfigError`.
-The Authorization header and its signature are never logged.
+header. The Authorization header and its signature are never logged.
+
+Any OpenSSH key type works — Ed25519, ECDSA, and RSA private-key files, plus
+keys held by a running ssh-agent (selected by ``SHA256:…`` fingerprint or as
+the passphrase-protected counterpart of a file on disk). Under headless
+``mtui-mcp`` we must never block on a passphrase prompt, so an encrypted key
+is only usable via the agent; every unresolvable case fails closed with a
+typed :class:`ObsConfigError`.
 """
 
 from __future__ import annotations
 
+import base64
 import time
 from logging import getLogger
 from pathlib import Path
@@ -61,35 +67,109 @@ def _challenge_params(response: requests.Response) -> dict[str, dict[str, str]]:
     return schemes
 
 
+def _pubkey_blob(path: Path) -> bytes | None:
+    """Return the public-key blob from ``<path>.pub``, or ``None`` if absent.
+
+    Used to identify a passphrase-protected private key's counterpart among
+    the ssh-agent's loaded keys by comparing raw public-key blobs.
+    """
+    try:
+        text = Path(f"{path}.pub").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    parts = text.split()
+    if len(parts) < 2:
+        return None
+    try:
+        return base64.b64decode(parts[1])
+    except ValueError:  # includes binascii.Error
+        return None
+
+
 class ObsSignatureAuth(requests.auth.AuthBase):
     """A ``requests`` auth handler for OBS SSH-signature authentication."""
 
-    def __init__(self, user: str, sshkey_path: Path) -> None:
-        """Initialise with the acting user and its Ed25519 private-key path."""
+    def __init__(
+        self,
+        user: str,
+        sshkey_path: Path | None = None,
+        sshkey_fingerprint: str | None = None,
+    ) -> None:
+        """Initialise with the acting user and its key locator.
+
+        Exactly one of ``sshkey_path`` (a private-key file) or
+        ``sshkey_fingerprint`` (an ssh-agent key's ``SHA256:…`` fingerprint)
+        identifies the signing key.
+        """
         self.user = user
         self.sshkey_path = sshkey_path
+        self.sshkey_fingerprint = sshkey_fingerprint
         self._retried = False
 
-    def _load_key(self) -> paramiko.Ed25519Key:
-        """Load the Ed25519 key, failing closed (never prompting)."""
+    @staticmethod
+    def _agent_keys() -> list[Any]:
+        """The keys currently held by the ssh-agent (fails closed on error)."""
         try:
-            return paramiko.Ed25519Key.from_private_key_file(str(self.sshkey_path))
-        except paramiko.PasswordRequiredException as e:
-            raise ObsConfigError(
-                f"ssh key {self.sshkey_path} is passphrase-protected; the native "
-                "OBS backend needs an unencrypted key or an ssh-agent (agent "
-                "support is not yet available)"
-            ) from e
+            return list(paramiko.Agent().get_keys())
         except paramiko.SSHException as e:
+            raise ObsConfigError(f"could not query the ssh-agent: {e}") from e
+
+    def _agent_key_by_fingerprint(self, fingerprint: str) -> Any:
+        """Select the ssh-agent key matching ``fingerprint`` (``SHA256:…``)."""
+        want = fingerprint.strip()
+        for key in self._agent_keys():
+            key_fp = key.fingerprint
+            if key_fp == want or key_fp.split(":", 1)[-1] == want:
+                return key
+        raise ObsConfigError(
+            f"ssh-agent has no key matching fingerprint {want!r}; load it with "
+            "'ssh-add' (the native OBS backend never prompts for a passphrase)"
+        )
+
+    def _agent_key_for_file(self, path: Path) -> Any:
+        """Find the ssh-agent key that is ``path``'s decrypted counterpart."""
+        blob = _pubkey_blob(path)
+        if blob is not None:
+            for key in self._agent_keys():
+                if key.asbytes() == blob:
+                    return key
+        hint = "" if blob is not None else f" (no {path}.pub found to identify it)"
+        raise ObsConfigError(
+            f"ssh key {path} is passphrase-protected and no matching key is "
+            f"loaded in the ssh-agent{hint}; run 'ssh-add {path}' first — the "
+            "native OBS backend never prompts for a passphrase"
+        )
+
+    def _load_key_file(self, path: Path) -> Any:
+        """Load any private-key type from ``path``, failing closed.
+
+        ``PKey.from_path`` auto-detects Ed25519/ECDSA/RSA. A missing
+        passphrase surfaces as ``PasswordRequiredException`` or (from the
+        cryptography backend) a bare ``TypeError``; either way we must never
+        prompt under headless mtui-mcp, so we fall back to an ssh-agent that
+        holds the decrypted key. A missing file may still be an agent key
+        identified by its ``.pub`` on disk.
+        """
+        try:
+            return paramiko.PKey.from_path(str(path))
+        except (paramiko.PasswordRequiredException, TypeError):
+            return self._agent_key_for_file(path)
+        except FileNotFoundError:
+            return self._agent_key_for_file(path)
+        except (paramiko.SSHException, ValueError) as e:
             raise ObsConfigError(
-                f"ssh key {self.sshkey_path} is not a usable Ed25519 key "
-                f"({e}); only Ed25519 keys are supported by the native OBS "
-                "backend today"
+                f"ssh key {path} is not a usable private key ({e})"
             ) from e
         except OSError as e:
-            raise ObsConfigError(
-                f"ssh key {self.sshkey_path} could not be read: {e}"
-            ) from e
+            raise ObsConfigError(f"ssh key {path} could not be read: {e}") from e
+
+    def _load_key(self) -> Any:
+        """Resolve the configured key locator to a loaded signing key."""
+        if self.sshkey_fingerprint is not None:
+            return self._agent_key_by_fingerprint(self.sshkey_fingerprint)
+        if self.sshkey_path is None:  # pragma: no cover - oscrc sets one
+            raise ObsConfigError("no ssh key configured for OBS signature auth")
+        return self._load_key_file(self.sshkey_path)
 
     def _authorization(self, realm: str) -> str:
         """Build the ``Authorization: Signature …`` header value for ``realm``."""

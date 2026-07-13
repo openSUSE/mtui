@@ -1277,8 +1277,13 @@ whoami
 Displays current user name and session PID.
 
 
-OSC-wrapper Commands
-*********************
+OBS Review Commands
+*******************
+
+These commands act on the loaded ``SUSE:Maintenance`` review request. mtui
+performs each action natively against the OBS/IBS API (it no longer shells out
+to the ``osc qam`` plugin), reading the acting user and SSH key from
+``~/.oscrc``. The linked pages document the equivalent tester workflow.
 
 assign
 ++++++
@@ -1287,8 +1292,9 @@ assign
 
     assign [-h] [-g [GROUP]]
 
-Wrapper around the `osc qam assign`_ command; assigns current update.
-QA groups for assignment can be specified.
+Assigns the current update to you. When no group is given, mtui infers the
+single open QA group you belong to; specify ``-g`` to disambiguate. Mirrors
+the `osc qam assign`_ workflow.
 
 .. _osc qam assign: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#assigning-updates
 
@@ -1306,8 +1312,9 @@ unassign
 
     unassign [-h] [-g [GROUP]]
 
-Wrapper around the `osc qam unassign`_ command; unassigns current update.
-QA groups for unassignment can be specified.
+Unassigns the current update. When no group is given, mtui reverts the
+assignment(s) you currently hold; specify ``-g`` to revert a particular group.
+Mirrors the `osc qam unassign`_ workflow.
 
 .. _osc qam unassign: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#unassigning-updates
 
@@ -1325,8 +1332,9 @@ approve
 
     approve [-h] [-g [GROUP]] [-r REVIEWER]
 
-Wrapper around the `osc qam approve`_ command; approves current update. It is
-possible to specify more QA groups for approval.
+Approves the current update for the review assigned to you. Group approval
+(``-g``) is not supported by the native backend and is refused, so approve the
+review assigned to you without ``-g``. Mirrors the `osc qam approve`_ workflow.
 
 When ``-r REVIEWER`` is given, the reviewer is recorded in the testreport (the
 ``Test Plan Reviewer:`` line), the testreport is committed to SVN, and only
@@ -1354,8 +1362,9 @@ reject
 
     reject [-h] [-g [GROUP]] -r REASON [-m ...]
 
-Wrapper around the `osc qam reject`_ command; rejects current update. The ``-r``
-option is required.
+Rejects the current update (always as a ``by_user`` decline). The ``-r``
+option is required; ``-g`` is accepted for compatibility but ignored. Mirrors
+the `osc qam reject`_ workflow.
 
 .. _osc qam reject: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#reject
 
@@ -1383,8 +1392,8 @@ comment
 
     comment
 
-Adds a comment to the currently loaded review request via OSC. The
-command takes no arguments; it prompts interactively for the comment
+Adds a comment to the currently loaded review request via the native OBS
+backend. The command takes no arguments; it prompts interactively for the comment
 text on stdin (``Comment:``). The comment is posted against the RRID
 of the loaded test report template.
 

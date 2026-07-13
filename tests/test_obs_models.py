@@ -1,6 +1,9 @@
 """Tests for the OBS XML parsers (mtui.data_sources.obs.models)."""
 
+import pytest
+
 from mtui.data_sources.obs import models
+from mtui.data_sources.obs.errors import ObsError
 
 REQUEST_XML = """
 <request id="42">
@@ -85,3 +88,24 @@ def test_is_qam_group():
     assert not models.is_qam_group("qam-auto")
     assert not models.is_qam_group("qam-openqa")
     assert not models.is_qam_group("legal-auto")
+
+
+@pytest.mark.parametrize(
+    "parser",
+    [
+        models.parse_request,
+        models.parse_request_collection,
+        models.parse_group_directory,
+        models.parse_reject_reason_values,
+    ],
+)
+def test_parsers_refuse_dtd(parser):
+    """A DTD (billion-laughs vector) is refused before parsing."""
+    billion_laughs = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE lolz [<!ENTITY lol "lol">'
+        '<!ENTITY lol2 "&lol;&lol;&lol;">]>'
+        '<request><state name="&lol2;"/></request>'
+    )
+    with pytest.raises(ObsError, match="DTD"):
+        parser(billion_laughs)
