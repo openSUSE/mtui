@@ -80,6 +80,8 @@ struct NormalizedJob {
     arch: String,
     version: String,
     build: String,
+    /// Whether this run is superseded by a retrigger (`obsolete` flag).
+    obsolete: bool,
 }
 
 impl NormalizedJob {
@@ -116,6 +118,10 @@ impl NormalizedJob {
             arch: pick("arch", set_str("arch")),
             version: pick("version", set_str("version")),
             build: pick("build", set_str("build")),
+            obsolete: job
+                .get("obsolete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }
     }
 
@@ -153,7 +159,25 @@ impl NormalizedJob {
             arch: s("ARCH"),
             version: s("VERSION"),
             build: s("BUILD"),
+            obsolete: job
+                .get("obsolete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }
+    }
+
+    /// Whether this is a superseded run that must not count toward results.
+    ///
+    /// Mirrors upstream `_is_obsolete`: when an openQA job is retriggered the
+    /// dashboard keeps the older run but marks it superseded — either with an
+    /// `obsolete` flag or an `"obsoleted"` result. Both must be dropped so a
+    /// stale failure does not poison the install verdict
+    /// ([`has_passed_install_jobs`](Self::has_passed_install_jobs)) or surface as
+    /// a phantom entry in the failed-jobs listing. Matches `oqa_search`'s
+    /// `incident_jobs`, which filters `result == "obsoleted"`; only the current
+    /// run matters.
+    fn is_obsolete(&self) -> bool {
+        self.obsolete || self.result == "obsoleted"
     }
 
     /// The openQA host job URL (`{host}/tests/{id}`); empty when no id.
@@ -366,7 +390,16 @@ impl DashboardAutoOpenQA {
             match outcome {
                 Ok(setting_jobs) => {
                     for job in &setting_jobs {
-                        jobs.push(NormalizedJob::from_raw(job, source, setting));
+                        let normalized = NormalizedJob::from_raw(job, source, setting);
+                        if normalized.is_obsolete() {
+                            tracing::debug!(
+                                "dropping obsoleted {source} job {:?} ({})",
+                                normalized.id,
+                                normalized.test
+                            );
+                            continue;
+                        }
+                        jobs.push(normalized);
                     }
                 }
                 Err(_) => {
@@ -581,9 +614,7 @@ impl DashboardAutoOpenQA {
         }
 
         // Failed jobs, nested under group headers.
-        if failed_by_group.is_empty() {
-            ret.push("  All jobs passed.\n".to_string());
-        } else {
+        if !failed_by_group.is_empty() {
             ret.push("  Failed jobs:\n".to_string());
             for key in &problem_keys {
                 let Some(fjobs) = failed_by_group.get(*key) else {
@@ -611,6 +642,18 @@ impl DashboardAutoOpenQA {
                     }
                 }
             }
+        } else if !problem_keys.is_empty() {
+            // Problem groups exist but none carry a failed/incomplete/
+            // timeout_exceeded job, so `failed_by_group` is empty — their
+            // problems are entirely in the `other` bucket (still-running,
+            // parallel_failed, skipped, ...). The Summary already flags them;
+            // don't claim success (the old bug) and don't print an empty
+            // `Failed jobs:` block. Mirrors upstream.
+            ret.push(
+                "  No failed jobs, but some groups need review (see Summary above).\n".to_string(),
+            );
+        } else {
+            ret.push("  All jobs passed.\n".to_string());
         }
         ret.push("\n".to_string());
     }
@@ -907,6 +950,44 @@ mod tests {
     }
 
     #[test]
+    fn is_obsolete_flag_and_result() {
+        // The `obsolete` flag alone marks a superseded run.
+        let flagged = NormalizedJob::from_normalized(&json!({
+            "test": "qam-x", "result": "passed", "obsolete": true,
+        }));
+        assert!(flagged.is_obsolete());
+
+        // A `result == "obsoleted"` also marks a superseded run.
+        let obsoleted = NormalizedJob::from_normalized(&json!({
+            "test": "qam-x", "result": "obsoleted",
+        }));
+        assert!(obsoleted.is_obsolete());
+
+        // A normal current run is not obsolete.
+        let current = incident_job(1, "qam-x", "passed");
+        assert!(!current.is_obsolete());
+    }
+
+    #[test]
+    fn pretty_print_other_bucket_needs_review_not_all_passed() {
+        // A group whose only problem lives in the `other` bucket (a still-running
+        // `result: none`) is flagged in the Summary (`has_problems`) but carries
+        // no failed/incomplete/timeout job, so `failed_by_group` is empty. The
+        // trailer must NOT claim success and must NOT print an empty Failed jobs
+        // block; it prints the "need review" note instead.
+        let jobs = vec![
+            incident_job(1, "qam-pass", "passed"),
+            incident_job(2, "qam-running", "none"),
+        ];
+        let out = render(&jobs);
+
+        assert!(out.contains("No failed jobs, but some groups need review (see Summary above)."));
+        assert!(!out.contains("All jobs passed."));
+        assert!(!out.contains("Failed jobs:"));
+        assert!(out.contains("other: 1"));
+    }
+
+    #[test]
     fn format_counts_skips_zeros() {
         let counts = Counts {
             passed: 10,
@@ -1185,6 +1266,40 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_other_bucket_needs_review() {
+        // Problem group present (an `other`-bucket still-running job) but no
+        // failed job: renders the "need review" note, never "All jobs passed."
+        let jobs = vec![
+            incident_job(2500, "qam-pass", "passed"),
+            incident_job(2501, "qam-running", "none"),
+        ];
+        insta::assert_snapshot!(render(&jobs));
+    }
+
+    #[test]
+    fn snapshot_obsoleted_excluded() {
+        // Obsoleted runs are dropped before rendering; only the current passed
+        // run remains, so the block reports a clean pass with no phantom failure.
+        let settings = json!({
+            "DISTRI": "sle", "FLAVOR": "Server-DVD-Incidents",
+            "ARCH": "x86_64", "VERSION": "15-SP5", "BUILD": ":12358:bash",
+        });
+        let jobs: Vec<_> = [
+            json!({"test": "qam-incidentinstall", "result": "failed", "obsolete": true,
+                   "source": "incident", "id": 1, "settings": settings}),
+            json!({"test": "qam-incidentinstall", "result": "obsoleted",
+                   "source": "incident", "id": 2, "settings": settings}),
+            json!({"test": "qam-incidentinstall", "result": "passed",
+                   "source": "incident", "id": 3, "settings": settings}),
+        ]
+        .iter()
+        .map(NormalizedJob::from_normalized)
+        .filter(|j| !j.is_obsolete())
+        .collect();
+        insta::assert_snapshot!(render(&jobs));
+    }
+
+    #[test]
     fn snapshot_aggregate_grouping() {
         let jobs = vec![
             aggregate_job(
@@ -1299,6 +1414,58 @@ mod tests {
             .collect();
         assert_eq!(dashboard.job_test_names(), expected);
         // `.expect(1)` on each mock asserts exactly-once on server drop.
+    }
+
+    #[tokio::test]
+    async fn load_jobs_drops_obsoleted_runs_and_keeps_verdict() {
+        // A retriggered install scenario: the dashboard keeps an older superseded
+        // run (an `obsolete` flag on a stale `failed`, and a separate stale run
+        // marked with `status: "obsoleted"`) alongside the current `passed` run.
+        // The obsoleted runs must be dropped so they neither appear in the job
+        // list nor poison the install verdict — `results` must be `Some`.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/12358"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!([{"id": 11, "settings": {"DISTRI": "sle"}}])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/update_settings/12358"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/jobs/incident/11"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                // Stale failed run, superseded via the `obsolete` flag.
+                {"job_id": 1, "name": "qam-incidentinstall", "status": "failed", "obsolete": true},
+                // Stale run superseded via an `obsoleted` result.
+                {"job_id": 2, "name": "qam-incidentinstall", "status": "obsoleted"},
+                // Current run that actually passed.
+                {"job_id": 3, "name": "qam-incidentinstall", "status": "passed"},
+            ])))
+            .mount(&server)
+            .await;
+
+        let mut dashboard = dashboard_against(&server);
+        dashboard.run().await;
+
+        // Only the current run survives.
+        assert_eq!(
+            dashboard.job_test_names(),
+            vec!["qam-incidentinstall".to_string()]
+        );
+        // The stale failed run no longer poisons the verdict.
+        let results = dashboard.results.expect("install verdict should be Some");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].url.contains("/tests/3/"));
+        // No phantom failed entry in the rendered block.
+        let rendered = dashboard.pp.concat();
+        assert!(!rendered.contains("Failed jobs:"));
+        assert!(rendered.contains("All jobs passed."));
     }
 
     #[tokio::test]
