@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::{Gitea, Osc};
+use mtui_datasources::{Gitea, Osc, TeReGen};
 use mtui_types::RequestKind;
 
 use crate::command::{Command, Scope};
@@ -88,6 +88,32 @@ pub(crate) async fn pi_autolock(session: &mut Session, action: PiAction) {
         }
         PiAction::None => {}
     }
+}
+
+/// Prints the loaded update's priority + deadline from TeReGen, if available
+/// (upstream `BaseApiCall._show_priority_deadline`).
+///
+/// Best-effort context for the tester picking up an update: silent when TeReGen
+/// has nothing for this request (both values `None`) or is unreachable. A
+/// failure to build the client is logged and ignored — it never fails the
+/// command.
+async fn show_priority_deadline(session: &mut Session, rrid: &mtui_types::RequestReviewID) {
+    let teregen = match TeReGen::new(&session.config, &session.config.teregen_api) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::debug!("could not build TeReGen client: {e}");
+            return;
+        }
+    };
+    let (priority, deadline) = teregen.priority_deadline(&rrid.to_string()).await;
+    if priority.is_none() && deadline.is_none() {
+        return;
+    }
+    let p = priority.map_or_else(|| "?".to_owned(), |v| v.to_string());
+    let d = deadline.unwrap_or_else(|| "?".to_owned());
+    session
+        .display
+        .println(&format!("TeReGen: priority {p}, deadline {d}"));
 }
 
 /// Adds the common `-g/--group` + `-u/--user` args (upstream base
@@ -170,6 +196,7 @@ impl Command for Assign {
                 .map_err(|e| CommandError::Other(format!("osc assign failed: {e}")))?;
         }
         pi_autolock(session, PiAction::Lock).await;
+        show_priority_deadline(session, &rrid).await;
         Ok(())
     }
 }
@@ -512,5 +539,92 @@ mod tests {
         // marker bookkeeping.
         let args = matches(&Assign, &["--force"]);
         Assign.call(&mut session, &args).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn assign_surfaces_teregen_priority_deadline() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // One server backs both the Gitea PR API and the TeReGen report API.
+        // The TeReGen `GET /reports/{rrid}` mock is registered first and matched
+        // by path, so it wins over the catch-all Gitea GET.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/reports/.+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "priority": 700,
+                "deadline": "2026-08-01T00:00:00Z"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requested_reviewers": [],
+                "state": "open",
+                "head": {"sha": "abc"}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
+        session.templates.active_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_token = "tok".to_owned();
+        session.config.teregen_api = server.uri();
+
+        let args = matches(&Assign, &["--force"]);
+        Assign.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            buf.contents()
+                .contains("TeReGen: priority 700, deadline 2026-08-01T00:00:00Z"),
+            "expected priority/deadline line, got: {}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn assign_silent_when_teregen_has_no_priority_deadline() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // TeReGen returns a report object with neither priority nor deadline →
+        // the assign must print nothing TeReGen-related.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/reports/.+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requested_reviewers": [],
+                "state": "open",
+                "head": {"sha": "abc"}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
+        session.templates.active_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_token = "tok".to_owned();
+        session.config.teregen_api = server.uri();
+
+        let args = matches(&Assign, &["--force"]);
+        Assign.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            !buf.contents().contains("TeReGen:"),
+            "expected no TeReGen line, got: {}",
+            buf.contents()
+        );
     }
 }
