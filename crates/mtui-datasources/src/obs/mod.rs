@@ -3,16 +3,20 @@
 //! Ported from upstream `mtui/data_sources/obs/`. This backend replaces the
 //! `osc qam` subprocess wrapper ([`crate::oscqam`]) with a native Rust OBS API
 //! client. The transport foundation ([`client`], [`errors`]), the native oscrc
-//! credential reader ([`oscrc`]), the XML models ([`models`]) and the
-//! assignment-inference state machine ([`inference`]) have landed; later
-//! subtasks add the SSH-signature signer and the five QAM operations.
+//! credential reader ([`oscrc`]), the XML models ([`models`]), the
+//! assignment-inference state machine ([`inference`]) and the SSH-signature
+//! auth ([`auth`], [`sshsig`]) have landed; later subtasks add the five QAM
+//! operations.
 
+pub mod auth;
 pub mod client;
 pub mod errors;
 pub mod inference;
 pub mod models;
 pub mod oscrc;
+pub mod sshsig;
 
+pub use auth::{AgentKeys, ObsSignatureAuth, challenge_params};
 pub use client::{NoAuth, ObsAuth, ObsClient, error_summary};
 pub use errors::ObsError;
 pub use inference::{Assignment, assignments_for_user, infer};

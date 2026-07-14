@@ -28,29 +28,37 @@ use crate::obs::errors::ObsError;
 
 /// The SSH-signature auth seam for the OBS transport.
 ///
-/// The transport foundation (G1a) needs *a* way to decorate an outbound request
-/// without depending on the (large) SSH-signature signer, which lands in G1c
-/// together with the `401 WWW-Authenticate: Signature` challenge/response flow.
-/// This trait is that seam: [`apply`](ObsAuth::apply) decorates a
-/// [`RequestBuilder`] just before it is sent. The provisional single-method
-/// shape may be widened by G1c to carry the challenge/retry-once handshake.
+/// Upstream sends the first request unauthenticated and only signs on a `401`
+/// `WWW-Authenticate: Signature` challenge, resending **exactly once** with the
+/// `Authorization: Signature` header. reqwest has no `requests`-style response
+/// hook, so the retry-once loop lives in `ObsClient::request`; this trait is
+/// the seam it drives: [`authorization`](ObsAuth::authorization) builds the
+/// header value for the challenge `realm`.
+///
+/// Implementations must **never** cause the auth material (header/signature) to
+/// be logged — they only ever *return* it to the transport, which logs method +
+/// URL only.
+#[async_trait::async_trait]
 pub trait ObsAuth: Send + Sync {
-    /// Decorate `builder` with whatever auth headers the request needs.
+    /// Build the `Authorization: Signature …` value for the challenge `realm`.
     ///
-    /// Implementations must **never** cause the auth material to be logged.
-    fn apply(&self, builder: RequestBuilder) -> RequestBuilder;
+    /// Returns `Ok(None)` when no auth is configured (the [`NoAuth`] stub), in
+    /// which case the transport does **not** retry the `401`. Returns
+    /// `Err(..)` for a resolvable-but-failed signer (fail-closed).
+    async fn authorization(&self, realm: &str) -> Result<Option<String>, ObsError>;
 }
 
-/// A no-op [`ObsAuth`] that adds no headers.
+/// A no-op [`ObsAuth`] that never signs.
 ///
-/// Used by the transport foundation and its tests; G1c replaces it with the
-/// real SSH-signature signer.
+/// Used by callers that hold a session cookie already, and by tests; a `401`
+/// challenge is returned as-is (no retry) because there is nothing to sign.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoAuth;
 
+#[async_trait::async_trait]
 impl ObsAuth for NoAuth {
-    fn apply(&self, builder: RequestBuilder) -> RequestBuilder {
-        builder
+    async fn authorization(&self, _realm: &str) -> Result<Option<String>, ObsError> {
+        Ok(None)
     }
 }
 
@@ -173,7 +181,49 @@ impl ObsClient {
         Ok(())
     }
 
+    /// Build a fresh request builder for `url` with the standard OBS headers and
+    /// optional body. `auth` is deliberately *not* applied here — the first
+    /// request goes out unauthenticated (upstream), and the retry attaches the
+    /// signed header directly.
+    fn builder(&self, method: &Method, url: &str, body: Option<&str>) -> RequestBuilder {
+        let mut builder = self
+            .http
+            .inner()
+            .request(method.clone(), url)
+            .header("Accept", "application/xml");
+        if let Some(body) = body {
+            builder = builder
+                .header("Content-Type", "application/xml; charset=utf-8")
+                .body(body.as_bytes().to_vec());
+        }
+        builder
+    }
+
+    /// Send one prepared request, mapping transport failures to [`ObsError`].
+    async fn send(
+        &self,
+        method: &Method,
+        url: &str,
+        builder: RequestBuilder,
+    ) -> Result<reqwest::Response, ObsError> {
+        builder.send().await.map_err(|e| {
+            if is_ssl_verification_error(&e) {
+                let host = host_of(url);
+                tracing::error!("{}", ssl_verification_hint(host.as_deref()));
+                tracing::debug!("OBS TLS error detail: {e}");
+            } else {
+                tracing::error!("OBS {method} {url} failed: {e}");
+            }
+            ObsError::Http(e.into())
+        })
+    }
+
     /// The shared request path for GET/POST, ported from upstream `_request`.
+    ///
+    /// Sends the first request unauthenticated; on a `401` that offers a
+    /// `Signature` challenge, signs `(created)` over the challenge realm and
+    /// resends **exactly once** with the `Authorization: Signature` header. The
+    /// header is never logged — only method + URL are, at `debug`.
     async fn request(
         &self,
         method: Method,
@@ -184,53 +234,90 @@ impl ObsClient {
         let url = self.url(path, params);
         self.check_budget(&url)?;
 
-        let mut builder = self
-            .http
-            .inner()
-            .request(method.clone(), &url)
-            .header("Accept", "application/xml");
-        if let Some(body) = body {
-            builder = builder
-                .header("Content-Type", "application/xml; charset=utf-8")
-                .body(body.as_bytes().to_vec());
-        }
-        // NB: auth is applied last and never logged; we log only method + URL.
-        builder = self.auth.apply(builder);
         tracing::debug!("OBS {method} {url}");
+        let response = self
+            .send(&method, &url, self.builder(&method, &url, body))
+            .await?;
 
-        let response = match builder.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                if is_ssl_verification_error(&e) {
-                    let host = host_of(&url);
-                    tracing::error!("{}", ssl_verification_hint(host.as_deref()));
-                    tracing::debug!("OBS TLS error detail: {e}");
-                } else {
-                    tracing::error!("OBS {method} {url} failed: {e}");
-                }
-                return Err(ObsError::Http(e.into()));
-            }
+        let response = if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            self.retry_signed(&method, &url, body, response).await?
+        } else {
+            response
         };
 
-        let status = response.status();
-        if !status.is_success() {
-            // `text()` consumes the response; read it before building the error.
-            let text = response.text().await.unwrap_or_default();
-            let summary = error_summary(&text);
-            let suffix = if summary.is_empty() {
-                String::new()
-            } else {
-                format!(": {summary}")
-            };
-            tracing::warn!("OBS {method} {url} -> {}{suffix}", status.as_u16());
-            return Err(ObsError::Api {
-                status: status.as_u16(),
-                url,
-                summary,
-            });
-        }
+        self.finish(&method, &url, response).await
+    }
 
-        response.text().await.map_err(|e| ObsError::Http(e.into()))
+    /// On a `401`, build the signed retry and resend once.
+    ///
+    /// Returns the retried response when the challenge offers `Signature` and a
+    /// signer is configured; otherwise returns the original `401` unchanged (the
+    /// caller then surfaces it as an [`ObsError::Api`]). A signer error
+    /// (fail-closed) propagates.
+    async fn retry_signed(
+        &self,
+        method: &Method,
+        url: &str,
+        body: Option<&str>,
+        response: reqwest::Response,
+    ) -> Result<reqwest::Response, ObsError> {
+        let schemes = crate::obs::auth::challenge_params(response.headers());
+        let Some(params) = schemes.get("signature") else {
+            tracing::error!(
+                "OBS returned 401 but did not offer Signature auth (offered: {})",
+                if schemes.is_empty() {
+                    "nothing".to_owned()
+                } else {
+                    schemes.keys().cloned().collect::<Vec<_>>().join(", ")
+                }
+            );
+            return Ok(response);
+        };
+        let realm = params.get("realm").map_or("", String::as_str).to_owned();
+
+        let Some(header) = self.auth.authorization(&realm).await? else {
+            // No signer configured (NoAuth): return the original 401 unchanged.
+            return Ok(response);
+        };
+
+        // Release the challenge response before resending.
+        drop(response);
+
+        let builder = self
+            .builder(method, url, body)
+            .header("Authorization", header);
+        self.send(method, url, builder).await
+    }
+
+    /// Turn a final (non-retryable) response into its body or an [`ObsError`].
+    async fn finish(
+        &self,
+        method: &Method,
+        url: &str,
+        response: reqwest::Response,
+    ) -> Result<String, ObsError> {
+        if response.status().is_success() {
+            return response.text().await.map_err(|e| ObsError::Http(e.into()));
+        }
+        Err(self.api_error(method, url, response).await)
+    }
+
+    /// Build an [`ObsError::Api`] from a failing response (consumes its body).
+    async fn api_error(&self, method: &Method, url: &str, response: reqwest::Response) -> ObsError {
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        let summary = error_summary(&text);
+        let suffix = if summary.is_empty() {
+            String::new()
+        } else {
+            format!(": {summary}")
+        };
+        tracing::warn!("OBS {method} {url} -> {status}{suffix}");
+        ObsError::Api {
+            status,
+            url: url.to_owned(),
+            summary,
+        }
     }
 
     /// GET `path` (relative to the API base) and return the response body.
@@ -340,11 +427,15 @@ mod tests {
         assert_eq!(host_of("not a url"), None);
     }
 
-    #[test]
-    fn no_auth_leaves_builder_unchanged() {
-        // Smoke test the seam: NoAuth returns the builder as-is (no panic).
-        let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
-        let builder = http.inner().get("https://example.invalid/");
-        let _ = NoAuth.apply(builder);
+    #[tokio::test]
+    async fn no_auth_never_signs() {
+        // The seam: NoAuth returns no header, so a 401 challenge is not retried.
+        assert!(
+            NoAuth
+                .authorization("Use your developer account")
+                .await
+                .expect("NoAuth never errors")
+                .is_none()
+        );
     }
 }

@@ -29,11 +29,32 @@ hmac.workspace = true
 sha1.workspace = true
 hex.workspace = true
 urlencoding.workspace = true
+# OBS "Signature" (SSH) auth (G1c). `ssh-key` provides the SSHSIG wire-format
+# signer (`sshsig` module) + `Fingerprint` for any key type; pinned to the exact
+# version russh 0.62 resolves so Cargo unifies on one copy and the file-key and
+# ssh-agent (russh) paths share `ssh_key::PublicKey`/`PrivateKey`. `crypto`
+# enables ed25519/ecdsa/rsa/p256 signing (RSA is signed rsa-sha2-512, not SHA-1).
+ssh-key = { version = "=0.7.0-rc.11", features = ["crypto", "std", "encryption"] }
+base64ct = { version = "1", features = ["alloc"] }
+# ssh-agent client for headless agent signing (select by SHA256 fingerprint /
+# `.pub` blob / passphrase-protected counterpart). russh is already a workspace
+# dep and shares `ssh_key` types with the file-key path — no second crypto stack.
+russh.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 wiremock.workspace = true
 insta.workspace = true
 tempfile = "3"
+# Golden-vector tests for the SSHSIG signer: `signature::Signer` to sign the
+# agent-path enveloped bytes with a file key (proving both backends agree), and
+# `base64ct` to decode the raw SSHSIG blob back for round-trip assertions.
+# Pinned to the versions ssh-key 0.7 resolves so the traits/types unify.
+signature = "3.0.0-rc.5"
+base64ct = { version = "1", features = ["alloc"] }
+# RNG for encrypting a test key in the auth ssh-agent fallback tests. `rand`
+# 0.10 matches russh's resolved rand_core 0.10 (ssh-key's CryptoRng bound), the
+# same version mtui-hosts uses for test key-gen.
+rand = { workspace = true }
 # Scoped subscriber to capture the oscrc loose-permissions warning in tests.
 tracing-subscriber.workspace = true
