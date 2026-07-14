@@ -500,9 +500,11 @@ mod tests {
 
     #[tokio::test]
     async fn osc_dispatch_maintenance_assign_runs_backend() {
-        // A Maintenance RRID routes to OSC; with no `osc` binary the assign
-        // fails, surfacing the OSC-branch error and exercising that dispatch.
+        // A Maintenance RRID routes to the native OBS backend. Point it at an
+        // oscrc that does not exist so credential resolution fails fast (offline,
+        // no network), surfacing the OSC-branch error and exercising that dispatch.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.config.obs_conffile = "/nonexistent/oscrc-for-tests".to_owned();
         let args = matches(&Assign, &["-g", "qam-sle"]);
         if let Err(e) = Assign.call(&mut session, &args).await {
             assert!(matches!(e, CommandError::Other(m) if m.contains("osc assign failed")));

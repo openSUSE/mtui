@@ -6,10 +6,10 @@
 //! `svn co` runs in `template_dir` so the absolute repo URI lands in the right
 //! place, and `svn ci`/`svn up` run inside the working copy.
 //!
-//! This is deliberately **not** the `mtui-datasources::oscqam::CommandRunner`:
-//! that trait is an `osc`-review wrapper with an `osc`-tuned timeout posture and
-//! **no `cwd` parameter**, and reusing it would couple testreport checkout to
-//! the incident-review crate. A small, local trait keeps the crate boundary
+//! This runner is deliberately local to this crate rather than shared with the
+//! incident-review backends in `mtui-datasources`: those drive the OBS review
+//! API and have no `cwd` notion, and reusing one runner would couple testreport
+//! checkout to the review crate. A small, local trait keeps the crate boundary
 //! honest and lets tests inject a stub that records the `cwd` (which
 //! `test_svn_io.py` asserts).
 

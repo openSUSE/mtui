@@ -196,15 +196,18 @@ mod tests {
 
     #[tokio::test]
     async fn osc_dispatch_runs_for_maintenance_rrid() {
-        // A Maintenance RRID routes to OSC. With no `osc` binary on PATH the
-        // call fails, surfacing the OSC-branch error — which exercises the
-        // non-gitea dispatch + error mapping without needing a real backend.
+        // A Maintenance RRID routes to the native OBS backend. Point it at an
+        // oscrc that does not exist so credential resolution fails fast (offline,
+        // no network), exercising the non-gitea dispatch + error mapping without
+        // needing a real backend. (Group-approve is refused before any I/O, but
+        // the missing-oscrc guard makes the failure deterministic regardless.)
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.config.session_user = "tester".to_owned();
+        session.config.obs_conffile = "/nonexistent/oscrc-for-tests".to_owned();
         let args = matches(&Approve, &["-g", "qam-sle"]);
         let res = Approve.call(&mut session, &args).await;
-        // Either the osc call failed (no binary) → Err, or (unlikely in CI) it
-        // succeeded; both mean the OSC branch executed.
+        // The native backend refuses group-approve / fails to resolve creds → Err;
+        // the branch executed and the error mapping produced our message.
         if let Err(e) = res {
             assert!(matches!(e, CommandError::Other(m) if m.contains("osc approve failed")));
         }

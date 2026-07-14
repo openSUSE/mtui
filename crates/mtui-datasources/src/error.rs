@@ -148,68 +148,6 @@ pub enum GiteaError {
     Http(#[from] HttpError),
 }
 
-/// Errors from the `osc qam` subprocess wrapper ([`crate::oscqam`]).
-///
-/// Upstream `mtui/data_sources/oscqam.py` is best-effort: every failure is
-/// logged and folded into a `bool` return. This port deviates intentionally to
-/// an idiomatic typed `Result<(), OscError>` (see the crate AGENTS notes on
-/// preferring a typed `Result` over MTUI's `log + return`), preserving the
-/// *behaviour* — the operation still never panics and each failure carries the
-/// reason `osc` gave — while making that reason inspectable by the caller. The
-/// variants map onto upstream's three logged failure paths plus the runner
-/// seam:
-///
-/// * [`NonZero`](Self::NonZero) → upstream `CalledProcessError` (osc exited
-///   non-zero); the payload is `_tail`-trimmed stderr/stdout or the bare exit
-///   code, exactly as upstream logged it.
-/// * [`Timeout`](Self::Timeout) → upstream `TimeoutExpired` (osc did not return
-///   within the runtime cap, likely an interactive prompt with no input).
-/// * [`NotFound`](Self::NotFound) → upstream `FileNotFoundError` (`osc` is not
-///   installed or not on `PATH`).
-/// * [`Runner`](Self::Runner) → any other I/O failure spawning/awaiting the
-///   child process (Rust-specific: upstream `run` folded these into the same
-///   exception paths).
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum OscError {
-    /// `osc` exited with a non-zero status. The payload reproduces upstream's
-    /// logged detail: the trimmed stderr, or trimmed stdout, or `exit code N`.
-    #[error("osc '{operation}' operation failed: {detail}")]
-    NonZero {
-        /// The `qam` subcommand that failed (e.g. `approve`).
-        operation: String,
-        /// The trimmed osc stderr/stdout, or `exit code N` when both were empty.
-        detail: String,
-    },
-
-    /// `osc` did not return within the runtime cap (upstream 180s), likely an
-    /// interactive prompt with no input on the detached stdin.
-    #[error(
-        "osc '{operation}' operation timed out after {seconds}s; osc did not return \
-         (likely an interactive prompt with no input)"
-    )]
-    Timeout {
-        /// The `qam` subcommand that timed out.
-        operation: String,
-        /// The elapsed runtime cap in seconds.
-        seconds: u64,
-    },
-
-    /// The `osc` binary could not be found; it is not installed or not on
-    /// `PATH`.
-    #[error("'osc' command not found. Is it installed and in your PATH?")]
-    NotFound,
-
-    /// Any other I/O failure spawning or awaiting the `osc` child process.
-    #[error("failed to run osc '{operation}': {source}")]
-    Runner {
-        /// The `qam` subcommand being run when the failure occurred.
-        operation: String,
-        /// The underlying I/O failure.
-        source: std::io::Error,
-    },
-}
-
 /// Errors from the openQA / QAM Dashboard overview search ([`crate::oqa_search`]).
 ///
 /// Mirrors upstream's single `_HTTPError` (raised by `_get_json` /

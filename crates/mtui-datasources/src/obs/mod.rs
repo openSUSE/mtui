@@ -11,6 +11,7 @@
 pub mod auth;
 pub mod client;
 pub mod errors;
+pub mod facade;
 pub mod inference;
 pub mod models;
 pub mod oscrc;
@@ -21,6 +22,7 @@ pub mod sshsig;
 pub use auth::{AgentKeys, ObsSignatureAuth, challenge_params};
 pub use client::{NoAuth, ObsAuth, ObsClient, error_summary};
 pub use errors::ObsError;
+pub use facade::Osc;
 pub use inference::{Assignment, assignments_for_user, infer};
 pub use models::{
     HistoryEvent, REJECT_REASON_NAME, REJECT_REASON_NAMESPACE, Request, Review,

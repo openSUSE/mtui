@@ -5,10 +5,10 @@
 //! `mtui/types/updateid.py` (`UpdateID._checkout`).
 //!
 //! Test reports live in **SVN** — this is the only checkout mechanism, shared by
-//! OBS/IBS and SLFO incidents alike. Gitea (SLFO) and `osc qam` (OBS/IBS) are
-//! review-workflow backends (assign/approve/reject/comment) and never check a
-//! template out; see [`runner`] for why this crate does not reuse the `oscqam`
-//! command runner.
+//! OBS/IBS and SLFO incidents alike. Gitea (SLFO) and the native OBS API
+//! (OBS/IBS) are review-workflow backends (assign/approve/reject/comment) and
+//! never check a template out; see [`runner`] for why this crate keeps its own
+//! `svn` command runner.
 //!
 //! The checkout exceptions and their user-facing messages are colocated here
 //! (rather than in `mtui-types`) to mirror upstream, where they live in
