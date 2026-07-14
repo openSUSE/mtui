@@ -43,7 +43,7 @@ crates/
   mtui-types/        domain types + error hierarchy (no I/O)
   mtui-config/       INI config + XDG paths
   mtui-hosts/        SSH/SFTP (russh), Target/HostsGroup, locks, arbiter   [async]
-  mtui-datasources/  shared HTTP, refhosts resolve/search/verify, openQA/QEM/Gitea/osc-qam/oqa-search  [async]
+  mtui-datasources/  shared HTTP, refhosts resolve/search/verify, openQA/QEM/Gitea/native-OBS-QAM/oqa-search  [async]
   mtui-testreport/   TestReport lifecycle, metadata parsers, SVN/Gitea checkout, update workflow (actions/checks/export)
   mtui-core/         Command trait + registry + Session + engine + wiring (composition root)
   mtui-cli/          reedline REPL + `mtui` binary
@@ -115,8 +115,10 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
 
 ## Contracts (do not break without intent — these enable ecosystem interop)
 - **RRID grammar** `project:kind:maintenance_id:review_id` and its parse errors.
-- **refhosts.yml schema** (location-grouped, merged + deduped; `version.minor` may
-  be numeric or `spN`) — parse identically to upstream fixtures.
+- **refhosts.yml schema** — the file is still location-grouped *on disk*, but
+  location is a legacy grouping, not a live query dimension: rows are
+  merged/flattened and de-duplicated at load (`version.minor` may be numeric or
+  `spN`). Parse identically to upstream fixtures.
 - **Testreport / export text format**, incl. the `overview_inject` BEGIN/END
   idempotent block under `regression tests:`.
 - **Remote lock wire format** — one line `timestamp:user:pid[:comment]` (parsed
@@ -166,9 +168,11 @@ and treat them as golden.
 5. Update the command reference docs (prefer generating from the registry).
 
 ## Runtime dependencies (subprocess, not crates)
-`svn` (testreport checkout), `osc` + `osc-plugin-qam` (osc-qam backend), terminal
-emulators for `terms/switch`. Declare as packaging recommends; keep them optional
-and degrade gracefully when absent.
+`svn` (testreport checkout) and terminal emulators for `terms/switch`. Declare as
+packaging recommends; keep them optional and degrade gracefully when absent. The
+QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`) no longer
+shells out to `osc`/`osc-plugin-qam` — it talks to the OBS/IBS API natively (see
+the native OBS backend and `[obs]` config), reading credentials from `oscrc`.
 
 ## Further reading
 - `PLAN-highlevel.md` — the implementation roadmap (architecture, crate layout,

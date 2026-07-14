@@ -40,7 +40,7 @@ ecosystem.
   `install`, `prepare`, `downgrade`, …) with per-host `enabled`/`disabled`/
   `dryrun` states and `parallel`/`serial` modes. **Pubkey auth only.**
 - OBS/IBS and Gitea maintenance-request workflow (`assign`, `approve`, `reject`,
-  `comment`, …).
+  `comment`, …) via the native OBS/IBS API (no `osc` subprocess).
 - openQA / QEM Dashboard integration, incl. an `openqa_overview` (port of
   `oqa-search`) with `--export` into the testreport.
 - Reference-host discovery via `refhosts.yml` (HTTPS- or filesystem-resolved,
@@ -72,8 +72,11 @@ Some backends shell out to external tools (kept optional; degrade gracefully whe
 absent):
 
 - `svn` — testreport checkout/commit (SVN backend)
-- `osc` + `osc-plugin-qam` — the osc-qam request backend
 - a terminal emulator — for the `terms`/`switch` commands
+
+The QAM review workflow talks to the OBS/IBS API natively (no `osc` subprocess);
+it reads credentials from `oscrc` and is configured via the `[obs]` table
+(`api_url`, `conffile`, `request_timeout`).
 
 ## Documentation
 
