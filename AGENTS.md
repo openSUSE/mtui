@@ -63,7 +63,9 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
 - Run the MCP server: `cargo run -p mtui-mcp --features mcp -- --help`
 - Format: `cargo fmt --all`
 - Lint (warnings are errors): `cargo clippy --workspace --all-targets -- -D warnings`
-- Test: `cargo test --workspace`
+- Test: `cargo test --workspace` — **runs long (exceeds the default 120s
+  timeout); allow ≥300000 ms (5 min).** For faster iteration, scope to one
+  crate with `cargo test -p <crate>`.
 - Coverage: `cargo llvm-cov --workspace --lcov --output-path lcov.info`
 - Feature matrix (catches feature-gate rot):
   `cargo build --workspace --no-default-features` and `--all-features`
@@ -71,7 +73,9 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
 ## Definition of Done (hard rules)
 - Run the **full gate on the whole workspace** before claiming done:
   `cargo fmt --all --check` **and** `cargo clippy --workspace --all-targets -- -D warnings`
-  **and** `cargo test --workspace`.
+  **and** `cargo test --workspace`. The `cargo test --workspace` step is
+  long-running — run it with a generous timeout (≥300000 ms); do not treat an
+  early timeout as a failure.
 - **"Done" means CI observed green, not predicted green.** Report status from the
   actual run.
 - New/changed code needs **>=80% patch coverage**. If a line is genuinely
