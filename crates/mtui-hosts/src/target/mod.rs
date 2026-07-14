@@ -651,7 +651,13 @@ impl Target {
     /// The local connection is closed last regardless. A no-op when the target
     /// is not connected. Unlike [`HostsGroup::reboot`](crate::HostsGroup::reboot)
     /// this never reconnects — it is the teardown used on session exit.
-    pub async fn close(&mut self, action: Option<&str>) {
+    ///
+    /// Returns the final connection-shutdown outcome so callers (`quit` via
+    /// [`HostsGroup::close`](crate::HostsGroup::close)) can name a host that
+    /// failed to disconnect. The lock/claim release above stays best-effort and
+    /// is *not* folded into the result: a lock held by another owner (or a lost
+    /// link during unlock) must not mask the shutdown outcome.
+    pub async fn close(&mut self, action: Option<&str>) -> Result<()> {
         let active = self.connection.as_ref().is_some_and(|c| c.is_active());
         if active {
             // Best-effort release of our own locks before disconnecting; a lock
@@ -676,11 +682,10 @@ impl Target {
             }
         }
 
-        if let Some(conn) = self.connection.as_mut()
-            && let Err(e) = conn.close().await
-        {
-            tracing::debug!(host = %self.hostname, error = %e, "close: connection shutdown failed (ignored)");
+        if let Some(conn) = self.connection.as_mut() {
+            conn.close().await?;
         }
+        Ok(())
     }
 
     /// Records the parsed host system and its transactional flag.
@@ -1880,7 +1885,7 @@ mod tests {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
         let mut t = enabled_with(conn);
-        t.close(None).await;
+        t.close(None).await.expect("close ok");
         assert!(
             handle.fired_commands().is_empty(),
             "no reboot/halt dispatched"
@@ -1893,7 +1898,7 @@ mod tests {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
         let mut t = enabled_with(conn);
-        t.close(Some("reboot")).await;
+        t.close(Some("reboot")).await.expect("close ok");
         assert_eq!(handle.fired_commands(), vec!["reboot".to_owned()]);
     }
 
@@ -1902,7 +1907,7 @@ mod tests {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
         let mut t = enabled_with(conn);
-        t.close(Some("poweroff")).await;
+        t.close(Some("poweroff")).await.expect("close ok");
         assert_eq!(handle.fired_commands(), vec!["halt".to_owned()]);
     }
 
@@ -1910,7 +1915,7 @@ mod tests {
     async fn close_on_unconnected_is_noop() {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
         // Must not panic; no live connection to close, no action dispatched.
-        t.close(Some("reboot")).await;
+        t.close(Some("reboot")).await.expect("close ok");
     }
 
     #[tokio::test]

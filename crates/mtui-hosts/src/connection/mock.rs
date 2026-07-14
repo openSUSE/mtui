@@ -103,6 +103,10 @@ pub struct MockConnection {
     /// across `Clone`d handles so the test fires the same notify. Never set by
     /// default (an instant close).
     block_close: Option<Arc<tokio::sync::Notify>>,
+    /// When `true`, [`close`](Connection::close) returns an error, modelling a
+    /// host that fails to disconnect cleanly so `quit`'s per-host failure
+    /// naming can be exercised.
+    close_fails: bool,
     /// Number of times [`reconnect`](Connection::reconnect) has been called.
     reconnects: Arc<Mutex<usize>>,
     /// When `true`, [`reconnect`](Connection::reconnect) fails.
@@ -172,6 +176,7 @@ impl MockConnection {
             issued: Arc::new(Mutex::new(Vec::new())),
             closed: Arc::new(Mutex::new(false)),
             block_close: None,
+            close_fails: false,
             reconnects: Arc::new(Mutex::new(0)),
             reconnect_fails: false,
             fired: Arc::new(Mutex::new(Vec::new())),
@@ -260,6 +265,15 @@ impl MockConnection {
     #[must_use]
     pub fn with_blocking_close(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
         self.block_close = Some(gate);
+        self
+    }
+
+    /// Scripts [`close`](Connection::close) to fail, modelling a host that does
+    /// not disconnect cleanly so `quit`'s per-host failure naming (upstream
+    /// `failed to disconnect from <host>`) can be exercised.
+    #[must_use]
+    pub fn with_failing_close(mut self) -> Self {
+        self.close_fails = true;
         self
     }
 
@@ -524,6 +538,12 @@ impl Connection for MockConnection {
         if let Some(gate) = self.block_close.clone() {
             gate.notified().await;
         }
+        if self.close_fails {
+            return Err(HostError::Connect {
+                host: self.hostname.clone(),
+                reason: "mock close failure".to_owned(),
+            });
+        }
         *self.closed.lock().expect("mock closed lock") = true;
         self.active = false;
         Ok(())
@@ -745,6 +765,15 @@ mod tests {
     async fn inactive_builder_reports_not_active() {
         let conn = MockConnection::new("h1").inactive();
         assert!(!conn.is_active());
+    }
+
+    #[tokio::test]
+    async fn with_failing_close_returns_err() {
+        let mut conn = MockConnection::new("h1").with_failing_close();
+        let err = conn.close().await.expect_err("close should fail");
+        assert!(matches!(err, HostError::Connect { host, .. } if host == "h1"));
+        // A failed close does not mark the transport closed.
+        assert!(!conn.is_closed());
     }
 
     #[tokio::test]

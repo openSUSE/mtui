@@ -453,9 +453,19 @@ impl HostsGroup {
     /// hosts one at a time) via [`run_fanout`](super::actions::run_fanout),
     /// mirroring upstream's concurrent close. The overall wait budget is applied
     /// by the caller. A no-op when the group is empty.
-    pub async fn close(&mut self, action: Option<&str>) {
+    ///
+    /// Returns each host's teardown outcome keyed by hostname so `quit` can name
+    /// a host that failed to disconnect (upstream `quit` logs
+    /// `failed to disconnect from <host>: <err>` per future). Collected exactly
+    /// like [`report_locks`](Self::report_locks): each host's
+    /// [`Target::close`] result is inserted into a shared map inside the fan-out,
+    /// so the map is deterministic regardless of completion order.
+    pub async fn close(&mut self, action: Option<&str>) -> BTreeMap<String, Result<()>> {
+        use std::sync::Mutex;
+
         let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         let action = action.map(str::to_owned);
+        let collected: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -464,11 +474,16 @@ impl HostsGroup {
             |_t| true,
             |t| {
                 let action = action.clone();
-                Box::pin(async move { t.close(action.as_deref()).await })
-                    as actions::BoxTargetFut<'_>
+                let collected = &collected;
+                Box::pin(async move {
+                    let hostname = t.hostname().to_owned();
+                    let outcome = t.close(action.as_deref()).await;
+                    collected.lock().unwrap().insert(hostname, outcome);
+                }) as actions::BoxTargetFut<'_>
             },
         )
         .await;
+        collected.into_inner().unwrap()
     }
 
     /// Reports the lock state of every host in the group to `sink`.
@@ -1387,8 +1402,12 @@ mod tests {
             false,
         );
 
-        g.close(Some("poweroff")).await;
+        let outcomes = g.close(Some("poweroff")).await;
 
+        // Every member reports a successful teardown, keyed by hostname.
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes["h1"].is_ok());
+        assert!(outcomes["h2"].is_ok());
         // Both hosts received the mapped `halt` command and were closed.
         assert_eq!(h1.fired_commands(), vec!["halt".to_owned()]);
         assert_eq!(h2.fired_commands(), vec!["halt".to_owned()]);
@@ -1397,10 +1416,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn close_surfaces_per_host_failure() {
+        // One member's connection fails to close; the other closes cleanly. The
+        // returned map names the failing host with an `Err` and the healthy one
+        // with `Ok`, so `quit` can name the failure.
+        let ok = echo("h1");
+        let bad = echo("h2").with_failing_close();
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(ok),
+                ),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(bad),
+                ),
+            ],
+            false,
+        );
+
+        let outcomes = g.close(None).await;
+
+        assert!(outcomes["h1"].is_ok());
+        assert!(
+            matches!(&outcomes["h2"], Err(HostError::Connect { host, .. }) if host == "h2"),
+            "failing host is named in the outcome map"
+        );
+    }
+
+    #[tokio::test]
     async fn close_empty_group_is_noop() {
         let mut g = HostsGroup::new(vec![], false);
-        // Must not panic on an empty group.
-        g.close(Some("reboot")).await;
+        // Must not panic on an empty group; no per-host outcomes.
+        assert!(g.close(Some("reboot")).await.is_empty());
     }
 
     #[tokio::test]
@@ -2000,7 +2053,8 @@ mod tests {
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut g = serial_barrier_group(Arc::clone(&seen));
 
-        g.close(None).await;
+        let outcomes = g.close(None).await;
+        assert!(outcomes.values().all(std::result::Result::is_ok));
 
         assert_eq!(
             *seen.lock().unwrap(),

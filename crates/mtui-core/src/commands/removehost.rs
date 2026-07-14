@@ -57,7 +57,9 @@ impl Command for RemoveHost {
             // lock files drop (upstream `target.close()`); dropping the target
             // alone never runs `close`.
             if let Some(mut target) = session.targets_mut().remove(name) {
-                target.close(None).await;
+                // Best-effort teardown; a failed shutdown is irrelevant since the
+                // target is being dropped anyway.
+                let _ = target.close(None).await;
             }
             // Release the in-process arbiter claim + prune slot candidates
             // (upstream `metadata.release_pool_claim`); no-op when unpooled.

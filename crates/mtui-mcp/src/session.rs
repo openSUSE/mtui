@@ -563,7 +563,8 @@ impl McpSession {
                     report.release_pool_claims().await;
                     // Close the group: plain disconnect (no reboot/poweroff on an
                     // MCP session eviction, unlike the REPL `quit` bootarg).
-                    report.base_mut().targets.close(None).await;
+                    // Per-host teardown outcomes are irrelevant on eviction.
+                    let _ = report.base_mut().targets.close(None).await;
                 }
             }
         };
