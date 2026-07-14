@@ -71,7 +71,7 @@ fn term_script_argv(dir: &Path, name: &str, hosts: &[String]) -> (PathBuf, Vec<S
 /// term names (matching upstream's two `println` calls). Factored out so the
 /// exact text is snapshot-testable with deterministic names.
 fn render_listing(names: &[String]) -> String {
-    format!("available terminals scripts:\n{}\n", names.join(" "))
+    format!("available terminal scripts:\n{}\n", names.join(" "))
 }
 
 #[async_trait]
@@ -212,7 +212,7 @@ mod tests {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Terms, &[]);
         Terms.call(&mut session, &args).await.unwrap();
-        assert!(buf.contents().contains("available terminals scripts:"));
+        assert!(buf.contents().contains("available terminal scripts:"));
     }
 
     #[test]
@@ -220,7 +220,7 @@ mod tests {
         // Deterministic snapshot of the exact no-arg output with seeded names.
         let names = vec!["gnome".to_owned(), "xterm".to_owned()];
         insta::assert_snapshot!(render_listing(&names), @r"
-        available terminals scripts:
+        available terminal scripts:
         gnome xterm
         ");
     }
