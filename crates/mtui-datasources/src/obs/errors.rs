@@ -13,9 +13,9 @@
 //! [`Timeout`](ObsError::Timeout) and the [`Http`](ObsError::Http) transport
 //! passthrough; the oscrc reader (G1b) added [`Config`](ObsError::Config)
 //! (upstream `ObsConfigError`); the XML models (G1d) added
-//! [`Parse`](ObsError::Parse) (malformed OBS XML and the DTD/XXE refusal).
-//! Later subtasks widen the enum with `Inference` (assignment state machine,
-//! G1e) variants; `#[non_exhaustive]` keeps that additive.
+//! [`Parse`](ObsError::Parse) (malformed OBS XML and the DTD/XXE refusal); the
+//! QAM operations (G1f) added [`Op`](ObsError::Op) (workflow-precondition
+//! refusals). `#[non_exhaustive]` keeps further additions additive.
 
 use thiserror::Error;
 
@@ -75,6 +75,18 @@ pub enum ObsError {
     /// matching upstream's `pytest.raises(ObsError, match="DTD")`.
     #[error("{0}")]
     Parse(String),
+
+    /// A QAM operation refused a workflow precondition (G1f).
+    ///
+    /// Reproduces upstream `qam.py`'s bare `ObsError(msg)` raised for the
+    /// operation-level refusals — an empty comment, an ambiguous auto-inferred
+    /// group, a request not open for review, a missing/wrong-`SUMMARY`
+    /// testreport, a previous-decline guard, and the group-approve refusal.
+    /// Kept distinct from [`Parse`](ObsError::Parse) (which means malformed XML)
+    /// so the `OSC` facade (G1g) can tell a workflow refusal apart from a
+    /// transport/parse fault while still folding both into a logged `false`.
+    #[error("{0}")]
+    Op(String),
 
     /// A transport failure, a non-2xx surfaced by the shared HTTP layer, or a
     /// client-build failure (e.g. an unreadable CA bundle).
@@ -153,6 +165,17 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "refusing to parse an OBS document that carries a DTD"
+        );
+    }
+
+    #[test]
+    fn op_error_display_is_verbatim_message() {
+        // Mirrors upstream qam.py's bare ObsError(msg): plain, verbatim.
+        let e =
+            ObsError::Op("group approval is not supported by the native OBS backend".to_owned());
+        assert_eq!(
+            e.to_string(),
+            "group approval is not supported by the native OBS backend"
         );
     }
 

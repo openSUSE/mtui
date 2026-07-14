@@ -14,6 +14,8 @@ pub mod errors;
 pub mod inference;
 pub mod models;
 pub mod oscrc;
+pub mod preconditions;
+pub mod qam;
 pub mod sshsig;
 
 pub use auth::{AgentKeys, ObsSignatureAuth, challenge_params};
@@ -26,3 +28,4 @@ pub use models::{
     parse_request, parse_request_collection,
 };
 pub use oscrc::{ObsCredentials, read_credentials};
+pub use preconditions::fetch_testreport_log;
