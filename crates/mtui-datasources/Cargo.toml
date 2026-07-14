@@ -16,6 +16,7 @@ reqwest.workspace = true
 tokio = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
+ini.workspace = true
 directories.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
@@ -34,3 +35,5 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 wiremock.workspace = true
 insta.workspace = true
 tempfile = "3"
+# Scoped subscriber to capture the oscrc loose-permissions warning in tests.
+tracing-subscriber.workspace = true

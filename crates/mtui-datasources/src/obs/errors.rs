@@ -9,10 +9,10 @@
 //! facade matches exhaustively, mirroring the crate's other typed error
 //! families ([`crate::error::GiteaError`], [`crate::error::OscError`]).
 //!
-//! Only the variants the transport foundation (G1a) needs land here:
-//! [`Api`](ObsError::Api), [`Timeout`](ObsError::Timeout) and the
-//! [`Http`](ObsError::Http) transport passthrough. Later subtasks widen the
-//! enum with `Config` (oscrc reader / auth, G1b/G1c) and `Inference`
+//! The transport foundation (G1a) landed [`Api`](ObsError::Api),
+//! [`Timeout`](ObsError::Timeout) and the [`Http`](ObsError::Http) transport
+//! passthrough; the oscrc reader (G1b) added [`Config`](ObsError::Config)
+//! (upstream `ObsConfigError`). Later subtasks widen the enum with `Inference`
 //! (assignment state machine, G1e) variants; `#[non_exhaustive]` keeps that
 //! additive.
 
@@ -53,6 +53,17 @@ pub enum ObsError {
     /// was exhausted before.
     #[error("{0}")]
     Timeout(String),
+
+    /// A configuration/credential fault while reading `~/.oscrc` (or, later, the
+    /// SSH-signature signer, G1c).
+    ///
+    /// Reproduces upstream `ObsConfigError`: a fail-closed, secret-safe message
+    /// that names the real failing oscrc file/section. The native oscrc reader
+    /// ([`crate::obs::oscrc`]) never interpolates a parser error's own text into
+    /// this message, so a malformed oscrc's offending source line (possibly a
+    /// password) is never leaked.
+    #[error("{0}")]
+    Config(String),
 
     /// A transport failure, a non-2xx surfaced by the shared HTTP layer, or a
     /// client-build failure (e.g. an unreadable CA bundle).
@@ -115,6 +126,13 @@ mod tests {
             "OBS operation exceeded its between-calls time budget before \
              https://api.suse.de/request/1"
         );
+    }
+
+    #[test]
+    fn config_error_display_is_verbatim_message() {
+        // Mirrors upstream ObsConfigError: a plain, fail-closed message.
+        let e = ObsError::Config("oscrc [https://api.suse.de] has no 'user'".to_owned());
+        assert_eq!(e.to_string(), "oscrc [https://api.suse.de] has no 'user'");
     }
 
     #[test]

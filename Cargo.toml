@@ -33,6 +33,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9" # or serde_yml; decide in Phase 1
 toml = "1"
+# INI parsing for the native `~/.oscrc` credential reader (obs backend, G1b).
+# osc writes genuine INI (`[https://api.suse.de]` headers, bare `key = value`),
+# not TOML, so this is a configparser-parity reader distinct from the app's TOML
+# config. Parse errors are mapped to a fixed message (never interpolating the
+# parser's Display) so a malformed oscrc's source line — possibly a password —
+# is not leaked.
+ini = { package = "rust-ini", version = "0.21" }
 # XML parsing for /etc/products.d/*.prod product files (host system parser).
 quick-xml = "0.41"
 directories = "6"
