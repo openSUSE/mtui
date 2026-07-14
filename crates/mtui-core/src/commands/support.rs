@@ -279,27 +279,68 @@ pub fn complete_choices_filelist(
     complete_choices(synonyms, merged, line, text)
 }
 
+/// Expands a leading tilde in a completion path, mirroring Python's
+/// `os.path.expanduser` for the forms mtui's file completer sees.
+///
+/// - `~` / `~/…` → `$HOME` (+ the remainder), as before.
+/// - `~user` / `~user/…` → that user's home directory (getpwnam), so completing
+///   another user's tree resolves to real absolute candidates.
+///
+/// Best-effort, matching the completer's "transient input must not tear down
+/// completion" convention: an unknown user, a degraded environment (no `$HOME`),
+/// or a non-Unix target leaves `text` unexpanded.
+fn expand_tilde(text: &str) -> String {
+    let Some(rest) = text.strip_prefix('~') else {
+        return text.to_owned();
+    };
+
+    // Bare `~` or `~/…`: split off the user segment (empty here) from `/rest`.
+    if rest.is_empty() || rest.starts_with('/') {
+        return match std::env::var_os("HOME") {
+            Some(home) => format!("{}{rest}", home.to_string_lossy()),
+            None => text.to_owned(),
+        };
+    }
+
+    // `~user` or `~user/…`: resolve the named user's home via getpwnam.
+    let (user, tail) = match rest.find('/') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => (rest, ""),
+    };
+    resolve_user_home(user).map_or_else(|| text.to_owned(), |home| format!("{home}{tail}"))
+}
+
+/// The home directory of a named user, or `None` when it can't be resolved.
+///
+/// Uses getpwnam on Unix; non-Unix targets can't resolve arbitrary users, so the
+/// caller falls back to leaving the tilde unexpanded.
+#[cfg(unix)]
+fn resolve_user_home(user: &str) -> Option<String> {
+    nix::unistd::User::from_name(user)
+        .ok()
+        .flatten()
+        .map(|u| u.dir.to_string_lossy().into_owned())
+}
+
+#[cfg(not(unix))]
+fn resolve_user_home(_user: &str) -> Option<String> {
+    None
+}
+
 /// Lists directory entries matching the basename prefix in `text` (shared by the
 /// `edit`/`put` file completers).
 ///
 /// Splits `text` into a directory part and a basename prefix, lists that
 /// directory, and offers entries whose name starts with the prefix (directories
-/// carry a trailing `/`). A `~` prefix expands to `$HOME`. A bare prefix
-/// completes against the current directory. Best-effort: an unreadable directory
-/// yields no candidates.
+/// carry a trailing `/`). A `~`/`~user` prefix expands to the corresponding home
+/// directory. A bare prefix completes against the current directory.
+/// Best-effort: an unreadable directory yields no candidates.
 #[must_use]
 pub fn complete_path(text: &str) -> Vec<String> {
     use std::path::Path;
 
-    // `~` / `~/…` → expand to the home directory (upstream `expanduser`).
-    let expanded: String = if let Some(rest) = text.strip_prefix('~') {
-        match std::env::var_os("HOME") {
-            Some(home) => format!("{}{rest}", home.to_string_lossy()),
-            None => text.to_owned(),
-        }
-    } else {
-        text.to_owned()
-    };
+    // `~` / `~/…` / `~user` / `~user/…` → expand (upstream `expanduser`).
+    let expanded = expand_tilde(text);
 
     let (dir, prefix) = match expanded.rfind('/') {
         // Keep the trailing slash so the re-joined candidate stays anchored.
@@ -544,6 +585,50 @@ mod tests {
     #[test]
     fn complete_path_unreadable_is_empty() {
         assert!(complete_path("/no/such/dir/x").is_empty());
+    }
+
+    #[test]
+    fn expand_tilde_bare_and_slash_use_home() {
+        let home = std::env::var_os("HOME").map(|h| h.to_string_lossy().into_owned());
+        let Some(home) = home else {
+            return; // no HOME in this environment; nothing to assert.
+        };
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("~/a/b"), format!("{home}/a/b"));
+    }
+
+    #[test]
+    fn expand_tilde_non_tilde_passthrough() {
+        assert_eq!(expand_tilde("/abs/path"), "/abs/path");
+        assert_eq!(expand_tilde("rel/path"), "rel/path");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_tilde_resolves_named_user_home() {
+        // Resolve the *current* user — always present in the password DB — so the
+        // test is hermetic and makes no assumption about root/nobody.
+        let Some(me) = nix::unistd::User::from_uid(nix::unistd::getuid())
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        let home = me.dir.to_string_lossy().into_owned();
+        let name = &me.name;
+        assert_eq!(expand_tilde(&format!("~{name}")), home);
+        assert_eq!(expand_tilde(&format!("~{name}/x")), format!("{home}/x"));
+    }
+
+    #[test]
+    fn expand_tilde_unknown_user_is_unexpanded() {
+        let text = "~nosuchuser123456/x";
+        assert_eq!(expand_tilde(text), text);
+    }
+
+    #[test]
+    fn complete_path_unknown_user_is_empty() {
+        assert!(complete_path("~nosuchuser123456/x").is_empty());
     }
 
     #[test]

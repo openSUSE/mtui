@@ -2174,6 +2174,7 @@ dependencies = [
  "mtui-hosts",
  "mtui-testreport",
  "mtui-types",
+ "nix",
  "owo-colors",
  "rand",
  "regex",
