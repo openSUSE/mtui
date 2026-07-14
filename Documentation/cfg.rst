@@ -268,6 +268,128 @@ Used e.g. in lock files.
 .. __: https://docs.python.org/2/library/getpass.html#getpass.getuser
 
 
+``mcp.max_output_bytes``
+~~~~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int (bytes)
+  | **default**
+  |     100000
+
+Caps the size of a single ``mtui-mcp`` tool result. Output beyond the cap
+is truncated with a one-line notice pointing at the ``offset``/``limit``
+paging on the testreport read tools. A value of ``0`` disables the cap.
+Ignored outside the MCP server. See :doc:`mcp`.
+
+
+``mcp.session_cap``
+~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int
+  | **default**
+  |     32
+
+Maximum number of concurrent client sessions the ``mtui-mcp`` ``http``
+transport will create; a tool call that would exceed the cap fails with a
+clear error instead of spawning unbounded SSH connections and worker
+threads. Must be a positive integer. Ignored under the ``stdio``
+transport. See :doc:`mcp`.
+
+
+``mcp.session_idle_timeout``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int (seconds)
+  | **default**
+  |     1800
+
+Seconds of inactivity after which an idle ``mtui-mcp`` ``http`` session is
+swept and its hosts disconnected. Because the MCP SDK provides no
+per-session teardown callback, this sweep is what releases the SSH
+connections of a client that simply disconnected. Must be a positive
+integer; set to ``0`` to disable reaping. Ignored under the ``stdio``
+transport. See :doc:`mcp`.
+
+
+``mcp.tool_profile``
+~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     enum: ``full``, ``core``
+  | **default**
+  |     ``full``
+
+Selects which synthesised tools the ``mtui-mcp`` server exposes.
+``full`` keeps every command tool. ``core`` exposes only the curated
+everyday subset (load/inspect/run/install, report editing, approve/reject,
+the ``testreport_*`` and ``job_*`` tools), roughly halving the per-request
+tool-list payload the model must carry. Fine-tune either profile with
+``mcp.tools_allow`` and ``mcp.tools_deny``. See :doc:`mcp`.
+
+
+``mcp.tools_allow``
+~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     list: comma-separated tool names
+  | **default**
+  |     (empty)
+
+Tool names added back on top of the selected ``mcp.tool_profile``. Applied
+before ``mcp.tools_deny``. See :doc:`mcp`.
+
+
+``mcp.tools_deny``
+~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     list: comma-separated tool names
+  | **default**
+  |     (empty)
+
+Tool names removed from the exposed set last, after the profile and
+``mcp.tools_allow`` have been applied (deny always wins). See :doc:`mcp`.
+
+
+``obs.api_url``
+~~~~~~~~~~~~~~~
+  | **type**
+  |     URL
+  | **default**
+  |     ``https://api.suse.de``
+
+OBS/IBS API that mtui acts against for native ``SUSE:Maintenance`` and
+Product Increment review actions (``assign``, ``unassign``, ``approve``,
+``reject``, ``comment``). No credentials live here: the acting user and
+the SSH signing key are read from the user's ``~/.oscrc`` (see
+``obs.conffile``), and this value must match a section header in that
+oscrc. OBS TLS verification is governed by ``mtui.ssl_verify``, not by
+oscrc's own TLS options.
+
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
+
+
+``obs.conffile``
+~~~~~~~~~~~~~~~~
+  | **type**
+  |     pathname
+  | **default**
+  |     (empty; ``~/.oscrc``)
+
+Path to the oscrc from which the native OBS backend reads the acting user
+and SSH ``sshkey``. An empty value (the default) uses ``~/.oscrc``.
+
+
+``obs.request_timeout``
+~~~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int (seconds)
+  | **default**
+  |     180
+
+Coarse wall-clock budget checked **between** the individual HTTP calls a
+native OBS operation makes; each call is itself bounded by the shared HTTP
+timeout. This is not a mid-call hard kill. Must be a positive integer.
+
+
 ``openqa.baremetal``
 ~~~~~~~~~~~~~~~~~~~~
   | **type**
@@ -476,6 +598,18 @@ Example
   [mtui]
   user = <your username>
   template_dir = /path/to/where/you/want/to/store/test-reports
+  
+
+  [obs]
+  api_url = https://api.suse.de
+  request_timeout = 180
+  
+
+  [mcp]
+  session_cap = 32
+  session_idle_timeout = 1800
+  tool_profile = full
+  max_output_bytes = 100000
   
 
   [openqa]
