@@ -12,9 +12,10 @@
 //! The transport foundation (G1a) landed [`Api`](ObsError::Api),
 //! [`Timeout`](ObsError::Timeout) and the [`Http`](ObsError::Http) transport
 //! passthrough; the oscrc reader (G1b) added [`Config`](ObsError::Config)
-//! (upstream `ObsConfigError`). Later subtasks widen the enum with `Inference`
-//! (assignment state machine, G1e) variants; `#[non_exhaustive]` keeps that
-//! additive.
+//! (upstream `ObsConfigError`); the XML models (G1d) added
+//! [`Parse`](ObsError::Parse) (malformed OBS XML and the DTD/XXE refusal).
+//! Later subtasks widen the enum with `Inference` (assignment state machine,
+//! G1e) variants; `#[non_exhaustive]` keeps that additive.
 
 use thiserror::Error;
 
@@ -64,6 +65,16 @@ pub enum ObsError {
     /// password) is never leaked.
     #[error("{0}")]
     Config(String),
+
+    /// A malformed OBS XML payload, or a payload refused by the DTD/XXE guard.
+    ///
+    /// Reproduces upstream `models.py`'s bare `ObsError(msg)`: both a reader
+    /// failure and the pre-parse `<!DOCTYPE`/`<!ENTITY` refusal raise the same
+    /// base exception, so the `OSC` facade folds either into a logged `false`
+    /// with one `Err(_)` arm. The DTD-refusal message contains `"DTD"`,
+    /// matching upstream's `pytest.raises(ObsError, match="DTD")`.
+    #[error("{0}")]
+    Parse(String),
 
     /// A transport failure, a non-2xx surfaced by the shared HTTP layer, or a
     /// client-build failure (e.g. an unreadable CA bundle).
@@ -133,6 +144,16 @@ mod tests {
         // Mirrors upstream ObsConfigError: a plain, fail-closed message.
         let e = ObsError::Config("oscrc [https://api.suse.de] has no 'user'".to_owned());
         assert_eq!(e.to_string(), "oscrc [https://api.suse.de] has no 'user'");
+    }
+
+    #[test]
+    fn parse_error_display_is_verbatim_message() {
+        // Mirrors upstream models.py's bare ObsError(msg): plain, verbatim.
+        let e = ObsError::Parse("refusing to parse an OBS document that carries a DTD".to_owned());
+        assert_eq!(
+            e.to_string(),
+            "refusing to parse an OBS document that carries a DTD"
+        );
     }
 
     #[test]
