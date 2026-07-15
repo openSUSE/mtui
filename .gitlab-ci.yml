@@ -41,6 +41,19 @@ clippy:
   script:
     - cargo clippy --workspace --all-targets -- -D warnings
 
+# Catch feature-gate rot: code that only compiles under the default feature set,
+# or breaks when the optional features (mcp/notify/shell) are toggled. Bounding
+# the two extremes (--no-default-features and --all-features) exercises every
+# gate; RUSTFLAGS=-D warnings (from variables:) keeps gated code warning-clean.
+# Compile-only on purpose: the default `test` job covers behavior, and a full
+# --all-features test run roughly doubles an already long suite for little added
+# signal beyond compilation.
+feature-matrix:
+  stage: check
+  script:
+    - cargo build --workspace --no-default-features
+    - cargo build --workspace --all-features
+
 test:
   stage: test
   before_script:
