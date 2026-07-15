@@ -290,7 +290,6 @@ pub(crate) struct MtuiSection {
     pub user: Option<String>,
     pub install_logs: Option<PathBuf>,
     pub chdir_to_template_dir: Option<bool>,
-    pub use_keyring: Option<bool>,
     pub ssl_verify: Option<SslVerify>,
 }
 
@@ -465,7 +464,6 @@ impl RawConfig {
         take!(mtui, user);
         take!(mtui, install_logs);
         take!(mtui, chdir_to_template_dir);
-        take!(mtui, use_keyring);
         take!(mtui, ssl_verify);
         take!(connection, connection_timeout);
         take!(connection, ssh_strict_host_key_checking);
@@ -520,8 +518,6 @@ pub struct Config {
     pub install_logs: PathBuf,
     /// Whether to `chdir` into the template dir on load.
     pub chdir_to_template_dir: bool,
-    /// Whether to read secrets from the system keyring.
-    pub use_keyring: bool,
     /// TLS verification policy for outbound HTTP.
     pub ssl_verify: SslVerify,
 
@@ -640,7 +636,6 @@ impl Default for Config {
             session_user: default_session_user(),
             install_logs: default_install_logs(),
             chdir_to_template_dir: false,
-            use_keyring: false,
             ssl_verify: SslVerify::Enabled,
             connection_timeout: default_connection_timeout(),
             ssh_strict_host_key_checking: default_ssh_strict_host_key_checking(),
@@ -742,7 +737,6 @@ impl Config {
                 .mtui
                 .chdir_to_template_dir
                 .unwrap_or(d.chdir_to_template_dir),
-            use_keyring: raw.mtui.use_keyring.unwrap_or(d.use_keyring),
             ssl_verify: raw.mtui.ssl_verify.unwrap_or(d.ssl_verify),
             connection_timeout: validated_positive!(
                 raw.connection.connection_timeout,
@@ -838,7 +832,6 @@ mod tests {
         assert_eq!(c.connection_timeout, 300);
         assert_eq!(c.refhosts_https_expiration, 3600 * 12);
         assert!(!c.chdir_to_template_dir);
-        assert!(!c.use_keyring);
         assert_eq!(c.ssl_verify, SslVerify::Enabled);
         assert_eq!(c.ssh_strict_host_key_checking, "auto_add");
         assert_eq!(c.refhosts_resolvers, "https,path");

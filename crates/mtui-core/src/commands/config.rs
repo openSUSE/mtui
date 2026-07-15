@@ -21,7 +21,6 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "session_user" => config.session_user.clone(),
         "install_logs" => config.install_logs.display().to_string(),
         "chdir_to_template_dir" => config.chdir_to_template_dir.to_string(),
-        "use_keyring" => config.use_keyring.to_string(),
         "ssl_verify" => ssl_verify_to_string(&config.ssl_verify),
         "connection_timeout" => config.connection_timeout.to_string(),
         "ssh_strict_host_key_checking" => config.ssh_strict_host_key_checking.clone(),
@@ -71,13 +70,12 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 29] = [
+const ATTRS: [&str; 28] = [
     "template_dir",
     "local_tempdir",
     "session_user",
     "install_logs",
     "chdir_to_template_dir",
-    "use_keyring",
     "ssl_verify",
     "connection_timeout",
     "ssh_strict_host_key_checking",
@@ -136,7 +134,6 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         // a runtime `set` cannot store a value the file would reject.
         "ssl_verify" => config.ssl_verify = SslVerify::parse(raw),
         "chdir_to_template_dir" => config.chdir_to_template_dir = parse_bool(raw)?,
-        "use_keyring" => config.use_keyring = parse_bool(raw)?,
         "lock_reap_stale" => config.lock_reap_stale = parse_bool(raw)?,
         "lock_pi_autolock" => config.lock_pi_autolock = parse_bool(raw)?,
         "connection_timeout" => config.connection_timeout = parse_u64(raw)?,
@@ -386,19 +383,19 @@ mod tests {
     #[tokio::test]
     async fn set_bool_parses_config_spellings() {
         let (mut session, _buf) = empty_session();
-        let args = matches(&ConfigCmd, &["set", "use_keyring", "yes"]);
+        let args = matches(&ConfigCmd, &["set", "chdir_to_template_dir", "yes"]);
         ConfigCmd.call(&mut session, &args).await.unwrap();
-        assert!(session.config.use_keyring);
+        assert!(session.config.chdir_to_template_dir);
     }
 
     #[tokio::test]
     async fn set_invalid_bool_rejected_and_unchanged() {
         let (mut session, _buf) = empty_session();
-        let before = session.config.use_keyring;
-        let args = matches(&ConfigCmd, &["set", "use_keyring", "maybe"]);
+        let before = session.config.chdir_to_template_dir;
+        let args = matches(&ConfigCmd, &["set", "chdir_to_template_dir", "maybe"]);
         let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("invalid boolean")));
-        assert_eq!(session.config.use_keyring, before);
+        assert_eq!(session.config.chdir_to_template_dir, before);
     }
 
     #[tokio::test]
