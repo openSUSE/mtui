@@ -1,16 +1,17 @@
-//! Native reader for OBS/IBS credentials from `~/.oscrc` (no `osc` subprocess).
+//! Native reader for OBS/IBS credentials from oscrc (no `osc` subprocess).
 //!
 //! Ported from upstream `mtui/data_sources/obs/oscrc.py`. Parses the user's
 //! existing oscrc (genuine INI) and resolves the credentials for one apiurl (the
-//! fixed `https://api.suse.de`) into a small [`ObsCredentials`]. mtui
-//! authenticates with SSH-signature auth, so this reader deliberately does
+//! fixed `https://api.suse.de`) into a small [`ObsCredentials`]. The oscrc is
+//! located exactly like `osc` itself (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc`
+//! → `~/.oscrc`), so mtui reads the same file `osc` does without importing it.
+//! mtui authenticates with SSH-signature auth, so this reader deliberately does
 //! **not** read `pass`/`passx` for that Signature-only target — pulling a
 //! plaintext password into memory for a code path that never fires would be pure
 //! exposure. Every failure is a typed, fail-closed [`ObsError::Config`] that
 //! names the real oscrc file/section; there is no interactive prompt.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use ini::Ini;
 use tracing::warn;
@@ -80,19 +81,55 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Test seam for the default oscrc path (`~/.oscrc`).
+/// The XDG config base directory, resolved like `osc`/`xdg.BaseDirectory`.
 ///
-/// Mirrors upstream's monkeypatched `_default_conffile`: tests set this to a
-/// temp file so `read_credentials(api, "")` can be exercised without touching
-/// the real `~/.oscrc`.
-static DEFAULT_CONFFILE_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
-
-/// The default oscrc location (`~/.oscrc`), or a test override when set.
-pub fn default_conffile() -> PathBuf {
-    if let Some(p) = DEFAULT_CONFFILE_OVERRIDE.get() {
-        return p.clone();
+/// `$XDG_CONFIG_HOME` if set and non-empty, else `$HOME/.config`. Resolved
+/// directly from the environment (not via the `directories` crate) so the result
+/// matches `osc` on every platform — `directories` diverges on macOS
+/// (`~/Library/Application Support`), which would make mtui read a different
+/// oscrc than `osc` itself.
+fn xdg_config_home() -> PathBuf {
+    if let Some(v) = std::env::var_os("XDG_CONFIG_HOME")
+        && !v.is_empty()
+    {
+        return PathBuf::from(v);
     }
-    expanduser("~/.oscrc")
+    expanduser("~/.config")
+}
+
+/// Locate the oscrc exactly like `osc` (its `identify_conf`).
+///
+/// Precedence, mirroring upstream `osc`:
+///
+/// 1. `$OSC_CONFIG` (verbatim, `~`-expanded, if set) — the explicit override.
+/// 2. `$XDG_CONFIG_HOME/osc/oscrc` (default `~/.config/osc/oscrc`) if it exists.
+/// 3. `~/.oscrc` if it exists.
+/// 4. otherwise the XDG path, as the fallback default.
+///
+/// If both the XDG file and `~/.oscrc` exist, the XDG one wins and a warning is
+/// logged (a dangling `~/.oscrc` symlink counts as present).
+pub fn default_conffile() -> PathBuf {
+    if let Some(override_path) = std::env::var_os("OSC_CONFIG") {
+        return expanduser(&override_path.to_string_lossy());
+    }
+
+    let xdg_path = xdg_config_home().join("osc").join("oscrc");
+    let home_path = expanduser("~/.oscrc");
+
+    if xdg_path.exists() {
+        if home_path.exists() || home_path.is_symlink() {
+            warn!(
+                "multiple oscrc files detected; ignoring {}, using {}",
+                home_path.display(),
+                xdg_path.display(),
+            );
+        }
+        return xdg_path;
+    }
+    if home_path.exists() {
+        return home_path;
+    }
+    xdg_path
 }
 
 /// Resolve an oscrc `sshkey` value to `(path, fingerprint)`.
@@ -154,20 +191,17 @@ fn warn_loose_permissions(_path: &Path) {}
 /// Read SSH-signature credentials for `apiurl` from oscrc.
 ///
 /// `apiurl` is the OBS API URL whose oscrc section to read (its section header
-/// must equal this value). `conffile` is an optional oscrc path override; empty
-/// uses [`default_conffile`] (`~/.oscrc`).
+/// must equal this value). The oscrc is located like `osc` (see
+/// [`default_conffile`]): `$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` →
+/// `~/.oscrc`.
 ///
 /// Returns the resolved [`ObsCredentials`] (user + signing key). Errors with
 /// [`ObsError::Config`] for any fault — missing/unreadable oscrc, missing
 /// section/user/sshkey, an unsupported credentials manager, or a missing key
 /// file. The message names the real failing file/section. Never prompts, never
 /// leaks the offending source line.
-pub fn read_credentials(apiurl: &str, conffile: &str) -> Result<ObsCredentials, ObsError> {
-    let path = if conffile.is_empty() {
-        default_conffile()
-    } else {
-        expanduser(conffile)
-    };
+pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
+    let path = default_conffile();
 
     if !path.is_file() {
         return Err(ObsError::Config(format!(
@@ -311,34 +345,8 @@ mod tests {
         assert!(err.to_string().contains("empty"), "{err}");
     }
 
-    #[test]
-    fn default_conffile_used_when_conffile_empty() {
-        // Mirrors upstream test_default_conffile_used_when_conffile_empty +
-        // test_default_conffile_is_oscrc. The process-global override can be set
-        // once, so both assertions live in this single test.
-        let dir = tempfile::TempDir::new().unwrap();
-        let key = dir.path().join("k");
-        std::fs::write(&key, "dummy-key").unwrap();
-        let oscrc_path = dir.path().join(".oscrc");
-        std::fs::write(
-            &oscrc_path,
-            format!(
-                "[https://api.suse.de]\nuser = bob\nsshkey = {}\n",
-                key.display()
-            ),
-        )
-        .unwrap();
-
-        DEFAULT_CONFFILE_OVERRIDE
-            .set(oscrc_path.clone())
-            .expect("override claimed once per process");
-
-        // The default now points at our temp oscrc (test seam parity with
-        // upstream's monkeypatched _default_conffile).
-        assert_eq!(default_conffile(), oscrc_path);
-
-        // An empty conffile falls back to that default and reads it.
-        let creds = read_credentials("https://api.suse.de", "").unwrap();
-        assert_eq!(creds.user, "bob");
-    }
+    // oscrc discovery (`default_conffile`) and `read_credentials` are covered by
+    // the env-serialised integration tests in `tests/obs_oscrc.rs` (they must
+    // mutate `$OSC_CONFIG`/`$HOME`/`$XDG_CONFIG_HOME`, which the process-global
+    // `#[serial]` guard there isolates).
 }

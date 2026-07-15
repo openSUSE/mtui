@@ -79,8 +79,9 @@ absent):
   `/usr/share/mtui/terms`).
 
 The QAM review workflow talks to the OBS/IBS API natively (no `osc` subprocess);
-it reads credentials from `oscrc` and is configured via the `[obs]` table
-(`api_url`, `conffile`, `request_timeout`).
+it reads credentials from the user's oscrc — located exactly like `osc` itself
+(`$OSC_CONFIG`, then `$XDG_CONFIG_HOME/osc/oscrc`, then `~/.oscrc`) — and is
+configured via the `[obs]` table (`api_url`, `request_timeout`).
 
 ## Documentation
 

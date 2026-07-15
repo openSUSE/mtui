@@ -9,8 +9,8 @@
 //! oscrc file and reaches the OBS API.
 //!
 //! HTTP is mocked with `wiremock`; oscrc/keys are written to `tempfile` dirs.
-//! `$HOME` is manipulated only inside a serialized test to exercise the
-//! no-home path, and always restored.
+//! `$OSC_CONFIG` (the osc-native oscrc override) is set only inside
+//! `#[serial(osc_config_env)]` tests and always removed afterwards.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -198,11 +198,16 @@ fn write_oscrc(
 }
 
 #[tokio::test]
+#[serial_test::serial(osc_config_env)]
+// `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+// `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+#[allow(unsafe_code)]
 async fn non_pem_key_yields_logged_failure_not_panic() {
     // Escape hatch #1 (PR#323): a non-PEM key file. The oscrc references an
     // existing-but-garbage key; on the first authenticated call the wiremock OBS
     // server returns a 401 Signature challenge, the signer tries to load the key,
-    // and fails with a typed ObsError::Config — never a panic.
+    // and fails with a typed ObsError::Config — never a panic. The oscrc is
+    // discovered via `$OSC_CONFIG` (process-global → `#[serial]`).
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/request/56789"))
@@ -220,26 +225,37 @@ async fn non_pem_key_yields_logged_failure_not_panic() {
 
     let mut config = Config::default();
     config.obs_api_url = apiurl;
-    config.obs_conffile = oscrc.display().to_string();
+    // SAFETY: serialised via `#[serial(osc_config_env)]`.
+    unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
 
     // unassign hits GET request/{id} first, triggering the 401 -> sign -> fail.
     let osc = Osc::new(config, rrid());
     let err = osc.unassign(&[]).await.unwrap_err();
+    // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+    unsafe { std::env::remove_var("OSC_CONFIG") };
     assert!(matches!(err, ObsError::Config(_)), "{err:?}");
 }
 
 #[tokio::test]
-async fn expanduser_conffile_yields_logged_failure_not_panic() {
-    // Escape hatch #2 (PR#323): a `~`-relative conffile through expanduser().
-    // Whether or not `$HOME` is set, the reader never panics on the `~` path: it
-    // expands (or leaves `~` in place with no home) and the resulting missing
-    // file surfaces as a typed ObsError::Config. (The no-home invariant — that
+#[serial_test::serial(osc_config_env)]
+// `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+// `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+#[allow(unsafe_code)]
+async fn expanduser_oscrc_yields_logged_failure_not_panic() {
+    // Escape hatch #2 (PR#323): a `~`-relative oscrc path through expanduser().
+    // `$OSC_CONFIG` (the osc-native override) is honoured verbatim and `~`-expanded;
+    // whether or not `$HOME` is set, the reader never panics on the `~` path: it
+    // expands (or leaves `~` in place with no home) and the resulting missing file
+    // surfaces as a typed ObsError::Config. (The no-home invariant — that
     // expanduser leaves `~` in place rather than panicking — is unit-tested in
     // `obs::oscrc`; this asserts the facade folds that path into a logged Err.)
-    let mut config = Config::default();
-    config.obs_conffile = "~/.oscrc-mtui-rs-facade-test-does-not-exist".to_owned();
+    let config = Config::default();
+    // SAFETY: serialised via `#[serial(osc_config_env)]`.
+    unsafe { std::env::set_var("OSC_CONFIG", "~/.oscrc-mtui-rs-facade-test-does-not-exist") };
     let osc = Osc::new(config, rrid());
     let err = osc.comment("hi").await.unwrap_err();
+    // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+    unsafe { std::env::remove_var("OSC_CONFIG") };
     assert!(matches!(err, ObsError::Config(_)), "{err:?}");
 }
 

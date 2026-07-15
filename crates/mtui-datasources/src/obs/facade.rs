@@ -3,8 +3,9 @@
 //! Ported from upstream `mtui/data_sources/oscqam.py`'s `OSC` class. This is the
 //! final cutover of the native OBS backend: the [`Osc`] seam binds the resolved
 //! [`Config`] and target [`RequestReviewID`] to the five QAM operations
-//! ([`crate::obs::qam`]), reading credentials from the user's `~/.oscrc`
-//! ([`read_credentials`]) and authenticating with SSH signature auth
+//! ([`crate::obs::qam`]), reading credentials from the user's oscrc — located
+//! like `osc` (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`)
+//! ([`read_credentials`]) — and authenticating with SSH signature auth
 //! ([`ObsSignatureAuth`]). It replaces the historical shell-out to the external
 //! `osc qam` plugin (the deleted `oscqam` subprocess wrapper).
 //!
@@ -48,8 +49,8 @@ type Built = (ObsClient, String);
 
 /// The credential-reading + client-building seam.
 ///
-/// The production path ([`build_client`]) reads `~/.oscrc` and attaches SSH
-/// signature auth; tests inject a closure that returns an already-built
+/// The production path ([`build_client`]) reads the osc-located oscrc and
+/// attaches SSH signature auth; tests inject a closure that returns an already-built
 /// wiremock-backed [`ObsClient`] (happy path) or an [`Err`] (never-raise
 /// escape-hatch paths) without touching the real oscrc or a real agent.
 type ClientFactory = Arc<dyn Fn(&Config) -> Result<Built, ObsError> + Send + Sync>;
@@ -232,14 +233,15 @@ impl Osc {
     }
 }
 
-/// The production client factory: read `~/.oscrc` and attach SSH signature auth.
+/// The production client factory: read oscrc and attach SSH signature auth.
 ///
-/// Reads the credentials for `obs_api_url` from `obs_conffile` (empty =
-/// `~/.oscrc`), builds an [`ObsClient`] against `obs_api_url` with the coarse
-/// `obs_request_timeout` budget and the resolved TLS posture, and injects an
-/// [`ObsSignatureAuth`] signer for the acting user's key.
+/// Reads the credentials for `obs_api_url` from the oscrc located like `osc`
+/// (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`), builds an
+/// [`ObsClient`] against `obs_api_url` with the coarse `obs_request_timeout`
+/// budget and the resolved TLS posture, and injects an [`ObsSignatureAuth`]
+/// signer for the acting user's key.
 fn build_client(config: &Config) -> Result<Built, ObsError> {
-    let credentials = read_credentials(&config.obs_api_url, &config.obs_conffile)?;
+    let credentials = read_credentials(&config.obs_api_url)?;
     let verify: VerifyPolicy = resolve_verify(
         VerifyPolicy::Default(true),
         Some(VerifyPolicy::from_config(&config.ssl_verify)),

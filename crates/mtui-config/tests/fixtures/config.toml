@@ -42,4 +42,3 @@ tools_deny = ["run"]              # tools removed regardless of profile/allow
 [obs]
 api_url = "https://api.example.de"
 request_timeout = 90              # integer value
-# conffile omitted on purpose: it must keep its upstream default ("")

@@ -195,17 +195,25 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+    // `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+    #[allow(unsafe_code)]
     async fn osc_dispatch_runs_for_maintenance_rrid() {
-        // A Maintenance RRID routes to the native OBS backend. Point it at an
-        // oscrc that does not exist so credential resolution fails fast (offline,
-        // no network), exercising the non-gitea dispatch + error mapping without
-        // needing a real backend. (Group-approve is refused before any I/O, but
-        // the missing-oscrc guard makes the failure deterministic regardless.)
+        // A Maintenance RRID routes to the native OBS backend. Point $OSC_CONFIG
+        // at an oscrc that does not exist so credential resolution fails fast
+        // (offline, no network), exercising the non-gitea dispatch + error
+        // mapping without needing a real backend. (Group-approve is refused
+        // before any I/O, but the missing-oscrc guard makes the failure
+        // deterministic regardless.) `$OSC_CONFIG` is process-global → `#[serial]`.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.config.session_user = "tester".to_owned();
-        session.config.obs_conffile = "/nonexistent/oscrc-for-tests".to_owned();
+        // SAFETY: serialised via `#[serial(osc_config_env)]`.
+        unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
         let args = matches(&Approve, &["-g", "qam-sle"]);
         let res = Approve.call(&mut session, &args).await;
+        // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+        unsafe { std::env::remove_var("OSC_CONFIG") };
         // The native backend refuses group-approve / fails to resolve creds → Err;
         // the branch executed and the error mapping produced our message.
         if let Err(e) = res {

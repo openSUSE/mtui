@@ -45,6 +45,7 @@ russh.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 wiremock.workspace = true
 insta.workspace = true
+serial_test.workspace = true
 tempfile = "3"
 # Golden-vector tests for the SSHSIG signer: `signature::Signer` to sign the
 # agent-path enveloped bytes with a file key (proving both backends agree), and

@@ -55,7 +55,7 @@ pub enum ObsError {
     #[error("{0}")]
     Timeout(String),
 
-    /// A configuration/credential fault while reading `~/.oscrc` (or, later, the
+    /// A configuration/credential fault while reading the oscrc (or, later, the
     /// SSH-signature signer, G1c).
     ///
     /// Reproduces upstream `ObsConfigError`: a fail-closed, secret-safe message

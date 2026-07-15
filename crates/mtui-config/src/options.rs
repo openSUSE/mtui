@@ -410,12 +410,13 @@ pub(crate) struct McpSection {
 /// Mirrors upstream `mtui/support/config.py`'s `obs_*` options (INI `[obs]`
 /// section), added when upstream cut over to the native OBS API backend and
 /// dropped the transitional `backend` selector (mtui-rs is native-only). No OBS
-/// credentials live here — `~/.oscrc` remains the sole credential source (see
+/// credentials live here — the oscrc remains the sole credential source (see
 /// `mtui_datasources::obs::oscrc`).
 ///
 /// * `api_url` is the OBS API mtui acts against; it must equal a section header
-///   in the user's oscrc.
-/// * `conffile` optionally overrides the oscrc path (empty = `~/.oscrc`).
+///   in the user's oscrc. The oscrc is located like `osc` itself (`$OSC_CONFIG`
+///   → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`), so there is no mtui-side path
+///   option — set `$OSC_CONFIG` to point at a non-default oscrc.
 /// * `request_timeout` is a **coarse** wall-clock budget checked *between* a
 ///   native operation's HTTP calls (each call is itself bounded by the shared
 ///   HTTP timeout) — it is not a mid-call hard kill.
@@ -423,7 +424,6 @@ pub(crate) struct McpSection {
 #[serde(default)]
 pub(crate) struct ObsSection {
     pub api_url: Option<String>,
-    pub conffile: Option<String>,
     pub request_timeout: Option<u64>,
 }
 
@@ -494,7 +494,6 @@ impl RawConfig {
         take!(mcp, tools_allow);
         take!(mcp, tools_deny);
         take!(obs, api_url);
-        take!(obs, conffile);
         take!(obs, request_timeout);
     }
 }
@@ -617,12 +616,11 @@ pub struct Config {
 
     // [obs]
     /// The OBS/IBS API URL the native QAM review backend acts against. Must
-    /// equal a section header in the user's `~/.oscrc`. Upstream default is
-    /// `https://api.suse.de`.
+    /// equal a section header in the user's oscrc. Upstream default is
+    /// `https://api.suse.de`. The oscrc is located like `osc` itself
+    /// (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`); there is no
+    /// mtui-side path option (set `$OSC_CONFIG` to override).
     pub obs_api_url: String,
-    /// Optional override for the oscrc path; empty means `~/.oscrc`. Upstream
-    /// default is empty.
-    pub obs_conffile: String,
     /// Coarse wall-clock budget (seconds) for a whole native OBS operation,
     /// checked *between* its HTTP calls. Upstream default is 180.
     pub obs_request_timeout: u64,
@@ -666,7 +664,6 @@ impl Default for Config {
             mcp_tools_allow: Vec::new(),
             mcp_tools_deny: Vec::new(),
             obs_api_url: default_obs_api_url(),
-            obs_conffile: String::new(),
             obs_request_timeout: default_obs_request_timeout(),
         }
     }
@@ -812,7 +809,6 @@ impl Config {
             mcp_tools_allow: raw.mcp.tools_allow.unwrap_or(d.mcp_tools_allow),
             mcp_tools_deny: raw.mcp.tools_deny.unwrap_or(d.mcp_tools_deny),
             obs_api_url: validated_url!(raw.obs.api_url, "obs_api_url", d.obs_api_url),
-            obs_conffile: raw.obs.conffile.unwrap_or(d.obs_conffile),
             obs_request_timeout: validated_positive!(
                 raw.obs.request_timeout,
                 "obs_request_timeout",
@@ -863,7 +859,6 @@ mod tests {
         assert_eq!(c.openqa_install_distri, "sle");
         // [obs] defaults mirror upstream config.py exactly (native-only backend).
         assert_eq!(c.obs_api_url, "https://api.suse.de");
-        assert_eq!(c.obs_conffile, "");
         assert_eq!(c.obs_request_timeout, 180);
     }
 
@@ -873,25 +868,22 @@ mod tests {
             r#"
             [obs]
             api_url = "https://api.opensuse.org"
-            conffile = "~/.config/osc/oscrc"
             request_timeout = 90
             "#,
         )
         .unwrap();
         let c = Config::from_raw(raw);
         assert_eq!(c.obs_api_url, "https://api.opensuse.org");
-        assert_eq!(c.obs_conffile, "~/.config/osc/oscrc");
         assert_eq!(c.obs_request_timeout, 90);
     }
 
     #[test]
     fn obs_section_partial_keeps_defaults() {
         // A partial [obs] table leaves absent keys at their upstream defaults.
-        let raw: RawConfig = toml::from_str("[obs]\nconffile = \"/etc/oscrc\"\n").unwrap();
+        let raw: RawConfig = toml::from_str("[obs]\nrequest_timeout = 90\n").unwrap();
         let c = Config::from_raw(raw);
-        assert_eq!(c.obs_conffile, "/etc/oscrc");
+        assert_eq!(c.obs_request_timeout, 90);
         assert_eq!(c.obs_api_url, "https://api.suse.de");
-        assert_eq!(c.obs_request_timeout, 180);
     }
 
     #[test]

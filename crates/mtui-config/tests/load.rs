@@ -69,7 +69,6 @@ fn config_toml_fixture_parses_all_sections() {
     // [obs] section: explicit overrides land, an omitted key keeps its default.
     assert_eq!(cfg.obs_api_url, "https://api.example.de");
     assert_eq!(cfg.obs_request_timeout, 90);
-    assert_eq!(cfg.obs_conffile, ""); // omitted -> upstream default
 
     // An option absent from the fixture keeps its upstream default.
     assert_eq!(cfg.fancy_reports_url, "https://qam.suse.de/reports");

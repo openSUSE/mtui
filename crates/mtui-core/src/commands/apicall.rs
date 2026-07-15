@@ -499,14 +499,24 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+    // `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+    #[allow(unsafe_code)]
     async fn osc_dispatch_maintenance_assign_runs_backend() {
-        // A Maintenance RRID routes to the native OBS backend. Point it at an
-        // oscrc that does not exist so credential resolution fails fast (offline,
-        // no network), surfacing the OSC-branch error and exercising that dispatch.
+        // A Maintenance RRID routes to the native OBS backend. Point $OSC_CONFIG
+        // at an oscrc that does not exist so credential resolution fails fast
+        // (offline, no network), surfacing the OSC-branch error and exercising
+        // that dispatch. `$OSC_CONFIG` is process-global, hence `#[serial]`.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.config.obs_conffile = "/nonexistent/oscrc-for-tests".to_owned();
+        // SAFETY: serialised via `#[serial(osc_config_env)]` so no other test
+        // reads/writes this env var concurrently.
+        unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
         let args = matches(&Assign, &["-g", "qam-sle"]);
-        if let Err(e) = Assign.call(&mut session, &args).await {
+        let res = Assign.call(&mut session, &args).await;
+        // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+        unsafe { std::env::remove_var("OSC_CONFIG") };
+        if let Err(e) = res {
             assert!(matches!(e, CommandError::Other(m) if m.contains("osc assign failed")));
         }
     }
