@@ -381,41 +381,57 @@ fn trailing_slash_section_header_matches() {
     assert_eq!(creds.user, "bob");
 }
 
-/// Read `read_credentials` under a scoped tracing subscriber, returning the
-/// captured stderr-style output so a warning can be asserted.
+/// Run `f` under a scoped tracing subscriber that captures each event's message
+/// **synchronously** into an in-memory buffer, returning the joined records.
+///
+/// Unlike an `fmt` subscriber writing through a `MakeWriter`, this appends the
+/// rendered message the instant the event fires (no formatter/flush step), so the
+/// captured buffer never depends on writer flush ordering under scheduler
+/// pressure — the condition that made the previous `fmt`-based capture flake under
+/// `cargo test --workspace`. The subscriber is a thread-local default via
+/// `with_default`; every caller is `#[serial(osc_config_env)]`, so no concurrent
+/// test in this binary races it.
 #[cfg(unix)]
-fn read_capturing_logs() -> String {
+fn capture_logs(f: impl FnOnce()) -> String {
+    use std::fmt::Write as _;
     use std::sync::{Arc, Mutex};
-    use tracing_subscriber::fmt::MakeWriter;
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::Registry;
 
     #[derive(Clone)]
-    struct BufMaker(Arc<Mutex<Vec<u8>>>);
-    struct BufWriter(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for BufWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    impl<'a> MakeWriter<'a> for BufMaker {
-        type Writer = BufWriter;
-        fn make_writer(&'a self) -> Self::Writer {
-            BufWriter(self.0.clone())
+    struct CaptureLayer(Arc<Mutex<Vec<String>>>);
+
+    struct MessageVisitor(String);
+    impl Visit for MessageVisitor {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                let _ = write!(self.0, "{value:?}");
+            }
         }
     }
 
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let sub = tracing_subscriber::fmt()
-        .with_writer(BufMaker(buf.clone()))
-        .with_max_level(tracing::Level::WARN)
-        .finish();
-    tracing::subscriber::with_default(sub, || {
+    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut visitor = MessageVisitor(String::new());
+            event.record(&mut visitor);
+            self.0.lock().unwrap().push(visitor.0);
+        }
+    }
+
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let sub = Registry::default().with(CaptureLayer(records.clone()));
+    tracing::subscriber::with_default(sub, f);
+    records.lock().unwrap().join("\n")
+}
+
+/// Read `read_credentials` under a scoped tracing subscriber, returning the
+/// captured warning output so a permission warning can be asserted.
+#[cfg(unix)]
+fn read_capturing_logs() -> String {
+    capture_logs(|| {
         let _ = read();
-    });
-    String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    })
 }
 
 #[cfg(unix)]
@@ -533,9 +549,6 @@ fn discovery_default_is_xdg_when_nothing_exists() {
 #[serial(osc_config_env)]
 fn discovery_warns_when_both_locations_exist() {
     // Both XDG and ~/.oscrc present: XDG wins and a warning is logged.
-    use std::sync::{Arc, Mutex};
-    use tracing_subscriber::fmt::MakeWriter;
-
     let guard = EnvGuard::new();
     let xdg = guard.xdg_oscrc();
     fs::create_dir_all(xdg.parent().unwrap()).unwrap();
@@ -544,34 +557,10 @@ fn discovery_warns_when_both_locations_exist() {
     fs::create_dir_all(home.parent().unwrap()).unwrap();
     fs::write(&home, "").unwrap();
 
-    #[derive(Clone)]
-    struct BufMaker(Arc<Mutex<Vec<u8>>>);
-    struct BufWriter(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for BufWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    impl<'a> MakeWriter<'a> for BufMaker {
-        type Writer = BufWriter;
-        fn make_writer(&'a self) -> Self::Writer {
-            BufWriter(self.0.clone())
-        }
-    }
+    let mut result = None;
+    let logs = capture_logs(|| result = Some(oscrc::default_conffile()));
 
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let sub = tracing_subscriber::fmt()
-        .with_writer(BufMaker(buf.clone()))
-        .with_max_level(tracing::Level::WARN)
-        .finish();
-    let result = tracing::subscriber::with_default(sub, oscrc::default_conffile);
-
-    assert_eq!(result, xdg);
-    let logs = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+    assert_eq!(result.unwrap(), xdg);
     assert!(
         logs.contains("multiple oscrc files detected"),
         "logs: {logs}"
