@@ -1,0 +1,6 @@
+# Repo automation entrypoint: `cargo xtask <task>` runs the dev-only `xtask`
+# crate (the standard `cargo xtask` pattern). Today its one task is `gen`, which
+# regenerates the checked-in `dist/` shell completions + man pages for both
+# binaries. See `xtask/src/main.rs`.
+[alias]
+xtask = "run --package xtask --"

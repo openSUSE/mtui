@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,6 +16,9 @@ futures = "0.3"
 # cli
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
+# Man-page generation for both binaries (P8.3). Used only by the `xtask` dev
+# tool, not by any shipped binary, so it never enters a release build.
+clap_mangen = "0.2"
 reedline = "0.49"
 # raw-mode terminal + async input/resize stream for the interactive `shell`
 # TTY bridge (P6, mtui-rs-jww). Pinned to reedline 0.49's `crossterm` major so
@@ -121,6 +124,7 @@ mtui-hosts = { path = "crates/mtui-hosts" }
 mtui-datasources = { path = "crates/mtui-datasources" }
 mtui-testreport = { path = "crates/mtui-testreport" }
 mtui-core = { path = "crates/mtui-core" }
+mtui-mcp = { path = "crates/mtui-mcp" }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

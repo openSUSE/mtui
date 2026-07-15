@@ -1,0 +1,37 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Dev-only automation crate (the `cargo xtask` pattern). Never published or
+# shipped; it regenerates the checked-in `dist/` completions + man pages.
+publish = false
+
+[lib]
+name = "xtask"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The two binaries' top-level clap parsers, reached via the auto-derived
+# `CommandFactory` (`Args::command()` / `McpArgs::command()`). `mtui-mcp` is
+# pulled without its `mcp` feature so the MCP server graph (rmcp/axum) stays out
+# of this dev tool's build; only the ungated `args` module is used.
+mtui-core.workspace = true
+mtui-mcp = { workspace = true }
+clap = { workspace = true }
+clap_complete.workspace = true
+clap_mangen.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+# Offline generation smoke test writes into an isolated temp dir (never `dist/`).
+tempfile = "3"
