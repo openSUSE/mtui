@@ -5,9 +5,11 @@ OBS API calls over :mod:`requests` (mirroring :mod:`mtui.data_sources.gitea`)
 and native OBS "Signature" (SSH) authentication reproduced with paramiko.
 No module here imports the ``osc`` library or shells out to ``osc``.
 
-Credentials come from the user's existing ``~/.oscrc`` (parsed natively by
-:mod:`~mtui.data_sources.obs.oscrc`) — oscrc stays the single source of
-truth for OBS credentials; mtui reads it and authenticates itself.
+Credentials come from the user's existing oscrc, located exactly like
+``osc`` itself (``$OSC_CONFIG`` → ``$XDG_CONFIG_HOME/osc/oscrc`` →
+``~/.oscrc``) and parsed natively by :mod:`~mtui.data_sources.obs.oscrc`.
+oscrc stays the single source of truth for OBS credentials; mtui reads it
+and authenticates itself.
 
 This first milestone lands the credential-reader foundation; the wire-format
 signer, the auth handshake, the HTTP client, and the operation logic land in

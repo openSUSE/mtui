@@ -261,7 +261,6 @@ class Config:
 
     # -- OBS/IBS native QAM review backend (mtui/data_sources/obs/) --
     obs_api_url: str
-    obs_conffile: str
     obs_request_timeout: int
 
     # -- mtui-mcp server (http transport) per-client session registry --
@@ -676,10 +675,11 @@ class Config:
             # OBS/IBS native QAM review backend (direct OBS API over
             # ``requests``, no ``osc`` library). ``api_url`` is the OBS API
             # mtui acts against and must equal a section header in the user's
-            # oscrc; ``conffile`` optionally overrides the oscrc path (empty
-            # = ~/.oscrc); ``request_timeout`` is a COARSE wall-clock budget
-            # checked BETWEEN a native operation's HTTP calls (each call is
-            # itself bounded by support/http HTTP_TIMEOUT) — it is NOT a
+            # oscrc. The oscrc is located like ``osc`` itself (``$OSC_CONFIG``
+            # → ``$XDG_CONFIG_HOME/osc/oscrc`` → ``~/.oscrc``), so there is no
+            # mtui-side path option. ``request_timeout`` is a COARSE wall-clock
+            # budget checked BETWEEN a native operation's HTTP calls (each call
+            # is itself bounded by support/http HTTP_TIMEOUT) — it is NOT a
             # mid-call hard kill. No OBS credentials live here — oscrc
             # remains the sole credential source.
             ConfigOption(
@@ -687,13 +687,6 @@ class Config:
                 ("obs", "api_url"),
                 "https://api.suse.de",
                 _parse_base_url,
-                get,
-            ),
-            ConfigOption(
-                "obs_conffile",
-                ("obs", "conffile"),
-                "",
-                str,
                 get,
             ),
             ConfigOption(

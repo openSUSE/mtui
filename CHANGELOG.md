@@ -12,8 +12,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The QAM review actions (approve/assign/unassign/reject/comment) now call the
   OBS/IBS API directly instead of shelling out to the external `osc qam`
   plugin — no `osc` library and no subprocess. Credentials are read from the
-  user's existing `~/.oscrc` (SSH-signature auth, reproduced in-process with
-  paramiko), so the `osc-plugin-qam` dependency is no longer required. Two
+  user's existing oscrc (SSH-signature auth, reproduced in-process with
+  paramiko), so the `osc-plugin-qam` dependency is no longer required. The
+  oscrc is located exactly like `osc` itself — `$OSC_CONFIG`, then
+  `$XDG_CONFIG_HOME/osc/oscrc`, then `~/.oscrc` — so set `$OSC_CONFIG` to
+  point mtui at a non-default oscrc. Two
   behaviour notes: OBS TLS is now governed by `[mtui] ssl_verify` rather than
   oscrc's own TLS knobs (`sslcertck`/`cafile`/`capath`/`no_verify`); and the
   new `[obs] request_timeout` (default 180s) is a coarse between-call budget
@@ -24,7 +27,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a key file). Under headless `mtui-mcp` the backend never prompts for a
   passphrase: an encrypted key is used only via the agent, and anything
   unresolvable fails closed. A new `[obs]` config section (`api_url`,
-  `conffile`, `request_timeout`) is introduced.
+  `request_timeout`) is introduced.
 
 - `mtui-mcp` is now much more token-efficient. Tool schemas are automatically
   slimmed of redundant pydantic boilerplate (the per-field `title` keys and the

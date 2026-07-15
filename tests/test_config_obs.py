@@ -15,7 +15,6 @@ def test_obs_defaults(tmpdir):
     """With no [obs] section, the parity-preserving defaults apply."""
     cfg = _cfg(tmpdir, "")
     assert cfg.obs_api_url == "https://api.suse.de"
-    assert cfg.obs_conffile == ""
     # Parity with the legacy ``osc qam`` subprocess 180s cap, not 120.
     assert cfg.obs_request_timeout == 180
 
@@ -24,13 +23,9 @@ def test_obs_explicit_values(tmpdir):
     """Explicit [obs] values are read verbatim."""
     cfg = _cfg(
         tmpdir,
-        "[obs]\n"
-        "api_url = https://api.opensuse.org\n"
-        "conffile = /etc/osc/oscrc\n"
-        "request_timeout = 90\n",
+        "[obs]\napi_url = https://api.opensuse.org\nrequest_timeout = 90\n",
     )
     assert cfg.obs_api_url == "https://api.opensuse.org"
-    assert cfg.obs_conffile == "/etc/osc/oscrc"
     assert cfg.obs_request_timeout == 90
 
 

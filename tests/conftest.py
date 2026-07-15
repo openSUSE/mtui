@@ -77,7 +77,6 @@ def mock_config():
     config.reports_url = "https://reports.example.com"
     # Native OBS backend defaults (mtui/data_sources/obs/); see [obs].
     config.obs_api_url = "https://api.suse.de"
-    config.obs_conffile = ""
     config.obs_request_timeout = 180
     return config
 
