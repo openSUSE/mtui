@@ -36,17 +36,51 @@ Example:
 
 .. code-block:: sh
 
-  # EDITOR=nano mtui -r SUSE:Maintenance:3601:126030
+  # EDITOR=nano mtui -a SUSE:Maintenance:3601:126030
 
 Is there a way to easily distinguish among different updates?
 =============================================================
 
 When you are testing different updates at the same time, you can load several
-test reports into a single MTUI session as templates and switch between them.
-The bottom toolbar shows the active template's RRID together with the total
-number of loaded templates, so the prompt stays unambiguous. See
-`load_template`, `switch`, and `list_templates` in the interactive commands
-reference.
+test reports into a single MTUI session as templates. Each ``load_template``
+adds another RRID to the session; ``list_templates`` shows the loaded set,
+``switch`` changes the active one, and ``unload`` drops one (closing only its
+host connections). The bottom toolbar shows the active template's RRID together
+with the total number of loaded templates, so the prompt stays unambiguous.
+
+Action commands fan out across every loaded template by default, each acting on
+that template's own hosts (or report), with each template's output prefixed by
+an ``=== <RRID> ===`` banner. Scope a single command to one template with
+``-T RRID``/``--template RRID``, or force fan-out explicitly with
+``--all-templates``. See `load_template`, `list_templates`, `switch`, and
+`unload` in the interactive commands reference.
+
+Example::
+
+  mtui> load_template -a SUSE:Maintenance:3601:126030
+  mtui> load_template -a SUSE:Maintenance:3602:126040
+  mtui> list_templates
+  * SUSE:Maintenance:3602:126040  hosts: 2  workflow: manual
+    SUSE:Maintenance:3601:126030  hosts: 3  workflow: manual
+  mtui> switch SUSE:Maintenance:3601:126030
+
+Which update should I pick up next?
+===================================
+
+The ``updates`` command lists the update queue live from the TeReGen API,
+sorted by priority. By default it shows the actionable pickup queue:
+**unassigned** updates that are **in testing**, so you can grab the next one
+without wading through released entries. Each row shows priority, status, kind,
+deadline and the RRID.
+
+Pass ``--status all`` for the full queue (every status and assignee), or use
+the assignment filters ``--mine`` (updates assigned to you), ``--assignee
+<user>``, or ``--all-assignees``. Restrict to a review group with
+``--review-group`` and cap the row count with ``--limit``.
+
+Example::
+
+  mtui> updates --review-group qam-sle --limit 5
 
 Can I run MTUI without loading a test report?
 =============================================
@@ -306,6 +340,23 @@ Example::
   info: connecting to craig.qam.suse.cz
 
 
+How can I search the reference-host inventory without connecting?
+=================================================================
+
+The ``list_refhosts`` command queries the same inventory ``add_host``
+resolves through, but reads it offline: it makes no SSH connection, takes no
+lock, and needs no loaded test report. Filter by hostname glob (``--name``),
+arch (``--arch``), base product (``--product``), version (``--version``),
+addon (``--addon``), or a full testplatform query (``--testplatform``). Add
+``--free`` to additionally probe each matched host's live lock state (the only
+part that goes on the wire), ``--pool`` to group by test-target slot, or
+``--json`` for structured output.
+
+Example::
+
+  mtui> list_refhosts --product sles --version 15-SP6 --arch x86_64
+
+
 How can I override refhosts mentioned in the test report?
 =========================================================
 
@@ -316,12 +367,12 @@ machines, the host list could be overwritten with the ``-s`` option.
 
 Example::
 
-  # mtui -s edna.qam.suse.cz,moe.qam.suse.cz -r SUSE:Maintenance:3601:126030
+  # mtui -s edna.qam.suse.cz,moe.qam.suse.cz -a SUSE:Maintenance:3601:126030
   info: connecting to edna.qam.suse.cz
   info: connecting to moe.qam.suse.cz
   mtui> list_hosts
-  edna.qam.suse.cz     (sle12None)             : Enabled (parallel)
-  moe.qam.suse.cz      (sle12None)             : Enabled (parallel)
+  edna.qam.suse.cz     (sles12_module-x86_64): Enabled (parallel)
+  moe.qam.suse.cz      (sles12_module-x86_64): Enabled (parallel)
   mtui>
 
 Can I run commands only on a subset of the host list?
@@ -369,59 +420,6 @@ the ``unlock`` command.
 Example::
 
   mtui> unlock -f
-
-
-Tests
-#####
-
-Can I run a QA ctcs2 testsuite within MTUI?
-===========================================
-
-The ``testsuite_*`` commands offer several options to run testsuites
-and manage the submission to QADB.
-
-Examples
-~~~~~~~~
-
-List available testsuites on a refhost::
-
-  mtui> testsuite_list -t kenny.qam.suse.cz
-  testsuites on kenny.qam.suse.cz (sles12sp2_module-x86_64):
-  test_gzip-run
-  test_php-run
-  test_tiff-run
-
-
-Run a specific testsuite::
-
-  mtui> testsuite_run -t moe.qam.suse.cz test_bzip2-run
-  moe.qam.suse.cz:~> test_bzip2-testsuite [0]
-  INFO: Variable TESTS_LOGDIR is set, logs will be stored in /var/log/qa/SUSE:Maintenance:3601:126030/ctcs2.
-  Initializing test run for control file qa_bzip2.tcf...
-  Current time: Thu Apr 20 11:26:02 CEST 2017
-  **** Test in progress ****
-  qa_bzip2_validation ... ... PASSED (2s)
-  qa_bzip2_bigfilerun ... ... PASSED (3s)
-  qa_bzip2_bznew ... ... PASSED (1s)
-  qa_bzip2_compile ... ... PASSED (1s)
-  **** Test run complete ****
-  Current time: Thu Apr 20 11:26:09 CEST 2017
-  Exiting test run..
-  Displaying report...
-  Total test time: 7s
-  Tests passed:
-  qa_bzip2_bigfilerun qa_bzip2_bznew qa_bzip2_compile qa_bzip2_validation
-  **** Test run completed successfully ****
-
-  info: done
-
-
-Submit the testsuite results to QADB2::
-
-  mtui> testsuite_submit -t moe.qam.suse.cz test_bzip2-run
-  info: Submiting results of test_bzip2-run from moe.qam.suse.cz
-  info: submission for moe.qam.suse.cz (sles12_module-x86_64): http://qadb2.suse.de/qadb/submission.php?submission_id=494079
-  info: done
 
 
 Where are stored installation logs from refhosts?
