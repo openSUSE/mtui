@@ -1,23 +1,29 @@
-"""Native reader for OBS/IBS credentials from ``~/.oscrc`` (no osc import).
+"""Native reader for OBS/IBS credentials from oscrc (no osc import).
 
 Parses the user's existing oscrc with the stdlib :mod:`configparser` and
 resolves the credentials for one apiurl (the fixed ``https://api.suse.de``)
-into a small frozen dataclass. mtui authenticates itself with SSH-signature
-auth, so this reader deliberately does **not** read ``pass``/``passx`` for
-that Signature-only target — pulling a plaintext password into memory for a
-code path that never fires would be pure exposure. Every failure is a typed,
-fail-closed :class:`ObsConfigError` that names the real oscrc file/section;
-there is no interactive prompt.
+into a small frozen dataclass. The oscrc is located exactly like ``osc``
+itself (``$OSC_CONFIG`` → ``$XDG_CONFIG_HOME/osc/oscrc`` → ``~/.oscrc``),
+so mtui reads the same file ``osc`` does without importing it. mtui
+authenticates itself with SSH-signature auth, so this reader deliberately
+does **not** read ``pass``/``passx`` for that Signature-only target —
+pulling a plaintext password into memory for a code path that never fires
+would be pure exposure. Every failure is a typed, fail-closed
+:class:`ObsConfigError` that names the real oscrc file/section; there is no
+interactive prompt.
 """
 
 from __future__ import annotations
 
 import configparser
+import os
 import re
 import stat
 from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path
+
+from xdg.BaseDirectory import xdg_config_home
 
 from ...support.exceptions import ObsConfigError
 
@@ -52,8 +58,37 @@ class ObsCredentials:
 
 
 def _default_conffile() -> Path:
-    """The default oscrc location (``~/.oscrc``)."""
-    return Path("~/.oscrc").expanduser()
+    """Locate the oscrc exactly like ``osc`` (its ``identify_conf``).
+
+    Precedence, mirroring upstream ``osc``:
+
+    1. ``$OSC_CONFIG`` (verbatim, if set) — the explicit override.
+    2. ``$XDG_CONFIG_HOME/osc/oscrc`` (default ``~/.config/osc/oscrc``) if
+       it exists.
+    3. ``~/.oscrc`` if it exists.
+    4. otherwise the XDG path, as the fallback default.
+
+    If both the XDG file and ``~/.oscrc`` exist, the XDG one wins and a
+    warning is logged (a dangling ``~/.oscrc`` symlink counts as present).
+    """
+    override = os.environ.get("OSC_CONFIG")
+    if override is not None:
+        return Path(override).expanduser()
+
+    xdg_path = Path(xdg_config_home) / "osc" / "oscrc"
+    home_path = Path("~/.oscrc").expanduser()
+
+    if xdg_path.exists():
+        if home_path.exists() or home_path.is_symlink():
+            logger.warning(
+                "multiple oscrc files detected; ignoring %s, using %s",
+                home_path,
+                xdg_path,
+            )
+        return xdg_path
+    if home_path.exists():
+        return home_path
+    return xdg_path
 
 
 def _resolve_sshkey(raw: str) -> tuple[Path | None, str | None]:
@@ -79,13 +114,15 @@ def _resolve_sshkey(raw: str) -> tuple[Path | None, str | None]:
     return Path("~/.ssh").expanduser() / value, None
 
 
-def read_credentials(apiurl: str, conffile: str = "") -> ObsCredentials:
+def read_credentials(apiurl: str) -> ObsCredentials:
     """Read SSH-signature credentials for ``apiurl`` from oscrc.
+
+    The oscrc is located like ``osc`` (see :func:`_default_conffile`):
+    ``$OSC_CONFIG`` → ``$XDG_CONFIG_HOME/osc/oscrc`` → ``~/.oscrc``.
 
     Args:
         apiurl: The OBS API URL whose oscrc section to read (its section
             header must equal this value).
-        conffile: Optional oscrc path override; empty uses ``~/.oscrc``.
 
     Returns:
         The resolved :class:`ObsCredentials` (user + private-key path).
@@ -97,7 +134,7 @@ def read_credentials(apiurl: str, conffile: str = "") -> ObsCredentials:
             names the real failing file/section. Never prompts.
 
     """
-    path = Path(conffile).expanduser() if conffile else _default_conffile()
+    path = _default_conffile()
     if not path.is_file():
         raise ObsConfigError(
             f"osc config file not found: {path}; create an oscrc with a "

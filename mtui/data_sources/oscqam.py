@@ -2,7 +2,8 @@
 
 The ``OSC(config, rrid)`` seam exposes five bool / never-raising methods that
 call the OBS/IBS API directly via :mod:`mtui.data_sources.obs`, reading
-credentials from the user's ``~/.oscrc``. It replaces the historical
+credentials from the user's oscrc (located like ``osc``: ``$OSC_CONFIG`` →
+``$XDG_CONFIG_HOME/osc/oscrc`` → ``~/.oscrc``). It replaces the historical
 shell-out to the external ``osc qam`` plugin.
 """
 
@@ -48,9 +49,7 @@ class OSC:
         propagate.
         """
         try:
-            credentials = read_credentials(
-                self.config.obs_api_url, self.config.obs_conffile
-            )
+            credentials = read_credentials(self.config.obs_api_url)
             client = ObsClient(self.config, credentials)
             op(client, credentials.user)
         except Exception as e:  # noqa: BLE001 - documented never-raise seam

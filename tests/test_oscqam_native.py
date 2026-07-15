@@ -23,7 +23,6 @@ CREDS = ObsCredentials(
 def _config():
     return SimpleNamespace(
         obs_api_url="https://api.suse.de",
-        obs_conffile="",
         obs_request_timeout=180,
         ssl_verify=True,
         reports_url="https://qam.suse.de/testreports",

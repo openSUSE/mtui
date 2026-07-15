@@ -183,7 +183,7 @@ class ObsError(Exception):
 class ObsConfigError(ObsError):
     """Raised when the native OBS backend cannot obtain usable credentials.
 
-    Covers a missing/unreadable ``~/.oscrc``, a missing apiurl section, a
+    Covers a missing/unreadable oscrc, a missing apiurl section, a
     missing ``user``/``sshkey``, an unsupported credentials manager
     (keyring/transient), an ssh-agent-fingerprint key (deferred), or a
     missing key file. The message names the real failing oscrc file/section;

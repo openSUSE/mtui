@@ -357,25 +357,16 @@ Tool names removed from the exposed set last, after the profile and
 OBS/IBS API that mtui acts against for native ``SUSE:Maintenance`` and
 Product Increment review actions (``assign``, ``unassign``, ``approve``,
 ``reject``, ``comment``). No credentials live here: the acting user and
-the SSH signing key are read from the user's ``~/.oscrc`` (see
-``obs.conffile``), and this value must match a section header in that
-oscrc. OBS TLS verification is governed by ``mtui.ssl_verify``, not by
-oscrc's own TLS options.
+the SSH signing key are read from the user's oscrc, and this value must
+match a section header in that oscrc. The oscrc is located exactly like
+``osc`` itself — ``$OSC_CONFIG``, then ``$XDG_CONFIG_HOME/osc/oscrc``
+(default ``~/.config/osc/oscrc``), then ``~/.oscrc`` — so set
+``$OSC_CONFIG`` to point mtui at a non-default oscrc. OBS TLS verification
+is governed by ``mtui.ssl_verify``, not by oscrc's own TLS options.
 
 Must be an ``http://`` or ``https://`` URL with a host (an explicit
 port must be numeric); an invalid value is rejected when the
 configuration is read and the default is used instead.
-
-
-``obs.conffile``
-~~~~~~~~~~~~~~~~
-  | **type**
-  |     pathname
-  | **default**
-  |     (empty; ``~/.oscrc``)
-
-Path to the oscrc from which the native OBS backend reads the acting user
-and SSH ``sshkey``. An empty value (the default) uses ``~/.oscrc``.
 
 
 ``obs.request_timeout``
