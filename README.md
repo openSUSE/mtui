@@ -72,7 +72,11 @@ Some backends shell out to external tools (kept optional; degrade gracefully whe
 absent):
 
 - `svn` — testreport checkout/commit (SVN backend)
-- a terminal emulator — for the `terms`/`switch` commands
+- a terminal emulator — for the `terms`/`switch` commands. The `term.*.sh`
+  launcher scripts ship in [`dist/terms/`](dist/terms); packaging installs them
+  into the datadir (`$XDG_DATA_HOME/mtui/terms`), and `MTUI_TERMS_DIR` overrides
+  where the `terms` command looks for them (e.g. a system path like
+  `/usr/share/mtui/terms`).
 
 The QAM review workflow talks to the OBS/IBS API natively (no `osc` subprocess);
 it reads credentials from `oscrc` and is configured via the `[obs]` table
