@@ -18,7 +18,7 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 # Man-page generation for both binaries (P8.3). Used only by the `xtask` dev
 # tool, not by any shipped binary, so it never enters a release build.
-clap_mangen = "0.2"
+clap_mangen = { version = "0.3", features = ["env"] }
 reedline = "0.49"
 # raw-mode terminal + async input/resize stream for the interactive `shell`
 # TTY bridge (P6, mtui-rs-jww). Pinned to reedline 0.49's `crossterm` major so
@@ -49,7 +49,7 @@ directories = "6"
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
 # contract. Verified against every upstream `test_rpm_version` golden vector.
-sandogasa-rpmvercmp = "0.16"
+sandogasa-rpmvercmp = "0.17"
 # http
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
 # openQA API auth: HMAC-SHA1 request signing (X-API-Hash), matching the
