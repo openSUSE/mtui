@@ -196,27 +196,17 @@ impl Fetcher for HttpFetcher {
     }
 }
 
-/// [`FileWriter`] that writes atomically via a sibling temp file + rename,
-/// mirroring upstream `atomic_write_file`.
+/// [`FileWriter`] that writes atomically via [`mtui_config::atomic::write`], the
+/// single secure temp-file + rename implementation shared across the workspace.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AtomicFileWriter;
 
 impl FileWriter for AtomicFileWriter {
     fn write(&self, bytes: &[u8], path: &Path) -> Result<(), RefhostError> {
-        let map_io = |source| RefhostError::Io {
+        mtui_config::atomic::write(bytes, path).map_err(|source| RefhostError::Io {
             path: path.display().to_string(),
             source,
-        };
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(map_io)?;
-        }
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, bytes).map_err(|source| RefhostError::Io {
-            path: tmp.display().to_string(),
-            source,
-        })?;
-        std::fs::rename(&tmp, path).map_err(map_io)?;
-        Ok(())
+        })
     }
 }
 

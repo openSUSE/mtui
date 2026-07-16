@@ -535,11 +535,12 @@ fn dirs_home() -> Option<PathBuf> {
 
 /// Best-effort atomic append of `host[:port] <openssh-pubkey>` to `known_hosts`.
 ///
-/// Reads any existing content, writes it plus the new line to a **unique**
-/// sibling temp file opened with `create_new` and `0o600`, fsyncs, then renames
-/// over the target — so a concurrent reader never sees a half-written file and
-/// no predictable-name temp can be pre-created by an attacker (the file-safety
-/// contract shared with th4o.11).
+/// Reads any existing content, then hands the full buffer to
+/// [`mtui_config::atomic::write`] — the single secure temp-file + rename
+/// implementation (unique `create_new` + `0o600` temp, fsync, rename) shared
+/// across the workspace (the file-safety contract from th4o.11) — so a
+/// concurrent reader never sees a half-written file and no predictable-name temp
+/// can be pre-created by an attacker.
 ///
 /// This is advisory, mirroring paramiko's `save_host_keys`: any failure is
 /// logged and swallowed so a fresh host still connects under `auto_add`. Never
@@ -556,8 +557,6 @@ fn persist_host_key_inner(
     pubkey: &PublicKey,
     path: &Path,
 ) -> std::io::Result<()> {
-    use std::io::Write;
-
     let openssh = pubkey
         .to_openssh()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
@@ -566,11 +565,6 @@ fn persist_host_key_inner(
     } else {
         format!("[{host}]:{port} {openssh}\n")
     };
-
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-    if let Some(parent) = parent {
-        std::fs::create_dir_all(parent)?;
-    }
 
     // Preserve existing entries: rewrite the whole file (existing + new).
     let mut contents = match std::fs::read(path) {
@@ -583,42 +577,8 @@ fn persist_host_key_inner(
     }
     contents.extend_from_slice(entry.as_bytes());
 
-    // Unique same-directory temp opened create_new with restrictive perms.
-    let dir = parent.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let tmp = unique_temp_path(&dir, path);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut file = opts.open(&tmp)?;
-    if let Err(e) = file.write_all(&contents).and_then(|()| file.sync_all()) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    drop(file);
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
-}
-
-/// A unique temp path in `dir` derived from `target`'s file name plus the PID
-/// and a nanosecond timestamp, so concurrent writers never collide on the
-/// `create_new` open.
-fn unique_temp_path(dir: &Path, target: &Path) -> PathBuf {
-    let base = target
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("known_hosts");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    dir.join(format!(".{base}.{}.{nanos}.tmp", std::process::id()))
+    // Delegate the secure temp-file + rename to the shared helper.
+    mtui_config::atomic::write(&contents, path)
 }
 
 /// Establishes the transport and authenticates. Shared by `connect` and

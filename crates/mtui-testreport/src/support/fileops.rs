@@ -6,13 +6,9 @@
 //! * [`timestamp`] — a whole-second Unix timestamp string (upstream
 //!   `str(int(time.time()))`), used as a filename suffix when the user declines
 //!   to overwrite an existing export.
-//! * [`atomic_write_file`] — a temp-file + rename write that first ensures the
-//!   destination directory exists (upstream `atomic_write_file`).
-//!
-//! The refhost resolver already carries a private `AtomicFileWriter` with the
-//! same semantics, but it is coupled to `RefhostError`; per the crate-boundary
-//! decision for Phase 4 the export subsystem keeps its own small copy rather
-//! than promoting that type to a cross-crate public API.
+//! * [`atomic_write_file`] — a thin wrapper over [`mtui_config::atomic::write`],
+//!   the single secure temp-file + rename implementation shared across the
+//!   workspace (upstream `atomic_write_file`).
 
 use std::io;
 use std::path::Path;
@@ -32,25 +28,21 @@ pub fn timestamp() -> String {
     secs.to_string()
 }
 
-/// Atomically writes `data` to `path` via a sibling temp file + rename.
+/// Atomically writes `data` to `path`.
 ///
-/// The destination directory is created first (upstream comment: cache
-/// locations such as `~/.cache/mtui` may be absent on a fresh checkout).
-/// Writing to a temp file and renaming into place means a reader never observes
-/// a half-written file.
+/// Delegates to [`mtui_config::atomic::write`], the single secure temp-file +
+/// rename implementation: it creates the destination directory first (cache
+/// locations such as `~/.cache/mtui` may be absent on a fresh checkout), writes
+/// to a unique same-directory temp opened `create_new` + `0o600`, fsyncs, then
+/// renames into place — so a reader never observes a half-written file and no
+/// attacker-precreated symlink is followed.
 ///
 /// # Errors
 ///
 /// Returns any I/O error from creating the directory, writing the temp file, or
 /// renaming it into place.
 pub fn atomic_write_file(data: &[u8], path: &Path) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    mtui_config::atomic::write(data, path)
 }
 
 #[cfg(test)]

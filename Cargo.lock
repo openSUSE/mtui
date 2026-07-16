@@ -2208,6 +2208,7 @@ dependencies = [
  "directories",
  "mtui-types",
  "serde",
+ "tempfile",
  "thiserror",
  "toml",
  "tracing",

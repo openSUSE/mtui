@@ -24,6 +24,7 @@
 //! (`[lock]`, `[openqa]`, `[mcp]`, ...) additively. CLI-argument merging
 //! (`merge_args`) is deferred to Phase 6, where the `clap` args struct exists.
 
+pub mod atomic;
 pub mod error;
 pub mod options;
 pub mod paths;
