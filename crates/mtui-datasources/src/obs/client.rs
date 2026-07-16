@@ -23,7 +23,9 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use reqwest::{Method, RequestBuilder};
 
-use crate::http::{HttpClient, VerifyPolicy, is_ssl_verification_error, ssl_verification_hint};
+use crate::http::{
+    HttpClient, VerifyPolicy, is_ssl_verification_error, sanitize_url, ssl_verification_hint,
+};
 use crate::obs::errors::ObsError;
 
 /// The SSH-signature auth seam for the OBS transport.
@@ -212,7 +214,7 @@ impl ObsClient {
                 tracing::error!("{}", ssl_verification_hint(host.as_deref()));
                 tracing::debug!("OBS TLS error detail: {e}");
             } else {
-                tracing::error!("OBS {method} {url} failed: {e}");
+                tracing::error!("OBS {method} {} failed: {e}", sanitize_url(url));
             }
             ObsError::Http(e.into())
         })
@@ -234,7 +236,7 @@ impl ObsClient {
         let url = self.url(path, params);
         self.check_budget(&url)?;
 
-        tracing::debug!("OBS {method} {url}");
+        tracing::debug!("OBS {method} {}", sanitize_url(&url));
         let response = self
             .send(&method, &url, self.builder(&method, &url, body))
             .await?;
@@ -312,10 +314,11 @@ impl ObsClient {
         } else {
             format!(": {summary}")
         };
-        tracing::warn!("OBS {method} {url} -> {status}{suffix}");
+        let safe_url = sanitize_url(url);
+        tracing::warn!("OBS {method} {safe_url} -> {status}{suffix}");
         ObsError::Api {
             status,
-            url: url.to_owned(),
+            url: safe_url,
             summary,
         }
     }

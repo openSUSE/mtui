@@ -167,3 +167,81 @@ async fn transport_error_maps_to_http_variant() {
         .expect_err("connection refused is an error");
     assert!(matches!(err, ObsError::Http(_)), "got {err:?}");
 }
+
+/// Capture the `message` field of every tracing event emitted by `f`.
+///
+/// A thread-local subscriber works under `#[tokio::test]`'s current-thread
+/// runtime. Mirrors the capture helper in `obs_oscrc`/`gitea`.
+async fn capture_logs<F, Fut>(f: F) -> String
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    use std::fmt::Write as _;
+    use std::sync::{Arc as StdArc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::Registry;
+
+    struct CaptureLayer(StdArc<Mutex<Vec<String>>>);
+    struct MessageVisitor(String);
+    impl Visit for MessageVisitor {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                let _ = write!(self.0, "{value:?}");
+            }
+        }
+    }
+    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut v = MessageVisitor(String::new());
+            event.record(&mut v);
+            self.0.lock().unwrap().push(v.0);
+        }
+    }
+
+    let records = StdArc::new(Mutex::new(Vec::new()));
+    let sub = Registry::default().with(CaptureLayer(records.clone()));
+    let guard = tracing::subscriber::set_default(sub);
+    f().await;
+    drop(guard);
+    records.lock().unwrap().join("\n")
+}
+
+#[tokio::test]
+async fn logs_and_api_error_redact_url_credentials() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/request/9"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_string(r#"<status code="not_found"><summary>nope</summary></status>"#),
+        )
+        .mount(&server)
+        .await;
+
+    // Embed credentials in the API base authority.
+    let base = server.uri().replace("http://", "http://user:s3cret@");
+    let client = ObsClient::new(
+        &base,
+        Duration::from_secs(180),
+        VerifyPolicy::Default(true),
+        Arc::new(NoAuth),
+    )
+    .expect("client builds");
+
+    let mut err = String::new();
+    let logs = capture_logs(|| async {
+        let e = client.get("request/9", &[]).await.expect_err("404");
+        err = format!("{e:?}");
+    })
+    .await;
+
+    // The debug request line and the warn/API-error url are all redacted.
+    assert!(!logs.contains("s3cret"), "logs leaked credential: {logs}");
+    assert!(!err.contains("s3cret"), "error leaked credential: {err}");
+    assert!(
+        logs.contains("***@"),
+        "logs missing redaction marker: {logs}"
+    );
+}

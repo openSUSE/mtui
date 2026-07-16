@@ -347,6 +347,81 @@ async fn assignee_returns_current_user() {
     );
 }
 
+/// Capture the `message` field of every tracing event emitted by `f`.
+///
+/// A thread-local subscriber (`with_default`) works here because `#[tokio::test]`
+/// drives a current-thread runtime, so the awaited request's events fire on this
+/// thread. Mirrors the capture helper in `obs_oscrc`.
+async fn capture_logs<F, Fut>(f: F) -> String
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    use std::fmt::Write as _;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::Registry;
+
+    struct CaptureLayer(Arc<Mutex<Vec<String>>>);
+    struct MessageVisitor(String);
+    impl Visit for MessageVisitor {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                let _ = write!(self.0, "{value:?}");
+            }
+        }
+    }
+    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut v = MessageVisitor(String::new());
+            event.record(&mut v);
+            self.0.lock().unwrap().push(v.0);
+        }
+    }
+
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let sub = Registry::default().with(CaptureLayer(records.clone()));
+    let guard = tracing::subscriber::set_default(sub);
+    f().await;
+    drop(guard);
+    records.lock().unwrap().join("\n")
+}
+
+#[tokio::test]
+async fn request_logs_and_error_redact_url_credentials() {
+    let server = MockServer::start().await;
+    // Any request to the comments endpoint 404s, driving both the failure `warn!`
+    // and the `FailedCall` error through the sanitizing path.
+    Mock::given(method("GET"))
+        .and(path(COMMENTS_PATH))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    // Embed `user:s3cret@` credentials in the target authority.
+    let authority = server.uri().replace("http://", "http://user:s3cret@");
+    let pr_api = format!("{authority}/api/v1/repos/owner/repo/pulls/1");
+    let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
+    let client = Gitea::with_client(http, "tok".to_string(), USER.to_string(), &pr_api, None);
+
+    let mut err = String::new();
+    let logs = capture_logs(|| async {
+        let e = client.assignee().await.unwrap_err();
+        err = format!("{e}");
+    })
+    .await;
+
+    // Neither the captured debug/warn logs nor the surfaced error leak the
+    // password, but the host is preserved for diagnosis.
+    assert!(!logs.contains("s3cret"), "logs leaked credential: {logs}");
+    assert!(!err.contains("s3cret"), "error leaked credential: {err}");
+    assert!(
+        logs.contains("***@"),
+        "logs missing redaction marker: {logs}"
+    );
+}
+
 #[tokio::test]
 async fn assignee_none_when_unassigned() {
     let server = MockServer::start().await;

@@ -283,6 +283,40 @@ pub fn ssl_verification_hint(host: Option<&str>) -> String {
     )
 }
 
+/// Return `url` with any userinfo (`user[:password]@`) replaced by `***`, for
+/// safe logging/diagnostics.
+///
+/// Configured datasource URLs may legitimately embed credentials
+/// (`scheme://user:pass@host/…`); those must never reach the log stream. This
+/// preserves the scheme, host, port, path and query so a log line stays useful,
+/// and touches only the authority's userinfo. Parsing is deliberately
+/// dependency-free and mirrors [`host_of`]-style string splitting; on any
+/// unexpected shape it fails closed by stripping an entire `…@` authority prefix
+/// rather than risk echoing a credential.
+#[must_use]
+pub fn sanitize_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        // No scheme separator: if there is an `@`, drop everything up to and
+        // including it (fail closed); otherwise the input carries no userinfo.
+        return match rest_after_at(url) {
+            Some(after) => format!("***@{after}"),
+            None => url.to_owned(),
+        };
+    };
+    // The authority ends at the first path/query/fragment delimiter.
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    match authority.rsplit_once('@') {
+        Some((_userinfo, hostport)) => format!("{scheme}://***@{hostport}{tail}"),
+        None => url.to_owned(),
+    }
+}
+
+/// If `s` contains an `@`, return the slice after the last one; else `None`.
+fn rest_after_at(s: &str) -> Option<&str> {
+    s.rsplit_once('@').map(|(_, after)| after)
+}
+
 /// The system's CA bundle path, or `None` when none is found.
 ///
 /// Ported from upstream `system_ca_bundle`: prefer the `SSL_CERT_FILE`
@@ -517,5 +551,41 @@ mod tests {
         assert!(msg.contains("ssl_verify = false"));
         assert!(msg.contains("/path/to/ca.pem"));
         assert!(!msg.contains("ca-bundle.pem"));
+    }
+
+    #[test]
+    fn sanitize_url_redacts_password() {
+        let out = sanitize_url("https://alice:s3cret@host.example/api/v1?q=1");
+        assert_eq!(out, "https://***@host.example/api/v1?q=1");
+        assert!(!out.contains("s3cret"));
+        assert!(!out.contains("alice"));
+    }
+
+    #[test]
+    fn sanitize_url_redacts_username_only() {
+        let out = sanitize_url("https://token@host.example:443/path");
+        assert_eq!(out, "https://***@host.example:443/path");
+        assert!(!out.contains("token"));
+    }
+
+    #[test]
+    fn sanitize_url_without_userinfo_is_unchanged() {
+        let url = "https://host.example:8080/a/b?c=d#e";
+        assert_eq!(sanitize_url(url), url);
+    }
+
+    #[test]
+    fn sanitize_url_at_in_path_is_not_userinfo() {
+        // An `@` after the authority (e.g. in the path) must not be redacted.
+        let url = "https://host.example/users/me@example.com";
+        assert_eq!(sanitize_url(url), url);
+    }
+
+    #[test]
+    fn sanitize_url_unparseable_with_at_fails_closed() {
+        // No scheme separator but a credential-looking `@`: strip it.
+        let out = sanitize_url("alice:s3cret@host.example/x");
+        assert_eq!(out, "***@host.example/x");
+        assert!(!out.contains("s3cret"));
     }
 }

@@ -35,7 +35,8 @@ use serde_json::json;
 
 use crate::error::GiteaError;
 use crate::http::{
-    HttpClient, VerifyPolicy, is_ssl_verification_error, resolve_verify, ssl_verification_hint,
+    HttpClient, VerifyPolicy, is_ssl_verification_error, resolve_verify, sanitize_url,
+    ssl_verification_hint,
 };
 
 /// The default review group a [`Gitea`] client operates on behalf of, matching
@@ -290,7 +291,7 @@ impl Gitea {
         url: &str,
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, GiteaError> {
-        tracing::debug!("Requesting {method} on {url}");
+        tracing::debug!("Requesting {method} on {}", sanitize_url(url));
         let mut builder = self
             .http
             .inner()
@@ -311,13 +312,19 @@ impl Gitea {
                 } else {
                     tracing::warn!("API call to Gitea failed: {e}");
                 }
-                return Err(GiteaError::FailedCall(format!("{method} - {url}")));
+                return Err(GiteaError::FailedCall(format!(
+                    "{method} - {}",
+                    sanitize_url(url)
+                )));
             }
         };
 
         let status = response.status();
         if !status.is_success() {
-            tracing::warn!("API call to {url} failed with status code: {status}");
+            tracing::warn!(
+                "API call to {} failed with status code: {status}",
+                sanitize_url(url)
+            );
             // Best-effort: surface a more specific message from the body.
             if let Ok(v) = response.json::<serde_json::Value>().await
                 && let Some(msg) = v.get("message").and_then(serde_json::Value::as_str)
@@ -325,7 +332,8 @@ impl Gitea {
                 tracing::debug!("Gitea error message: {msg}");
             }
             return Err(GiteaError::FailedCall(format!(
-                "{method} - {url} returned status {}",
+                "{method} - {} returned status {}",
+                sanitize_url(url),
                 status.as_u16()
             )));
         }

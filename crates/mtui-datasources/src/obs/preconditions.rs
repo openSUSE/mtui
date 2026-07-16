@@ -16,7 +16,7 @@ use regex::Regex;
 
 use mtui_types::RequestReviewID;
 
-use crate::http::{HttpClient, VerifyPolicy};
+use crate::http::{HttpClient, VerifyPolicy, sanitize_url};
 
 /// Capture the whole trimmed `SUMMARY:` value, not just the first token, so a
 /// trailing qualifier ("PASSED with notes") reads as UNKNOWN — matching the
@@ -51,17 +51,19 @@ pub async fn fetch_testreport_log(
     rrid: &RequestReviewID,
 ) -> Option<String> {
     let url = log_url(reports_url, rrid);
+    // The reports URL may carry credentials; never log them verbatim.
+    let safe_url = sanitize_url(&url);
     let client = match HttpClient::new(VerifyPolicy::from_config(ssl_verify)) {
         Ok(client) => client,
         Err(e) => {
-            tracing::error!("could not build testreport HTTP client for {url}: {e}");
+            tracing::error!("could not build testreport HTTP client for {safe_url}: {e}");
             return None;
         }
     };
     let response = match client.inner().get(&url).send().await {
         Ok(response) => response,
         Err(e) => {
-            tracing::error!("could not fetch testreport {url}: {e}");
+            tracing::error!("could not fetch testreport {safe_url}: {e}");
             return None;
         }
     };
@@ -70,13 +72,13 @@ pub async fn fetch_testreport_log(
         return None;
     }
     if !status.is_success() {
-        tracing::error!("testreport {url} returned {}", status.as_u16());
+        tracing::error!("testreport {safe_url} returned {}", status.as_u16());
         return None;
     }
     match response.text().await {
         Ok(body) => Some(body),
         Err(e) => {
-            tracing::error!("could not read testreport body {url}: {e}");
+            tracing::error!("could not read testreport body {safe_url}: {e}");
             None
         }
     }

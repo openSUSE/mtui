@@ -191,6 +191,15 @@ and treat them as golden.
 - Logging: `tracing` (not `log`); levels configurable via CLI + `RUST_LOG`.
 - Async everywhere I/O happens (`tokio`); keep pure logic (`mtui-types`) sync and
   I/O-free.
+- **Never leak secrets to output or logs.** Secret config fields (currently just
+  `gitea_token`, classified by `is_secret_attr` in the `config` command) are
+  masked (`<set>`) by both `config show` and `config set` — never echo their
+  value to the display buffer (it reaches terminal scrollback and MCP output).
+  Configured datasource URLs may embed credentials (`scheme://user:pass@host`);
+  always run a URL through `mtui_datasources::sanitize_url` before logging it or
+  putting it in an error (it replaces userinfo with `***` while keeping the host
+  for diagnosis). The Gitea token travels in an `Authorization` header and is
+  never logged.
 - Never add SSH password auth — MTUI is **pubkey-only by design**; preserve that.
 
 ## When adding or changing a command

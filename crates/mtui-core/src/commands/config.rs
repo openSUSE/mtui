@@ -44,7 +44,7 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
             if config.gitea_token.is_empty() {
                 String::new()
             } else {
-                "<set>".to_owned()
+                SECRET_MASK.to_owned()
             }
         }
         "target_tempdir" => config.target_tempdir.display().to_string(),
@@ -56,6 +56,18 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         _ => return None,
     };
     Some(v)
+}
+
+/// The placeholder shown in place of a set secret value, so a credential never
+/// reaches the display buffer (terminal scrollback or MCP output) via `show` or
+/// `set`.
+const SECRET_MASK: &str = "<set>";
+
+/// Whether `attr` names a secret configuration field whose value must never be
+/// echoed. The single source of truth for `show`'s mask and `set`'s redacted
+/// acknowledgement; add a new secret field here to cover both paths at once.
+fn is_secret_attr(attr: &str) -> bool {
+    attr == "gitea_token"
 }
 
 /// Render an [`SslVerify`] back to the string form `config set`/the config file
@@ -217,9 +229,17 @@ impl Command for ConfigCmd {
                 let attr = sub.get_one::<String>("attribute").expect("required");
                 let value = sub.get_one::<String>("value").expect("required");
                 set_attr(&mut session.config, attr, value).map_err(CommandError::Other)?;
+                // Never echo a secret's value back to the display buffer (which
+                // reaches terminal scrollback and MCP output); confirm the set
+                // with the mask instead.
+                let shown = if is_secret_attr(attr) {
+                    SECRET_MASK
+                } else {
+                    value
+                };
                 session
                     .display
-                    .println(&format!("option: {attr} set to value : {value}"));
+                    .println(&format!("option: {attr} set to value : {shown}"));
                 Ok(())
             }
             _ => Err(CommandError::Other(
@@ -360,6 +380,24 @@ mod tests {
             .unwrap();
         let out = buf.contents();
         // The secret is never rendered verbatim; presence is confirmed instead.
+        assert!(!out.contains("secret123"));
+        assert!(out.contains("<set>"));
+    }
+
+    #[tokio::test]
+    async fn set_secret_attr_does_not_echo_value() {
+        let (mut session, buf) = empty_session();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "gitea_token", "secret123"]),
+            )
+            .await
+            .unwrap();
+        // The value is still stored, but never echoed to the display buffer.
+        assert_eq!(session.config.gitea_token, "secret123");
+        let out = buf.contents();
+        assert!(out.contains("gitea_token"));
         assert!(!out.contains("secret123"));
         assert!(out.contains("<set>"));
     }
