@@ -26,6 +26,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use mtui_hosts::{Command, HostsGroup, OperationGroup, RepoOp, SetRepo};
+use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
 
 use crate::update_workflow::actions::ActionCommands;
@@ -342,13 +343,14 @@ async fn prepare_body(
     if installed_only {
         // Conditional per-package install — inherently one package at a time.
         for pkg in pkgs {
-            let cmd = build_prepare_map(targets, registry, Some(pkg), true);
+            let quoted = quote_args(std::slice::from_ref(pkg));
+            let cmd = build_prepare_map(targets, registry, Some(&quoted), true);
             targets.run(Command::PerHost(cmd)).await;
         }
     } else if !pkgs.is_empty() {
         // Install every package in a SINGLE transaction (one snapshot for
-        // transactional hosts).
-        let joined = pkgs.join(" ");
+        // transactional hosts). Quote each name for the root command line.
+        let joined = quote_args(pkgs);
         let cmd = build_prepare_map(targets, registry, Some(&joined), false);
         targets.run(Command::PerHost(cmd)).await;
     }
@@ -426,7 +428,7 @@ async fn downgrade_body(
 
     // Run the list_command to discover each host's available downgrade
     // versions, then parse `name = version` lines, keeping the highest per pkg.
-    let joined = packages.join(" ");
+    let joined = quote_args(packages);
     let list_map = {
         let mut m = BTreeMap::new();
         for target in targets.targets() {
@@ -482,9 +484,15 @@ async fn downgrade_body(
             else {
                 continue;
             };
-            let vars: HashMap<&str, &str> = [("package", package.as_str()), ("version", ver)]
-                .into_iter()
-                .collect();
+            // Both values reach the root downgrade command line; quote each.
+            let quoted_package = quote_args(std::slice::from_ref(package));
+            let quoted_version = quote_args(std::slice::from_ref(ver));
+            let vars: HashMap<&str, &str> = [
+                ("package", quoted_package.as_str()),
+                ("version", quoted_version.as_str()),
+            ]
+            .into_iter()
+            .collect();
             if let Ok(rendered) = doer.render_command(&vars) {
                 cmd.insert(hn.to_owned(), rendered);
             }
@@ -521,7 +529,8 @@ async fn downgrade_body(
         let Some(doer) = resolve_doer(registry, Role::Downgrade, &release, transactional) else {
             continue;
         };
-        let joined_specs = specs.join(" ");
+        // Each `name=version` spec is quoted as a single argument.
+        let joined_specs = quote_args(&specs);
         let vars: HashMap<&str, &str> = [("package", joined_specs.as_str())].into_iter().collect();
         if let Ok(rendered) = doer.render_command(&vars) {
             combined.insert(hn.clone(), rendered);
@@ -651,7 +660,7 @@ pub async fn perform_update(
     targets.fanout_set_repo(RepoOp::Add, report).await;
 
     let repa = repa_for(maintenance_id, review_id);
-    let joined = packages.join(" ");
+    let joined = quote_args(packages);
     let (commands, reboot) = match build_update_maps(targets, &registry, &repa, &joined) {
         Ok(maps) => maps,
         Err(e) => {

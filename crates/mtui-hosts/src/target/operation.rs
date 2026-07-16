@@ -40,6 +40,8 @@
 //! `test_operation.py`, which drives the template against fully mocked targets
 //! and a mocked group, so the port is faithfully unit-testable offline.
 
+use mtui_types::shellquote::quote_args;
+
 use crate::error::HostError;
 
 /// A per-host command (or reboot) map as ordered `(hostname, command)` pairs.
@@ -247,12 +249,14 @@ pub trait Operation: Send + Sync {
     /// Builds the per-host command map and the transactional-only reboot map.
     ///
     /// Mirrors upstream `Operation.collect`: one command entry per host (with
-    /// `$packages` substituted by the space-joined package list) and a reboot
-    /// entry only for transactional hosts. Consumes `plans` (each carries a
-    /// `FnMut` check) and returns them alongside the two maps so `run` can drive
-    /// the checks after the commands complete.
+    /// `$packages` substituted by the shell-quoted, space-joined package list)
+    /// and a reboot entry only for transactional hosts. Consumes `plans` (each
+    /// carries a `FnMut` check) and returns them alongside the two maps so `run`
+    /// can drive the checks after the commands complete.
     fn collect(&self, plans: Vec<HostPlan>) -> (HostCommandMap, HostCommandMap, Vec<HostPlan>) {
-        let packages = self.packages().join(" ");
+        // Package names are substituted into a root command template; quote each
+        // so a malicious name is a single literal argument, not injected shell.
+        let packages = quote_args(self.packages());
         let mut commands = Vec::with_capacity(plans.len());
         let mut reboot = Vec::new();
         for plan in &plans {
@@ -689,6 +693,31 @@ mod tests {
         let op = InstallOperation::new(strs(&["pkg-a", "pkg-b", "pkg-c"]));
         let (commands, _reboot, _plans) = op.collect(plans);
         assert_eq!(commands[0].1, "in pkg-a pkg-b pkg-c");
+    }
+
+    #[test]
+    fn collect_shell_quotes_malicious_package_name() {
+        // A crafted package name must be substituted as a single quoted arg, so
+        // the resulting root command re-splits back to `in` + the literal name.
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![plan_with_recording_check(
+            "h1",
+            false,
+            Doer::new("in $packages", "r"),
+            sink,
+        )];
+        let op = InstallOperation::new(strs(&["foo; rm -rf /"]));
+        let (commands, _reboot, _plans) = op.collect(plans);
+        let cmd = &commands[0].1;
+        assert!(
+            !cmd.ends_with("in foo; rm -rf /"),
+            "metacharacters leaked unquoted: {cmd:?}"
+        );
+        assert_eq!(
+            shlex::split(cmd).unwrap(),
+            vec!["in".to_owned(), "foo; rm -rf /".to_owned()],
+            "package name not a single literal token: {cmd:?}"
+        );
     }
 
     // --- run(): early return on missing doer, no lock/run/unlock/reboot -----

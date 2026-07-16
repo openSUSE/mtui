@@ -168,6 +168,36 @@ fn json_parser_parse_maps_every_field() {
 }
 
 #[test]
+fn json_parser_drops_injection_shaped_package_names() {
+    // A package name carrying shell metacharacters must be dropped at ingestion
+    // (it is interpolated into root remote commands), while valid siblings in
+    // the same product set are retained.
+    let mut report = empty_report();
+    let data = r#"{
+        "rrid": "SUSE:Maintenance:1:1",
+        "packages": {"prod": [
+            "bash 1.0 5.1-1",
+            "foo;rm 1.0 2.0",
+            "kernel-default 1.0 5.14.21-150500"
+        ]}
+    }"#;
+
+    JSONParser::parse_str(&mut report, data).expect("valid json");
+
+    let prod = &report.packages["prod"];
+    assert!(prod.contains_key("bash"), "valid name dropped: {prod:?}");
+    assert!(
+        prod.contains_key("kernel-default"),
+        "valid name dropped: {prod:?}"
+    );
+    assert!(
+        !prod.keys().any(|k| k.contains(';')),
+        "injection-shaped name retained: {prod:?}"
+    );
+    assert_eq!(prod.len(), 2);
+}
+
+#[test]
 fn json_parser_tolerates_missing_optional_keys() {
     // Port of upstream
     // `test_json_parser_parse_tolerates_missing_optional_keys`: absent list/dict

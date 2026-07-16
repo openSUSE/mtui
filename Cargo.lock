@@ -2292,6 +2292,7 @@ dependencies = [
  "russh",
  "russh-config",
  "russh-sftp",
+ "shlex",
  "tempfile",
  "thiserror",
  "tokio",
@@ -2353,6 +2354,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "shlex",
  "thiserror",
  "tracing",
 ]

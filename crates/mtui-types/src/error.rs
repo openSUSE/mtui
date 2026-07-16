@@ -42,6 +42,52 @@ pub enum Error {
     /// A system's base product mapped to no known release.
     #[error(transparent)]
     UnknownSystem(#[from] crate::system::UnknownSystemError),
+
+    /// A package name/spec failed validation.
+    #[error(transparent)]
+    PackageSpecParse(#[from] PackageSpecParseError),
+}
+
+/// Error produced when a package name or `name=version` spec fails validation.
+///
+/// Package specifiers parsed from testreport metadata are interpolated into
+/// remote commands executed as root; a value carrying shell metacharacters,
+/// whitespace, or an option-like leading dash is a command-injection vector.
+/// [`PackageSpec`](crate::package_spec::PackageSpec) rejects such input with a
+/// typed error *before* it reaches host execution.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PackageSpecParseError {
+    /// The name (or the name half of a `name=version` spec) was empty.
+    #[error("package spec: empty name")]
+    Empty,
+
+    /// The name began with `-`, so it would be read as a command option.
+    #[error("package spec: option-like name (leading '-'): {name:?}")]
+    OptionLike {
+        /// The offending name.
+        name: String,
+    },
+
+    /// The name contained a character outside the RPM name allow-list
+    /// (`[A-Za-z0-9._+-]`).
+    #[error("package spec: illegal character {ch:?} in name: {name:?}")]
+    IllegalChar {
+        /// The disallowed character.
+        ch: char,
+        /// The offending name.
+        name: String,
+    },
+
+    /// The version half of a `name=version` spec was empty or contained a
+    /// character outside the version allow-list (`[A-Za-z0-9.:_+~^-]`).
+    #[error("package spec: invalid version {version:?} in spec: {spec:?}")]
+    BadVersion {
+        /// The offending version half.
+        version: String,
+        /// The full `name=version` spec that failed.
+        spec: String,
+    },
 }
 
 /// Error produced when a `refhosts.yml` document cannot be parsed.

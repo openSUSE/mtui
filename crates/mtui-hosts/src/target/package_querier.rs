@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use mtui_types::rpmver::RPMVersion;
+use mtui_types::shellquote::quote_args;
 use tracing::warn;
 
 use super::Target;
@@ -46,7 +47,9 @@ impl<'a> PackageQuerier<'a> {
     /// to the highest version. A version string that fails to parse is logged
     /// and skipped (best-effort, mirroring upstream's tolerance of odd output).
     pub async fn versions(&mut self, packages: &[String]) -> HashMap<String, Option<RPMVersion>> {
-        let joined = packages.join(" ");
+        // Package names reach this root command line; quote each so a name
+        // carrying shell metacharacters can never break out of its argument.
+        let joined = quote_args(packages);
         let is_ubuntu = self.target.system().get_base().name == "ubuntu";
         let cmd = if is_ubuntu {
             format!("dpkg-query -W -f='${{package}} ${{version}}\n' {joined}")
@@ -148,6 +151,28 @@ mod tests {
         let mut q = PackageQuerier::new(&mut t);
         let _ = q.versions(&["bash".to_owned()]).await;
         assert!(mock.commands().iter().any(|c| c.starts_with("rpm -q")));
+    }
+
+    #[tokio::test]
+    async fn malicious_package_name_is_shell_quoted() {
+        // A package name carrying shell metacharacters must reach the host as a
+        // single quoted argument, never as an injected command.
+        let (mut t, mock) = target_and_mock("");
+        let mut q = PackageQuerier::new(&mut t);
+        let _ = q.versions(&["foo; rm -rf /".to_owned()]).await;
+        let cmd = mock.commands().into_iter().next().expect("one command ran");
+        assert!(cmd.starts_with("rpm -q"), "unexpected command: {cmd:?}");
+        // The `; rm` sequence must not appear as a bare shell separator.
+        assert!(
+            !cmd.contains("\" foo; rm") && !cmd.ends_with("foo; rm -rf /"),
+            "metacharacters leaked unquoted: {cmd:?}"
+        );
+        // Re-splitting the queryformat tail must keep the value as one token.
+        let tokens = shlex::split(&cmd).expect("command re-splits");
+        assert!(
+            tokens.iter().any(|tok| tok == "foo; rm -rf /"),
+            "package name not a single literal token: {tokens:?}"
+        );
     }
 
     #[tokio::test]

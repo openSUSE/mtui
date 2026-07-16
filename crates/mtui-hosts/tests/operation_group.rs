@@ -145,6 +145,40 @@ async fn install_drives_doer_and_reboots_only_transactional() {
 }
 
 #[tokio::test]
+async fn install_shell_quotes_malicious_package_name_end_to_end() {
+    // Trust-boundary regression: a package name carrying shell metacharacters,
+    // driven through the real HostsGroup install path, must reach the host as a
+    // single quoted argument — never as an injected root command.
+    let (provider, _lookups, _checked) = RecordingProvider::new();
+    let (h1, m1) = target("h1", "SLES", "15.5", false);
+    let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
+
+    InstallOperation::new(vec!["foo; rm -rf /".to_owned()])
+        .run(&mut group)
+        .await;
+
+    let cmd = m1.commands().into_iter().next().expect("one command ran");
+    assert!(
+        !cmd.ends_with("foo; rm -rf /"),
+        "metacharacters leaked unquoted: {cmd:?}"
+    );
+    // The command re-splits to the template words plus the literal package name.
+    let tokens = shlex::split(&cmd).expect("command re-splits");
+    assert_eq!(
+        tokens,
+        vec![
+            "zypper".to_owned(),
+            "-n".to_owned(),
+            "in".to_owned(),
+            "-y".to_owned(),
+            "-l".to_owned(),
+            "foo; rm -rf /".to_owned(),
+        ],
+        "package name not a single literal token: {cmd:?}"
+    );
+}
+
+#[tokio::test]
 async fn uninstall_uses_uninstaller_role() {
     let (provider, lookups, _checked) = RecordingProvider::new();
     let (h1, _m1) = target("h1", "SLES", "15.5", false);

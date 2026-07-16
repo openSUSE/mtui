@@ -21,11 +21,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use mtui_types::RequestReviewID;
+use mtui_types::{PackageSpec, RequestReviewID};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use regex::Regex;
 use serde::Deserialize;
+use tracing::error;
 
 use crate::testreport::TestReportBase;
 
@@ -207,6 +208,13 @@ impl JSONParser {
                 if let (Some(pkg), Some(_), Some(ver)) =
                     (tokens.next(), tokens.next(), tokens.next())
                 {
+                    // Package names are interpolated into root remote commands.
+                    // Reject anything that is not a valid RPM name at ingestion
+                    // (lenient-load: log and skip, never hard-fail the load).
+                    if let Err(e) = PackageSpec::parse(pkg) {
+                        error!(package = %pkg, error = %e, "skipping invalid package name in metadata");
+                        continue;
+                    }
                     pkgs.insert(pkg.to_owned(), ver.to_owned());
                 }
             }
