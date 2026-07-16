@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use mtui_hosts::{HostsGroup, MockConnection, Sink, Target, set_test_sink};
 use mtui_types::enums::{ExecutionMode, TargetState};
+use serial_test::serial;
 
 /// A shared in-memory sink so the test can read the painted frames.
 fn shared_sink() -> (Sink, Arc<Mutex<Vec<u8>>>) {
@@ -40,6 +41,7 @@ fn shared_sink() -> (Sink, Arc<Mutex<Vec<u8>>>) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(test_sink)]
 async fn interactive_fanout_run_paints_a_spinner() {
     let (sink, store) = shared_sink();
     // Route the production `run_parallel` spinner (built via `TtySpinner::new`)

@@ -157,11 +157,26 @@ and treat them as golden.
 
 ## Testing conventions
 - Unit tests colocated (`#[cfg(test)]`); integration tests in `crates/*/tests/`.
+- **One integration-test binary per crate.** Each crate's integration tests are
+  consolidated into a single `tests/it.rs` (`#[path = "<file>.rs"] mod <file>;`
+  per file) with `autotests = false` + `[[test]] name = "it"` in `Cargo.toml`, so
+  the crate + its heavy deps link **once**, not once per file (this is the main
+  test-compile speedup). **Add a new integration test as a `mod` line in
+  `tests/it.rs`, not as a new top-level `tests/*.rs`** (a new top-level file
+  would be silently ignored under `autotests = false`, or reintroduce a per-file
+  binary if you re-enable discovery). Because all a crate's integration tests now
+  share one process, anything touching a **process-global** (env vars, the
+  `set_test_sink` spinner sink) must be serialised with `#[serial(<name>)]`
+  (`serial_test`), and tests must not assume per-binary isolation (e.g. no
+  asserting on heap-address identity — a freed `Arc` address can be reused).
 - **Mock, don't hit the network/hosts:** HTTP via `wiremock`; SSH via a
   `MockConnection` implementing the `Connection` trait; `svn`/`osc` via a
   command-runner trait or a stub on `PATH`.
 - **Snapshot text contracts** (`insta`): testreport/export rendering, metadata
-  parsing, MCP schemas, lock-file format, display output.
+  parsing, MCP schemas, lock-file format, display output. `insta` prefixes each
+  `.snap` file with the **test-binary** name, which is now `it` for every crate —
+  so snapshot files are `it__<module>__<name>.snap`. A new snapshot test's file
+  lands with that prefix automatically; don't hand-name it otherwise.
 - **Gate real hosts/containers** behind `#[ignore]` + a CI env flag (sshd
   integration fixture); unit tests must run offline and fast.
 - Port the corresponding upstream `tests/test_*.py` when porting a module; it

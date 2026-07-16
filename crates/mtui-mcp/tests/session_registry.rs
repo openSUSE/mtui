@@ -112,7 +112,12 @@ async fn drop_frees_a_slot() {
 /// upstream's "refetch after evict mints anew".
 #[tokio::test]
 async fn remint_after_drop_is_a_new_session() {
-    let reg = registry(1, 0);
+    // Cap of 2 so the first session's `Arc` can be held alive *across* the
+    // re-mint. Keeping it live pins its heap address, so the pointer-identity
+    // check below cannot be defeated by the allocator reusing a freed address —
+    // a race that surfaced once these tests share one process (consolidated `it`
+    // binary) instead of one binary each.
+    let reg = registry(2, 0);
 
     let first = reg.live_sessions();
     assert!(first.is_empty());
@@ -121,16 +126,27 @@ async fn remint_after_drop_is_a_new_session() {
     let sess_a = reg.live_sessions();
     assert_eq!(sess_a.len(), 1);
     let ptr_a = Arc::as_ptr(&sess_a[0]);
-    drop(sess_a);
+    // Drop the server (frees its cap slot) but retain the session `Arc` so its
+    // address stays valid and non-reusable for the comparison.
     drop(a);
 
     let _b = reg.try_make_server().unwrap();
-    let sess_b = reg.live_sessions();
-    assert_eq!(sess_b.len(), 1);
+    let sess_b: Vec<_> = reg
+        .live_sessions()
+        .into_iter()
+        .filter(|s| Arc::as_ptr(s) != ptr_a)
+        .collect();
+    assert_eq!(
+        sess_b.len(),
+        1,
+        "exactly one fresh session besides the held one"
+    );
     assert!(
         Arc::as_ptr(&sess_b[0]) != ptr_a,
         "a re-mint must be a fresh session instance"
     );
+
+    drop(sess_a);
 }
 
 // --------------------------------------------------------------------------- #

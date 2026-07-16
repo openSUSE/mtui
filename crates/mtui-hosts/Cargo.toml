@@ -5,9 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# Integration tests are consolidated into a single `tests/it.rs` binary so the
+# crate + its deps (russh/tokio) link once, not once per file.
+autotests = false
 
 [lints]
 workspace = true
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
 
 [features]
 # Interactive PTY shell primitive (P2.10). Adds `Connection::shell` /
@@ -36,6 +43,10 @@ tempfile = "3"
 # Used only in tests to assert command lines re-split to a single literal token.
 shlex.workspace = true
 insta.workspace = true
+# Serialises the spinner tests that install the process-global test sink
+# (`set_test_sink`); in the consolidated `it` binary they run in one process, so
+# their shared global must not race.
+serial_test.workspace = true
 # rand 0.10 to match russh 0.62's rand_core 0.10 (ssh-key's CryptoRng bound
 # is tied to that exact rand_core; 0.9 pulls a second, incompatible copy).
 # `rand::rng()` mirrors upstream russh's own key-gen in tests.
