@@ -63,19 +63,39 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
 - Run the MCP server: `cargo run -p mtui-mcp --features mcp -- --help`
 - Format: `cargo fmt --all`
 - Lint (warnings are errors): `cargo clippy --workspace --all-targets -- -D warnings`
-- Test: `cargo test --workspace` — **runs long (exceeds the default 120s
-  timeout); allow ≥300000 ms (5 min).** For faster iteration, scope to one
-  crate with `cargo test -p <crate>`.
+- Test: `cargo test --workspace` — **the cost is compilation, not test
+  execution.** A cold `cargo build --workspace --tests` is ~80s; the actual test
+  *run*, once compiled, is only ~20-25s. The default 120s timeout is exceeded
+  only when compiling from cold, so allow ≥300000 ms (5 min) on the first run of
+  a session; a second run against a warm `target/` cache is seconds.
 - Coverage: `cargo llvm-cov --workspace --lcov --output-path lcov.info`
-- Feature matrix (catches feature-gate rot):
-  `cargo build --workspace --no-default-features` and `--all-features`
+- Feature matrix (catches feature-gate rot) — **compile-only, and ~doubles build
+  time** (the `mcp` feature pulls in `axum` + `rmcp` streamable-http):
+  `cargo build --workspace --no-default-features` and `--all-features`. Do **not**
+  routinely *test* `--all-features`; CI only compiles it (`.gitlab-ci.yml`
+  feature-matrix job).
+
+### Fast local iteration
+- **Keep the cache warm and scope tight.** During dev, run
+  `cargo test -p <crate>` for the crate you're touching, not the whole workspace
+  — reserve `cargo test --workspace` for the final gate.
+- **Test default features only while iterating.** `--all-features` relinks the
+  whole mcp/axum tree (~95s even warm) for no runtime signal beyond what the
+  compile-only feature matrix already gives.
+- **`mtui-cli`'s lib suite is the slow one (~8s).** Its `edit`/`shell` tests spawn
+  real editor/shell subprocesses. When working elsewhere, don't rerun it.
 
 ## Definition of Done (hard rules)
-- Run the **full gate on the whole workspace** before claiming done:
-  `cargo fmt --all --check` **and** `cargo clippy --workspace --all-targets -- -D warnings`
-  **and** `cargo test --workspace`. The `cargo test --workspace` step is
-  long-running — run it with a generous timeout (≥300000 ms); do not treat an
-  early timeout as a failure.
+- Run the **full gate on the whole workspace** before claiming done, mirroring
+  CI: `cargo fmt --all --check` **and**
+  `cargo clippy --workspace --all-targets -- -D warnings` **and**
+  `cargo test --workspace` (default features) **and** the compile-only feature
+  matrix `cargo build --workspace --no-default-features` +
+  `cargo build --workspace --all-features`. Tests run against default features
+  only — do **not** run `--all-features` *tests*. The long pole is cold
+  compilation, not the test run itself, so give the first `cargo test --workspace`
+  (and the feature-matrix builds) a generous timeout (≥300000 ms) and don't treat
+  an early timeout as a failure.
 - **"Done" means CI observed green, not predicted green.** Report status from the
   actual run.
 - New/changed code needs **>=80% patch coverage**. If a line is genuinely
