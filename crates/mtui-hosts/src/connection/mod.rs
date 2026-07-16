@@ -161,6 +161,13 @@ pub trait Connection: Send + Sync {
     /// a workflow contract (parallel fan-out writes many hosts' copies into one
     /// local dir without clobbering).
     ///
+    /// The peer controls the directory-entry names; each is validated to be a
+    /// single ordinary path component before it is used to build a local path.
+    /// Names that would escape the destination (`../x`, `/etc/x`, `a/b`, `.`,
+    /// `..`, or control bytes) are skipped rather than written, defeating path
+    /// traversal by a hostile host. File bytes are streamed rather than buffered
+    /// whole in memory.
+    ///
     /// # Errors
     ///
     /// Returns an SFTP/transport error if listing or any transfer fails.

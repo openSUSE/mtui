@@ -223,6 +223,24 @@ pub enum HostError {
     /// that injection surfaces this rather than silently doing nothing.
     #[error("no update-workflow provider wired into the host group")]
     NoPlanProvider,
+
+    /// An SFTP folder download returned an entry name that is not a single
+    /// ordinary path component (contains a separator, is `.`/`..`, is absolute,
+    /// or carries a control byte).
+    ///
+    /// The remote peer controls directory-entry names; concatenating one
+    /// verbatim into a local path lets a hostile/compromised host escape the
+    /// download destination and overwrite arbitrary local files
+    /// (path traversal). Such entries are rejected — the crafted name is quoted
+    /// via `{name:?}` and no local path is echoed, so the diagnostic cannot leak
+    /// the attacker-chosen target.
+    #[error("unsafe SFTP entry name from {host}: {name:?}")]
+    UnsafeSftpName {
+        /// The host that supplied the entry name.
+        host: String,
+        /// The rejected (attacker-controlled) entry name.
+        name: String,
+    },
 }
 
 #[cfg(test)]

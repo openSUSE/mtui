@@ -356,6 +356,20 @@ impl MockConnection {
             .cloned()
     }
 
+    /// Returns every path currently present in the in-memory file table (seeded
+    /// via [`with_file`](Self::with_file) or written by an SFTP operation), so a
+    /// test can assert on the *complete set* of writes — e.g. that a folder
+    /// download produced no key outside its intended destination.
+    #[must_use]
+    pub fn file_paths(&self) -> Vec<PathBuf> {
+        self.files
+            .lock()
+            .expect("mock files lock")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     /// Scripts a canned symlink target for `sftp_readlink` on `path`.
     #[must_use]
     pub fn with_link(mut self, path: impl Into<PathBuf>, target: impl Into<String>) -> Self {
@@ -628,6 +642,35 @@ impl Connection for MockConnection {
             remote: remote.to_path_buf(),
             local: local.to_path_buf(),
         });
+        // Mirror the real `SshConnection::sftp_get_folder` loop so the
+        // path-traversal trust boundary is exercised end-to-end: iterate the
+        // canned listing, validate each server-supplied name through the *same*
+        // helper the ssh impl uses (single source of truth), skip rejects, and
+        // for accepted names copy the remote file bytes into the local target
+        // key (`<local><name>.<hostname>`). Accepted vs rejected is then
+        // observable via `file_contents` / the `files` table.
+        let remote_str = remote.to_string_lossy().to_string();
+        let names = self.listings.get(remote).cloned().unwrap_or_default();
+        for name in names {
+            if super::ssh::validate_sftp_component(&name, &self.hostname).is_err() {
+                continue;
+            }
+            let src = PathBuf::from(format!("{remote_str}/{name}"));
+            let data = {
+                let files = self.files.lock().expect("mock files lock");
+                files.get(&src).cloned().unwrap_or_default()
+            };
+            let target = PathBuf::from(format!(
+                "{}{}.{}",
+                local.to_string_lossy(),
+                name,
+                self.hostname
+            ));
+            self.files
+                .lock()
+                .expect("mock files lock")
+                .insert(target, data);
+        }
         Ok(())
     }
 

@@ -13,6 +13,8 @@ mod fanout_spinner_visible;
 mod lock_format;
 #[path = "operation_group.rs"]
 mod operation_group;
+#[path = "sftp_traversal.rs"]
+mod sftp_traversal;
 #[path = "spinner_concurrent_logging.rs"]
 mod spinner_concurrent_logging;
 #[path = "ssh_integration.rs"]

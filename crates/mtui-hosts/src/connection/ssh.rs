@@ -737,6 +737,43 @@ fn best_hash() -> Option<HashAlg> {
     Some(HashAlg::Sha512)
 }
 
+/// Validates that a server-supplied SFTP directory entry name is a single,
+/// ordinary path component before it is used to build a local write path.
+///
+/// The remote peer controls directory-entry names; concatenating one verbatim
+/// into a local path (`{local}{name}.{host}`) lets a hostile/compromised host
+/// escape the download destination via `../`, an absolute path, a nested
+/// `a/b`, or a Windows-style separator, and overwrite arbitrary local files.
+/// Accept `name` iff it is exactly one [`std::path::Component::Normal`] equal to
+/// itself and free of separators / control bytes; otherwise return
+/// [`HostError::UnsafeSftpName`].
+pub(crate) fn validate_sftp_component<'a>(name: &'a str, host: &str) -> Result<&'a str> {
+    let reject = || HostError::UnsafeSftpName {
+        host: host.to_owned(),
+        name: name.to_owned(),
+    };
+    // Fast rejects: empty, dot components, separators (both platforms), and any
+    // control byte (NUL, newline, etc.). `\` is rejected regardless of host OS
+    // because the *local* side may be Windows.
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.chars().any(char::is_control)
+    {
+        return Err(reject());
+    }
+    // Defensive structural check: the name must resolve to exactly one normal
+    // component identical to the input (catches drive/root prefixes and any
+    // separator form the byte checks above might miss on other platforms).
+    let mut comps = Path::new(name).components();
+    match (comps.next(), comps.next()) {
+        (Some(std::path::Component::Normal(c)), None) if c == name => Ok(name),
+        _ => Err(reject()),
+    }
+}
+
 #[async_trait]
 impl Connection for SshConnection {
     fn hostname(&self) -> &str {
@@ -963,13 +1000,30 @@ impl Connection for SshConnection {
             .map_err(|e| self.sftp_err(e))?;
         for entry in dir {
             let name = entry.file_name();
-            let data = sftp
-                .read(format!("{remote_str}/{name}"))
+            // The peer controls entry names; a crafted name (`../x`, `/etc/x`,
+            // `a/b`) would escape the download destination. Reject non-component
+            // names and skip them — a hostile entry must not abort the transfer
+            // of the legitimate ones (best-effort transfer contract). The name
+            // is logged quoted, and no local path is emitted, so the diagnostic
+            // cannot leak the attacker's chosen target.
+            if let Err(e) = validate_sftp_component(&name, &self.hostname) {
+                tracing::warn!(host = %self.hostname, error = %e, "skipping unsafe SFTP entry");
+                continue;
+            }
+            // Stream remote -> local rather than buffering the whole file.
+            let mut src = sftp
+                .open(format!("{remote_str}/{name}"))
                 .await
                 .map_err(|e| self.sftp_err(e))?;
             // Per-host suffix contract: <local><name>.<hostname>
             let target = format!("{}{}.{}", local.to_string_lossy(), name, self.hostname);
-            tokio::fs::write(&target, &data)
+            let mut dst = tokio::fs::File::create(&target)
+                .await
+                .map_err(|e| HostError::Sftp {
+                    host: self.hostname.clone(),
+                    reason: format!("create {target}: {e}"),
+                })?;
+            tokio::io::copy(&mut src, &mut dst)
                 .await
                 .map_err(|e| HostError::Sftp {
                     host: self.hostname.clone(),
@@ -1603,5 +1657,49 @@ mod tests {
             "auto_add must still accept when persistence fails"
         );
         assert!(!kh.exists());
+    }
+
+    #[test]
+    fn sftp_component_accepts_ordinary_names() {
+        for name in ["app.log", ".hidden", "Ünïcode.txt", "a b c", "file-1_2.log"] {
+            assert_eq!(
+                validate_sftp_component(name, "h").expect("should accept"),
+                name,
+                "expected {name:?} to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn sftp_component_rejects_traversal_and_absolute() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../evil",
+            "../../etc/passwd",
+            "/etc/passwd",
+            "a/b",
+            "sub/../x",
+            r"C:\evil",
+            r"\\srv\share",
+            r"dir\file",
+            "foo\0bar",
+            "line\nbreak",
+        ] {
+            let err = validate_sftp_component(name, "h").expect_err("should reject");
+            assert!(
+                matches!(err, HostError::UnsafeSftpName { .. }),
+                "expected {name:?} rejected as UnsafeSftpName, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sftp_component_error_quotes_name_without_local_path() {
+        let err = validate_sftp_component("../evil", "badhost").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("badhost"));
+        assert!(msg.contains("\"../evil\""));
     }
 }
