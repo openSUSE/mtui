@@ -307,11 +307,98 @@ impl SshConnection {
         }
     }
 
+    /// Categorizes the error from an **atomic exclusive create**
+    /// ([`sftp_write`](Connection::sftp_write) with `exclusive = true`).
+    ///
+    /// SFTPv3 has no dedicated "file exists" status, so an `O_EXCL` collision
+    /// surfaces as the generic [`StatusCode::Failure`]. That is the only status
+    /// mapped to [`HostError::AlreadyExists`] (so the lock protocol reconciles
+    /// the race). Every other case fails **closed** — it propagates as a real
+    /// error rather than being mistaken for lost contention:
+    ///
+    /// * [`StatusCode::NoSuchFile`] → [`HostError::SftpNotFound`] (a missing
+    ///   parent directory, not a collision),
+    /// * every other status (`PermissionDenied`, `OpUnsupported`,
+    ///   `NoConnection`, `ConnectionLost`, …) → [`HostError::Sftp`],
+    /// * a non-status (transport/IO) error → [`HostError::Transport`].
+    fn exclusive_create_err(
+        &self,
+        e: russh_sftp::client::error::Error,
+        path_str: &str,
+    ) -> HostError {
+        exclusive_create_err(&self.hostname, e, path_str)
+    }
+
     fn transport_err(&self, e: impl std::fmt::Display) -> HostError {
         HostError::Transport {
             host: self.hostname.clone(),
             reason: e.to_string(),
         }
+    }
+}
+
+/// Categorizes the error from an **atomic exclusive create**
+/// ([`Connection::sftp_write`](crate::Connection::sftp_write) with
+/// `exclusive = true`).
+///
+/// SFTPv3 has no dedicated "file exists" status, so an `O_EXCL` collision
+/// surfaces as the generic [`StatusCode::Failure`]. That is the only status
+/// mapped to [`HostError::AlreadyExists`] (so the lock protocol reconciles the
+/// race). Every other case fails **closed** — it propagates as a real error
+/// rather than being mistaken for lost contention:
+///
+/// * [`StatusCode::NoSuchFile`] → [`HostError::SftpNotFound`] (a missing parent
+///   directory, not a collision),
+/// * every other status (`PermissionDenied`, `OpUnsupported`, `NoConnection`,
+///   `ConnectionLost`, …) → [`HostError::Sftp`],
+/// * a non-status (transport/IO) error → [`HostError::Transport`].
+///
+/// [`StatusCode::Failure`]: russh_sftp::protocol::StatusCode::Failure
+/// [`StatusCode::NoSuchFile`]: russh_sftp::protocol::StatusCode::NoSuchFile
+fn exclusive_create_err(
+    hostname: &str,
+    e: russh_sftp::client::error::Error,
+    path_str: &str,
+) -> HostError {
+    use russh_sftp::client::error::Error as SftpError;
+    use russh_sftp::protocol::StatusCode;
+
+    if let SftpError::Status(status) = &e {
+        match status.status_code {
+            StatusCode::Failure => {
+                tracing::debug!(
+                    host = %hostname, path = %path_str, error = %e,
+                    "exclusive sftp create did not win the race"
+                );
+                return HostError::AlreadyExists {
+                    host: hostname.to_owned(),
+                    path: path_str.to_owned(),
+                };
+            }
+            StatusCode::NoSuchFile => {
+                return HostError::SftpNotFound {
+                    host: hostname.to_owned(),
+                    path: path_str.to_owned(),
+                };
+            }
+            _ => {}
+        }
+        tracing::debug!(
+            host = %hostname, path = %path_str, error = %e,
+            "exclusive sftp create failed (not contention)"
+        );
+        return HostError::Sftp {
+            host: hostname.to_owned(),
+            reason: e.to_string(),
+        };
+    }
+    tracing::debug!(
+        host = %hostname, path = %path_str, error = %e,
+        "exclusive sftp create failed at transport"
+    );
+    HostError::Transport {
+        host: hostname.to_owned(),
+        reason: e.to_string(),
     }
 }
 
@@ -748,26 +835,22 @@ impl Connection for SshConnection {
 
         if exclusive {
             // Atomic exclusive create (paramiko mode "x" -> O_CREAT | O_EXCL).
-            // The SFTPv3 protocol has no dedicated "file exists" status, so a
-            // collision surfaces as a generic Failure. Mirroring upstream's
-            // `_write_lockfile(exclusive=True)` — which treats *any* failure of
-            // the exclusive create as "lost the race, reconcile" — we map every
-            // open error here to AlreadyExists, logging the true reason at
-            // debug for diagnosis.
+            // SFTPv3 has no dedicated "file exists" status, so an O_EXCL
+            // collision surfaces as the generic `Failure` status — that (and
+            // only that) is mapped to `AlreadyExists` so the lock protocol
+            // reconciles the race. Every *other* category (permission denied,
+            // operation unsupported, connection lost, non-status transport/IO)
+            // must propagate: mapping them to `AlreadyExists` would fail *open*
+            // (silently reconcile a genuinely-failed create). The true reason
+            // is logged at debug for diagnosis.
             let flags =
                 OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE | OpenFlags::EXCLUDE;
             let mut file = match sftp.open_with_flags(path_str.clone(), flags).await {
                 Ok(f) => f,
                 Err(e) => {
-                    tracing::debug!(
-                        host = %self.hostname, path = %path_str, error = %e,
-                        "exclusive sftp create did not win the race"
-                    );
+                    let err = self.exclusive_create_err(e, &path_str);
                     let _ = sftp.close().await;
-                    return Err(HostError::AlreadyExists {
-                        host: self.hostname.clone(),
-                        path: path_str,
-                    });
+                    return Err(err);
                 }
             };
             file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
@@ -957,6 +1040,56 @@ impl ShellChannel for SshShellChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sftp_status(code: russh_sftp::protocol::StatusCode) -> russh_sftp::client::error::Error {
+        russh_sftp::client::error::Error::Status(russh_sftp::protocol::Status {
+            id: 0,
+            status_code: code,
+            error_message: "x".to_owned(),
+            language_tag: String::new(),
+        })
+    }
+
+    #[test]
+    fn exclusive_create_failure_is_contention() {
+        use russh_sftp::protocol::StatusCode;
+        let err =
+            exclusive_create_err("h", sftp_status(StatusCode::Failure), "/var/lock/mtui.lock");
+        assert!(matches!(err, HostError::AlreadyExists { .. }));
+    }
+
+    #[test]
+    fn exclusive_create_no_such_file_is_not_found() {
+        use russh_sftp::protocol::StatusCode;
+        let err = exclusive_create_err(
+            "h",
+            sftp_status(StatusCode::NoSuchFile),
+            "/var/lock/mtui.lock",
+        );
+        assert!(matches!(err, HostError::SftpNotFound { .. }));
+    }
+
+    #[test]
+    fn exclusive_create_permission_denied_propagates_as_sftp() {
+        use russh_sftp::protocol::StatusCode;
+        // Fail closed: a permission error is NOT mistaken for lost contention.
+        let err = exclusive_create_err(
+            "h",
+            sftp_status(StatusCode::PermissionDenied),
+            "/var/lock/mtui.lock",
+        );
+        assert!(matches!(err, HostError::Sftp { .. }));
+    }
+
+    #[test]
+    fn exclusive_create_io_error_propagates_as_transport() {
+        let err = exclusive_create_err(
+            "h",
+            russh_sftp::client::error::Error::IO("broken pipe".to_owned()),
+            "/var/lock/mtui.lock",
+        );
+        assert!(matches!(err, HostError::Transport { .. }));
+    }
 
     /// A prompt that always returns `answer`, recording whether it was called.
     fn fixed_prompt(

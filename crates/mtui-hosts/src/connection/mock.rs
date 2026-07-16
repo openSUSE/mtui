@@ -127,9 +127,21 @@ pub struct MockConnection {
     files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
     /// Canned symlink targets keyed by remote path (for `sftp_readlink`).
     links: HashMap<PathBuf, String>,
-    /// When `true`, [`sftp_remove`](Connection::sftp_remove) fails, exercising a
-    /// caller's directory-removal fallback (e.g. `Target::sftp_remove`).
+    /// When `true`, [`sftp_remove`](Connection::sftp_remove) fails with a generic
+    /// [`HostError::Sftp`], exercising a caller's directory-removal fallback
+    /// (e.g. `Target::sftp_remove`) or the fail-closed unlock path (a non-gone
+    /// removal error must propagate).
     sftp_remove_fails: bool,
+    /// When `true`, [`sftp_remove`](Connection::sftp_remove) fails with
+    /// [`HostError::SftpNotFound`] (the file is already gone), so the unlock
+    /// "ignore only already-missing" path can be exercised.
+    sftp_remove_not_found: bool,
+    /// File paths whose *exclusive* [`sftp_write`](Connection::sftp_write) fails
+    /// with a generic [`HostError::Sftp`] instead of the contention
+    /// [`HostError::AlreadyExists`] — models a non-collision failure of the
+    /// atomic create (permission denied, transport), which must fail closed
+    /// rather than reconcile.
+    exclusive_write_errors: HashSet<PathBuf>,
     /// Directory paths scripted to raise [`HostError::SftpNotFound`] from
     /// `sftp_listdir` (mirrors upstream `listdir` raising `OSError`, e.g. a host
     /// with no `/etc/products.d`). Distinct from unscripted paths, which return
@@ -185,6 +197,8 @@ impl MockConnection {
             files: Arc::new(Mutex::new(HashMap::new())),
             links: HashMap::new(),
             sftp_remove_fails: false,
+            sftp_remove_not_found: false,
+            exclusive_write_errors: HashSet::new(),
             missing_dirs: HashSet::new(),
             sftp_open_errors: HashSet::new(),
             listdir_transient_failures: Arc::new(Mutex::new(HashMap::new())),
@@ -199,11 +213,33 @@ impl MockConnection {
         }
     }
 
-    /// Makes [`sftp_remove`](Connection::sftp_remove) fail so a caller's
-    /// directory-removal fallback path can be exercised.
+    /// Makes [`sftp_remove`](Connection::sftp_remove) fail with a generic
+    /// [`HostError::Sftp`] so a caller's directory-removal fallback path, or the
+    /// fail-closed unlock path (a non-gone removal error must propagate), can be
+    /// exercised.
     #[must_use]
     pub fn failing_sftp_remove(mut self) -> Self {
         self.sftp_remove_fails = true;
+        self
+    }
+
+    /// Makes [`sftp_remove`](Connection::sftp_remove) fail with
+    /// [`HostError::SftpNotFound`] (the file is already gone), so the unlock
+    /// "ignore only already-missing" path can be exercised.
+    #[must_use]
+    pub fn not_found_sftp_remove(mut self) -> Self {
+        self.sftp_remove_not_found = true;
+        self
+    }
+
+    /// Scripts an *exclusive* [`sftp_write`](Connection::sftp_write) to `path` to
+    /// fail with a generic [`HostError::Sftp`] — a non-collision failure of the
+    /// atomic create (e.g. permission denied). Unlike a real collision (which
+    /// returns [`HostError::AlreadyExists`]), this must fail closed and
+    /// propagate, not reconcile.
+    #[must_use]
+    pub fn with_exclusive_write_error(mut self, path: impl Into<PathBuf>) -> Self {
+        self.exclusive_write_errors.insert(path.into());
         self
     }
 
@@ -647,6 +683,14 @@ impl Connection for MockConnection {
             path: path.to_path_buf(),
             exclusive,
         });
+        if exclusive && self.exclusive_write_errors.contains(path) {
+            // Non-collision failure of the atomic create (e.g. permission
+            // denied): must fail closed and propagate, not reconcile.
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: format!("scripted exclusive-create failure: {}", path.display()),
+            });
+        }
         let mut files = self.files.lock().expect("mock files lock");
         if exclusive && files.contains_key(path) {
             // Atomic exclusive create lost the race: the file already exists.
@@ -661,6 +705,12 @@ impl Connection for MockConnection {
 
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Remove(path.to_path_buf()));
+        if self.sftp_remove_not_found {
+            return Err(HostError::SftpNotFound {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            });
+        }
         if self.sftp_remove_fails {
             return Err(HostError::Sftp {
                 host: self.hostname.clone(),

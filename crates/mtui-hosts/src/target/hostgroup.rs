@@ -739,10 +739,16 @@ impl HostsGroup {
     /// (best-effort) and return [`HostError::Update`] so the caller aborts — the
     /// group is not fully owned by this process.
     ///
+    /// **Fails closed**: success (`Ok`) means *every* host is verifiably locked
+    /// by this process. Any per-host failure marks the group contended — a
+    /// foreign lock, a `TargetLocked` contention on acquire, or an
+    /// SFTP/transport error reading the lock state or writing the lockfile.
+    /// A host whose state we cannot even read is treated as "not ours".
+    ///
     /// # Errors
     ///
     /// Returns [`HostError::Update`] when one or more hosts were locked by
-    /// another owner.
+    /// another owner or could not be locked/read.
     pub async fn update_lock(&mut self) -> Result<()> {
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -763,8 +769,17 @@ impl HostsGroup {
                 let skipped = &skipped;
                 Box::pin(async move {
                     // Load the lock (is_locked) before reading ownership;
-                    // is_mine requires a prior load and is order-sensitive.
-                    let locked = target.is_locked().await.unwrap_or(false);
+                    // is_mine requires a prior load and is order-sensitive. A
+                    // read failure (fail-closed load) means the host's state is
+                    // unknown — treat it as a skip rather than assuming free.
+                    let locked = match target.is_locked().await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            skipped.store(true, Ordering::SeqCst);
+                            tracing::warn!(host = %target.hostname(), error = %e, "update_lock: lock state unreadable; skipping");
+                            return;
+                        }
+                    };
                     let foreign = locked
                         && target
                             .lock_mut()
@@ -784,12 +799,18 @@ impl HostsGroup {
                             tracing::info!(host = %hostname, %by, %comment, "lock comment");
                         }
                     } else {
+                        // Any failure to acquire — contention or an SFTP/transport
+                        // error — means we do NOT own this host, so the whole
+                        // group must abort. Flip `skipped` on every error, not
+                        // just `TargetLocked`.
                         match target.lock("").await {
                             Ok(()) => {}
                             Err(HostError::TargetLocked(msg)) => {
+                                skipped.store(true, Ordering::SeqCst);
                                 tracing::debug!(host = %target.hostname(), %msg, "update_lock: held by another owner");
                             }
                             Err(e) => {
+                                skipped.store(true, Ordering::SeqCst);
                                 tracing::warn!(host = %target.hostname(), error = %e, "update_lock: lock failed");
                             }
                         }
@@ -1705,6 +1726,35 @@ mod tests {
         let err = g.update_lock().await.expect_err("foreign lock -> abort");
         assert!(matches!(err, HostError::Update(_)));
         // h1's lock was released during the abort.
+        assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn update_lock_errors_and_releases_on_non_contention_lock_failure() {
+        // h2 is free but its atomic lock create fails with a non-contention
+        // SFTP error: update_lock must still abort the whole group (we do not
+        // own h2) and release the lock h1 took. Fail-closed group ownership.
+        let failing = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_exclusive_write_error(TARGET_LOCK_PATH);
+        let mut g = HostsGroup::new(
+            vec![
+                enabled("h1"),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(failing),
+                ),
+            ],
+            false,
+        );
+
+        let err = g
+            .update_lock()
+            .await
+            .expect_err("non-contention lock failure -> abort");
+        assert!(matches!(err, HostError::Update(_)));
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
     }
 
