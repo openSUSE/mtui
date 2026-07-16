@@ -116,15 +116,27 @@ async fn on_command_timeout(
     TimeoutDecision::Abort
 }
 
-/// The russh client handler: its sole job is applying the [`HostKeyPolicy`] to
-/// the server's host key, mirroring paramiko's `MissingHostKeyPolicy`.
+/// The russh client handler: it verifies the server's host key against
+/// `known_hosts` first, then applies the [`HostKeyPolicy`] only to keys that
+/// are *not already recorded* — mirroring paramiko's `load_system_host_keys()`
+/// + `MissingHostKeyPolicy` layering.
 ///
-/// russh has no host-key store of its own here, so this is the seam that
-/// decides accept/reject. `auto_add` and `warn` both accept (the latter with a
-/// log line); `reject` refuses the key.
+/// A key that matches an existing `known_hosts` entry is accepted regardless of
+/// policy; a key that *differs* from a recorded one (`BadHostKeyException` in
+/// paramiko) is rejected under every policy and reported distinctly. Only an
+/// unknown host falls through to the policy: `auto_add` accepts and persists the
+/// key atomically, `warn` accepts without persisting, and `reject` refuses.
 struct ClientHandler {
     hostname: String,
+    /// The resolved connect host (post `~/.ssh/config`) used as the
+    /// `known_hosts` lookup key, so config aliases/`HostName` match.
+    connect_host: String,
+    /// The resolved port, so a non-22 host matches its `[host]:port` entry.
+    port: u16,
     policy: HostKeyPolicy,
+    /// The `known_hosts` file to consult/append. `None` uses russh's default
+    /// (`~/.ssh/known_hosts`); tests point it at a temp file.
+    known_hosts_path: Option<PathBuf>,
 }
 
 impl client::Handler for ClientHandler {
@@ -134,29 +146,101 @@ impl client::Handler for ClientHandler {
         &mut self,
         server_public_key: &PublicKey,
     ) -> std::result::Result<bool, Self::Error> {
-        match self.policy {
-            HostKeyPolicy::AutoAdd => {
+        Ok(self.verify(server_public_key))
+    }
+}
+
+impl ClientHandler {
+    /// Verifies `server_public_key` against `known_hosts`, then applies the
+    /// [`HostKeyPolicy`] to unknown hosts. Returns whether to accept the key.
+    ///
+    /// Never logs raw key material — only fingerprints.
+    fn verify(&self, server_public_key: &PublicKey) -> bool {
+        use russh::keys::Error as KeyError;
+        use russh::keys::known_hosts::check_known_hosts_path;
+
+        let fingerprint = server_public_key.fingerprint(Default::default());
+        let path = self.known_hosts();
+
+        match check_known_hosts_path(&self.connect_host, self.port, server_public_key, &path) {
+            // Recorded and matching: accept regardless of policy.
+            Ok(true) => {
                 tracing::debug!(
                     host = %self.hostname,
-                    fingerprint = %server_public_key.fingerprint(Default::default()),
-                    "auto-adding host key",
+                    %fingerprint,
+                    "host key matches known_hosts",
                 );
-                Ok(true)
+                true
+            }
+            // Recorded but *different*: a changed key (paramiko
+            // BadHostKeyException). Reject under every policy and report it
+            // distinctly — never silently auto-add over a changed key.
+            Err(KeyError::KeyChanged { line }) => {
+                tracing::error!(
+                    host = %self.hostname,
+                    %fingerprint,
+                    line,
+                    "host key CHANGED from the one recorded in known_hosts; \
+                     rejecting (possible MITM). Verify the host and remove the \
+                     stale line if the change is expected.",
+                );
+                false
+            }
+            // Unknown host: apply the policy.
+            Ok(false) => self.apply_policy(server_public_key, &fingerprint, &path),
+            // Any other lookup failure (no home dir, parse error, I/O): the key
+            // is *not verified*. Under `reject` refuse; otherwise fall through
+            // to the unknown-host policy (matching paramiko's empty-store
+            // behaviour when known_hosts is missing/unreadable).
+            Err(e) => {
+                tracing::warn!(
+                    host = %self.hostname,
+                    %fingerprint,
+                    "known_hosts lookup failed: {e}; treating host as unknown",
+                );
+                self.apply_policy(server_public_key, &fingerprint, &path)
+            }
+        }
+    }
+
+    /// The `known_hosts` path to use: the test override, else russh's default
+    /// `~/.ssh/known_hosts`.
+    fn known_hosts(&self) -> PathBuf {
+        self.known_hosts_path.clone().unwrap_or_else(|| {
+            dirs_home()
+                .map(|h| h.join(".ssh").join("known_hosts"))
+                .unwrap_or_default()
+        })
+    }
+
+    /// Applies the [`HostKeyPolicy`] to an unknown host key.
+    fn apply_policy(
+        &self,
+        server_public_key: &PublicKey,
+        fingerprint: &impl std::fmt::Display,
+        path: &Path,
+    ) -> bool {
+        match self.policy {
+            HostKeyPolicy::AutoAdd => {
+                tracing::debug!(host = %self.hostname, %fingerprint, "auto-adding host key");
+                persist_host_key(&self.connect_host, self.port, server_public_key, path);
+                true
             }
             HostKeyPolicy::Warn => {
                 tracing::warn!(
                     host = %self.hostname,
-                    fingerprint = %server_public_key.fingerprint(Default::default()),
-                    "accepting unknown host key (warn policy)",
+                    %fingerprint,
+                    "accepting unknown host key (warn policy); not persisting",
                 );
-                Ok(true)
+                true
             }
             HostKeyPolicy::Reject => {
                 tracing::error!(
                     host = %self.hostname,
+                    %fingerprint,
                     "rejecting unknown host key (reject policy)",
                 );
-                Ok(false)
+                false
             }
         }
     }
@@ -449,6 +533,94 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// Best-effort atomic append of `host[:port] <openssh-pubkey>` to `known_hosts`.
+///
+/// Reads any existing content, writes it plus the new line to a **unique**
+/// sibling temp file opened with `create_new` and `0o600`, fsyncs, then renames
+/// over the target — so a concurrent reader never sees a half-written file and
+/// no predictable-name temp can be pre-created by an attacker (the file-safety
+/// contract shared with th4o.11).
+///
+/// This is advisory, mirroring paramiko's `save_host_keys`: any failure is
+/// logged and swallowed so a fresh host still connects under `auto_add`. Never
+/// logs raw key material.
+fn persist_host_key(host: &str, port: u16, pubkey: &PublicKey, path: &Path) {
+    if let Err(e) = persist_host_key_inner(host, port, pubkey, path) {
+        tracing::warn!(host, "failed to persist host key to known_hosts: {e}");
+    }
+}
+
+fn persist_host_key_inner(
+    host: &str,
+    port: u16,
+    pubkey: &PublicKey,
+    path: &Path,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let openssh = pubkey
+        .to_openssh()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+    let entry = if port == 22 {
+        format!("{host} {openssh}\n")
+    } else {
+        format!("[{host}]:{port} {openssh}\n")
+    };
+
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Preserve existing entries: rewrite the whole file (existing + new).
+    let mut contents = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e),
+    };
+    if !contents.is_empty() && !contents.ends_with(b"\n") {
+        contents.push(b'\n');
+    }
+    contents.extend_from_slice(entry.as_bytes());
+
+    // Unique same-directory temp opened create_new with restrictive perms.
+    let dir = parent.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let tmp = unique_temp_path(&dir, path);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&tmp)?;
+    if let Err(e) = file.write_all(&contents).and_then(|()| file.sync_all()) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    drop(file);
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// A unique temp path in `dir` derived from `target`'s file name plus the PID
+/// and a nanosecond timestamp, so concurrent writers never collide on the
+/// `create_new` open.
+fn unique_temp_path(dir: &Path, target: &Path) -> PathBuf {
+    let base = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("known_hosts");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    dir.join(format!(".{base}.{}.{nanos}.tmp", std::process::id()))
+}
+
 /// Establishes the transport and authenticates. Shared by `connect` and
 /// `reconnect`.
 async fn establish(
@@ -463,7 +635,10 @@ async fn establish(
     });
     let handler = ClientHandler {
         hostname: hostname.to_owned(),
+        connect_host: resolved.connect_host.clone(),
+        port: resolved.port,
         policy,
+        known_hosts_path: None,
     };
 
     let addr = (resolved.connect_host.as_str(), resolved.port);
@@ -1229,29 +1404,204 @@ mod tests {
         assert!(conn.handle().is_err());
     }
 
-    #[tokio::test]
-    async fn handler_applies_host_key_policy() {
-        // Generate a real Ed25519 key to feed check_server_key.
-        let key =
-            PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).expect("gen key");
-        let pubkey = key.public_key().clone();
+    // --- host-key verification (th4o.4) ---
 
+    fn gen_pubkey() -> PublicKey {
+        PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+            .expect("gen key")
+            .public_key()
+            .clone()
+    }
+
+    fn handler(host: &str, port: u16, policy: HostKeyPolicy, kh: &Path) -> ClientHandler {
+        ClientHandler {
+            hostname: host.to_owned(),
+            connect_host: host.to_owned(),
+            port,
+            policy,
+            known_hosts_path: Some(kh.to_path_buf()),
+        }
+    }
+
+    #[test]
+    fn unknown_host_follows_policy() {
+        let key = gen_pubkey();
         for (policy, expect) in [
             (HostKeyPolicy::Reject, false),
             (HostKeyPolicy::AutoAdd, true),
             (HostKeyPolicy::Warn, true),
         ] {
-            let mut h = ClientHandler {
-                hostname: "h".to_owned(),
-                policy,
-            };
+            let dir = tempfile::tempdir().unwrap();
+            let kh = dir.path().join("known_hosts");
+            let h = handler("h", 22, policy, &kh);
+            assert_eq!(h.verify(&key), expect, "policy {policy:?}");
+        }
+    }
+
+    #[test]
+    fn missing_known_hosts_file_treated_as_unknown() {
+        let key = gen_pubkey();
+        // A fresh dir per policy: auto_add would otherwise create the file and
+        // make the key "known" for the later reject check.
+        for (policy, expect) in [
+            (HostKeyPolicy::AutoAdd, true),
+            (HostKeyPolicy::Warn, true),
+            (HostKeyPolicy::Reject, false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let kh = dir.path().join("does-not-exist/known_hosts");
             assert_eq!(
-                client::Handler::check_server_key(&mut h, &pubkey)
-                    .await
-                    .unwrap(),
+                handler("h", 22, policy, &kh).verify(&key),
                 expect,
                 "policy {policy:?}"
             );
         }
+    }
+
+    #[test]
+    fn known_matching_key_accepts_under_every_policy() {
+        let key = gen_pubkey();
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        std::fs::write(&kh, format!("h {}\n", key.to_openssh().unwrap())).unwrap();
+        for policy in [
+            HostKeyPolicy::Reject,
+            HostKeyPolicy::AutoAdd,
+            HostKeyPolicy::Warn,
+        ] {
+            assert!(
+                handler("h", 22, policy, &kh).verify(&key),
+                "policy {policy:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn changed_key_rejected_under_every_policy() {
+        let recorded = gen_pubkey();
+        let presented = gen_pubkey();
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        std::fs::write(&kh, format!("h {}\n", recorded.to_openssh().unwrap())).unwrap();
+        for policy in [
+            HostKeyPolicy::AutoAdd,
+            HostKeyPolicy::Warn,
+            HostKeyPolicy::Reject,
+        ] {
+            assert!(
+                !handler("h", 22, policy, &kh).verify(&presented),
+                "policy {policy:?} must reject a changed key"
+            );
+        }
+        // The stale entry is untouched (no silent auto-add over a changed key).
+        let after = std::fs::read_to_string(&kh).unwrap();
+        assert_eq!(after.lines().count(), 1);
+    }
+
+    #[test]
+    fn auto_add_persists_key_atomically() {
+        let key = gen_pubkey();
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        assert!(handler("h", 22, HostKeyPolicy::AutoAdd, &kh).verify(&key));
+
+        // The key is now recorded and re-verifies as known.
+        assert!(kh.exists());
+        assert!(handler("h", 22, HostKeyPolicy::Reject, &kh).verify(&key));
+        // No leftover temp files in the directory.
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp file left behind");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&kh).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "known_hosts must be 0o600");
+        }
+    }
+
+    #[test]
+    fn warn_accepts_without_persisting() {
+        let key = gen_pubkey();
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        assert!(handler("h", 22, HostKeyPolicy::Warn, &kh).verify(&key));
+        assert!(!kh.exists(), "warn policy must not persist the key");
+    }
+
+    #[test]
+    fn ported_host_matches_bracket_port_entry() {
+        let key = gen_pubkey();
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        std::fs::write(&kh, format!("[h]:2222 {}\n", key.to_openssh().unwrap())).unwrap();
+        // Matches on the ported entry.
+        assert!(handler("h", 2222, HostKeyPolicy::Reject, &kh).verify(&key));
+        // But the same host on the default port is *not* covered by it.
+        assert!(!handler("h", 22, HostKeyPolicy::Reject, &kh).verify(&key));
+    }
+
+    #[test]
+    fn auto_add_persists_ported_host_with_bracket_form() {
+        let key = gen_pubkey();
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        assert!(handler("h", 2222, HostKeyPolicy::AutoAdd, &kh).verify(&key));
+        let recorded = std::fs::read_to_string(&kh).unwrap();
+        assert!(recorded.starts_with("[h]:2222 "), "got {recorded:?}");
+        assert!(handler("h", 2222, HostKeyPolicy::Reject, &kh).verify(&key));
+    }
+
+    #[test]
+    fn hashed_host_entry_matches() {
+        let key = gen_pubkey();
+        let dir = tempfile::tempdir().unwrap();
+        let kh = dir.path().join("known_hosts");
+        // russh's learn_known_hosts writes a plain entry; a hashed entry uses
+        // the `|1|salt|hash` form. Verify our reader (russh's matcher) accepts a
+        // hashed line by generating one deterministically.
+        let line = hashed_known_hosts_line("h", &key);
+        std::fs::write(&kh, format!("{line}\n")).unwrap();
+        assert!(handler("h", 22, HostKeyPolicy::Reject, &kh).verify(&key));
+    }
+
+    /// Builds an OpenSSH `|1|salt|hash` hashed known_hosts line for `host`,
+    /// using the same HMAC-SHA1 + `BASE64_MIME` scheme russh's matcher expects.
+    fn hashed_known_hosts_line(host: &str, key: &PublicKey) -> String {
+        use data_encoding::BASE64_MIME;
+        use hmac::{Hmac, KeyInit, Mac};
+        use sha1::Sha1;
+
+        let salt: [u8; 20] = rand::random();
+        let mut mac = Hmac::<Sha1>::new_from_slice(&salt).unwrap();
+        mac.update(host.as_bytes());
+        let hash = mac.finalize().into_bytes();
+        format!(
+            "|1|{}|{} {}",
+            BASE64_MIME.encode(&salt).trim_end(),
+            BASE64_MIME.encode(&hash).trim_end(),
+            key.to_openssh().unwrap()
+        )
+    }
+
+    #[test]
+    fn persist_failure_leaves_connection_working() {
+        let key = gen_pubkey();
+        let dir = tempfile::tempdir().unwrap();
+        // Point known_hosts at a path whose parent is a *file*, so create_dir_all
+        // and the temp open both fail — persistence errors, but verify() still
+        // accepts under auto_add.
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"x").unwrap();
+        let kh = blocker.join("known_hosts");
+        assert!(
+            handler("h", 22, HostKeyPolicy::AutoAdd, &kh).verify(&key),
+            "auto_add must still accept when persistence fails"
+        );
+        assert!(!kh.exists());
     }
 }

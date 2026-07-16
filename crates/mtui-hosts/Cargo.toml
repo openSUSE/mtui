@@ -52,3 +52,8 @@ serial_test.workspace = true
 # `rand::rng()` mirrors upstream russh's own key-gen in tests.
 rand = "0.10"
 russh-sftp = { workspace = true }
+# Only for the hashed-known_hosts test line; mirrors russh's own matcher
+# (HMAC-SHA1 + BASE64_MIME). Versions match those already resolved via russh.
+hmac.workspace = true
+sha1.workspace = true
+data-encoding = "2"
