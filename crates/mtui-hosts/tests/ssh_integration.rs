@@ -570,8 +570,13 @@ async fn run_aborts_continuous_output_at_absolute_deadline() {
     // Headless connection (no timeout prompt): a short inactivity window makes
     // the absolute deadline (window * COMMAND_DEADLINE_FACTOR) small, so the
     // trickling command — which never lets the inactivity window fire — is
-    // stopped by the deadline rather than running forever.
-    let mut conn = connect(port, CommandTimeout::new(Duration::from_millis(50))).await;
+    // stopped by the deadline rather than running forever. Connect with a normal
+    // handshake timeout, then narrow only the *command* window: the short value
+    // must not also bound the loopback handshake (which can exceed 50ms on a
+    // loaded CI runner, failing the connect before the test even runs).
+    let mut conn = connect(port, CommandTimeout::from_secs(5))
+        .await
+        .with_command_timeout(CommandTimeout::new(Duration::from_millis(50)));
     let err = tokio::time::timeout(Duration::from_secs(10), conn.run("trickle-forever"))
         .await
         .expect("run must return before the test-level timeout")

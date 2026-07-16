@@ -425,6 +425,20 @@ impl SshConnection {
         self
     }
 
+    /// Overrides the per-command (no-output window) timeout after connecting.
+    ///
+    /// [`connect`](Self::connect) applies one [`CommandTimeout`] to *both* the
+    /// SSH handshake and the per-command wait; this builder lets a caller keep a
+    /// normal handshake timeout while setting a different command timeout — the
+    /// two concerns are otherwise conflated. Builder-style for the same reason as
+    /// [`with_timeout_prompt`](Self::with_timeout_prompt): it stays off the
+    /// object-safe [`Connection`] trait.
+    #[must_use]
+    pub fn with_command_timeout(mut self, timeout: CommandTimeout) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Returns the live handle or a [`HostError::Transport`] "not connected".
     fn handle(&self) -> Result<&Handle<ClientHandler>> {
         self.handle.as_ref().ok_or_else(|| HostError::Transport {
