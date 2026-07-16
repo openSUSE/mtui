@@ -275,7 +275,7 @@ pub async fn dispatch_tool(
     if background {
         let job_ids = session
             .start_jobs(Arc::clone(registry), route.command, argv)
-            .await;
+            .await?;
         return Ok(started_jobs_reply(route.command, &job_ids));
     }
 
@@ -704,7 +704,9 @@ mod tests {
         let session = McpSession::new(config);
         let registry = Arc::new(register_all());
 
-        let job_id = session.start_job(Arc::clone(&registry), "whoami", Vec::new());
+        let job_id = session
+            .start_job(Arc::clone(&registry), "whoami", Vec::new())
+            .expect("start_job succeeds");
 
         let listed = dispatch_job_tool(&session, "job_list", &Map::new())
             .await

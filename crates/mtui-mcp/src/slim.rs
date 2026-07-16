@@ -54,12 +54,24 @@ pub fn cap_output(text: String, limit: usize) -> String {
     let dropped = total - limit;
     let mut head = text;
     head.truncate(cut);
-    head.push_str(&format!(
+    head.push_str(&truncation_notice(dropped, limit));
+    head
+}
+
+/// The one-line truncation notice appended when output is capped.
+///
+/// Shared by [`cap_output`] (post-hoc string truncation) and the write-time
+/// [`SharedBuf`](crate::capture::SharedBuf) path in
+/// [`McpSession::run_command`](crate::session::McpSession::run_command) so both
+/// emit byte-identical text. `dropped` is the budget overrun (bytes discarded),
+/// `limit` the `[mcp] max_output_bytes` budget.
+#[must_use]
+pub fn truncation_notice(dropped: usize, limit: usize) -> String {
+    format!(
         "\n…[truncated {dropped} bytes; output exceeded the \
          [mcp] max_output_bytes={limit} budget — use a narrower command, or \
          the offset/limit paging on testreport reads]"
-    ));
-    head
+    )
 }
 
 /// Long `clap`/argparse `help` strings shared across many synthesised tools,

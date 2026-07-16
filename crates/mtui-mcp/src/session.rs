@@ -46,6 +46,15 @@
 //! [`run_command`](McpSession::run_command) primitive (so it takes the same
 //! per-RRID / registry gate and output cap as a foreground call).
 //!
+//! Bead `mtui-rs-th4o.8` bounded this table's resource use: a spawn is rejected
+//! (before allocating a worker) once the session holds
+//! `[mcp] max_active_jobs` running jobs — a fan-out is admitted or rejected as a
+//! whole — and terminal records are FIFO-evicted to `[mcp] max_completed_jobs`
+//! so a long-lived session does not accumulate job history unbounded (`0`
+//! disables either cap). The capture sink is likewise bounded at *write time*
+//! (see [`crate::capture`]) so a single command cannot buffer more than
+//! `[mcp] max_output_bytes` before the cap applies.
+//!
 //! P7.3d (`mtui-rs-76e.14`) landed the `notifications/progress` **heartbeats**:
 //! a long-running foreground tool call ([`run_command_with_progress`]) races the
 //! dispatch against a ticker that emits a progress frame every
@@ -81,7 +90,7 @@ use tokio::task::JoinHandle;
 
 use crate::capture::{self, SharedBuf};
 use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
-use crate::slim::cap_output;
+use crate::slim::{cap_output, truncation_notice};
 
 /// Wall-clock budget for the whole [`close`](McpSession::close) host-disconnect
 /// fan-out (upstream `DISCONNECT_TIMEOUT_SECONDS = 45.0`).
@@ -319,14 +328,25 @@ pub struct McpSession {
     /// A backgrounded slow command runs in a spawned worker that records its
     /// outcome on its `Arc<StdMutex<Job>>`; the poll methods
     /// ([`job_status`](Self::job_status) / [`job_result`](Self::job_result))
-    /// read it without locking the session. Records persist for the session's
-    /// lifetime (finished jobs are never evicted); under http the registry's
-    /// idle sweep drops the whole session and its table with it. The outer
-    /// [`StdMutex`] guards insert/lookup only (never held across an await).
+    /// read it without locking the session. Under http the registry's idle
+    /// sweep drops the whole session and its table with it; within a session's
+    /// lifetime the table is **bounded** — active spawns are capped by
+    /// [`max_active_jobs`](Self::max_active_jobs) and terminal records are
+    /// FIFO-evicted to [`max_completed_jobs`](Self::max_completed_jobs) (bead
+    /// `mtui-rs-th4o.8`). The outer [`StdMutex`] guards insert/lookup/eviction
+    /// only (never held across an await).
     jobs: StdMutex<HashMap<String, Arc<StdMutex<Job>>>>,
     /// Monotonic job-id counter (upstream `_job_counter`), pre-incremented per
     /// minted job so ids are session-unique.
     job_counter: AtomicU64,
+    /// Ceiling on concurrent *running* jobs (`config.mcp_max_active_jobs`); a
+    /// spawn request that would exceed it is rejected before allocating the
+    /// worker. `0` disables the cap.
+    max_active_jobs: usize,
+    /// Ceiling on retained *terminal* job records (`config.mcp_max_completed_jobs`);
+    /// the oldest-finished records beyond it are evicted FIFO. `0` disables the
+    /// cap.
+    max_completed_jobs: usize,
 }
 
 /// An acquired hold on the concurrency gate for one command/tool invocation.
@@ -363,6 +383,8 @@ impl McpSession {
         let profile = config.mcp_profile.clone();
         let tools_allow = config.mcp_tools_allow.clone();
         let tools_deny = config.mcp_tools_deny.clone();
+        let max_active_jobs = config.mcp_max_active_jobs;
+        let max_completed_jobs = config.mcp_max_completed_jobs;
         let (session, output) = capture::session(config);
         Arc::new(Self {
             session: Arc::new(Mutex::new(session)),
@@ -375,6 +397,8 @@ impl McpSession {
             rrid_locks: StdMutex::new(HashMap::new()),
             jobs: StdMutex::new(HashMap::new()),
             job_counter: AtomicU64::new(0),
+            max_active_jobs,
+            max_completed_jobs,
         })
     }
 
@@ -619,7 +643,19 @@ impl McpSession {
             dispatch_argv(registry, &mut session, name, argv).await
         };
 
-        let text = cap_output(self.output.take(), self.max_output_bytes);
+        // The capture sink already bounded the output at write time (discarding
+        // overflow before it was ever buffered). If it dropped anything, append
+        // the same notice `cap_output` would — exactly once, with the write-time
+        // overrun count. When nothing was dropped (or the cap is disabled) the
+        // captured text is already within budget, so `cap_output` is a no-op.
+        let (captured, dropped) = self.output.take_with_dropped();
+        let text = if dropped > 0 {
+            let mut t = captured;
+            t.push_str(&truncation_notice(dropped, self.max_output_bytes));
+            t
+        } else {
+            cap_output(captured, self.max_output_bytes)
+        };
 
         match result {
             Ok(()) => Ok(text),
@@ -696,16 +732,58 @@ impl McpSession {
         resolve_command_rrids(command.as_ref(), &session, argv)
     }
 
-    /// Create, register and start one worker for `argv`, returning its id.
+    /// Reject a spawn of `n` new jobs when it would breach the active cap.
+    ///
+    /// Enforced against the *projected* running count so a fan-out is admitted or
+    /// rejected as a whole (no partial spawn — bead `mtui-rs-th4o.8`). Must be
+    /// called while holding `jobs_guard` so the count and the subsequent inserts
+    /// are atomic against a concurrent (http) spawn. `max_active_jobs == 0`
+    /// disables the cap.
+    ///
+    /// # Errors
+    ///
+    /// [`McpCommandError`] (exit 1) naming the active/max counts when the spawn
+    /// would exceed the cap.
+    fn admit(
+        &self,
+        jobs_guard: &HashMap<String, Arc<StdMutex<Job>>>,
+        n: usize,
+    ) -> Result<(), McpCommandError> {
+        if self.max_active_jobs == 0 {
+            return Ok(());
+        }
+        let active = jobs_guard
+            .values()
+            .filter(|j| j.lock().expect("job record poisoned").state == JobState::Running)
+            .count();
+        if active + n > self.max_active_jobs {
+            return Err(McpCommandError {
+                stdout: String::new(),
+                stderr: format!(
+                    "too many active jobs ({active}/{max}); wait for one to finish \
+                     or cancel one before starting {n} more",
+                    max = self.max_active_jobs,
+                ),
+                exit_code: 1,
+            });
+        }
+        Ok(())
+    }
+
+    /// Create, register and start one worker for `argv`, inserting it into the
+    /// already-locked `jobs_guard` and returning its id.
     ///
     /// The Rust analogue of upstream `_mint_job`. The worker runs through
     /// [`run_command`](Self::run_command) (so it takes the same per-RRID /
     /// registry gate and output cap as a foreground call) and records the
-    /// terminal state/result on the job's `Arc<StdMutex<Job>>`. `self` is an
-    /// `Arc` because the spawned task must own the session for its `'static`
-    /// lifetime.
+    /// terminal state/result on the job's `Arc<StdMutex<Job>>`; on settling it
+    /// FIFO-evicts terminal records past the completed cap. `self` is an `Arc`
+    /// because the spawned task must own the session for its `'static` lifetime.
+    /// The caller holds the jobs lock so the admit-check and the insert are
+    /// atomic against a concurrent spawn.
     fn mint_job(
         self: &Arc<Self>,
+        jobs_guard: &mut HashMap<String, Arc<StdMutex<Job>>>,
         registry: Arc<Registry>,
         name: &str,
         argv: Vec<String>,
@@ -722,37 +800,69 @@ impl McpSession {
             exit_code: None,
             handle: None,
         }));
-        self.jobs
-            .lock()
-            .expect("jobs table poisoned")
-            .insert(job_id.clone(), Arc::clone(&job));
+        jobs_guard.insert(job_id.clone(), Arc::clone(&job));
 
         let session = Arc::clone(self);
         let name = name.to_owned();
         let worker_job = Arc::clone(&job);
         let handle = tokio::spawn(async move {
             let outcome = session.run_command(&registry, &name, &argv).await;
-            let mut j = worker_job.lock().expect("job record poisoned");
-            // A cancel may have already marked the record terminal; if so, do not
-            // overwrite it with the (aborted) worker's outcome.
-            if j.state == JobState::Running {
-                match outcome {
-                    Ok(out) => {
-                        j.result = Some(out);
-                        j.state = JobState::Done;
+            {
+                let mut j = worker_job.lock().expect("job record poisoned");
+                // A cancel may have already marked the record terminal; if so, do
+                // not overwrite it with the (aborted) worker's outcome.
+                if j.state == JobState::Running {
+                    match outcome {
+                        Ok(out) => {
+                            j.result = Some(out);
+                            j.state = JobState::Done;
+                        }
+                        Err(err) => {
+                            j.state = JobState::Failed;
+                            j.result = Some(err.stdout);
+                            j.error = Some(err.stderr);
+                            j.exit_code = Some(err.exit_code);
+                        }
                     }
-                    Err(err) => {
-                        j.state = JobState::Failed;
-                        j.result = Some(err.stdout);
-                        j.error = Some(err.stderr);
-                        j.exit_code = Some(err.exit_code);
-                    }
+                    j.finished = Some(Instant::now());
                 }
-                j.finished = Some(Instant::now());
             }
+            // Bound retained history: evict oldest-finished terminal records.
+            session.evict_completed();
         });
         job.lock().expect("job record poisoned").handle = Some(handle);
         job_id
+    }
+
+    /// FIFO-evict terminal job records beyond [`max_completed_jobs`](Self::max_completed_jobs).
+    ///
+    /// Keeps only the newest-`finished` terminal (done/failed/cancelled) records;
+    /// running jobs are never evicted. `max_completed_jobs == 0` disables the cap.
+    /// Runs under the jobs lock (never across an await).
+    fn evict_completed(&self) {
+        if self.max_completed_jobs == 0 {
+            return;
+        }
+        let mut jobs = self.jobs.lock().expect("jobs table poisoned");
+        // (finished-instant, id) for every terminal record.
+        let mut terminal: Vec<(Instant, String)> = jobs
+            .values()
+            .filter_map(|j| {
+                let j = j.lock().expect("job record poisoned");
+                j.finished
+                    .filter(|_| j.state != JobState::Running)
+                    .map(|f| (f, j.id.clone()))
+            })
+            .collect();
+        if terminal.len() <= self.max_completed_jobs {
+            return;
+        }
+        // Oldest first; drop everything past the newest `max_completed_jobs`.
+        terminal.sort_by_key(|(finished, _)| *finished);
+        let evict = terminal.len() - self.max_completed_jobs;
+        for (_, id) in terminal.into_iter().take(evict) {
+            jobs.remove(&id);
+        }
     }
 
     /// Start `name`/`argv` in the background and return its job id.
@@ -763,15 +873,23 @@ impl McpSession {
     /// The tool layer calls [`start_jobs`](Self::start_jobs) instead so a
     /// fanned-out slow command yields one job per template; this stays the
     /// single-job primitive for tests and non-fan-out callers.
+    ///
+    /// # Errors
+    ///
+    /// [`McpCommandError`] (exit 1) when the session is already at
+    /// [`max_active_jobs`](Self::max_active_jobs) running jobs; no worker is
+    /// spawned in that case.
     pub fn start_job(
         self: &Arc<Self>,
         registry: Arc<Registry>,
         name: &str,
         argv: Vec<String>,
-    ) -> String {
+    ) -> Result<String, McpCommandError> {
+        let mut jobs = self.jobs.lock().expect("jobs table poisoned");
+        self.admit(&jobs, 1)?;
         let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
         let job_id = format!("{name}-{n}");
-        self.mint_job(registry, name, argv, job_id)
+        Ok(self.mint_job(&mut jobs, registry, name, argv, job_id))
     }
 
     /// Start `name`/`argv` in the background, fanning out one job per template.
@@ -786,28 +904,39 @@ impl McpSession {
     /// command is independently observable and cancellable per template. When a
     /// single template (or none) resolves, this is exactly one job with the
     /// unchanged `<command>-<n>` id.
+    ///
+    /// # Errors
+    ///
+    /// [`McpCommandError`] (exit 1) when spawning the resolved jobs would breach
+    /// [`max_active_jobs`](Self::max_active_jobs); the whole fan-out is rejected
+    /// atomically (no partial spawn).
     pub async fn start_jobs(
         self: &Arc<Self>,
         registry: Arc<Registry>,
         name: &str,
         argv: Vec<String>,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>, McpCommandError> {
         let rrids = self.resolve_job_rrids(&registry, name, &argv).await;
         match rrids {
-            Some(rrids) if rrids.len() > 1 => rrids
-                .into_iter()
-                .map(|rrid| {
-                    let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
-                    let token = rrid.replace(':', "_");
-                    let job_id = format!("{name}-{token}-{n}");
-                    let mut scoped_argv = vec!["-T".to_owned(), rrid];
-                    scoped_argv.extend(argv.iter().cloned());
-                    self.mint_job(Arc::clone(&registry), name, scoped_argv, job_id)
-                })
-                .collect(),
+            Some(rrids) if rrids.len() > 1 => {
+                let mut jobs = self.jobs.lock().expect("jobs table poisoned");
+                // Admit or reject the whole batch atomically under the lock.
+                self.admit(&jobs, rrids.len())?;
+                Ok(rrids
+                    .into_iter()
+                    .map(|rrid| {
+                        let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                        let token = rrid.replace(':', "_");
+                        let job_id = format!("{name}-{token}-{n}");
+                        let mut scoped_argv = vec!["-T".to_owned(), rrid];
+                        scoped_argv.extend(argv.iter().cloned());
+                        self.mint_job(&mut jobs, Arc::clone(&registry), name, scoped_argv, job_id)
+                    })
+                    .collect())
+            }
             // Single template, none, or a client-supplied `-T` already narrowing
             // to one: keep the single-job path (and its stable id shape).
-            _ => vec![self.start_job(registry, name, argv)],
+            _ => Ok(vec![self.start_job(registry, name, argv)?]),
         }
     }
 
@@ -912,6 +1041,9 @@ impl McpSession {
             // Await the aborted task so cancellation has fully unwound before we
             // return; a `JoinError::Cancelled` is expected and ignored.
             let _ = handle.await;
+            // The aborted worker's terminal-write branch (which normally evicts)
+            // was skipped, so reap history here now this record is terminal.
+            self.evict_completed();
         }
         Ok(format!("cancelled job {job_id}"))
     }
@@ -1095,6 +1227,60 @@ mod tests {
         );
     }
 
+    /// A command that emits far more than the cap is bounded at *write time*:
+    /// the result is truncated to the budget, carries exactly one notice, and
+    /// reports the correct budget-overrun count — proving the full payload was
+    /// never buffered (it was discarded as it was written).
+    #[tokio::test]
+    async fn run_command_bounds_giant_output_at_write_time() {
+        use clap::ArgMatches;
+        use mtui_core::{Command, CommandResult, Scope};
+
+        /// Emits `n` 'x' bytes to the display in one write.
+        struct Flood(usize);
+        #[async_trait::async_trait]
+        impl Command for Flood {
+            fn name(&self) -> &'static str {
+                "flood_probe"
+            }
+            fn scope(&self) -> Scope {
+                Scope::Fanout
+            }
+            async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
+                session.display.println(&"x".repeat(self.0));
+                Ok(())
+            }
+        }
+
+        let cap = 16;
+        let flood = 10_000;
+        // `println` appends a trailing newline, so the display emits flood + 1 bytes.
+        let total = flood + 1;
+        let mut config = Config::default();
+        config.mcp_max_output_bytes = cap;
+        let sess = session(config);
+        let mut registry = register_all();
+        registry.register(Arc::new(Flood(flood)));
+
+        let out = sess
+            .run_command(&registry, "flood_probe", &[])
+            .await
+            .expect("flood succeeds");
+        // Head kept up to the budget, then a single notice.
+        assert!(
+            out.starts_with(&"x".repeat(cap)),
+            "head kept: {}",
+            &out[..40]
+        );
+        assert_eq!(out.matches("truncated").count(), 1, "exactly one notice");
+        // Overrun = total - limit.
+        assert!(
+            out.contains(&format!("truncated {} bytes", total - cap)),
+            "correct dropped count: {out}"
+        );
+        assert!(out.contains(&format!("max_output_bytes={cap}")));
+    }
+
     /// Each call isolates its own output: a second call does not see the first
     /// call's captured text.
     #[tokio::test]
@@ -1134,6 +1320,92 @@ mod tests {
             exit_code: 1,
         };
         assert_eq!(no_stderr.to_string(), "command failed (exit_code=1)");
+    }
+
+    /// Eviction FIFO-drops the oldest terminal records to the completed cap and
+    /// never removes a still-running record, even under cap pressure.
+    ///
+    /// Driven directly against the private jobs table (fabricated records) so the
+    /// invariant is deterministic — an integration test cannot force a concurrent
+    /// completion while another job holds the single session mutex.
+    #[tokio::test]
+    async fn evict_completed_fifo_and_spares_running() {
+        let mut config = Config::default();
+        config.mcp_max_completed_jobs = 2;
+        let sess = session(config);
+
+        let base = Instant::now();
+        let mk = |id: &str, state: JobState, finished: Option<Instant>| {
+            Arc::new(StdMutex::new(Job {
+                id: id.to_owned(),
+                command: "probe".to_owned(),
+                state,
+                started: base,
+                finished,
+                result: None,
+                error: None,
+                exit_code: None,
+                handle: None,
+            }))
+        };
+        {
+            let mut jobs = sess.jobs.lock().unwrap();
+            // Three terminal records with increasing finish times + one running.
+            jobs.insert("t-1".to_owned(), mk("t-1", JobState::Done, Some(base)));
+            jobs.insert(
+                "t-2".to_owned(),
+                mk("t-2", JobState::Failed, Some(base + Duration::from_secs(1))),
+            );
+            jobs.insert(
+                "t-3".to_owned(),
+                mk(
+                    "t-3",
+                    JobState::Cancelled,
+                    Some(base + Duration::from_secs(2)),
+                ),
+            );
+            jobs.insert("run".to_owned(), mk("run", JobState::Running, None));
+        }
+
+        sess.evict_completed();
+
+        let ids: std::collections::HashSet<String> =
+            sess.job_list().into_iter().map(|j| j.id).collect();
+        // Oldest terminal (t-1) evicted; newest two terminals kept; running kept.
+        assert!(!ids.contains("t-1"), "oldest terminal evicted: {ids:?}");
+        assert!(ids.contains("t-2"), "kept: {ids:?}");
+        assert!(ids.contains("t-3"), "kept: {ids:?}");
+        assert!(ids.contains("run"), "running never evicted: {ids:?}");
+        assert_eq!(ids.len(), 3);
+    }
+
+    /// A zero completed cap disables eviction (records accumulate).
+    #[tokio::test]
+    async fn evict_completed_zero_cap_is_disabled() {
+        let mut config = Config::default();
+        config.mcp_max_completed_jobs = 0;
+        let sess = session(config);
+        {
+            let mut jobs = sess.jobs.lock().unwrap();
+            for i in 0..5 {
+                jobs.insert(
+                    format!("t-{i}"),
+                    Arc::new(StdMutex::new(Job {
+                        id: format!("t-{i}"),
+                        command: "probe".to_owned(),
+                        state: JobState::Done,
+                        started: Instant::now(),
+                        finished: Some(Instant::now()),
+                        result: None,
+                        error: None,
+                        exit_code: None,
+                        handle: None,
+                    })),
+                );
+            }
+        }
+        sess.evict_completed();
+        assert_eq!(sess.job_list().len(), 5, "zero cap keeps everything");
     }
 
     /// `lock_for` returns the *same* lock object for a repeated RRID (so
@@ -1191,7 +1463,9 @@ mod tests {
         let sess = session(config);
         let registry = Arc::new(register_all());
 
-        let job_id = sess.start_job(Arc::clone(&registry), "whoami", Vec::new());
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "whoami", Vec::new())
+            .expect("start_job succeeds");
         // Drive it to completion.
         for _ in 0..500 {
             if sess.job_status(&job_id).unwrap().state != JobState::Running {

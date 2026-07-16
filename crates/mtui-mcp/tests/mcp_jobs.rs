@@ -97,7 +97,9 @@ async fn start_job_runs_and_result_returns_stdout() {
     let sess = session();
     let registry = Arc::new(register_all());
 
-    let job_id = sess.start_job(Arc::clone(&registry), "whoami", Vec::new());
+    let job_id = sess
+        .start_job(Arc::clone(&registry), "whoami", Vec::new())
+        .expect("start_job succeeds");
     assert!(job_id.starts_with("whoami-"), "id shape: {job_id}");
 
     let state = await_terminal(&sess, &job_id).await;
@@ -119,11 +121,13 @@ async fn job_result_failed_surfaces_error_envelope() {
     let sess = session();
     let registry = Arc::new(register_all());
 
-    let job_id = sess.start_job(
-        Arc::clone(&registry),
-        "whoami",
-        vec!["--nonexistent-flag".to_owned()],
-    );
+    let job_id = sess
+        .start_job(
+            Arc::clone(&registry),
+            "whoami",
+            vec!["--nonexistent-flag".to_owned()],
+        )
+        .expect("start_job succeeds");
     let state = await_terminal(&sess, &job_id).await;
     assert_eq!(state, JobState::Failed);
 
@@ -145,7 +149,9 @@ async fn job_result_running_tells_caller_to_poll() {
     let started = Arc::clone(&blocker.started);
     let registry = registry_with_probe(Arc::new(blocker));
 
-    let job_id = sess.start_job(Arc::clone(&registry), "blocking_job_probe", Vec::new());
+    let job_id = sess
+        .start_job(Arc::clone(&registry), "blocking_job_probe", Vec::new())
+        .expect("start_job succeeds");
     // Wait until the body is actually executing.
     started.notified().await;
 
@@ -174,8 +180,12 @@ async fn job_list_reports_started_jobs() {
     let sess = session();
     let registry = Arc::new(register_all());
 
-    let a = sess.start_job(Arc::clone(&registry), "whoami", Vec::new());
-    let b = sess.start_job(Arc::clone(&registry), "whoami", Vec::new());
+    let a = sess
+        .start_job(Arc::clone(&registry), "whoami", Vec::new())
+        .expect("start_job a");
+    let b = sess
+        .start_job(Arc::clone(&registry), "whoami", Vec::new())
+        .expect("start_job b");
     await_terminal(&sess, &a).await;
     await_terminal(&sess, &b).await;
 
@@ -210,7 +220,8 @@ async fn start_jobs_single_template_keeps_one_job() {
 
     let ids = sess
         .start_jobs(Arc::clone(&registry), "whoami", Vec::new())
-        .await;
+        .await
+        .expect("start_jobs succeeds");
     assert_eq!(ids.len(), 1);
     assert!(ids[0].starts_with("whoami-"), "id shape: {}", ids[0]);
     assert!(
@@ -230,7 +241,8 @@ async fn start_jobs_fans_out_one_job_per_template() {
 
     let ids = sess
         .start_jobs(Arc::clone(&registry), "fanout_job_probe", Vec::new())
-        .await;
+        .await
+        .expect("start_jobs succeeds");
     assert_eq!(ids.len(), 2);
     // ids encode the (sanitised) RRID and are unique.
     assert!(ids.iter().any(|j| j.contains("SUSE_Maintenance_1_1")));
@@ -265,7 +277,8 @@ async fn start_jobs_explicit_template_yields_single_job() {
             "fanout_job_probe",
             vec!["-T".to_owned(), RRID_B.to_owned()],
         )
-        .await;
+        .await
+        .expect("start_jobs succeeds");
     assert_eq!(ids.len(), 1);
     await_terminal(&sess, &ids[0]).await;
     assert_eq!(sess.job_result(&ids[0]).expect("done").trim(), RRID_B);
@@ -291,7 +304,8 @@ async fn cancel_one_template_job_leaves_others() {
 
     let ids = sess
         .start_jobs(Arc::clone(&registry), "per_rrid_blocking_probe", Vec::new())
-        .await;
+        .await
+        .expect("start_jobs succeeds");
     assert_eq!(ids.len(), 2);
     let first = ids
         .iter()
@@ -320,6 +334,133 @@ async fn cancel_one_template_job_leaves_others() {
 }
 
 // --------------------------------------------------------------------------- //
+// Resource limits (bead mtui-rs-th4o.8)                                        //
+// --------------------------------------------------------------------------- //
+
+/// A session with explicit active/completed job caps and a deterministic user.
+fn session_with_caps(max_active: usize, max_completed: usize) -> Arc<McpSession> {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    config.template_dir = tmp.path().to_path_buf();
+    config.session_user = "testuser".to_owned();
+    config.mcp_max_active_jobs = max_active;
+    config.mcp_max_completed_jobs = max_completed;
+    std::mem::forget(tmp);
+    McpSession::new(config)
+}
+
+/// Spawning up to the active cap succeeds; the next spawn is rejected before a
+/// worker is created, and freeing a slot re-enables spawning.
+#[tokio::test]
+async fn active_job_cap_rejects_before_spawn_and_frees_on_finish() {
+    let sess = session_with_caps(2, 0);
+    // Two blocking probes occupy both active slots. Both records are inserted as
+    // Running synchronously by `start_job` (before either body runs), so the cap
+    // sees two active jobs regardless of the registry-gate serialisation.
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let registry = registry_with_probe(Arc::new(FlagBlocker {
+        release: Arc::clone(&flag),
+    }));
+
+    let a = sess
+        .start_job(Arc::clone(&registry), "flag_blocking_probe", Vec::new())
+        .expect("first fits");
+    let b = sess
+        .start_job(Arc::clone(&registry), "flag_blocking_probe", Vec::new())
+        .expect("second fits");
+
+    // The third is rejected without spawning.
+    let err = sess
+        .start_job(Arc::clone(&registry), "flag_blocking_probe", Vec::new())
+        .expect_err("third exceeds the cap");
+    assert_eq!(err.exit_code, 1);
+    assert!(err.stderr.contains("too many active jobs"), "got: {err:?}");
+    // Only the two admitted jobs exist — the rejected one never entered the table.
+    assert_eq!(sess.job_list().len(), 2);
+
+    // Release both; once they settle a slot frees for a new spawn.
+    flag.store(true, Ordering::SeqCst);
+    await_terminal(&sess, &a).await;
+    await_terminal(&sess, &b).await;
+    let c = sess
+        .start_job(Arc::clone(&registry), "whoami", Vec::new())
+        .expect("slot freed after finish");
+    await_terminal(&sess, &c).await;
+}
+
+/// A fan-out that would breach the active cap is rejected as a whole (no partial
+/// spawn).
+#[tokio::test]
+async fn fanout_breaching_active_cap_is_rejected_whole() {
+    let sess = session_with_caps(1, 0);
+    load_two(&sess).await;
+    let registry = registry_with_probe(Arc::new(FanoutProbe));
+
+    // Two templates resolve → 2 jobs, but the cap is 1.
+    let err = sess
+        .start_jobs(Arc::clone(&registry), "fanout_job_probe", Vec::new())
+        .await
+        .expect_err("fan-out exceeds the cap");
+    assert!(err.stderr.contains("too many active jobs"), "got: {err:?}");
+    // Nothing was spawned — the batch is atomic.
+    assert_eq!(sess.job_list().len(), 0);
+}
+
+/// A zero active cap disables the limit (any number of jobs may run).
+#[tokio::test]
+async fn zero_active_cap_disables_the_limit() {
+    let sess = session_with_caps(0, 0);
+    let registry = Arc::new(register_all());
+    let mut ids = Vec::new();
+    for _ in 0..8 {
+        ids.push(
+            sess.start_job(Arc::clone(&registry), "whoami", Vec::new())
+                .expect("no cap → always admitted"),
+        );
+    }
+    for id in &ids {
+        await_terminal(&sess, id).await;
+    }
+    assert_eq!(sess.job_list().len(), 8);
+}
+
+/// Completed records are FIFO-evicted to the completed cap; running jobs survive
+/// and evicted ids report cleanly as unknown.
+#[tokio::test]
+async fn completed_jobs_are_fifo_evicted_to_the_cap() {
+    let sess = session_with_caps(0, 2);
+    let registry = Arc::new(register_all());
+
+    // Run five fast jobs to completion, in order, so `finished` is monotonic.
+    let mut ids = Vec::new();
+    for _ in 0..5 {
+        let id = sess
+            .start_job(Arc::clone(&registry), "whoami", Vec::new())
+            .expect("admitted");
+        await_terminal(&sess, &id).await;
+        ids.push(id);
+    }
+
+    // Only the newest two terminal records survive.
+    let listed = sess.job_list();
+    assert_eq!(listed.len(), 2, "capped to newest two: {listed:?}");
+    let survivors: std::collections::HashSet<_> = listed.iter().map(|j| j.id.clone()).collect();
+    assert!(survivors.contains(&ids[3]), "second-newest kept");
+    assert!(survivors.contains(&ids[4]), "newest kept");
+
+    // The three oldest were evicted and now report cleanly as unknown.
+    for old in &ids[..3] {
+        let err = sess.job_status(old).expect_err("evicted id is unknown");
+        assert!(err.stderr.contains("no such job"), "got: {err:?}");
+    }
+}
+
+// The "eviction spares running jobs" invariant is proven deterministically as a
+// unit test in `session.rs` (it needs direct access to the private jobs table;
+// an integration test cannot drive a concurrent completion while another job
+// holds the single session mutex — see the `mtui-rs-f36r` caveat).
+
+// --------------------------------------------------------------------------- //
 // Test-only blocking probes                                                   //
 // --------------------------------------------------------------------------- //
 
@@ -340,6 +481,33 @@ impl Command for Blocker {
     async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
         self.started.notify_one();
         self.release.notified().await;
+        Ok(())
+    }
+}
+
+/// A self-scoped probe that blocks by *polling* an `AtomicBool` until it is set.
+///
+/// Unlike [`Blocker`] (a `Notify`, which only wakes tasks already parked at
+/// `.notified()`), this survives wake races and workers that arrive at the block
+/// late — the right primitive for the resource-limit tests, where several
+/// same-scope jobs serialise on the registry gate and reach the block at
+/// different times.
+struct FlagBlocker {
+    release: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl Command for FlagBlocker {
+    fn name(&self) -> &'static str {
+        "flag_blocking_probe"
+    }
+    fn scope(&self) -> Scope {
+        Scope::Fanout
+    }
+    async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+        while !self.release.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
         Ok(())
     }
 }

@@ -159,6 +159,36 @@ mod tests {
     }
 
     #[test]
+    fn mcp_job_limits_default_to_conservative_values() {
+        let d = Config::default();
+        assert_eq!(d.mcp_max_active_jobs, 16);
+        assert_eq!(d.mcp_max_completed_jobs, 128);
+    }
+
+    #[test]
+    fn load_reads_mcp_job_limits() {
+        let path = write_tmp(
+            "mcp-jobs.toml",
+            "[mcp]\nmax_active_jobs = 4\nmax_completed_jobs = 10\n",
+        );
+        let cfg = Config::load(Some(path));
+        assert_eq!(cfg.mcp_max_active_jobs, 4);
+        assert_eq!(cfg.mcp_max_completed_jobs, 10);
+    }
+
+    #[test]
+    fn mcp_job_limits_zero_disables() {
+        // `0` is a valid "disabled" sentinel (not clamped like session_cap).
+        let path = write_tmp(
+            "mcp-jobs-zero.toml",
+            "[mcp]\nmax_active_jobs = 0\nmax_completed_jobs = 0\n",
+        );
+        let cfg = Config::load(Some(path));
+        assert_eq!(cfg.mcp_max_active_jobs, 0);
+        assert_eq!(cfg.mcp_max_completed_jobs, 0);
+    }
+
+    #[test]
     fn mcp_profile_defaults_to_full_with_empty_overrides() {
         let d = Config::default();
         assert_eq!(d.mcp_profile, "full");
