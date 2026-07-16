@@ -24,7 +24,8 @@ use quick_xml::reader::Reader;
 use reqwest::{Method, RequestBuilder};
 
 use crate::http::{
-    HttpClient, VerifyPolicy, is_ssl_verification_error, sanitize_url, ssl_verification_hint,
+    HttpClient, MAX_API_BODY, VerifyPolicy, is_ssl_verification_error, read_body_capped,
+    sanitize_url, ssl_verification_hint,
 };
 use crate::obs::errors::ObsError;
 
@@ -299,7 +300,10 @@ impl ObsClient {
         response: reqwest::Response,
     ) -> Result<String, ObsError> {
         if response.status().is_success() {
-            return response.text().await.map_err(|e| ObsError::Http(e.into()));
+            let bytes = read_body_capped(response, MAX_API_BODY)
+                .await
+                .map_err(ObsError::Http)?;
+            return Ok(String::from_utf8_lossy(&bytes).into_owned());
         }
         Err(self.api_error(method, url, response).await)
     }
@@ -307,7 +311,10 @@ impl ObsClient {
     /// Build an [`ObsError::Api`] from a failing response (consumes its body).
     async fn api_error(&self, method: &Method, url: &str, response: reqwest::Response) -> ObsError {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = read_body_capped(response, MAX_API_BODY)
+            .await
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
         let summary = error_summary(&text);
         let suffix = if summary.is_empty() {
             String::new()

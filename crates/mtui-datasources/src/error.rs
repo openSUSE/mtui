@@ -40,6 +40,24 @@ pub enum HttpError {
         /// The underlying I/O or certificate-parse failure.
         source: std::io::Error,
     },
+
+    /// The response body exceeded the endpoint's maximum allowed size.
+    ///
+    /// A defence against a hostile/misconfigured datasource returning an
+    /// arbitrarily large (or `Content-Length`-lying, or endless chunked) body
+    /// that would OOM/DoS mtui. `seen` carries the advertised `Content-Length`
+    /// when the body was rejected *before* any read; it is `None` when the cap
+    /// tripped mid-stream (unknown/lying length). The message deliberately
+    /// carries no URL, so it can never leak credentials embedded in a
+    /// datasource URL.
+    #[error("response body exceeds the {limit}-byte limit")]
+    BodyTooLarge {
+        /// The maximum number of bytes the caller was willing to buffer.
+        limit: usize,
+        /// The advertised `Content-Length` if the body was rejected early,
+        /// else `None` (the cap tripped while streaming).
+        seen: Option<u64>,
+    },
 }
 
 /// Errors from loading and parsing a local `refhosts.yml` database.

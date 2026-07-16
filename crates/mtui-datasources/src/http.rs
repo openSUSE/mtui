@@ -29,6 +29,17 @@
 //! `_parse_ssl_verify` (the config-string coercion) is **not** re-ported here:
 //! it already lives in [`mtui_config::SslVerify`]. [`VerifyPolicy::from_config`]
 //! bridges that typed config value into this layer's posture.
+//!
+//! ## Bounded response bodies (new, no upstream target)
+//!
+//! Upstream `get_bytes` buffers the whole body unconditionally. Here every body
+//! is read through [`read_body_capped`], which rejects an oversized advertised
+//! `Content-Length` before reading and enforces the same ceiling while streaming
+//! chunked/unknown-length bodies — a hostile or misconfigured datasource cannot
+//! OOM mtui. Callers pick [`MAX_API_BODY`] (small JSON/text) or
+//! [`MAX_DOWNLOAD_BODY`] (bulk downloads); overflow surfaces as
+//! [`HttpError::BodyTooLarge`], which carries no URL so it cannot leak a
+//! credential embedded in a datasource URL.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +58,19 @@ pub const HTTP_TIMEOUT: (Duration, Duration) = (Duration::from_secs(5), Duration
 const CONNECT_TIMEOUT: Duration = HTTP_TIMEOUT.0;
 /// The read-phase component of [`HTTP_TIMEOUT`].
 const READ_TIMEOUT: Duration = HTTP_TIMEOUT.1;
+
+/// Maximum body size for a JSON/text API response (Gitea, openQA, QEM
+/// dashboard, OBS/IBS, teregen, oqa-search). These endpoints return small
+/// structured documents; 16 MiB is orders of magnitude above any legitimate
+/// payload while still bounding a hostile/misconfigured server. See
+/// [`HttpClient::get_bytes_capped`] and the crate's direct-`Response` callers.
+pub const MAX_API_BODY: usize = 16 * 1024 * 1024;
+
+/// Maximum body size for a bulk *download* — a `refhosts.yml` database or an
+/// openQA install/result log fetched via [`HttpClient::get_bytes`]. Generous
+/// (256 MiB) because these can legitimately be large, but still a hard ceiling
+/// so a runaway body cannot exhaust memory.
+pub const MAX_DOWNLOAD_BODY: usize = 256 * 1024 * 1024;
 
 /// Fallback locations of the distribution-managed CA bundle, probed only when
 /// the interpreter/OpenSSL default (via `SSL_CERT_FILE`) names no existing file.
@@ -207,20 +231,71 @@ impl HttpClient {
         &self.inner
     }
 
-    /// GET `url` and return the raw response body as bytes.
+    /// GET `url` and return the raw response body as bytes, capped at
+    /// [`MAX_DOWNLOAD_BODY`].
     ///
     /// The single GET-to-bytes path for callers that just want a payload (a log
     /// file, a YAML document). Raises for any non-2xx status, mirroring
-    /// upstream `get_bytes` → `response.raise_for_status()`.
+    /// upstream `get_bytes` → `response.raise_for_status()`. Use
+    /// [`get_bytes_capped`](Self::get_bytes_capped) with [`MAX_API_BODY`] for
+    /// small JSON/text API responses.
     ///
     /// # Errors
     ///
     /// Returns [`HttpError::Request`] on any transport failure or non-2xx HTTP
-    /// status.
+    /// status, or [`HttpError::BodyTooLarge`] if the body exceeds the cap.
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        let response = self.inner.get(url).send().await?.error_for_status()?;
-        Ok(response.bytes().await?.to_vec())
+        self.get_bytes_capped(url, MAX_DOWNLOAD_BODY).await
     }
+
+    /// GET `url` and return the response body as bytes, rejecting any body
+    /// larger than `max`.
+    ///
+    /// An oversized advertised `Content-Length` is rejected *before* any body
+    /// is read; a chunked/unknown-length body is streamed and rejected the
+    /// instant the running total exceeds `max`, so an endless or
+    /// `Content-Length`-lying server cannot force unbounded buffering.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpError::Request`] on any transport failure or non-2xx HTTP
+    /// status, or [`HttpError::BodyTooLarge`] if the body exceeds `max`.
+    pub async fn get_bytes_capped(&self, url: &str, max: usize) -> Result<Vec<u8>> {
+        let response = self.inner.get(url).send().await?.error_for_status()?;
+        read_body_capped(response, max).await
+    }
+}
+
+/// Read `response`'s body into a `Vec`, rejecting any body larger than `max`.
+///
+/// Fail-fast on the advertised `Content-Length`, then enforce the same ceiling
+/// while streaming so a missing/lying length or an endless chunked body still
+/// cannot exceed `max` bytes buffered. Dropping `response` on rejection closes
+/// the underlying connection instead of draining the overflow.
+pub(crate) async fn read_body_capped(
+    mut response: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>> {
+    if let Some(len) = response.content_length()
+        && len > max as u64
+    {
+        return Err(HttpError::BodyTooLarge {
+            limit: max,
+            seen: Some(len),
+        });
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > max {
+            return Err(HttpError::BodyTooLarge {
+                limit: max,
+                seen: None,
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// Read a PEM CA bundle from `path` into reqwest certificates.

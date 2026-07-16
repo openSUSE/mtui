@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::error::QemDashboardError;
-use crate::http::{HttpClient, VerifyPolicy};
+use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy};
 
 /// openQA job result statuses reported individually in the exported log.
 ///
@@ -81,7 +81,7 @@ impl QemDashboardClient {
     /// malformed JSON body is logged at `debug` and returns `None`.
     async fn get(&self, path: &str) -> Option<Value> {
         let url = format!("{}/{}", self.apiurl, path.trim_start_matches('/'));
-        match self.http.get_bytes(&url).await {
+        match self.http.get_bytes_capped(&url, MAX_API_BODY).await {
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
                 Ok(value) => Some(value),
                 Err(e) => {

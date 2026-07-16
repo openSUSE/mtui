@@ -35,8 +35,8 @@ use serde_json::json;
 
 use crate::error::GiteaError;
 use crate::http::{
-    HttpClient, VerifyPolicy, is_ssl_verification_error, resolve_verify, sanitize_url,
-    ssl_verification_hint,
+    HttpClient, MAX_API_BODY, VerifyPolicy, is_ssl_verification_error, read_body_capped,
+    resolve_verify, sanitize_url, ssl_verification_hint,
 };
 
 /// The default review group a [`Gitea`] client operates on behalf of, matching
@@ -326,7 +326,8 @@ impl Gitea {
                 sanitize_url(url)
             );
             // Best-effort: surface a more specific message from the body.
-            if let Ok(v) = response.json::<serde_json::Value>().await
+            if let Ok(bytes) = read_body_capped(response, MAX_API_BODY).await
+                && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 && let Some(msg) = v.get("message").and_then(serde_json::Value::as_str)
             {
                 tracing::debug!("Gitea error message: {msg}");
@@ -342,10 +343,13 @@ impl Gitea {
         if status.as_u16() == 204 {
             return Ok(serde_json::Value::Null);
         }
-        response
-            .json::<serde_json::Value>()
+        let bytes = read_body_capped(response, MAX_API_BODY)
             .await
-            .map_err(|e| GiteaError::FailedCall(format!("{method} - {url}: {e}")))
+            .map_err(|e| {
+                GiteaError::FailedCall(format!("{method} - {}: {e}", sanitize_url(url)))
+            })?;
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .map_err(|e| GiteaError::FailedCall(format!("{method} - {}: {e}", sanitize_url(url))))
     }
 
     /// Fetch and deserialise all comments on the pull request.

@@ -171,3 +171,22 @@ async fn incident_metadata_shortest_package_name() {
     assert!(incident.is_present());
     assert_eq!(incident.get_incident_name().as_deref(), Some("kernel-ec2"));
 }
+
+#[tokio::test]
+async fn oversized_incident_body_folds_to_absent() {
+    // th4o.9: a body exceeding MAX_API_BODY is rejected by the bounded read and
+    // the dashboard `get` folds that error to None, so an oversized/hostile
+    // response degrades to "incident not present" instead of OOMing.
+    use mtui_datasources::MAX_API_BODY;
+    let server = MockServer::start().await;
+    let oversized = vec![b'x'; MAX_API_BODY + 1];
+    Mock::given(method("GET"))
+        .and(path("/api/incidents/12358"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(oversized))
+        .mount(&server)
+        .await;
+
+    let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
+    let incident = QemIncident::with_client(rrid, client_for(&server)).await;
+    assert!(!incident.is_present());
+}

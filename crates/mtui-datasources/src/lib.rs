@@ -21,9 +21,9 @@ pub use error::{
 };
 pub use gitea::{Comment, DEFAULT_GROUP, Gitea, assign_marker, pr_api_url, unassign_marker};
 pub use http::{
-    HTTP_TIMEOUT, HttpClient, VerifyPolicy, default_pool_size, disable_insecure_warnings,
-    is_ssl_verification_error, resolve_verify, sanitize_url, ssl_verification_hint,
-    system_ca_bundle,
+    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, MAX_DOWNLOAD_BODY, VerifyPolicy, default_pool_size,
+    disable_insecure_warnings, is_ssl_verification_error, resolve_verify, sanitize_url,
+    ssl_verification_hint, system_ca_bundle,
 };
 pub use obs::{NoAuth, ObsAuth, ObsClient, ObsError, Osc, error_summary};
 pub use openqa::{

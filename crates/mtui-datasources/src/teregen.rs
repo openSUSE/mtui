@@ -31,7 +31,9 @@ use std::time::Duration;
 use mtui_config::Config;
 use serde_json::{Value, json};
 
-use crate::http::{HTTP_TIMEOUT, HttpClient, VerifyPolicy, resolve_verify};
+use crate::http::{
+    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, resolve_verify,
+};
 
 /// The result of a regenerate-and-wait attempt (see
 /// [`TeReGen::regenerate_and_wait`]).
@@ -132,7 +134,14 @@ impl TeReGen {
                 return None;
             }
         };
-        match response.json::<Value>().await {
+        let bytes = match read_body_capped(response, MAX_API_BODY).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::debug!("TeReGen GET {path} failed: {e}");
+                return None;
+            }
+        };
+        match serde_json::from_slice::<Value>(&bytes) {
             Ok(v) => Some(v),
             Err(e) => {
                 tracing::debug!("TeReGen GET {path} returned invalid JSON: {e}");
@@ -264,7 +273,10 @@ impl TeReGen {
             }
         };
         let status = response.status();
-        let body = response.json::<Value>().await.ok();
+        let body = read_body_capped(response, MAX_API_BODY)
+            .await
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
         if let Some(Value::Object(_)) = &body {
             return body;
         }

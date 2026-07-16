@@ -12,6 +12,7 @@ use mtui_types::{RequestKind, RequestReviewID};
 use serde::Deserialize;
 
 use super::client::OpenQAClient;
+use crate::http::{MAX_API_BODY, read_body_capped};
 
 /// The openQA `distri` query parameter.
 ///
@@ -182,7 +183,14 @@ impl OpenQABase {
             }
         };
 
-        match response.json::<JobsResponse>().await {
+        let bytes = match read_body_capped(response, MAX_API_BODY).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::error!("openQA request to {} failed: {e}", self.host);
+                return None;
+            }
+        };
+        match serde_json::from_slice::<JobsResponse>(&bytes) {
             Ok(body) => Some(body.jobs),
             Err(e) => {
                 tracing::error!("openQA request to {} failed: {e}", self.host);

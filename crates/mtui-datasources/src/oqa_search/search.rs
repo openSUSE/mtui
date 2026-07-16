@@ -23,7 +23,7 @@ use std::collections::{BTreeSet, HashMap};
 use scraper::{Html, Selector};
 
 use crate::error::OqaSearchError;
-use crate::http::HttpClient;
+use crate::http::{HttpClient, MAX_API_BODY};
 
 use super::heuristics::{
     AGGREGATED_EXCLUDED_VERSIONS, AGGREGATED_GROUPS_TERMS, AGGREGATED_NAME_MAP, EXCLUDED_GROUPS,
@@ -41,14 +41,14 @@ use super::results::{BuildCheckResult, GroupResult, JobResult, VersionResult};
 /// [`OqaSearchError::Http`] so callers can convert into a user-facing message
 /// (or fold it into a note / empty result, as the entry points do).
 async fn get_json(http: &HttpClient, url: &str) -> Result<serde_json::Value, OqaSearchError> {
-    let bytes = http.get_bytes(url).await?;
+    let bytes = http.get_bytes_capped(url, MAX_API_BODY).await?;
     serde_json::from_slice(&bytes).map_err(|e| OqaSearchError::Http(e.to_string()))
 }
 
 /// GET `url` and return the body as UTF-8 text, mirroring upstream
 /// `_fetch_url_content`.
 async fn fetch_url_content(http: &HttpClient, url: &str) -> Result<String, OqaSearchError> {
-    let bytes = http.get_bytes(url).await?;
+    let bytes = http.get_bytes_capped(url, MAX_API_BODY).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 

@@ -16,7 +16,7 @@ use regex::Regex;
 
 use mtui_types::RequestReviewID;
 
-use crate::http::{HttpClient, VerifyPolicy, sanitize_url};
+use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, sanitize_url};
 
 /// Capture the whole trimmed `SUMMARY:` value, not just the first token, so a
 /// trailing qualifier ("PASSED with notes") reads as UNKNOWN — matching the
@@ -75,8 +75,8 @@ pub async fn fetch_testreport_log(
         tracing::error!("testreport {safe_url} returned {}", status.as_u16());
         return None;
     }
-    match response.text().await {
-        Ok(body) => Some(body),
+    match read_body_capped(response, MAX_API_BODY).await {
+        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
         Err(e) => {
             tracing::error!("could not read testreport body {safe_url}: {e}");
             None
