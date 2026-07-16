@@ -293,8 +293,13 @@ impl<C: Clock> TargetLock<C> {
 
     /// Loads the lock state from the remote host into [`Self::lock`].
     ///
-    /// A missing lockfile resets to the empty (unlocked) state. Any other SFTP
-    /// error propagates.
+    /// **Fails closed**: only a genuinely *missing* lockfile
+    /// ([`HostError::SftpNotFound`]) resets to the empty (unlocked) state,
+    /// mirroring upstream's `errno.ENOENT` branch. Every other error — a
+    /// permission-denied read, a transport blip, a truncated/garbled read — is
+    /// propagated, because reporting "unlocked" for an *unknown* state would let
+    /// us claim a host another owner already holds. (Upstream re-raises any
+    /// non-`ENOENT` `OSError` for the same reason.)
     async fn load(&mut self) -> Result<()> {
         self.lock = RemoteLock::default();
         let path = self.filename();
@@ -305,11 +310,8 @@ impl<C: Clock> TargetLock<C> {
                 self.lock = RemoteLock::from_lockfile(line)?;
                 Ok(())
             }
-            Err(HostError::SftpNotFound { .. } | HostError::Sftp { .. }) => {
-                // Treat a missing/unreadable lockfile as "unlocked", matching
-                // upstream's ENOENT branch. A truly absent file surfaces as
-                // HostError::SftpNotFound; a present-but-unreadable one as the
-                // catch-all HostError::Sftp — both mean "no usable lock".
+            Err(HostError::SftpNotFound { .. }) => {
+                // A truly absent lockfile means "unlocked" (upstream ENOENT).
                 Ok(())
             }
             Err(e) => Err(e),
@@ -421,14 +423,27 @@ impl<C: Clock> TargetLock<C> {
         }
     }
 
+    /// The maximum number of atomic-create retries during reconciliation, so a
+    /// pathological create/reap/create ping-pong with a competing racer cannot
+    /// spin forever. On exhaustion the caller reports the host as locked.
+    const RECONCILE_RETRIES: u32 = 8;
+
     /// Locks the target.
     ///
     /// Attempts an atomic exclusive create first; on collision, reconciles
     /// (re-stamp if ours, reap if stale, wait if configured) or refuses.
     ///
+    /// **Race-safe**: a foreign lock is never blind-overwritten. The only
+    /// non-exclusive (truncating) write is a re-stamp of a lock this process
+    /// *already owns* — clobbering "the winner" there means clobbering
+    /// ourselves. When wait/reap frees the host, the acquisition is a **retried
+    /// atomic exclusive create**, so a racer that took the lock in the TOCTOU
+    /// window between our last check and the write wins and we reconcile again
+    /// rather than stomping their line.
+    ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the host is held by another
-    /// owner and cannot be acquired, or an SFTP error from the write path.
+    /// owner and cannot be acquired, or an SFTP error from the read/write path.
     pub async fn lock(&mut self, comment: &str) -> Result<()> {
         let rl = RemoteLock {
             user: self.i_am_user.clone(),
@@ -437,33 +452,49 @@ impl<C: Clock> TargetLock<C> {
             comment: comment.to_owned(),
         };
         let path = self.filename();
+        let line = rl.to_lockfile();
 
-        // 1) Atomic exclusive create: on a free host exactly one racer wins.
-        match self
-            .connection
-            .sftp_write(&path, rl.to_lockfile().as_bytes(), true)
-            .await
-        {
-            Ok(()) => {
+        for _ in 0..Self::RECONCILE_RETRIES {
+            // 1) Atomic exclusive create: on a free host exactly one racer wins.
+            match self
+                .connection
+                .sftp_write(&path, line.as_bytes(), true)
+                .await
+            {
+                Ok(()) => {
+                    self.lock = rl;
+                    return Ok(());
+                }
+                Err(HostError::AlreadyExists { .. }) => {
+                    // Fall through to reconciliation.
+                }
+                Err(e) => return Err(e),
+            }
+
+            // 2) The file exists. Load it (fail-closed) and decide.
+            self.load().await?;
+            if self.lock.user.is_empty() {
+                // Freed between the create and the load — retry the create.
+                continue;
+            }
+            if self.is_mine()? {
+                // Legitimate re-stamp of our own lock (possibly a new comment).
+                self.connection
+                    .sftp_write(&path, line.as_bytes(), false)
+                    .await?;
                 self.lock = rl;
                 return Ok(());
             }
-            Err(HostError::AlreadyExists { .. }) => {
-                // Fall through to reconciliation.
+            // Foreign lock: reap-if-stale / wait may free it, then we retry the
+            // atomic create (never a blind overwrite of a foreign line).
+            if self.wait_for_lock().await? {
+                continue;
             }
-            Err(e) => return Err(e),
-        }
-
-        // 2) The file exists. May we overwrite it?
-        if self.is_locked().await? && !self.is_mine()? && !self.wait_for_lock().await? {
             return Err(HostError::TargetLocked(self.locked_by_msg().await?));
         }
 
-        self.connection
-            .sftp_write(&path, rl.to_lockfile().as_bytes(), false)
-            .await?;
-        self.lock = rl;
-        Ok(())
+        // Exhausted retries: treat as contended and fail closed.
+        Err(HostError::TargetLocked(self.locked_by_msg().await?))
     }
 
     /// A "locked by" message suitable for display.
@@ -512,9 +543,16 @@ impl<C: Clock> TargetLock<C> {
     /// With `force = false` a foreign lock is refused; with `force = true` any
     /// owner's lock is removed. A no-op on an unlocked host.
     ///
+    /// **Fails closed on removal**: an already-missing lockfile
+    /// ([`HostError::SftpNotFound`], upstream `ENOENT`) counts as released, but
+    /// any other remove failure (permission, transport) propagates and leaves
+    /// the in-memory lock state intact — the caller must not believe it released
+    /// a lock it did not.
+    ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the lock is foreign and not
-    /// forced, or an SFTP error from the remove path.
+    /// forced, or an SFTP/transport error from the remove path (other than
+    /// "already gone").
     pub async fn unlock(&mut self, force: bool) -> Result<()> {
         if !self.is_locked().await? {
             return Ok(());
@@ -523,10 +561,17 @@ impl<C: Clock> TargetLock<C> {
             return Err(HostError::TargetLocked(self.locked_by_msg().await?));
         }
         let path = self.filename();
-        if let Err(e) = self.connection.sftp_remove(&path).await {
-            // A already-gone lockfile is fine; log other failures but do not
-            // propagate them (best-effort unlock, mirrors upstream).
-            tracing::debug!(host = %self.hostname(), error = %e, "ignoring unlock remove error");
+        match self.connection.sftp_remove(&path).await {
+            Ok(()) => {}
+            Err(HostError::SftpNotFound { .. }) => {
+                // Already gone — treat as released (upstream ENOENT branch).
+                tracing::debug!(host = %self.hostname(), "lockfile already gone");
+            }
+            Err(e) => {
+                // A permission/transport failure did NOT remove the lock; do not
+                // pretend we released it (fail closed — leave self.lock intact).
+                return Err(e);
+            }
         }
         self.lock = RemoteLock::default();
         Ok(())
@@ -822,8 +867,15 @@ impl<C: Clock> PoolLock<C> {
             return Err(HostError::TargetLocked(self.inner.locked_by_msg().await?));
         }
         let path = self.filename();
-        if let Err(e) = self.inner.connection.sftp_remove(&path).await {
-            tracing::debug!(error = %e, "ignoring pool-unlock remove error");
+        match self.inner.connection.sftp_remove(&path).await {
+            Ok(()) => {}
+            Err(HostError::SftpNotFound { .. }) => {
+                tracing::debug!("pool lockfile already gone");
+            }
+            Err(e) => {
+                // The claim was not removed; do not mark it released.
+                return Err(e);
+            }
         }
         self.inner.lock = RemoteLock::default();
         Ok(())
@@ -1370,6 +1422,112 @@ mod tests {
         assert!(matches!(err, HostError::TargetLocked(_)));
     }
 
+    // --- fail-closed reads & race safety ------------------------------------
+
+    #[tokio::test]
+    async fn load_fails_closed_on_generic_sftp_error() {
+        // A present-but-unreadable lockfile (generic Sftp error, not NotFound)
+        // must propagate, not report "unlocked" — otherwise we would claim a
+        // host whose true state is unknown.
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:otheruser:99999".to_vec())
+            .with_open_error(TARGET_LOCK_PATH);
+        let mut lock = tl(conn, FakeClock::new(now()));
+        assert!(matches!(
+            lock.is_locked().await,
+            Err(HostError::Sftp { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn lock_fails_closed_on_generic_read_error_during_reconcile() {
+        // Exclusive create loses (file exists) → reconcile loads the lock, which
+        // now errors: the whole lock() must propagate, not overwrite blindly.
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:otheruser:99999".to_vec())
+            .with_open_error(TARGET_LOCK_PATH);
+        let mut lock = tl(conn, FakeClock::new(now()));
+        assert!(matches!(lock.lock("").await, Err(HostError::Sftp { .. })));
+    }
+
+    #[tokio::test]
+    async fn lock_propagates_non_contention_exclusive_create_error() {
+        // A non-collision failure of the atomic create (e.g. permission denied)
+        // fails closed: it is NOT reconciled as lost contention.
+        let conn = MockConnection::new("h1").with_exclusive_write_error(TARGET_LOCK_PATH);
+        let mut lock = tl(conn, FakeClock::new(now()));
+        assert!(matches!(lock.lock("").await, Err(HostError::Sftp { .. })));
+    }
+
+    #[tokio::test]
+    async fn lock_reconcile_retries_atomic_create_never_overwrites_foreign() {
+        // A foreign lock that is freed mid-wait must be re-acquired via the
+        // atomic exclusive create, never via a blind non-exclusive overwrite.
+        // Model "freed": a stale foreign lock is reaped, then the retried create
+        // wins. Assert the only writes are exclusive creates + the final owning
+        // line — no non-exclusive overwrite of a foreign line.
+        let mut c = reaping_cfg();
+        c.lock_wait = 5;
+        c.lock_wait_poll = 1;
+        let stale = now() - 200_000;
+        let conn = MockConnection::new("h1").with_file(
+            TARGET_LOCK_PATH,
+            format!("{stale}:otheruser:99999").into_bytes(),
+        );
+        let handle = conn.clone();
+        let mut lock = TargetLock::with_clock(Box::new(conn), &c, FakeClock::new(now()));
+        lock.lock("").await.unwrap();
+        // Every Write op for the lockfile was exclusive (atomic create); the
+        // foreign line was reaped (Remove), never truncated over.
+        let writes: Vec<bool> = handle
+            .sftp_ops()
+            .into_iter()
+            .filter_map(|op| match op {
+                crate::connection::MockSftpOp::Write { path, exclusive }
+                    if path == std::path::Path::new(TARGET_LOCK_PATH) =>
+                {
+                    Some(exclusive)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            writes.iter().all(|&excl| excl),
+            "reconcile must retry exclusive create, not overwrite: {writes:?}"
+        );
+        let contents = String::from_utf8(handle.file_contents(TARGET_LOCK_PATH).unwrap()).unwrap();
+        assert!(contents.contains("testuser"));
+    }
+
+    #[tokio::test]
+    async fn unlock_propagates_non_missing_remove_error() {
+        // A permission/transport failure on remove must propagate; we must not
+        // pretend the lock was released.
+        let mine = format!("1700000000:testuser:{}", std::process::id());
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, mine.into_bytes())
+            .failing_sftp_remove();
+        let mut lock = tl(conn, FakeClock::new(now()));
+        assert!(matches!(
+            lock.unlock(false).await,
+            Err(HostError::Sftp { .. })
+        ));
+        // In-memory state left intact (still ours) since we did not release it.
+        assert!(!lock.current().user.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unlock_ignores_already_missing_lockfile() {
+        // An already-gone lockfile (SftpNotFound) counts as released.
+        let mine = format!("1700000000:testuser:{}", std::process::id());
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, mine.into_bytes())
+            .not_found_sftp_remove();
+        let mut lock = tl(conn, FakeClock::new(now()));
+        lock.unlock(false).await.unwrap();
+        assert!(lock.current().user.is_empty());
+    }
+
     // --- PoolLock -----------------------------------------------------------
 
     fn pool(conn: MockConnection, rrid: &str) -> PoolLock<FakeClock> {
@@ -1523,6 +1681,34 @@ mod tests {
     async fn pool_unlock_noop_when_unclaimed() {
         let mut p = pool(MockConnection::new("h1"), "SUSE:Maintenance:1:2");
         p.unlock(false).await.unwrap(); // must not raise
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_propagates_non_missing_remove_error() {
+        // Fail-closed: a non-gone removal error must propagate and not mark the
+        // claim released.
+        let mine = format!(
+            "1700000000:testuser:{}:mtui pool SUSE:Maintenance:1:2 [alice]",
+            std::process::id()
+        );
+        let conn = MockConnection::new("h1")
+            .with_file(POOL_LOCK_PATH, mine.into_bytes())
+            .failing_sftp_remove();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(matches!(p.unlock(false).await, Err(HostError::Sftp { .. })));
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_ignores_already_missing_lockfile() {
+        let mine = format!(
+            "1700000000:testuser:{}:mtui pool SUSE:Maintenance:1:2 [alice]",
+            std::process::id()
+        );
+        let conn = MockConnection::new("h1")
+            .with_file(POOL_LOCK_PATH, mine.into_bytes())
+            .not_found_sftp_remove();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        p.unlock(false).await.unwrap(); // already gone → released
     }
 
     #[tokio::test]

@@ -196,14 +196,20 @@ pub trait Connection: Send + Sync {
     ///   already exists (paramiko mode `"x"` → `O_CREAT | O_EXCL`). A
     ///   collision returns [`HostError::AlreadyExists`](crate::HostError::AlreadyExists)
     ///   so a racing caller can reconcile instead of clobbering the winner —
-    ///   this is what closes the read-then-write TOCTOU window.
+    ///   this is what closes the read-then-write TOCTOU window. Because SFTPv3
+    ///   has no "file exists" status, the collision is detected as the generic
+    ///   `Failure` status; **only** that maps to `AlreadyExists`. Any other
+    ///   failure (permission denied, connection lost, …) propagates as a real
+    ///   SFTP/transport error — the exclusive create fails *closed*, never
+    ///   silently reconciled as if it had lost a race.
     /// * `exclusive = false` — a truncating overwrite (paramiko mode `"w+"`).
     ///
     /// # Errors
     ///
     /// Returns [`HostError::AlreadyExists`](crate::HostError::AlreadyExists)
     /// when `exclusive` is set and the file exists, or an SFTP/transport error
-    /// if the write otherwise fails.
+    /// if the write otherwise fails (including a non-collision failure of the
+    /// exclusive create).
     async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()>;
 
     /// Deletes a remote file over SFTP.
