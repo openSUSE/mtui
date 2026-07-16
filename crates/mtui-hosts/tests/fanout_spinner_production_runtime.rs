@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use mtui_hosts::{HostsGroup, MockConnection, Sink, Target, set_test_sink};
 use mtui_types::enums::{ExecutionMode, TargetState};
+use serial_test::serial;
 
 fn shared_sink() -> (Sink, Arc<Mutex<Vec<u8>>>) {
     struct SharedBuf(Arc<Mutex<Vec<u8>>>);
@@ -37,6 +38,7 @@ fn shared_sink() -> (Sink, Arc<Mutex<Vec<u8>>>) {
 }
 
 #[test]
+#[serial(test_sink)]
 fn production_runtime_block_on_paints_spinner_during_slow_command() {
     let (sink, store) = shared_sink();
     set_test_sink(Some(Arc::clone(&sink)));

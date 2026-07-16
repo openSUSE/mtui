@@ -2292,6 +2292,7 @@ dependencies = [
  "russh",
  "russh-config",
  "russh-sftp",
+ "serial_test",
  "shlex",
  "tempfile",
  "thiserror",

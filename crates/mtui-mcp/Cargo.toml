@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# Integration tests are consolidated into a single `tests/it.rs` binary so the
+# crate + its heavy deps (rmcp/axum under `--all-features`) link once, not once
+# per file. Only test autodiscovery is disabled; the `[[bin]]` is explicit.
+autotests = false
 
 [lib]
 name = "mtui_mcp"
@@ -13,6 +17,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "mtui-mcp"
 path = "src/main.rs"
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
 
 [lints]
 workspace = true

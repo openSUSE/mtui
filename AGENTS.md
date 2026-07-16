@@ -63,19 +63,39 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
 - Run the MCP server: `cargo run -p mtui-mcp --features mcp -- --help`
 - Format: `cargo fmt --all`
 - Lint (warnings are errors): `cargo clippy --workspace --all-targets -- -D warnings`
-- Test: `cargo test --workspace` — **runs long (exceeds the default 120s
-  timeout); allow ≥300000 ms (5 min).** For faster iteration, scope to one
-  crate with `cargo test -p <crate>`.
+- Test: `cargo test --workspace` — **the cost is compilation, not test
+  execution.** A cold `cargo build --workspace --tests` is ~80s; the actual test
+  *run*, once compiled, is only ~20-25s. The default 120s timeout is exceeded
+  only when compiling from cold, so allow ≥300000 ms (5 min) on the first run of
+  a session; a second run against a warm `target/` cache is seconds.
 - Coverage: `cargo llvm-cov --workspace --lcov --output-path lcov.info`
-- Feature matrix (catches feature-gate rot):
-  `cargo build --workspace --no-default-features` and `--all-features`
+- Feature matrix (catches feature-gate rot) — **compile-only, and ~doubles build
+  time** (the `mcp` feature pulls in `axum` + `rmcp` streamable-http):
+  `cargo build --workspace --no-default-features` and `--all-features`. Do **not**
+  routinely *test* `--all-features`; CI only compiles it (`.gitlab-ci.yml`
+  feature-matrix job).
+
+### Fast local iteration
+- **Keep the cache warm and scope tight.** During dev, run
+  `cargo test -p <crate>` for the crate you're touching, not the whole workspace
+  — reserve `cargo test --workspace` for the final gate.
+- **Test default features only while iterating.** `--all-features` relinks the
+  whole mcp/axum tree (~95s even warm) for no runtime signal beyond what the
+  compile-only feature matrix already gives.
+- **`mtui-cli`'s lib suite is the slow one (~8s).** Its `edit`/`shell` tests spawn
+  real editor/shell subprocesses. When working elsewhere, don't rerun it.
 
 ## Definition of Done (hard rules)
-- Run the **full gate on the whole workspace** before claiming done:
-  `cargo fmt --all --check` **and** `cargo clippy --workspace --all-targets -- -D warnings`
-  **and** `cargo test --workspace`. The `cargo test --workspace` step is
-  long-running — run it with a generous timeout (≥300000 ms); do not treat an
-  early timeout as a failure.
+- Run the **full gate on the whole workspace** before claiming done, mirroring
+  CI: `cargo fmt --all --check` **and**
+  `cargo clippy --workspace --all-targets -- -D warnings` **and**
+  `cargo test --workspace` (default features) **and** the compile-only feature
+  matrix `cargo build --workspace --no-default-features` +
+  `cargo build --workspace --all-features`. Tests run against default features
+  only — do **not** run `--all-features` *tests*. The long pole is cold
+  compilation, not the test run itself, so give the first `cargo test --workspace`
+  (and the feature-matrix builds) a generous timeout (≥300000 ms) and don't treat
+  an early timeout as a failure.
 - **"Done" means CI observed green, not predicted green.** Report status from the
   actual run.
 - New/changed code needs **>=80% patch coverage**. If a line is genuinely
@@ -137,11 +157,26 @@ and treat them as golden.
 
 ## Testing conventions
 - Unit tests colocated (`#[cfg(test)]`); integration tests in `crates/*/tests/`.
+- **One integration-test binary per crate.** Each crate's integration tests are
+  consolidated into a single `tests/it.rs` (`#[path = "<file>.rs"] mod <file>;`
+  per file) with `autotests = false` + `[[test]] name = "it"` in `Cargo.toml`, so
+  the crate + its heavy deps link **once**, not once per file (this is the main
+  test-compile speedup). **Add a new integration test as a `mod` line in
+  `tests/it.rs`, not as a new top-level `tests/*.rs`** (a new top-level file
+  would be silently ignored under `autotests = false`, or reintroduce a per-file
+  binary if you re-enable discovery). Because all a crate's integration tests now
+  share one process, anything touching a **process-global** (env vars, the
+  `set_test_sink` spinner sink) must be serialised with `#[serial(<name>)]`
+  (`serial_test`), and tests must not assume per-binary isolation (e.g. no
+  asserting on heap-address identity — a freed `Arc` address can be reused).
 - **Mock, don't hit the network/hosts:** HTTP via `wiremock`; SSH via a
   `MockConnection` implementing the `Connection` trait; `svn`/`osc` via a
   command-runner trait or a stub on `PATH`.
 - **Snapshot text contracts** (`insta`): testreport/export rendering, metadata
-  parsing, MCP schemas, lock-file format, display output.
+  parsing, MCP schemas, lock-file format, display output. `insta` prefixes each
+  `.snap` file with the **test-binary** name, which is now `it` for every crate —
+  so snapshot files are `it__<module>__<name>.snap`. A new snapshot test's file
+  lands with that prefix automatically; don't hand-name it otherwise.
 - **Gate real hosts/containers** behind `#[ignore]` + a CI env flag (sshd
   integration fixture); unit tests must run offline and fast.
 - Port the corresponding upstream `tests/test_*.py` when porting a module; it
