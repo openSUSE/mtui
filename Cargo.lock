@@ -2283,7 +2283,9 @@ name = "mtui-hosts"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "data-encoding",
  "futures",
+ "hmac",
  "insta",
  "mtui-config",
  "mtui-types",
@@ -2293,6 +2295,7 @@ dependencies = [
  "russh-config",
  "russh-sftp",
  "serial_test",
+ "sha1",
  "shlex",
  "tempfile",
  "thiserror",

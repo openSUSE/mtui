@@ -87,12 +87,24 @@ impl From<CommandTimeout> for Duration {
     }
 }
 
-/// How the SSH client reacts to a host key that is not already in
+/// How the SSH client reacts to a host key that is **not already in**
 /// `known_hosts`.
 ///
-/// Mirrors upstream's `_HOST_KEY_POLICIES` mapping of paramiko policies. The
-/// wire tokens are the exact `ssh_strict_host_key_checking` config values
-/// (`auto_add` / `warn` / `reject`), so a config string round-trips through
+/// The policy is only consulted for *unknown* hosts: the russh handler first
+/// looks the key up in `known_hosts` (see `ClientHandler::verify`), and a key
+/// that matches a recorded entry is always accepted while a key that *differs*
+/// from one is always rejected — no policy can auto-add over a changed key.
+///
+/// For an unknown host:
+/// * [`AutoAdd`](Self::AutoAdd) accepts and persists the key (atomically).
+/// * [`Warn`](Self::Warn) accepts with a warning but does not persist.
+/// * [`Reject`](Self::Reject) refuses — this is the **strict/verified** mode:
+///   only hosts already present in `known_hosts` connect.
+///
+/// Mirrors upstream's `_HOST_KEY_POLICIES` mapping of paramiko policies layered
+/// over `load_system_host_keys()`. The wire tokens are the exact
+/// `ssh_strict_host_key_checking` config values (`auto_add` / `warn` /
+/// `reject`), so a config string round-trips through
 /// [`FromStr`](std::str::FromStr)/[`Display`](std::fmt::Display).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum HostKeyPolicy {
