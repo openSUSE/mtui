@@ -20,6 +20,20 @@
 //!   stuck and aborted with [`HostError::Timeout`]. This is the non-interactive
 //!   contract (upstream's `interactive=False` branch); the async model has no
 //!   TTY prompt to loop on.
+//! * **`run` output/lifetime bounds (th4o.6, no upstream port target).** Beyond
+//!   the inactivity window, `run` additionally (a) caps the captured
+//!   stdout/stderr at [`MAX_STREAM_BYTES`] per stream / [`MAX_TOTAL_BYTES`]
+//!   combined, discarding the overflow instead of buffering it and flagging the
+//!   resulting [`CommandLog`] `truncated`; and (b) in **non-interactive** runs
+//!   enforces an *absolute* execution deadline
+//!   (`connection_timeout * COMMAND_DEADLINE_FACTOR`) so a command that trickles
+//!   output forever — which never trips the inactivity window — cannot hang a
+//!   headless / `mtui-mcp` run. Upstream's blocking loop has neither bound (it
+//!   appends `recv(1024)` chunks unbounded and only guards inactivity), so these
+//!   are deliberate DoS hardening, not parity. In the REPL a human may answer
+//!   the keep-waiting prompt indefinitely, so no absolute deadline is imposed
+//!   there. An aborted/deadlined command's channel is closed before returning so
+//!   no orphaned remote process/channel leaks (upstream's `close_session`).
 //! * **`fire_and_forget`.** Dispatches on a fresh channel and closes the local
 //!   link without awaiting completion — for reboot-style commands that tear
 //!   down the transport; callers follow up with [`reconnect`](SshConnection).
@@ -64,6 +78,83 @@ const RETRIES: usize = 5;
 /// The exit-code sentinel upstream uses when a command produced no exit status
 /// (killed / channel lost). Kept in sync with [`CommandLog`]'s `-1` convention.
 const NO_EXIT_CODE: i16 = -1;
+
+/// Maximum bytes captured **per stream** (stdout, stderr) for one command.
+///
+/// A command that emits more has its excess for that stream discarded (not
+/// buffered) and the resulting [`CommandLog`] is flagged
+/// [`truncated`](CommandLog::truncated). Bounds the memory a single hostile or
+/// runaway command (`yes`, `cat /dev/urandom`) can force mtui to hold — a DoS
+/// vector upstream's unbounded `recv` loop leaves open. 16 MiB is generous for
+/// legitimate `zypper`/`rpm` output while capping the blast radius under
+/// host/template fan-out.
+pub const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum bytes captured **across both streams combined** for one command.
+///
+/// Enforced in addition to [`MAX_STREAM_BYTES`] so a command that splits a flood
+/// evenly across stdout and stderr still cannot exceed a fixed total. Set to
+/// twice the per-stream cap so each stream may independently reach its own limit
+/// while the combined memory ceiling stays fixed and bounded.
+pub const MAX_TOTAL_BYTES: usize = 2 * MAX_STREAM_BYTES;
+
+/// Absolute wall-clock ceiling multiplier applied to the connection timeout to
+/// derive a command's hard execution deadline in **non-interactive** runs.
+///
+/// A command that keeps producing output never trips the inactivity window, so a
+/// headless / `mtui-mcp` run would otherwise hang forever on a command that
+/// trickles output (`while true; do echo .; sleep 1; done`). The deadline is
+/// `connection_timeout * COMMAND_DEADLINE_FACTOR`; it is enforced **only** when
+/// there is no interactive user to answer the keep-waiting prompt (a REPL user
+/// who chooses to keep waiting is never force-aborted — upstream parity). The
+/// factor keeps the ceiling well above the inactivity window so legitimately
+/// long, chatty commands (large `zypper` transactions) still complete.
+const COMMAND_DEADLINE_FACTOR: u32 = 12;
+
+/// Accumulates a command's stdout/stderr under fixed per-stream and combined
+/// byte caps, discarding overflow instead of buffering it.
+///
+/// Each `push_*` copies only up to the remaining per-stream **and** remaining
+/// combined budget; once either is reached the rest of the chunk is dropped and
+/// [`truncated`](Self::truncated) latches `true`. This is the bounded
+/// re-expression of upstream's unbounded `stdout += recv(1024)` accumulation.
+#[derive(Debug, Default)]
+struct CaptureBuf {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    /// Combined bytes captured so far (`stdout.len() + stderr.len()`), tracked
+    /// explicitly so the combined cap binds regardless of the per-stream split.
+    total: usize,
+    truncated: bool,
+}
+
+impl CaptureBuf {
+    fn push_stdout(&mut self, data: &[u8]) {
+        let room = MAX_STREAM_BYTES.saturating_sub(self.stdout.len());
+        let take = self.take(room, data);
+        self.stdout.extend_from_slice(&data[..take]);
+    }
+
+    fn push_stderr(&mut self, data: &[u8]) {
+        let room = MAX_STREAM_BYTES.saturating_sub(self.stderr.len());
+        let take = self.take(room, data);
+        self.stderr.extend_from_slice(&data[..take]);
+    }
+
+    /// Returns how many leading bytes of `data` fit under both the per-stream
+    /// `stream_room` and the remaining combined budget, advancing the running
+    /// total and latching [`truncated`](Self::truncated) if any byte is dropped.
+    fn take(&mut self, stream_room: usize, data: &[u8]) -> usize {
+        let combined_room = MAX_TOTAL_BYTES.saturating_sub(self.total);
+        let room = stream_room.min(combined_room);
+        let take = data.len().min(room);
+        if take < data.len() {
+            self.truncated = true;
+        }
+        self.total += take;
+        take
+    }
+}
 
 /// An async prompt invoked when a command hits its no-output timeout window.
 ///
@@ -795,20 +886,69 @@ impl Connection for SshConnection {
         // it and proceeds instead of blocking (upstream shutdown_write).
         let _ = channel.eof().await;
 
-        let mut stdout: Vec<u8> = Vec::new();
-        let mut stderr: Vec<u8> = Vec::new();
+        let mut capture = CaptureBuf::default();
         let mut exitcode: i16 = NO_EXIT_CODE;
         let window = self.timeout.as_duration();
+        // Absolute execution ceiling for non-interactive runs (headless /
+        // `mtui-mcp`), which have no user to answer the keep-waiting prompt: a
+        // command trickling output forever never trips the inactivity window, so
+        // without this it would hang the run indefinitely. In the REPL there is a
+        // human who may legitimately choose to keep waiting, so no absolute
+        // deadline is imposed there (upstream parity).
+        let deadline = (!self.is_repl)
+            .then(|| Instant::now() + window.saturating_mul(COMMAND_DEADLINE_FACTOR));
 
         loop {
-            match timeout(window, channel.wait()).await {
-                // No message within the no-output window -> command looks stuck.
+            // Enforce the absolute (non-interactive) deadline up front: continuous
+            // output keeps `channel.wait()` returning data so the inactivity
+            // branch never fires — the deadline must be checked every iteration,
+            // not only on a wait timeout.
+            if let Some(d) = deadline
+                && Instant::now() >= d
+            {
+                tracing::warn!(
+                    host = %self.hostname,
+                    command,
+                    "command exceeded absolute deadline; aborting (non-interactive)",
+                );
+                let _ = channel.close().await;
+                return Err(HostError::Timeout {
+                    command: command.to_owned(),
+                });
+            }
+
+            // Bound each wait so the absolute deadline is honoured even under
+            // continuous output (which would otherwise keep resetting `window`).
+            // Interactive runs use the plain inactivity window.
+            let wait_for = match deadline {
+                Some(d) => window.min(d.saturating_duration_since(Instant::now())),
+                None => window,
+            };
+            match timeout(wait_for, channel.wait()).await {
+                // No message within the wait budget: either the absolute deadline
+                // elapsed (non-interactive hard cap) or the no-output inactivity
+                // window did.
                 Err(_) => {
-                    // Interactive: ask the user whether to keep waiting. Empty /
-                    // `y` resumes the wait loop (upstream's Enter/Y default);
-                    // `n` aborts. Headless (no prompt / not interactive): abort
-                    // immediately, emitting one WARN so the silence is
-                    // observable (upstream's `timeout_prompt=None` branch).
+                    if let Some(d) = deadline
+                        && Instant::now() >= d
+                    {
+                        // Non-interactive hard cap reached: abort. Close the
+                        // channel so the remote process/channel is not orphaned.
+                        tracing::warn!(
+                            host = %self.hostname,
+                            command,
+                            "command exceeded absolute deadline; aborting (non-interactive)",
+                        );
+                        let _ = channel.close().await;
+                        return Err(HostError::Timeout {
+                            command: command.to_owned(),
+                        });
+                    }
+                    // Inactivity window. Interactive: ask the user whether to keep
+                    // waiting. Empty / `y` resumes the wait loop (upstream's
+                    // Enter/Y default); `n` aborts. Headless: abort immediately,
+                    // emitting one WARN so the silence is observable (upstream's
+                    // `timeout_prompt=None` branch).
                     let decision = on_command_timeout(
                         &self.hostname,
                         command,
@@ -819,6 +959,10 @@ impl Connection for SshConnection {
                     match decision {
                         TimeoutDecision::KeepWaiting => continue,
                         TimeoutDecision::Abort => {
+                            // Close the channel so the abandoned command's remote
+                            // process/channel is reclaimed (upstream close_session
+                            // on BaseException).
+                            let _ = channel.close().await;
                             return Err(HostError::Timeout {
                                 command: command.to_owned(),
                             });
@@ -828,8 +972,8 @@ impl Connection for SshConnection {
                 // Channel closed cleanly.
                 Ok(None) => break,
                 Ok(Some(msg)) => match msg {
-                    ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-                    ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
+                    ChannelMsg::Data { data } => capture.push_stdout(&data),
+                    ChannelMsg::ExtendedData { data, .. } => capture.push_stderr(&data),
                     ChannelMsg::ExitStatus { exit_status } => {
                         exitcode = i16::try_from(exit_status).unwrap_or(NO_EXIT_CODE);
                     }
@@ -840,14 +984,22 @@ impl Connection for SshConnection {
             }
         }
 
+        if capture.truncated {
+            tracing::warn!(
+                host = %self.hostname,
+                command,
+                "command output exceeded capture caps; truncated",
+            );
+        }
         let runtime = i64::try_from(started.elapsed().as_secs()).unwrap_or(i64::MAX);
         Ok(CommandLog::new(
             command,
-            String::from_utf8_lossy(&stdout).into_owned(),
-            String::from_utf8_lossy(&stderr).into_owned(),
+            String::from_utf8_lossy(&capture.stdout).into_owned(),
+            String::from_utf8_lossy(&capture.stderr).into_owned(),
             exitcode,
             runtime,
-        ))
+        )
+        .with_flags(capture.truncated, false))
     }
 
     fn is_active(&self) -> bool {
@@ -1237,6 +1389,77 @@ mod tests {
             error_message: "x".to_owned(),
             language_tag: String::new(),
         })
+    }
+
+    // --- CaptureBuf: bounded output capture (th4o.6). ---
+
+    #[test]
+    fn capture_small_output_is_not_truncated() {
+        let mut c = CaptureBuf::default();
+        c.push_stdout(b"hello");
+        c.push_stderr(b"warn");
+        assert_eq!(c.stdout, b"hello");
+        assert_eq!(c.stderr, b"warn");
+        assert!(!c.truncated);
+    }
+
+    #[test]
+    fn capture_caps_stdout_at_per_stream_limit() {
+        let mut c = CaptureBuf::default();
+        // One oversized chunk: only MAX_STREAM_BYTES is kept, the rest dropped.
+        let data = vec![b'a'; MAX_STREAM_BYTES + 4096];
+        c.push_stdout(&data);
+        assert_eq!(c.stdout.len(), MAX_STREAM_BYTES);
+        assert!(c.truncated);
+        // Further pushes to the full stream keep dropping.
+        c.push_stdout(b"more");
+        assert_eq!(c.stdout.len(), MAX_STREAM_BYTES);
+    }
+
+    #[test]
+    fn capture_caps_stderr_at_per_stream_limit() {
+        let mut c = CaptureBuf::default();
+        let data = vec![b'e'; MAX_STREAM_BYTES + 1];
+        c.push_stderr(&data);
+        assert_eq!(c.stderr.len(), MAX_STREAM_BYTES);
+        assert!(c.truncated);
+    }
+
+    #[test]
+    fn capture_exact_per_stream_fit_is_not_truncated() {
+        let mut c = CaptureBuf::default();
+        let data = vec![b'a'; MAX_STREAM_BYTES];
+        c.push_stdout(&data);
+        assert_eq!(c.stdout.len(), MAX_STREAM_BYTES);
+        assert!(!c.truncated);
+    }
+
+    #[test]
+    fn capture_enforces_combined_cap_across_streams() {
+        let mut c = CaptureBuf::default();
+        // Each stream fills its own per-stream cap; together they reach exactly
+        // MAX_TOTAL_BYTES (= 2 * MAX_STREAM_BYTES) with nothing dropped.
+        c.push_stdout(&vec![b'a'; MAX_STREAM_BYTES]);
+        c.push_stderr(&vec![b'e'; MAX_STREAM_BYTES]);
+        assert_eq!(c.total, MAX_TOTAL_BYTES);
+        assert!(!c.truncated);
+        // Any further byte on either stream is over both caps and dropped.
+        c.push_stdout(b"x");
+        assert_eq!(c.total, MAX_TOTAL_BYTES);
+        assert!(c.truncated);
+    }
+
+    #[test]
+    fn capture_partial_chunk_copies_prefix_then_truncates() {
+        let mut c = CaptureBuf::default();
+        // Prime the stream near its cap, then push a chunk straddling the limit:
+        // only the fitting prefix is copied, and truncated latches.
+        c.push_stdout(&vec![b'a'; MAX_STREAM_BYTES - 2]);
+        assert!(!c.truncated);
+        c.push_stdout(b"XYZ");
+        assert_eq!(c.stdout.len(), MAX_STREAM_BYTES);
+        assert_eq!(&c.stdout[MAX_STREAM_BYTES - 2..], b"XY");
+        assert!(c.truncated);
     }
 
     #[test]

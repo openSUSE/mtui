@@ -25,10 +25,14 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 use mtui_hosts::{
-    CommandTimeout, Connection, HostKeyPolicy, HostsGroup, SshConnection, TARGET_LOCK_PATH, Target,
-    TargetLock,
+    CommandTimeout, Connection, HostKeyPolicy, HostsGroup, MAX_STREAM_BYTES, SshConnection,
+    TARGET_LOCK_PATH, Target, TargetLock,
 };
 use mtui_types::enums::{ExecutionMode, TargetState};
+
+/// Bytes the `flood-stdout` scripted command emits: comfortably past the
+/// per-stream capture cap so `run` must truncate.
+const FLOOD_BYTES: usize = MAX_STREAM_BYTES + 512 * 1024;
 
 // ----------------------------------------------------------------------------
 // In-memory backing filesystem shared by the SFTP handler.
@@ -111,6 +115,32 @@ impl russh::server::Handler for TestSshSession {
         // deliberately sends nothing, so the client's no-output timeout fires.
         if command == "sleep-forever" {
             return Ok(());
+        }
+
+        // A command that floods stdout past the client's capture cap: emit
+        // `FLOOD_BYTES` then exit cleanly. Proves `run` truncates rather than
+        // buffering the whole stream.
+        if command == "flood-stdout" {
+            let chunk = vec![b'a'; 64 * 1024];
+            let mut sent = 0;
+            while sent < FLOOD_BYTES {
+                session.data(channel_id, chunk.clone())?;
+                sent += chunk.len();
+            }
+            session.exit_status_request(channel_id, 0)?;
+            session.eof(channel_id)?;
+            session.close(channel_id)?;
+            return Ok(());
+        }
+
+        // A command that trickles output forever: one byte every 20ms, never
+        // exits. Continuous output keeps the client's inactivity window from
+        // firing, so only the absolute (non-interactive) deadline can stop it.
+        if command == "trickle-forever" {
+            loop {
+                session.data(channel_id, b".".to_vec())?;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
         }
 
         let (stdout, stderr, code) = scripted_command(&command);
@@ -519,6 +549,47 @@ async fn run_times_out_on_silent_command() {
         matches!(&err, mtui_hosts::HostError::Timeout { command } if command == "sleep-forever"),
         "unexpected error: {err:?}"
     );
+}
+
+#[tokio::test]
+async fn run_truncates_oversized_stdout() {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let log = conn.run("flood-stdout").await.expect("run");
+    // Captured output is capped, not the full flood, and the flag is set.
+    assert_eq!(log.stdout.len(), MAX_STREAM_BYTES);
+    assert!(log.stdout.len() < FLOOD_BYTES);
+    assert!(log.truncated, "truncation flag should be set");
+    assert!(!log.timed_out);
+    assert_eq!(log.exitcode, 0);
+}
+
+#[tokio::test]
+async fn run_aborts_continuous_output_at_absolute_deadline() {
+    let port = start_server(SharedFs::default()).await;
+    // Headless connection (no timeout prompt): a short inactivity window makes
+    // the absolute deadline (window * COMMAND_DEADLINE_FACTOR) small, so the
+    // trickling command — which never lets the inactivity window fire — is
+    // stopped by the deadline rather than running forever.
+    let mut conn = connect(port, CommandTimeout::new(Duration::from_millis(50))).await;
+    let err = tokio::time::timeout(Duration::from_secs(10), conn.run("trickle-forever"))
+        .await
+        .expect("run must return before the test-level timeout")
+        .expect_err("continuous output should hit the absolute deadline");
+    assert!(
+        matches!(&err, mtui_hosts::HostError::Timeout { command } if command == "trickle-forever"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn run_small_output_is_not_flagged() {
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let log = conn.run("echo hello").await.expect("run");
+    assert_eq!(log.stdout, "hello\n");
+    assert!(!log.truncated);
+    assert!(!log.timed_out);
 }
 
 #[tokio::test]

@@ -36,10 +36,28 @@ pub struct CommandLog {
     pub exitcode: i16,
     /// The command's runtime, in seconds.
     pub runtime: i64,
+    /// Whether the captured `stdout`/`stderr` was truncated because the command
+    /// exceeded the connection layer's output byte caps.
+    ///
+    /// `false` for every non-SSH producer (mocks, dry-runs, synthesised logs);
+    /// only [`mtui-hosts`](../../mtui_hosts)' bounded capture sets it. When
+    /// `true`, `stdout`/`stderr` hold the capped prefix and the overflow was
+    /// discarded rather than buffered.
+    pub truncated: bool,
+    /// Whether the command was aborted because it hit the connection layer's
+    /// absolute execution deadline (as opposed to completing on its own).
+    ///
+    /// `false` for every non-SSH producer; only the SSH `run` path sets it.
+    pub timed_out: bool,
 }
 
 impl CommandLog {
-    /// Creates a new [`CommandLog`].
+    /// Creates a new [`CommandLog`] with the truncation/timeout flags cleared.
+    ///
+    /// This is the primary constructor used by every producer that cannot
+    /// truncate or deadline output (mocks, dry-runs, synthesised logs). The SSH
+    /// connection layer, which *can*, uses [`with_flags`](Self::with_flags) to
+    /// record those conditions.
     #[must_use]
     pub fn new(
         command: impl Into<String>,
@@ -54,7 +72,22 @@ impl CommandLog {
             stderr: stderr.into(),
             exitcode,
             runtime,
+            truncated: false,
+            timed_out: false,
         }
+    }
+
+    /// Sets the [`truncated`](Self::truncated) / [`timed_out`](Self::timed_out)
+    /// flags, returning the updated log.
+    ///
+    /// Used by the SSH `run` path to record that captured output was capped or
+    /// that the command was aborted at its absolute deadline, without changing
+    /// [`new`](Self::new)'s signature for the many callers that never do either.
+    #[must_use]
+    pub fn with_flags(mut self, truncated: bool, timed_out: bool) -> Self {
+        self.truncated = truncated;
+        self.timed_out = timed_out;
+        self
     }
 }
 
@@ -138,6 +171,23 @@ mod tests {
         assert_eq!(c.stderr, "");
         assert_eq!(c.exitcode, 0);
         assert_eq!(c.runtime, 2);
+    }
+
+    #[test]
+    fn command_log_new_clears_flags() {
+        let c = CommandLog::new("ls", "", "", 0, 0);
+        assert!(!c.truncated);
+        assert!(!c.timed_out);
+    }
+
+    #[test]
+    fn command_log_with_flags_sets_both() {
+        let c = CommandLog::new("ls", "x", "", 0, 1).with_flags(true, true);
+        assert!(c.truncated);
+        assert!(c.timed_out);
+        // Other fields are preserved.
+        assert_eq!(c.stdout, "x");
+        assert_eq!(c.exitcode, 0);
     }
 
     #[test]

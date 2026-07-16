@@ -26,8 +26,8 @@ pub mod target;
 #[cfg(feature = "shell")]
 pub use connection::ShellChannel;
 pub use connection::{
-    CommandTimeout, Connection, HostKeyPolicy, MockConnection, MockSftpOp, SshConnection,
-    TimeoutPrompt,
+    CommandTimeout, Connection, HostKeyPolicy, MAX_STREAM_BYTES, MAX_TOTAL_BYTES, MockConnection,
+    MockSftpOp, SshConnection, TimeoutPrompt,
 };
 pub use error::{HostError, Result};
 pub use prompter::{Prompter, Reader};
