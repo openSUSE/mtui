@@ -129,12 +129,12 @@ fn synthesise(registry: &Registry) -> (Vec<ToolDescriptor>, BTreeMap<String, Too
     names.sort_unstable();
 
     for name in names {
-        if is_denied(name) {
-            continue;
-        }
         let command = registry
             .get(name)
             .expect("registry.names() yields registered commands");
+        if is_denied(name) || command.aliases().iter().any(|alias| is_denied(alias)) {
+            continue;
+        }
 
         if SUBPARSER_COMMANDS.contains(&name) {
             fan_out_subparser(command.as_ref(), name, &mut descriptors, &mut routes);
@@ -448,8 +448,31 @@ fn job_id_arg(kwargs: &Map<String, Value>) -> Result<String, McpCommandError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use clap::ArgMatches;
     use mtui_config::Config;
-    use mtui_core::register_all;
+    use mtui_core::{Command, CommandResult, Scope, Session, register_all};
+
+    struct AliasedCommand;
+
+    #[async_trait]
+    impl Command for AliasedCommand {
+        fn name(&self) -> &'static str {
+            "renamed_lrun"
+        }
+
+        fn aliases(&self) -> &'static [&'static str] {
+            &["lrun"]
+        }
+
+        fn scope(&self) -> Scope {
+            Scope::Single
+        }
+
+        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
 
     fn descriptor<'a>(tools: &'a [ToolDescriptor], name: &str) -> &'a ToolDescriptor {
         tools
@@ -465,14 +488,30 @@ mod tests {
     #[test]
     fn deny_listed_commands_are_not_synthesised() {
         let tools = build_tools(&register_all());
+        let routes = tool_routes(&register_all());
         for denied in [
-            "quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch",
+            "quit", "exit", "EOF", "edit", "shell", "lrun", "help", "terms", "switch",
         ] {
             assert!(
                 !names(&tools).contains(&denied),
                 "denied command {denied} leaked into tools"
             );
+            assert!(
+                !routes.contains_key(denied),
+                "denied command {denied} leaked into routes"
+            );
         }
+        assert!(names(&tools).contains(&"run"));
+        assert!(routes.contains_key("run"));
+    }
+
+    #[test]
+    fn command_with_denied_alias_is_not_synthesised() {
+        let mut registry = Registry::new();
+        registry.register(Arc::new(AliasedCommand));
+
+        assert!(build_tools(&registry).is_empty());
+        assert!(tool_routes(&registry).is_empty());
     }
 
     #[test]

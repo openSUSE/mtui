@@ -114,16 +114,16 @@ impl Registry {
     }
 }
 
-/// Commands that are **REPL-only** and must not be synthesised into MCP tools.
+/// Commands that must not be synthesised into MCP tools.
 ///
-/// Ports upstream's MCP deny-list (`AGENTS.md`): these commands drive the
-/// interactive shell (exit the loop, move the hidden active-template pointer,
-/// attach a PTY) or otherwise have no meaning for a headless client. The Phase-7
-/// `mtui-mcp` tool synthesiser skips every registry command whose name or alias
-/// appears here, and asserts at boot that the deny-list ∩ registry is exactly
-/// this set (so a renamed/removed command can't silently leak an interactive
-/// tool). Kept here, beside [`register_all`], so the deny-list and the command
-/// surface it filters live in one place.
+/// Ports and hardens upstream's MCP deny-list (`AGENTS.md`): these commands drive
+/// the interactive shell, require a controlling terminal, or execute locally
+/// with the `mtui-mcp` process user's authority. The Phase-7 `mtui-mcp` tool
+/// synthesiser skips every registry command whose name or alias appears here,
+/// and warns at boot if a deny-list entry no longer resolves (so a
+/// renamed/removed command does not drift silently). Kept here, beside
+/// [`register_all`], so the deny-list and the command surface it filters live in
+/// one place.
 ///
 /// Names not yet backed by a registered command are reserved for their later
 /// waves; [`mcp_denylist_is_consistent`] tolerates them so adding the command
@@ -132,6 +132,7 @@ pub const MCP_DENYLIST: &[&str] = &[
     "quit", "exit", "EOF",    // session exit (Wave 2)
     "switch", // active-template pointer, REPL-only (Wave 2)
     "shell",  // interactive PTY attach, Phase 6 (Wave 2)
+    "lrun",   // arbitrary local execution as the mtui-mcp process user
     "help",   // registry listing / per-command help, REPL-only (Phase 6)
     "edit",   // $EDITOR spawn on the controlling TTY, REPL-only (Phase 6)
     "terms",  // spawn terminal-launcher scripts to hosts, REPL-only (Phase 6)
@@ -394,11 +395,19 @@ mod tests {
     }
 
     #[test]
+    fn mcp_denylist_blocks_local_execution() {
+        assert!(MCP_DENYLIST.contains(&"lrun"));
+        assert!(
+            register_all().contains("lrun"),
+            "lrun remains a REPL command"
+        );
+    }
+
+    #[test]
     fn mcp_denylist_is_consistent() {
-        // Every deny-listed name that is *registered* must be an interactive
-        // command (present as a name or alias); names not yet backed by a
-        // command (reserved for later waves) are tolerated. Nothing in the
-        // deny-list may be a duplicate.
+        // Every deny-listed name that is *registered* must be present as a name
+        // or alias; names not yet backed by a command (reserved for later waves)
+        // are tolerated. Nothing in the deny-list may be a duplicate.
         let r = register_all();
         let mut seen = std::collections::HashSet::new();
         for name in MCP_DENYLIST {
@@ -408,8 +417,8 @@ mod tests {
             let _reserved_or_registered = r.contains(name);
         }
         // Sanity: the currently-registered deny-listed commands are the Wave 2
-        // REPL-only set (quit+aliases, switch, shell) plus `help`, `edit`, and
-        // `terms` (Phase 6).
+        // REPL-only set (quit+aliases, switch, shell), local execution (`lrun`),
+        // plus `help`, `edit`, and `terms` (Phase 6).
         let registered_denied: Vec<&str> = MCP_DENYLIST
             .iter()
             .copied()
@@ -418,7 +427,7 @@ mod tests {
         assert_eq!(
             registered_denied,
             vec![
-                "quit", "exit", "EOF", "switch", "shell", "help", "edit", "terms"
+                "quit", "exit", "EOF", "switch", "shell", "lrun", "help", "edit", "terms"
             ]
         );
     }

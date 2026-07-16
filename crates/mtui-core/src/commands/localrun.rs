@@ -11,10 +11,10 @@ use crate::session::Session;
 ///
 /// Ports upstream `mtui.commands.localrun.LocalRun`. The command runs in mtui's
 /// current working directory. When the session is interactive (a human at the
-/// REPL) the child inherits the terminal so output streams live; under a
-/// non-interactive session (MCP, headless callers) stdout and stderr are
-/// captured and re-emitted through the display, and a non-zero exit is surfaced
-/// as a command error carrying the real return code.
+/// REPL) the child inherits the terminal so output streams live; under a direct
+/// non-interactive engine caller stdout and stderr are captured and re-emitted
+/// through the display, and a non-zero exit is surfaced as a command error
+/// carrying the real return code. MCP permanently deny-lists this command.
 ///
 /// The positional tokens are re-quoted with `shlex::join` so a token containing
 /// shell metacharacters keeps its quoting instead of being re-split by the
@@ -125,6 +125,14 @@ mod tests {
         let args = matches(&LocalRun, &["printf", "hello"]);
         LocalRun.call(&mut session, &args).await.unwrap();
         assert!(buf.contents().contains("hello"), "{}", buf.contents());
+    }
+
+    #[tokio::test]
+    async fn runs_when_interactive() {
+        let (mut session, _buf) = empty_session();
+        session.is_repl = true;
+        let args = matches(&LocalRun, &["true"]);
+        LocalRun.call(&mut session, &args).await.unwrap();
     }
 
     #[tokio::test]

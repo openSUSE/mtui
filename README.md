@@ -34,6 +34,18 @@ ecosystem.
 - `mtui-mcp` — a Model Context Protocol server whose tools are **synthesised from
   the command registry**, so the CLI and the MCP surface never drift.
 
+### MCP security boundary
+
+`lrun` executes commands as the local process user. It remains available through
+direct `mtui` use and trusted callers of the core engine, but MCP synthesis and
+routing never expose it over stdio or HTTP. This permanent deny applies under
+every MCP profile and cannot be reversed with `[mcp] tools_allow`.
+
+MCP profiles reduce the advertised tool surface; they are not authentication or
+authorization. HTTP session isolation is likewise not caller authentication.
+Keep the HTTP transport on its default loopback interface or place it behind an
+authenticated boundary trusted to operate the remaining maintenance tools.
+
 ## Planned features
 
 - Parallel SSH command execution across reference hosts (`run`, `update`,

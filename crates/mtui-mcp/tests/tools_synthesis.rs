@@ -10,13 +10,13 @@
 use mtui_core::register_all;
 use mtui_mcp::{build_tools, job_tool_descriptors};
 
-/// Deny-listed REPL-only commands never appear as tools.
+/// Deny-listed commands never appear as tools.
 #[test]
 fn deny_list_is_filtered() {
     let tools = build_tools(&register_all());
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     for denied in [
-        "quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch",
+        "quit", "exit", "EOF", "edit", "shell", "lrun", "help", "terms", "switch",
     ] {
         assert!(!names.contains(&denied), "{denied} leaked into tools");
     }

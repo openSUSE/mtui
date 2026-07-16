@@ -3,14 +3,17 @@
 //! The server synthesises one tool per command plus the testreport and job
 //! tools. The full set is sent to the model on every request, which is the
 //! dominant fixed token cost of an MCP session. Many of those tools
-//! (`set_log_level`, `lrun`, `reload_*`, `config_*`, host-bookkeeping verbs) are
-//! rarely needed in a normal maintenance-test workflow.
+//! (`set_log_level`, `reload_*`, `config_*`, host-bookkeeping verbs) are rarely
+//! needed in a normal maintenance-test workflow.
 //!
 //! A *profile* is a named allow-set of tool names. The `full` profile is a no-op
 //! (every synthesised tool stays). The `core` profile keeps only the curated
 //! everyday subset in [`CORE`], removing the rest so they never reach the wire.
 //! An operator selects a profile with `[mcp] profile` and can fine-tune with
 //! `[mcp] tools_allow` / `[mcp] tools_deny` (see [`apply_profile`]).
+//! Profiles only filter the surface remaining after the permanent MCP deny-list;
+//! `tools_allow` cannot restore a command such as `lrun` that was never
+//! synthesised.
 //!
 //! The default is `full` so existing deployments are unchanged; slimming the tool
 //! surface is strictly opt-in.

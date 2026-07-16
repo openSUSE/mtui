@@ -1,8 +1,9 @@
-//! REPL-only commands the MCP server must not expose as tools.
+//! Commands the MCP server must not expose as tools.
 //!
-//! Port of upstream `mtui/mcp/deny.py`. Each entry cannot meaningfully run
-//! outside an interactive terminal session and is filtered out when
-//! [`crate::tools`] synthesises tools from the command [`Registry`].
+//! Hardening of upstream `mtui/mcp/deny.py`. Each entry either cannot
+//! meaningfully run outside an interactive terminal session or crosses a local
+//! process trust boundary, and is filtered out when [`crate::tools`] synthesises
+//! tools from the command [`Registry`].
 //!
 //! The deny surface is **not** re-declared here: it is the single
 //! [`mtui_core::MCP_DENYLIST`], which sits beside `register_all` so the list and
@@ -18,6 +19,8 @@
 //!   (P7.8) operate on the loaded report file directly instead.
 //! - `shell`: opens an interactive root PTY on a refhost and needs a TTY the MCP
 //!   transports do not provide.
+//! - `lrun`: executes arbitrary local commands with the `mtui-mcp` process user's
+//!   authority. It remains available to a human through the direct REPL.
 //! - `help`: prints argparser help to stdout; the MCP protocol already
 //!   advertises tool descriptions.
 //! - `terms`: launches local terminal-emulator scripts on the operator's
@@ -32,7 +35,7 @@
 
 pub use mtui_core::MCP_DENYLIST;
 
-/// Whether `name` is a REPL-only command that must not become an MCP tool.
+/// Whether `name` must not become an MCP tool.
 #[must_use]
 pub fn is_denied(name: &str) -> bool {
     MCP_DENYLIST.contains(&name)
@@ -43,9 +46,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn repl_only_commands_are_denied() {
+    fn blocked_commands_are_denied() {
         for name in [
-            "quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch",
+            "quit", "exit", "EOF", "edit", "shell", "lrun", "help", "terms", "switch",
         ] {
             assert!(is_denied(name), "{name} must be denied");
         }

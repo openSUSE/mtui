@@ -32,7 +32,6 @@ list_update_commands read_only=true
 list_versions read_only=true
 load_template read_only=false
 lock read_only=false
-lrun read_only=false
 openqa_jobs read_only=true
 openqa_overview read_only=true
 prepare read_only=false

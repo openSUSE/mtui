@@ -6,7 +6,7 @@
 //!
 //! 1. `tools/list` reflects the full synthesised surface (command tools + job
 //!    tools + the hand-written testreport tools) and **omits** every deny-listed
-//!    REPL-only command.
+//!    command.
 //! 2. `call_tool("whoami")` routes through the *same* engine the REPL uses and
 //!    returns the `User: <user>, app pid: …` banner the command prints.
 //! 3. A deny-listed tool call is rejected (`method_not_found`) — no route exists.
@@ -82,10 +82,10 @@ async fn tools_list_reflects_synthesised_surface_and_denylist() {
                 "expected job tool `{expected}` in tools/list, got: {names:?}"
             );
         }
-        // Deny-listed REPL-only commands must never surface, nor the bare
-        // `config` (it is fanned out into config_show/config_set).
+        // Deny-listed commands must never surface, nor the bare `config` (it is
+        // fanned out into config_show/config_set).
         for denied in [
-            "quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch", "config",
+            "quit", "exit", "EOF", "edit", "shell", "lrun", "help", "terms", "switch", "config",
         ] {
             assert!(
                 !names.contains(&denied),
@@ -145,10 +145,10 @@ async fn call_whoami_routes_through_the_engine() {
 #[tokio::test]
 async fn call_denied_tool_is_method_not_found() {
     with_client(|client| async move {
-        // `shell` is deny-listed, so the server synthesised no route for it and
-        // rejects the call as an unknown method.
+        // `lrun` is deny-listed, so the server synthesised no local-process route
+        // and rejects the call as an unknown method.
         let err = client
-            .call_tool(CallToolRequestParams::new("shell"))
+            .call_tool(CallToolRequestParams::new("lrun"))
             .await
             .expect_err("denied tool must be rejected");
         let msg = err.to_string();

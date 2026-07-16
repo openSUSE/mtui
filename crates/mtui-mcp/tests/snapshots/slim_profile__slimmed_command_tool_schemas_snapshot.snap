@@ -795,31 +795,6 @@ expression: pretty
   {
     "input_schema": {
       "properties": {
-        "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
-          "type": "boolean"
-        },
-        "command": {
-          "items": {
-            "description": "command to run on local shell",
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "template": {
-          "description": "RRID of a single loaded template to act on",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "name": "lrun",
-    "read_only": false
-  },
-  {
-    "input_schema": {
-      "properties": {
         "all": {
           "default": false,
           "description": "keep obsoleted jobs (superseded by a retrigger)",
