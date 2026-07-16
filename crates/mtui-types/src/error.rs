@@ -46,6 +46,55 @@ pub enum Error {
     /// A package name/spec failed validation.
     #[error(transparent)]
     PackageSpecParse(#[from] PackageSpecParseError),
+
+    /// A repository URL failed validation.
+    #[error(transparent)]
+    RepoUrlParse(#[from] RepoUrlParseError),
+}
+
+/// Error produced when a repository URL fails validation.
+///
+/// Repository URLs parsed from testreport metadata are interpolated into remote
+/// `zypper ar`/`rr` commands executed as root; a value carrying shell
+/// metacharacters, whitespace, an option-like leading dash, or an unsupported
+/// URI scheme is a command-injection vector. [`RepoUrl`](crate::repo_url::RepoUrl)
+/// rejects such input with a typed error *before* it reaches host execution.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RepoUrlParseError {
+    /// The URL was empty.
+    #[error("repo url: empty")]
+    Empty,
+
+    /// The URL began with `-`, so it would be read as a command option.
+    #[error("repo url: option-like (leading '-'): {url:?}")]
+    OptionLike {
+        /// The offending URL.
+        url: String,
+    },
+
+    /// The URL had no `scheme://` prefix.
+    #[error("repo url: missing scheme: {url:?}")]
+    MissingScheme {
+        /// The offending URL.
+        url: String,
+    },
+
+    /// The URL's scheme is not one zypper/libzypp accepts for a repository.
+    #[error("repo url: unsupported scheme {scheme:?}")]
+    UnsupportedScheme {
+        /// The offending scheme.
+        scheme: String,
+    },
+
+    /// The URL contained a shell-unsafe or control character.
+    #[error("repo url: illegal character {ch:?} in url: {url:?}")]
+    IllegalChar {
+        /// The disallowed character.
+        ch: char,
+        /// The offending URL.
+        url: String,
+    },
 }
 
 /// Error produced when a package name or `name=version` spec fails validation.

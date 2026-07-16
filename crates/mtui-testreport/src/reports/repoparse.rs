@@ -18,15 +18,39 @@
 //!
 //! All helpers operate on the flat [`SystemProduct`] `(name, version, arch)` —
 //! upstream's `Product` `NamedTuple`.
+//!
+//! ## Security
+//!
+//! Each derived URL is validated through [`RepoUrl`] before it enters the
+//! `update_repos` map (it later becomes a root `zypper ar`/`rr` argument). A URL
+//! with an unsupported scheme or a shell-unsafe character is dropped and logged,
+//! never trusted; the exec boundary additionally shell-quotes every argument.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use mtui_types::SystemProduct;
+use mtui_types::{RepoUrl, SystemProduct};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use tracing::error;
 
 use crate::products::{normalize, normalize_16};
+
+/// Validates a derived repository URL before it becomes part of an
+/// `update_repos` map (and thus a root `zypper ar`/`rr` argument).
+///
+/// Returns the URL unchanged when valid, or `None` (logged at ERROR) when it
+/// fails [`RepoUrl`] validation — a malformed or injection-shaped URL is dropped
+/// rather than trusted, keeping loading lenient (never hard-failing).
+fn validated_url(url: String) -> Option<String> {
+    match RepoUrl::parse(&url) {
+        Ok(_) => Some(url),
+        Err(e) => {
+            error!(%url, error = %e, "skipping invalid repository URL");
+            None
+        }
+    }
+}
 
 /// Joins a base URL and a path segment the way upstream `os.path.join` does for
 /// the URL cases here: a single `/` separator, without collapsing an existing
@@ -80,10 +104,9 @@ pub fn slrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProdu
     products
         .iter()
         .flat_map(|pd| parse_product(pd))
-        .map(|x| {
+        .filter_map(|x| {
             let tail = format!("images/repo/{}-{}-{}/", x.name, x.version, x.arch);
-            let url = urljoin(repository, &tail);
-            (x, url)
+            validated_url(urljoin(repository, &tail)).map(|url| (x, url))
         })
         .collect()
 }
@@ -97,10 +120,7 @@ pub fn gitrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProd
     products
         .iter()
         .flat_map(|pd| parse_product(pd))
-        .map(|x| {
-            let url = urljoin(repository, "standard");
-            (x, url)
-        })
+        .filter_map(|x| validated_url(urljoin(repository, "standard")).map(|url| (x, url)))
         .collect()
 }
 
@@ -119,8 +139,10 @@ pub fn reporepoparse(
         for ps in parse_product(pd) {
             let needle = format!("{}-{}-{}", ps.name, ps.version, ps.arch);
             for repo in repositories {
-                if repo.contains(&needle) {
-                    out.insert(normalize_16(ps.clone()), repo.clone());
+                if repo.contains(&needle)
+                    && let Some(url) = validated_url(repo.clone())
+                {
+                    out.insert(normalize_16(ps.clone()), url);
                 }
             }
         }
@@ -239,6 +261,8 @@ pub fn obsrepoparse(repository: &str, dir: &Path) -> HashMap<SystemProduct, Stri
     };
     xmlparse(&xml)
         .into_iter()
-        .map(|(product, name)| (normalize(product), urljoin(repository, &name)))
+        .filter_map(|(product, name)| {
+            validated_url(urljoin(repository, &name)).map(|url| (normalize(product), url))
+        })
         .collect()
 }

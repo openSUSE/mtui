@@ -45,6 +45,45 @@ fn reporepoparse_matches_repo_by_name_version_arch() {
 }
 
 #[test]
+fn reporepoparse_drops_injection_and_bad_scheme_urls() {
+    // Repo URLs are interpolated into root `zypper ar`/`rr` commands. A URL that
+    // matches the product needle but carries shell metacharacters or an
+    // unsupported scheme must be dropped at ingestion, never trusted.
+    let product = SystemProduct::new("SLES", "15", "x86_64");
+
+    // Shell metacharacter in an otherwise-matching URL → dropped.
+    let repos = reporepoparse(
+        &["https://example.com/SLES-15-x86_64/;reboot".to_string()],
+        &["SLES 15 (x86_64)".to_string()],
+    );
+    assert!(
+        !repos.contains_key(&product),
+        "injection-shaped URL retained: {repos:?}"
+    );
+
+    // Unsupported scheme (still contains the needle) → dropped.
+    let repos = reporepoparse(
+        &["ssh://example.com/SLES-15-x86_64/".to_string()],
+        &["SLES 15 (x86_64)".to_string()],
+    );
+    assert!(
+        !repos.contains_key(&product),
+        "bad-scheme URL retained: {repos:?}"
+    );
+}
+
+#[test]
+fn slrepoparse_drops_injection_shaped_base() {
+    // An injection-shaped base repository URL yields a shell-unsafe derived URL,
+    // which must be dropped rather than reaching a root zypper command.
+    let repos = slrepoparse(
+        "https://example.com/$(reboot)",
+        &["SLES 15 (x86_64)".to_string()],
+    );
+    assert!(repos.is_empty(), "unsafe derived URL retained: {repos:?}");
+}
+
+#[test]
 fn reporepoparse_drops_products_with_no_matching_repo() {
     // A product whose (name-version-arch) appears in no repo URL is omitted.
     let repos = reporepoparse(

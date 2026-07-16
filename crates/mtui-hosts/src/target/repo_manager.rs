@@ -43,6 +43,7 @@
 use std::collections::BTreeMap;
 
 use mtui_types::rrid::RequestReviewID;
+use mtui_types::shellquote::quote_args;
 use mtui_types::system::SystemProduct;
 use tracing::{debug, info, warn};
 
@@ -131,6 +132,10 @@ impl<'a> RepoManager<'a> {
     ///   exit is surfaced as a WARNING (the repo was *not* registered), not
     ///   swallowed.
     /// * **`rr`** (remove-repo, `cmd` contains `"rr"`) → `zypper <cmd> <url>`.
+    ///
+    /// The metadata-derived `alias` and `url` are shell-quoted at this exec
+    /// boundary (they run as root), so a crafted value cannot inject a command;
+    /// URLs are additionally validated at ingestion (see `repoparse`).
     /// * **anything else** → force-unlock the target ([`Target::unlock`] with
     ///   `force = true`) and return [`false`], the Rust analogue of upstream's
     ///   post-`unlock(True)` `ValueError` safeguard. (The typed error the caller
@@ -210,9 +215,10 @@ impl<'a> RepoManager<'a> {
             if is_ar {
                 let alias = issue_alias(product, rrid);
                 info!("Adding repo {url} on {hostname}");
-                self.target
-                    .run(&format!("zypper {cmd} {alias} {url} {alias}"))
-                    .await;
+                // Quote the metadata-derived alias/url so a crafted value cannot
+                // break out of its argument into the root command line.
+                let args = quote_args(&[alias.as_str(), url.as_str(), alias.as_str()]);
+                self.target.run(&format!("zypper {cmd} {args}")).await;
                 // Surface a failed add instead of returning silent success: a
                 // non-zero zypper exit here means the repo was NOT registered.
                 if self.target.lastexit() != Some(0) {
@@ -225,7 +231,8 @@ impl<'a> RepoManager<'a> {
                 }
             } else if is_rr {
                 info!("Removing repo {url} on {hostname}");
-                self.target.run(&format!("zypper {cmd} {url}")).await;
+                let args = quote_args(&[url.as_str()]);
+                self.target.run(&format!("zypper {cmd} {args}")).await;
             } else {
                 // Unknown sub-command: upstream force-unlocks the target
                 // (`self.target._lock.unlock(True)`) and raises `ValueError`.
@@ -394,9 +401,70 @@ mod tests {
         t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
 
         let cmds = conn.commands();
+        // The alias contains `=` (`:p=1:2`), which shlex quotes at the exec
+        // boundary; the URL has no shell-special chars so it stays bare. The
+        // single-quoted alias is the identical zypper alias.
         assert_eq!(
             cmds[0],
-            "zypper ar issue-SLES:15-SP5:p=1:2 https://example/repo issue-SLES:15-SP5:p=1:2"
+            "zypper ar 'issue-SLES:15-SP5:p=1:2' https://example/repo 'issue-SLES:15-SP5:p=1:2'"
+        );
+    }
+
+    #[tokio::test]
+    async fn ar_shell_quotes_malicious_url_and_alias() {
+        // A crafted repo URL (and a product name that feeds the alias) must reach
+        // the host as single quoted arguments, never as injected root commands.
+        let evil = product("SLES;reboot", "15-SP5");
+        let (mut t, conn) = target_with(system_of(evil.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(evil, "https://x/repo;rm -rf /".to_owned());
+
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+
+        let cmd = conn
+            .commands()
+            .into_iter()
+            .find(|c| c.starts_with("zypper ar"))
+            .expect("an ar command ran");
+        // Re-splitting must yield exactly the verbs plus three literal args
+        // (alias, url, alias) — no injected `reboot`/`rm` words.
+        let tokens = shlex::split(&cmd).expect("command re-splits");
+        assert_eq!(
+            tokens,
+            vec![
+                "zypper".to_owned(),
+                "ar".to_owned(),
+                "issue-SLES;reboot:15-SP5:p=1:2".to_owned(),
+                "https://x/repo;rm -rf /".to_owned(),
+                "issue-SLES;reboot:15-SP5:p=1:2".to_owned(),
+            ],
+            "injection leaked into argv: {cmd:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rr_shell_quotes_malicious_url() {
+        let evil = product("SLES", "15-SP5");
+        let (mut t, conn) = target_with(system_of(evil.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(evil, "https://x/repo;reboot".to_owned());
+
+        t.repo_manager().run_zypper("rr", &repos, &rrid()).await;
+
+        let cmd = conn
+            .commands()
+            .into_iter()
+            .find(|c| c.starts_with("zypper rr"))
+            .expect("an rr command ran");
+        let tokens = shlex::split(&cmd).expect("command re-splits");
+        assert_eq!(
+            tokens,
+            vec![
+                "zypper".to_owned(),
+                "rr".to_owned(),
+                "https://x/repo;reboot".to_owned(),
+            ],
+            "injection leaked into argv: {cmd:?}"
         );
     }
 
@@ -541,9 +609,10 @@ mod tests {
 
         let sles = product("SLES", "15-SP5");
         // The add fails (exit 4) but the refresh must still run. The exact `ar`
-        // command string is deterministic from the alias helper.
+        // command string is deterministic from the alias helper; the alias is
+        // shlex-quoted at the exec boundary because it contains `=`.
         let ar_cmd =
-            "zypper ar issue-SLES:15-SP5:p=1:2 https://example/repo issue-SLES:15-SP5:p=1:2";
+            "zypper ar 'issue-SLES:15-SP5:p=1:2' https://example/repo 'issue-SLES:15-SP5:p=1:2'";
         let conn = MockConnection::new("host1.example.com").with_response(
             ar_cmd,
             CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
