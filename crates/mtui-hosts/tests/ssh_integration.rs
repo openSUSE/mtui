@@ -14,7 +14,8 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use russh::keys::{Algorithm, PrivateKey};
@@ -481,10 +482,31 @@ async fn start_server(fs: SharedFs) -> u16 {
     port
 }
 
+/// Per-process temp directory holding this test binary's `known_hosts`.
+///
+/// The in-process fixture generates a fresh ephemeral host key each run and
+/// loopback ports get reused over time, so with `AutoAdd` against the default
+/// `~/.ssh/known_hosts` every run would append a `[127.0.0.1]:<port>` entry and
+/// eventually collide (`Unknown server key`/`CHANGED`). Pointing every test
+/// connection at this temp file keeps the developer's real file untouched.
+static TEST_KNOWN_HOSTS_DIR: LazyLock<tempfile::TempDir> =
+    LazyLock::new(|| tempfile::tempdir().expect("create temp known_hosts dir"));
+
+/// Path to the shared per-process temp `known_hosts` file.
+fn test_known_hosts() -> PathBuf {
+    TEST_KNOWN_HOSTS_DIR.path().join("known_hosts")
+}
+
 async fn connect(port: u16, timeout: CommandTimeout) -> SshConnection {
-    SshConnection::connect("127.0.0.1", port, HostKeyPolicy::AutoAdd, timeout)
-        .await
-        .expect("connect")
+    SshConnection::connect(
+        "127.0.0.1",
+        port,
+        HostKeyPolicy::AutoAdd,
+        timeout,
+        Some(test_known_hosts()),
+    )
+    .await
+    .expect("connect")
 }
 
 /// Builds a [`Target`] whose live connection is a real [`SshConnection`] to the
@@ -727,12 +749,45 @@ async fn connect_to_unreachable_host_maps_to_connect_error() {
         1,
         HostKeyPolicy::AutoAdd,
         CommandTimeout::new(Duration::from_millis(500)),
+        Some(test_known_hosts()),
     )
     .await
     .expect_err("should fail to connect");
     assert!(
         matches!(&err, mtui_hosts::HostError::Connect { host, .. } if host == "127.0.0.1"),
         "unexpected error: {err:?}"
+    );
+}
+
+/// Regression for the known_hosts test-isolation bug: `AutoAdd` must land the
+/// fixture's host key in the per-test temp file, and must never touch the
+/// developer's real `~/.ssh/known_hosts`.
+#[tokio::test]
+async fn connect_isolates_known_hosts_from_real_home() {
+    // Snapshot the real file's contents (or absence) before connecting.
+    let real = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|h| h.join(".ssh").join("known_hosts"));
+    let before = real.as_ref().and_then(|p| std::fs::read(p).ok());
+
+    let port = start_server(SharedFs::default()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+    assert!(conn.is_active());
+    conn.close().await.expect("close");
+
+    // AutoAdd persisted the loopback key into the temp file, not the home file.
+    let temp = std::fs::read_to_string(test_known_hosts())
+        .expect("temp known_hosts should exist after AutoAdd");
+    assert!(
+        temp.contains("127.0.0.1"),
+        "temp known_hosts missing loopback entry: {temp:?}"
+    );
+
+    // The real file is byte-for-byte unchanged (still present/absent as before).
+    let after = real.as_ref().and_then(|p| std::fs::read(p).ok());
+    assert_eq!(
+        before, after,
+        "connect() must not modify the real ~/.ssh/known_hosts"
     );
 }
 

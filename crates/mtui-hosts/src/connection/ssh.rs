@@ -368,6 +368,12 @@ pub struct SshConnection {
     /// Optional serialised prompt for the command-timeout branch. Wired from the
     /// composition root; `None` keeps the timeout an immediate abort.
     timeout_prompt: Option<TimeoutPrompt>,
+    /// The `known_hosts` file consulted during the handshake; `None` uses
+    /// russh's default (`~/.ssh/known_hosts`). Retained so
+    /// [`reconnect`](Connection::reconnect) re-verifies against the same file
+    /// the initial [`connect`](Self::connect) used (tests point it at a temp
+    /// file to stay out of the developer's real store).
+    known_hosts: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -385,6 +391,13 @@ impl SshConnection {
     /// Connects to `hostname` on `port` (0 means "use `~/.ssh/config` / 22"),
     /// applying `policy` to the host key and `timeout` to the handshake.
     ///
+    /// `known_hosts` selects the file consulted (and, under
+    /// [`AutoAdd`](HostKeyPolicy::AutoAdd), appended) during host-key
+    /// verification; `None` uses russh's default (`~/.ssh/known_hosts`). Tests
+    /// pass a per-test temp path so they never touch the developer's real file.
+    /// The path is applied during the handshake, so it must be supplied here
+    /// rather than via a post-connect builder.
+    ///
     /// # Errors
     ///
     /// * [`HostError::Connect`] — the host is unreachable or the SSH handshake
@@ -396,10 +409,11 @@ impl SshConnection {
         port: u16,
         policy: HostKeyPolicy,
         timeout: CommandTimeout,
+        known_hosts: Option<PathBuf>,
     ) -> Result<Self> {
         let hostname = hostname.into();
         let resolved = resolve(&hostname, port);
-        let handle = establish(&hostname, &resolved, policy, timeout).await?;
+        let handle = establish(&hostname, &resolved, policy, timeout, known_hosts.clone()).await?;
         Ok(Self {
             hostname,
             resolved,
@@ -408,6 +422,7 @@ impl SshConnection {
             handle: Some(handle),
             is_repl: false,
             timeout_prompt: None,
+            known_hosts,
         })
     }
 
@@ -693,6 +708,7 @@ async fn establish(
     resolved: &Resolved,
     policy: HostKeyPolicy,
     ctimeout: CommandTimeout,
+    known_hosts: Option<PathBuf>,
 ) -> Result<Handle<ClientHandler>> {
     let config = Arc::new(ClientConfig {
         inactivity_timeout: Some(Duration::from_secs(60)),
@@ -703,7 +719,7 @@ async fn establish(
         connect_host: resolved.connect_host.clone(),
         port: resolved.port,
         policy,
-        known_hosts_path: None,
+        known_hosts_path: known_hosts,
     };
 
     let addr = (resolved.connect_host.as_str(), resolved.port);
@@ -864,6 +880,7 @@ impl Connection for SshConnection {
             handle: None,
             is_repl: self.is_repl,
             timeout_prompt: self.timeout_prompt.clone(),
+            known_hosts: self.known_hosts.clone(),
         })
     }
 
@@ -1035,7 +1052,15 @@ impl Connection for SshConnection {
         }
         let mut last_err = None;
         for attempt in 0..=RETRIES {
-            match establish(&self.hostname, &self.resolved, self.policy, self.timeout).await {
+            match establish(
+                &self.hostname,
+                &self.resolved,
+                self.policy,
+                self.timeout,
+                self.known_hosts.clone(),
+            )
+            .await
+            {
                 Ok(handle) => {
                     self.handle = Some(handle);
                     return Ok(());
@@ -1644,6 +1669,7 @@ mod tests {
             handle: None,
             is_repl: false,
             timeout_prompt: None,
+            known_hosts: None,
         };
         let s = format!("{conn:?}");
         assert!(s.contains("example.host"), "{s}");

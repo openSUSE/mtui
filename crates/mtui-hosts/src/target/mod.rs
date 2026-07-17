@@ -901,11 +901,17 @@ impl Target {
         if self.connection.is_none() {
             tracing::info!(host = %self.hostname, "connecting");
             let port = self.port.parse::<u16>().unwrap_or(0);
-            let conn = SshConnection::connect(self.host.clone(), port, self.policy, self.timeout)
-                .await
-                .inspect_err(|e| {
-                    tracing::error!(host = %self.hostname, error = %e, "connecting to target failed");
-                })?;
+            let conn = SshConnection::connect(
+                self.host.clone(),
+                port,
+                self.policy,
+                self.timeout,
+                None,
+            )
+            .await
+            .inspect_err(|e| {
+                tracing::error!(host = %self.hostname, error = %e, "connecting to target failed");
+            })?;
             // Wire the interactive command-timeout prompt when the composition
             // root supplied one (REPL); headless targets leave it unset
             // (immediate abort).
