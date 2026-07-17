@@ -28,12 +28,16 @@
 //! fan-out / registry mutators; [`scoped_lock`](McpSession::scoped_lock) is the
 //! same hold for the hand-written testreport tools.
 //!
-//! **Not yet landed** — genuine wall-clock concurrency between *different-RRID*
-//! calls (and per-call output isolation) additionally needs the `mtui-core`
-//! change that stops dispatch taking `&mut Session` for the whole monolithic
-//! session; until then different-RRID calls hold distinct per-RRID locks but
-//! still serialise on the inner session `Mutex`. Tracked as `mtui-rs-f36r`
-//! (the two `#[ignore]`d parity tests in `tests/session_concurrency.rs`).
+//! **Landed** (`mtui-rs-f36r` / `mtui-rs-0mop.11`) — genuine wall-clock
+//! concurrency between *different-RRID* calls plus per-call output isolation. A
+//! single-real-RRID call dispatches on a [`Session::fork_for_call`] (which shares
+//! the loaded reports' per-entry `Arc<Mutex<..>>` locks and carries its own
+//! display) via [`dispatch_command`], spawned so it overlaps a concurrent
+//! different-RRID call; [`run_command`](McpSession::run_command) no longer holds
+//! a session-wide mutex across the scoped dispatch. Registry-structure mutators
+//! ([`Command::mutates_registry`](mtui_core::Command::mutates_registry)) and
+//! unscoped fan-out still take the gate *exclusive* against the canonical
+//! session. All four `tests/session_concurrency.rs` parity tests pass.
 //!
 //! P7.3b (`mtui-rs-76e.12`) landed the **background-job table** (`_jobs`): a slow
 //! `run`/`update`/`downgrade` can be started with
@@ -663,20 +667,24 @@ impl McpSession {
     /// Runs a registered command and returns its captured, output-capped stdout.
     ///
     /// The central MCP dispatch primitive (the Rust analogue of upstream
-    /// `McpSession.run_command`): it drains any stale captured output, dispatches
-    /// `name`/`argv` through the **same** engine entry the REPL uses
-    /// ([`mtui_core::dispatch_argv`]) under the session lock, then returns what the command
-    /// wrote to the captured display — passed through [`cap_output`] so one large
-    /// result cannot dwarf the client's context.
+    /// `McpSession.run_command`): it dispatches `name`/`argv` through the **same**
+    /// engine the REPL uses (a forked-session [`dispatch_command`] on the
+    /// concurrent path, [`dispatch_argv`] on the canonical session for the
+    /// exclusive path), then returns what the command wrote to the call's own
+    /// captured display — passed through [`cap_output`] so one large result cannot
+    /// dwarf the client's context.
     ///
     /// Before dispatch the call takes its [`command_lock`](Self::command_lock):
     /// a single-template call holds the registry gate *shared* plus its per-RRID
     /// lock (so same-RRID calls serialise, different-RRID calls take distinct
-    /// locks), while fan-out / mutators take the gate *exclusive*. The dispatch
-    /// itself still holds the single session `Mutex` (the `mtui-core` change that
-    /// lets different-RRID dispatch run truly in parallel is `mtui-rs-f36r`). A
-    /// `--help`/`--version` request is a *success* (its text is returned),
-    /// matching argparse's exit-0 semantics.
+    /// locks), while fan-out / mutators take the gate *exclusive*. A single-RRID
+    /// (non-mutator) call then dispatches on a
+    /// [`Session::fork_for_call`](mtui_core::Session::fork_for_call) — sharing the
+    /// report entry locks, with its own display — spawned so it runs in genuine
+    /// parallel with a concurrent different-RRID call (`mtui-rs-f36r`); the
+    /// exclusive path dispatches on the canonical session so its config/registry
+    /// mutations persist. A `--help`/`--version` request is a *success* (its text
+    /// is returned), matching argparse's exit-0 semantics.
     ///
     /// # Errors
     ///

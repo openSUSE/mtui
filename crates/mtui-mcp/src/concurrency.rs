@@ -13,16 +13,20 @@
 //! fairness queue beyond that; the single-session workload (a handful of
 //! concurrent subagents) does not need one.
 //!
-//! ## Interim locking depth (bead `mtui-rs-76e.11` / follow-up `mtui-rs-f36r`)
+//! ## Locking depth (beads `mtui-rs-76e.11` + `mtui-rs-f36r` / `mtui-rs-0mop.11`)
 //!
-//! This gate + the per-RRID lock map in [`crate::session`] land the correct lock
+//! This gate + the per-RRID lock map in [`crate::session`] land the lock
 //! *discipline*: same-RRID and unscoped calls serialise, and registry mutators
 //! drain in-flight per-RRID work. Genuine wall-clock concurrency between
-//! *different-RRID* calls additionally needs `mtui-core` to stop taking
-//! `&mut Session` for the whole monolithic session on dispatch (and to isolate
-//! per-call output); that core change is tracked as `mtui-rs-f36r`. Until then
-//! two different-RRID calls acquire distinct per-RRID locks (as they must) but
-//! still serialise on the inner session mutex during dispatch.
+//! *different-RRID* calls **has landed** (`mtui-rs-f36r`): `mtui-core` report
+//! entries are per-entry `Arc<Mutex<..>>`, and a single-real-RRID call dispatches
+//! on a [`Session::fork_for_call`](mtui_core::Session::fork_for_call) (sharing
+//! the entry locks, with its own display) via
+//! [`dispatch_command`](mtui_core::dispatch_command), so
+//! [`run_command`](crate::McpSession::run_command) no longer holds a session-wide
+//! mutex across dispatch. Two different-RRID calls now acquire distinct per-RRID
+//! locks *and* run in parallel; registry-structure mutators still take this gate
+//! *exclusive* against the canonical session.
 
 use std::sync::{Arc, Mutex};
 
