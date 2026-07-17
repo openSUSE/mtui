@@ -172,18 +172,16 @@ async fn approve_uses_last_assignee() {
     assert!(String::from_utf8_lossy(&posts[0].body).contains("LGTM"));
 }
 
-/// Perf baseline oracle (mtui-rs-0mop.1 → 0mop.8: deduplicate Gitea approval
-/// fetches). Captures the *current* per-`approve` request breakdown so the dedup
-/// remediation has a golden count to shrink against without regressing behaviour.
+/// Request-count oracle (mtui-rs-0mop.8: deduplicate Gitea approval fetches).
 ///
-/// A single happy-path `approve` currently issues **two** GETs on the comments
-/// endpoint — `check_assign`→`assignee`→`get_all_comments`, then
-/// `is_done`→`get_all_comments` — plus one POST. `is_done` short-circuits before
-/// `has_review` here because no decision comment exists, so the PR endpoint is
-/// not hit. When 0mop.8 lands, the comments-GET count should drop to 1; update
-/// this oracle then (and only then).
+/// A single happy-path `approve` fetches the comment snapshot **once** and
+/// derives both the assignment state (`assign_state`) and the decision state
+/// (`is_done_from`) from it — one comments GET, plus one POST. `is_done_from`
+/// short-circuits before `has_review` here because no decision comment exists,
+/// so the PR endpoint is not hit. The count fails the test if it drifts either
+/// way (a regression back to the old double-fetch, or an unexpected extra call).
 #[tokio::test]
-async fn approve_request_count_baseline() {
+async fn approve_request_count() {
     let server = MockServer::start().await;
     mount_comments(
         &server,
@@ -199,12 +197,18 @@ async fn approve_request_count_baseline() {
         .iter()
         .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == COMMENTS_PATH)
         .count();
+    let pr_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == PR_PATH)
+        .count();
     let posts = reqs
         .iter()
         .filter(|r| r.method == wiremock::http::Method::POST)
         .count();
-    // Baseline: comments fetched twice (redundantly) per approve; one POST.
-    assert_eq!(comment_gets, 2, "approve refetches comments; see 0mop.8");
+    // Deduplicated: comments fetched once per approve; no PR GET (no decision);
+    // one POST.
+    assert_eq!(comment_gets, 1, "approve fetches comments once; see 0mop.8");
+    assert_eq!(pr_gets, 0, "no decision comment -> no has_review PR GET");
     assert_eq!(posts, 1);
 }
 
@@ -294,6 +298,73 @@ async fn reject_posts_decline_with_reason() {
     assert!(body.contains("decline"));
     assert!(body.contains("Reason: broke boot"));
     assert!(body.contains("see logs"));
+}
+
+/// Request-count oracle (0mop.8): a happy-path `reject` fetches the comment
+/// snapshot once (no decision -> no PR GET) and posts once.
+#[tokio::test]
+async fn reject_request_count() {
+    let server = MockServer::start().await;
+    mount_comments(
+        &server,
+        json!([comment_json(1, &assign_marker(USER, GROUP), 1)]),
+    )
+    .await;
+    mount_post_comment(&server).await;
+
+    gitea_for(&server).reject("", None, "").await.unwrap();
+
+    let reqs = server.received_requests().await.unwrap();
+    let comment_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == COMMENTS_PATH)
+        .count();
+    let pr_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == PR_PATH)
+        .count();
+    let posts = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .count();
+    assert_eq!(comment_gets, 1, "reject fetches comments once");
+    assert_eq!(pr_gets, 0, "no decision comment -> no has_review PR GET");
+    assert_eq!(posts, 1);
+}
+
+/// Request-count oracle (0mop.8): a happy-path `assign` (no `force`) issues one
+/// PR GET (`has_review` review-requested guard), fetches the comment snapshot
+/// **once** (feeding both `is_done_from` and the unassigned guard — no refetch),
+/// and posts once. No decision comment means `has_review` runs only once (the
+/// guard), not again from the decision path.
+#[tokio::test]
+async fn assign_request_count() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await; // unassigned, no decision
+    mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
+    mount_post_comment(&server).await;
+
+    gitea_for(&server).assign(None, false).await.unwrap();
+
+    let reqs = server.received_requests().await.unwrap();
+    let comment_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == COMMENTS_PATH)
+        .count();
+    let pr_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == PR_PATH)
+        .count();
+    let posts = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .count();
+    assert_eq!(comment_gets, 1, "assign fetches comments once");
+    assert_eq!(
+        pr_gets, 1,
+        "one has_review PR GET (the review-requested guard)"
+    );
+    assert_eq!(posts, 1);
 }
 
 #[tokio::test]

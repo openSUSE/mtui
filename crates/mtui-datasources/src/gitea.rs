@@ -118,6 +118,23 @@ fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_string())
 }
 
+/// Whether any comment records a decision for `group`
+/// (`@<group>-review: LGTM|approve[d]|decline[d]`).
+///
+/// Pure over an already-fetched comment snapshot. The "does it *still* stand"
+/// question (a pending re-request supersedes a stale decision) is answered by
+/// the caller via [`Gitea::has_review`]; this only reports that a decision
+/// marker exists.
+#[must_use]
+fn decision_present(comments: &[Comment], group: &str) -> bool {
+    let done = Regex::new(&format!(
+        r"^@{}-review: (LGTM|approved?|declined?)",
+        regex::escape(group)
+    ))
+    .expect("decision regex is valid");
+    comments.iter().any(|c| done.is_match(&c.body))
+}
+
 /// A Gitea comment, sortable by its `updated_at` timestamp.
 ///
 /// Mirrors upstream `Comment`: ordering and equality are **by date** (upstream
@@ -385,6 +402,18 @@ impl Gitea {
         assignee
     }
 
+    /// Fetch the PR comments once and return them chronologically sorted.
+    ///
+    /// The single comment snapshot a write operation derives *all* of its state
+    /// from — assignment ([`assign_state`](Self::assign_state)) and decision
+    /// presence ([`decision_present`]) — so one op issues one comments GET
+    /// instead of refetching per helper.
+    async fn load_sorted_comments(&self) -> Result<Vec<Comment>, GiteaError> {
+        let mut comments = self.get_all_comments().await?;
+        comments.sort();
+        Ok(comments)
+    }
+
     /// Return the current assignee for this PR's group, or `None`.
     ///
     /// Reloads the comments and replays the assign/unassign markers. `None`
@@ -395,21 +424,24 @@ impl Gitea {
     ///
     /// Returns [`GiteaError::FailedCall`] if the comments cannot be fetched.
     pub async fn assignee(&self) -> Result<Option<String>, GiteaError> {
-        let mut comments = self.get_all_comments().await?;
-        comments.sort();
+        let comments = self.load_sorted_comments().await?;
         Ok(self.assignee_from_comments(&comments, &self.group))
     }
 
-    /// Determine the assignment state for `check_user` from the comment history.
-    async fn check_assign(&self, check_user: &str) -> Result<Assignment, GiteaError> {
-        match self.assignee().await? {
-            None => Ok(Assignment::Unassigned),
-            Some(a) if a == check_user => Ok(Assignment::AssignedUser),
-            Some(_) => Ok(Assignment::AssignedOther),
+    /// Derive the assignment state for `check_user` from an already-fetched
+    /// comment snapshot (pure; no I/O).
+    fn assign_state(&self, comments: &[Comment], check_user: &str) -> Assignment {
+        match self.assignee_from_comments(comments, &self.group) {
+            None => Assignment::Unassigned,
+            Some(a) if a == check_user => Assignment::AssignedUser,
+            Some(_) => Assignment::AssignedOther,
         }
     }
 
     /// Whether the group's review is currently requested on the PR.
+    ///
+    /// Issues one GET on the PR endpoint. A write op calls this at most once,
+    /// and only when a decision comment exists (see [`decision_present`]).
     async fn has_review(&self) -> Result<bool, GiteaError> {
         let pr = self.request(Method::GET, &self.pr, None).await?;
         let wanted = format!("{}-review", self.group);
@@ -423,21 +455,17 @@ impl Gitea {
             }))
     }
 
-    /// Whether the group's review is decided *and still stands*.
+    /// Whether the group's review is decided *and still stands*, derived from an
+    /// already-fetched comment snapshot.
     ///
     /// A decision comment (`@<group>-review: LGTM|approve|decline`) records a
     /// decision, but the history is append-only: a re-requested review after a
     /// rebuild supersedes a stale decision. So this only reports "done" when a
     /// decision comment exists **and** the group is not currently a requested
-    /// reviewer.
-    async fn is_done(&self) -> Result<bool, GiteaError> {
-        let comments = self.get_all_comments().await?;
-        let done = Regex::new(&format!(
-            r"^@{}-review: (LGTM|approved?|declined?)",
-            regex::escape(&self.group)
-        ))
-        .expect("decision regex is valid");
-        if !comments.iter().any(|c| done.is_match(&c.body)) {
+    /// reviewer — the latter checked lazily (one PR GET) so no decision means no
+    /// PR fetch at all.
+    async fn is_done_from(&self, comments: &[Comment]) -> Result<bool, GiteaError> {
+        if !decision_present(comments, &self.group) {
             return Ok(false);
         }
         // A decision exists, but a pending re-request supersedes it.
@@ -452,14 +480,15 @@ impl Gitea {
     /// user; [`GiteaError::NoReview`] if it was already approved/rejected.
     pub async fn approve(&self, other: Option<&str>) -> Result<(), GiteaError> {
         let a_user = other.unwrap_or(&self.user);
-        let state = self.check_assign(a_user).await?;
+        let comments = self.load_sorted_comments().await?;
+        let state = self.assign_state(&comments, a_user);
         if state != Assignment::AssignedUser {
             return Err(GiteaError::AssignInvalid {
                 state,
                 user: a_user.to_string(),
             });
         }
-        if self.is_done().await? {
+        if self.is_done_from(&comments).await? {
             return Err(GiteaError::NoReview(
                 "PR was already approved/rejected".to_string(),
             ));
@@ -486,14 +515,15 @@ impl Gitea {
         message: &str,
     ) -> Result<(), GiteaError> {
         let a_user = other.unwrap_or(&self.user);
-        let state = self.check_assign(a_user).await?;
+        let comments = self.load_sorted_comments().await?;
+        let state = self.assign_state(&comments, a_user);
         if state != Assignment::AssignedUser {
             return Err(GiteaError::AssignInvalid {
                 state,
                 user: a_user.to_string(),
             });
         }
-        if self.is_done().await? {
+        if self.is_done_from(&comments).await? {
             return Err(GiteaError::NoReview(
                 "PR was already approved/rejected".to_string(),
             ));
@@ -530,13 +560,14 @@ impl Gitea {
                 self.group
             )));
         }
-        if self.is_done().await? {
+        let comments = self.load_sorted_comments().await?;
+        if self.is_done_from(&comments).await? {
             return Err(GiteaError::NoReview(
                 "PR was already approved/rejected".to_string(),
             ));
         }
         if !force {
-            let state = self.check_assign(a_user).await?;
+            let state = self.assign_state(&comments, a_user);
             if state != Assignment::Unassigned {
                 return Err(GiteaError::AssignInvalid {
                     state,
@@ -558,7 +589,8 @@ impl Gitea {
     /// [`GiteaError::AssignInvalid`] if the PR is not assigned to the user.
     pub async fn unassign(&self, other: Option<&str>) -> Result<(), GiteaError> {
         let a_user = other.unwrap_or(&self.user);
-        let state = self.check_assign(a_user).await?;
+        let comments = self.load_sorted_comments().await?;
+        let state = self.assign_state(&comments, a_user);
         if state != Assignment::AssignedUser {
             return Err(GiteaError::AssignInvalid {
                 state,
@@ -745,6 +777,67 @@ mod tests {
             g.assignee_from_comments(&comments, "qam-openqa"),
             Some("bob".to_string())
         );
+    }
+
+    // --- decision_present golden decision vectors ---
+
+    #[test]
+    fn decision_present_matches_all_decision_forms() {
+        for body in [
+            "@qam-sle-review: LGTM",
+            "@qam-sle-review: approve",
+            "@qam-sle-review: approved",
+            "@qam-sle-review: decline",
+            "@qam-sle-review: declined",
+        ] {
+            let comments = [comment(1, body, "2024-01-01T00:00:00+00:00")];
+            assert!(decision_present(&comments, "qam-sle"), "{body}");
+        }
+    }
+
+    #[test]
+    fn decision_present_false_without_decision() {
+        // No comments, a non-decision comment, and a chat mention that is not a
+        // start-anchored decision all read as "no decision".
+        assert!(!decision_present(&[], "qam-sle"));
+        let plain = [comment(1, "just a comment", "2024-01-01T00:00:00+00:00")];
+        assert!(!decision_present(&plain, "qam-sle"));
+        let midline = [comment(
+            1,
+            "ping @qam-sle-review: LGTM",
+            "2024-01-01T00:00:00+00:00",
+        )];
+        assert!(!decision_present(&midline, "qam-sle"));
+    }
+
+    #[test]
+    fn decision_present_is_group_scoped() {
+        let comments = [comment(
+            1,
+            "@qam-openqa-review: LGTM",
+            "2024-01-01T00:00:00+00:00",
+        )];
+        assert!(!decision_present(&comments, "qam-sle"));
+        assert!(decision_present(&comments, "qam-openqa"));
+    }
+
+    #[test]
+    fn assign_state_classifies_from_snapshot() {
+        let g = dummy();
+        let assigned = [comment(
+            1,
+            &assign_marker("testuser", "qam-sle"),
+            "2024-01-01T00:00:00+00:00",
+        )];
+        assert_eq!(
+            g.assign_state(&assigned, "testuser"),
+            Assignment::AssignedUser
+        );
+        assert_eq!(
+            g.assign_state(&assigned, "someoneelse"),
+            Assignment::AssignedOther
+        );
+        assert_eq!(g.assign_state(&[], "testuser"), Assignment::Unassigned);
     }
 
     #[test]

@@ -11,17 +11,24 @@
 //!   `reqwest::Client`, i.e. a new connection pool + TLS config each time) — the
 //!   baseline for reusing one client across commands (0mop.13).
 //!
-//! The network-fan-out workloads (oqa-search, gitea approval) are measured as
-//! request-count invariants in the integration tests rather than timed here:
-//! their wall-clock is dominated by the mock server, so a count is the honest
-//! regression oracle for dedup (0mop.8) / parallelize (0mop.7). See
-//! `plans/perf-baseline-0mop1.md`.
+//! The oqa-search fan-out is measured as a request-count invariant in the
+//! integration tests rather than timed here (its wall-clock is dominated by the
+//! mock server; a count is the honest regression oracle for parallelize
+//! (0mop.7)). The gitea approval flow (`gitea/approve`) is timed here as a
+//! *supplementary* high-latency signal for 0mop.8 — but the authoritative
+//! regression gate remains the request-count oracles in `tests/gitea.rs`
+//! (`approve_request_count` etc.), since the bench wall-clock is dominated by
+//! the mock server's simulated latency. See `plans/perf-baseline-0mop1.md`.
 
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use mtui_datasources::gitea::{Gitea, assign_marker};
 use mtui_datasources::{Attributes, HttpClient, Refhosts, VerifyPolicy};
 use mtui_types::load_refhosts;
+use serde_json::json;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Host-count points swept for the refhosts parse/search benches.
 const HOST_COUNTS: &[usize] = &[16, 128, 1024];
@@ -85,10 +92,74 @@ fn bench_http_client_new(c: &mut Criterion) {
     });
 }
 
+/// Simulated per-response latency for the gitea approval bench, so the
+/// round-trip *count* (the thing 0mop.8 changes) shows up in wall-clock. Small
+/// enough to keep the bench quick; the count oracle is the real gate.
+const GITEA_RESPONSE_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Mount a mock Gitea PR whose comments show the session user assigned (so a
+/// happy-path `approve` proceeds), each response delayed by
+/// [`GITEA_RESPONSE_DELAY`]. Returns a ready `Gitea` client pointed at it.
+async fn gitea_approve_fixture(server: &MockServer) -> Gitea {
+    let comments = json!([{
+        "id": 1,
+        "body": assign_marker("benchuser", "qam-sle"),
+        "updated_at": "2024-01-01T00:00:00+00:00",
+    }]);
+    Mock::given(method("GET"))
+        .and(path("/api/v1/repos/owner/repo/issues/1/comments"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(comments)
+                .set_delay(GITEA_RESPONSE_DELAY),
+        )
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/repos/owner/repo/issues/1/comments"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(json!({ "id": 999 }))
+                .set_delay(GITEA_RESPONSE_DELAY),
+        )
+        .mount(server)
+        .await;
+    let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
+    let pr_api = format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri());
+    Gitea::with_client(
+        http,
+        "tok".to_string(),
+        "benchuser".to_string(),
+        &pr_api,
+        None,
+    )
+}
+
+/// Time one happy-path `approve` against a latency-injecting mock server. Fewer
+/// comment fetches (0mop.8: 2->1) means fewer round trips at `GITEA_RESPONSE_DELAY`
+/// each. Supplementary to the request-count oracle.
+fn bench_gitea_approve(c: &mut Criterion) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime builds");
+    let (server, gitea) = rt.block_on(async {
+        let server = MockServer::start().await;
+        let gitea = gitea_approve_fixture(&server).await;
+        (server, gitea)
+    });
+    c.bench_function("gitea/approve", |b| {
+        b.to_async(&rt)
+            .iter(|| async { black_box(gitea.approve(None).await).expect("approve succeeds") });
+    });
+    drop(server);
+}
+
 criterion_group!(
     benches,
     bench_refhosts_parse,
     bench_refhosts_search,
-    bench_http_client_new
+    bench_http_client_new,
+    bench_gitea_approve
 );
 criterion_main!(benches);
