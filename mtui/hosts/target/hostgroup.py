@@ -214,9 +214,7 @@ class HostsGroup(UserDict[str, Target]):
             # host with retries + backoff while it comes back up.
             for hn, command in reboot.items():
                 self.data[hn].reboot(command)
-            for hn in sorted(reboot):
-                self.data[hn].reconnect(retry=10, backoff=True)
-                logger.info("%s is back up", hn)
+            self._reconnect_all(sorted(reboot))
 
     def reboot(
         self, command: str = "systemctl reboot", relock_comment: str = ""
@@ -245,9 +243,7 @@ class HostsGroup(UserDict[str, Target]):
         boot_ids = {hn: t.boot_id() for hn, t in self.data.items()}
         for t in self.data.values():
             t.reboot(command)
-        for hn in sorted(self.data):
-            self.data[hn].reconnect(retry=10, backoff=True)
-            logger.info("%s is back up", hn)
+        self._reconnect_all(sorted(self.data))
 
         for hn, t in self.data.items():
             self._verify_reboot(t, boot_ids[hn])
@@ -281,6 +277,29 @@ class HostsGroup(UserDict[str, Target]):
                 target.hostname,
                 new_boot_id,
             )
+
+    def _reconnect_all(self, hostnames: list[str]) -> None:
+        """Reconnect the given hosts concurrently after a reboot.
+
+        Each ``Connection.reconnect`` begins with a fixed pre-sleep (~10s on
+        the first attempt) before probing the host. Fanning the reconnects
+        out overlaps those waits instead of stacking them (N hosts would
+        otherwise pay ~N*10s even though they all rebooted at once); the
+        per-host sleep is kept -- it guards against reconnecting to a
+        still-shutting-down sshd -- and only its accumulation is removed.
+        Reconnects are independent: each :class:`Target` owns its own
+        connection. The first failure surfaces to the caller, as a serial
+        loop would.
+        """
+
+        def _reconnect(hn: str) -> None:
+            self.data[hn].reconnect(retry=10, backoff=True)
+            logger.info("%s is back up", hn)
+
+        run_parallel(
+            [(_reconnect, (hn,)) for hn in hostnames],
+            desc="reconnect" if self.interactive else None,
+        )
 
     def update_lock(self) -> None:
         """Locks all hosts in the group for an update."""
