@@ -548,6 +548,33 @@ def test_reboot_all_logs_clean_host_list_and_back_up(caplog):
     assert not any("['" in m for m in msgs)
 
 
+def test_reboot_reconnects_hosts_concurrently():
+    """Post-reboot reconnects run in parallel, not one host at a time.
+
+    Each host's reconnect blocks on a Barrier of width N; it trips only if
+    every host's reconnect is in flight at once. A revert to the serial loop
+    makes the first reconnect block alone until the Barrier times out, and
+    run_parallel re-raises the resulting BrokenBarrierError -- so this test
+    fails on that revert. It also pins the keyword call convention.
+    """
+    import threading
+
+    hosts = ["h1", "h2", "h3"]
+    barrier = threading.Barrier(len(hosts))
+    targets = []
+    for hn in hosts:
+        t = _stub_target(hn, transactional=True)
+        t.reconnect.side_effect = lambda retry, backoff: barrier.wait(timeout=10)
+        targets.append(t)
+
+    hg = HostsGroup(targets)
+    hg._reboot(dict.fromkeys(hosts, "systemctl reboot"))
+
+    for t in targets:
+        t.reboot.assert_called_once_with("systemctl reboot")
+        t.reconnect.assert_called_once_with(retry=10, backoff=True)
+
+
 # ---------------------------------------------------------------------------
 # update_lock — comment-logging branch
 # ---------------------------------------------------------------------------
@@ -1025,6 +1052,28 @@ def test_hostgroup_interactive_passes_desc_label_to_run_parallel():
         hg._fanout_set_repo("add", MagicMock())  # noqa: SLF001
 
     assert mock_rp.call_args.kwargs["desc"] == "set_repo add"
+
+
+def test_hostgroup_non_interactive_reconnect_passes_desc_none():
+    """``_reconnect_all`` on a headless group (mtui-mcp) must pass ``desc=None``."""
+    t1 = _stub_target("h1")
+    hg = HostsGroup([t1], interactive=False)
+
+    with patch("mtui.hosts.target.hostgroup.run_parallel") as mock_rp:
+        hg._reconnect_all(["h1"])  # noqa: SLF001
+
+    assert mock_rp.call_args.kwargs["desc"] is None
+
+
+def test_hostgroup_interactive_reconnect_passes_desc_label():
+    """The REPL path keeps the ``reconnect`` spinner label."""
+    t1 = _stub_target("h1")
+    hg = HostsGroup([t1])  # interactive=True by default
+
+    with patch("mtui.hosts.target.hostgroup.run_parallel") as mock_rp:
+        hg._reconnect_all(["h1"])  # noqa: SLF001
+
+    assert mock_rp.call_args.kwargs["desc"] == "reconnect"
 
 
 def test_hostgroup_non_interactive_run_passes_through_to_runcommand():

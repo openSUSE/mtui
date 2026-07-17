@@ -28,6 +28,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   updates. `refhosts.yml` is now parsed once per report and shared across every
   testplatform (and with the product-drift check) instead of being re-parsed
   (~1s each) for every testplatform during autoconnect / `add_host`.
+- Rebooting a host group is faster. After the reboot is dispatched, the hosts
+  are now reconnected concurrently instead of one at a time, so the fixed
+  per-host reconnect wait (~10s) overlaps across hosts rather than stacking.
+  The wait itself is kept (it guards against reconnecting to a
+  still-shutting-down sshd); only the serialization is removed. Most visible on
+  transactional (SL Micro) updates, which reboot every host.
 
 ## 19.0.1 - 2026-07-17
 
