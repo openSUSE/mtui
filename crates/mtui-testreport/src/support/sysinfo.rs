@@ -46,10 +46,15 @@ pub fn detect_system() -> (String, String, String) {
     (distro, verid, kernel)
 }
 
-/// Finds the first line beginning with `key` and returns the value with a
-/// single surrounding pair of `"` or `|` stripped, mirroring upstream's
-/// `NAME=["|](.*)["|]` regex (the trailing quote is part of the capture upstream
-/// too, so we only strip a matching leading/trailing delimiter).
+/// Finds the first line beginning with `key` and returns its value with a
+/// single surrounding pair of `"` or `'` stripped.
+///
+/// Mirrors upstream's post-`d72769d5` "quoted-or-bare" parse: an os-release
+/// value may be double-quoted, single-quoted, or bare (`NAME=Fedora` and
+/// `VERSION_ID=15.6` are spec-legal). A matching leading/trailing `"` or `'`
+/// pair is stripped; any other value (bare, or with mismatched delimiters) is
+/// returned verbatim. (The earlier port reproduced the original Python bug: it
+/// treated a literal `|` as a quote character and never stripped single quotes.)
 fn extract_quoted(content: &str, key: &str) -> Option<String> {
     let line = content.lines().find(|l| l.starts_with(key))?;
     let raw = &line[key.len()..];
@@ -57,7 +62,7 @@ fn extract_quoted(content: &str, key: &str) -> Option<String> {
     if bytes.len() >= 2 {
         let first = bytes[0];
         let last = bytes[bytes.len() - 1];
-        if (first == b'"' || first == b'|') && (last == b'"' || last == b'|') {
+        if (first == b'"' || first == b'\'') && first == last {
             return Some(raw[1..raw.len() - 1].to_string());
         }
     }
@@ -87,9 +92,34 @@ mod tests {
     }
 
     #[test]
+    fn extract_strips_single_quotes() {
+        // Regression for the ported bug: single-quoted values (spec-legal, e.g.
+        // NAME='openSUSE') must not leak their quotes into the footer.
+        let osr = "NAME='openSUSE'\nVERSION_ID='15.6'\n";
+        assert_eq!(extract_quoted(osr, "NAME=").as_deref(), Some("openSUSE"));
+        assert_eq!(extract_quoted(osr, "VERSION_ID=").as_deref(), Some("15.6"));
+    }
+
+    #[test]
     fn extract_leaves_unquoted_value() {
-        let osr = "VERSION_ID=15.5\n";
-        assert_eq!(extract_quoted(osr, "VERSION_ID=").as_deref(), Some("15.5"));
+        // Bare values (NAME=Fedora, VERSION_ID=15.6) pass through verbatim.
+        let osr = "NAME=Fedora\nVERSION_ID=15.6\n";
+        assert_eq!(extract_quoted(osr, "NAME=").as_deref(), Some("Fedora"));
+        assert_eq!(extract_quoted(osr, "VERSION_ID=").as_deref(), Some("15.6"));
+    }
+
+    #[test]
+    fn extract_leaves_mismatched_delimiters_verbatim() {
+        // A stray leading quote with no matching trailing quote is not stripped;
+        // a literal '|' is not a quote character (the old bug treated it as one).
+        assert_eq!(
+            extract_quoted("NAME=\"oops\n", "NAME=").as_deref(),
+            Some("\"oops")
+        );
+        assert_eq!(
+            extract_quoted("NAME=|weird|\n", "NAME=").as_deref(),
+            Some("|weird|")
+        );
     }
 
     #[test]
