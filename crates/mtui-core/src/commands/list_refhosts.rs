@@ -382,11 +382,21 @@ impl Command for ListRefhosts {
 /// of the command; failures are swallowed per host so one dead host never aborts
 /// the listing.
 async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
+    // Bound the probe fan-out to `[connection] max_parallel`: one SSH task per
+    // inventory record, but no more than `max_parallel` connecting at once. Each
+    // task holds an owned permit for its whole lifetime, so the semaphore caps
+    // peak concurrent connections/sockets on large inventories.
+    let bound = (config.max_parallel as usize).max(1);
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(bound));
     let mut set: JoinSet<(String, String)> = JoinSet::new();
     for r in records.iter() {
         let config = config.clone();
         let name = r.name.clone();
+        let sem = std::sync::Arc::clone(&sem);
         set.spawn(async move {
+            // Held for the task's lifetime; the semaphore has as many permits as
+            // the bound, so at most `bound` probes run concurrently.
+            let _permit = sem.acquire_owned().await.expect("semaphore is not closed");
             let mut target = Target::new(
                 &config,
                 name.clone(),

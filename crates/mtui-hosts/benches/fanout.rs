@@ -83,6 +83,35 @@ fn bench_fanout_run(c: &mut Criterion) {
     g.finish();
 }
 
+/// The bounded counterpart to `fanout/run` (0mop.2). Sweeps the same fleet
+/// sizes with a fixed `max_parallel` cap so the "after" curve can be diffed
+/// against the unbounded baseline: for fleets at/below the cap the two must stay
+/// ~flat and equivalent; above the cap the bounded curve trades a small latency
+/// increase for a hard ceiling on peak concurrency (sockets/tasks/RSS).
+fn bench_fanout_run_bounded(c: &mut Criterion) {
+    const BOUND: usize = 16;
+    let rt = rt();
+    let mut g = c.benchmark_group("fanout/run_bounded");
+    for &n in FLEET_SIZES {
+        g.throughput(criterion::Throughput::Elements(n as u64));
+        g.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.to_async(&rt).iter_batched(
+                || {
+                    let mut group = build_group(n, PER_HOST_DELAY);
+                    group.set_max_parallel(BOUND);
+                    group
+                },
+                |mut group| async move {
+                    group.run(black_box("true")).await;
+                    group
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    g.finish();
+}
+
 fn bench_sftp(c: &mut Criterion) {
     let rt = rt();
     let local = Path::new("/tmp/mtui-bench-payload");
@@ -144,5 +173,11 @@ fn bench_report_locks(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench_fanout_run, bench_sftp, bench_report_locks);
+criterion_group!(
+    benches,
+    bench_fanout_run,
+    bench_fanout_run_bounded,
+    bench_sftp,
+    bench_report_locks
+);
 criterion_main!(benches);

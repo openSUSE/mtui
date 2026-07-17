@@ -179,6 +179,9 @@ pub(crate) fn is_relative_dir_name(raw: &str) -> bool {
 pub(crate) fn default_connection_timeout() -> u64 {
     300
 }
+pub(crate) fn default_max_parallel() -> u64 {
+    50
+}
 pub(crate) fn default_svn_path() -> String {
     "svn+ssh://svn@qam.suse.de/testreports".to_owned()
 }
@@ -304,6 +307,7 @@ pub(crate) struct MtuiSection {
 #[serde(default)]
 pub(crate) struct ConnectionSection {
     pub connection_timeout: Option<u64>,
+    pub max_parallel: Option<u64>,
     pub ssh_strict_host_key_checking: Option<String>,
 }
 
@@ -474,6 +478,7 @@ impl RawConfig {
         take!(mtui, chdir_to_template_dir);
         take!(mtui, ssl_verify);
         take!(connection, connection_timeout);
+        take!(connection, max_parallel);
         take!(connection, ssh_strict_host_key_checking);
         take!(refhosts, resolvers);
         take!(refhosts, https_uri);
@@ -533,6 +538,11 @@ pub struct Config {
     // [connection]
     /// SSH connect + command timeout, in seconds.
     pub connection_timeout: u64,
+    /// Maximum number of hosts to fan out to concurrently (SSH command,
+    /// SFTP, lock-probe, and connect batches). Caps peak sockets/tasks/RSS
+    /// and remote load on large fleets; serial-host semantics are unaffected.
+    /// A non-positive value falls back to the default (upstream is unbounded).
+    pub max_parallel: u64,
     /// SSH host-key checking policy (`auto_add`, `strict`, `warn`, ...).
     pub ssh_strict_host_key_checking: String,
 
@@ -657,6 +667,7 @@ impl Default for Config {
             chdir_to_template_dir: false,
             ssl_verify: SslVerify::Enabled,
             connection_timeout: default_connection_timeout(),
+            max_parallel: default_max_parallel(),
             ssh_strict_host_key_checking: default_ssh_strict_host_key_checking(),
             refhosts_resolvers: default_refhosts_resolvers(),
             refhosts_https_uri: default_refhosts_https_uri(),
@@ -763,6 +774,11 @@ impl Config {
                 "connection_timeout",
                 d.connection_timeout
             ),
+            max_parallel: validated_positive!(
+                raw.connection.max_parallel,
+                "max_parallel",
+                d.max_parallel
+            ),
             ssh_strict_host_key_checking: raw
                 .connection
                 .ssh_strict_host_key_checking
@@ -854,6 +870,7 @@ mod tests {
     fn default_matches_upstream_scalars() {
         let c = Config::default();
         assert_eq!(c.connection_timeout, 300);
+        assert_eq!(c.max_parallel, 50);
         assert_eq!(c.refhosts_https_expiration, 3600 * 12);
         assert!(!c.chdir_to_template_dir);
         assert_eq!(c.ssl_verify, SslVerify::Enabled);
@@ -1040,11 +1057,13 @@ mod tests {
     fn from_raw_applies_values_and_defaults() {
         let mut raw = RawConfig::default();
         raw.connection.connection_timeout = Some(450);
+        raw.connection.max_parallel = Some(8);
         raw.mtui.chdir_to_template_dir = Some(true);
         raw.url.bugzilla = Some("https://bugzilla.example.com".to_owned());
         let c = Config::from_raw(raw);
         // Overridden.
         assert_eq!(c.connection_timeout, 450);
+        assert_eq!(c.max_parallel, 8);
         assert!(c.chdir_to_template_dir);
         assert_eq!(c.bugzilla_url, "https://bugzilla.example.com");
         // Untouched falls back to default.
@@ -1154,6 +1173,7 @@ mod tests {
             r#"
             [connection]
             connection_timeout = 0
+            max_parallel = 0
             [refhosts]
             https_expiration = 0
             [lock]
@@ -1167,6 +1187,7 @@ mod tests {
         let c = Config::from_raw(raw);
         let d = Config::default();
         assert_eq!(c.connection_timeout, d.connection_timeout);
+        assert_eq!(c.max_parallel, d.max_parallel);
         assert_eq!(c.refhosts_https_expiration, d.refhosts_https_expiration);
         assert_eq!(c.lock_wait_poll, d.lock_wait_poll);
         assert_eq!(c.mcp_session_cap, d.mcp_session_cap);

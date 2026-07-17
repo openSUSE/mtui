@@ -86,6 +86,12 @@ pub struct HostsGroup {
     /// back-to-back and a command timeout an immediate abort (upstream
     /// `prompter=None`).
     prompter: Option<crate::Prompter>,
+    /// Maximum hosts to fan out to concurrently in the parallel batch. Pushed
+    /// down from the composition root (`mtui-core::Session`) via
+    /// [`set_max_parallel`](Self::set_max_parallel) from `[connection]
+    /// max_parallel`. `0` (the default before wiring) means "unconfigured" and
+    /// the fan-out primitive applies its own conservative default.
+    max_parallel: usize,
 }
 
 impl HostsGroup {
@@ -104,7 +110,17 @@ impl HostsGroup {
             is_repl,
             plan_provider: None,
             prompter: None,
+            max_parallel: 0,
         }
+    }
+
+    /// Sets the parallel-batch fan-out bound from `[connection] max_parallel`.
+    ///
+    /// Pushed down by the composition root (`mtui-core::Session`), mirroring
+    /// [`set_prompter`](Self::set_prompter). `0` leaves the fan-out primitive's
+    /// own conservative default in effect.
+    pub fn set_max_parallel(&mut self, max_parallel: usize) {
+        self.max_parallel = max_parallel;
     }
 
     /// Injects the update-workflow [`PlanProvider`] (builder-style), enabling the
@@ -350,25 +366,30 @@ impl HostsGroup {
     /// [`Command::PerHost`] map (hosts absent from the map are skipped). See
     /// [`RunCommand`].
     pub async fn run(&mut self, cmd: impl Into<Command>) {
+        let max_parallel = self.max_parallel;
         RunCommand::new(&mut self.data, cmd, self.is_repl, self.prompter.clone())
+            .with_max_parallel(max_parallel)
             .run()
             .await;
     }
 
     /// Uploads `local` to `remote` on every host in parallel.
     pub async fn sftp_put(&mut self, local: &Path, remote: &Path) {
-        actions::sftp_put_all(&mut self.data, local, remote, self.is_repl).await;
+        let max_parallel = self.max_parallel;
+        actions::sftp_put_all(&mut self.data, local, remote, self.is_repl, max_parallel).await;
     }
 
     /// Downloads `remote` (per-host suffixed) into `local` from every host in
     /// parallel.
     pub async fn sftp_get(&mut self, remote: &str, local: &Path) {
-        actions::sftp_get_all(&mut self.data, remote, local, self.is_repl).await;
+        let max_parallel = self.max_parallel;
+        actions::sftp_get_all(&mut self.data, remote, local, self.is_repl, max_parallel).await;
     }
 
     /// Deletes `path` on every host in parallel.
     pub async fn sftp_remove(&mut self, path: &Path) {
-        actions::sftp_remove_all(&mut self.data, path, self.is_repl).await;
+        let max_parallel = self.max_parallel;
+        actions::sftp_remove_all(&mut self.data, path, self.is_repl, max_parallel).await;
     }
 
     /// Locks every host in the group for `comment`, best-effort.
@@ -379,11 +400,13 @@ impl HostsGroup {
     /// one contended host never aborts the fan-out. Other transport errors are
     /// logged, not propagated.
     pub async fn lock(&mut self, comment: &str) {
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("lock"),
             |_t| true,
             |t| {
@@ -410,11 +433,13 @@ impl HostsGroup {
     /// [`Target::unlock`] (which already suppresses [`HostError::TargetLocked`]
     /// for a foreign lock), so a contended host never aborts the fan-out.
     pub async fn unlock(&mut self) {
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("unlock"),
             |_t| true,
             |t| Box::pin(async move { t.unlock(false).await }) as actions::BoxTargetFut<'_>,
@@ -429,11 +454,13 @@ impl HostsGroup {
     /// a claim owned by another template), so one contended host never aborts
     /// the fan-out. `force` removes claims owned by other templates too.
     pub async fn pool_unlock(&mut self, force: bool) {
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("pool_unlock"),
             |_t| true,
             |t| Box::pin(async move { t.pool_unlock(force).await }) as actions::BoxTargetFut<'_>,
@@ -463,13 +490,15 @@ impl HostsGroup {
     pub async fn close(&mut self, action: Option<&str>) -> BTreeMap<String, Result<()>> {
         use std::sync::Mutex;
 
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         let action = action.map(str::to_owned);
         let collected: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("close"),
             |_t| true,
             |t| {
@@ -509,11 +538,13 @@ impl HostsGroup {
         // `(system, row)` is collected keyed by hostname, so the drain below is
         // deterministically sorted regardless of completion order.
         let collected: Mutex<BTreeMap<String, (System, LockRow)>> = Mutex::new(BTreeMap::new());
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("report_locks"),
             |_t| true,
             |t| {
@@ -586,11 +617,13 @@ impl HostsGroup {
     /// The per-host `last*` state is left in place so a caller can inspect
     /// `lasterr()` after the fan-out (upstream's prepare abort-on-`lasterr`).
     pub async fn fanout_set_repo(&mut self, operation: RepoOp, report: &dyn SetRepo) {
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("set_repo"),
             |_t| true,
             |t| {
@@ -629,11 +662,13 @@ impl HostsGroup {
     /// Ports upstream `HostsGroup.add_history`: fans [`Target::add_history`] out
     /// across the group (enabled hosts only, best-effort per host).
     pub async fn add_history(&mut self, fields: &[String]) {
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("add_history"),
             |_t| true,
             |t| {
@@ -652,11 +687,13 @@ impl HostsGroup {
     /// together, serial hosts one at a time behind the Enter barrier), so the
     /// pure per-package bookkeeping that follows never blocks on serial I/O.
     pub async fn query_versions(&mut self) {
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("query_versions"),
             |_t| true,
             |t| Box::pin(async move { t.query_versions().await }) as actions::BoxTargetFut<'_>,
@@ -758,11 +795,13 @@ impl HostsGroup {
         // shared `skipped` flag. The per-host lock wire semantics are unchanged
         // — only the fan-out is now concurrent (Contract preserved).
         let skipped = AtomicBool::new(false);
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("update_lock"),
             |_t| true,
             |target| {
@@ -854,7 +893,8 @@ impl HostsGroup {
         }
         let names: Vec<String> = self.data.keys().cloned().collect();
         tracing::info!(hosts = %names.join(", "), "Rebooting");
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
 
         // Phase 1: record boot ids before rebooting (concurrently), so we can
         // confirm a fresh boot afterwards.
@@ -863,6 +903,7 @@ impl HostsGroup {
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("boot_id"),
             |_t| true,
             |t| {
@@ -884,6 +925,7 @@ impl HostsGroup {
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("reboot"),
             |_t| true,
             |t| {
@@ -898,6 +940,7 @@ impl HostsGroup {
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("reconnect"),
             |_t| true,
             |t| {
@@ -917,6 +960,7 @@ impl HostsGroup {
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("verify_reboot"),
             |_t| true,
             |t| {
@@ -953,7 +997,8 @@ impl HostsGroup {
             hosts = %names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
             "Rebooting transactional hosts"
         );
-        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
+        let (is_repl, prompter, max_parallel) =
+            (self.is_repl, self.prompter.clone(), self.max_parallel);
 
         // Fire the reboot on every named host first (it drops the connection),
         // then reconnect each once it is back up — both phases fan out
@@ -963,6 +1008,7 @@ impl HostsGroup {
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("reboot"),
             |t| reboot.contains_key(t.hostname()),
             |t| {
@@ -975,6 +1021,7 @@ impl HostsGroup {
             &mut self.data,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("reconnect"),
             |t| reboot.contains_key(t.hostname()),
             |t| {
@@ -1160,6 +1207,39 @@ mod tests {
         assert!(g.get_mut("h1").is_some());
         assert!(g.get_mut("nope").is_none());
         assert_eq!(g.targets().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_honors_max_parallel_and_still_runs_every_host() {
+        // With a small configured bound, a many-host command must still reach
+        // every host (correctness under the bound). The peak-concurrency cap
+        // itself is asserted deterministically on the `run_parallel` primitive
+        // in `actions::tests`; here we prove the group forwards the bound and
+        // does not drop hosts.
+        let mocks: Vec<MockConnection> = (0..12).map(|i| echo(&format!("h{i:02}"))).collect();
+        let handles: Vec<MockConnection> = mocks.to_vec();
+        let targets: Vec<Target> = mocks
+            .into_iter()
+            .enumerate()
+            .map(|(i, m)| {
+                Target::with_connection(
+                    format!("h{i:02}"),
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(m),
+                )
+            })
+            .collect();
+        let mut g = HostsGroup::new(targets, false);
+        g.set_max_parallel(3);
+        g.run("uptime").await;
+        for (i, h) in handles.iter().enumerate() {
+            assert_eq!(
+                h.commands(),
+                vec!["uptime".to_owned()],
+                "h{i:02} should have run once"
+            );
+        }
     }
 
     // --- add / remove ------------------------------------------------------

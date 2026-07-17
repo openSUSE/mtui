@@ -585,7 +585,23 @@ impl Session {
                 pool_claims_ref.contains(host),
             )
         });
-        let connected = futures::future::join_all(connect_futs).await;
+        // Bound the connect fan-out to `[connection] max_parallel` so attaching a
+        // large fleet caps peak concurrent SSH handshakes/sockets/tasks rather
+        // than opening one per host at once. The per-host connect futures borrow
+        // `&config`/`&store` (a spawn-free in-place fan-out), which does not fit
+        // `buffer_unordered`'s stream bounds; chunk the iterator into batches of
+        // `bound` and `join_all` each batch instead. This caps peak concurrency
+        // at `bound` while keeping the exact per-batch `join_all` semantics.
+        // Completion/order within a batch is irrelevant: results fold into a
+        // sorted `BTreeMap` group below.
+        let bound = (config.max_parallel as usize).max(1);
+        let connect_futs: Vec<_> = connect_futs.collect();
+        let mut connected = Vec::with_capacity(connect_futs.len());
+        let mut iter = connect_futs.into_iter().peekable();
+        while iter.peek().is_some() {
+            let batch: Vec<_> = iter.by_ref().take(bound).collect();
+            connected.extend(futures::future::join_all(batch).await);
+        }
 
         let mut drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
         // Track which hosts connected so the pool-backup step (below) can tell

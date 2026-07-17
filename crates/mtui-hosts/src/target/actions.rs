@@ -39,11 +39,16 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use mtui_types::enums::ExecutionMode;
 
 use super::Target;
 use crate::prompter::Prompter;
+
+/// Fallback fan-out width when a caller passes `0` (unconfigured). Mirrors the
+/// `[connection] max_parallel` default in `mtui-config`; kept as a local
+/// constant so `mtui-hosts` needs no dependency on `mtui-config`.
+const DEFAULT_MAX_PARALLEL: usize = 50;
 
 /// Drives every future in `futures` to completion concurrently.
 ///
@@ -59,7 +64,15 @@ use crate::prompter::Prompter;
 /// their own errors (the upstream `-1`-sentinel / log-not-propagate contract),
 /// so one bad host can never abort the fan-out. `run_parallel` therefore has no
 /// error to propagate and returns `()`.
-pub async fn run_parallel<I, F>(futures: I, desc: Option<&str>)
+///
+/// `max_parallel` bounds how many futures are polled at once (peak
+/// sockets/tasks/RSS and remote load); `0` falls back to
+/// [`DEFAULT_MAX_PARALLEL`]. Completion order is irrelevant to every caller (the
+/// group is a sorted `BTreeMap` and per-host results attach to disjoint `&mut
+/// Target` borrows), so a bounded, out-of-order scheduler
+/// (`buffer_unordered`) is observably equivalent to the previous unbounded
+/// `join_all`.
+pub async fn run_parallel<I, F>(futures: I, desc: Option<&str>, max_parallel: usize)
 where
     I: IntoIterator<Item = F>,
     F: std::future::Future<Output = ()>,
@@ -68,6 +81,11 @@ where
     if futs.is_empty() {
         return;
     }
+    let bound = if max_parallel == 0 {
+        DEFAULT_MAX_PARALLEL
+    } else {
+        max_parallel
+    };
     // Drive a labelled spinner for the batch; `TtySpinner` is a no-op off a TTY,
     // so this stays silent in tests / MCP. Dropping it (or the explicit `stop`)
     // erases the frame.
@@ -86,7 +104,10 @@ where
         );
         s
     });
-    join_all(futs).await;
+    stream::iter(futs)
+        .buffer_unordered(bound)
+        .for_each(|()| async {})
+        .await;
     if let Some(mut s) = spinner.take() {
         s.stop();
     }
@@ -128,6 +149,7 @@ pub async fn run_fanout<'t, S, F>(
     targets: &'t mut BTreeMap<String, Target>,
     is_repl: bool,
     prompter: Option<&Prompter>,
+    max_parallel: usize,
     desc: Option<&str>,
     mut should_run: S,
     op: F,
@@ -162,7 +184,12 @@ pub async fn run_fanout<'t, S, F>(
     // Parallel batch: each future borrows a distinct target mutably, so the
     // borrows are disjoint and need no shared lock.
     let parallel_futs: Vec<_> = parallel.into_iter().map(&op).collect();
-    run_parallel(parallel_futs, if is_repl { desc } else { None }).await;
+    run_parallel(
+        parallel_futs,
+        if is_repl { desc } else { None },
+        max_parallel,
+    )
+    .await;
 
     // Serial barrier: one host at a time. Under an interactive session with a
     // serialised prompter, ask the user to press Enter before each serial host
@@ -242,6 +269,7 @@ pub struct RunCommand<'a> {
     command: Command,
     is_repl: bool,
     prompter: Option<Prompter>,
+    max_parallel: usize,
 }
 
 impl<'a> RunCommand<'a> {
@@ -249,7 +277,9 @@ impl<'a> RunCommand<'a> {
     ///
     /// `prompter` is the session-level serialised [`Prompter`] (or `None` when
     /// headless); when present and `interactive` is set, the serial barrier
-    /// prompts before each serial host.
+    /// prompts before each serial host. The parallel-batch width defaults to
+    /// unconfigured (`0` → [`DEFAULT_MAX_PARALLEL`]); set it with
+    /// [`with_max_parallel`](Self::with_max_parallel).
     #[must_use]
     pub fn new(
         targets: &'a mut BTreeMap<String, Target>,
@@ -262,7 +292,16 @@ impl<'a> RunCommand<'a> {
             command: command.into(),
             is_repl,
             prompter,
+            max_parallel: 0,
         }
+    }
+
+    /// Sets the parallel-batch concurrency bound (builder-style). `0` falls back
+    /// to [`DEFAULT_MAX_PARALLEL`].
+    #[must_use]
+    pub fn with_max_parallel(mut self, max_parallel: usize) -> Self {
+        self.max_parallel = max_parallel;
+        self
     }
 
     /// Executes the command: parallel hosts concurrently, then serial hosts
@@ -278,12 +317,14 @@ impl<'a> RunCommand<'a> {
             command,
             is_repl,
             prompter,
+            max_parallel,
         } = self;
 
         run_fanout(
             targets,
             is_repl,
             prompter.as_ref(),
+            max_parallel,
             Some("run"),
             // `for_host` returning None means "skip" (upstream dict subset).
             |t: &Target| command.for_host(t.hostname()).is_some(),
@@ -310,6 +351,7 @@ pub async fn sftp_put_all(
     local: &Path,
     remote: &Path,
     is_repl: bool,
+    max_parallel: usize,
 ) {
     let desc = if is_repl { Some("FileUpload") } else { None };
     let local = local.to_path_buf();
@@ -318,7 +360,7 @@ pub async fn sftp_put_all(
         let (local, remote) = (local.clone(), remote.clone());
         async move { t.sftp_put(&local, &remote).await }
     });
-    run_parallel(futs, desc).await;
+    run_parallel(futs, desc, max_parallel).await;
 }
 
 /// Downloads `remote` into `local` (per-host suffixed) from every target in
@@ -331,6 +373,7 @@ pub async fn sftp_get_all(
     remote: &str,
     local: &Path,
     is_repl: bool,
+    max_parallel: usize,
 ) {
     let desc = if is_repl { Some("FileDownload") } else { None };
     let remote = remote.to_owned();
@@ -339,21 +382,26 @@ pub async fn sftp_get_all(
         let (remote, local) = (remote.clone(), local.clone());
         async move { t.sftp_get(&remote, &local).await }
     });
-    run_parallel(futs, desc).await;
+    run_parallel(futs, desc, max_parallel).await;
 }
 
 /// Deletes `path` on every target in parallel.
 ///
 /// Async equivalent of upstream `FileDelete`. Errors are swallowed and logged by
 /// [`Target::sftp_remove`]; this helper never fails.
-pub async fn sftp_remove_all(targets: &mut BTreeMap<String, Target>, path: &Path, is_repl: bool) {
+pub async fn sftp_remove_all(
+    targets: &mut BTreeMap<String, Target>,
+    path: &Path,
+    is_repl: bool,
+    max_parallel: usize,
+) {
     let desc = if is_repl { Some("FileDelete") } else { None };
     let path = path.to_path_buf();
     let futs = targets.values_mut().map(|t| {
         let path = path.clone();
         async move { t.sftp_remove(&path).await }
     });
-    run_parallel(futs, desc).await;
+    run_parallel(futs, desc, max_parallel).await;
 }
 
 #[cfg(test)]
@@ -390,7 +438,7 @@ mod tests {
     async fn run_parallel_empty_is_noop() {
         // An empty future set returns immediately without panicking.
         let futs: Vec<std::future::Ready<()>> = Vec::new();
-        run_parallel(futs, Some("desc")).await;
+        run_parallel(futs, Some("desc"), 0).await;
     }
 
     #[tokio::test]
@@ -404,8 +452,92 @@ mod tests {
                 }
             })
             .collect();
-        run_parallel(futs, None).await;
+        run_parallel(futs, None, 0).await;
         assert_eq!(counter.load(Ordering::SeqCst), 5);
+    }
+
+    /// Peak in-flight concurrency never exceeds the configured bound, and every
+    /// future still runs. Each future increments a live counter, records the
+    /// running peak, yields so siblings can enter, then decrements — so with an
+    /// unbounded scheduler the peak would reach N.
+    #[tokio::test]
+    async fn run_parallel_caps_peak_concurrency() {
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let ran = Arc::new(AtomicUsize::new(0));
+        let n = 50usize;
+        let bound = 4usize;
+        let futs: Vec<_> = (0..n)
+            .map(|_| {
+                let (live, peak, ran) = (Arc::clone(&live), Arc::clone(&peak), Arc::clone(&ran));
+                async move {
+                    let cur = live.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(cur, Ordering::SeqCst);
+                    // Yield repeatedly so all admitted futures overlap before any
+                    // completes — maximising the observed peak for the assert.
+                    for _ in 0..8 {
+                        tokio::task::yield_now().await;
+                    }
+                    ran.fetch_add(1, Ordering::SeqCst);
+                    live.fetch_sub(1, Ordering::SeqCst);
+                }
+            })
+            .collect();
+        run_parallel(futs, None, bound).await;
+        assert_eq!(ran.load(Ordering::SeqCst), n, "every future must run");
+        assert!(
+            peak.load(Ordering::SeqCst) <= bound,
+            "peak {} exceeded bound {bound}",
+            peak.load(Ordering::SeqCst)
+        );
+    }
+
+    /// A zero bound falls back to the conservative default rather than stalling.
+    #[tokio::test]
+    async fn run_parallel_zero_bound_uses_default_and_runs_all() {
+        let ran = Arc::new(AtomicUsize::new(0));
+        let futs: Vec<_> = (0..DEFAULT_MAX_PARALLEL + 10)
+            .map(|_| {
+                let ran = Arc::clone(&ran);
+                async move {
+                    ran.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .collect();
+        run_parallel(futs, None, 0).await;
+        assert_eq!(ran.load(Ordering::SeqCst), DEFAULT_MAX_PARALLEL + 10);
+    }
+
+    /// Dropping the fan-out future mid-flight cancels the un-admitted and
+    /// in-flight work: futures beyond the bound never start, and the whole batch
+    /// does not complete. Proven by counting how many futures *started* vs `n`.
+    #[tokio::test]
+    async fn run_parallel_cancellation_stops_pending_work() {
+        let started = Arc::new(AtomicUsize::new(0));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let n = 40usize;
+        let bound = 4usize;
+        let futs: Vec<_> = (0..n)
+            .map(|_| {
+                let (started, completed) = (Arc::clone(&started), Arc::clone(&completed));
+                async move {
+                    started.fetch_add(1, Ordering::SeqCst);
+                    // Never resolves within the test window.
+                    futures::future::pending::<()>().await;
+                    completed.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .collect();
+        // Drive the fan-out only briefly, then drop it (cancel).
+        let fut = run_parallel(futs, None, bound);
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(20), fut).await;
+        // At most `bound` futures were ever admitted; none completed (all pend).
+        assert!(
+            started.load(Ordering::SeqCst) <= bound,
+            "more than the bound ({bound}) futures started: {}",
+            started.load(Ordering::SeqCst)
+        );
+        assert_eq!(completed.load(Ordering::SeqCst), 0, "none should complete");
     }
 
     // --- Command resolution -------------------------------------------------
@@ -559,7 +691,14 @@ mod tests {
             target("h2", ExecutionMode::Parallel, m2),
         ]);
 
-        sftp_put_all(&mut g, Path::new("/local/f"), Path::new("/remote/f"), false).await;
+        sftp_put_all(
+            &mut g,
+            Path::new("/local/f"),
+            Path::new("/remote/f"),
+            false,
+            0,
+        )
+        .await;
 
         for h in [&h1, &h2] {
             assert!(matches!(
@@ -576,7 +715,7 @@ mod tests {
         let h1 = m1.clone();
         let mut g = group(vec![target("h1", ExecutionMode::Parallel, m1)]);
 
-        sftp_get_all(&mut g, "/remote/f", Path::new("/local/f"), false).await;
+        sftp_get_all(&mut g, "/remote/f", Path::new("/local/f"), false, 0).await;
 
         // Target::sftp_get appends `.{hostname}` to a non-folder local path.
         assert!(matches!(
@@ -595,7 +734,7 @@ mod tests {
             target("h2", ExecutionMode::Parallel, m2),
         ]);
 
-        sftp_remove_all(&mut g, Path::new("/remote/f"), false).await;
+        sftp_remove_all(&mut g, Path::new("/remote/f"), false, 0).await;
 
         for h in [&h1, &h2] {
             assert!(matches!(

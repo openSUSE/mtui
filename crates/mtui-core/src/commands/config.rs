@@ -23,6 +23,7 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "chdir_to_template_dir" => config.chdir_to_template_dir.to_string(),
         "ssl_verify" => ssl_verify_to_string(&config.ssl_verify),
         "connection_timeout" => config.connection_timeout.to_string(),
+        "max_parallel" => config.max_parallel.to_string(),
         "ssh_strict_host_key_checking" => config.ssh_strict_host_key_checking.clone(),
         "refhosts_resolvers" => config.refhosts_resolvers.clone(),
         "refhosts_https_uri" => config.refhosts_https_uri.clone(),
@@ -82,7 +83,7 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 28] = [
+const ATTRS: [&str; 29] = [
     "template_dir",
     "local_tempdir",
     "session_user",
@@ -90,6 +91,7 @@ const ATTRS: [&str; 28] = [
     "chdir_to_template_dir",
     "ssl_verify",
     "connection_timeout",
+    "max_parallel",
     "ssh_strict_host_key_checking",
     "refhosts_resolvers",
     "refhosts_https_uri",
@@ -149,6 +151,7 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "lock_reap_stale" => config.lock_reap_stale = parse_bool(raw)?,
         "lock_pi_autolock" => config.lock_pi_autolock = parse_bool(raw)?,
         "connection_timeout" => config.connection_timeout = parse_u64(raw)?,
+        "max_parallel" => config.max_parallel = parse_u64(raw)?,
         "refhosts_https_expiration" => config.refhosts_https_expiration = parse_u64(raw)?,
         "lock_stale_age" => config.lock_stale_age = parse_u64(raw)?,
         "lock_wait" => config.lock_wait = parse_u64(raw)?,
@@ -416,6 +419,18 @@ mod tests {
         let args = matches(&ConfigCmd, &["set", "session_user", "bob"]);
         ConfigCmd.call(&mut session, &args).await.unwrap();
         assert_eq!(session.config.session_user, "bob");
+    }
+
+    #[tokio::test]
+    async fn set_and_show_max_parallel_roundtrips() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&ConfigCmd, &["set", "max_parallel", "8"]);
+        ConfigCmd.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.config.max_parallel, 8);
+        assert_eq!(
+            attr_value(&session.config, "max_parallel").as_deref(),
+            Some("8")
+        );
     }
 
     #[tokio::test]

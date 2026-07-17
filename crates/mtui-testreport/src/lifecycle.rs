@@ -124,6 +124,7 @@ pub async fn make_testreport(
 ) -> Box<dyn TestReport + Send + Sync> {
     let template_dir = config.template_dir.clone();
     let svn_path = config.svn_path.clone();
+    let max_parallel = config.max_parallel as usize;
     let mut report = tr_factory(update, config);
 
     let rrid_dir = template_dir.join(update.id.to_string());
@@ -280,6 +281,9 @@ pub async fn make_testreport(
     // it is never toggled afterwards. Empty group here, so this only sets the flag
     // that every later `add` / fan-out (spinner + serial-barrier prompt) reads.
     report.base_mut().targets.set_is_repl(is_repl);
+    // Push the configured fan-out bound (`[connection] max_parallel`) onto the
+    // group alongside the session mode, so every later fan-out is bounded.
+    report.base_mut().targets.set_max_parallel(max_parallel);
 
     report
 }
