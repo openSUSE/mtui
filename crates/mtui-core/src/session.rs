@@ -12,8 +12,11 @@
 //! [`targets`](Session::targets), delegating to the active report so command
 //! bodies and tests keep working as the registry grows past one entry.
 
+use std::sync::Mutex;
+
 use mtui_config::Config;
-use mtui_datasources::http::VerifyPolicy;
+use mtui_datasources::HttpError;
+use mtui_datasources::http::{HttpClient, VerifyPolicy, resolve_verify};
 use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
 use mtui_hosts::{HostArbiter, HostError, HostsGroup, Owner, Prompter, Target};
 use mtui_testreport::{TestReport, UpdateKind, make_testreport};
@@ -78,12 +81,32 @@ pub struct Session {
     /// `None`, a command timeout aborts immediately and serial hosts run
     /// back-to-back.
     prompter: Option<Prompter>,
+    /// Test-only count of how many times [`http_client`](Self::http_client)
+    /// actually *built* a client (vs. handing back a cached clone). The
+    /// regression oracle for perf bead `mtui-rs-0mop.13`: proves back-to-back
+    /// calls under stable config reuse one client, and that a mid-session
+    /// posture change rebuilds exactly once.
+    #[cfg(test)]
+    http_builds: std::sync::atomic::AtomicUsize,
     /// Per-slot candidate shuffle (upstream `random.shuffle`), so pool selection
     /// spreads load across interchangeable refhosts instead of always taking the
     /// first in `refhosts.yml` order. Defaults to a real random shuffle; tests
     /// override it with the identity ([`set_shuffle`](Self::set_shuffle)) for
     /// deterministic assertions.
     shuffle: ShuffleFn,
+    /// Lazily-built, session-scoped outbound [`HttpClient`], cached with the
+    /// [`VerifyPolicy`] it was built under.
+    ///
+    /// Every datasource-touching command historically built a fresh
+    /// [`HttpClient`] per invocation; because `reqwest` fixes TLS and owns its
+    /// connection pool at build time, that meant a cold pool per command (no
+    /// cross-command keep-alive reuse). [`http_client`](Self::http_client) builds
+    /// one on first use and hands out cheap `Arc`-backed clones thereafter,
+    /// rebuilding only when the effective posture changes (e.g. a mid-session
+    /// `config set ssl_verify`). Interior mutability so the `&Session` call sites
+    /// (`export::build_http`) can lazily populate it; the lock is uncontended
+    /// (one dispatch at a time). Perf bead `mtui-rs-0mop.13`.
+    http_client: Mutex<Option<(VerifyPolicy, HttpClient)>>,
 }
 
 /// A candidate-order shuffle seam (upstream `random.shuffle`). Mutates the slot's
@@ -171,6 +194,9 @@ impl Session {
             notify_sink: None,
             prompter: None,
             shuffle: random_shuffle,
+            http_client: Mutex::new(None),
+            #[cfg(test)]
+            http_builds: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -188,6 +214,9 @@ impl Session {
             notify_sink: None,
             prompter: None,
             shuffle: random_shuffle,
+            http_client: Mutex::new(None),
+            #[cfg(test)]
+            http_builds: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -195,6 +224,52 @@ impl Session {
     /// `|_| {}` (identity) makes pool selection deterministic.
     pub fn set_shuffle(&mut self, shuffle: ShuffleFn) {
         self.shuffle = shuffle;
+    }
+
+    /// The session-scoped outbound [`HttpClient`], built lazily and reused.
+    ///
+    /// The effective [`VerifyPolicy`] is resolved from `config.ssl_verify` (the
+    /// same `resolve_verify(Default(true), Some(from_config(..)))` seam every
+    /// datasource command used inline). The first call builds a client; later
+    /// calls return a cheap `Arc`-backed clone of the cached one, so
+    /// back-to-back commands reuse a single `reqwest` connection pool instead of
+    /// churning a cold pool per invocation. If a mid-session `config set
+    /// ssl_verify` changes the posture, the next call rebuilds under the new
+    /// policy — the cache is keyed on the policy it was built with, so TLS
+    /// behaviour never goes stale.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`HttpError`] when the client cannot be built (e.g. a
+    /// configured CA bundle cannot be read); callers map it onto their own error
+    /// type exactly as the previous inline `HttpClient::new` did.
+    pub fn http_client(&self) -> Result<HttpClient, HttpError> {
+        let policy = resolve_verify(
+            VerifyPolicy::Default(true),
+            Some(VerifyPolicy::from_config(&self.config.ssl_verify)),
+        );
+        let mut cache = self
+            .http_client
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((cached_policy, client)) = cache.as_ref()
+            && *cached_policy == policy
+        {
+            return Ok(client.clone());
+        }
+        let client = HttpClient::new(policy.clone())?;
+        #[cfg(test)]
+        self.http_builds
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *cache = Some((policy, client.clone()));
+        Ok(client)
+    }
+
+    /// Test-only count of clients actually built by
+    /// [`http_client`](Self::http_client) (perf-bead `mtui-rs-0mop.13` oracle).
+    #[cfg(test)]
+    fn http_builds(&self) -> usize {
+        self.http_builds.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The active report (upstream `prompt.metadata`). Never `None` — the
@@ -1202,6 +1277,34 @@ mod tests {
         assert!(!s.metadata().is_loaded());
         assert!(s.templates.is_empty());
         assert_eq!(s.metadata().id(), "");
+    }
+
+    /// Perf-bead `mtui-rs-0mop.13` oracle: repeated `http_client()` calls under
+    /// a stable `ssl_verify` reuse one built client (a cheap clone), and a
+    /// mid-session posture change rebuilds exactly once. Guards against a
+    /// regression to per-command client construction.
+    #[test]
+    fn http_client_is_reused_and_rebuilt_on_posture_change() {
+        use mtui_config::SslVerify;
+
+        let mut s = Session::new(config(), true);
+        assert_eq!(s.http_builds(), 0, "no client until first use");
+
+        // First use builds; three more calls with unchanged config reuse it.
+        let c0 = s.http_client().expect("client builds");
+        for _ in 0..3 {
+            let _ = s.http_client().expect("cached clone");
+        }
+        assert_eq!(s.http_builds(), 1, "one build shared across four calls");
+        drop(c0);
+
+        // Flipping ssl_verify changes the resolved policy -> exactly one rebuild.
+        s.config.ssl_verify = SslVerify::Disabled;
+        let _ = s.http_client().expect("rebuild under new posture");
+        assert_eq!(s.http_builds(), 2, "posture change rebuilds once");
+        // ...and the new posture is then itself reused, not rebuilt again.
+        let _ = s.http_client().expect("cached clone of new posture");
+        assert_eq!(s.http_builds(), 2, "no rebuild while posture stable");
     }
 
     #[test]

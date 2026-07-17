@@ -11,8 +11,7 @@ use mtui_types::Workflow;
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{
-    build_auto_openqa, build_incident, build_kernel_openqa, config_verify_policy, require_update,
-    template_completion,
+    build_auto_openqa, build_incident, build_kernel_openqa, require_update, template_completion,
 };
 use crate::error::{CommandError, CommandResult};
 use crate::session::{LogLevel, Session};
@@ -126,13 +125,15 @@ impl Command for SetWorkflow {
             .ok_or_else(|| CommandError::Other("workflow is required".to_owned()))?;
 
         // Snapshot config primitives so no `&Session` borrow crosses `.await`.
-        let policy = config_verify_policy(session);
+        let http = session
+            .http_client()
+            .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let openqa_instance = session.config.openqa_instance.clone();
         let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
         let current = session.metadata().workflow();
 
-        let incident = build_incident(rrid.clone(), dashboard_api, policy.clone()).await?;
+        let incident = build_incident(rrid.clone(), dashboard_api, http.clone()).await;
 
         match desired {
             Workflow::Kernel => {
@@ -155,7 +156,7 @@ impl Command for SetWorkflow {
                 let mut kernel = Vec::new();
                 for host in [openqa_instance, openqa_baremetal] {
                     kernel.push(
-                        build_kernel_openqa(&incident, &host, policy.clone())?
+                        build_kernel_openqa(&incident, &host, http.clone())
                             .run()
                             .await,
                     );
@@ -390,17 +391,15 @@ mod tests {
         point_at(&mut session, &server);
         // Pre-seed a kernel result to prove it gets cleared.
         let rrid = session.metadata().rrid().unwrap().clone();
-        let policy = config_verify_policy(&session);
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let host = session.config.openqa_instance.clone();
-        let incident = build_incident(rrid, dashboard_api, policy.clone())
-            .await
-            .unwrap();
+        let http = session.http_client().unwrap();
+        let incident = build_incident(rrid, dashboard_api, http.clone()).await;
         session
             .metadata_mut()
             .openqa_mut()
             .kernel
-            .push(build_kernel_openqa(&incident, &host, policy).unwrap());
+            .push(build_kernel_openqa(&incident, &host, http));
 
         let args = matches(&SetWorkflow, &["manual"]);
         SetWorkflow.call(&mut session, &args).await.unwrap();

@@ -2,11 +2,11 @@
 
 use async_trait::async_trait;
 use clap::ArgMatches;
-use mtui_datasources::TeReGen;
 
 use crate::command::{Command, Scope};
+use crate::commands::apicall::teregen_client;
 use crate::commands::support::{require_update, template_completion};
-use crate::error::{CommandError, CommandResult};
+use crate::error::CommandResult;
 use crate::session::Session;
 
 /// Checker result strings that count as success (everything else renders red).
@@ -42,8 +42,7 @@ impl Command for Checkers {
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
-        let teregen = TeReGen::new(&session.config, &session.config.teregen_api)
-            .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+        let teregen = teregen_client(session)?;
 
         let checkers = teregen.checkers(&rrid.to_string()).await;
         let entries = checkers.as_ref().and_then(serde_json::Value::as_array);
@@ -98,6 +97,7 @@ fn checker_fields(c: &serde_json::Value) -> (String, String) {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::error::CommandError;
     use mtui_config::Config;
 
     #[test]

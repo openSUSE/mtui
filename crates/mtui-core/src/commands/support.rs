@@ -10,7 +10,7 @@ use mtui_datasources::openqa::client::{ApiCredentials, ClientConf, OpenQAClient}
 use mtui_datasources::openqa::kernel::KernelOpenQA;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_datasources::qem_dashboard::incident::QemIncident;
-use mtui_datasources::{HttpClient, VerifyPolicy, resolve_verify};
+use mtui_datasources::{HttpClient, QemDashboardClient, VerifyPolicy, resolve_verify};
 use mtui_hosts::HostsGroup;
 use mtui_types::RequestReviewID;
 
@@ -31,21 +31,20 @@ pub fn config_verify_policy(session: &Session) -> VerifyPolicy {
 /// build on).
 ///
 /// Mirrors upstream, which constructs a single `QEMIncident(config, rrid)` and
-/// threads it into `DashboardAutoOpenQA` / `KernelOpenQA`. Takes plain values
-/// rather than `&Session` so callers never hold a (non-`Sync`) `Session` borrow
-/// across the `.await`.
-///
-/// # Errors
-///
-/// [`CommandError::Other`] when the shared HTTP client cannot be built.
+/// threads it into `DashboardAutoOpenQA` / `KernelOpenQA`. Takes an
+/// already-built [`HttpClient`] (obtain it once from
+/// [`Session::http_client`](crate::session::Session::http_client)) so the QEM
+/// dashboard fetch reuses the session connection pool instead of building a
+/// fresh client (perf bead `mtui-rs-0mop.13`), and plain values rather than
+/// `&Session` so callers never hold a (non-`Sync`) `Session` borrow across the
+/// `.await`.
 pub async fn build_incident(
     rrid: RequestReviewID,
     dashboard_api: String,
-    policy: VerifyPolicy,
-) -> Result<QemIncident, CommandError> {
-    QemIncident::new(rrid, dashboard_api, policy)
-        .await
-        .map_err(|e| CommandError::Other(format!("could not query QEM Dashboard: {e}")))
+    http: HttpClient,
+) -> QemIncident {
+    let client = QemDashboardClient::with_client(http, dashboard_api);
+    QemIncident::with_client(rrid, client).await
 }
 
 /// Builds a fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow on
@@ -67,16 +66,12 @@ pub fn build_auto_openqa(
 /// Resolves openQA API credentials from the standard `client.conf` search
 /// paths, keyed on the instance host. Call [`KernelOpenQA::run`] to populate it.
 ///
-/// # Errors
-///
-/// [`CommandError::Other`] when the shared HTTP client cannot be built.
-pub fn build_kernel_openqa(
-    incident: &QemIncident,
-    host: &str,
-    policy: VerifyPolicy,
-) -> Result<KernelOpenQA, CommandError> {
-    let http = HttpClient::new(policy)
-        .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
+/// Takes an already-built [`HttpClient`] (obtain it once from
+/// [`Session::http_client`](crate::session::Session::http_client)) so a
+/// per-host loop reuses one connection pool instead of building a fresh client
+/// per instance (perf bead `mtui-rs-0mop.13`).
+#[must_use]
+pub fn build_kernel_openqa(incident: &QemIncident, host: &str, http: HttpClient) -> KernelOpenQA {
     let server = host
         .rsplit("://")
         .next()
@@ -85,7 +80,7 @@ pub fn build_kernel_openqa(
     let creds: ApiCredentials = ApiCredentials::resolve(&ClientConf::load(), server, host);
     let client = OpenQAClient::new(http, host.to_owned(), creds);
     let base = OpenQABase::new(client, &incident.rrid, incident);
-    Ok(KernelOpenQA::new(base))
+    KernelOpenQA::new(base)
 }
 
 /// Guards a command body that requires a loaded update (upstream

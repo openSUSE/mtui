@@ -2,10 +2,11 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
-use mtui_datasources::{TeReGen, UpdatesQuery};
+use mtui_datasources::UpdatesQuery;
 
 use crate::command::{Command, Scope};
-use crate::error::{CommandError, CommandResult};
+use crate::commands::apicall::teregen_client;
+use crate::error::CommandResult;
 use crate::session::Session;
 
 /// The `--status` value that widens the queue to every status (upstream
@@ -132,8 +133,7 @@ impl Command for Updates {
         // Show the assignee column whenever assignment is part of the view.
         let want_assignment = assignee.is_some() || unassigned || all_assignees;
 
-        let teregen = TeReGen::new(&session.config, &session.config.teregen_api)
-            .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+        let teregen = teregen_client(session)?;
         let query = UpdatesQuery {
             review_group: review_group.as_deref(),
             status: status.as_deref(),

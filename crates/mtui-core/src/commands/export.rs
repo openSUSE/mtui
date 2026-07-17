@@ -4,15 +4,15 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::{HttpClient, VerifyPolicy, resolve_verify};
+use mtui_datasources::HttpClient;
 use mtui_testreport::{
     AutoExport, DenyOverwrite, ExportContext, FileList, KernelExport, ManualExport, ManualHost,
 };
 use mtui_types::Workflow;
 
 use super::support::{
-    add_hosts_arg, build_auto_openqa, build_incident, config_verify_policy, named_hosts,
-    require_update, select_names, template_completion,
+    add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_update, select_names,
+    template_completion,
 };
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -111,10 +111,10 @@ impl Command for Export {
         // and select the connected-host results to fold in (report_results).
         let (manual_results, manual_overview) = if workflow == Workflow::Manual {
             if session.metadata().openqa().auto.is_none() {
-                let policy = config_verify_policy(session);
+                let http = build_http(session)?;
                 let dashboard_api = session.config.qem_dashboard_api.clone();
                 let openqa_instance = session.config.openqa_instance.clone();
-                let incident = build_incident(rrid.clone(), dashboard_api, policy).await?;
+                let incident = build_incident(rrid.clone(), dashboard_api, http).await;
                 let mut auto = build_auto_openqa(openqa_instance, &incident, rrid.clone());
                 auto.run().await;
                 session.metadata_mut().openqa_mut().auto = Some(auto);
@@ -168,13 +168,11 @@ impl Command for Export {
     }
 }
 
-/// Builds a verifying HTTP client from the session config (log-download seam).
+/// Borrows the session-scoped HTTP client for log downloads (perf bead
+/// `mtui-rs-0mop.13`: reuse one client/pool across commands).
 fn build_http(session: &Session) -> Result<HttpClient, CommandError> {
-    let verify = resolve_verify(
-        VerifyPolicy::Default(true),
-        Some(VerifyPolicy::from_config(&session.config.ssl_verify)),
-    );
-    HttpClient::new(verify)
+    session
+        .http_client()
         .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))
 }
 
@@ -330,7 +328,7 @@ mod tests {
     /// Regression guard for the `Vec::new(), None` stub.
     #[tokio::test]
     async fn kernel_reads_holder_and_renders_matrix() {
-        use mtui_datasources::VerifyPolicy;
+        use mtui_datasources::{HttpClient, VerifyPolicy};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -359,21 +357,12 @@ mod tests {
 
         // Build a real, populated kernel connector against the mock and seed it.
         let rrid = session.metadata().rrid().unwrap().clone();
-        let incident = build_incident(
-            rrid.clone(),
-            format!("{}/api", oqa.uri()),
-            VerifyPolicy::Default(false),
-        )
-        .await
-        .unwrap();
-        let kernel = crate::commands::support::build_kernel_openqa(
-            &incident,
-            &oqa.uri(),
-            VerifyPolicy::Default(false),
-        )
-        .unwrap()
-        .run()
-        .await;
+        let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
+        let incident =
+            build_incident(rrid.clone(), format!("{}/api", oqa.uri()), http.clone()).await;
+        let kernel = crate::commands::support::build_kernel_openqa(&incident, &oqa.uri(), http)
+            .run()
+            .await;
         assert!(
             kernel.results().is_some_and(|r| !r.is_empty()),
             "mock kernel connector should populate"
@@ -453,10 +442,8 @@ mod tests {
         // Pre-seed an auto result via a throwaway dashboard.
         let server = dashboard_server("1").await;
         let rrid = session.metadata().rrid().unwrap().clone();
-        let policy = config_verify_policy(&session);
-        let incident = build_incident(rrid.clone(), format!("{}/api", server.uri()), policy)
-            .await
-            .unwrap();
+        let http = session.http_client().unwrap();
+        let incident = build_incident(rrid.clone(), format!("{}/api", server.uri()), http).await;
         session.metadata_mut().openqa_mut().auto =
             Some(build_auto_openqa(server.uri(), &incident, rrid));
 

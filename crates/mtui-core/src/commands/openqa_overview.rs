@@ -3,7 +3,6 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::oqa_search as oqa;
-use mtui_datasources::{HttpClient, VerifyPolicy, resolve_verify};
 use mtui_testreport::{FileList, inject_overview};
 
 use crate::command::{Command, Scope};
@@ -153,11 +152,8 @@ impl Command for OpenQAOverview {
             .cloned()
             .unwrap_or_else(|| derive_qam_url(&session.config.reports_url));
 
-        let verify = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&session.config.ssl_verify)),
-        );
-        let http = HttpClient::new(verify)
+        let http = session
+            .http_client()
             .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
 
         // incident_id is maintenance_id ("1.2" for SLFO); effective id falls back

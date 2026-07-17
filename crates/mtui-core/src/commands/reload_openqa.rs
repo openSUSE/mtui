@@ -6,10 +6,9 @@ use mtui_types::Workflow;
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{
-    build_auto_openqa, build_incident, build_kernel_openqa, config_verify_policy, require_update,
-    template_completion,
+    build_auto_openqa, build_incident, build_kernel_openqa, require_update, template_completion,
 };
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Reloads information from the openQA instances (upstream
@@ -48,19 +47,21 @@ impl Command for ReloadOpenQA {
         let rrid = require_update(session)?;
         // Snapshot the config primitives up front so no `&Session` borrow is
         // held across an `.await` (`Session` is not `Sync`).
-        let policy = config_verify_policy(session);
+        let http = session
+            .http_client()
+            .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let openqa_instance = session.config.openqa_instance.clone();
         let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
         let workflow = session.metadata().workflow();
 
-        let incident = build_incident(rrid.clone(), dashboard_api, policy.clone()).await?;
+        let incident = build_incident(rrid.clone(), dashboard_api, http.clone()).await;
 
         if workflow == Workflow::Kernel {
             if session.metadata().openqa().kernel.is_empty() {
                 tracing::info!("Getting data from kernel openQA");
                 for host in [openqa_instance.clone(), openqa_baremetal] {
-                    let oqa = build_kernel_openqa(&incident, &host, policy.clone())?
+                    let oqa = build_kernel_openqa(&incident, &host, http.clone())
                         .run()
                         .await;
                     session.metadata_mut().openqa_mut().kernel.push(oqa);
@@ -97,7 +98,6 @@ impl Command for ReloadOpenQA {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
-    use crate::error::CommandError;
 
     #[test]
     fn name_and_fanout_scope() {
@@ -171,12 +171,10 @@ mod tests {
 
         // Prime the holder so the "refresh" branch runs instead of "get".
         let rrid = session.metadata().rrid().unwrap().clone();
-        let policy = config_verify_policy(&session);
+        let http = session.http_client().unwrap();
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let openqa_instance = session.config.openqa_instance.clone();
-        let incident = build_incident(rrid.clone(), dashboard_api, policy)
-            .await
-            .unwrap();
+        let incident = build_incident(rrid.clone(), dashboard_api, http).await;
         session.metadata_mut().openqa_mut().auto =
             Some(build_auto_openqa(openqa_instance, &incident, rrid));
 

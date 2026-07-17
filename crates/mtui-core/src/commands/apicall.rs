@@ -9,7 +9,7 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::{Gitea, Osc, TeReGen};
+use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen};
 use mtui_types::RequestKind;
 
 use crate::command::{Command, Scope};
@@ -50,14 +50,46 @@ fn user_override(args: &ArgMatches) -> Option<String> {
 
 /// Builds a Gitea client for the loaded report, mapping the missing-PR-URL and
 /// build errors onto [`CommandError`].
+///
+/// Reuses the session-scoped [`HttpClient`](mtui_datasources::HttpClient) (perf
+/// bead `mtui-rs-0mop.13`) via [`Gitea::with_client`], while preserving
+/// [`Gitea::new`]'s empty-token guard.
 pub(crate) fn gitea_client(session: &Session) -> Result<Gitea, CommandError> {
     let apiurl = session
         .metadata()
         .giteaprapi()
         .ok_or_else(|| CommandError::Other("no Gitea PR API URL on this report".to_owned()))?
         .to_owned();
-    Gitea::new(&session.config, &apiurl, None)
-        .map_err(|e| CommandError::Other(format!("could not build Gitea client: {e}")))
+    if session.config.gitea_token.is_empty() {
+        return Err(CommandError::Other(format!(
+            "could not build Gitea client: {}",
+            GiteaError::MissingToken
+        )));
+    }
+    let http = session
+        .http_client()
+        .map_err(|e| CommandError::Other(format!("could not build Gitea client: {e}")))?;
+    Ok(Gitea::with_client(
+        http,
+        session.config.gitea_token.clone(),
+        session.config.session_user.clone(),
+        &apiurl,
+        None,
+    ))
+}
+
+/// Builds a TeReGen client for the loaded report, reusing the session-scoped
+/// [`HttpClient`](mtui_datasources::HttpClient) (perf bead `mtui-rs-0mop.13`)
+/// via [`TeReGen::with_client`].
+///
+/// # Errors
+///
+/// [`CommandError::Other`] when the shared HTTP client cannot be built.
+pub(crate) fn teregen_client(session: &Session) -> Result<TeReGen, CommandError> {
+    let http = session
+        .http_client()
+        .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+    Ok(TeReGen::with_client(http, &session.config.teregen_api))
 }
 
 /// Locks/unlocks the reference hosts around a PI action (upstream `_pi_autolock`).
@@ -98,7 +130,7 @@ pub(crate) async fn pi_autolock(session: &mut Session, action: PiAction) {
 /// failure to build the client is logged and ignored — it never fails the
 /// command.
 async fn show_priority_deadline(session: &mut Session, rrid: &mtui_types::RequestReviewID) {
-    let teregen = match TeReGen::new(&session.config, &session.config.teregen_api) {
+    let teregen = match teregen_client(session) {
         Ok(t) => t,
         Err(e) => {
             tracing::debug!("could not build TeReGen client: {e}");

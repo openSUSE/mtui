@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::oqa_search as oqa;
-use mtui_datasources::{HttpClient, VerifyPolicy, resolve_verify};
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, template_completion};
@@ -123,11 +122,8 @@ impl Command for OpenQAJobs {
                     .to_owned()
             });
 
-        let verify = resolve_verify(
-            VerifyPolicy::Default(true),
-            Some(VerifyPolicy::from_config(&session.config.ssl_verify)),
-        );
-        let http = HttpClient::new(verify)
+        let http = session
+            .http_client()
             .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
 
         // incident_id is maintenance_id (int for Maintenance, "1.2" for SLFO);

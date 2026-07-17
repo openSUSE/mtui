@@ -2,14 +2,14 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::TeReGen;
 use mtui_testreport::UpdateKind;
 use mtui_types::{UpdateID, Workflow};
 use tracing::info;
 
 use crate::command::{Command, Scope};
+use crate::commands::apicall::teregen_client;
 use crate::commands::support::{require_update, template_completion};
-use crate::error::{CommandError, CommandResult};
+use crate::error::CommandResult;
 use crate::session::Session;
 
 /// Regenerates the loaded update's test-report template via the TeReGen API.
@@ -77,8 +77,7 @@ impl Command for Regenerate {
         let ignore_inconsistent = args.get_flag("ignore_inconsistent");
         let no_wait = args.get_flag("no_wait");
 
-        let teregen = TeReGen::new(&session.config, &session.config.teregen_api)
-            .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
+        let teregen = teregen_client(session)?;
         let rrid_str = rrid.to_string();
 
         if no_wait {
@@ -242,6 +241,7 @@ fn println_retry_hint(session: &mut Session, force: bool, ignore_inconsistent: b
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::error::CommandError;
     use mtui_config::Config;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
