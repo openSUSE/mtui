@@ -147,6 +147,20 @@ pub trait Connection: Send + Sync {
     /// Returns an SFTP/transport error if the transfer fails.
     async fn sftp_put(&mut self, local: &Path, remote: &Path) -> Result<()>;
 
+    /// Transfers already-read bytes to the remote host over SFTP, with the same
+    /// parent-directory creation and `0770` executable contract as
+    /// [`sftp_put`](Self::sftp_put).
+    ///
+    /// This exists so a fan-out upload can read an immutable local payload
+    /// **once** and dispatch the shared bytes to every host, rather than
+    /// re-reading the same file per host. [`sftp_put`](Self::sftp_put) is the
+    /// convenience wrapper that reads `local` then calls this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the transfer fails.
+    async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) -> Result<()>;
+
     /// Transfers a remote file to the local host over SFTP.
     ///
     /// Mirrors upstream `Connection.sftp_get`.

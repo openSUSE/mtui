@@ -38,6 +38,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
 use mtui_types::enums::ExecutionMode;
@@ -49,6 +50,15 @@ use crate::prompter::Prompter;
 /// `[connection] max_parallel` default in `mtui-config`; kept as a local
 /// constant so `mtui-hosts` needs no dependency on `mtui-config`.
 const DEFAULT_MAX_PARALLEL: usize = 50;
+
+/// Upper bound (bytes) for reading an upload payload once into a shared buffer.
+///
+/// At or below this size the fan-out reads `local` a single time and dispatches
+/// the shared `Arc<[u8]>` to every host, so peak RSS is ~O(payload) rather than
+/// O(payload × hosts). Above it, each host streams the file from disk itself
+/// (per-host re-read) to keep memory bounded for very large uploads. mtui
+/// uploads are small test scripts, so the shared path is the common case.
+const SHARED_UPLOAD_CAP: u64 = 8 * 1024 * 1024;
 
 /// Drives every future in `futures` to completion concurrently.
 ///
@@ -354,13 +364,40 @@ pub async fn sftp_put_all(
     max_parallel: usize,
 ) {
     let desc = if is_repl { Some("FileUpload") } else { None };
-    let local = local.to_path_buf();
     let remote = remote.to_path_buf();
-    let futs = targets.values_mut().map(|t| {
-        let (local, remote) = (local.clone(), remote.clone());
-        async move { t.sftp_put(&local, &remote).await }
-    });
-    run_parallel(futs, desc, max_parallel).await;
+
+    // Read the immutable payload once when it is size-bounded, and dispatch the
+    // shared bytes to every host — a fan-out of N hosts then performs one disk
+    // read, not N. A file larger than the cap (or one whose size can't be
+    // stat'd) falls back to per-host streaming from disk.
+    let shared: Option<Arc<[u8]>> = match tokio::fs::metadata(local).await {
+        Ok(meta) if meta.len() <= SHARED_UPLOAD_CAP => match tokio::fs::read(local).await {
+            Ok(bytes) => Some(Arc::from(bytes.into_boxed_slice())),
+            Err(e) => {
+                tracing::error!(local = %local.display(), error = %e, "failed to read upload payload");
+                return;
+            }
+        },
+        _ => None,
+    };
+
+    match shared {
+        Some(bytes) => {
+            let futs = targets.values_mut().map(|t| {
+                let (bytes, remote) = (Arc::clone(&bytes), remote.clone());
+                async move { t.sftp_put_bytes(&bytes, &remote).await }
+            });
+            run_parallel(futs, desc, max_parallel).await;
+        }
+        None => {
+            let local = local.to_path_buf();
+            let futs = targets.values_mut().map(|t| {
+                let (local, remote) = (local.clone(), remote.clone());
+                async move { t.sftp_put(&local, &remote).await }
+            });
+            run_parallel(futs, desc, max_parallel).await;
+        }
+    }
 }
 
 /// Downloads `remote` into `local` (per-host suffixed) from every target in
@@ -706,6 +743,98 @@ mod tests {
                 [MockSftpOp::Put { local, remote }]
                     if local == Path::new("/local/f") && remote == Path::new("/remote/f")
             ));
+        }
+    }
+
+    #[tokio::test]
+    async fn sftp_put_all_reads_payload_once_and_shares_bytes() {
+        // A real, size-bounded file takes the read-once shared path: every host
+        // receives a `PutBytes` of the same length, and the file is read from
+        // disk a single time regardless of fleet size.
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("payload");
+        std::fs::write(&local, b"hello world").unwrap();
+
+        let (m1, m2, m3) = (echo("h1", ""), echo("h2", ""), echo("h3", ""));
+        let (h1, h2, h3) = (m1.clone(), m2.clone(), m3.clone());
+        let mut g = group(vec![
+            target("h1", ExecutionMode::Parallel, m1),
+            target("h2", ExecutionMode::Parallel, m2),
+            target("h3", ExecutionMode::Parallel, m3),
+        ]);
+
+        sftp_put_all(&mut g, &local, Path::new("/remote/f"), false, 0).await;
+
+        for h in [&h1, &h2, &h3] {
+            assert!(
+                matches!(
+                    h.sftp_ops().as_slice(),
+                    [MockSftpOp::PutBytes { len, remote }]
+                        if *len == b"hello world".len() && remote == Path::new("/remote/f")
+                ),
+                "each host must receive the shared payload via PutBytes, got {:?}",
+                h.sftp_ops()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sftp_put_all_streams_per_host_when_over_cap() {
+        // A file larger than the shared cap falls back to per-host streaming
+        // (`sftp_put(path)` → `Put`), keeping memory bounded for huge uploads.
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("big");
+        let big = vec![0u8; (SHARED_UPLOAD_CAP as usize) + 1];
+        std::fs::write(&local, &big).unwrap();
+
+        let (m1, m2) = (echo("h1", ""), echo("h2", ""));
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let mut g = group(vec![
+            target("h1", ExecutionMode::Parallel, m1),
+            target("h2", ExecutionMode::Parallel, m2),
+        ]);
+
+        sftp_put_all(&mut g, &local, Path::new("/remote/f"), false, 0).await;
+
+        for h in [&h1, &h2] {
+            assert!(
+                matches!(h.sftp_ops().as_slice(), [MockSftpOp::Put { .. }]),
+                "over-cap upload must stream per-host, got {:?}",
+                h.sftp_ops()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sftp_put_all_missing_payload_uploads_to_no_host() {
+        // A payload that can't be stat'd/read must not partially dispatch:
+        // the fan-out aborts before any host op. (Read-once error handling.)
+        let (m1, m2) = (echo("h1", ""), echo("h2", ""));
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let mut g = group(vec![
+            target("h1", ExecutionMode::Parallel, m1),
+            target("h2", ExecutionMode::Parallel, m2),
+        ]);
+
+        // Nonexistent path: metadata() → None branch → streaming `sftp_put`,
+        // whose per-host read fails and is swallowed. No PutBytes is dispatched.
+        sftp_put_all(
+            &mut g,
+            Path::new("/does/not/exist"),
+            Path::new("/r"),
+            false,
+            0,
+        )
+        .await;
+
+        for h in [&h1, &h2] {
+            assert!(
+                !h.sftp_ops()
+                    .iter()
+                    .any(|op| matches!(op, MockSftpOp::PutBytes { .. })),
+                "missing payload must never dispatch shared bytes, got {:?}",
+                h.sftp_ops()
+            );
         }
     }
 

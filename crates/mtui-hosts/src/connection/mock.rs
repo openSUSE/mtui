@@ -40,6 +40,15 @@ pub enum MockSftpOp {
         /// The remote destination path.
         remote: PathBuf,
     },
+    /// `sftp_put_bytes(data, remote)` — records the payload length (not the
+    /// bytes) and the destination, so a fan-out read-once test can assert that
+    /// N hosts each received the same-sized shared payload.
+    PutBytes {
+        /// The number of bytes dispatched.
+        len: usize,
+        /// The remote destination path.
+        remote: PathBuf,
+    },
     /// `sftp_get(remote, local)`.
     Get {
         /// The remote source path.
@@ -756,6 +765,14 @@ impl Connection for MockConnection {
         Ok(())
     }
 
+    async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) -> Result<()> {
+        self.record_sftp(MockSftpOp::PutBytes {
+            len: data.len(),
+            remote: remote.to_path_buf(),
+        });
+        Ok(())
+    }
+
     async fn sftp_get(&mut self, remote: &Path, local: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Get {
             remote: remote.to_path_buf(),
@@ -1087,6 +1104,21 @@ mod tests {
                     local: PathBuf::from("/tmp/b"),
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_put_bytes_records_len_and_remote() {
+        let mut conn = MockConnection::new("h1");
+        conn.sftp_put_bytes(b"payload", Path::new("/remote/a"))
+            .await
+            .expect("put bytes ok");
+        assert_eq!(
+            conn.sftp_ops(),
+            [MockSftpOp::PutBytes {
+                len: b"payload".len(),
+                remote: PathBuf::from("/remote/a"),
+            }]
         );
     }
 

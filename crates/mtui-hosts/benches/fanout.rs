@@ -10,7 +10,9 @@
 //!   the scaling curve of the current **unbounded** `join_all` parallel batch.
 //!   A flat curve until memory/scheduler pressure is the baseline for bounding
 //!   (0mop.2) and session reuse (0mop.3).
-//! - `sftp/put` / `sftp/get`: per-host SFTP fan-out cost (0mop.6).
+//! - `sftp/put` / `sftp/get`: per-host SFTP fan-out cost (0mop.6). `put` uses a
+//!   real size-bounded payload so it exercises the read-once shared-buffer path
+//!   (one disk read, shared bytes to every host) rather than per-host re-reads.
 //! - `history/append`: cost of recording one history entry vs. the size the log
 //!   already holds. Flat = the append primitive (0mop.5); a rising curve would
 //!   be the old read-rewrite emulation.
@@ -123,7 +125,11 @@ fn bench_fanout_run_bounded(c: &mut Criterion) {
 
 fn bench_sftp(c: &mut Criterion) {
     let rt = rt();
-    let local = Path::new("/tmp/mtui-bench-payload");
+    // A real, size-bounded payload so `sftp_put` exercises the read-once shared
+    // path (0mop.6): one disk read, shared `Arc<[u8]>` fanned to every host.
+    let payload = tempfile::NamedTempFile::new().expect("temp payload");
+    std::fs::write(payload.path(), vec![0u8; 4096]).expect("write payload");
+    let local = payload.path();
     let remote = Path::new("/tmp/mtui-bench-remote");
 
     let mut put = c.benchmark_group("sftp/put");

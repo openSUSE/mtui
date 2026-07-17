@@ -779,6 +779,39 @@ async fn sftp_get_folder_suffixes_with_hostname() {
     assert_eq!(got, b"data");
 }
 
+/// Many entries download under bounded concurrency: every file lands with the
+/// correct per-host suffix and content regardless of completion order. Guards
+/// the `buffer_unordered` folder path against dropping or misnaming entries.
+#[tokio::test]
+async fn sftp_get_folder_downloads_many_entries_with_correct_suffixes() {
+    let fs = SharedFs::default();
+    let names: Vec<String> = (0..12).map(|i| format!("f{i}.log")).collect();
+    {
+        let mut g = fs.lock().await;
+        g.dirs.insert("/logs".to_owned(), names.clone());
+        for (i, n) in names.iter().enumerate() {
+            g.files
+                .insert(format!("/logs/{n}"), format!("body-{i}").into_bytes());
+        }
+    }
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let dir = tempfile::tempdir().expect("tmp");
+    let local = format!("{}/", dir.path().to_string_lossy());
+    conn.sftp_get_folder(std::path::Path::new("/logs"), std::path::Path::new(&local))
+        .await
+        .expect("get_folder");
+
+    for (i, n) in names.iter().enumerate() {
+        let expected = dir.path().join(format!("{n}.127.0.0.1"));
+        let got = tokio::fs::read(&expected)
+            .await
+            .unwrap_or_else(|e| panic!("{} must exist: {e}", expected.display()));
+        assert_eq!(got, format!("body-{i}").into_bytes());
+    }
+}
+
 #[tokio::test]
 async fn connect_to_unreachable_host_maps_to_connect_error() {
     // Port 1 on localhost: nothing listens -> connection refused. A short

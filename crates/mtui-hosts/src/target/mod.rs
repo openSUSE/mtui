@@ -1116,6 +1116,37 @@ impl Target {
         }
     }
 
+    /// Uploads already-read bytes to `remote` over SFTP, gated by
+    /// [`TargetState`].
+    ///
+    /// The read-once counterpart of [`sftp_put`](Self::sftp_put): a fan-out
+    /// reads the local payload a single time and dispatches the shared bytes to
+    /// every host. Same failure semantics (logged, not propagated).
+    pub async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) {
+        match self.state {
+            TargetState::Enabled => {
+                let Some(conn) = self.connection.as_mut() else {
+                    tracing::error!(host = %self.hostname, "sftp_put on unconnected target");
+                    return;
+                };
+                if let Err(e) = conn.sftp_put_bytes(data, remote).await {
+                    tracing::error!(
+                        host = %self.hostname, remote = %remote.display(), error = %e,
+                        "failed to send"
+                    );
+                }
+            }
+            TargetState::Dryrun => {
+                tracing::info!(
+                    host = %self.hostname,
+                    "dryrun: put <{} bytes> {}:{}",
+                    data.len(), self.hostname, remote.display()
+                );
+            }
+            TargetState::Disabled => {}
+        }
+    }
+
     /// Downloads a file (or folder) from the host over SFTP, gated by
     /// [`TargetState`].
     ///

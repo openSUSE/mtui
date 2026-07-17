@@ -76,6 +76,12 @@ use crate::error::{HostError, Result};
 /// `RETRIES`.
 const RETRIES: usize = 5;
 
+/// Modest bound on concurrent per-entry transfers within a single folder
+/// download. Host-level fan-out is already bounded by the fleet
+/// `max_parallel`; this only caps parallelism *within* one host's folder so a
+/// directory with many entries streams a few at a time rather than all at once.
+const FOLDER_DOWNLOAD_CONCURRENCY: usize = 4;
+
 /// The exit-code sentinel upstream uses when a command produced no exit status
 /// (killed / channel lost). Kept in sync with [`CommandLog`]'s `-1` convention.
 const NO_EXIT_CODE: i16 = -1;
@@ -1164,6 +1170,10 @@ impl Connection for SshConnection {
             host: self.hostname.clone(),
             reason: format!("read {}: {e}", local.display()),
         })?;
+        self.sftp_put_bytes(&data, remote).await
+    }
+
+    async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) -> Result<()> {
         let sftp = self.sftp().await?;
 
         // Create parent directories (best-effort; "already exists" is success).
@@ -1180,7 +1190,7 @@ impl Connection for SshConnection {
             let _ = sftp.create_dir(path.clone()).await;
         }
 
-        sftp.write(remote_str.to_string(), &data)
+        sftp.write(remote_str.to_string(), data)
             .await
             .map_err(|e| self.sftp_err(e))?;
         // Make executable (0770), matching upstream chmod after put.
@@ -1194,60 +1204,99 @@ impl Connection for SshConnection {
 
     async fn sftp_get(&mut self, remote: &Path, local: &Path) -> Result<()> {
         let sftp = self.sftp().await?;
-        let data = sftp
-            .read(remote.to_string_lossy().to_string())
+        // Stream remote -> local rather than buffering the whole file in memory.
+        let mut src = sftp
+            .open(remote.to_string_lossy().to_string())
             .await
             .map_err(|e| self.sftp_err(e))?;
-        let _ = sftp.close().await;
-        tokio::fs::write(local, &data)
+        let mut dst = tokio::fs::File::create(local)
+            .await
+            .map_err(|e| HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: format!("create {}: {e}", local.display()),
+            })?;
+        let copy = tokio::io::copy(&mut src, &mut dst)
             .await
             .map_err(|e| HostError::Sftp {
                 host: self.hostname.clone(),
                 reason: format!("write {}: {e}", local.display()),
-            })
+            });
+        let _ = sftp.close().await;
+        copy.map(|_| ())
     }
 
     async fn sftp_get_folder(&mut self, remote: &Path, local: &Path) -> Result<()> {
+        use futures::stream::{self, StreamExt};
+
         let sftp = self.sftp().await?;
         let remote_str = remote.to_string_lossy().to_string();
         let dir = sftp
             .read_dir(remote_str.clone())
             .await
             .map_err(|e| self.sftp_err(e))?;
-        for entry in dir {
-            let name = entry.file_name();
-            // The peer controls entry names; a crafted name (`../x`, `/etc/x`,
-            // `a/b`) would escape the download destination. Reject non-component
-            // names and skip them — a hostile entry must not abort the transfer
-            // of the legitimate ones (best-effort transfer contract). The name
-            // is logged quoted, and no local path is emitted, so the diagnostic
-            // cannot leak the attacker's chosen target.
-            if let Err(e) = validate_sftp_component(&name, &self.hostname) {
-                tracing::warn!(host = %self.hostname, error = %e, "skipping unsafe SFTP entry");
-                continue;
-            }
-            // Stream remote -> local rather than buffering the whole file.
-            let mut src = sftp
-                .open(format!("{remote_str}/{name}"))
-                .await
-                .map_err(|e| self.sftp_err(e))?;
-            // Per-host suffix contract: <local><name>.<hostname>
-            let target = format!("{}{}.{}", local.to_string_lossy(), name, self.hostname);
-            let mut dst = tokio::fs::File::create(&target)
-                .await
-                .map_err(|e| HostError::Sftp {
-                    host: self.hostname.clone(),
-                    reason: format!("create {target}: {e}"),
-                })?;
-            tokio::io::copy(&mut src, &mut dst)
-                .await
-                .map_err(|e| HostError::Sftp {
-                    host: self.hostname.clone(),
-                    reason: format!("write {target}: {e}"),
-                })?;
-        }
+
+        // The peer controls entry names; a crafted name (`../x`, `/etc/x`,
+        // `a/b`) would escape the download destination. Validate up front and
+        // skip hostile names — a hostile entry must not abort the transfer of
+        // the legitimate ones (best-effort transfer contract). The name is
+        // logged quoted, and no local path is emitted, so the diagnostic cannot
+        // leak the attacker's chosen target.
+        let names: Vec<String> = dir
+            .map(|entry| entry.file_name())
+            .filter(
+                |name| match validate_sftp_component(name.as_str(), &self.hostname) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        tracing::warn!(host = %self.hostname, error = %e, "skipping unsafe SFTP entry");
+                        false
+                    }
+                },
+            )
+            .collect();
+
+        let local_str = local.to_string_lossy();
+        // Capture the host name once; the per-entry futures must not borrow
+        // `&mut self` (they run concurrently), so build errors via the free
+        // `sftp_err_for` rather than `self.sftp_err`.
+        let host = self.hostname.clone();
+        let sftp = &sftp;
+        // Stream each entry remote -> local under modest bounded concurrency;
+        // the shared `sftp` session accepts concurrent `open`s (`&self`).
+        let results: Vec<Result<()>> = stream::iter(names)
+            .map(|name| {
+                let host = &host;
+                // Per-host suffix contract: <local><name>.<hostname>
+                let target = format!("{local_str}{name}.{host}");
+                let remote_path = format!("{remote_str}/{name}");
+                async move {
+                    let mut src = sftp
+                        .open(remote_path)
+                        .await
+                        .map_err(|e| sftp_err_for(host, e))?;
+                    let mut dst =
+                        tokio::fs::File::create(&target)
+                            .await
+                            .map_err(|e| HostError::Sftp {
+                                host: host.clone(),
+                                reason: format!("create {target}: {e}"),
+                            })?;
+                    tokio::io::copy(&mut src, &mut dst)
+                        .await
+                        .map_err(|e| HostError::Sftp {
+                            host: host.clone(),
+                            reason: format!("write {target}: {e}"),
+                        })?;
+                    Ok(())
+                }
+            })
+            .buffer_unordered(FOLDER_DOWNLOAD_CONCURRENCY)
+            .collect()
+            .await;
+
         let _ = sftp.close().await;
-        Ok(())
+        // Surface the first transfer error, if any (matches the previous
+        // fail-on-first-error semantics of the sequential loop).
+        results.into_iter().collect::<Result<Vec<()>>>().map(|_| ())
     }
 
     async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
