@@ -6,6 +6,7 @@ when it migrated from raw ``urllib`` to ``mtui.support.http``.
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock, patch
 
 import requests
@@ -157,3 +158,119 @@ def test_get_logs_creates_install_logs_dir(mock_config, tmp_path):
     assert len(filenames) == 1
     written = target_dir / "sle_15-SP7_x86_64.log"
     assert written.is_file()
+
+
+def _multi_results() -> list[URLs]:
+    """Three install-log URLs with distinct filenames (varying arch)."""
+    return [
+        URLs("sle", "x86_64", "15-SP7", "https://oqa/1"),
+        URLs("sle", "aarch64", "15-SP7", "https://oqa/2"),
+        URLs("sle", "s390x", "15-SP7", "https://oqa/3"),
+    ]
+
+
+def test_get_logs_preserves_order_across_parallel_downloads(mock_config, tmp_path):
+    """Parallel downloads still line up with ``auto.results``, in order.
+
+    ``executor.map`` preserves input order, so each log's content must be
+    written to the file derived from the *same* result -- proving the
+    concurrent downloads did not scramble the pairing -- and the ``_writer``
+    calls stay serial and in order.
+    """
+    mock_config.template_dir = tmp_path
+    rrid = "SUSE:Maintenance:1:1"
+    exporter = AutoExport(mock_config, MagicMock(), FileList([]), False, rrid, False)
+    exporter.openqa = MagicMock()
+    exporter.openqa.auto.results = _multi_results()
+
+    with (
+        patch.object(
+            exporter,
+            "_openqa_installog_to_template",
+            side_effect=lambda url: [f"content-{url.url}\n"],
+        ),
+        patch.object(exporter, "_writer") as writer,
+    ):
+        filenames = exporter.get_logs()
+
+    assert [str(p) for p in filenames] == [
+        "sle_15-SP7_x86_64.log",
+        "sle_15-SP7_aarch64.log",
+        "sle_15-SP7_s390x.log",
+    ]
+    written = [(c.args[0].name, c.args[1]) for c in writer.call_args_list]
+    assert written == [
+        ("sle_15-SP7_x86_64.log", ["content-https://oqa/1\n"]),
+        ("sle_15-SP7_aarch64.log", ["content-https://oqa/2\n"]),
+        ("sle_15-SP7_s390x.log", ["content-https://oqa/3\n"]),
+    ]
+
+
+def test_get_logs_downloads_run_concurrently(mock_config, tmp_path):
+    """The per-log downloads run in parallel, not one after another.
+
+    Each download blocks on a Barrier of width N; it trips only if every
+    download is in flight at once. A revert to the serial ``map`` makes the
+    first download block alone until the Barrier times out, and the raised
+    ``BrokenBarrierError`` propagates out of ``get_logs`` -- so this fails on
+    that revert.
+    """
+    mock_config.template_dir = tmp_path
+    exporter = AutoExport(
+        mock_config, MagicMock(), FileList([]), False, "SUSE:Maintenance:1:1", False
+    )
+    exporter.openqa = MagicMock()
+    results = _multi_results()
+    exporter.openqa.auto.results = results
+    barrier = threading.Barrier(len(results))
+
+    def _fake_download(url):
+        barrier.wait(timeout=10)
+        return [f"content-{url.url}\n"]
+
+    with (
+        patch.object(
+            exporter, "_openqa_installog_to_template", side_effect=_fake_download
+        ),
+        patch.object(exporter, "_writer"),
+    ):
+        filenames = exporter.get_logs()
+
+    assert len(filenames) == 3
+
+
+def test_get_logs_skips_failed_download_and_keeps_pairing(mock_config, tmp_path):
+    """A download that returns ``[]`` (failed) is skipped; pairing survives.
+
+    Proves the ``if y:`` skip still works after the concurrent fan-out: the
+    empty middle result is dropped, and the two written files pair with the
+    two *non-empty* results in order.
+    """
+    mock_config.template_dir = tmp_path
+    exporter = AutoExport(
+        mock_config, MagicMock(), FileList([]), False, "SUSE:Maintenance:1:1", False
+    )
+    exporter.openqa = MagicMock()
+    exporter.openqa.auto.results = _multi_results()  # x86_64, aarch64, s390x
+
+    def _fake_download(url):
+        # The aarch64 log "fails" and yields no lines.
+        return [] if url.url == "https://oqa/2" else [f"content-{url.url}\n"]
+
+    with (
+        patch.object(
+            exporter, "_openqa_installog_to_template", side_effect=_fake_download
+        ),
+        patch.object(exporter, "_writer") as writer,
+    ):
+        filenames = exporter.get_logs()
+
+    assert [str(p) for p in filenames] == [
+        "sle_15-SP7_x86_64.log",
+        "sle_15-SP7_s390x.log",
+    ]
+    written = [(c.args[0].name, c.args[1]) for c in writer.call_args_list]
+    assert written == [
+        ("sle_15-SP7_x86_64.log", ["content-https://oqa/1\n"]),
+        ("sle_15-SP7_s390x.log", ["content-https://oqa/3\n"]),
+    ]

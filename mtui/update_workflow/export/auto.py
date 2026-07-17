@@ -6,6 +6,7 @@ from pathlib import Path
 
 import requests
 
+from ...support.concurrency import ContextExecutor
 from ...support.http import HTTP_TIMEOUT, build_session, resolve_verify
 from ...types import FileList
 from .base import BaseExport
@@ -112,10 +113,14 @@ class AutoExport(BaseExport):
         # paths may not have pre-created it, and writing a log into a missing
         # directory raises FileNotFoundError.
         filepath.mkdir(parents=True, exist_ok=True)
-        ilogs = zip_longest(
-            auto.results,
-            map(self._openqa_installog_to_template, auto.results),
-        )
+        # Download the install logs concurrently -- each is an independent
+        # HTTP GET (and builds its own requests session, so nothing is
+        # shared across workers). executor.map preserves input order, so the
+        # results still line up with auto.results. The file writes below stay
+        # serial (they touch the filesystem and may prompt on overwrite).
+        with ContextExecutor() as executor:
+            logs = list(executor.map(self._openqa_installog_to_template, auto.results))
+        ilogs = zip_longest(auto.results, logs)
         filenames = []
         for i, y in ilogs:
             fn = f"{i.distri.lower()}_{i.version}_{i.arch}.log"

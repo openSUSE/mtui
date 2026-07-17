@@ -34,6 +34,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   The wait itself is kept (it guards against reconnecting to a
   still-shutting-down sshd); only the serialization is removed. Most visible on
   transactional (SL Micro) updates, which reboot every host.
+- Exporting an AUTO-workflow testreport is faster. The openQA install logs are
+  now downloaded concurrently instead of one after another; results are written
+  in the original order, so the exported report is unchanged.
 
 ## 19.0.1 - 2026-07-17
 
