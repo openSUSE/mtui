@@ -27,6 +27,15 @@ path = "benches/mcp_jobs.rs"
 harness = false
 required-features = ["mcp"]
 
+# Contention measurement for different-RRID dispatch (mtui-rs-0mop.11). Requires
+# the `mcp` feature. Run with
+# `cargo bench -p mtui-mcp --features mcp --bench dispatch_concurrency`.
+[[bench]]
+name = "dispatch_concurrency"
+path = "benches/dispatch_concurrency.rs"
+harness = false
+required-features = ["mcp"]
+
 [[test]]
 name = "it"
 path = "tests/it.rs"
@@ -74,6 +83,7 @@ mtui-testreport.workspace = true
 mtui-hosts.workspace = true
 mtui-types.workspace = true
 tokio-util = { workspace = true }
+futures.workspace = true
 tempfile = "3"
 # Perf baseline bench (mtui-rs-0mop.1): MCP scoped-lock acquire/release contention.
 criterion.workspace = true
