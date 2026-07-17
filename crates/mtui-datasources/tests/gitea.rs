@@ -172,6 +172,42 @@ async fn approve_uses_last_assignee() {
     assert!(String::from_utf8_lossy(&posts[0].body).contains("LGTM"));
 }
 
+/// Perf baseline oracle (mtui-rs-0mop.1 → 0mop.8: deduplicate Gitea approval
+/// fetches). Captures the *current* per-`approve` request breakdown so the dedup
+/// remediation has a golden count to shrink against without regressing behaviour.
+///
+/// A single happy-path `approve` currently issues **two** GETs on the comments
+/// endpoint — `check_assign`→`assignee`→`get_all_comments`, then
+/// `is_done`→`get_all_comments` — plus one POST. `is_done` short-circuits before
+/// `has_review` here because no decision comment exists, so the PR endpoint is
+/// not hit. When 0mop.8 lands, the comments-GET count should drop to 1; update
+/// this oracle then (and only then).
+#[tokio::test]
+async fn approve_request_count_baseline() {
+    let server = MockServer::start().await;
+    mount_comments(
+        &server,
+        json!([comment_json(1, &assign_marker(USER, GROUP), 1)]),
+    )
+    .await;
+    mount_post_comment(&server).await;
+
+    gitea_for(&server).approve(None).await.unwrap();
+
+    let reqs = server.received_requests().await.unwrap();
+    let comment_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == COMMENTS_PATH)
+        .count();
+    let posts = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .count();
+    // Baseline: comments fetched twice (redundantly) per approve; one POST.
+    assert_eq!(comment_gets, 2, "approve refetches comments; see 0mop.8");
+    assert_eq!(posts, 1);
+}
+
 #[tokio::test]
 async fn approve_after_rebuild_rerequest_posts_comment() {
     // A stale decline lingers, but the group's review is requested again ->

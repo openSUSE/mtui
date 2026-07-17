@@ -16,6 +16,12 @@ workspace = true
 name = "it"
 path = "tests/it.rs"
 
+# Perf baseline bench (mtui-rs-0mop.1). `harness = false` -> criterion main.
+[[bench]]
+name = "testreport"
+path = "benches/testreport.rs"
+harness = false
+
 [dependencies]
 mtui-types.workspace = true
 mtui-config.workspace = true
@@ -36,3 +42,5 @@ thiserror.workspace = true
 insta.workspace = true
 tempfile = "3"
 wiremock.workspace = true
+# Perf baseline bench (mtui-rs-0mop.1): metadata JSON parse hot path.
+criterion.workspace = true

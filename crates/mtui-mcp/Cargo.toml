@@ -18,6 +18,15 @@ path = "src/lib.rs"
 name = "mtui-mcp"
 path = "src/main.rs"
 
+# Perf baseline bench (mtui-rs-0mop.1). Requires the `mcp` feature (the session +
+# job model live behind it); `harness = false` -> criterion main. Run with
+# `cargo bench -p mtui-mcp --features mcp --bench mcp_jobs`.
+[[bench]]
+name = "mcp_jobs"
+path = "benches/mcp_jobs.rs"
+harness = false
+required-features = ["mcp"]
+
 [[test]]
 name = "it"
 path = "tests/it.rs"
@@ -64,3 +73,5 @@ mtui-hosts.workspace = true
 mtui-types.workspace = true
 tokio-util = { workspace = true }
 tempfile = "3"
+# Perf baseline bench (mtui-rs-0mop.1): MCP scoped-lock acquire/release contention.
+criterion.workspace = true

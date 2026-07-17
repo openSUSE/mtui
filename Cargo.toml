@@ -121,6 +121,14 @@ wiremock = "0.6"
 # $XDG_CONFIG_HOME) for the osc-parity oscrc discovery reader — cargo runs tests
 # in parallel threads, so env mutation must not race.
 serial_test = "3"
+# perf baselines (mtui-rs-0mop.1): criterion for in-process latency/throughput
+# benches, dhat for allocation + peak-heap profiles. Dev-only; benches use
+# `harness = false` so they compile only under `cargo bench`, never in the
+# default `cargo test` gate. Startup timing is measured externally with
+# `hyperfine` (documented in plans/perf-baseline-0mop1.md), not a crate dep.
+criterion = { version = "0.7", features = ["async_tokio"] }
+dhat = "0.3"
+tempfile = "3"
 # internal crates (path deps)
 mtui-types = { path = "crates/mtui-types" }
 mtui-config = { path = "crates/mtui-config" }

@@ -16,6 +16,13 @@ workspace = true
 name = "it"
 path = "tests/it.rs"
 
+# Perf baseline benches (mtui-rs-0mop.1). `harness = false` -> criterion main,
+# compiled only under `cargo bench`.
+[[bench]]
+name = "datasources"
+path = "benches/datasources.rs"
+harness = false
+
 [dependencies]
 mtui-types.workspace = true
 mtui-config.workspace = true
@@ -66,3 +73,5 @@ base64ct = { version = "1", features = ["alloc"] }
 rand = { workspace = true }
 # Scoped subscriber to capture the oscrc loose-permissions warning in tests.
 tracing-subscriber.workspace = true
+# Perf baseline benches (mtui-rs-0mop.1): refhosts parse/search + client build.
+criterion.workspace = true

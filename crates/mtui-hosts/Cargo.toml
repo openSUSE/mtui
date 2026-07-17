@@ -16,6 +16,13 @@ workspace = true
 name = "it"
 path = "tests/it.rs"
 
+# Perf baseline benches (mtui-rs-0mop.1). `harness = false` -> criterion's own
+# main, compiled only under `cargo bench`, never in the default `cargo test` gate.
+[[bench]]
+name = "fanout"
+path = "benches/fanout.rs"
+harness = false
+
 [features]
 # Interactive PTY shell primitive (P2.10). Adds `Connection::shell` /
 # `Target::shell` and the `ShellChannel` duplex handle. Off by default: the
@@ -57,3 +64,5 @@ russh-sftp = { workspace = true }
 hmac.workspace = true
 sha1.workspace = true
 data-encoding = "2"
+# Perf baseline benches (mtui-rs-0mop.1): fan-out scaling / SFTP / lock reporting.
+criterion.workspace = true
