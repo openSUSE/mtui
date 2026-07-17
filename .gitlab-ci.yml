@@ -62,6 +62,17 @@ test:
     - cargo build --workspace
     - cargo test --workspace
 
+# The MCP security integration tests (deny-list filtering, tool-surface
+# snapshots that keep local-shell off the wire, and mcp_jobs resource caps) are
+# gated behind `-F mcp`, so the default `cargo test --workspace` above never runs
+# them and `feature-matrix` only *builds* them. Test just this crate under `mcp`
+# to enforce those trust boundaries continuously, without relinking the whole
+# axum/rmcp tree that a full --all-features test run would (see AGENTS.md DoD).
+test-mcp:
+  stage: test
+  script:
+    - cargo test -p mtui-mcp -F mcp
+
 coverage:
   stage: test
   before_script:
