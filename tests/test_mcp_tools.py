@@ -34,6 +34,7 @@ from mtui.mcp._argv import kwargs_to_argv  # noqa: E402
 from mtui.mcp._schema import build_parameters  # noqa: E402
 from mtui.mcp.deny import REPL_ONLY  # noqa: E402
 from mtui.mcp.session import McpSession  # noqa: E402
+from mtui.mcp.testreport_tools import register_testreport_tools  # noqa: E402
 from mtui.mcp.tools import (  # noqa: E402
     SLOW_COMMANDS,
     SUBPARSER_COMMANDS,
@@ -113,6 +114,32 @@ def test_build_tools_excludes_subparser_parent(
     """Subparser parents are fanned out; the bare parent must not be a tool."""
     for parent in SUBPARSER_COMMANDS:
         assert parent not in registered_names
+
+
+def test_registered_tools_advertise_no_output_schema(
+    mcp: FastMCP, session: McpSession
+) -> None:
+    """No registered tool may carry an auto-generated ``outputSchema``.
+
+    The command wrappers and job tools return a plain ``str``; left to the
+    SDK default each would advertise an information-free ``{"result": str}``
+    output schema -- inflating the manifest the client re-reads each
+    session -- and echo the whole text back as ``structuredContent`` on
+    every call. The testreport tools return dicts but likewise opt out, to
+    keep the wire uniform. Every one of the server's six ``add_tool`` sites
+    therefore passes ``structured_output=False``; registering all of them
+    here pins that contract so a new site that forgets the flag is caught.
+    """
+    build_tools(mcp, session)
+    register_job_tools(mcp, session)
+    register_testreport_tools(mcp, session)
+
+    offenders = [
+        name
+        for name, tool in mcp._tool_manager._tools.items()  # noqa: SLF001
+        if tool.output_schema is not None
+    ]
+    assert not offenders, f"tools advertising a boilerplate outputSchema: {offenders}"
 
 
 def test_build_tools_includes_expected_commands(

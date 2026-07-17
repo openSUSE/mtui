@@ -1,5 +1,7 @@
 """Tests for the helpers in :mod:`mtui.term`."""
 
+import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,11 +15,18 @@ from mtui.cli.term import ask_user, filter_ansi, page, prompt_user
 def _patch_prompt(response):
     """Stub the ``PromptSession`` used by :func:`prompt_user` / :func:`ask_user`.
 
-    Returns a context manager that swaps ``mtui.cli.term.PromptSession``
+    Returns a context manager that swaps ``prompt_toolkit.PromptSession``
     for a factory yielding a session whose ``prompt`` call returns
     ``response``. Passing an exception class (e.g. ``KeyboardInterrupt``,
     ``EOFError``) raises it instead, so the bail-out branches can be
     exercised the same way.
+
+    ``prompt_toolkit`` is imported lazily inside
+    :func:`mtui.cli.term._read_line`, so the patch targets the class on
+    its home module (``prompt_toolkit.PromptSession``) rather than a
+    re-export on ``mtui.cli.term``; the lazy ``from prompt_toolkit import
+    PromptSession`` then binds the stub. This keeps the real ``_read_line``
+    body (and its ``InMemoryHistory`` construction) exercised.
     """
     session = MagicMock()
     if isinstance(response, type) and issubclass(response, BaseException):
@@ -25,7 +34,7 @@ def _patch_prompt(response):
     else:
         session.prompt.return_value = response
     factory = MagicMock(return_value=session)
-    return patch("mtui.cli.term.PromptSession", factory)
+    return patch("prompt_toolkit.PromptSession", factory)
 
 
 def test_filter_ansi():
@@ -188,6 +197,44 @@ def test_page_non_interactive_writer_receives_each_line():
     captured: list[str] = []
     page(["alpha", "beta\n", "gamma\r\n"], interactive=False, writer=captured.append)
     assert captured == ["alpha", "beta", "gamma"]
+
+
+def test_importing_term_does_not_load_prompt_toolkit():
+    """Importing :mod:`mtui.cli.term` must not pull in ``prompt_toolkit``.
+
+    The headless ``mtui-mcp`` server imports this module only for
+    :func:`termsize`/:func:`page` and never reads a line, so
+    ``prompt_toolkit`` (~115 submodules, ~170ms) is imported lazily
+    inside :func:`_read_line` instead of at module scope. Run in a fresh
+    interpreter because the test session itself imports prompt_toolkit
+    elsewhere, which would poison an in-process ``sys.modules`` check.
+    """
+    code = (
+        "import sys; import mtui.cli.term; "
+        "loaded = [m for m in sys.modules if m.startswith('prompt_toolkit')]; "
+        "assert not loaded, loaded; print('ok')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_read_line_lazy_import_still_prompts():
+    """The lazy import inside :func:`_read_line` still reaches prompt_toolkit.
+
+    Patching ``prompt_toolkit.PromptSession`` (its home, not a re-export
+    on ``mtui.cli.term``) proves the deferred ``from prompt_toolkit
+    import PromptSession`` binds the current attribute at call time.
+    """
+    from mtui.cli.term import _read_line
+
+    with _patch_prompt("typed answer"):
+        assert _read_line("prompt> ") == "typed answer"
 
 
 def test_termsize_fallback_matches_normal_path_order(monkeypatch):

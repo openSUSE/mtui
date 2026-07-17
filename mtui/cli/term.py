@@ -14,9 +14,6 @@ import struct
 import termios
 from collections.abc import Callable, Collection
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.history import InMemoryHistory
-
 
 def termsize() -> tuple[int, int]:
     """Gets the size of the terminal.
@@ -76,7 +73,15 @@ def _read_line(text: str) -> str:
     (yes/no confirmations, free-form comments) never reach
     ``~/.mtui_history``. The shared on-disk file is still owned by
     :mod:`mtui.cli._history`.
+
+    ``prompt_toolkit`` is imported here rather than at module scope so
+    the headless ``mtui-mcp`` server -- which imports this module only
+    for :func:`termsize`/:func:`page` and never reads a line -- does not
+    pay prompt_toolkit's import cost (~115 submodules) at startup.
     """
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import InMemoryHistory
+
     return PromptSession(history=InMemoryHistory()).prompt(text)
 
 
