@@ -43,7 +43,7 @@
 use std::path::{Path, PathBuf};
 
 use mtui_core::Session;
-use mtui_testreport::{TestReport, atomic_write_file};
+use mtui_testreport::atomic_write_file;
 use serde_json::{Map, Value, json};
 
 use crate::session::{
@@ -97,11 +97,19 @@ fn refuse(msg: impl Into<String>) -> McpCommandError {
 /// Then validates the report is loaded and has a path, else
 /// `"no testreport loaded; run `load_template` first"`.
 fn resolve_path(session: &Session, template: Option<&str>) -> Result<PathBuf, McpCommandError> {
-    let report: &(dyn TestReport + Send + Sync) = if let Some(rrid) = template {
-        session
-            .templates
-            .get(rrid)
-            .ok_or_else(|| refuse(format!("template not loaded: {rrid}")))?
+    // Reads `(is_loaded, path)` from a report, then applies the shared "loaded +
+    // has path" validation. Kept as a closure so both the named-template and
+    // active-report branches funnel through one place.
+    let validate = |is_loaded: bool, path: Option<PathBuf>| -> Result<PathBuf, McpCommandError> {
+        if !is_loaded {
+            return Err(refuse("no testreport loaded; run `load_template` first"));
+        }
+        path.ok_or_else(|| refuse("no testreport loaded; run `load_template` first"))
+    };
+
+    // Resolve the target RRID (named, or the single/active one).
+    let rrid = if let Some(rrid) = template {
+        rrid.to_owned()
     } else {
         if session.templates.len() > 1 {
             let rrids = session.templates.rrids().join(", ");
@@ -109,17 +117,35 @@ fn resolve_path(session: &Session, template: Option<&str>) -> Result<PathBuf, Mc
                 "multiple templates loaded ({rrids}); pass template=<rrid>"
             )));
         }
-        session.metadata()
+        match session.templates.active_rrid() {
+            Some(r) => r.to_owned(),
+            // Nothing loaded: read the null active report through `metadata()` so
+            // the "no testreport loaded" message is produced consistently.
+            None => {
+                let report = session.metadata();
+                return validate(report.is_loaded(), report.base().path.clone());
+            }
+        }
     };
 
-    if !report.is_loaded() {
-        return Err(refuse("no testreport loaded; run `load_template` first"));
+    // Read the target report. These hand-written tools do not run through the
+    // fan-out driver, so no per-call active guard is installed — read the entry
+    // directly. If it *is* the active template and a guard happens to hold it
+    // (e.g. after a prior foreground command), read through `metadata()` instead
+    // of a would-fail `try_lock`.
+    if session.active_report_is_guarded(&rrid) {
+        let report = session.metadata();
+        validate(report.is_loaded(), report.base().path.clone())
+    } else {
+        let entry = session
+            .templates
+            .handle(&rrid)
+            .ok_or_else(|| refuse(format!("template not loaded: {rrid}")))?;
+        let report = entry
+            .try_lock()
+            .map_err(|_| refuse(format!("template busy: {rrid}")))?;
+        validate(report.is_loaded(), report.base().path.clone())
     }
-    report
-        .base()
-        .path
-        .clone()
-        .ok_or_else(|| refuse("no testreport loaded; run `load_template` first"))
 }
 
 /// The checkout directory (parent of the `log` file) for the resolved report.
@@ -843,7 +869,7 @@ mod tests {
     use std::path::Path;
 
     use mtui_config::Config;
-    use mtui_testreport::ObsReport;
+    use mtui_testreport::{ObsReport, TestReport};
     use mtui_types::RequestReviewID;
 
     /// Build an `McpSession` whose `template_dir` is a fresh temp dir; returns

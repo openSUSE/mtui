@@ -67,7 +67,7 @@ mod tests {
     async fn lists_update_repos_sorted() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         // Seed the active report's update_repos.
-        let base = session.templates.active_mut().base_mut();
+        let base = session.metadata_mut().base_mut();
         base.update_repos.insert(
             mtui_types::SystemProduct::new("SLES", "15.5", "x86_64"),
             "http://repo/b".to_owned(),

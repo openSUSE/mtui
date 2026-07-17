@@ -130,12 +130,15 @@ pub trait Command: Send + Sync {
 
         if resolved.len() <= 1 {
             let restore = session.templates.active_rrid().map(str::to_owned);
-            // Empty session: the sole "resolved" entry is the active null
-            // report; running against it preserves the historical single-call
+            // Install this call's active handle (the entry's lock). An empty
+            // "resolved" entry (empty session) clears the guard so `metadata()`
+            // falls back to the null report — the historical single-call
             // dispatch. A named RRID is guaranteed loaded by resolve_templates.
-            if let Some(rrid) = resolved.first() {
-                session.templates.set_active(rrid);
-            }
+            //
+            // `activate` drops the prior guard first, so a command that mutates
+            // the registry (`load_template`) can then re-point/re-lock the active
+            // entry from inside `call` without self-deadlocking on the guard.
+            session.activate(resolved.first().map_or("", String::as_str));
             let out = self.call(session, args).await;
             restore_active(session, restore);
             return out;
@@ -157,21 +160,21 @@ pub trait Command: Send + Sync {
         let skippable = declares_hosts && !named_hosts && self.skip_hostless_templates();
 
         let restore = session.templates.active_rrid().map(str::to_owned);
+        // Release any held active handle before probing entries: `is_hostless`
+        // locks the entry it inspects, so a guard still held on it would make it
+        // read as skippable. Each iteration re-activates its own template below.
+        session.release_active_guard();
         let mut failures: Vec<(String, CommandError)> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
 
         for rrid in &resolved {
-            let is_empty = session
-                .templates
-                .get(rrid)
-                .map(|r| r.base().targets.is_empty())
-                .unwrap_or(true);
+            let is_empty = session.is_hostless(rrid);
             if skippable && is_empty {
                 tracing::warn!(command = self.name(), rrid = %rrid, "skipped: no connected hosts");
                 skipped.push(rrid.clone());
                 continue;
             }
-            session.templates.set_active(rrid);
+            session.activate(rrid);
             session.display.template_banner(rrid);
             if let Err(exc) = self.call(session, args).await {
                 tracing::error!(command = self.name(), rrid = %rrid, error = %exc, "command failed");
@@ -209,11 +212,24 @@ pub trait Command: Send + Sync {
     }
 }
 
-/// Restores the active-template pointer after fan-out (leaves it as-is if the
-/// restored RRID is no longer loaded).
+/// Restores the active-template pointer (and its per-call handle) after
+/// dispatch.
+///
+/// When a prior template was active it is re-activated (leaving it as-is if the
+/// restored RRID is no longer loaded). When nothing was active before, the guard
+/// is refreshed onto whatever the call left active — so a `load_template` that
+/// added and activated a brand-new template keeps it active, matching the
+/// historical `restore_active(None)` no-op followed by the new `set_active`.
 fn restore_active(session: &mut Session, restore: Option<String>) {
-    if let Some(rrid) = restore {
-        session.templates.set_active(&rrid);
+    match restore {
+        Some(rrid) => {
+            if !session.activate(&rrid) {
+                // The prior active template is gone (e.g. `unload`d): fall back to
+                // whatever remains active in the registry.
+                session.refresh_active_guard();
+            }
+        }
+        None => session.refresh_active_guard(),
     }
 }
 

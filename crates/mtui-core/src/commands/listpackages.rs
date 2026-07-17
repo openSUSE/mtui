@@ -404,7 +404,7 @@ mod tests {
         use std::collections::HashMap;
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         {
-            let base = session.templates.active_mut().base_mut();
+            let base = session.metadata_mut().base_mut();
             let mut per_product = HashMap::new();
             per_product.insert("bash".to_owned(), "5.1-1".to_owned());
             base.packages.insert("SLES-15.5".to_owned(), per_product);

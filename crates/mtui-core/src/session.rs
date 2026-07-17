@@ -19,9 +19,10 @@ use mtui_datasources::HttpError;
 use mtui_datasources::http::{HttpClient, VerifyPolicy, resolve_verify};
 use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
 use mtui_hosts::{HostArbiter, HostError, HostsGroup, Owner, Prompter, Target};
-use mtui_testreport::{TestReport, UpdateKind, make_testreport};
+use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{ExecutionMode, TargetState, Workflow};
+use tokio::sync::OwnedMutexGuard;
 use tracing::{info, warn};
 
 use crate::display::CommandPromptDisplay;
@@ -33,6 +34,23 @@ pub struct Session {
     pub config: Config,
     /// Loaded templates and the active pointer.
     pub templates: TemplateRegistry,
+    /// The per-call active-report handle: the [`OwnedMutexGuard`] of the entry
+    /// this dispatch is acting on (`mtui-rs-f36r`, step 2).
+    ///
+    /// [`metadata`](Self::metadata) / [`targets`](Self::targets) and their `_mut`
+    /// counterparts read through this guard when present, and through
+    /// [`null`](Self::null) when nothing is loaded — so command bodies keep the
+    /// *unchanged* sync `session.metadata()` / `session.targets()` surface. The
+    /// fan-out driver [`Command::run`](crate::Command::run) installs it per
+    /// resolved template (saving/restoring the prior active). Installing it means
+    /// dropping any prior guard first (releasing that entry's lock) before
+    /// acquiring the new one, so the same [`Session`] never self-deadlocks on one
+    /// entry; while the MCP outer session mutex is still in place (steps 1-3) the
+    /// entry locks are uncontended and behaviour is preserved.
+    active_guard: Option<OwnedMutexGuard<Box<dyn TestReport + Send + Sync>>>,
+    /// The null-object fallback [`metadata`](Self::metadata) hands out when
+    /// nothing is loaded (no [`active_guard`](Self::active_guard) installed).
+    null: Box<dyn TestReport + Send + Sync>,
     /// Formatted-output sink.
     pub display: CommandPromptDisplay,
     /// `true` for the interactive REPL, `false` for headless callers (MCP).
@@ -184,9 +202,12 @@ impl Session {
     #[must_use]
     pub fn new(config: Config, is_repl: bool) -> Self {
         let templates = TemplateRegistry::new(config.clone());
+        let null: Box<dyn TestReport + Send + Sync> = Box::new(NullReport::new(config.clone()));
         Self {
             config,
             templates,
+            active_guard: None,
+            null,
             display: CommandPromptDisplay::stdout(),
             is_repl,
             should_exit: false,
@@ -204,9 +225,12 @@ impl Session {
     #[must_use]
     pub fn with_display(config: Config, is_repl: bool, display: CommandPromptDisplay) -> Self {
         let templates = TemplateRegistry::new(config.clone());
+        let null: Box<dyn TestReport + Send + Sync> = Box::new(NullReport::new(config.clone()));
         Self {
             config,
             templates,
+            active_guard: None,
+            null,
             display,
             is_repl,
             should_exit: false,
@@ -272,21 +296,126 @@ impl Session {
         self.http_builds.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// The active report (upstream `prompt.metadata`). Never `None` — the
-    /// [`TemplateRegistry`] returns a null object when nothing is loaded.
+    /// Makes `rrid` the active template *and* installs its per-call active
+    /// handle ([`active_guard`](Self::active_guard)).
+    ///
+    /// The unified activation seam: it re-points the registry's active pointer
+    /// and acquires the entry's lock so [`metadata`](Self::metadata) /
+    /// [`targets`](Self::targets) read the right report. Any prior guard is
+    /// dropped first (releasing that entry's lock) so re-activating the same
+    /// entry never self-deadlocks. Returns `false` (leaving the guard cleared) if
+    /// `rrid` is not loaded; passing an empty `rrid` clears the active pointer and
+    /// guard so `metadata()` falls back to the null object (the empty-session
+    /// state). Uses `try_lock_owned`: the outer session mutex serialises dispatch
+    /// (steps 1-3), and the prior guard is dropped first, so the entry is always
+    /// free here.
+    pub fn activate(&mut self, rrid: &str) -> bool {
+        // Drop any prior guard before acquiring the next so one Session never
+        // holds two guards (and never blocks on an entry it already owns).
+        self.active_guard = None;
+        if rrid.is_empty() {
+            self.templates.set_active_none();
+            return false;
+        }
+        if !self.templates.set_active(rrid) {
+            return false;
+        }
+        self.active_guard = self
+            .templates
+            .active_handle()
+            .and_then(|h| h.try_lock_owned().ok());
+        self.active_guard.is_some()
+    }
+
+    /// Drops the per-call active handle *without* changing the active pointer.
+    ///
+    /// Used by teardown/probe paths that must lock entries directly
+    /// (`quit`/`unload`/`load` replace, MCP `close`, and the fan-out
+    /// `is_hostless` probe): they would self-deadlock on an entry this session's
+    /// guard still holds. Unlike `activate("")` this leaves the registry's active
+    /// RRID intact, so a survivor can still be promoted afterwards.
+    pub fn release_active_guard(&mut self) {
+        self.active_guard = None;
+    }
+
+    /// Re-installs the active handle for the registry's current active pointer.
+    ///
+    /// Used after a registry mutation (load) repoints `active` without going
+    /// through [`activate`](Self::activate) — it drops any stale guard and locks
+    /// the (possibly new) active entry, falling back to the null object when
+    /// nothing is loaded.
+    pub fn refresh_active_guard(&mut self) {
+        self.active_guard = None;
+        self.active_guard = self
+            .templates
+            .active_handle()
+            .and_then(|h| h.try_lock_owned().ok());
+    }
+
+    /// Whether `rrid` is the active template *and* this session currently holds
+    /// its per-call handle.
+    ///
+    /// Lets guard-unaware callers (the hand-written MCP testreport tools) decide
+    /// whether to read that report through [`metadata`](Self::metadata) (guard
+    /// held) or by locking its entry handle directly (no guard).
+    #[must_use]
+    pub fn active_report_is_guarded(&self, rrid: &str) -> bool {
+        self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid)
+    }
+
+    /// Whether the report loaded under `rrid` has no connected hosts.
+    ///
+    /// The guard-aware counterpart of
+    /// [`TemplateRegistry::is_hostless`](crate::TemplateRegistry::is_hostless):
+    /// when `rrid` is the currently-active template its entry is already locked
+    /// by this session's [`active_guard`](Self::active_guard), so read through the
+    /// guard rather than a (failing) `try_lock`. Other entries are locked
+    /// directly.
+    #[must_use]
+    pub fn is_hostless(&self, rrid: &str) -> bool {
+        if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
+            self.metadata().base().targets.is_empty()
+        } else {
+            self.templates.is_hostless(rrid)
+        }
+    }
+
+    /// The connected-host count and workflow label for `rrid`, or `None` if
+    /// absent (for `list_templates`).
+    ///
+    /// Guard-aware, like [`is_hostless`](Self::is_hostless): the active template's
+    /// entry is read through the session guard, others are locked directly.
+    #[must_use]
+    pub fn template_row(&self, rrid: &str) -> Option<(usize, &'static str)> {
+        if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
+            let base = self.metadata().base();
+            Some((base.targets.len(), base.workflow.as_str()))
+        } else {
+            self.templates.template_row(rrid)
+        }
+    }
+
+    /// The active report (upstream `prompt.metadata`). Never `None` — falls back
+    /// to the null object when nothing is loaded.
     #[must_use]
     pub fn metadata(&self) -> &(dyn TestReport + Send + Sync) {
-        self.templates.active()
+        match &self.active_guard {
+            Some(g) => &***g,
+            None => &*self.null,
+        }
     }
 
     /// Mutably borrows the active report (upstream `prompt.metadata`, mutated).
     ///
     /// The mutable counterpart of [`metadata`](Self::metadata). The
     /// `reload_openqa` / `set_workflow` commands populate the report's openQA
-    /// holder ([`TestReport::openqa_mut`]) through it; never `None` (the registry
-    /// returns a null object when nothing is loaded).
+    /// holder ([`TestReport::openqa_mut`]) through it; never `None` (falls back to
+    /// the null object when nothing is loaded).
     pub fn metadata_mut(&mut self) -> &mut (dyn TestReport + Send + Sync) {
-        self.templates.active_mut().as_mut()
+        match &mut self.active_guard {
+            Some(g) => (**g).as_mut(),
+            None => self.null.as_mut(),
+        }
     }
 
     /// Sets the active report's [`Workflow`] mode (upstream
@@ -298,13 +427,13 @@ impl Session {
     /// REPL prompt string; that prompt refresh is a Phase-6 REPL concern, so the
     /// command only mutates the report here.
     pub fn set_workflow(&mut self, workflow: Workflow) {
-        self.templates.active_mut().base_mut().workflow = workflow;
+        self.metadata_mut().base_mut().workflow = workflow;
     }
 
     /// The active report's connected targets (upstream `prompt.targets`).
     #[must_use]
     pub fn targets(&self) -> &HostsGroup {
-        &self.templates.active().base().targets
+        &self.metadata().base().targets
     }
 
     /// Mutably borrows the active report's connected targets.
@@ -313,7 +442,7 @@ impl Session {
     /// that fan a command out across hosts (`run`, `reboot`, `set_repo`) need
     /// `&mut HostsGroup`.
     pub fn targets_mut(&mut self) -> &mut HostsGroup {
-        &mut self.templates.active_mut().base_mut().targets
+        &mut self.metadata_mut().base_mut().targets
     }
 
     /// Moves the active report's targets out, leaving an empty group in place.
@@ -333,14 +462,14 @@ impl Session {
     pub fn take_targets(&mut self) -> HostsGroup {
         let is_repl = self.is_repl;
         std::mem::replace(
-            &mut self.templates.active_mut().base_mut().targets,
+            &mut self.metadata_mut().base_mut().targets,
             HostsGroup::new(Vec::new(), is_repl),
         )
     }
 
     /// Restores the active report's targets, undoing [`take_targets`](Self::take_targets).
     pub fn restore_targets(&mut self, targets: HostsGroup) {
-        self.templates.active_mut().base_mut().targets = targets;
+        self.metadata_mut().base_mut().targets = targets;
     }
 
     /// Takes the active report's targets and splits them into the `-t` selection
@@ -429,6 +558,13 @@ impl Session {
         let rrid = report.id();
         let pending = report.base().autoconnect_pending;
 
+        // Release any held active handle before the (possibly same-RRID) replace:
+        // `add_or_replace` tears the old report down by locking its entry, which
+        // would self-deadlock against a guard this session still holds on it
+        // (e.g. `regenerate` reloading the active template). The guard is
+        // re-installed for the freshly-loaded template below.
+        self.active_guard = None;
+
         // `add_or_replace` ignores the empty-RRID null sentinel; a real report
         // becomes active (re-load tears the previous same-RRID report down —
         // releasing its arbiter claim + remote pool/operation locks and closing
@@ -444,6 +580,13 @@ impl Session {
         if !rrid.is_empty() {
             self.templates.set_active(&rrid);
         }
+        // Re-install the per-call active handle for whatever is now active: the
+        // freshly-loaded template on success, or the *unchanged* prior active
+        // when the load failed (empty rrid → `add_or_replace` ignored the null
+        // sentinel and the pointer never moved). This restores the guard released
+        // above so the autoconnect below (and the caller after this returns) read
+        // through `metadata()`/`targets_mut()`.
+        self.refresh_active_guard();
 
         if pending && !rrid.is_empty() {
             self.autoconnect_active(&rrid).await;
@@ -473,7 +616,7 @@ impl Session {
         let config = self.config.clone();
         let shuffle = self.shuffle;
         let (mut ref_hosts, already, testplatforms, arbiter, owner) = {
-            let base = self.templates.active().base();
+            let base = self.metadata().base();
             (
                 base.hostnames.iter().cloned().collect::<Vec<_>>(),
                 base.targets.names(),
@@ -531,7 +674,7 @@ impl Session {
         // future non-`Send` (the `Command::call` bound), exactly the constraint
         // the `config`/`timeout_prompt` snapshots below exist for. Empty when no
         // PI assignment is active (upstream `lock_comment == ""`).
-        let lock_comment = self.templates.active().base().lock_comment.clone();
+        let lock_comment = self.metadata().base().lock_comment.clone();
         // Snapshot the active report's package metadata (`product -> { name ->
         // required-version }`) before the `targets_mut()` borrow below. Cloning
         // it up front keeps the connect future `Send` (a `base()` borrow held
@@ -540,7 +683,7 @@ impl Session {
         // with their required versions — right after connect(). Empty when no
         // report (or a report with no packages) is loaded, in which case seeding
         // is a no-op, matching upstream's empty `self.packages` pre-load.
-        let package_meta = self.templates.active().base().packages.clone();
+        let package_meta = self.metadata().base().packages.clone();
         // Snapshot the command-timeout prompt (a `Clone`-able closure) before the
         // connect loop: a `&Session`/`&Prompter` borrow held across the connect
         // `.await` would make this future non-`Send`, which `Command::call`
@@ -566,7 +709,7 @@ impl Session {
         // Snapshot the pool claims so each host knows whether to take the remote
         // pool lock (upstream `host in self._pool_claims`) vs. the normal
         // autolock. Empty on the legacy `add_host --target` path.
-        let pool_claims = self.templates.active().base().pool_claims.clone();
+        let pool_claims = self.metadata().base().pool_claims.clone();
         let store_ref = store.as_ref();
         let package_meta = &package_meta;
         let timeout_prompt = &timeout_prompt;
@@ -733,7 +876,7 @@ impl Session {
     ) -> Vec<(String, Option<Vec<String>>)> {
         // Snapshot pool state + selection identity before any await.
         let (arbiter, owner, slot_candidates, lock_comment, package_meta) = {
-            let base = self.templates.active().base();
+            let base = self.metadata().base();
             (
                 base.arbiter,
                 base.owner.clone(),
@@ -765,7 +908,7 @@ impl Session {
             // Drop dead primary claim(s) so a sibling can be tried and the
             // exhausted-pool wait reflects real availability.
             {
-                let base = self.templates.active_mut().base_mut();
+                let base = self.metadata_mut().base_mut();
                 for c in &candidates {
                     if base.pool_claims.contains(c) && !live.contains(c) {
                         base.pool_claims.remove(c);
@@ -786,8 +929,7 @@ impl Session {
                 };
                 attempted.insert(chosen.clone());
                 remaining.retain(|c| c != &chosen);
-                self.templates
-                    .active_mut()
+                self.metadata_mut()
                     .base_mut()
                     .pool_claims
                     .insert(chosen.clone());
@@ -812,7 +954,7 @@ impl Session {
                     }
                     None => {
                         // Release the claim so the next candidate is free to try.
-                        let base = self.templates.active_mut().base_mut();
+                        let base = self.metadata_mut().base_mut();
                         base.pool_claims.remove(&chosen);
                         arbiter.release(&chosen, &owner);
                     }
@@ -884,7 +1026,7 @@ impl Session {
                 }
             }
         }
-        let warnings = self.templates.active_mut().base_mut();
+        let warnings = self.metadata_mut().base_mut();
         for (host, lines) in drift {
             match lines {
                 Some(lines) => {
@@ -931,7 +1073,7 @@ impl Session {
         let config = self.config.clone();
         let shuffle = self.shuffle;
         let (already, testplatforms, arbiter, owner) = {
-            let base = self.templates.active().base();
+            let base = self.metadata().base();
             (
                 base.targets.names(),
                 base.testplatforms.clone(),
@@ -965,7 +1107,7 @@ impl Session {
     /// [`add_testplatform_hosts`](Self::add_testplatform_hosts). The membership
     /// snapshot is taken before any `.await` so the connect future stays `Send`.
     pub async fn add_named_hosts(&mut self, hosts: Vec<String>) {
-        let already = self.templates.active().base().targets.names();
+        let already = self.metadata().base().targets.names();
         let mut wanted = Vec::with_capacity(hosts.len());
         for host in hosts {
             if already.contains(&host) {
@@ -1172,7 +1314,7 @@ impl Session {
                     // Record claims + candidates on the active report so
                     // connect_and_add_hosts connects only the claims (and can
                     // fall back to siblings) and quit can release them.
-                    let base = self.templates.active_mut().base_mut();
+                    let base = self.metadata_mut().base_mut();
                     for host in &chosen {
                         base.pool_claims.insert(host.clone());
                     }
@@ -1438,7 +1580,7 @@ mod tests {
         }
         report.base_mut().testplatforms = testplatforms.iter().map(|s| (*s).to_owned()).collect();
         session.templates.add(Box::new(report));
-        session.templates.set_active(rrid);
+        session.activate(rrid);
     }
 
     /// Reconstructs the legacy (non-pool) autoconnect host set from the active
@@ -1448,7 +1590,7 @@ mod tests {
     async fn autoconnect_hosts_of(s: &Session) -> Vec<String> {
         let config = s.config.clone();
         let (ref_hosts, already, testplatforms) = {
-            let base = s.templates.active().base();
+            let base = s.metadata().base();
             (
                 base.hostnames.iter().cloned().collect::<Vec<_>>(),
                 base.targets.names(),
@@ -1834,8 +1976,7 @@ mod tests {
         let mut s = Session::new(config_with_path_refhosts(), false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         // Pre-seed a stale entry that a later match should clear.
-        s.templates
-            .active_mut()
+        s.metadata_mut()
             .base_mut()
             .product_warnings
             .insert("stale.example".to_owned(), vec!["old".to_owned()]);
@@ -1848,7 +1989,7 @@ mod tests {
             ("stale.example".to_owned(), None),
         ]);
 
-        let base = s.templates.active().base();
+        let base = s.metadata().base();
         assert_eq!(
             base.product_warnings
                 .get("drift.example")
@@ -1978,7 +2119,7 @@ mod tests {
     fn added_report_has_arbiter_and_owner_wired() {
         let mut s = Session::new(config(), false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
-        let base = s.templates.active().base();
+        let base = s.metadata().base();
         assert!(base.arbiter.is_some(), "arbiter must be wired on add()");
         let owner = base.owner.as_ref().expect("owner wired");
         assert_eq!(

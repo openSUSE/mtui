@@ -79,7 +79,8 @@ async fn close_releases_pool_claims() {
 
     let guard = sess.session().lock().await;
     for rrid in [RRID_A, RRID_B] {
-        let report = guard.templates.get(rrid).expect("template still loaded");
+        let entry = guard.templates.handle(rrid).expect("template still loaded");
+        let report = entry.try_lock().expect("entry uncontended after close");
         assert!(
             report.base().pool_claims.is_empty(),
             "close must release pool claims for {rrid}",
@@ -144,13 +145,7 @@ async fn close_is_idempotent() {
 
     assert!(mock.is_closed());
     let guard = sess.session().lock().await;
-    assert!(
-        guard
-            .templates
-            .get(RRID_A)
-            .unwrap()
-            .base()
-            .pool_claims
-            .is_empty()
-    );
+    let entry = guard.templates.handle(RRID_A).unwrap();
+    let report = entry.try_lock().expect("entry uncontended after close");
+    assert!(report.base().pool_claims.is_empty());
 }

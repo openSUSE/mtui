@@ -623,7 +623,7 @@ mod tests {
         .unwrap();
 
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.templates.active_mut().base_mut().path = Some(log.clone());
+        session.metadata_mut().base_mut().path = Some(log.clone());
 
         let args = matches(
             &OpenQAOverview,

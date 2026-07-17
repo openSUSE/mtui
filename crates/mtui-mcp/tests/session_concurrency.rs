@@ -216,11 +216,12 @@ async fn different_rrids_run_concurrently() {
 
 /// Overlapping different-RRID runs each capture only their own output.
 ///
-/// Ignored until `mtui-rs-f36r`: per-call output isolation needs the per-call
-/// display (task-local) that lands with the core dispatch change; today both
-/// calls share the one `Session.display`/`SharedBuf`.
+/// Per-call output isolation (bead `mtui-rs-f36r`, step 3): `run_command` swaps a
+/// fresh capture buffer + display onto the session for each dispatch, so even
+/// interleaved calls each return exactly their own stdout. (This does not require
+/// wall-clock parallelism — the sibling `different_rrids_run_concurrently` still
+/// awaits the step-5 outer-mutex removal.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "per-call output isolation needs mtui-core change: bead mtui-rs-f36r"]
 async fn do_not_clobber_each_others_stdout() {
     let seen: Intervals = Arc::new(Mutex::new(Vec::new()));
     let reg = registry_with(Probe {

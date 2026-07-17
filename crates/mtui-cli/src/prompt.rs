@@ -110,7 +110,7 @@ mod tests {
         report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
         report.base_mut().workflow = workflow;
         s.templates.add(Box::new(report));
-        s.templates.set_active(rrid);
+        s.activate(rrid);
     }
 
     #[test]

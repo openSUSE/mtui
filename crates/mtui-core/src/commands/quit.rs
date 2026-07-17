@@ -97,8 +97,15 @@ impl Command for Quit {
         // with the registry borrow.
         let rrids = session.templates.rrids();
         let timeout = close_timeout();
+        // Release the per-call active handle before locking entries: quit locks
+        // *every* loaded entry (incl. the active one) to tear it down, which
+        // would otherwise self-deadlock on the guard this session already holds.
+        session.release_active_guard();
         for rrid in rrids {
-            if let Some(report) = session.templates.get_mut(&rrid) {
+            if let Some(entry) = session.templates.handle(&rrid) {
+                // Lock the entry to tear it down; uncontended while the outer
+                // session mutex still serialises dispatch (steps 1-3).
+                let mut report = entry.lock().await;
                 // Release arbiter ownership + remote pool locks before
                 // disconnecting (best-effort; a no-op without pooling).
                 report.release_pool_claims().await;
@@ -258,10 +265,13 @@ mod tests {
         // reads: the failing host is named with an `Err`, the healthy one `Ok`.
         // (The first close already tore the group down; a second close on the
         // now-closed mocks still reports the scripted failure deterministically.)
-        let report = session
+        // `quit` released the active handle, so re-lock the entry directly to
+        // assert the per-host outcome it read.
+        let entry = session
             .templates
-            .get_mut("SUSE:Maintenance:1:1")
+            .handle("SUSE:Maintenance:1:1")
             .expect("report loaded");
+        let mut report = entry.lock().await;
         let outcomes = report.base_mut().targets.close(None).await;
         assert!(outcomes["good"].is_ok());
         assert!(outcomes["bad"].is_err(), "failing host is named with Err");

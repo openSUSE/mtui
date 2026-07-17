@@ -285,6 +285,9 @@ pub(crate) mod testkit {
             rrid: rrid.to_owned(),
             fail_update: false,
         }));
+        // Install the active handle so direct `command.call()` tests (which
+        // bypass the fan-out driver) read the report through `metadata()`.
+        session.activate(rrid);
         (session, buf)
     }
 
@@ -306,6 +309,7 @@ pub(crate) mod testkit {
             rrid: rrid.to_owned(),
             fail_update: true,
         }));
+        session.activate(rrid);
         (session, buf)
     }
 
@@ -381,6 +385,7 @@ pub(crate) mod testkit {
             rrid: rrid.to_owned(),
             fail_update: false,
         }));
+        session.activate(rrid);
         (session, buf)
     }
 

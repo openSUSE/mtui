@@ -213,7 +213,7 @@ mod tests {
     #[tokio::test]
     async fn auto_writes_template_to_explicit_filename() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.templates.active_mut().base_mut().workflow = Workflow::Auto;
+        session.metadata_mut().base_mut().workflow = Workflow::Auto;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("template.txt");
         std::fs::write(&path, "source code change review:\n").unwrap();
@@ -270,7 +270,7 @@ mod tests {
         let log_url = format!("{}/install.log", oqa.uri());
 
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.templates.active_mut().base_mut().workflow = Workflow::Auto;
+        session.metadata_mut().base_mut().workflow = Workflow::Auto;
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
         // Realistic template: a header above the `source code change review:`
@@ -309,7 +309,7 @@ mod tests {
     #[tokio::test]
     async fn kernel_writes_template_to_explicit_filename() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.templates.active_mut().base_mut().workflow = Workflow::Kernel;
+        session.metadata_mut().base_mut().workflow = Workflow::Kernel;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("template.txt");
         std::fs::write(&path, "regression tests:\n").unwrap();
@@ -349,7 +349,7 @@ mod tests {
             .await;
 
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.templates.active_mut().base_mut().workflow = Workflow::Kernel;
+        session.metadata_mut().base_mut().workflow = Workflow::Kernel;
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
         let path_out = dir.path().join("template.txt");
@@ -406,7 +406,7 @@ mod tests {
     #[tokio::test]
     async fn manual_lazily_builds_and_folds_openqa_auto() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.templates.active_mut().base_mut().workflow = Workflow::Manual;
+        session.metadata_mut().base_mut().workflow = Workflow::Manual;
         let server = dashboard_server("1").await;
         session.config.qem_dashboard_api = format!("{}/api", server.uri());
         session.config.openqa_instance = server.uri();
@@ -433,7 +433,7 @@ mod tests {
         // When the holder already has an "auto" result, export must not rebuild
         // it (no dashboard call needed).
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.templates.active_mut().base_mut().workflow = Workflow::Manual;
+        session.metadata_mut().base_mut().workflow = Workflow::Manual;
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
         let path = dir.path().join("template.txt");
@@ -458,7 +458,7 @@ mod tests {
     #[tokio::test]
     async fn missing_file_errors_cleanly() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.templates.active_mut().base_mut().workflow = Workflow::Auto;
+        session.metadata_mut().base_mut().workflow = Workflow::Auto;
         let args = matches(&Export, &["-f", "/nonexistent/dir/nope.txt"]);
         let err = Export.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
@@ -476,7 +476,7 @@ mod tests {
         // The reported bug: `export` on an Auto template with no connected hosts
         // must still write the template (data comes from openQA), not error.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
-        session.templates.active_mut().base_mut().workflow = Workflow::Auto;
+        session.metadata_mut().base_mut().workflow = Workflow::Auto;
         assert!(session.targets().is_empty());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("template.txt");
@@ -496,7 +496,7 @@ mod tests {
         // the dashboard/openQA (config points nowhere; a real export attempt
         // would surface an error, proving the early return fired).
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
-        session.templates.active_mut().base_mut().workflow = Workflow::Manual;
+        session.metadata_mut().base_mut().workflow = Workflow::Manual;
         assert!(session.targets().is_empty());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("template.txt");
@@ -521,7 +521,7 @@ mod tests {
         // on a Manual template must still fail (upstream HostIsNotConnectedError),
         // not be silently skipped.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
-        session.templates.active_mut().base_mut().workflow = Workflow::Manual;
+        session.metadata_mut().base_mut().workflow = Workflow::Manual;
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
         let path = dir.path().join("template.txt");

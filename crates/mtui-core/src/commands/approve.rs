@@ -137,7 +137,7 @@ async fn record_reviewer(session: &mut Session, name: &str) -> Result<bool, Comm
         return Ok(false);
     }
 
-    if let Err(e) = session.templates.active_mut().set_reviewer(name) {
+    if let Err(e) = session.metadata_mut().set_reviewer(name) {
         tracing::error!("Failed to record reviewer, not approving: {e}");
         return Ok(false);
     }
@@ -242,7 +242,7 @@ mod tests {
             .await;
 
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
-        session.templates.active_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
         session.config.gitea_token = "tok".to_owned();
         let args = matches(&Approve, &[]);
         Approve.call(&mut session, &args).await.unwrap();
@@ -293,6 +293,7 @@ mod tests {
         base.giteaprapi = Some("http://gitea.invalid/api".to_owned());
         session.config.gitea_token = "tok".to_owned();
         session.templates.add(Box::new(MismatchReport { base }));
+        session.activate("SUSE:SLFO:1.2:5");
 
         let args = matches(&Approve, &[]);
         let err = Approve.call(&mut session, &args).await.unwrap_err();

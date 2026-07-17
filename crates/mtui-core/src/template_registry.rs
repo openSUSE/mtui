@@ -3,9 +3,11 @@
 //! Port of upstream `mtui.template_registry.TemplateRegistry`. It replaces the
 //! historical scalar `metadata` / `targets` state with a keyed collection of
 //! [`TestReport`] instances and an "active" pointer, keyed by RRID
-//! (`report.id()`). A single [`NullReport`] is held as the fallback so
-//! [`active`](TemplateRegistry::active) never returns `None` and is never
-//! inserted into the keyed collection (its id is the empty string).
+//! (`report.id()`). Each entry is an individually lockable [`ReportEntry`], and
+//! a dispatch acquires exactly the entry it acts on via
+//! [`handle`](TemplateRegistry::handle) (the per-call active handle). The
+//! null-object fallback (returned when nothing is loaded) lives on
+//! [`Session`](crate::Session), which reads through its per-call active guard.
 //!
 //! A stable per-instance [`id`](TemplateRegistry::id) is established here; it is
 //! the owner-key seed the host-arbitration work keys on as `(registry.id, RRID)`
@@ -26,12 +28,25 @@
 //! (release pool claims, then `targets.close(None)` under a per-report budget)
 //! before the entry is dropped and the active pointer is repointed.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use indexmap::IndexMap;
 use mtui_config::Config;
 use mtui_hosts::get_arbiter;
-use mtui_testreport::{NullReport, TestReport};
+use mtui_testreport::TestReport;
+use tokio::sync::Mutex;
+
+/// A loaded report behind its own lock.
+///
+/// Each registry entry is individually lockable (bead `mtui-rs-f36r`, step 1):
+/// a dispatch takes the [`OwnedMutexGuard`](tokio::sync::OwnedMutexGuard) of
+/// exactly the entry it acts on (via [`TemplateRegistry::handle`]), so per-call
+/// active-report handling no longer needs to borrow the whole registry. With the
+/// MCP monolithic session `Mutex` still in place (steps 1-3) these entry locks
+/// are uncontended, so behaviour is preserved; dropping that outer mutex to let
+/// different-RRID dispatch overlap is step 5, out of scope here.
+pub type ReportEntry = Arc<Mutex<Box<dyn TestReport + Send + Sync>>>;
 
 /// Wall-clock budget for one removed report's host-close fan-out (upstream
 /// `DISCONNECT_TIMEOUT_SECONDS = 45.0` / `quit`'s `CLOSE_TIMEOUT`); removal must
@@ -67,35 +82,25 @@ pub struct RemoveReport {
 /// Holds the loaded templates and tracks the active one.
 pub struct TemplateRegistry {
     /// Loaded reports keyed by RRID, in insertion order (for fan-out order).
-    entries: IndexMap<String, Box<dyn TestReport + Send + Sync>>,
+    /// Each entry is individually lockable — see [`ReportEntry`].
+    entries: IndexMap<String, ReportEntry>,
     /// The active RRID, or `None` when nothing is loaded.
     active: Option<String>,
-    /// The null-object fallback returned by [`active`](Self::active) when empty.
-    null: Box<dyn TestReport + Send + Sync>,
     /// Stable per-registry identity; the owner-key seed for host arbitration.
     id: String,
 }
 
 impl TemplateRegistry {
-    /// Builds an empty registry with a fresh [`NullReport`] fallback.
+    /// Builds an empty registry.
     ///
     /// `config` is retained for parity with the runtime and future arbiter
-    /// wiring; the null report is built from it, matching upstream's
-    /// `null_factory`.
+    /// wiring; the null-object fallback now lives on [`Session`](crate::Session)
+    /// (which reads through its per-call active guard), not here.
     #[must_use]
-    pub fn new(config: Config) -> Self {
-        Self::with_null(Box::new(NullReport::new(config)))
-    }
-
-    /// Builds an empty registry with an explicit null-object fallback.
-    ///
-    /// Test seam mirroring upstream's injectable `null_factory`.
-    #[must_use]
-    pub fn with_null(null: Box<dyn TestReport + Send + Sync>) -> Self {
+    pub fn new(_config: Config) -> Self {
         Self {
             entries: IndexMap::new(),
             active: None,
-            null,
             id: uuid::Uuid::new_v4().simple().to_string(),
         }
     }
@@ -129,7 +134,8 @@ impl TemplateRegistry {
             base.owner = Some((self.id.clone(), rrid.clone()));
         }
         let is_new = !self.entries.contains_key(&rrid);
-        self.entries.insert(rrid.clone(), report);
+        self.entries
+            .insert(rrid.clone(), Arc::new(Mutex::new(report)));
         if is_new && self.active.is_none() {
             self.active = Some(rrid);
         }
@@ -191,7 +197,10 @@ impl TemplateRegistry {
     async fn teardown(&mut self, rrid: &str) -> RemoveReport {
         let mut result = RemoveReport::default();
         let timeout = remove_close_timeout();
-        if let Some(report) = self.entries.get_mut(rrid) {
+        if let Some(entry) = self.entries.get(rrid).cloned() {
+            // Lock the entry to operate on it; uncontended while the MCP outer
+            // session mutex still serialises dispatch (steps 1-3).
+            let mut report = entry.lock().await;
             // Release arbiter ownership + remote pool locks before disconnecting
             // (best-effort; a no-op without pooling).
             report.release_pool_claims().await;
@@ -218,32 +227,46 @@ impl TemplateRegistry {
         result
     }
 
-    /// Returns the loaded report for `rrid`, or `None` if absent.
+    /// Returns a cloned handle (lockable [`ReportEntry`]) for `rrid`, or `None`
+    /// if absent.
+    ///
+    /// The caller `.lock()`s it to read/mutate the report. This is how a dispatch
+    /// (via [`Session`](crate::Session)) acquires exactly the entry it acts on
+    /// without borrowing the whole registry — the per-call active handle
+    /// (`mtui-rs-f36r`, step 2).
     #[must_use]
-    pub fn get(&self, rrid: &str) -> Option<&(dyn TestReport + Send + Sync)> {
-        self.entries.get(rrid).map(|b| &**b)
+    pub fn handle(&self, rrid: &str) -> Option<ReportEntry> {
+        self.entries.get(rrid).map(Arc::clone)
     }
 
-    /// Mutably returns the loaded report for `rrid`, or `None` if absent.
-    pub fn get_mut(&mut self, rrid: &str) -> Option<&mut Box<dyn TestReport + Send + Sync>> {
-        self.entries.get_mut(rrid)
+    /// The cloned handle for the active report, or `None` when nothing is loaded.
+    #[must_use]
+    pub fn active_handle(&self) -> Option<ReportEntry> {
+        self.active.as_deref().and_then(|rrid| self.handle(rrid))
     }
 
-    /// The active report, or the [`NullReport`] fallback when nothing is loaded.
+    /// Whether the report loaded under `rrid` has no connected hosts.
+    ///
+    /// Returns `true` when `rrid` is absent (nothing to act on), matching the
+    /// prior `get(rrid).map(..).unwrap_or(true)` fan-out skip check. Locks the
+    /// entry (uncontended under the outer session mutex).
     #[must_use]
-    pub fn active(&self) -> &(dyn TestReport + Send + Sync) {
-        match &self.active {
-            Some(rrid) => &*self.entries[rrid],
-            None => &*self.null,
+    pub fn is_hostless(&self, rrid: &str) -> bool {
+        match self.entries.get(rrid) {
+            Some(entry) => entry
+                .try_lock()
+                .map_or(true, |report| report.base().targets.is_empty()),
+            None => true,
         }
     }
 
-    /// Mutably borrows the active report, or the null fallback.
-    pub fn active_mut(&mut self) -> &mut Box<dyn TestReport + Send + Sync> {
-        match &self.active {
-            Some(rrid) => &mut self.entries[rrid],
-            None => &mut self.null,
-        }
+    /// Reads the connected-host count and workflow label for `rrid`, or `None`
+    /// if absent (for `list_templates`). Locks the entry (uncontended).
+    #[must_use]
+    pub fn template_row(&self, rrid: &str) -> Option<(usize, &'static str)> {
+        let entry = self.entries.get(rrid)?;
+        let report = entry.try_lock().ok()?;
+        Some((report.base().targets.len(), report.base().workflow.as_str()))
     }
 
     /// The active RRID, or `None` when nothing is loaded.
@@ -261,6 +284,11 @@ impl TemplateRegistry {
         } else {
             false
         }
+    }
+
+    /// Clears the active pointer (the empty-session state).
+    pub fn set_active_none(&mut self) {
+        self.active = None;
     }
 
     /// Every loaded RRID in insertion order (for completion).
@@ -371,7 +399,8 @@ mod tests {
     fn claim_hosts(reg: &mut TemplateRegistry, rrid: &str, hosts: &[&str]) -> Owner {
         let owner: Owner = (reg.id().to_owned(), rrid.to_owned());
         let arbiter = mtui_hosts::get_arbiter();
-        let report = reg.get_mut(rrid).expect("report loaded");
+        let entry = reg.handle(rrid).expect("report loaded");
+        let mut report = entry.try_lock().expect("entry uncontended in test");
         for h in hosts {
             assert!(arbiter.try_acquire(h, &owner), "host {h} claimable");
             report.base_mut().pool_claims.insert((*h).to_owned());

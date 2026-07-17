@@ -57,6 +57,12 @@ impl Command for Unload {
         if !session.templates.contains(&rrid) {
             return Err(CommandError::TemplateNotLoaded(rrid));
         }
+        // Release the per-call active handle before removing: `remove` locks the
+        // target entry to tear it down, which would self-deadlock if that entry
+        // is the one this session's guard currently holds (unload of the active
+        // template). Leaves the registry pointer alone so the survivor is still
+        // promoted by `remove`.
+        session.release_active_guard();
         // Async removal releases the report's arbiter claim + remote
         // pool/operation locks and closes its hosts (bounded) before the entry is
         // dropped. Teardown failures are best-effort logged; unload still
@@ -110,10 +116,10 @@ mod tests {
         );
         let arbiter = mtui_hosts::get_arbiter();
         assert!(arbiter.try_acquire("unload-claim-h1", &owner));
+        // `SUSE:Maintenance:1:1` is the active template, so mutate it through the
+        // session's active handle rather than a (locked) registry entry.
         session
-            .templates
-            .get_mut("SUSE:Maintenance:1:1")
-            .unwrap()
+            .metadata_mut()
             .base_mut()
             .pool_claims
             .insert("unload-claim-h1".to_owned());

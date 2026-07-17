@@ -83,7 +83,10 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use mtui_config::Config;
-use mtui_core::{EngineError, Registry, Session, dispatch_argv, resolve_command_rrids};
+use mtui_core::{
+    ColorMode, CommandPromptDisplay, EngineError, Registry, Session, dispatch_argv,
+    resolve_command_rrids,
+};
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
@@ -595,21 +598,36 @@ impl McpSession {
     /// kept `pub(crate)` so the wedged-close unit test can bound the wait to a
     /// fraction of a second instead of 45s.
     pub(crate) async fn close_with_timeout(&self, timeout: Duration) {
-        let mut session = self.session.lock().await;
-        // Snapshot the RRIDs first so the mutable per-report borrow below does
-        // not conflict with the registry borrow (as the REPL `quit` does).
-        let rrids = session.templates.rrids();
+        // Snapshot every loaded entry's lockable handle under the session lock,
+        // then drop the session guard *before* the teardown awaits: holding the
+        // `MutexGuard<Session>` across the per-entry `.await` would force the
+        // whole close future to require `Session: Sync` (which it is not — the
+        // display sink is `Send`-only). The `Arc<Mutex<..>>` handles keep each
+        // report alive independently, so teardown needs no `&Session`.
+        let handles: Vec<_> = {
+            let mut session = self.session.lock().await;
+            // Release any lingering active handle before locking entries: a prior
+            // dispatch leaves the active template's entry locked via the session's
+            // per-call guard, and this loop locks *every* entry to tear it down —
+            // which would self-deadlock on the active one otherwise.
+            session.release_active_guard();
+            session
+                .templates
+                .rrids()
+                .into_iter()
+                .filter_map(|rrid| session.templates.handle(&rrid))
+                .collect()
+        };
         let teardown = async {
-            for rrid in rrids {
-                if let Some(report) = session.templates.get_mut(&rrid) {
-                    // Release arbiter ownership + remote pool locks before
-                    // disconnecting (best-effort; a no-op without pooling).
-                    report.release_pool_claims().await;
-                    // Close the group: plain disconnect (no reboot/poweroff on an
-                    // MCP session eviction, unlike the REPL `quit` bootarg).
-                    // Per-host teardown outcomes are irrelevant on eviction.
-                    let _ = report.base_mut().targets.close(None).await;
-                }
+            for entry in handles {
+                let mut report = entry.lock().await;
+                // Release arbiter ownership + remote pool locks before
+                // disconnecting (best-effort; a no-op without pooling).
+                report.release_pool_claims().await;
+                // Close the group: plain disconnect (no reboot/poweroff on an
+                // MCP session eviction, unlike the REPL `quit` bootarg).
+                // Per-host teardown outcomes are irrelevant on eviction.
+                let _ = report.base_mut().targets.close(None).await;
             }
         };
         // Never let a wedged host teardown block the eviction (and the http
@@ -655,20 +673,31 @@ impl McpSession {
         // whole dispatch, released when `_lock` drops at end of scope.
         let _lock = self.command_lock(registry, name, argv).await;
 
-        // Isolate this call's output: drop anything a prior call left behind.
-        let _ = self.output.take();
+        // Per-call output isolation (D2, bead `mtui-rs-f36r`, step 3): give this
+        // dispatch its *own* fresh capture buffer + display, swapped onto the
+        // session for the duration and restored afterwards, so two overlapping
+        // calls never write into the same buffer and clobber each other's stdout.
+        // Bounded to the same budget as the session-wide sink. The session's
+        // display is swapped back before the lock is released.
+        let call_buf = SharedBuf::with_limit(self.max_output_bytes);
+        let call_display =
+            CommandPromptDisplay::with_sink(Box::new(call_buf.clone()), ColorMode::Never);
 
         let result = {
             let mut session = self.session.lock().await;
-            dispatch_argv(registry, &mut session, name, argv).await
+            let prev_display = std::mem::replace(&mut session.display, call_display);
+            let result = dispatch_argv(registry, &mut session, name, argv).await;
+            session.display = prev_display;
+            result
         };
 
-        // The capture sink already bounded the output at write time (discarding
-        // overflow before it was ever buffered). If it dropped anything, append
-        // the same notice `cap_output` would — exactly once, with the write-time
-        // overrun count. When nothing was dropped (or the cap is disabled) the
-        // captured text is already within budget, so `cap_output` is a no-op.
-        let (captured, dropped) = self.output.take_with_dropped();
+        // Read this call's own buffer. The sink already bounded the output at
+        // write time (discarding overflow before it was ever buffered). If it
+        // dropped anything, append the same notice `cap_output` would — exactly
+        // once, with the write-time overrun count. When nothing was dropped (or
+        // the cap is disabled) the captured text is already within budget, so
+        // `cap_output` is a no-op.
+        let (captured, dropped) = call_buf.take_with_dropped();
         let text = if dropped > 0 {
             let mut t = captured;
             t.push_str(&truncation_notice(dropped, self.max_output_bytes));

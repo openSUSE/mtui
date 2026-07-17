@@ -50,13 +50,9 @@ impl Command for ListTemplates {
         let rows: Vec<(String, usize, &'static str)> = rrids
             .iter()
             .filter_map(|rrid| {
-                session.templates.get(rrid).map(|r| {
-                    (
-                        rrid.clone(),
-                        r.base().targets.len(),
-                        r.base().workflow.as_str(),
-                    )
-                })
+                session
+                    .template_row(rrid)
+                    .map(|(hosts, mode)| (rrid.clone(), hosts, mode))
             })
             .collect();
 
@@ -116,7 +112,7 @@ mod tests {
             .templates
             .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
         // The most-recently added is active.
-        session.templates.set_active("SUSE:Maintenance:1:1");
+        session.activate("SUSE:Maintenance:1:1");
         let args = matches(&ListTemplates, &[]);
         ListTemplates.call(&mut session, &args).await.unwrap();
         let out = buf.contents();

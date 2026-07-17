@@ -377,7 +377,7 @@ mod tests {
         mount_success(&server, rrid).await;
 
         let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
-        session.templates.active_mut().base_mut().workflow = Workflow::Kernel;
+        session.metadata_mut().base_mut().workflow = Workflow::Kernel;
         let tmp = tempfile::tempdir().unwrap();
         session.config = config_for(&server);
         session.config.template_dir = tmp.path().to_path_buf();

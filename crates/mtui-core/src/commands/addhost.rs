@@ -118,7 +118,7 @@ mod tests {
 
     /// Sets the active report's testplatforms (via the public template registry).
     fn set_testplatforms(session: &mut Session, tps: &[&str]) {
-        session.templates.active_mut().base_mut().testplatforms =
+        session.metadata_mut().base_mut().testplatforms =
             tps.iter().map(|s| (*s).to_owned()).collect();
     }
 

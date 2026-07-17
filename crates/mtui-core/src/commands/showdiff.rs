@@ -440,7 +440,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // report_wd() == parent of `path`; put source.diff beside a "log" file.
         std::fs::write(dir.path().join("source.diff"), diff).unwrap();
-        session.templates.active_mut().base_mut().path = Some(dir.path().join("log"));
+        session.metadata_mut().base_mut().path = Some(dir.path().join("log"));
         (session, buf, dir)
     }
 

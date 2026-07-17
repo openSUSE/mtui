@@ -109,14 +109,14 @@ pub(crate) async fn pi_autolock(session: &mut Session, action: PiAction) {
     match action {
         PiAction::Lock => {
             let comment = format!("testing of {rrid}");
-            session.templates.active_mut().base_mut().lock_comment = comment.clone();
+            session.metadata_mut().base_mut().lock_comment = comment.clone();
             tracing::info!("Locking reference hosts for {rrid}");
             session.targets_mut().lock(&comment).await;
         }
         PiAction::Unlock => {
             tracing::info!("Unlocking reference hosts for {rrid}");
             session.targets_mut().unlock().await;
-            session.templates.active_mut().base_mut().lock_comment = String::new();
+            session.metadata_mut().base_mut().lock_comment = String::new();
         }
         PiAction::None => {}
     }
@@ -499,7 +499,7 @@ mod tests {
         // the comment on Unlock; a None action is a no-op.
         let (mut session, _buf) = session_with_hosts("SUSE:PI:1.2:5", &["h1"], "ok");
         session.config.lock_pi_autolock = true;
-        session.templates.active_mut().base_mut().rrid = "SUSE:PI:1.2:5".parse().ok();
+        session.metadata_mut().base_mut().rrid = "SUSE:PI:1.2:5".parse().ok();
 
         pi_autolock(&mut session, PiAction::None).await;
         assert_eq!(session.metadata().base().lock_comment, "");
@@ -525,7 +525,7 @@ mod tests {
         // PI but the knob is off → no-op.
         let (mut session, _buf) = session_with_hosts("SUSE:PI:1.2:5", &["h1"], "ok");
         session.config.lock_pi_autolock = false;
-        session.templates.active_mut().base_mut().rrid = "SUSE:PI:1.2:5".parse().ok();
+        session.metadata_mut().base_mut().rrid = "SUSE:PI:1.2:5".parse().ok();
         pi_autolock(&mut session, PiAction::Lock).await;
         assert_eq!(session.metadata().base().lock_comment, "");
     }
@@ -575,7 +575,7 @@ mod tests {
             .await;
 
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
-        session.templates.active_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
         session.config.gitea_token = "tok".to_owned();
 
         // Force assign skips the open-group guard; a Gitea error is logged, not
@@ -616,7 +616,7 @@ mod tests {
             .await;
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
-        session.templates.active_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
         session.config.gitea_token = "tok".to_owned();
         session.config.teregen_api = server.uri();
 
@@ -658,7 +658,7 @@ mod tests {
             .await;
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
-        session.templates.active_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
         session.config.gitea_token = "tok".to_owned();
         session.config.teregen_api = server.uri();
 
