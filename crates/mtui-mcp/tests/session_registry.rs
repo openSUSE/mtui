@@ -112,11 +112,11 @@ async fn drop_frees_a_slot() {
 /// upstream's "refetch after evict mints anew".
 #[tokio::test]
 async fn remint_after_drop_is_a_new_session() {
-    // Cap of 2 so the first session's `Arc` can be held alive *across* the
-    // re-mint. Keeping it live pins its heap address, so the pointer-identity
-    // check below cannot be defeated by the allocator reusing a freed address —
-    // a race that surfaced once these tests share one process (consolidated `it`
-    // binary) instead of one binary each.
+    // Cap of 2 so the first session can be held alive in the live-set *across*
+    // the re-mint. Freshness is asserted via the session's stable, monotonic
+    // `id()` — not `Arc` address identity, which the allocator can reuse after a
+    // drop (a flake that surfaced once these tests share one process, the
+    // consolidated `it` binary, instead of one binary each — bead mtui-rs-1edj).
     let reg = registry(2, 0);
 
     let first = reg.live_sessions();
@@ -125,16 +125,16 @@ async fn remint_after_drop_is_a_new_session() {
     let a = reg.try_make_server().unwrap();
     let sess_a = reg.live_sessions();
     assert_eq!(sess_a.len(), 1);
-    let ptr_a = Arc::as_ptr(&sess_a[0]);
-    // Drop the server (frees its cap slot) but retain the session `Arc` so its
-    // address stays valid and non-reusable for the comparison.
+    let id_a = sess_a[0].id();
+    // Drop the server (frees its cap slot) but retain the session `Arc` so it
+    // stays in the live-set alongside the re-mint.
     drop(a);
 
     let _b = reg.try_make_server().unwrap();
     let sess_b: Vec<_> = reg
         .live_sessions()
         .into_iter()
-        .filter(|s| Arc::as_ptr(s) != ptr_a)
+        .filter(|s| s.id() != id_a)
         .collect();
     assert_eq!(
         sess_b.len(),
@@ -142,7 +142,7 @@ async fn remint_after_drop_is_a_new_session() {
         "exactly one fresh session besides the held one"
     );
     assert!(
-        Arc::as_ptr(&sess_b[0]) != ptr_a,
+        sess_b[0].id() != id_a,
         "a re-mint must be a fresh session instance"
     );
 

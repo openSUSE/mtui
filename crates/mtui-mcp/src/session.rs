@@ -285,6 +285,11 @@ pub struct JobView {
     pub elapsed_s: f64,
 }
 
+/// Process-global monotonic source of [`McpSession::id`] values. Each session
+/// pulls a fresh id at construction, so two distinct sessions never share one
+/// (freshness independent of heap-address reuse — bead `mtui-rs-1edj`).
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(0);
+
 /// A headless mtui session backing one MCP client.
 ///
 /// Holds the [`Session`] behind a [`Mutex`] because command dispatch
@@ -293,6 +298,10 @@ pub struct JobView {
 /// [`SharedBuf`] is the sink the session's display writes to; a tool call
 /// [`take`](SharedBuf::take)s it to isolate its own output.
 pub struct McpSession {
+    /// Process-unique, monotonic id assigned at construction. Stable for the
+    /// session's lifetime; two distinct sessions never share one. Used to assert
+    /// session freshness without relying on `Arc` address identity.
+    id: u64,
     /// The guarded session commands dispatch against.
     session: Arc<Mutex<Session>>,
     /// The capture sink the session's display writes to; drained per tool call.
@@ -387,6 +396,7 @@ impl McpSession {
         let max_completed_jobs = config.mcp_max_completed_jobs;
         let (session, output) = capture::session(config);
         Arc::new(Self {
+            id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
             session: Arc::new(Mutex::new(session)),
             output,
             max_output_bytes,
@@ -400,6 +410,16 @@ impl McpSession {
             max_active_jobs,
             max_completed_jobs,
         })
+    }
+
+    /// The process-unique, monotonic id assigned at construction.
+    ///
+    /// Stable for the session's lifetime; two distinct sessions never share one.
+    /// A valid freshness signal where `Arc` address identity is not (a freed
+    /// address can be reused by the allocator).
+    #[must_use]
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// The guarded session, for dispatch under the session lock.
@@ -1070,6 +1090,17 @@ mod tests {
 
     fn session(config: Config) -> Arc<McpSession> {
         McpSession::new(config)
+    }
+
+    /// Each session gets a distinct id, and a session's id is stable across
+    /// calls — the freshness invariant `remint_after_drop_is_a_new_session`
+    /// relies on instead of `Arc` address identity (bead `mtui-rs-1edj`).
+    #[test]
+    fn session_id_is_unique_and_stable() {
+        let a = McpSession::new(Config::default());
+        let b = McpSession::new(Config::default());
+        assert_ne!(a.id(), b.id(), "distinct sessions must have distinct ids");
+        assert_eq!(a.id(), a.id(), "a session's id is stable across calls");
     }
 
     /// A host whose `close()` never returns must not block `close_with_timeout`.
