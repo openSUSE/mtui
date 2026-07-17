@@ -98,39 +98,39 @@ fn set_active_unknown_returns_false() {
     assert!(!r.set_active("nope"));
 }
 
-#[test]
-fn remove_nonactive_keeps_active() {
+#[tokio::test]
+async fn remove_nonactive_keeps_active() {
     let mut r = registry();
     r.add(FakeReport::new("a").boxed());
     r.add(FakeReport::new("b").boxed());
-    r.remove("b");
+    r.remove("b").await;
     assert_eq!(r.active().id(), "a");
     assert_eq!(r.len(), 1);
 }
 
-#[test]
-fn remove_active_advances_pointer() {
+#[tokio::test]
+async fn remove_active_advances_pointer() {
     let mut r = registry();
     r.add(FakeReport::new("a").boxed());
     r.add(FakeReport::new("b").boxed());
-    r.remove("a");
+    r.remove("a").await;
     assert_eq!(r.active().id(), "b");
 }
 
-#[test]
-fn remove_last_empties_and_active_is_null() {
+#[tokio::test]
+async fn remove_last_empties_and_active_is_null() {
     let mut r = registry();
     r.add(FakeReport::with_hosts("a", &["h1"]).boxed());
-    r.remove("a"); // dropping the report tears down its connections (no panic)
+    r.remove("a").await; // teardown releases claims/locks + closes connections
     assert_eq!(r.len(), 0);
     assert!(!r.active().is_loaded());
 }
 
-#[test]
-fn remove_unknown_is_noop() {
+#[tokio::test]
+async fn remove_unknown_is_noop() {
     let mut r = registry();
     r.add(FakeReport::new("a").boxed());
-    r.remove("nope"); // absent → no-op, active unchanged
+    r.remove("nope").await; // absent → no-op, active unchanged
     assert_eq!(r.len(), 1);
     assert_eq!(r.active().id(), "a");
 }

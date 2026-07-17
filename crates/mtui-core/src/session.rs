@@ -354,9 +354,18 @@ impl Session {
         let rrid = report.id();
         let pending = report.base().autoconnect_pending;
 
-        // `templates.add` ignores the empty-RRID null sentinel; a real report
-        // becomes active (re-load replaces + re-activates).
-        self.templates.add(report);
+        // `add_or_replace` ignores the empty-RRID null sentinel; a real report
+        // becomes active (re-load tears the previous same-RRID report down —
+        // releasing its arbiter claim + remote pool/operation locks and closing
+        // its hosts — before storing the new one, then re-activates). Teardown
+        // failures on the replaced report are best-effort logged.
+        let removed = self.templates.add_or_replace(report).await;
+        for (host, err) in &removed.failed {
+            tracing::warn!("failed to disconnect from {host} while reloading: {err}");
+        }
+        for host in &removed.stragglers {
+            tracing::warn!("still disconnecting from {host} while reloading");
+        }
         if !rrid.is_empty() {
             self.templates.set_active(&rrid);
         }

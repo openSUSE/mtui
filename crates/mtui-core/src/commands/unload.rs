@@ -57,7 +57,17 @@ impl Command for Unload {
         if !session.templates.contains(&rrid) {
             return Err(CommandError::TemplateNotLoaded(rrid));
         }
-        session.templates.remove(&rrid);
+        // Async removal releases the report's arbiter claim + remote
+        // pool/operation locks and closes its hosts (bounded) before the entry is
+        // dropped. Teardown failures are best-effort logged; unload still
+        // succeeds (mirroring `quit`).
+        let removed = session.templates.remove(&rrid).await;
+        for (host, err) in &removed.failed {
+            tracing::warn!("failed to disconnect from {host}: {err}");
+        }
+        for host in &removed.stragglers {
+            tracing::warn!("still disconnecting from {host}");
+        }
         Ok(())
     }
 }
@@ -83,6 +93,44 @@ mod tests {
         Unload.call(&mut session, &args).await.unwrap();
         assert!(!session.templates.contains("SUSE:Maintenance:2:2"));
         assert!(session.templates.contains("SUSE:Maintenance:1:1"));
+    }
+
+    #[tokio::test]
+    async fn unload_releases_pool_claims_and_closes_hosts() {
+        // The active report of two claims a host through the process-global
+        // arbiter; unload must release that ownership (not just drop the entry).
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+
+        let owner = (
+            session.templates.id().to_owned(),
+            "SUSE:Maintenance:1:1".to_owned(),
+        );
+        let arbiter = mtui_hosts::get_arbiter();
+        assert!(arbiter.try_acquire("unload-claim-h1", &owner));
+        session
+            .templates
+            .get_mut("SUSE:Maintenance:1:1")
+            .unwrap()
+            .base_mut()
+            .pool_claims
+            .insert("unload-claim-h1".to_owned());
+
+        let args = matches(&Unload, &["SUSE:Maintenance:1:1"]);
+        Unload.call(&mut session, &args).await.unwrap();
+
+        assert!(!session.templates.contains("SUSE:Maintenance:1:1"));
+        assert_eq!(
+            session.templates.active_rrid(),
+            Some("SUSE:Maintenance:2:2"),
+            "the survivor is promoted"
+        );
+        assert!(
+            arbiter.owner_of("unload-claim-h1").is_none(),
+            "the unloaded report's arbiter claim is released"
+        );
     }
 
     #[tokio::test]

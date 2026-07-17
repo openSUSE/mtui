@@ -331,6 +331,27 @@ pub(crate) mod testkit {
         })
     }
 
+    /// Boxes a caller-built [`TestReportBase`] under `rrid` into the shared
+    /// [`FakeReport`] double.
+    ///
+    /// The escape hatch behind [`fake_report`] for tests that must pre-wire the
+    /// host group beyond the uniform stdout-echo mock — e.g. a group holding a
+    /// target whose mock `close` fails or wedges, to exercise the removal
+    /// teardown paths.
+    #[must_use]
+    pub fn fake_report_from_base(base: TestReportBase) -> Box<dyn TestReport + Send + Sync> {
+        let rrid = base
+            .rrid
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        Box::new(FakeReport {
+            base,
+            rrid,
+            fail_update: false,
+        })
+    }
+
     /// A session whose single host scripts `command` to a log that echoes the
     /// command back (as a real host does), so `lastin()` reflects what ran.
     #[must_use]
