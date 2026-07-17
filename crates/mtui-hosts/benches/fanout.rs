@@ -13,6 +13,11 @@
 //! - `sftp/put` / `sftp/get`: per-host SFTP fan-out cost (0mop.6).
 //! - `locks/report`: `report_locks` re-reads each host's lock file over SSH; the
 //!   per-host read count is the baseline for eliminating repeated reads (0mop.4).
+//! - `discovery/parse_system` vs `discovery/per_op_reads`: on a high-latency
+//!   host with K product files, the batched single-session `parse_system`
+//!   (0mop.3) pays one SFTP handshake regardless of K, while the per-op read
+//!   path pays one per read — the batched curve stays flat in K, the per-op
+//!   curve grows linearly.
 //!
 //! Wall-clock here is advisory (async scheduling is noisy); the deterministic
 //! regression oracle is the per-host Connection call count, asserted in the
@@ -23,7 +28,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use mtui_hosts::{HostsGroup, MockConnection, Target};
+use mtui_hosts::connection::Connection;
+use mtui_hosts::{HostsGroup, MockConnection, Target, parse_system};
 use mtui_types::enums::{ExecutionMode, TargetState};
 use mtui_types::hostlog::CommandLog;
 
@@ -173,11 +179,92 @@ fn bench_report_locks(c: &mut Criterion) {
     g.finish();
 }
 
+/// Product-file counts swept for the discovery benches (the addon-loop length).
+const PRODUCT_COUNTS: &[usize] = &[1, 4, 16, 64];
+
+/// A per-SFTP-handshake latency. A real high-latency host pays a full round
+/// trip to open the channel + request the subsystem, which dwarfs the tiny cost
+/// of an already-open read; the delay is set well above the mock's per-read
+/// bookkeeping so the bench isolates the handshake-count difference (batched
+/// pays it once per probe, per-op pays it once per read).
+const HANDSHAKE_LATENCY: Duration = Duration::from_millis(2);
+
+/// Builds a SLES host with `k` addon product files, each read during discovery,
+/// with a per-SFTP-session handshake `delay`.
+fn discovery_host(k: usize, delay: Duration) -> MockConnection {
+    let base = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
+    let mut entries: Vec<String> = vec!["SLES.prod".to_owned()];
+    for i in 0..k {
+        entries.push(format!("addon-{i:03}.prod"));
+    }
+    let mut conn = MockConnection::new("sles.example")
+        .with_listing("/etc/products.d", entries)
+        .with_link("/etc/products.d/baseproduct", "SLES.prod")
+        .with_file("/etc/products.d/SLES.prod", base.to_vec())
+        .with_sftp_session_delay(delay);
+    for i in 0..k {
+        let prod = format!(
+            "<product><name>addon-{i:03}</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"
+        );
+        conn = conn.with_file(
+            format!("/etc/products.d/addon-{i:03}.prod"),
+            prod.into_bytes(),
+        );
+    }
+    conn
+}
+
+/// The batched path (0mop.3): one SFTP handshake for the whole probe, flat in K.
+fn bench_discovery_parse_system(c: &mut Criterion) {
+    let rt = rt();
+    let mut g = c.benchmark_group("discovery/parse_system");
+    for &k in PRODUCT_COUNTS {
+        g.bench_with_input(BenchmarkId::from_parameter(k), &k, |b, &k| {
+            b.to_async(&rt).iter_batched(
+                || discovery_host(k, HANDSHAKE_LATENCY),
+                |mut conn| async move {
+                    let _ = parse_system(black_box(&mut conn)).await;
+                    conn
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    g.finish();
+}
+
+/// The per-op counterfactual: reading the same K+1 product files one open at a
+/// time pays one handshake per read, growing linearly in K — the cost the
+/// batched path amortizes away.
+fn bench_discovery_per_op_reads(c: &mut Criterion) {
+    let rt = rt();
+    let mut g = c.benchmark_group("discovery/per_op_reads");
+    for &k in PRODUCT_COUNTS {
+        g.bench_with_input(BenchmarkId::from_parameter(k), &k, |b, &k| {
+            b.to_async(&rt).iter_batched(
+                || discovery_host(k, HANDSHAKE_LATENCY),
+                |mut conn| async move {
+                    let _ = conn.sftp_open(Path::new("/etc/products.d/SLES.prod")).await;
+                    for i in 0..k {
+                        let p = format!("/etc/products.d/addon-{i:03}.prod");
+                        let _ = conn.sftp_open(black_box(Path::new(&p))).await;
+                    }
+                    conn
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_fanout_run,
     bench_fanout_run_bounded,
     bench_sftp,
-    bench_report_locks
+    bench_report_locks,
+    bench_discovery_parse_system,
+    bench_discovery_per_op_reads
 );
 criterion_main!(benches);

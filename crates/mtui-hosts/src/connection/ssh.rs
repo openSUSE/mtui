@@ -62,11 +62,12 @@ use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
 use russh::{ChannelMsg, client::Config as ClientConfig};
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::SftpSession as RusshSftpSession;
 use tokio::time::{Duration, timeout};
 
 #[cfg(feature = "shell")]
 use super::ShellChannel;
+use super::sftp_session::SftpSession;
 use super::timeout::{CommandTimeout, HostKeyPolicy};
 use super::{Connection, DEFAULT_USER};
 use crate::error::{HostError, Result};
@@ -464,7 +465,7 @@ impl SshConnection {
 
     /// Opens the SFTP subsystem on a fresh channel, reconnecting first if the
     /// link has dropped. Mirrors upstream `_sftp` (open per operation).
-    async fn sftp(&mut self) -> Result<SftpSession> {
+    async fn sftp(&mut self) -> Result<RusshSftpSession> {
         if !self.is_active() {
             self.reconnect().await?;
         }
@@ -477,16 +478,13 @@ impl SshConnection {
             .request_subsystem(true, "sftp")
             .await
             .map_err(|e| self.sftp_err(e))?;
-        SftpSession::new(channel.into_stream())
+        RusshSftpSession::new(channel.into_stream())
             .await
             .map_err(|e| self.sftp_err(e))
     }
 
     fn sftp_err(&self, e: impl std::fmt::Display) -> HostError {
-        HostError::Sftp {
-            host: self.hostname.clone(),
-            reason: e.to_string(),
-        }
+        sftp_err_for(&self.hostname, e)
     }
 
     /// Maps a russh-sftp client error to [`HostError`], routing the
@@ -494,21 +492,7 @@ impl SshConnection {
     /// [`HostError::SftpNotFound`] variant so the host-system parser can branch
     /// on "not found" the way upstream branches on `FileNotFoundError`.
     fn sftp_err_at(&self, e: russh_sftp::client::error::Error, path: &Path) -> HostError {
-        use russh_sftp::client::error::Error as SftpError;
-        use russh_sftp::protocol::StatusCode;
-
-        if let SftpError::Status(status) = &e
-            && status.status_code == StatusCode::NoSuchFile
-        {
-            return HostError::SftpNotFound {
-                host: self.hostname.clone(),
-                path: path.to_string_lossy().into_owned(),
-            };
-        }
-        HostError::Sftp {
-            host: self.hostname.clone(),
-            reason: e.to_string(),
-        }
+        sftp_err_at_for(&self.hostname, e, path)
     }
 
     /// Categorizes the error from an **atomic exclusive create**
@@ -538,6 +522,41 @@ impl SshConnection {
             host: self.hostname.clone(),
             reason: e.to_string(),
         }
+    }
+}
+
+/// Builds a generic [`HostError::Sftp`] for `host` from a displayable error.
+///
+/// Shared by [`SshConnection::sftp_err`] and the batched [`SshSftpSession`] so
+/// both paths map SFTP failures identically.
+fn sftp_err_for(host: &str, e: impl std::fmt::Display) -> HostError {
+    HostError::Sftp {
+        host: host.to_owned(),
+        reason: e.to_string(),
+    }
+}
+
+/// Maps a russh-sftp client error to [`HostError`] for `host`/`path`, routing
+/// the `SSH_FX_NO_SUCH_FILE` status to [`HostError::SftpNotFound`].
+///
+/// Shared by [`SshConnection::sftp_err_at`] and the batched [`SshSftpSession`]
+/// so both paths preserve the "not found" branch the host-system parser relies
+/// on.
+fn sftp_err_at_for(host: &str, e: russh_sftp::client::error::Error, path: &Path) -> HostError {
+    use russh_sftp::client::error::Error as SftpError;
+    use russh_sftp::protocol::StatusCode;
+
+    if let SftpError::Status(status) = &e
+        && status.status_code == StatusCode::NoSuchFile
+    {
+        return HostError::SftpNotFound {
+            host: host.to_owned(),
+            path: path.to_string_lossy().into_owned(),
+        };
+    }
+    HostError::Sftp {
+        host: host.to_owned(),
+        reason: e.to_string(),
     }
 }
 
@@ -852,6 +871,52 @@ pub(crate) fn validate_sftp_component<'a>(name: &'a str, host: &str) -> Result<&
     match (comps.next(), comps.next()) {
         (Some(std::path::Component::Normal(c)), None) if c == name => Ok(name),
         _ => Err(reject()),
+    }
+}
+
+/// A batched SFTP session over one russh channel+subsystem, returned by
+/// [`SshConnection::sftp_session`].
+///
+/// Holds a single live [`RusshSftpSession`] and the hostname (for error
+/// context). Each read verb runs against the *same* session — no per-op
+/// handshake — and routes failures through the shared
+/// [`sftp_err_for`]/[`sftp_err_at_for`] mappers so the error surface is
+/// identical to the per-op [`Connection`] path.
+struct SshSftpSession {
+    sftp: RusshSftpSession,
+    hostname: String,
+}
+
+#[async_trait]
+impl SftpSession for SshSftpSession {
+    async fn open(&mut self, path: &Path) -> Result<Vec<u8>> {
+        self.sftp
+            .read(path.to_string_lossy().to_string())
+            .await
+            .map_err(|e| sftp_err_at_for(&self.hostname, e, path))
+    }
+
+    async fn listdir(&mut self, path: &Path) -> Result<Vec<String>> {
+        let dir = self
+            .sftp
+            .read_dir(path.to_string_lossy().to_string())
+            .await
+            .map_err(|e| sftp_err_at_for(&self.hostname, e, path))?;
+        Ok(dir.map(|e| e.file_name()).collect())
+    }
+
+    async fn readlink(&mut self, path: &Path) -> Result<String> {
+        self.sftp
+            .read_link(path.to_string_lossy().to_string())
+            .await
+            .map_err(|e| sftp_err_at_for(&self.hostname, e, path))
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        self.sftp
+            .close()
+            .await
+            .map_err(|e| sftp_err_for(&self.hostname, e))
     }
 }
 
@@ -1278,6 +1343,17 @@ impl Connection for SshConnection {
             .map_err(|e| self.sftp_err_at(e, path))?;
         let _ = sftp.close().await;
         Ok(target)
+    }
+
+    async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>> {
+        // One channel+subsystem handshake, reused across the returned handle's
+        // reads (upstream `sftp_session()`). `sftp()` already reconnects at
+        // entry if the link dropped; mid-session errors then propagate.
+        let sftp = self.sftp().await?;
+        Ok(Box::new(SshSftpSession {
+            sftp,
+            hostname: self.hostname.clone(),
+        }))
     }
 
     #[cfg(feature = "shell")]

@@ -17,6 +17,7 @@ use mtui_types::hostlog::CommandLog;
 use super::Connection;
 #[cfg(feature = "shell")]
 use super::ShellChannel;
+use super::sftp_session::SftpSession;
 use crate::error::{HostError, Result};
 
 /// The outcome scripted for a command run against a [`MockConnection`].
@@ -115,6 +116,17 @@ pub struct MockConnection {
     fired: Arc<Mutex<Vec<String>>>,
     /// SFTP operations observed, in order.
     sftp_ops: Arc<Mutex<Vec<MockSftpOp>>>,
+    /// Number of batched SFTP sessions opened via
+    /// [`sftp_session`](Connection::sftp_session). Shared across `Clone`d
+    /// handles so a test observes every session regardless of which handle
+    /// opened it — this is the `mtui-rs-0mop.3` handshake-count oracle
+    /// (`parse_system` must open exactly one).
+    sftp_sessions: Arc<Mutex<usize>>,
+    /// Artificial delay charged **once per SFTP session open** (the
+    /// channel+subsystem handshake). Models a high-latency host so a bench can
+    /// show batching (one handshake) beat per-op (one handshake per read). Zero
+    /// (the default) opens instantly.
+    sftp_session_delay: std::time::Duration,
     /// Canned directory listings keyed by remote path (for `sftp_listdir` /
     /// `sftp_get_folder`).
     listings: HashMap<PathBuf, Vec<String>>,
@@ -193,6 +205,8 @@ impl MockConnection {
             reconnect_fails: false,
             fired: Arc::new(Mutex::new(Vec::new())),
             sftp_ops: Arc::new(Mutex::new(Vec::new())),
+            sftp_sessions: Arc::new(Mutex::new(0)),
+            sftp_session_delay: std::time::Duration::ZERO,
             listings: HashMap::new(),
             files: Arc::new(Mutex::new(HashMap::new())),
             links: HashMap::new(),
@@ -284,6 +298,16 @@ impl MockConnection {
     #[must_use]
     pub fn with_run_delay(mut self, delay: std::time::Duration) -> Self {
         self.run_delay = delay;
+        self
+    }
+
+    /// Adds an artificial delay charged **once per SFTP session open**, modelling
+    /// a high-latency host's channel+subsystem handshake so a bench can contrast
+    /// batching (one handshake for a whole probe) against per-op reads (one
+    /// handshake each).
+    #[must_use]
+    pub fn with_sftp_session_delay(mut self, delay: std::time::Duration) -> Self {
+        self.sftp_session_delay = delay;
         self
     }
 
@@ -428,8 +452,42 @@ impl MockConnection {
         self.sftp_ops.lock().expect("mock sftp lock").clone()
     }
 
+    /// Returns how many batched SFTP sessions were opened via
+    /// [`sftp_session`](Connection::sftp_session).
+    ///
+    /// The `mtui-rs-0mop.3` handshake-count oracle: a multi-read probe
+    /// (`parse_system`) that batches correctly opens exactly **one** session
+    /// regardless of how many files it reads.
+    #[must_use]
+    pub fn sftp_session_count(&self) -> usize {
+        *self.sftp_sessions.lock().expect("mock sftp sessions lock")
+    }
+
     fn record_sftp(&self, op: MockSftpOp) {
         self.sftp_ops.lock().expect("mock sftp lock").push(op);
+    }
+
+    /// The file-lookup body of `sftp_open` **without** the per-op handshake
+    /// delay: records the op and returns the scripted bytes/error. Used by the
+    /// batched [`SftpSession`] (which already paid the handshake once at session
+    /// open) so a batch of reads pays one handshake, not one per read.
+    fn open_no_handshake(&self, path: &Path) -> Result<Vec<u8>> {
+        self.record_sftp(MockSftpOp::Open(path.to_path_buf()));
+        if self.sftp_open_errors.contains(path) {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: format!("open failed: {}", path.display()),
+            });
+        }
+        self.files
+            .lock()
+            .expect("mock files lock")
+            .get(path)
+            .cloned()
+            .ok_or_else(|| HostError::SftpNotFound {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            })
     }
 
     /// Scripts one chunk of shell output served by
@@ -538,6 +596,38 @@ impl ShellChannel for MockShellChannel {
             .expect("mock shell resizes lock")
             .push((cols, rows));
         Ok(())
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A batched [`SftpSession`] over a [`MockConnection`], returned by
+/// [`MockConnection::sftp_session`].
+///
+/// Holds a `Clone` of the parent mock (which shares its scripted state via
+/// `Arc`) and delegates each read verb to the parent's per-op `sftp_*` method,
+/// so the batched and per-op read paths honor identical scripting, error
+/// injection, and op-recording — there is exactly one source of truth for mock
+/// SFTP-read behaviour.
+struct MockSftpSession {
+    conn: MockConnection,
+}
+
+#[async_trait]
+impl SftpSession for MockSftpSession {
+    async fn open(&mut self, path: &Path) -> Result<Vec<u8>> {
+        // No per-read handshake: the session already paid it once at open.
+        self.conn.open_no_handshake(path)
+    }
+
+    async fn listdir(&mut self, path: &Path) -> Result<Vec<String>> {
+        self.conn.sftp_listdir(path).await
+    }
+
+    async fn readlink(&mut self, path: &Path) -> Result<String> {
+        self.conn.sftp_readlink(path).await
     }
 
     async fn close(&mut self) -> Result<()> {
@@ -703,22 +793,13 @@ impl Connection for MockConnection {
     }
 
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
-        self.record_sftp(MockSftpOp::Open(path.to_path_buf()));
-        if self.sftp_open_errors.contains(path) {
-            return Err(HostError::Sftp {
-                host: self.hostname.clone(),
-                reason: format!("open failed: {}", path.display()),
-            });
+        // The per-op path opens its own SFTP session per call (real ssh:
+        // `self.sftp()`), so charge the handshake delay here — this is the
+        // once-per-read cost the 0mop.3 batched path amortizes to once-per-probe.
+        if !self.sftp_session_delay.is_zero() {
+            tokio::time::sleep(self.sftp_session_delay).await;
         }
-        self.files
-            .lock()
-            .expect("mock files lock")
-            .get(path)
-            .cloned()
-            .ok_or_else(|| HostError::SftpNotFound {
-                host: self.hostname.clone(),
-                path: path.display().to_string(),
-            })
+        self.open_no_handshake(path)
     }
 
     async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()> {
@@ -786,6 +867,24 @@ impl Connection for MockConnection {
                 host: self.hostname.clone(),
                 path: path.display().to_string(),
             })
+    }
+
+    async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>> {
+        // Model the per-batch handshake: count one session open. Reconnect at
+        // entry if inactive, mirroring the ssh impl (and `parse_system`'s
+        // reconnect-then-retry expectations under `Target::connect`).
+        if !self.active {
+            self.reconnect().await?;
+        }
+        if !self.sftp_session_delay.is_zero() {
+            tokio::time::sleep(self.sftp_session_delay).await;
+        }
+        *self.sftp_sessions.lock().expect("mock sftp sessions lock") += 1;
+        // The handle shares this mock's scripted state via `Arc` (clone), so its
+        // reads record into the same `sftp_ops` log and honor the same
+        // file/listing/link/error scripting as the per-op methods — no behaviour
+        // divergence between the batched and per-op read paths.
+        Ok(Box::new(MockSftpSession { conn: self.clone() }))
     }
 
     #[cfg(feature = "shell")]
@@ -1035,6 +1134,56 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn sftp_session_batches_reads_and_counts_one_open() {
+        // One `sftp_session()` open serves several reads; the per-read ops are
+        // recorded through the shared log exactly as the per-op methods would.
+        let mut conn = MockConnection::new("h1")
+            .with_listing("/d", ["a", "b"])
+            .with_file("/d/a", b"A".to_vec());
+        {
+            let mut sess = conn.sftp_session().await.expect("session opens");
+            assert_eq!(
+                sess.listdir(Path::new("/d")).await.expect("listdir"),
+                ["a", "b"]
+            );
+            assert_eq!(sess.open(Path::new("/d/a")).await.expect("open"), b"A");
+            sess.close().await.expect("close");
+        }
+        assert_eq!(conn.sftp_session_count(), 1);
+        assert_eq!(
+            conn.sftp_ops(),
+            [
+                MockSftpOp::Listdir(PathBuf::from("/d")),
+                MockSftpOp::Open(PathBuf::from("/d/a")),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cloned_handle_shares_transport_state() {
+        // `clone_box()` yields a handle that shares the SFTP session counter and
+        // op log via `Arc` — the mock proxy for "reuses the same transport".
+        // This is what lets a `TargetLock`/`PoolLock` built from a target's
+        // clone be observed operating against the *same* connection state in
+        // offline tests. (The real `SshConnection::clone_box` clones identity
+        // with an empty handle and opens its own transport on first use; the
+        // mock deliberately shares so lock behaviour stays observable.)
+        let mut conn = MockConnection::new("h1").with_file("/f", b"x".to_vec());
+        let mut clone = conn.clone_box();
+
+        {
+            let mut s1 = conn.sftp_session().await.expect("open on original");
+            let _ = s1.open(Path::new("/f")).await;
+        }
+        {
+            let mut s2 = clone.sftp_session().await.expect("open on clone");
+            let _ = s2.open(Path::new("/f")).await;
+        }
+        // Both opens counted against the one shared counter.
+        assert_eq!(conn.sftp_session_count(), 2);
     }
 
     #[cfg(feature = "shell")]

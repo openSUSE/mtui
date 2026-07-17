@@ -36,6 +36,7 @@
 //! russh impl for [`MockConnection`] freely.
 
 mod mock;
+mod sftp_session;
 #[cfg(feature = "shell")]
 mod shell;
 mod ssh;
@@ -44,6 +45,7 @@ mod timeout;
 use std::path::Path;
 
 pub use mock::{MockConnection, MockSftpOp};
+pub use sftp_session::SftpSession;
 #[cfg(feature = "shell")]
 pub use shell::ShellChannel;
 pub use ssh::{MAX_STREAM_BYTES, MAX_TOTAL_BYTES, SshConnection, TimeoutPrompt};
@@ -245,6 +247,27 @@ pub trait Connection: Send + Sync {
     ///
     /// Returns an SFTP/transport error if the link cannot be read.
     async fn sftp_readlink(&mut self, path: &Path) -> Result<String>;
+
+    /// Opens a batched SFTP session that reuses one channel+subsystem across
+    /// several reads, returning an object-safe [`SftpSession`] handle.
+    ///
+    /// Ports upstream `Connection.sftp_session`: a caller running several reads
+    /// in a row (e.g. [`parse_system`](crate::target::parse_system) on a host
+    /// with many product files) opens one session, issues its reads through the
+    /// handle, then closes it — paying the SFTP handshake **once** instead of
+    /// per op. The per-op `sftp_*` methods keep opening their own session; this
+    /// is purely an optimization boundary for multi-step probes and carries no
+    /// behavioural contract beyond identical per-read semantics.
+    ///
+    /// The session reconnects the transport first if it has dropped (like the
+    /// per-op path); **mid-session** errors propagate without auto-retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a reconnect error if the link is down and cannot be
+    /// re-established, or an SFTP/transport error if the subsystem cannot be
+    /// opened.
+    async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>>;
 
     /// Opens an interactive PTY shell on the host, returning an object-safe
     /// [`ShellChannel`] duplex.
