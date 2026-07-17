@@ -65,6 +65,8 @@ pub enum MockSftpOp {
         /// Whether the write was an exclusive (atomic-create) write.
         exclusive: bool,
     },
+    /// `sftp_append(path, ..)`.
+    Append(PathBuf),
     /// `sftp_remove(path)`.
     Remove(PathBuf),
     /// `sftp_rmdir(path)`.
@@ -154,6 +156,11 @@ pub struct MockConnection {
     /// atomic create (permission denied, transport), which must fail closed
     /// rather than reconcile.
     exclusive_write_errors: HashSet<PathBuf>,
+    /// Paths scripted to raise [`HostError::Sftp`] from
+    /// [`sftp_append`](Connection::sftp_append), modelling a best-effort append
+    /// failure (read-only/full remote fs) that callers such as `add_history`
+    /// swallow.
+    sftp_append_errors: HashSet<PathBuf>,
     /// Directory paths scripted to raise [`HostError::SftpNotFound`] from
     /// `sftp_listdir` (mirrors upstream `listdir` raising `OSError`, e.g. a host
     /// with no `/etc/products.d`). Distinct from unscripted paths, which return
@@ -213,6 +220,7 @@ impl MockConnection {
             sftp_remove_fails: false,
             sftp_remove_not_found: false,
             exclusive_write_errors: HashSet::new(),
+            sftp_append_errors: HashSet::new(),
             missing_dirs: HashSet::new(),
             sftp_open_errors: HashSet::new(),
             listdir_transient_failures: Arc::new(Mutex::new(HashMap::new())),
@@ -254,6 +262,15 @@ impl MockConnection {
     #[must_use]
     pub fn with_exclusive_write_error(mut self, path: impl Into<PathBuf>) -> Self {
         self.exclusive_write_errors.insert(path.into());
+        self
+    }
+
+    /// Scripts `path`'s [`sftp_append`](Connection::sftp_append) calls to raise a
+    /// [`HostError::Sftp`], modelling a best-effort append failure (read-only or
+    /// full remote fs) that a caller such as `add_history` swallows.
+    #[must_use]
+    pub fn with_sftp_append_error(mut self, path: impl Into<PathBuf>) -> Self {
+        self.sftp_append_errors.insert(path.into());
         self
     }
 
@@ -827,6 +844,24 @@ impl Connection for MockConnection {
         Ok(())
     }
 
+    async fn sftp_append(&mut self, path: &Path, data: &[u8]) -> Result<()> {
+        self.record_sftp(MockSftpOp::Append(path.to_path_buf()));
+        if self.sftp_append_errors.contains(path) {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: format!("scripted append failure: {}", path.display()),
+            });
+        }
+        // Additive: create-if-missing, then extend at EOF. No truncation and no
+        // read-modify-write window, so concurrent appenders never lose entries.
+        let mut files = self.files.lock().expect("mock files lock");
+        files
+            .entry(path.to_path_buf())
+            .or_default()
+            .extend_from_slice(data);
+        Ok(())
+    }
+
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Remove(path.to_path_buf()));
         if self.sftp_remove_not_found {
@@ -1113,6 +1148,39 @@ mod tests {
                 exclusive: false,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn sftp_append_creates_missing_then_extends_and_records() {
+        let mut conn = MockConnection::new("h1");
+        // Missing file is created by the first append.
+        conn.sftp_append(Path::new("/log"), b"a\n")
+            .await
+            .expect("first append creates");
+        // A second append extends at EOF, preserving the first entry.
+        conn.sftp_append(Path::new("/log"), b"b\n")
+            .await
+            .expect("second append extends");
+        assert_eq!(conn.file_contents("/log").as_deref(), Some(&b"a\nb\n"[..]));
+        assert_eq!(
+            conn.sftp_ops(),
+            [
+                MockSftpOp::Append(PathBuf::from("/log")),
+                MockSftpOp::Append(PathBuf::from("/log")),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_append_scripted_error_propagates() {
+        let mut conn = MockConnection::new("h1").with_sftp_append_error("/log");
+        let err = conn
+            .sftp_append(Path::new("/log"), b"x")
+            .await
+            .expect_err("scripted append failure propagates");
+        assert!(matches!(err, HostError::Sftp { .. }));
+        // The op is still recorded even though it failed.
+        assert_eq!(conn.sftp_ops(), [MockSftpOp::Append(PathBuf::from("/log"))]);
     }
 
     #[tokio::test]

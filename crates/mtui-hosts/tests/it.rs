@@ -9,6 +9,8 @@
 mod fanout_spinner_production_runtime;
 #[path = "fanout_spinner_visible.rs"]
 mod fanout_spinner_visible;
+#[path = "history_append.rs"]
+mod history_append;
 #[path = "lock_format.rs"]
 mod lock_format;
 #[path = "operation_group.rs"]

@@ -804,14 +804,16 @@ impl Target {
     /// wire-format contract is shared with the Python mtui and read back by
     /// `list_history`, so it is preserved byte-for-byte.
     ///
-    /// The [`Connection`] trait has no append primitive (upstream opens the file
-    /// `"a+"`), so this reads the current contents via
-    /// [`sftp_open`](Connection::sftp_open) and rewrites the concatenation via
-    /// [`sftp_write`](Connection::sftp_write) — a missing file reads as empty.
+    /// Upstream opens the file `"a+"` and writes one line; this sends only that
+    /// new line via [`sftp_append`](Connection::sftp_append), which appends at
+    /// end-of-file and creates the file if it is missing. Unlike the former
+    /// read-concatenate-rewrite emulation, the cost per entry is now O(1) in the
+    /// line size (not O(history)), and concurrent writers (a Rust and a Python
+    /// mtui sharing the host) no longer clobber one another's entries.
     ///
-    /// Best-effort, matching upstream: a read/write failure (read-only or full
-    /// remote fs, unconnected host) is logged and swallowed so a bookkeeping
-    /// write never aborts the operation it records.
+    /// Best-effort, matching upstream: a write failure (read-only or full remote
+    /// fs, unconnected host) is logged and swallowed so a bookkeeping write never
+    /// aborts the operation it records.
     pub async fn add_history(&mut self, fields: &[String]) {
         if self.state != TargetState::Enabled {
             return;
@@ -828,10 +830,7 @@ impl Target {
             return;
         };
         let path = std::path::Path::new("/var/log/mtui.log");
-        // Append = read existing (missing ⇒ empty), concatenate, write back.
-        let mut buf = conn.sftp_open(path).await.unwrap_or_default();
-        buf.extend_from_slice(line.as_bytes());
-        if let Err(e) = conn.sftp_write(path, &buf, false).await {
+        if let Err(e) = conn.sftp_append(path, line.as_bytes()).await {
             tracing::warn!(host = %hostname, error = %e, "failed to write history entry");
         }
     }
@@ -2320,6 +2319,12 @@ mod tests {
         let _user = it.next().unwrap();
         let rest = it.next().unwrap();
         assert_eq!(rest, "downgrade:SUSE:Maintenance:1:2:pkg-a pkg-b");
+        // One append, no read-modify-write: the entry is sent via a single
+        // `sftp_append`, never a read (`sftp_open`) + rewrite (`sftp_write`).
+        assert_eq!(
+            handle.sftp_ops(),
+            vec![MockSftpOp::Append(PathBuf::from("/var/log/mtui.log"))]
+        );
     }
 
     #[tokio::test]

@@ -11,6 +11,9 @@
 //!   A flat curve until memory/scheduler pressure is the baseline for bounding
 //!   (0mop.2) and session reuse (0mop.3).
 //! - `sftp/put` / `sftp/get`: per-host SFTP fan-out cost (0mop.6).
+//! - `history/append`: cost of recording one history entry vs. the size the log
+//!   already holds. Flat = the append primitive (0mop.5); a rising curve would
+//!   be the old read-rewrite emulation.
 //! - `locks/report`: `report_locks` re-reads each host's lock file over SSH; the
 //!   per-host read count is the baseline for eliminating repeated reads (0mop.4).
 //! - `discovery/parse_system` vs `discovery/per_op_reads`: on a high-latency
@@ -258,6 +261,54 @@ fn bench_discovery_per_op_reads(c: &mut Criterion) {
     g.finish();
 }
 
+/// Sizes of the *pre-existing* history the `add_history` bench appends onto.
+const HISTORY_SIZES: &[usize] = &[0, 1_000, 100_000];
+
+/// `history/append` (0mop.5): the cost of recording **one** history entry as a
+/// function of how large the log already is. The old read-concatenate-rewrite
+/// emulation grew ~linearly in existing size (it downloaded and re-uploaded the
+/// whole file every time); the append primitive is flat — one append regardless
+/// of prior size. A flat curve here is the whole point of the change; the
+/// deterministic oracle is the per-entry append call-count asserted in
+/// `tests/history_append.rs`, this only measures the scaling shape.
+fn bench_history_append(c: &mut Criterion) {
+    let rt = rt();
+    let mut g = c.benchmark_group("history/append");
+    for &existing in HISTORY_SIZES {
+        g.bench_with_input(
+            BenchmarkId::from_parameter(existing),
+            &existing,
+            |b, &existing| {
+                b.to_async(&rt).iter_batched(
+                    || {
+                        // A log already holding `existing` entries.
+                        let mut prior = Vec::new();
+                        for i in 0..existing {
+                            prior.extend_from_slice(format!("{i}:seed:noop\n").as_bytes());
+                        }
+                        let conn =
+                            MockConnection::new("host-0000").with_file("/var/log/mtui.log", prior);
+                        Target::with_connection(
+                            "host-0000",
+                            TargetState::Enabled,
+                            ExecutionMode::Parallel,
+                            Box::new(conn),
+                        )
+                    },
+                    |mut target| async move {
+                        target
+                            .add_history(black_box(&["install".to_owned(), "pkg".to_owned()]))
+                            .await;
+                        target
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_fanout_run,
@@ -265,6 +316,7 @@ criterion_group!(
     bench_sftp,
     bench_report_locks,
     bench_discovery_parse_system,
-    bench_discovery_per_op_reads
+    bench_discovery_per_op_reads,
+    bench_history_append
 );
 criterion_main!(benches);

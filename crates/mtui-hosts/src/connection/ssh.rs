@@ -1310,6 +1310,31 @@ impl Connection for SshConnection {
         Ok(())
     }
 
+    async fn sftp_append(&mut self, path: &Path, data: &[u8]) -> Result<()> {
+        use russh_sftp::protocol::OpenFlags;
+        use tokio::io::AsyncWriteExt;
+
+        let sftp = self.sftp().await?;
+        let path_str = path.to_string_lossy().to_string();
+
+        // Open at end-of-file (paramiko mode "a+"), creating the file if it is
+        // missing. O_APPEND makes each write land at the current EOF, so
+        // concurrent appenders extend the file without a read-modify-write race.
+        let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND;
+        let mut file = match sftp.open_with_flags(path_str, flags).await {
+            Ok(f) => f,
+            Err(e) => {
+                let err = self.sftp_err_at(e, path);
+                let _ = sftp.close().await;
+                return Err(err);
+            }
+        };
+        file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
+        file.shutdown().await.map_err(|e| self.sftp_err(e))?;
+        let _ = sftp.close().await;
+        Ok(())
+    }
+
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
         let sftp = self.sftp().await?;
         sftp.remove_file(path.to_string_lossy().to_string())

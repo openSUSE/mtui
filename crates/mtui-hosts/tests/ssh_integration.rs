@@ -170,6 +170,7 @@ impl russh::server::Handler for TestSshSession {
             let handler = SftpHandler {
                 fs: self.fs.clone(),
                 listed: HashMap::new(),
+                append: std::collections::HashSet::new(),
             };
             russh_sftp::server::run(channel.into_stream(), handler).await;
         } else {
@@ -251,6 +252,9 @@ struct SftpHandler {
     fs: SharedFs,
     /// readdir cursor: handle -> whether already returned entries.
     listed: HashMap<String, bool>,
+    /// Handles opened with `O_APPEND`: writes ignore the client offset and land
+    /// at the current end-of-file, as a real sshd does.
+    append: std::collections::HashSet<String>,
 }
 
 impl SftpHandler {
@@ -313,6 +317,13 @@ impl russh_sftp::server::Handler for SftpHandler {
                 fs.files.entry(filename.clone()).or_default();
             }
         }
+        // O_APPEND: subsequent writes on this handle land at EOF regardless of
+        // the client-supplied offset (russh-sftp's client does not seek to EOF).
+        if pflags.contains(OpenFlags::APPEND) {
+            self.append.insert(filename.clone());
+        } else {
+            self.append.remove(&filename);
+        }
         Ok(Handle {
             id,
             handle: filename,
@@ -346,9 +357,12 @@ impl russh_sftp::server::Handler for SftpHandler {
         offset: u64,
         data: Vec<u8>,
     ) -> Result<Status, Self::Error> {
+        let append = self.append.contains(&handle);
         let mut fs = self.fs.lock().await;
         let buf = fs.files.entry(handle).or_default();
-        let start = offset as usize;
+        // In append mode the write lands at the current EOF; otherwise honour
+        // the client-supplied offset (overwrite/positioned write).
+        let start = if append { buf.len() } else { offset as usize };
         if buf.len() < start + data.len() {
             buf.resize(start + data.len(), 0);
         }
@@ -693,6 +707,31 @@ async fn sftp_write_exclusive_then_overwrite_and_read_back() {
         .expect("overwrite ok");
     let after_overwrite = conn.sftp_open(lock).await.expect("read after overwrite");
     assert_eq!(after_overwrite, b"1700000001:alice:42:comment");
+}
+
+#[tokio::test]
+async fn sftp_append_creates_then_extends_at_eof_and_read_back() {
+    let fs = SharedFs::default();
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let log = std::path::Path::new("/var/log/mtui.log");
+
+    // First append against a missing path creates the file (O_CREAT).
+    conn.sftp_append(log, b"1700000000:alice:install\n")
+        .await
+        .expect("first append creates the file");
+    // Subsequent appends land at EOF, preserving prior entries (O_APPEND) —
+    // no read-modify-write, unlike the old emulation.
+    conn.sftp_append(log, b"1700000001:bob:downgrade\n")
+        .await
+        .expect("second append extends at EOF");
+
+    let back = conn.sftp_open(log).await.expect("read back");
+    assert_eq!(
+        back,
+        b"1700000000:alice:install\n1700000001:bob:downgrade\n"
+    );
 }
 
 #[tokio::test]

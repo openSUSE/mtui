@@ -221,6 +221,26 @@ pub trait Connection: Send + Sync {
     /// exclusive create).
     async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()>;
 
+    /// Atomically appends `data` to the end of a remote file over SFTP.
+    ///
+    /// This is the additive counterpart to [`sftp_write`](Self::sftp_write):
+    /// it opens the file with `O_APPEND` (paramiko mode `"a+"`) so every write
+    /// lands at the current end-of-file, and **creates the file if it is
+    /// missing** (`O_CREAT`). Unlike the exclusive [`sftp_write`] path there is
+    /// no read-modify-write window and no TOCTOU to close — concurrent
+    /// appenders each extend the file without clobbering one another, which is
+    /// exactly what the shared `/var/log/mtui.log` history contract needs when a
+    /// Rust and a Python mtui write to the same host.
+    ///
+    /// It never truncates: existing contents are preserved and `data` is placed
+    /// after them, byte-for-byte.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the file cannot be opened, created,
+    /// or written.
+    async fn sftp_append(&mut self, path: &Path, data: &[u8]) -> Result<()>;
+
     /// Deletes a remote file over SFTP.
     ///
     /// Mirrors upstream `Connection.sftp_remove`.
