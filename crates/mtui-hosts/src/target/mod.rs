@@ -56,8 +56,8 @@ pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all,
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::HostsGroup;
 pub use locks::{
-    Clock, LockRow, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
-    TargetLock, with_locked,
+    Clock, LockRow, LockSnapshot, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock,
+    TARGET_LOCK_PATH, TargetLock, with_locked,
 };
 pub use operation::{
     Check, CheckArgs, Doer, HostPlan, InstallOperation, LastOutput, Operation, OperationGroup,
@@ -546,32 +546,42 @@ impl Target {
             let Some(lock) = self.pool_lock.as_mut() else {
                 return LockRow::default();
             };
-            if !lock.is_locked().await.unwrap_or(false) {
+            // Single remote read; every field is derived from the snapshot.
+            let Ok(snap) = lock.snapshot().await else {
+                return LockRow::default();
+            };
+            if snap.lock.user.is_empty() {
                 return LockRow::default();
             }
+            let time = snap.lock.display_time();
             LockRow {
                 is_locked: true,
-                is_mine: lock.is_mine().unwrap_or(false),
-                locked_by: lock.locked_by().await.unwrap_or_default(),
-                time: lock.time().await.unwrap_or_default(),
+                is_mine: snap.is_mine,
+                locked_by: snap.lock.user,
+                time,
                 // A pool claim's detail is the owning template's RRID (parsed
                 // from the `mtui pool <RRID> [<owner>]` stamp), not the raw
                 // comment the operation lock carries.
-                comment: lock.rrid().await.unwrap_or_default(),
+                comment: snap.rrid,
             }
         } else {
             let Some(lock) = self.lock.as_mut() else {
                 return LockRow::default();
             };
-            if !lock.is_locked().await.unwrap_or(false) {
+            // Single remote read; every field is derived from the snapshot.
+            let Ok(snap) = lock.snapshot().await else {
+                return LockRow::default();
+            };
+            if snap.lock.user.is_empty() {
                 return LockRow::default();
             }
+            let time = snap.lock.display_time();
             LockRow {
                 is_locked: true,
-                is_mine: lock.is_mine().unwrap_or(false),
-                locked_by: lock.locked_by().await.unwrap_or_default(),
-                time: lock.time().await.unwrap_or_default(),
-                comment: lock.comment().await.unwrap_or_default(),
+                is_mine: snap.is_mine,
+                locked_by: snap.lock.user,
+                time,
+                comment: snap.lock.comment,
             }
         }
     }
@@ -2029,6 +2039,56 @@ mod tests {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
         assert!(!t.lock_status(false).await.is_locked);
         assert!(!t.lock_status(true).await.is_locked);
+    }
+
+    /// Oracle for mtui-rs-0mop.4: resolving a full `LockRow` must read the
+    /// lockfile exactly once, not once per derived field.
+    #[tokio::test]
+    async fn lock_status_reads_lockfile_once() {
+        // Operation lock.
+        let conn = MockConnection::new("h1").with_file(
+            TARGET_LOCK_PATH,
+            b"1700000000:alice:4242:busy testing".to_vec(),
+        );
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        let _ = t.lock_status(false).await;
+        let op_reads = handle
+            .sftp_ops()
+            .into_iter()
+            .filter(|op| matches!(op, MockSftpOp::Open(p) if p == Path::new(TARGET_LOCK_PATH)))
+            .count();
+        assert_eq!(op_reads, 1, "operation lock should be read exactly once");
+
+        // Pool claim.
+        let conn = MockConnection::new("h1").with_file(
+            POOL_LOCK_PATH,
+            b"1700000000:bob:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec(),
+        );
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        let _ = t.lock_status(true).await;
+        let pool_reads = handle
+            .sftp_ops()
+            .into_iter()
+            .filter(|op| matches!(op, MockSftpOp::Open(p) if p == Path::new(POOL_LOCK_PATH)))
+            .count();
+        assert_eq!(pool_reads, 1, "pool claim should be read exactly once");
+    }
+
+    /// A self-owned operation lock resolves `is_mine = true` off the single read.
+    #[tokio::test]
+    async fn lock_status_reports_self_owned_lock() {
+        let me = mtui_config::Config::default().session_user;
+        let pid = std::process::id();
+        let line = format!("1700000000:{me}:{pid}:mine");
+        let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, line.into_bytes());
+        let mut t = enabled_with(conn);
+        let row = t.lock_status(false).await;
+        assert!(row.is_locked);
+        assert!(row.is_mine);
+        assert_eq!(row.locked_by, me);
+        assert_eq!(row.comment, "mine");
     }
 
     // --- shell() (feature `shell`) ------------------------------------------

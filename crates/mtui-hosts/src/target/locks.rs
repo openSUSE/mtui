@@ -138,6 +138,23 @@ pub struct LockRow {
     pub comment: String,
 }
 
+/// A single-read view of a lock's on-disk state plus derived ownership.
+///
+/// Produced by [`TargetLock::snapshot`] / [`PoolLock::snapshot`] with **exactly
+/// one** remote read, so [`Target::lock_status`](crate::Target::lock_status) can
+/// derive every displayed field without re-reading the lockfile per field.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LockSnapshot {
+    /// The parsed on-disk lock (empty [`user`](RemoteLock::user) ⇒ unlocked).
+    pub lock: RemoteLock,
+    /// Whether the lock belongs to the current owner. `false` when unlocked
+    /// (the accessor's "not locked" error is not propagated here).
+    pub is_mine: bool,
+    /// The owning template's RRID, for a [`PoolLock`] claim only; empty for an
+    /// operation-lock snapshot or a non-pool comment.
+    pub rrid: String,
+}
+
 impl RemoteLock {
     /// Serializes to a lockfile line: `timestamp:user:pid[:comment]`.
     ///
@@ -190,6 +207,17 @@ impl RemoteLock {
             pid,
             comment: parts.get(3).map_or(String::new(), |c| (*c).to_owned()),
         })
+    }
+
+    /// A formatted lock-creation time, or `"unknown"` when the stored timestamp
+    /// is missing/malformed. Shared by [`TargetLock::time`] and the one-read
+    /// snapshot path so both render identically.
+    #[must_use]
+    pub fn display_time(&self) -> String {
+        match self.timestamp.parse::<i64>() {
+            Ok(ts) => format_utc(ts),
+            Err(_) => "unknown".to_owned(),
+        }
     }
 
     /// Human-readable "locked by <user> (<comment>)." string.
@@ -532,10 +560,7 @@ impl<C: Clock> TargetLock<C> {
     /// Propagates an SFTP error from [`load`](Self::load).
     pub async fn time(&mut self) -> Result<String> {
         self.load().await?;
-        match self.lock.timestamp.parse::<i64>() {
-            Ok(ts) => Ok(format_utc(ts)),
-            Err(_) => Ok("unknown".to_owned()),
-        }
+        Ok(self.lock.display_time())
     }
 
     /// Unlocks the target.
@@ -599,6 +624,26 @@ impl<C: Clock> TargetLock<C> {
     #[must_use]
     pub fn current(&self) -> &RemoteLock {
         &self.lock
+    }
+
+    /// Resolves the lock's on-disk state and ownership with a **single** remote
+    /// read, for lock reporting ([`Target::lock_status`](crate::Target::lock_status)).
+    ///
+    /// One [`load`](Self::load); `is_mine` is derived from the freshly-loaded
+    /// cache (an unlocked lock is not "mine" and does not raise). Leaves the
+    /// per-field async accessors for the wait/claim/unlock callers, which
+    /// intentionally re-read between retries.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from [`load`](Self::load).
+    pub async fn snapshot(&mut self) -> Result<LockSnapshot> {
+        self.load().await?;
+        let is_mine = self.is_mine().unwrap_or(false);
+        Ok(LockSnapshot {
+            lock: self.lock.clone(),
+            is_mine,
+            rrid: String::new(),
+        })
     }
 }
 
@@ -788,6 +833,28 @@ impl<C: Clock> PoolLock<C> {
     pub async fn rrid(&mut self) -> Result<String> {
         let comment = self.inner.comment().await?;
         Ok(Self::rrid_of(&comment))
+    }
+
+    /// Resolves the pool claim's on-disk state, RRID-based ownership, and owning
+    /// RRID with a **single** remote read, for lock reporting
+    /// ([`Target::lock_status`](crate::Target::lock_status)).
+    ///
+    /// One inner [`load`](TargetLock::load); `is_mine` uses the pool RRID rule
+    /// against the freshly-loaded cache (an unclaimed lock is not "mine" and
+    /// does not raise), and `rrid` is parsed from the same cached comment.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the load path.
+    pub async fn snapshot(&mut self) -> Result<LockSnapshot> {
+        self.inner.load().await?;
+        let is_mine = self.is_mine().unwrap_or(false);
+        let lock = self.inner.current().clone();
+        let rrid = Self::rrid_of(&lock.comment);
+        Ok(LockSnapshot {
+            lock,
+            is_mine,
+            rrid,
+        })
     }
 
     /// A formatted pool-claim creation time, or `"unknown"` when the stored
