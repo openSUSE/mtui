@@ -314,6 +314,33 @@ impl TemplateRegistry {
     pub fn contains(&self, rrid: &str) -> bool {
         self.entries.contains_key(rrid)
     }
+
+    /// Builds a cheap per-call view of this registry that **shares** the same
+    /// per-entry report locks.
+    ///
+    /// The registry *structure* (the entry map + active pointer) is cloned, but
+    /// each entry is an `Arc<Mutex<..>>` so both registries point at the *same*
+    /// lockable report — a per-RRID command acting through a snapshot mutates the
+    /// report content visible to the canonical registry too. Used by
+    /// [`Session::fork_for_call`](crate::Session::fork_for_call) to let a headless
+    /// MCP dispatch run on its own [`Session`] without a session-wide lock, while
+    /// different-RRID calls still act on distinct entry locks and same-RRID calls
+    /// share one (`mtui-rs-f36r`, steps 4-5).
+    ///
+    /// The stable [`id`](Self::id) is preserved so a snapshot keeps the same
+    /// host-arbitration owner-key seed as the canonical registry.
+    #[must_use]
+    pub fn snapshot(&self) -> Self {
+        Self {
+            entries: self
+                .entries
+                .iter()
+                .map(|(k, v)| (k.clone(), Arc::clone(v)))
+                .collect(),
+            active: self.active.clone(),
+            id: self.id.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -524,5 +551,25 @@ mod tests {
         let removed = reg.add_or_replace(fake_report("", &["h1"], "ok")).await;
         assert!(removed.failed.is_empty());
         assert!(reg.is_empty());
+    }
+
+    /// `snapshot` clones the registry structure while *sharing* each entry's
+    /// `Arc<Mutex<..>>` (same report lock) and preserving the stable id + active
+    /// pointer — so a per-call fork acts on the same reports (`mtui-rs-f36r`).
+    #[test]
+    fn snapshot_shares_entries_and_preserves_id_and_active() {
+        let mut reg = registry();
+        reg.add(fake_report("SUSE:Maintenance:1:1", &["h1"], "ok"));
+        reg.add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+        reg.set_active("SUSE:Maintenance:2:2");
+
+        let snap = reg.snapshot();
+        assert_eq!(snap.id(), reg.id(), "stable id preserved");
+        assert_eq!(snap.active_rrid(), Some("SUSE:Maintenance:2:2"));
+        assert_eq!(snap.rrids(), reg.rrids());
+        // The entry handles are the *same* Arc (shared report lock).
+        let a = reg.handle("SUSE:Maintenance:1:1").expect("orig entry");
+        let b = snap.handle("SUSE:Maintenance:1:1").expect("snap entry");
+        assert!(Arc::ptr_eq(&a, &b), "snapshot shares the entry Arc");
     }
 }

@@ -31,6 +31,10 @@ impl Command for Switch {
         Scope::Single
     }
 
+    fn mutates_registry(&self) -> bool {
+        true
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("rrid")

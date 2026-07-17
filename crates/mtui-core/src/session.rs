@@ -244,6 +244,48 @@ impl Session {
         }
     }
 
+    /// Builds a cheap per-call [`Session`] that **shares** this session's loaded
+    /// reports and carries its own display sink.
+    ///
+    /// The headless MCP concurrency seam (`mtui-rs-f36r`, steps 4-5): a
+    /// single-RRID tool call needs a `&mut Session` to dispatch, but holding the
+    /// canonical session behind one mutex across dispatch serialises *all* calls.
+    /// Instead the caller forks a per-call session — its
+    /// [`TemplateRegistry::snapshot`] shares the same per-entry report locks, so a
+    /// command acting on RRID `X` locks only `X`'s entry (letting a concurrent
+    /// call on `Y` proceed), and the report content it mutates is visible to the
+    /// canonical session (same `Arc<Mutex<..>>`).
+    ///
+    /// The fork clones the read-mostly `config` and copies `is_repl`/`shuffle`
+    /// (all only mutated by `Scope::Single` commands, which run under the MCP
+    /// exclusive gate against the *canonical* session, never concurrently with a
+    /// forked per-RRID call), starts with a fresh empty `http_client` cache and
+    /// no prompter/sinks (headless), and takes `display` as its own sink. It is
+    /// therefore only sound to dispatch a **single-real-template**, non-mutating
+    /// command through a fork; registry mutators and fan-out take the canonical
+    /// session under the exclusive gate.
+    #[must_use]
+    pub fn fork_for_call(&self, display: CommandPromptDisplay) -> Self {
+        let null: Box<dyn TestReport + Send + Sync> =
+            Box::new(NullReport::new(self.config.clone()));
+        Self {
+            config: self.config.clone(),
+            templates: self.templates.snapshot(),
+            active_guard: None,
+            null,
+            display,
+            is_repl: self.is_repl,
+            should_exit: false,
+            log_level_sink: None,
+            notify_sink: None,
+            prompter: None,
+            shuffle: self.shuffle,
+            http_client: Mutex::new(None),
+            #[cfg(test)]
+            http_builds: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
     /// Overrides the per-slot candidate shuffle (test seam). Passing
     /// `|_| {}` (identity) makes pool selection deterministic.
     pub fn set_shuffle(&mut self, shuffle: ShuffleFn) {
@@ -2111,6 +2153,44 @@ mod tests {
         assert!(chosen.is_empty(), "all candidates busy → no claim");
         // Candidates are still recorded (for backup once one frees up).
         assert_eq!(slot_candidates.len(), 1);
+    }
+
+    /// `fork_for_call` shares the canonical session's loaded reports (same entry
+    /// locks) while carrying its own display, so a per-RRID command dispatched on
+    /// a fork mutates the *shared* report content visible to the canonical
+    /// session (`mtui-rs-f36r`, steps 4-5).
+    #[test]
+    fn fork_for_call_shares_reports_with_own_display() {
+        use crate::display::{ColorMode, CommandPromptDisplay};
+
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+
+        // The canonical session must not hold a guard on the entry a fork will
+        // lock (the MCP `run_command` exclusive path releases it after each call,
+        // exactly so a later fork can activate the shared entry).
+        s.release_active_guard();
+
+        let display = CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Always);
+        let mut fork = s.fork_for_call(display);
+        // Own (distinct) display.
+        assert_eq!(fork.display.color(), ColorMode::Always);
+        // Shared entry: activating the same RRID on the fork locks the shared
+        // report and mutating it is observable through the canonical session's
+        // registry handle.
+        assert!(fork.activate("SUSE:Maintenance:1:1"));
+        fork.set_workflow(Workflow::Auto);
+        // Drop the fork's guard so the canonical read can lock the shared entry.
+        fork.release_active_guard();
+        drop(fork);
+
+        let entry = s.templates.handle("SUSE:Maintenance:1:1").expect("entry");
+        let report = entry.try_lock().expect("uncontended");
+        assert_eq!(
+            report.base().workflow,
+            Workflow::Auto,
+            "fork mutation is visible on the shared report"
+        );
     }
 
     /// The composition root wires the arbiter + owner onto every added report

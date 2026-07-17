@@ -110,7 +110,31 @@ pub async fn dispatch_argv(
     let command = registry
         .get(name)
         .ok_or_else(|| EngineError::UnknownCommand(name.to_owned()))?;
-    let matches = parse_command(command.as_ref(), argv)?;
+    dispatch_command(command.as_ref(), session, argv).await
+}
+
+/// Dispatches an already-resolved `command` against `session` for `argv`.
+///
+/// The registry-free tail of [`dispatch_argv`]: parse `argv` through the
+/// command's own clap parser (no-exit-on-error), then drive
+/// [`Command::run`](crate::Command::run). Exposed so the headless MCP concurrent
+/// path (`mtui-rs-f36r`, steps 4-5) can `tokio::spawn` a dispatch holding an
+/// owned `Arc<dyn Command>` + forked [`Session`] — neither borrows the
+/// [`Registry`], so the spawned future is `'static`. `help` is *not* intercepted
+/// here (it resolves to the null report → the MCP exclusive path, which still
+/// goes through [`dispatch_argv`]).
+///
+/// # Errors
+///
+/// * [`EngineError::Parse`] if argument parsing fails or help/version is
+///   requested.
+/// * [`EngineError::Command`] if the command body fails.
+pub async fn dispatch_command(
+    command: &dyn Command,
+    session: &mut Session,
+    argv: &[String],
+) -> Result<(), EngineError> {
+    let matches = parse_command(command, argv)?;
     command.run(session, &matches).await.map_err(Into::into)
 }
 

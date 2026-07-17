@@ -84,8 +84,8 @@ use std::time::{Duration, Instant};
 
 use mtui_config::Config;
 use mtui_core::{
-    ColorMode, CommandPromptDisplay, EngineError, Registry, Session, dispatch_argv,
-    resolve_command_rrids,
+    ColorMode, CommandError, CommandPromptDisplay, EngineError, Registry, Session, dispatch_argv,
+    dispatch_command, resolve_command_rrids,
 };
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
@@ -111,6 +111,22 @@ pub(crate) const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 /// to [`McpSession::run_command_with_progress`], overridable per call so tests
 /// can drive a sub-second interval.
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
+/// A [`JoinHandle`] wrapper that aborts its task when dropped.
+///
+/// The concurrent dispatch path ([`McpSession::run_command`]) runs the command
+/// body on a spawned task and awaits it. If the awaiting `run_command` future is
+/// itself cancelled (an aborted background-job worker, or a dropped request
+/// future), this guard aborts the spawned dispatch too — preserving the inline
+/// path's cancellation shape (the body's future is dropped, not detached to run
+/// on unobserved).
+struct AbortOnDrop<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 /// A transport-free sink for heartbeat progress frames.
 ///
@@ -501,6 +517,13 @@ impl McpSession {
     /// guard is handed back, so the caller may re-lock the session for dispatch.
     async fn command_lock(&self, registry: &Registry, name: &str, argv: &[String]) -> CommandLock {
         let rrids = match registry.get(name) {
+            // A registry-structure mutator (`load_template`/`unload`/`switch`/
+            // `regenerate`) must take the gate *exclusive* even when it resolves
+            // to a single template: the concurrent path dispatches on a per-call
+            // fork whose registry snapshot is discarded, so a structural mutation
+            // would be lost unless it runs against the canonical session under
+            // the exclusive gate (`mtui-rs-f36r`, steps 4-5).
+            Some(command) if command.mutates_registry() => None,
             Some(command) => {
                 let session = self.session.lock().await;
                 resolve_command_rrids(command.as_ref(), &session, argv)
@@ -671,24 +694,84 @@ impl McpSession {
         // *before* touching the session, so same-RRID and unscoped calls
         // serialise and mutators drain in-flight per-RRID work. Held for the
         // whole dispatch, released when `_lock` drops at end of scope.
-        let _lock = self.command_lock(registry, name, argv).await;
+        let lock = self.command_lock(registry, name, argv).await;
 
-        // Per-call output isolation (D2, bead `mtui-rs-f36r`, step 3): give this
-        // dispatch its *own* fresh capture buffer + display, swapped onto the
-        // session for the duration and restored afterwards, so two overlapping
+        // Per-call output isolation (bead `mtui-rs-f36r`, step 3): give this
+        // dispatch its *own* fresh capture buffer + display so two overlapping
         // calls never write into the same buffer and clobber each other's stdout.
-        // Bounded to the same budget as the session-wide sink. The session's
-        // display is swapped back before the lock is released.
+        // Bounded to the same budget as the session-wide sink.
         let call_buf = SharedBuf::with_limit(self.max_output_bytes);
         let call_display =
             CommandPromptDisplay::with_sink(Box::new(call_buf.clone()), ColorMode::Never);
 
-        let result = {
-            let mut session = self.session.lock().await;
-            let prev_display = std::mem::replace(&mut session.display, call_display);
-            let result = dispatch_argv(registry, &mut session, name, argv).await;
-            session.display = prev_display;
-            result
+        let result = match &lock {
+            // Concurrent path (bead `mtui-rs-f36r`, steps 4-5): a single-real-RRID
+            // call holds the gate *shared* + its per-RRID lock. Fork a per-call
+            // `Session` that *shares* the loaded reports' per-entry locks (so this
+            // call locks only its own template's entry) and dispatch on it —
+            // **without** holding the canonical session mutex across dispatch, so a
+            // concurrent different-RRID call runs in genuine parallel. The forked
+            // session is snapshotted under the (briefly held) canonical lock, which
+            // the shared gate keeps consistent (no `Scope::Single` mutator can run
+            // concurrently). Report *content* mutations are visible to the canonical
+            // session (same `Arc<Mutex<..>>`); the fork's own config/registry
+            // structure is discarded, which is sound because a per-RRID command
+            // never mutates them (that is the exclusive path below).
+            CommandLock::Scoped { .. } => {
+                // Snapshot the forked session under the (briefly held) canonical
+                // lock, then dispatch the command on a *spawned* task so a
+                // blocking body overlaps a concurrent different-RRID call in real
+                // wall-clock time (the caller drives us via `join!`/`join_all` on
+                // one task; only a separate task yields genuine parallelism). The
+                // command is resolved to an owned `Arc<dyn Command>` and argv is
+                // cloned, so the spawned future borrows neither the registry nor
+                // the caller's argv — it is `Send + 'static`. `command_lock`
+                // already proved this resolves to exactly one loaded template, so
+                // the command is registered.
+                let command = registry
+                    .get(name)
+                    .expect("scoped lock implies a resolvable command")
+                    .clone();
+                let mut call_session = {
+                    let session = self.session.lock().await;
+                    session.fork_for_call(call_display)
+                };
+                let argv_owned = argv.to_vec();
+                // Abort-on-drop: if this `run_command` future is cancelled (e.g.
+                // an aborted background-job worker), abort the dispatch task too,
+                // preserving the inline path's cancellation shape.
+                let mut handle = AbortOnDrop(tokio::spawn(async move {
+                    dispatch_command(command.as_ref(), &mut call_session, &argv_owned).await
+                }));
+                match (&mut handle.0).await {
+                    Ok(result) => result,
+                    // A panic inside the spawned dispatch surfaces as an engine
+                    // command error rather than tearing the session down.
+                    Err(join_err) => Err(EngineError::Command(CommandError::Other(format!(
+                        "dispatch task failed: {join_err}"
+                    )))),
+                }
+            }
+            // Exclusive path: registry mutators (`load_template`/`unload`/`config`)
+            // and unscoped fan-out hold the gate *exclusive* (no concurrent
+            // readers), so dispatch directly against the canonical session — its
+            // config/registry-structure mutations must persist for later calls.
+            // The display is swapped for the call's own sink and restored after.
+            //
+            // Release the canonical session's per-call active guard afterwards:
+            // `Command::run` re-installs a guard on the active entry as it returns,
+            // and a guard lingering on the canonical session would block a later
+            // *concurrent* forked call from locking that same entry (its
+            // `try_lock_owned` in `activate` would fail). The MCP session holds no
+            // active guard between calls; each call re-establishes its own.
+            CommandLock::Exclusive(_) => {
+                let mut session = self.session.lock().await;
+                let prev_display = std::mem::replace(&mut session.display, call_display);
+                let result = dispatch_argv(registry, &mut session, name, argv).await;
+                session.display = prev_display;
+                session.release_active_guard();
+                result
+            }
         };
 
         // Read this call's own buffer. The sink already bounded the output at
@@ -1512,6 +1595,50 @@ mod tests {
         let sess = session(Config::default());
         let lock = sess.scoped_lock(None).await;
         assert!(matches!(lock, CommandLock::Scoped { .. }));
+    }
+
+    /// A registry-structure mutator (`load_template`) takes the gate *exclusive*
+    /// even when a single template is loaded (so its `resolve_command_rrids`
+    /// would otherwise be a single RRID). Guards the `mutates_registry` routing
+    /// added in `mtui-rs-f36r` steps 4-5: a structural mutation must land on the
+    /// canonical session, not a discarded per-call fork. A content command scoped
+    /// to that same template still takes the *scoped* (concurrent) path.
+    #[tokio::test]
+    async fn command_lock_registry_mutator_is_exclusive_even_when_scoped() {
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+
+        let sess = session(Config::default());
+        let rrid = "SUSE:Maintenance:1:1";
+        {
+            let mut guard = sess.session().lock().await;
+            let mut report = ObsReport::new(guard.config.clone());
+            report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
+            guard.templates.add(Box::new(report));
+            guard.templates.set_active(rrid);
+        }
+        let registry = register_all();
+
+        // `load_template` mutates the registry → exclusive, despite one template
+        // being loaded/active.
+        let mutator = sess
+            .command_lock(&registry, "load_template", &[rrid.to_owned()])
+            .await;
+        assert!(
+            matches!(mutator, CommandLock::Exclusive(_)),
+            "registry mutator must take the exclusive gate"
+        );
+        drop(mutator);
+
+        // A content command scoped to the same single template still takes the
+        // concurrent (scoped) path.
+        let scoped = sess
+            .command_lock(&registry, "list_hosts", &["-T".to_owned(), rrid.to_owned()])
+            .await;
+        assert!(
+            matches!(scoped, CommandLock::Scoped { .. }),
+            "content command on one template stays on the scoped path"
+        );
     }
 
     /// Cancelling a *finished* job is a no-op that still reports success (the

@@ -40,6 +40,10 @@ impl Command for Regenerate {
         Scope::Fanout
     }
 
+    fn mutates_registry(&self) -> bool {
+        true
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("force")

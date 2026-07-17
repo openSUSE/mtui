@@ -44,7 +44,7 @@ pub mod wiring;
 pub use args::{Args, ColorArg, Sut, Update};
 pub use command::{Command, Scope, resolve_command_rrids};
 pub use display::{ColorMode, CommandPromptDisplay, page};
-pub use engine::{EngineError, command_parser, dispatch_argv, dispatch_line};
+pub use engine::{EngineError, command_parser, dispatch_argv, dispatch_command, dispatch_line};
 pub use entrypoint::{ExitStatus, run_once};
 pub use error::{CommandError, CommandResult};
 pub use registry::{MCP_DENYLIST, Registry, register_all};

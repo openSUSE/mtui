@@ -179,11 +179,11 @@ async fn same_rrid_serialises() {
 
 /// Two calls scoped to *different* templates overlap in time.
 ///
-/// Ignored until `mtui-rs-f36r`: they take distinct per-RRID locks (as they
-/// must), but the inner `Mutex<Session>` dispatch still serialises them, so no
-/// wall-clock overlap is observable yet.
+/// Genuine wall-clock concurrency (bead `mtui-rs-f36r`, steps 4-5): each call
+/// forks a per-call `Session` sharing only its own template's per-entry report
+/// lock, so different-RRID dispatch no longer serialises on a session-wide
+/// mutex.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "genuine concurrency needs mtui-core dispatch change: bead mtui-rs-f36r"]
 async fn different_rrids_run_concurrently() {
     let seen: Intervals = Arc::new(Mutex::new(Vec::new()));
     let reg = registry_with(Probe {

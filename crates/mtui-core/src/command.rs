@@ -76,6 +76,22 @@ pub trait Command: Send + Sync {
         Scope::Active
     }
 
+    /// Whether this command's body mutates the [`TemplateRegistry`] *structure*
+    /// (loads/replaces/removes an entry or re-points the active template), as
+    /// opposed to only mutating an already-loaded report's *content*.
+    ///
+    /// `false` by default; `load_template`, `unload`, `switch`, and `regenerate`
+    /// override it to `true`. The headless MCP dispatch gate
+    /// ([`McpSession::command_lock`](../../mtui_mcp/session/struct.McpSession.html))
+    /// forces such a command onto the **exclusive** registry gate even when it
+    /// resolves to a single template, so its structural mutation lands on the
+    /// canonical session rather than on a discarded per-call fork
+    /// (`mtui-rs-f36r`, steps 4-5). A content-only per-RRID command may run on a
+    /// fork because its mutations reach the shared report through the entry lock.
+    fn mutates_registry(&self) -> bool {
+        false
+    }
+
     /// Whether the fan-out driver may skip a resolved template that has no
     /// connected hosts (when the invocation named no `-t` host).
     ///
