@@ -18,6 +18,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   session; MCP clients should read tool output from the text content block (as
   before) rather than `structuredContent`. Large single-command `run` output is
   also accumulated without the previous quadratic buffer growth.
+- `openqa_overview` is substantially faster. Its independent openQA/OBS HTTP
+  round-trips -- the per-version single-incident queries, the per-group and
+  per-version aggregated day-walks, and the per-log `build_checks` downloads --
+  now run concurrently instead of one after another, while results are read back
+  in the original order so the rendered overview is unchanged. The openQA
+  job-group list is fetched once up front and shared across the fan-out.
 
 ## 19.0.1 - 2026-07-17
 

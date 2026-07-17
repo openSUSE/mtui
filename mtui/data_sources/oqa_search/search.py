@@ -17,6 +17,7 @@ from logging import getLogger
 from typing import Any, Final, override
 from urllib.parse import quote, unquote
 
+from ...support.concurrency import ContextExecutor
 from .heuristics import (
     AGGREGATED_EXCLUDED_VERSIONS,
     AGGREGATED_GROUPS_TERMS,
@@ -404,32 +405,51 @@ def log_matches_package(log: str, packages: list[str]) -> bool:
 # --- Public entry points used by the command layer ---
 
 
+def _prewarm_openqa_groups(url_openqa: str) -> None:
+    """Populate the ``_fetch_openqa_groups`` cache on the calling thread.
+
+    ``_get_group_id`` reads the ``lru_cache``d group list, but ``lru_cache``
+    does not dedupe *concurrent* misses: fanning out per-version workers on
+    a cold cache would make each worker issue the large
+    ``/api/v1/job_groups`` GET. Warming it once here means the workers all
+    hit the cache. Any error is left to propagate exactly as the first
+    sequential ``_get_group_id`` would have raised it.
+    """
+    _fetch_openqa_groups(url_openqa)
+
+
 def single_incidents(
     build: str, versions: list[str], url_openqa: str
 ) -> list[VersionResult]:
-    """Resolve openQA status for each SLE version of a single incident."""
-    results: list[VersionResult] = []
-    for version in versions:
+    """Resolve openQA status for each SLE version of a single incident.
+
+    The per-version resolutions are independent HTTP round-trips, so they
+    are fanned out; results are read back in ``versions`` order to match
+    the previous sequential output.
+    """
+    if not versions:
+        return []
+
+    def _resolve(version: str) -> VersionResult:
         try:
             group_id = _get_group_id(url_openqa, version)
         except ValueError as e:
             logger.warning("%s", e)
-            results.append(
-                VersionResult(version=version, url="", status="failed", note=str(e))
-            )
-            continue
+            return VersionResult(version=version, url="", status="failed", note=str(e))
         try:
-            results.append(_query_version_status(url_openqa, version, build, group_id))
+            return _query_version_status(url_openqa, version, build, group_id)
         except _HTTPError as e:
-            results.append(
-                VersionResult(
-                    version=version,
-                    url="",
-                    status="failed",
-                    note=f"openQA query failed: {e}",
-                )
+            return VersionResult(
+                version=version,
+                url="",
+                status="failed",
+                note=f"openQA query failed: {e}",
             )
-    return results
+
+    _prewarm_openqa_groups(url_openqa)
+    with ContextExecutor() as executor:
+        futures = [executor.submit(_resolve, version) for version in versions]
+        return [future.result() for future in futures]
 
 
 def aggregated_updates(
@@ -455,26 +475,51 @@ def aggregated_updates(
     except (TypeError, ValueError):
         incident_id_int = None
 
-    results: list[GroupResult] = []
+    # Resolve group ids first, serially: this loop's first _get_group_id
+    # warms the _fetch_openqa_groups cache single-threaded (no separate
+    # prewarm needed here -- unlike single_incidents, the fan-out below runs
+    # _scan_aggregated_for_version, which never reads the group list). Drop
+    # groups that don't resolve, preserving order.
+    valid_groups: list[tuple[str, int]] = []
     for group in aggregated_groups:
         try:
             group_id = _get_group_id(url_openqa, group)
         except ValueError as e:
             logger.warning("%s", e)
             continue
+        valid_groups.append((group, group_id))
 
-        group_result = GroupResult(group=group)
-        for version in filtered_versions:
-            group_result.versions.append(
-                _scan_aggregated_for_version(
-                    url_openqa,
-                    version,
-                    days,
-                    group_id,
-                    incident_id_int,
-                )
+    if not valid_groups:
+        return []
+
+    # Fan out the independent per-(group, version) day-walks. Each
+    # _scan_aggregated_for_version stays internally serial: its early
+    # return on the first matching build is an ordering dependency.
+    with ContextExecutor() as executor:
+        submitted = [
+            (
+                group,
+                [
+                    executor.submit(
+                        _scan_aggregated_for_version,
+                        url_openqa,
+                        version,
+                        days,
+                        group_id,
+                        incident_id_int,
+                    )
+                    for version in filtered_versions
+                ],
             )
-        results.append(group_result)
+            for group, group_id in valid_groups
+        ]
+
+        results: list[GroupResult] = []
+        for group, version_futures in submitted:
+            group_result = GroupResult(group=group)
+            for future in version_futures:
+                group_result.versions.append(future.result())
+            results.append(group_result)
     return results
 
 
@@ -572,23 +617,27 @@ def build_checks(
         logger.warning("No build check logs found for packages %r", packages)
         return []
 
-    out: list[BuildCheckResult] = []
-    for log in logfiles:
+    def _fetch_and_parse(log: str) -> BuildCheckResult:
         log_url = f"{base_url}/{quote(log)}"
         try:
             log_text = _fetch_url_content(log_url)
         except _HTTPError as e:
             logger.warning("build_check log %s unavailable: %s", log_url, e)
-            out.append(BuildCheckResult(url=log_url))
-            continue
+            return BuildCheckResult(url=log_url)
 
         matches = extract_test_results(log_text, test_pattern)
         summary = ""
         if len(matches) > 4:
             summary = summarize_test_results(matches)
             matches = [matches[0], matches[-1]]
-        out.append(BuildCheckResult(url=log_url, matches=matches, summary=summary))
-    return out
+        return BuildCheckResult(url=log_url, matches=matches, summary=summary)
+
+    # Independent per-log downloads; ``map`` preserves the input order so
+    # the rendered rows stay in build_checks-index order. The per-log
+    # ``_HTTPError`` is caught inside the worker so one unavailable log
+    # still yields its placeholder row instead of failing the batch.
+    with ContextExecutor() as executor:
+        return list(executor.map(_fetch_and_parse, logfiles))
 
 
 # --- Plain-text renderer (shared by the command and the export injector) ---

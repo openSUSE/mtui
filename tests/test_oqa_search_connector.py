@@ -12,6 +12,7 @@ reference implementation.
 
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -924,3 +925,187 @@ def test_incident_jobs_captures_job_state():
 def test_incident_jobs_empty_build_makes_no_request():
     """A falsy build short-circuits with no HTTP call."""
     assert oqa_search.incident_jobs("", OPENQA) == []
+
+
+# --- fan-out concurrency + order preservation ---
+#
+# These patch the per-item network functions with a Barrier-synchronised
+# stub: the Barrier only trips once *every* item's worker is in flight, so
+# a revert to a sequential loop makes the first worker block until the
+# Barrier times out and the call raises -- i.e. the tests fail on a revert.
+# Each also asserts the results keep input order.
+
+_BARRIER_TIMEOUT = 10.0
+
+
+def test_single_incidents_fans_out_and_preserves_order(monkeypatch):
+    """single_incidents resolves versions concurrently, results stay in order."""
+    versions = ["15-SP2", "15-SP3", "15-SP1", "12-SP5"]
+    barrier = threading.Barrier(len(versions))
+
+    monkeypatch.setattr(oqa_search.search, "_prewarm_openqa_groups", lambda url: None)
+    monkeypatch.setattr(oqa_search.search, "_get_group_id", lambda url, key: 1)
+
+    def _fake_status(url_openqa, version, build, group_id):
+        barrier.wait(timeout=_BARRIER_TIMEOUT)
+        return oqa_search.VersionResult(
+            version=version, url=f"u/{version}", status="passed"
+        )
+
+    monkeypatch.setattr(oqa_search.search, "_query_version_status", _fake_status)
+
+    rows = oqa_search.single_incidents("build", versions, OPENQA)
+
+    assert [r.version for r in rows] == versions
+
+
+def test_aggregated_updates_fans_out_and_preserves_order(monkeypatch):
+    """Per-(group, version) day-walks run concurrently; nested order is kept."""
+    groups = ["core", "sap"]
+    versions = ["15-SP5", "15-SP4"]
+    barrier = threading.Barrier(len(groups) * len(versions))
+
+    monkeypatch.setattr(
+        oqa_search.search,
+        "_get_group_id",
+        lambda url, key: {"core": 1, "sap": 2}[key],
+    )
+
+    def _fake_scan(url_openqa, version, days, group_id, incident_id):
+        barrier.wait(timeout=_BARRIER_TIMEOUT)
+        return oqa_search.VersionResult(
+            version=version, url=f"g{group_id}/{version}", status="passed"
+        )
+
+    monkeypatch.setattr(oqa_search.search, "_scan_aggregated_for_version", _fake_scan)
+
+    out = oqa_search.aggregated_updates(12358, versions, 5, groups, OPENQA)
+
+    assert [g.group for g in out] == groups
+    for group_result in out:
+        assert [v.version for v in group_result.versions] == versions
+
+
+def test_build_checks_fans_out_and_preserves_order(monkeypatch):
+    """Per-log downloads run concurrently; rows stay in build-index order."""
+    logs = ["bash.x86_64.log", "bash.aarch64.log", "bash.s390x.log"]
+    index_html = "".join(f'<a href="{name}">{name}</a>' for name in logs)
+    barrier = threading.Barrier(len(logs))
+
+    def _fake_fetch(url):
+        if url.endswith("/build_checks"):
+            return index_html
+        barrier.wait(timeout=_BARRIER_TIMEOUT)
+        return f"content of {url}"
+
+    monkeypatch.setattr(oqa_search.search, "_fetch_url_content", _fake_fetch)
+
+    out = oqa_search.build_checks("Maintenance", 12358, 199773, ["bash"], QAM, None)
+
+    assert [r.url.rsplit("/", 1)[-1] for r in out] == logs
+
+
+def test_single_incidents_prewarms_job_groups_on_main_thread(monkeypatch):
+    """single_incidents warms the group cache once, on the calling thread.
+
+    Prewarming ``_fetch_openqa_groups`` before submitting the workers means
+    the fanned-out ``_get_group_id`` calls hit the ``lru_cache`` instead of
+    each issuing the large ``/api/v1/job_groups`` GET (which ``lru_cache``
+    would not dedupe under concurrent misses). Spying the network call
+    (``_get_json``, invoked only on a cache miss) and asserting the single
+    fetch happens on the *main* thread makes this revert-sensitive: drop
+    the prewarm and the lone fetch instead fires from a worker thread.
+    """
+    main_thread = threading.get_ident()
+    fetch_threads: list[int] = []
+
+    def _spy_get_json(url):
+        fetch_threads.append(threading.get_ident())
+        return [{"id": 490, "name": "SLE 15 SP5 Core Incidents", "template": "t"}]
+
+    # _fetch_openqa_groups stays real (and lru_cached); only its network call
+    # is spied, so worker cache hits do not record.
+    monkeypatch.setattr(oqa_search.search, "_get_json", _spy_get_json)
+    monkeypatch.setattr(
+        oqa_search.search,
+        "_query_version_status",
+        lambda url, version, build, group_id: oqa_search.VersionResult(
+            version=version, url="u", status="passed"
+        ),
+    )
+
+    oqa_search.single_incidents("build", ["15-SP5", "15-SP4", "15-SP3"], OPENQA)
+
+    assert fetch_threads == [main_thread]
+
+
+def test_single_incidents_empty_versions_returns_empty_without_http(monkeypatch):
+    """No versions -> empty result and not a single network call (no prewarm)."""
+    calls: list[str] = []
+    monkeypatch.setattr(oqa_search.search, "_get_json", lambda url: calls.append(url))
+
+    assert oqa_search.single_incidents("build", [], OPENQA) == []
+    assert calls == []
+
+
+def test_single_incidents_isolates_a_failed_version(monkeypatch):
+    """One version's _HTTPError yields a failed row; siblings still resolve.
+
+    Pins the batch-isolation catch inside the fanned-out worker: a single
+    query failure must not abort the whole overview, and order is kept.
+    """
+    versions = ["15-SP5", "15-SP4", "15-SP3"]
+    monkeypatch.setattr(oqa_search.search, "_prewarm_openqa_groups", lambda url: None)
+    monkeypatch.setattr(oqa_search.search, "_get_group_id", lambda url, key: 1)
+
+    def _status(url_openqa, version, build, group_id):
+        if version == "15-SP4":
+            raise oqa_search._HTTPError("boom")
+        return oqa_search.VersionResult(version=version, url="u", status="passed")
+
+    monkeypatch.setattr(oqa_search.search, "_query_version_status", _status)
+
+    rows = oqa_search.single_incidents("build", versions, OPENQA)
+
+    assert [r.version for r in rows] == versions
+    statuses = {r.version: r.status for r in rows}
+    assert statuses == {"15-SP5": "passed", "15-SP4": "failed", "15-SP3": "passed"}
+    failed = next(r for r in rows if r.version == "15-SP4")
+    assert failed.note.startswith("openQA query failed")
+
+
+@responses.activate
+def test_aggregated_updates_unresolved_group_returns_empty():
+    """Groups that don't resolve produce no GroupResult (prewarm still succeeds)."""
+    # job_groups is reachable (so prewarm/_get_group_id do not raise _HTTPError)
+    # but contains no matching group -> every _get_group_id raises ValueError.
+    _register_job_groups(_job_group(490, "SLE 15 SP5 Core Incidents"))
+
+    out = oqa_search.aggregated_updates(12358, ["15-SP5"], 5, ["nope"], OPENQA)
+    assert out == []
+
+
+def test_build_checks_isolates_an_unavailable_log(monkeypatch):
+    """One unavailable log yields a placeholder row; siblings parse, order kept.
+
+    Pins the batch-isolation catch inside the per-log worker.
+    """
+    logs = ["bash.x86_64.log", "bash.aarch64.log", "bash.s390x.log"]
+    index_html = "".join(f'<a href="{name}">{name}</a>' for name in logs)
+
+    def _fake_fetch(url):
+        if url.endswith("/build_checks"):
+            return index_html
+        if url.endswith("bash.aarch64.log"):
+            raise oqa_search._HTTPError("404")
+        return f"PASSED {url}"
+
+    monkeypatch.setattr(oqa_search.search, "_fetch_url_content", _fake_fetch)
+
+    out = oqa_search.build_checks("Maintenance", 12358, 199773, ["bash"], QAM, None)
+
+    assert [r.url.rsplit("/", 1)[-1] for r in out] == logs
+    placeholder = out[1]
+    assert placeholder.url.endswith("bash.aarch64.log")
+    assert placeholder.matches == []
+    assert placeholder.summary == ""
