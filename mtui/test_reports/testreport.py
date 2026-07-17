@@ -15,7 +15,7 @@ from pathlib import Path
 from traceback import format_exc
 from typing import TYPE_CHECKING, Any, Literal
 
-from ..hosts.refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
+from ..hosts.refhost import Attributes, RefhostsFactory
 from ..hosts.refhost import verify as product_verify
 from ..hosts.target import Target, TargetLockedError
 from ..hosts.target.hostgroup import HostsGroup
@@ -35,6 +35,7 @@ from .svn_io import (
 if TYPE_CHECKING:
     from ..cli.prompter import Prompter
     from ..hosts.host_arbiter import HostArbiter
+    from ..hosts.refhost import Refhosts
 
 logger = getLogger("mtui.template.testreport")
 
@@ -168,9 +169,11 @@ class TestReport(ABC):
         # (see _verify_target_products); commands print these so they
         # reach MCP clients, which only see command stdout (not logs).
         self.product_warnings: dict[str, list[str]] = {}
-        # Lazily-built, cached refhosts store for the product check, with
-        # a lock because connect_targets runs connect_target concurrently.
-        self._refhosts_store: Any = None
+        # Lazily-built, cached refhosts store shared by host resolution
+        # (refhosts_from_tp) and the product-drift check, with a lock
+        # because connect_targets runs connect_target concurrently. A
+        # failed build is cached and not retried for the report's lifetime.
+        self._refhosts_store: Refhosts | None = None
         self._refhosts_store_built = False
         self._refhosts_store_lock = threading.Lock()
 
@@ -449,12 +452,14 @@ class TestReport(ABC):
         with suppress(TargetLockedError):
             target.lock(self.lock_comment)
 
-    def _get_refhosts_store(self):
+    def _get_refhosts_store(self) -> "Refhosts | None":
         """Build (once, thread-safe) the refhosts store, or None on failure.
 
-        connect_targets fans connect_target out across threads, so the
-        first lookup may race; guard the one-time build with a lock and
-        cache the (possibly ``None``) result.
+        Shared by host resolution (:meth:`refhosts_from_tp`) and the
+        product-drift check. connect_targets fans connect_target out
+        across threads, so the first lookup may race; guard the one-time
+        build with a lock and cache the (possibly ``None``) result. A
+        failed build is cached and not retried for the report's lifetime.
         """
         if self._refhosts_store_built:
             return self._refhosts_store
@@ -463,10 +468,7 @@ class TestReport(ABC):
                 try:
                     self._refhosts_store = self.refhostsFactory(self.config)
                 except Exception:
-                    logger.debug(
-                        "refhosts store unavailable for product check:\n%s",
-                        format_exc(),
-                    )
+                    logger.debug("refhosts store unavailable:\n%s", format_exc())
                     self._refhosts_store = None
                 self._refhosts_store_built = True
         return self._refhosts_store
@@ -782,9 +784,22 @@ class TestReport(ABC):
             testplatform: The test platform to get reference hosts from.
 
         """
-        try:
-            refhosts = self.refhostsFactory(self.config)
-        except RefhostsResolveFailedError:
+        # Reuse the once-built, thread-safe store instead of re-parsing
+        # refhosts.yml (~1s) for every testplatform. autoconnect/add_host
+        # call this once per testplatform, so a K-testplatform template
+        # otherwise paid ~K seconds. The store is read-only after build, so
+        # sharing one instance across testplatforms (and with the product
+        # drift check) is safe. ``_get_refhosts_store`` returns None on any
+        # resolver failure (the factory funnels every resolver error into
+        # RefhostsResolveFailedError, which it swallows). Note the memo caches
+        # a failed build: unlike the previous per-call factory build, a
+        # transient resolver failure is not retried for the report's lifetime
+        # (reload the template to recover). This is acceptable -- resolver
+        # failures are effectively persistent (missing refhosts.yml + no
+        # network), and within one autoconnect loop caching is strictly better
+        # (one dead attempt instead of one per testplatform).
+        refhosts = self._get_refhosts_store()
+        if refhosts is None:
             return
 
         try:
