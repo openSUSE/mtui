@@ -244,11 +244,18 @@ def _register_tool(
 
     wrapper = _make_wrapper(cls, parser, provider, argv_prefix=argv_prefix)
     desc = (description or cls.__doc__ or name).strip()
+    # structured_output=False: the wrapper returns a plain ``str``, so the
+    # SDK's default would advertise an information-free ``{"result": str}``
+    # outputSchema on every tool (bloating the list_tools manifest the
+    # client carries each session) and echo the whole text back as
+    # ``structuredContent`` on every call, duplicating the text block.
+    # Mirrors ``register_testreport_tools`` (testreport_tools.py).
     mcp.add_tool(
         wrapper,
         name=name,
         description=desc,
         annotations=ToolAnnotations(readOnlyHint=_is_read_only(name)),
+        structured_output=False,
     )
 
 
@@ -440,29 +447,36 @@ def register_job_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
         "host (SSH/subprocess) may keep running on the host even after cancel."
     )
 
+    # structured_output=False on all four: they return plain ``str``; see
+    # the rationale in ``_register_tool``. Keeps the job tools consistent
+    # with every other ``-> str`` tool on the server.
     mcp.add_tool(
         job_list,
         name="job_list",
         description=list_desc,
         annotations=ToolAnnotations(readOnlyHint=True),
+        structured_output=False,
     )
     mcp.add_tool(
         job_status,
         name="job_status",
         description=status_desc,
         annotations=ToolAnnotations(readOnlyHint=True),
+        structured_output=False,
     )
     mcp.add_tool(
         job_result,
         name="job_result",
         description=result_desc,
         annotations=ToolAnnotations(readOnlyHint=True),
+        structured_output=False,
     )
     mcp.add_tool(
         job_cancel,
         name="job_cancel",
         description=cancel_desc,
         annotations=ToolAnnotations(readOnlyHint=False),
+        structured_output=False,
     )
     logger.info("registered 4 job tools: job_cancel, job_list, job_result, job_status")
     return ["job_cancel", "job_list", "job_result", "job_status"]

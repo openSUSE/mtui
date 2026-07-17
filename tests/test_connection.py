@@ -162,6 +162,97 @@ def test_run_tolerates_non_utf8_output(mock_ssh_client, mock_ssh_config, mock_pa
     assert conn.stderr == "warn�\n"
 
 
+def test_run_joins_multiple_recv_chunks(mock_ssh_client, mock_ssh_config, mock_path):
+    """Output arriving over several recv() chunks is concatenated in order.
+
+    Guards the switch from a ``bytes += buffer`` accumulator (O(n^2) in
+    the total output size) to a list of chunks joined once with
+    ``b"".join`` at the end: the joined result must stay byte-identical
+    to a straight concatenation of every chunk, across both streams.
+    """
+    conn = Connection("test_host", 22, 300)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+    mock_session.recv_exit_status.return_value = 0
+    mock_session.recv.side_effect = [b"chunk-one ", b"chunk-two ", b"chunk-three"]
+    mock_session.recv_ready.side_effect = [True, True, True, False]
+    mock_session.recv_stderr.side_effect = [b"err-a ", b"err-b"]
+    mock_session.recv_stderr_ready.side_effect = [True, True, False, False]
+
+    with patch("select.select", return_value=([mock_session], [], [])):
+        exit_code = conn.run("cat big.log")
+
+    assert exit_code == 0
+    assert conn.stdout == "chunk-one chunk-two chunk-three"
+    assert conn.stderr == "err-a err-b"
+
+
+@pytest.mark.parametrize("debug_enabled", [True, False])
+def test_run_debug_line_logging_is_gated(
+    debug_enabled, mock_ssh_client, mock_ssh_config, mock_path
+):
+    """The per-line decode/split/debug loop runs only when DEBUG is on.
+
+    Each recv() chunk is decoded, split on newlines and fed to
+    ``logger.debug`` one line at a time -- pointless work when the logger
+    is above DEBUG, so it is guarded by ``isEnabledFor``. Both streams are
+    driven so the stdout and stderr gates are pinned symmetrically, and
+    the captured output must be byte-identical either way.
+
+    The assertion spies the ``logger.debug`` *calls* rather than the
+    emitted records, and leaves ``isEnabledFor`` real. ``logger.debug``
+    self-gates on the effective level, so a records-only check stays green
+    even with the guard deleted; asserting the per-line calls never happen
+    when the logger is silenced is what actually fails on a reverted guard.
+    """
+    import logging
+
+    from mtui.hosts.connection import connection as conn_module
+
+    conn = Connection("test_host", 22, 300)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+    mock_session.recv_exit_status.return_value = 0
+    mock_session.recv.side_effect = [b"out-line\n", b""]
+    mock_session.recv_stderr.side_effect = [b"err-line\n", b""]
+    mock_session.recv_ready.side_effect = [True, False]
+    mock_session.recv_stderr_ready.side_effect = [True, False]
+
+    logger = conn_module.logger
+    original_level = logger.level
+    logger.setLevel(logging.DEBUG if debug_enabled else logging.WARNING)
+    try:
+        with (
+            patch.object(logger, "debug") as dbg,
+            patch("select.select", return_value=([mock_session], [], [])),
+        ):
+            conn.run("echo hi")
+    finally:
+        logger.setLevel(original_level)
+
+    # The final join+decode is independent of the per-line loop, so the
+    # captured output is identical regardless of log level.
+    assert conn.stdout == "out-line\n"
+    assert conn.stderr == "err-line\n"
+
+    # The loop logs each split line with the bare line as the first arg;
+    # setup-path debug calls use format strings, so filter to our lines.
+    per_line = [
+        c.args[0] for c in dbg.call_args_list if c.args and isinstance(c.args[0], str)
+    ]
+    if debug_enabled:
+        assert "out-line" in per_line
+        assert "err-line" in per_line
+    else:
+        # Guard skipped both loops: the wasted decode/split and these
+        # per-line logger.debug calls never happen. Fails if the
+        # isEnabledFor guard is removed.
+        assert "out-line" not in per_line
+        assert "err-line" not in per_line
+
+
 def test_run_closes_stdin_after_exec(mock_ssh_client, mock_ssh_config, mock_path):
     """run() must close the channel's write half so the remote command's
     stdin gets EOF and can't block forever waiting for input."""

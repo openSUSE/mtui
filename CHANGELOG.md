@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- `mtui-mcp` starts faster and ships a leaner tool manifest. The headless
+  server no longer imports `prompt_toolkit` (~115 modules, ~170ms) at startup —
+  it is loaded lazily only when the interactive REPL actually reads a line — and
+  the text-returning tools no longer advertise a redundant `{"result": string}`
+  `outputSchema` nor echo their output back as `structuredContent`. That trims
+  ~9KB (~2.4k tokens) from the `list_tools` manifest the client re-reads each
+  session; MCP clients should read tool output from the text content block (as
+  before) rather than `structuredContent`. Large single-command `run` output is
+  also accumulated without the previous quadratic buffer growth.
+
 ## 19.0.1 - 2026-07-17
 
 ### Added

@@ -388,8 +388,13 @@ class Connection:
         self.stdin = command
         self.stdout = ""
         self.stderr = ""
-        stdout = b""
-        stderr = b""
+        # Accumulate recv() chunks in lists and join once at the end.
+        # A ``bytes += buffer`` accumulator recopies the whole grown
+        # buffer on every 1 KiB read -- O(n^2) in the total output size,
+        # which bites multi-MB single commands (journalctl, cat of a big
+        # log). ``b"".join`` of the chunk list is byte-identical and O(n).
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
 
         session = self.__run_command(command)
         counter = 0
@@ -460,17 +465,22 @@ class Connection:
                     # print the received data
                     if session.recv_ready():
                         buffer = session.recv(1024)
-                        stdout += buffer
-                        for line in buffer.decode("utf-8", "ignore").split("\n"):
-                            if line:
-                                logger.debug(line)
+                        stdout_chunks.append(buffer)
+                        # Skip the per-line decode/split entirely unless DEBUG
+                        # is on -- otherwise every chunk is decoded and split
+                        # only to be discarded by a silenced logger.
+                        if logger.isEnabledFor(logging.DEBUG):
+                            for line in buffer.decode("utf-8", "ignore").split("\n"):
+                                if line:
+                                    logger.debug(line)
 
                     if session.recv_stderr_ready():
                         buffer = session.recv_stderr(1024)
-                        stderr += buffer
-                        for line in buffer.decode("utf-8", "ignore").split("\n"):
-                            if line:
-                                logger.debug(line)
+                        stderr_chunks.append(buffer)
+                        if logger.isEnabledFor(logging.DEBUG):
+                            for line in buffer.decode("utf-8", "ignore").split("\n"):
+                                if line:
+                                    logger.debug(line)
 
                     if not buffer:
                         break
@@ -497,8 +507,8 @@ class Connection:
         # dumps, non-UTF-8 locales, odd rpm metadata). A strict decode would
         # raise here and turn a successful command into a phantom failure
         # with its output lost -- mirror the tolerant per-line decode above.
-        self.stdout = stdout.decode("utf-8", "replace")
-        self.stderr = stderr.decode("utf-8", "replace")
+        self.stdout = b"".join(stdout_chunks).decode("utf-8", "replace")
+        self.stderr = b"".join(stderr_chunks).decode("utf-8", "replace")
         return exitcode
 
     def __invoke_shell(self, width: int, height: int) -> Channel | None:
