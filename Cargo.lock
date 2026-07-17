@@ -2356,6 +2356,7 @@ dependencies = [
  "chrono",
  "criterion",
  "directories",
+ "futures",
  "hex",
  "hmac",
  "insta",

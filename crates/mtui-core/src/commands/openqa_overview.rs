@@ -179,11 +179,62 @@ impl Command for OpenQAOverview {
                 }
             };
 
-        let mut single_incidents = Vec::new();
-        let mut aggregated = Vec::new();
+        let max_oqa_parallel = session.config.max_oqa_parallel as usize;
+        let test_pattern = args.get_one::<String>("test_pattern").map(String::as_str);
 
-        if let Some(versions) = versions.as_ref().filter(|v| !v.is_empty()) {
-            single_incidents = oqa::single_incidents(&http, &build, versions, &url_openqa).await;
+        // build_checks packages depend only on metadata + the QEM build string.
+        let mut packages = session.metadata().get_package_list();
+        if packages.is_empty()
+            && !build.is_empty()
+            && let Some(last) = build.rsplit(':').next()
+        {
+            packages = vec![last.to_owned()];
+        }
+
+        // The openQA (single/aggregated) and QAM (build_checks) fetches are
+        // independent; run them concurrently, then render in the fixed order
+        // below so on-screen output is byte-identical to the sequential flow.
+        let openqa_versions = versions.as_ref().filter(|v| !v.is_empty());
+        let single_fut = async {
+            match openqa_versions {
+                Some(versions) => {
+                    oqa::single_incidents(&http, &build, versions, &url_openqa, max_oqa_parallel)
+                        .await
+                }
+                None => Vec::new(),
+            }
+        };
+        let aggregated_fut = async {
+            match openqa_versions {
+                Some(versions) if !no_aggregated => {
+                    oqa::aggregated_updates(
+                        &http,
+                        &effective_incident_id,
+                        versions,
+                        days,
+                        &groups,
+                        &url_openqa,
+                        max_oqa_parallel,
+                    )
+                    .await
+                }
+                _ => Vec::new(),
+            }
+        };
+        let build_checks_fut = oqa::build_checks(
+            &http,
+            &product,
+            &incident_id,
+            i64::try_from(request_id).unwrap_or(0),
+            &packages,
+            &url_qam,
+            test_pattern,
+            max_oqa_parallel,
+        );
+        let (single_incidents, aggregated, build_checks) =
+            tokio::join!(single_fut, aggregated_fut, build_checks_fut);
+
+        if openqa_versions.is_some() {
             session
                 .display
                 .println(&session.display.blue("Single incidents - Core"));
@@ -193,15 +244,6 @@ impl Command for OpenQAOverview {
 
             if !no_aggregated {
                 session.display.println("-------");
-                aggregated = oqa::aggregated_updates(
-                    &http,
-                    &effective_incident_id,
-                    versions,
-                    days,
-                    &groups,
-                    &url_openqa,
-                )
-                .await;
                 for group in &aggregated {
                     session.display.println(&session.display.blue(&format!(
                         "\nAggregated updates - {}",
@@ -233,23 +275,6 @@ impl Command for OpenQAOverview {
             .display
             .println(&session.display.blue("#############"));
 
-        let mut packages = session.metadata().get_package_list();
-        if packages.is_empty()
-            && !build.is_empty()
-            && let Some(last) = build.rsplit(':').next()
-        {
-            packages = vec![last.to_owned()];
-        }
-        let build_checks = oqa::build_checks(
-            &http,
-            &product,
-            &incident_id,
-            i64::try_from(request_id).unwrap_or(0),
-            &packages,
-            &url_qam,
-            args.get_one::<String>("test_pattern").map(String::as_str),
-        )
-        .await;
         if build_checks.is_empty() {
             session.display.println("No build checks for this incident");
         } else {

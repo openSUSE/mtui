@@ -35,6 +35,7 @@ fn config_toml_fixture_parses_all_sections() {
     // Integer-typed options.
     assert_eq!(cfg.connection_timeout, 450);
     assert_eq!(cfg.max_parallel, 8);
+    assert_eq!(cfg.max_oqa_parallel, 4);
     assert_eq!(cfg.refhosts_https_expiration, 3600);
 
     // Boolean-typed option.

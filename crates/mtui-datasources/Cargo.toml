@@ -28,6 +28,7 @@ mtui-types.workspace = true
 mtui-config.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true }
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ini.workspace = true

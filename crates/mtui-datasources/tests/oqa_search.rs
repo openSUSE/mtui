@@ -63,6 +63,7 @@ async fn single_incidents_passed() {
         ":12358:bash",
         &["15-SP5".to_string()],
         &server.uri(),
+        4,
     )
     .await;
 
@@ -106,6 +107,7 @@ async fn single_incidents_failed_counts_jobs() {
         ":12358:bash",
         &["15-SP5".to_string()],
         &server.uri(),
+        4,
     )
     .await;
     assert_eq!(rows[0].status, "failed");
@@ -122,6 +124,7 @@ async fn single_incidents_unknown_version_records_note() {
         ":12358:bash",
         &["99-SP99".to_string()],
         &server.uri(),
+        4,
     )
     .await;
     assert_eq!(rows[0].status, "failed");
@@ -147,6 +150,7 @@ async fn single_incidents_teradata_uses_base_version_in_url() {
         ":12358:bash",
         &["12-SP3-TERADATA".to_string()],
         &server.uri(),
+        4,
     )
     .await;
 
@@ -174,6 +178,7 @@ async fn aggregated_updates_skips_excluded_versions() {
         5,
         &["core".to_string()],
         &server.uri(),
+        4,
     )
     .await;
     assert!(out.is_empty());
@@ -229,6 +234,7 @@ async fn aggregated_updates_finds_matching_build() {
         5,
         &["core".to_string()],
         &server.uri(),
+        4,
     )
     .await;
 
@@ -262,11 +268,58 @@ async fn aggregated_updates_missing_after_window() {
         3,
         &["core".to_string()],
         &server.uri(),
+        4,
     )
     .await;
     let row = &out[0].versions[0];
     assert_eq!(row.status, "missing");
     assert!(row.note.contains("in the last 3 days"));
+}
+
+#[tokio::test]
+async fn aggregated_updates_preserves_group_and_version_order() {
+    let server = MockServer::start().await;
+    mount_job_groups(
+        &server,
+        vec![
+            job_group(367, "Core Maintenance Updates 15-SP5"),
+            job_group(368, "Public Cloud Maintenance Updates 15-SP5"),
+        ],
+    )
+    .await;
+    // Every per-day query is empty -> every (group, version) resolves to
+    // "missing" after the window; a small delay lets the fan-out overlap so any
+    // ordering regression from out-of-order completion would surface.
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs/overview"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!([]))
+                .set_delay(std::time::Duration::from_millis(20)),
+        )
+        .mount(&server)
+        .await;
+
+    let out = aggregated_updates(
+        &client(),
+        "12358",
+        &["15-SP5".to_string(), "15-SP4".to_string()],
+        2,
+        &["core".to_string(), "cloud".to_string()],
+        &server.uri(),
+        8,
+    )
+    .await;
+
+    // Groups in `groups_wanted` order; versions in filtered-input order.
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].group, "core");
+    assert_eq!(out[1].group, "cloud");
+    for group in &out {
+        assert_eq!(group.versions.len(), 2);
+        assert_eq!(group.versions[0].version, "15-SP5");
+        assert_eq!(group.versions[1].version, "15-SP4");
+    }
 }
 
 // --- build_checks ---
@@ -324,6 +377,7 @@ async fn build_checks_filters_logs_by_package_and_parses() {
         &["bash".to_string()],
         &server.uri(),
         None,
+        4,
     )
     .await;
 
@@ -356,6 +410,7 @@ async fn build_checks_folds_long_match_lists() {
         &["bash".to_string()],
         &server.uri(),
         None,
+        4,
     )
     .await;
     assert_eq!(out.len(), 1);
@@ -379,6 +434,7 @@ async fn build_checks_index_404_returns_empty() {
         &["bash".to_string()],
         &server.uri(),
         None,
+        4,
     )
     .await;
     assert!(out.is_empty());
@@ -392,15 +448,26 @@ async fn build_checks_filters_multiple_packages() {
         .respond_with(ResponseTemplate::new(200).set_body_string(HTML_INDEX))
         .mount(&server)
         .await;
-    for arch in ["x86_64", "aarch64"] {
-        Mock::given(method("GET"))
-            .and(path(format!(
-                "{BUILD_CHECKS_PATH}/bash.SUSE_SLE-15-SP5_Update.{arch}.log"
-            )))
-            .respond_with(ResponseTemplate::new(200).set_body_string(LOG_SHORT))
-            .mount(&server)
-            .await;
-    }
+    // Delay the *first* link's log longest so, under concurrent fetching, it
+    // completes last — proving the output is re-ordered back to link order.
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{BUILD_CHECKS_PATH}/bash.SUSE_SLE-15-SP5_Update.x86_64.log"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(LOG_SHORT)
+                .set_delay(std::time::Duration::from_millis(120)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{BUILD_CHECKS_PATH}/bash.SUSE_SLE-15-SP5_Update.aarch64.log"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_string(LOG_SHORT))
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path(format!("{BUILD_CHECKS_PATH}/other-package.log")))
         .respond_with(ResponseTemplate::new(200).set_body_string(LOG_SHORT))
@@ -415,9 +482,22 @@ async fn build_checks_filters_multiple_packages() {
         &["bash".to_string(), "other-package".to_string()],
         &server.uri(),
         None,
+        4,
     )
     .await;
     assert_eq!(out.len(), 3);
+    // Output preserves the HTML link order, not the (delayed) completion order.
+    assert!(
+        out[0]
+            .url
+            .ends_with("bash.SUSE_SLE-15-SP5_Update.x86_64.log")
+    );
+    assert!(
+        out[1]
+            .url
+            .ends_with("bash.SUSE_SLE-15-SP5_Update.aarch64.log")
+    );
+    assert!(out[2].url.ends_with("other-package.log"));
 }
 
 #[tokio::test]
@@ -445,6 +525,7 @@ async fn build_checks_matches_flavored_python_package_to_source_log() {
         &["python313-ecdsa".to_string()],
         &server.uri(),
         None,
+        4,
     )
     .await;
     assert_eq!(out.len(), 1);
@@ -610,4 +691,147 @@ fn extract_test_results_rust_folds_via_summarize() {
     assert!(summary.contains("more results"));
     assert!(!summary.contains("0 passed"));
     assert!(summary.contains("0 failed"));
+}
+
+// --- 0mop.7: parallelization oracles ---
+//
+// These pin the two invariants of the bounded-concurrent fan-out: exact request
+// counts (no extra/duplicate fetches introduced by concurrency) and observable
+// overlap under the bound (proving the fetches actually run in parallel). The
+// request-count assert is the authoritative gate; the timing assert uses a
+// generous margin against the sequential lower bound to stay non-flaky.
+
+/// Mount the empty running + failed overview endpoints so every version resolves
+/// to PASSED, delaying each response by `delay` to make overlap observable.
+async fn mount_passing_overview(server: &MockServer, delay: std::time::Duration) {
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs/overview"))
+        .and(query_param("state", "running"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!([]))
+                .set_delay(delay),
+        )
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs/overview"))
+        .and(query_param("result", "failed"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!([]))
+                .set_delay(delay),
+        )
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn single_incidents_request_count_is_exact() {
+    let server = MockServer::start().await;
+    mount_job_groups(
+        &server,
+        vec![
+            job_group(490, "SLE 15 SP5 Core Incidents"),
+            job_group(491, "SLE 15 SP4 Core Incidents"),
+            job_group(492, "SLE 12 SP5 Core Incidents"),
+        ],
+    )
+    .await;
+    mount_passing_overview(&server, std::time::Duration::ZERO).await;
+
+    let versions = [
+        "15-SP5".to_string(),
+        "15-SP4".to_string(),
+        "12-SP5".to_string(),
+    ];
+    let rows = single_incidents(&client(), ":12358:bash", &versions, &server.uri(), 4).await;
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|r| r.status == "passed"));
+    // Output order matches the input order regardless of completion order.
+    assert_eq!(rows[0].version, "15-SP5");
+    assert_eq!(rows[1].version, "15-SP4");
+    assert_eq!(rows[2].version, "12-SP5");
+
+    // Exactly one job_groups fetch + two overview fetches (running + failed) per
+    // version. No dedup regression, no extra fetches from concurrency.
+    let reqs = server.received_requests().await.unwrap();
+    let job_groups = reqs
+        .iter()
+        .filter(|r| r.url.path() == "/api/v1/job_groups")
+        .count();
+    let overview = reqs
+        .iter()
+        .filter(|r| r.url.path() == "/api/v1/jobs/overview")
+        .count();
+    assert_eq!(job_groups, 1, "job_groups fetched once");
+    assert_eq!(overview, 2 * versions.len(), "2 overview GETs per version");
+}
+
+#[tokio::test]
+async fn single_incidents_runs_versions_concurrently() {
+    let server = MockServer::start().await;
+    mount_job_groups(
+        &server,
+        vec![
+            job_group(490, "SLE 15 SP5 Core Incidents"),
+            job_group(491, "SLE 15 SP4 Core Incidents"),
+            job_group(492, "SLE 12 SP5 Core Incidents"),
+            job_group(493, "SLE 12 SP4 Core Incidents"),
+        ],
+    )
+    .await;
+    let delay = std::time::Duration::from_millis(100);
+    mount_passing_overview(&server, delay).await;
+
+    let versions = [
+        "15-SP5".to_string(),
+        "15-SP4".to_string(),
+        "12-SP5".to_string(),
+        "12-SP4".to_string(),
+    ];
+    // 4 versions × 2 delayed GETs = 8 delayed requests. Within a version the two
+    // GETs are tokio::join!ed (~1 delay); across versions they overlap under the
+    // bound. Sequential lower bound would be 8×delay = 800ms; bounded-parallel
+    // (bound ≥ 4) is closer to ~2×delay. Assert well under the sequential bound.
+    let start = std::time::Instant::now();
+    let rows = single_incidents(&client(), ":12358:bash", &versions, &server.uri(), 8).await;
+    let elapsed = start.elapsed();
+
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().all(|r| r.status == "passed"));
+    assert!(
+        elapsed < delay * 6,
+        "expected concurrent fan-out well under the {}ms sequential bound, took {elapsed:?}",
+        (delay * 8).as_millis(),
+    );
+}
+
+#[tokio::test]
+async fn single_incidents_respects_bound_of_one() {
+    let server = MockServer::start().await;
+    mount_job_groups(
+        &server,
+        vec![
+            job_group(490, "SLE 15 SP5 Core Incidents"),
+            job_group(491, "SLE 15 SP4 Core Incidents"),
+        ],
+    )
+    .await;
+    let delay = std::time::Duration::from_millis(80);
+    mount_passing_overview(&server, delay).await;
+
+    let versions = ["15-SP5".to_string(), "15-SP4".to_string()];
+    // bound=1 serialises the two versions. Each version join!s its 2 GETs (~1
+    // delay), so serialised ≈ 2×delay while bound≥2 would be ≈ 1×delay. Assert
+    // it takes at least the serialised lower bound.
+    let start = std::time::Instant::now();
+    let rows = single_incidents(&client(), ":12358:bash", &versions, &server.uri(), 1).await;
+    let elapsed = start.elapsed();
+
+    assert_eq!(rows.len(), 2);
+    assert!(
+        elapsed >= delay + delay / 2,
+        "bound=1 should serialise the two versions, took {elapsed:?}",
+    );
 }

@@ -11,19 +11,21 @@
 //!   `reqwest::Client`, i.e. a new connection pool + TLS config each time) — the
 //!   baseline for reusing one client across commands (0mop.13).
 //!
-//! The oqa-search fan-out is measured as a request-count invariant in the
-//! integration tests rather than timed here (its wall-clock is dominated by the
-//! mock server; a count is the honest regression oracle for parallelize
-//! (0mop.7)). The gitea approval flow (`gitea/approve`) is timed here as a
-//! *supplementary* high-latency signal for 0mop.8 — but the authoritative
-//! regression gate remains the request-count oracles in `tests/gitea.rs`
-//! (`approve_request_count` etc.), since the bench wall-clock is dominated by
-//! the mock server's simulated latency. See `plans/perf-baseline-0mop1.md`.
+//! The oqa-search fan-out's authoritative regression gate is the request-count
+//! and order oracle in `tests/oqa_search.rs` (a count/order is the honest signal
+//! for parallelize, 0mop.7). `oqa/single_incidents` is timed here as a
+//! supplementary high-latency signal contrasting a serial bound with a parallel
+//! bound: with a per-response delay the sequential curve is additive while the
+//! bounded-parallel curve is ~flat. The gitea approval flow (`gitea/approve`) is
+//! the analogous supplementary signal for 0mop.8. Bench wall-clock is dominated
+//! by the mock server's simulated latency, so the count oracles remain the gate.
+//! See `plans/perf-baseline-0mop1.md`.
 
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mtui_datasources::gitea::{Gitea, assign_marker};
+use mtui_datasources::oqa_search::search::single_incidents;
 use mtui_datasources::{Attributes, HttpClient, Refhosts, VerifyPolicy};
 use mtui_types::load_refhosts;
 use serde_json::json;
@@ -155,11 +157,75 @@ fn bench_gitea_approve(c: &mut Criterion) {
     drop(server);
 }
 
+/// Per-response latency for the oqa-search bench, so the serial-vs-parallel
+/// fan-out difference (0mop.7) shows up in wall-clock. The request-count/order
+/// oracle in `tests/oqa_search.rs` is the real gate.
+const OQA_RESPONSE_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Number of versions to fan out over in the oqa-search bench.
+const OQA_VERSIONS: usize = 8;
+
+/// Time `single_incidents` over `OQA_VERSIONS` versions against a latency-injected
+/// mock, contrasting a serial bound (1) with a parallel bound (`OQA_VERSIONS`).
+/// Each version issues 2 delayed overview GETs (tokio::join!ed); serial is
+/// additive across versions, bounded-parallel is ~flat.
+fn bench_oqa_single_incidents(c: &mut Criterion) {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime builds");
+    let (server, uri, versions) = rt.block_on(async {
+        let server = MockServer::start().await;
+        let mut groups = Vec::new();
+        let mut versions = Vec::new();
+        for i in 0..OQA_VERSIONS {
+            let ver = format!("15-SP{i}");
+            groups.push(json!({
+                "id": 100 + i as i64,
+                "name": format!("SLE 15 SP{i} Core Incidents"),
+                "template": "tpl",
+            }));
+            versions.push(ver);
+        }
+        Mock::given(method("GET"))
+            .and(path("/api/v1/job_groups"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::Value::Array(groups)),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/jobs/overview"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!([]))
+                    .set_delay(OQA_RESPONSE_DELAY),
+            )
+            .mount(&server)
+            .await;
+        let uri = server.uri();
+        (server, uri, versions)
+    });
+
+    let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
+    let mut g = c.benchmark_group("oqa/single_incidents");
+    for bound in [1usize, OQA_VERSIONS] {
+        g.bench_with_input(BenchmarkId::from_parameter(bound), &bound, |b, &bound| {
+            b.to_async(&rt).iter(|| async {
+                black_box(single_incidents(&http, ":1:pkg", &versions, &uri, bound).await)
+            });
+        });
+    }
+    g.finish();
+    drop(server);
+}
+
 criterion_group!(
     benches,
     bench_refhosts_parse,
     bench_refhosts_search,
     bench_http_client_new,
-    bench_gitea_approve
+    bench_gitea_approve,
+    bench_oqa_single_incidents
 );
 criterion_main!(benches);

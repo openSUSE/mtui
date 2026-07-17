@@ -20,6 +20,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use futures::stream::{self, StreamExt};
 use scraper::{Html, Selector};
 
 use crate::error::OqaSearchError;
@@ -434,8 +435,13 @@ async fn query_version_status(
     let failed_url = openqa_build_url("failed", url_openqa, version_oqa, build, group_id)
         .expect("failed is a valid state");
 
-    let running_results = get_json(http, &running_url).await?;
-    let failed_results = get_json(http, &failed_url).await?;
+    // The running and failed overview queries are independent; fetch them
+    // concurrently. Both are always needed, and the failed>0 / running>0
+    // precedence below is applied to the results, so ordering is unchanged.
+    let (running_results, failed_results) =
+        tokio::join!(get_json(http, &running_url), get_json(http, &failed_url));
+    let running_results = running_results?;
+    let failed_results = failed_results?;
 
     let failed = overview_len(&failed_results);
     if failed > 0 {
@@ -621,6 +627,7 @@ pub async fn single_incidents(
     build: &str,
     versions: &[String],
     url_openqa: &str,
+    max_parallel: usize,
 ) -> Vec<VersionResult> {
     let groups = match fetch_openqa_groups(http, url_openqa).await {
         Ok(g) => g,
@@ -630,32 +637,58 @@ pub async fn single_incidents(
         }
     };
 
-    let mut results = Vec::new();
-    for version in versions {
-        let Some(group_id) = get_group_id(&groups, version) else {
-            let note = format!(
-                "Not a valid version (single incident) or group (aggregated updates): {version}"
-            );
-            tracing::warn!("{note}");
-            results.push(VersionResult {
-                version: version.clone(),
-                status: "failed".to_string(),
-                note,
-                ..Default::default()
-            });
-            continue;
-        };
-        match query_version_status(http, version, build, group_id, url_openqa).await {
-            Ok(row) => results.push(row),
-            Err(e) => results.push(VersionResult {
-                version: version.clone(),
-                status: "failed".to_string(),
-                note: format!("openQA query failed: {e}"),
-                ..Default::default()
-            }),
-        }
-    }
-    results
+    // Resolve each version's group id up front (a pure lookup), then fan the
+    // per-version openQA queries out concurrently under a bound; carry the input
+    // index so the output order is identical to the sequential version. Inputs
+    // are cloned into each future to keep the futures `'static`-friendly when the
+    // whole call is nested in another async context.
+    let jobs: Vec<(usize, String, Option<i64>)> = versions
+        .iter()
+        .enumerate()
+        .map(|(idx, version)| (idx, version.clone(), get_group_id(&groups, version)))
+        .collect();
+    let build = build.to_owned();
+    let url_openqa = url_openqa.to_owned();
+    let mut indexed: Vec<(usize, VersionResult)> = stream::iter(jobs)
+        .map(|(idx, version, group_id)| {
+            let build = build.clone();
+            let url_openqa = url_openqa.clone();
+            async move {
+                let Some(group_id) = group_id else {
+                    let note = format!(
+                        "Not a valid version (single incident) or group (aggregated updates): {version}"
+                    );
+                    tracing::warn!("{note}");
+                    return (
+                        idx,
+                        VersionResult {
+                            version,
+                            status: "failed".to_string(),
+                            note,
+                            ..Default::default()
+                        },
+                    );
+                };
+                let row = match query_version_status(http, &version, &build, group_id, &url_openqa)
+                    .await
+                {
+                    Ok(row) => row,
+                    Err(e) => VersionResult {
+                        version,
+                        status: "failed".to_string(),
+                        note: format!("openQA query failed: {e}"),
+                        ..Default::default()
+                    },
+                };
+                (idx, row)
+            }
+        })
+        .buffer_unordered(max_parallel.max(1))
+        .collect()
+        .await;
+
+    indexed.sort_by_key(|(idx, _)| *idx);
+    indexed.into_iter().map(|(_, row)| row).collect()
 }
 
 /// Walk the last `days` days of aggregated builds for each group, mirroring
@@ -667,6 +700,7 @@ pub async fn aggregated_updates(
     days: u32,
     groups_wanted: &[String],
     url_openqa: &str,
+    max_parallel: usize,
 ) -> Vec<GroupResult> {
     let filtered_versions: Vec<String> = versions
         .iter()
@@ -688,7 +722,10 @@ pub async fn aggregated_updates(
         }
     };
 
-    let mut results = Vec::new();
+    // Resolve the valid groups first, preserving `groups_wanted` order (invalid
+    // groups are skipped with a warning, as upstream). Each surviving group gets
+    // a stable output position.
+    let mut valid_groups: Vec<(String, i64)> = Vec::new();
     for group in groups_wanted {
         let Some(group_id) = get_group_id(&groups, group) else {
             tracing::warn!(
@@ -696,23 +733,56 @@ pub async fn aggregated_updates(
             );
             continue;
         };
-        let mut group_result = GroupResult {
-            group: group.clone(),
-            versions: Vec::new(),
-        };
-        for version in &filtered_versions {
-            let row = scan_aggregated_for_version(
-                http,
-                version,
-                days,
-                group_id,
-                incident_id_int,
-                url_openqa,
-            )
-            .await;
-            group_result.versions.push(row);
-        }
-        results.push(group_result);
+        valid_groups.push((group.clone(), group_id));
+    }
+
+    // Fan the independent (group, version) day-scans out concurrently under a
+    // bound; each scan is still early-exit sequential internally. The (group,
+    // version) index pair restores the exact grouped/ordered output. Inputs are
+    // cloned into each future to keep the futures nesting-friendly.
+    let jobs: Vec<(usize, usize, String, i64)> = valid_groups
+        .iter()
+        .enumerate()
+        .flat_map(|(gi, (_, group_id))| {
+            let group_id = *group_id;
+            filtered_versions
+                .iter()
+                .enumerate()
+                .map(move |(vi, version)| (gi, vi, version.clone(), group_id))
+        })
+        .collect();
+    let url_openqa = url_openqa.to_owned();
+    let mut scanned: Vec<(usize, usize, VersionResult)> = stream::iter(jobs)
+        .map(|(gi, vi, version, group_id)| {
+            let url_openqa = url_openqa.clone();
+            async move {
+                let row = scan_aggregated_for_version(
+                    http,
+                    &version,
+                    days,
+                    group_id,
+                    incident_id_int,
+                    &url_openqa,
+                )
+                .await;
+                (gi, vi, row)
+            }
+        })
+        .buffer_unordered(max_parallel.max(1))
+        .collect()
+        .await;
+
+    scanned.sort_by_key(|(gi, vi, _)| (*gi, *vi));
+
+    let mut results: Vec<GroupResult> = valid_groups
+        .into_iter()
+        .map(|(group, _)| GroupResult {
+            group,
+            versions: Vec::with_capacity(filtered_versions.len()),
+        })
+        .collect();
+    for (gi, _, row) in scanned {
+        results[gi].versions.push(row);
     }
     results
 }
@@ -779,6 +849,10 @@ async fn scan_aggregated_for_version(
 ///
 /// A missing index (or an unreadable log) is not an error — it yields no (or a
 /// bare) entry, so a flaky QAM host cannot abort the command.
+// The parameters mirror the upstream `build_checks` signature plus the 0mop.7
+// concurrency bound; the single internal caller (`openqa_overview`) passes them
+// positionally, so a params struct would add ceremony without a readability win.
+#[allow(clippy::too_many_arguments)]
 pub async fn build_checks(
     http: &HttpClient,
     product: &str,
@@ -787,6 +861,7 @@ pub async fn build_checks(
     packages: &[String],
     url_qam: &str,
     test_pattern: Option<&str>,
+    max_parallel: usize,
 ) -> Vec<BuildCheckResult> {
     let base_url =
         format!("{url_qam}/testreports/SUSE:{product}:{incident_id}:{request_id}/build_checks");
@@ -810,33 +885,53 @@ pub async fn build_checks(
         return vec![];
     }
 
-    let mut out = Vec::new();
-    for log in logfiles {
-        let log_url = format!("{base_url}/{}", urlencoding::encode(&log));
-        let log_text = match fetch_url_content(http, &log_url).await {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!("build_check log {log_url} unavailable: {e}");
-                out.push(BuildCheckResult {
-                    url: log_url,
-                    ..Default::default()
-                });
-                continue;
-            }
-        };
-        let mut matches = extract_test_results(&log_text, test_pattern);
-        let mut summary = String::new();
-        if matches.len() > 4 {
-            summary = summarize_test_results(&matches);
-            matches = vec![matches[0].clone(), matches[matches.len() - 1].clone()];
-        }
-        out.push(BuildCheckResult {
-            url: log_url,
-            matches,
-            summary,
-        });
-    }
-    out
+    // Fetch + parse each matching log concurrently under a bound; carry the
+    // input index so the output order matches the sequential (link) order.
+    // Inputs are cloned/owned into each future to keep the futures
+    // nesting-friendly when the whole call is composed into another async task.
+    let test_pattern = test_pattern.map(str::to_owned);
+    let mut indexed: Vec<(usize, BuildCheckResult)> =
+        stream::iter(logfiles.into_iter().enumerate())
+            .map(|(idx, log)| {
+                let base_url = base_url.clone();
+                let test_pattern = test_pattern.clone();
+                async move {
+                    let log_url = format!("{base_url}/{}", urlencoding::encode(&log));
+                    let log_text = match fetch_url_content(http, &log_url).await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::warn!("build_check log {log_url} unavailable: {e}");
+                            return (
+                                idx,
+                                BuildCheckResult {
+                                    url: log_url,
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    };
+                    let mut matches = extract_test_results(&log_text, test_pattern.as_deref());
+                    let mut summary = String::new();
+                    if matches.len() > 4 {
+                        summary = summarize_test_results(&matches);
+                        matches = vec![matches[0].clone(), matches[matches.len() - 1].clone()];
+                    }
+                    (
+                        idx,
+                        BuildCheckResult {
+                            url: log_url,
+                            matches,
+                            summary,
+                        },
+                    )
+                }
+            })
+            .buffer_unordered(max_parallel.max(1))
+            .collect()
+            .await;
+
+    indexed.sort_by_key(|(idx, _)| *idx);
+    indexed.into_iter().map(|(_, entry)| entry).collect()
 }
 
 #[cfg(test)]

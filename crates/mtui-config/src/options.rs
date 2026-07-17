@@ -182,6 +182,9 @@ pub(crate) fn default_connection_timeout() -> u64 {
 pub(crate) fn default_max_parallel() -> u64 {
     50
 }
+pub(crate) fn default_max_oqa_parallel() -> u64 {
+    8
+}
 pub(crate) fn default_svn_path() -> String {
     "svn+ssh://svn@qam.suse.de/testreports".to_owned()
 }
@@ -308,6 +311,7 @@ pub(crate) struct MtuiSection {
 pub(crate) struct ConnectionSection {
     pub connection_timeout: Option<u64>,
     pub max_parallel: Option<u64>,
+    pub max_oqa_parallel: Option<u64>,
     pub ssh_strict_host_key_checking: Option<String>,
 }
 
@@ -479,6 +483,7 @@ impl RawConfig {
         take!(mtui, ssl_verify);
         take!(connection, connection_timeout);
         take!(connection, max_parallel);
+        take!(connection, max_oqa_parallel);
         take!(connection, ssh_strict_host_key_checking);
         take!(refhosts, resolvers);
         take!(refhosts, https_uri);
@@ -543,6 +548,12 @@ pub struct Config {
     /// and remote load on large fleets; serial-host semantics are unaffected.
     /// A non-positive value falls back to the default (upstream is unbounded).
     pub max_parallel: u64,
+    /// Maximum number of independent openQA/QAM HTTP requests to run
+    /// concurrently in the oqa-search overview (per-version, group×version, and
+    /// per-log fan-out). Kept lower than [`max_parallel`] to stay polite toward
+    /// the shared openQA/QAM hosts. A non-positive value falls back to the
+    /// default.
+    pub max_oqa_parallel: u64,
     /// SSH host-key checking policy (`auto_add`, `strict`, `warn`, ...).
     pub ssh_strict_host_key_checking: String,
 
@@ -668,6 +679,7 @@ impl Default for Config {
             ssl_verify: SslVerify::Enabled,
             connection_timeout: default_connection_timeout(),
             max_parallel: default_max_parallel(),
+            max_oqa_parallel: default_max_oqa_parallel(),
             ssh_strict_host_key_checking: default_ssh_strict_host_key_checking(),
             refhosts_resolvers: default_refhosts_resolvers(),
             refhosts_https_uri: default_refhosts_https_uri(),
@@ -779,6 +791,11 @@ impl Config {
                 "max_parallel",
                 d.max_parallel
             ),
+            max_oqa_parallel: validated_positive!(
+                raw.connection.max_oqa_parallel,
+                "max_oqa_parallel",
+                d.max_oqa_parallel
+            ),
             ssh_strict_host_key_checking: raw
                 .connection
                 .ssh_strict_host_key_checking
@@ -871,6 +888,7 @@ mod tests {
         let c = Config::default();
         assert_eq!(c.connection_timeout, 300);
         assert_eq!(c.max_parallel, 50);
+        assert_eq!(c.max_oqa_parallel, 8);
         assert_eq!(c.refhosts_https_expiration, 3600 * 12);
         assert!(!c.chdir_to_template_dir);
         assert_eq!(c.ssl_verify, SslVerify::Enabled);
@@ -1058,12 +1076,14 @@ mod tests {
         let mut raw = RawConfig::default();
         raw.connection.connection_timeout = Some(450);
         raw.connection.max_parallel = Some(8);
+        raw.connection.max_oqa_parallel = Some(3);
         raw.mtui.chdir_to_template_dir = Some(true);
         raw.url.bugzilla = Some("https://bugzilla.example.com".to_owned());
         let c = Config::from_raw(raw);
         // Overridden.
         assert_eq!(c.connection_timeout, 450);
         assert_eq!(c.max_parallel, 8);
+        assert_eq!(c.max_oqa_parallel, 3);
         assert!(c.chdir_to_template_dir);
         assert_eq!(c.bugzilla_url, "https://bugzilla.example.com");
         // Untouched falls back to default.
@@ -1174,6 +1194,7 @@ mod tests {
             [connection]
             connection_timeout = 0
             max_parallel = 0
+            max_oqa_parallel = 0
             [refhosts]
             https_expiration = 0
             [lock]
@@ -1188,6 +1209,7 @@ mod tests {
         let d = Config::default();
         assert_eq!(c.connection_timeout, d.connection_timeout);
         assert_eq!(c.max_parallel, d.max_parallel);
+        assert_eq!(c.max_oqa_parallel, d.max_oqa_parallel);
         assert_eq!(c.refhosts_https_expiration, d.refhosts_https_expiration);
         assert_eq!(c.lock_wait_poll, d.lock_wait_poll);
         assert_eq!(c.mcp_session_cap, d.mcp_session_cap);
