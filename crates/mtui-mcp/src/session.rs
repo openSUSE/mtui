@@ -98,7 +98,7 @@ use crate::slim::{cap_output, truncation_notice};
 /// A wedged host teardown (a dead peer with no RST whose close never returns)
 /// must not block the http registry's idle-sweep behind it; a close that
 /// overruns this bound is logged and abandoned so `close()` always returns.
-const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Default interval between `notifications/progress` heartbeat frames while a
 /// long-running foreground tool call runs (upstream

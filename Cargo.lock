@@ -2419,6 +2419,7 @@ dependencies = [
  "axum",
  "clap",
  "criterion",
+ "futures",
  "insta",
  "mtui-config",
  "mtui-core",

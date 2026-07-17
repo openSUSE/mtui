@@ -275,6 +275,9 @@ pub(crate) fn default_mcp_session_cap() -> usize {
 pub(crate) fn default_mcp_session_idle_timeout() -> u64 {
     1800
 }
+pub(crate) fn default_mcp_sweep_parallel() -> usize {
+    4
+}
 pub(crate) fn default_mcp_max_active_jobs() -> usize {
     16
 }
@@ -416,6 +419,7 @@ pub(crate) struct McpSection {
     pub max_completed_jobs: Option<usize>,
     pub session_cap: Option<usize>,
     pub session_idle_timeout: Option<u64>,
+    pub sweep_parallel: Option<usize>,
     pub profile: Option<String>,
     pub tools_allow: Option<Vec<String>>,
     pub tools_deny: Option<Vec<String>>,
@@ -510,6 +514,7 @@ impl RawConfig {
         take!(mcp, max_completed_jobs);
         take!(mcp, session_cap);
         take!(mcp, session_idle_timeout);
+        take!(mcp, sweep_parallel);
         take!(mcp, profile);
         take!(mcp, tools_allow);
         take!(mcp, tools_deny);
@@ -645,6 +650,13 @@ pub struct Config {
     /// disables the sweeper. Upstream default is 1800. Enforcement is a
     /// follow-up (mtui-rs-odq8).
     pub mcp_session_idle_timeout: u64,
+    /// Max stale sessions the idle sweeper tears down concurrently in one sweep
+    /// cycle (each teardown is bounded by the per-session disconnect timeout).
+    /// Bounding the fan-out keeps a mass eviction from a host-teardown thundering
+    /// herd while making sweep latency ~independent of stale-session count.
+    /// Default is 4. No upstream equivalent — this is a hardening addition
+    /// (mtui-rs-0mop.10).
+    pub mcp_sweep_parallel: usize,
     /// Tool-surface profile the `mtui-mcp` server exposes: `"full"` (default,
     /// every synthesised tool) or `"core"` (the curated everyday subset — see
     /// `mtui_mcp::profiles`). An unknown name falls back to `full` with a
@@ -706,6 +718,7 @@ impl Default for Config {
             mcp_max_completed_jobs: default_mcp_max_completed_jobs(),
             mcp_session_cap: default_mcp_session_cap(),
             mcp_session_idle_timeout: default_mcp_session_idle_timeout(),
+            mcp_sweep_parallel: default_mcp_sweep_parallel(),
             mcp_profile: default_mcp_profile(),
             mcp_tools_allow: Vec::new(),
             mcp_tools_deny: Vec::new(),
@@ -865,6 +878,11 @@ impl Config {
                 raw.mcp.session_idle_timeout,
                 "mcp_session_idle_timeout",
                 d.mcp_session_idle_timeout
+            ),
+            mcp_sweep_parallel: validated_positive!(
+                raw.mcp.sweep_parallel,
+                "mcp_sweep_parallel",
+                d.mcp_sweep_parallel
             ),
             mcp_profile: raw.mcp.profile.unwrap_or(d.mcp_profile),
             mcp_tools_allow: raw.mcp.tools_allow.unwrap_or(d.mcp_tools_allow),
@@ -1202,6 +1220,7 @@ mod tests {
             [mcp]
             session_cap = 0
             session_idle_timeout = 0
+            sweep_parallel = 0
             "#,
         )
         .unwrap();
@@ -1214,6 +1233,7 @@ mod tests {
         assert_eq!(c.lock_wait_poll, d.lock_wait_poll);
         assert_eq!(c.mcp_session_cap, d.mcp_session_cap);
         assert_eq!(c.mcp_session_idle_timeout, d.mcp_session_idle_timeout);
+        assert_eq!(c.mcp_sweep_parallel, d.mcp_sweep_parallel);
     }
 
     #[test]

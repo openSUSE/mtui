@@ -106,6 +106,11 @@ pub struct MockConnection {
     /// across `Clone`d handles so the test fires the same notify. Never set by
     /// default (an instant close).
     block_close: Option<Arc<tokio::sync::Notify>>,
+    /// When set, [`close`](Connection::close) sleeps this long before completing,
+    /// modelling a slow (but eventually-returning) host teardown. Unlike
+    /// [`block_close`](Self::block_close) it needs no external release, so a
+    /// fixed per-close cost can be timed. Never set by default (an instant close).
+    close_delay: Option<std::time::Duration>,
     /// When `true`, [`close`](Connection::close) returns an error, modelling a
     /// host that fails to disconnect cleanly so `quit`'s per-host failure
     /// naming can be exercised.
@@ -207,6 +212,7 @@ impl MockConnection {
             issued: Arc::new(Mutex::new(Vec::new())),
             closed: Arc::new(Mutex::new(false)),
             block_close: None,
+            close_delay: None,
             close_fails: false,
             reconnects: Arc::new(Mutex::new(0)),
             reconnect_fails: false,
@@ -342,6 +348,17 @@ impl MockConnection {
     #[must_use]
     pub fn with_blocking_close(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
         self.block_close = Some(gate);
+        self
+    }
+
+    /// Makes [`close`](Connection::close) sleep `delay` before completing,
+    /// modelling a slow-but-eventually-returning host teardown. Unlike
+    /// [`with_blocking_close`](Self::with_blocking_close) it self-releases, so a
+    /// fixed per-close cost can be timed (e.g. proving the idle sweeper tears
+    /// stale sessions down concurrently rather than serially).
+    #[must_use]
+    pub fn with_close_delay(mut self, delay: std::time::Duration) -> Self {
+        self.close_delay = Some(delay);
         self
     }
 
@@ -694,6 +711,9 @@ impl Connection for MockConnection {
         // returns; `closed` is only set once (if) the gate fires.
         if let Some(gate) = self.block_close.clone() {
             gate.notified().await;
+        }
+        if let Some(delay) = self.close_delay {
+            tokio::time::sleep(delay).await;
         }
         if self.close_fails {
             return Err(HostError::Connect {

@@ -145,17 +145,19 @@ mod tests {
         let d = Config::default();
         assert_eq!(d.mcp_session_cap, 32);
         assert_eq!(d.mcp_session_idle_timeout, 1800);
+        assert_eq!(d.mcp_sweep_parallel, 4);
     }
 
     #[test]
     fn load_reads_mcp_session_bounds() {
         let path = write_tmp(
             "mcp-session.toml",
-            "[mcp]\nsession_cap = 8\nsession_idle_timeout = 120\n",
+            "[mcp]\nsession_cap = 8\nsession_idle_timeout = 120\nsweep_parallel = 2\n",
         );
         let cfg = Config::load(Some(path));
         assert_eq!(cfg.mcp_session_cap, 8);
         assert_eq!(cfg.mcp_session_idle_timeout, 120);
+        assert_eq!(cfg.mcp_sweep_parallel, 2);
     }
 
     #[test]
