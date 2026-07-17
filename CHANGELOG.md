@@ -24,6 +24,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   now run concurrently instead of one after another, while results are read back
   in the original order so the rendered overview is unchanged. The openQA
   job-group list is fetched once up front and shared across the fan-out.
+- Loading a template / connecting reference hosts is faster for multi-target
+  updates. `refhosts.yml` is now parsed once per report and shared across every
+  testplatform (and with the product-drift check) instead of being re-parsed
+  (~1s each) for every testplatform during autoconnect / `add_host`.
 
 ## 19.0.1 - 2026-07-17
 

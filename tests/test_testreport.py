@@ -890,6 +890,76 @@ def test_refhosts_from_tp_failed_resolve_swallows(tmp_path: Path) -> None:
     r.refhosts_from_tp("tp")
 
 
+def test_refhosts_from_tp_parses_refhosts_once_across_testplatforms(
+    tmp_path: Path,
+) -> None:
+    """refhosts.yml is parsed once per report, not once per testplatform.
+
+    autoconnect/add_host resolve every testplatform through
+    ``refhosts_from_tp``; reusing the memoized ``_get_refhosts_store``
+    collapses the K parses of a K-testplatform template to one. A revert to
+    the per-call factory build makes ``call_count == K``.
+    """
+    r = _make(tmp_path)
+    r._arbiter = None
+    r._owner = None
+    r.refhostsFactory = MagicMock(
+        return_value=_FakeRefhosts([_ph("h1", ("sles", "15", "x86_64", ()))])
+    )
+
+    for minor in (5, 6, 7):
+        r.refhosts_from_tp(f"base=sles(major=15,minor={minor});arch=[x86_64]")
+
+    assert r.refhostsFactory.call_count == 1
+    assert r.hostnames == {"h1"}
+
+
+def test_refhosts_from_tp_reuses_prebuilt_store(tmp_path: Path) -> None:
+    """A store already built (e.g. by the product-drift check) is reused.
+
+    ``refhosts_from_tp`` reads the same ``_get_refhosts_store`` memo the
+    product-drift check populates, so once the store is built it never calls
+    the factory again.
+    """
+    r = _make(tmp_path)
+    r._arbiter = None
+    r._owner = None
+    # Simulate the memo already built (as the product-drift check would).
+    # _FakeRefhosts is a structural test double, not a Refhosts subclass.
+    r._refhosts_store = _FakeRefhosts(  # ty: ignore[invalid-assignment]
+        [_ph("h1", ("sles", "15", "x86_64", ()))]
+    )
+    r._refhosts_store_built = True
+    r.refhostsFactory = MagicMock()
+
+    r.refhosts_from_tp("base=sles(major=15,minor=5);arch=[x86_64]")
+
+    r.refhostsFactory.assert_not_called()
+    assert r.hostnames == {"h1"}
+
+
+def test_refhosts_from_tp_caches_failed_resolve(tmp_path: Path) -> None:
+    """A failed store build is cached, not retried, for the report's lifetime.
+
+    Unlike the previous per-call factory build, the shared memo caches the
+    failure: a second ``refhosts_from_tp`` does not re-invoke the factory
+    (recovery needs a template reload). Pins the deliberate sticky-None
+    behavior of the memoization.
+    """
+    from mtui.hosts.refhost import RefhostsResolveFailedError
+
+    r = _make(tmp_path)
+    r._arbiter = None
+    r._owner = None
+    r.refhostsFactory = MagicMock(side_effect=RefhostsResolveFailedError("bad"))
+
+    r.refhosts_from_tp("base=sles(major=15,minor=5);arch=[x86_64]")
+    r.refhosts_from_tp("base=sles(major=15,minor=6);arch=[x86_64]")
+
+    assert r.refhostsFactory.call_count == 1
+    assert r.hostnames == set()
+
+
 # ---------------------------------------------------------------------------
 # trivial pytest sanity for shutil-side metadata; never raises.
 # ---------------------------------------------------------------------------
