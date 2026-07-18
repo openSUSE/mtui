@@ -214,8 +214,10 @@ async fn perform_install_drives_installer_doer() {
     let r = SlReport::new(config());
     let (mut group, handle) = sles_group();
 
-    r.perform_install(&mut group, &["pkg-a".to_owned(), "pkg-b".to_owned()])
+    let res = r
+        .perform_install(&mut group, &["pkg-a".to_owned(), "pkg-b".to_owned()])
         .await;
+    assert!(res.is_ok(), "a clean install returns Ok: {res:?}");
 
     assert_eq!(
         handle.commands(),
@@ -228,7 +230,8 @@ async fn perform_uninstall_drives_uninstaller_doer() {
     let r = SlReport::new(config());
     let (mut group, handle) = sles_group();
 
-    r.perform_uninstall(&mut group, &["pkg".to_owned()]).await;
+    let res = r.perform_uninstall(&mut group, &["pkg".to_owned()]).await;
+    assert!(res.is_ok(), "a clean uninstall returns Ok: {res:?}");
 
     assert_eq!(handle.commands(), vec!["zypper -n in -y -l pkg".to_owned()]);
 }

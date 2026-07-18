@@ -112,16 +112,26 @@ impl TestReport for ObsReport {
     // Shared `perform_*` flows (upstream defines these once on the base
     // `TestReport`; SL/PI/OBS behave identically). See `SlReport` for the
     // rationale behind the per-report delegation.
-    async fn perform_install(&self, targets: &mut HostsGroup, packages: &[String]) {
+    async fn perform_install(
+        &self,
+        targets: &mut HostsGroup,
+        packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
         update_flow::add_op_history(targets, "install", None, packages).await;
         InstallOperation::new(packages.to_vec()).run(targets).await;
+        update_flow::install_verdict("install", targets)
     }
 
-    async fn perform_uninstall(&self, targets: &mut HostsGroup, packages: &[String]) {
+    async fn perform_uninstall(
+        &self,
+        targets: &mut HostsGroup,
+        packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
         update_flow::add_op_history(targets, "uninstall", None, packages).await;
         UninstallOperation::new(packages.to_vec())
             .run(targets)
             .await;
+        update_flow::install_verdict("uninstall", targets)
     }
 
     async fn perform_prepare(
@@ -131,14 +141,18 @@ impl TestReport for ObsReport {
         force: bool,
         testing: bool,
         installed_only: bool,
-    ) {
-        update_flow::perform_prepare(targets, self, packages, force, testing, installed_only).await;
+    ) -> Result<(), crate::update_workflow::UpdateError> {
+        update_flow::perform_prepare(targets, self, packages, force, testing, installed_only).await
     }
 
-    async fn perform_downgrade(&self, targets: &mut HostsGroup, packages: &[String]) {
+    async fn perform_downgrade(
+        &self,
+        targets: &mut HostsGroup,
+        packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
         let id = self.rrid().map(ToString::to_string);
         update_flow::add_op_history(targets, "downgrade", id.as_deref(), packages).await;
-        update_flow::perform_downgrade(targets, self, packages).await;
+        update_flow::perform_downgrade(targets, self, packages).await
     }
 
     async fn perform_update(

@@ -117,16 +117,26 @@ impl TestReport for SlReport {
     // `dyn TestReport` cannot express a `where Self: SetRepo` default, so each
     // `SetRepo` report delegates to the shared `update_flow` free functions
     // below (thin, identical across the three reports).
-    async fn perform_install(&self, targets: &mut HostsGroup, packages: &[String]) {
+    async fn perform_install(
+        &self,
+        targets: &mut HostsGroup,
+        packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
         update_flow::add_op_history(targets, "install", None, packages).await;
         InstallOperation::new(packages.to_vec()).run(targets).await;
+        update_flow::install_verdict("install", targets)
     }
 
-    async fn perform_uninstall(&self, targets: &mut HostsGroup, packages: &[String]) {
+    async fn perform_uninstall(
+        &self,
+        targets: &mut HostsGroup,
+        packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
         update_flow::add_op_history(targets, "uninstall", None, packages).await;
         UninstallOperation::new(packages.to_vec())
             .run(targets)
             .await;
+        update_flow::install_verdict("uninstall", targets)
     }
 
     async fn perform_prepare(
@@ -136,14 +146,18 @@ impl TestReport for SlReport {
         force: bool,
         testing: bool,
         installed_only: bool,
-    ) {
-        update_flow::perform_prepare(targets, self, packages, force, testing, installed_only).await;
+    ) -> Result<(), crate::update_workflow::UpdateError> {
+        update_flow::perform_prepare(targets, self, packages, force, testing, installed_only).await
     }
 
-    async fn perform_downgrade(&self, targets: &mut HostsGroup, packages: &[String]) {
+    async fn perform_downgrade(
+        &self,
+        targets: &mut HostsGroup,
+        packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
         let id = self.rrid().map(ToString::to_string);
         update_flow::add_op_history(targets, "downgrade", id.as_deref(), packages).await;
-        update_flow::perform_downgrade(targets, self, packages).await;
+        update_flow::perform_downgrade(targets, self, packages).await
     }
 
     async fn perform_update(

@@ -124,7 +124,11 @@ where
             let pkgs = report.get_package_list();
             let id = report.base().rrid.as_ref().map(ToString::to_string);
             add_op_history(targets, "downgrade", id.as_deref(), &pkgs).await;
-            perform_downgrade(targets, report, &pkgs).await;
+            // Rollback is best-effort; a failed downgrade must never bury the
+            // original update error, so its result is logged, not returned.
+            if let Err(de) = perform_downgrade(targets, report, &pkgs).await {
+                warn!(error = %de, "rollback downgrade failed");
+            }
             Err(e)
         }
     }
@@ -254,6 +258,65 @@ fn run_checks(
     failures
 }
 
+/// Collapses a list of per-host [`UpdateError`]s into a single `Result`,
+/// mirroring [`update_run_phase`]'s aggregation: no failures → `Ok`, one →
+/// verbatim, many → a summary naming the operation (`op`) plus every failed host
+/// (sorted) and the joined detail. Shared by the prepare/downgrade/install/
+/// uninstall flows so they all report failures the same way `perform_update`
+/// does.
+fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), UpdateError> {
+    if failures.is_empty() {
+        Ok(())
+    } else if failures.len() == 1 {
+        Err(failures.remove(0))
+    } else {
+        let mut hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
+        hosts.sort();
+        let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
+        Err(UpdateError::reason_only(format!(
+            "{op} failed on {} ({})",
+            hosts.join(", "),
+            detail.join("; ")
+        )))
+    }
+}
+
+/// Scans every host's post-fan-out `last*` snapshot for a command failure
+/// (non-empty stderr or a non-zero exit) and returns one [`UpdateError`] per
+/// failed host, keyed on `reason`.
+///
+/// This is the report-flow analogue of [`run_checks`] for the flows that have no
+/// registry check of their own (the shared install/uninstall template and the
+/// prepare/downgrade repo/command fan-outs): a per-host `lasterr()`/`lastexit()`
+/// read after the command ran, per bead P3a-1's stable outcome accessors.
+fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError> {
+    let mut failures = Vec::new();
+    for target in targets.targets() {
+        let bad_exit = target.lastexit().is_some_and(|c| c != 0);
+        let bad_err = !target.lasterr().is_empty();
+        if bad_exit || bad_err {
+            failures.push(UpdateError::new(reason.to_owned(), target.hostname()));
+        }
+    }
+    failures
+}
+
+/// Reports whether a shared install/uninstall [`Operation`](mtui_hosts::Operation)
+/// fan-out succeeded on every host.
+///
+/// The template's own per-host check lives in `mtui-hosts` and only logs; this
+/// gives the report-level `perform_install`/`perform_uninstall` a returned
+/// verdict by scanning each host's post-fan-out `lasterr()`/`lastexit()`
+/// snapshot (bead P3a-1's stable outcome accessors). `op` labels the aggregated
+/// summary. Public so the report impls (SL/PI/OBS) can call it after
+/// `Operation::run`.
+pub fn install_verdict(op: &str, targets: &HostsGroup) -> Result<(), UpdateError> {
+    aggregate_failures(
+        op,
+        host_command_failures(targets, &format!("{op} command failed")),
+    )
+}
+
 /// Reboots the transactional hosts named in `reboot` (upstream `group._reboot`).
 async fn reboot_transactional(targets: &mut HostsGroup, reboot: BTreeMap<String, String>) {
     if reboot.is_empty() {
@@ -278,7 +341,7 @@ pub async fn perform_prepare(
     force: bool,
     testing: bool,
     installed_only: bool,
-) {
+) -> Result<(), UpdateError> {
     let registry = WorkflowRegistry::new(force, testing);
     let operation = if testing { RepoOp::Add } else { RepoOp::Remove };
     // Upstream drops branding-upstream from the prepare set.
@@ -291,16 +354,16 @@ pub async fn perform_prepare(
     // Resolve the reboot map before locking; a missing preparer aborts early
     // (upstream's `except MissingPreparerError: return`).
     let Ok(reboot) = build_reboot_map(targets, &registry, Role::Prepare) else {
-        return;
+        return Err(UpdateError::reason_only("missing preparer"));
     };
 
-    if targets.update_lock().await.is_err() {
-        return;
+    if let Err(e) = targets.update_lock().await {
+        return Err(UpdateError::reason_only(e.to_string()));
     }
 
     // From here upstream guarantees `unlock()` via `finally`; we mirror that by
     // running the body then always unlocking.
-    prepare_body(
+    let result = prepare_body(
         targets,
         &registry,
         report,
@@ -311,6 +374,7 @@ pub async fn perform_prepare(
     )
     .await;
     targets.unlock().await;
+    result
 }
 
 /// The locked body of [`perform_prepare`], factored out so the caller's
@@ -324,20 +388,23 @@ async fn prepare_body(
     pkgs: &[String],
     installed_only: bool,
     reboot: BTreeMap<String, String>,
-) {
+) -> Result<(), UpdateError> {
     targets.fanout_set_repo(operation, report).await;
 
     // Abort early if adding/removing the issue repo failed on any host.
-    for target in targets.targets() {
-        if !target.lasterr().is_empty() {
-            warn!(
-                host = %target.hostname(),
-                stderr = %target.lasterr(),
-                exit = ?target.lastexit(),
-                "failed to prepare host; stopping"
-            );
-            return;
+    let repo_failures = host_command_failures(targets, "failed to set issue repo");
+    if !repo_failures.is_empty() {
+        for target in targets.targets() {
+            if !target.lasterr().is_empty() {
+                warn!(
+                    host = %target.hostname(),
+                    stderr = %target.lasterr(),
+                    exit = ?target.lastexit(),
+                    "failed to prepare host; stopping"
+                );
+            }
         }
+        return aggregate_failures("prepare", repo_failures);
     }
 
     if installed_only {
@@ -355,11 +422,16 @@ async fn prepare_body(
         targets.run(Command::PerHost(cmd)).await;
     }
 
-    // The prepare check emits no diagnostics; discard the sink.
+    // Surface any per-host command failure from the install fan-out plus the
+    // prepare check's own failures. The prepare check emits no diagnostics; the
+    // sink is discarded.
+    let mut failures = host_command_failures(targets, "prepare command failed");
     for e in run_checks(targets, registry, Role::Prepare, &mut Vec::new()) {
         error!(error = %e, "prepare check failed");
+        failures.push(e);
     }
     reboot_transactional(targets, reboot).await;
+    aggregate_failures("prepare", failures)
 }
 
 /// Builds the per-host prepare command map. `package` fills the `$package`
@@ -399,21 +471,22 @@ pub async fn perform_downgrade(
     targets: &mut HostsGroup,
     report: &dyn SetRepo,
     packages: &[String],
-) {
+) -> Result<(), UpdateError> {
     let registry = WorkflowRegistry::default();
 
     // Resolve reboot before locking so a missing downgrader early-returns
     // without leaving the group locked.
     let Ok(reboot) = build_reboot_map(targets, &registry, Role::Downgrade) else {
-        return;
+        return Err(UpdateError::reason_only("missing downgrader"));
     };
 
-    if targets.update_lock().await.is_err() {
-        return;
+    if let Err(e) = targets.update_lock().await {
+        return Err(UpdateError::reason_only(e.to_string()));
     }
 
-    downgrade_body(targets, &registry, report, packages, reboot).await;
+    let result = downgrade_body(targets, &registry, report, packages, reboot).await;
     targets.unlock().await;
+    result
 }
 
 /// The locked body of [`perform_downgrade`].
@@ -423,8 +496,13 @@ async fn downgrade_body(
     report: &dyn SetRepo,
     packages: &[String],
     reboot: BTreeMap<String, String>,
-) {
+) -> Result<(), UpdateError> {
     targets.fanout_set_repo(RepoOp::Remove, report).await;
+
+    // Collected per-host failures (repo removal + per-package/combined checks),
+    // aggregated at the end so a downgrade failure surfaces rather than only
+    // being logged.
+    let mut failures = host_command_failures(targets, "failed to remove issue repo");
 
     // Run the list_command to discover each host's available downgrade
     // versions, then parse `name = version` lines, keeping the highest per pkg.
@@ -502,6 +580,7 @@ async fn downgrade_body(
             for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
                 if !transactional_hosts.contains(e.host.as_deref().unwrap_or("")) {
                     error!(error = %e, "downgrade check failed");
+                    failures.push(e);
                 }
             }
         }
@@ -541,6 +620,7 @@ async fn downgrade_body(
         for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
             if transactional_hosts.contains(e.host.as_deref().unwrap_or("")) {
                 error!(error = %e, "downgrade check failed");
+                failures.push(e);
             }
         }
     }
@@ -548,6 +628,8 @@ async fn downgrade_body(
     reboot_transactional(targets, reboot).await;
 
     downgrade_verdict(targets).await;
+
+    aggregate_failures("downgrade", failures)
 }
 
 /// Emits the post-downgrade "done" / "downgrade not completed" verdict.
@@ -645,8 +727,12 @@ pub async fn perform_update(
 
     if !noprepare {
         // Upstream: `perform_prepare(get_package_list(), testreport)` (default
-        // flags: remove-repo prepare).
-        perform_prepare(targets, report, packages, false, false, false).await;
+        // flags: remove-repo prepare). Prepare is best-effort within the update
+        // flow (upstream logs and proceeds), so a failure is logged, not
+        // returned.
+        if let Err(e) = perform_prepare(targets, report, packages, false, false, false).await {
+            warn!(error = %e, "prepare before update failed");
+        }
     }
 
     targets.package_check(false).await;
@@ -686,8 +772,10 @@ pub async fn perform_update(
         return Err(UpdateFailure::Check(e));
     }
 
-    if newpackage {
-        perform_prepare(targets, report, packages, false, true, false).await;
+    if newpackage
+        && let Err(e) = perform_prepare(targets, report, packages, false, true, false).await
+    {
+        warn!(error = %e, "newpackage prepare after update failed");
     }
 
     targets.package_check(true).await;
@@ -884,7 +972,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
         let report = NoopRepo;
 
-        perform_prepare(
+        let res = perform_prepare(
             &mut group,
             &report,
             &["pkg-a".to_owned(), "pkg-b".to_owned()],
@@ -893,6 +981,7 @@ mod tests {
             false,
         )
         .await;
+        assert!(res.is_ok(), "a clean prepare returns Ok: {res:?}");
 
         // The preparer install runs once with both packages joined (single
         // transaction), rendering the zypper prepare command.
@@ -913,7 +1002,7 @@ mod tests {
     async fn perform_prepare_drops_branding_upstream() {
         let (t, handle) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
-        perform_prepare(
+        let res = perform_prepare(
             &mut group,
             &NoopRepo,
             &["branding-upstream".to_owned(), "pkg-a".to_owned()],
@@ -922,6 +1011,7 @@ mod tests {
             false,
         )
         .await;
+        assert!(res.is_ok(), "a clean prepare returns Ok: {res:?}");
         let cmds = handle.commands();
         let install = cmds
             .iter()
@@ -929,6 +1019,122 @@ mod tests {
             .unwrap();
         assert!(install.contains("pkg-a"));
         assert!(!install.contains("branding-upstream"));
+    }
+
+    /// Builds an enabled *transactional* target whose release resolves to "11"
+    /// (`sle-studioonsite`) — a `(release, transactional)` key with no
+    /// preparer/downgrader doer, so `build_reboot_map` fails and the flow takes
+    /// its missing-doer early-return.
+    fn missing_doer_target(hostname: &str) -> Target {
+        let conn = MockConnection::new(hostname).with_default(CommandLog::new("", "", "", 0, 0));
+        let mut t = Target::with_connection(
+            hostname,
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+        t.set_system(
+            System::new(
+                SystemProduct::new("sle-studioonsite", "11", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        t
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_surfaces_missing_preparer() {
+        // A transactional host whose (release, transactional) key has no preparer
+        // doer makes build_reboot_map fail, so prepare returns Err rather than
+        // swallowing.
+        let mut group = HostsGroup::new(vec![missing_doer_target("h1")], false);
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await;
+        let err = res.expect_err("missing preparer must surface as Err");
+        assert!(
+            err.reason.contains("missing preparer"),
+            "reason: {}",
+            err.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_surfaces_per_host_command_failure() {
+        // The preparer install exits 104 on the host; the failure is returned,
+        // not just logged.
+        let (t, _h) = sles_target_with_exit("h1", "", 104);
+        let mut group = HostsGroup::new(vec![t], false);
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await;
+        let err = res.expect_err("a non-zero prepare command exit must surface as Err");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+    }
+
+    #[tokio::test]
+    async fn perform_downgrade_surfaces_missing_downgrader() {
+        let mut group = HostsGroup::new(vec![missing_doer_target("h1")], false);
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        let err = res.expect_err("missing downgrader must surface as Err");
+        assert!(
+            err.reason.contains("missing downgrader"),
+            "reason: {}",
+            err.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn install_verdict_surfaces_per_host_command_failure() {
+        // A host left with a non-zero lastexit after an install fan-out is
+        // reported by install_verdict (the report-level install/uninstall hook).
+        let (t, _h) = sles_target_with_exit("h1", "", 104);
+        let mut group = HostsGroup::new(vec![t], false);
+        // Run one command so the host records its (failing) last* snapshot.
+        group.run(Command::All("zypper in".to_owned())).await;
+        let err = install_verdict("install", &group).expect_err("non-zero exit surfaces as Err");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(
+            err.reason.contains("install command failed"),
+            "reason: {}",
+            err.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn install_verdict_ok_when_all_hosts_succeed() {
+        let (t, _h) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.run(Command::All("zypper in".to_owned())).await;
+        assert!(install_verdict("install", &group).is_ok());
+    }
+
+    #[test]
+    fn aggregate_failures_summarises_multiple_hosts() {
+        let failures = vec![
+            UpdateError::new("boom", "h2"),
+            UpdateError::new("boom", "h1"),
+        ];
+        let err = aggregate_failures("prepare", failures).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("prepare failed on h1, h2"),
+            "aggregated message names both hosts sorted: {msg}"
+        );
     }
 
     // --- perform_update ----------------------------------------------------
@@ -1048,7 +1254,8 @@ mod tests {
         let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t], false);
 
-        perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        assert!(res.is_ok(), "a clean downgrade returns Ok: {res:?}");
 
         let cmds = handle.commands();
         assert!(
@@ -1317,12 +1524,13 @@ mod tests {
         let (t, handle) = slmicro_target("h1", "pkg-a = 1.0-1\npkg-b = 2.0-1\n", 0);
         let mut group = HostsGroup::new(vec![t], false);
 
-        perform_downgrade(
+        let res = perform_downgrade(
             &mut group,
             &NoopRepo,
             &["pkg-a".to_owned(), "pkg-b".to_owned()],
         )
         .await;
+        assert!(res.is_ok(), "a clean downgrade returns Ok: {res:?}");
 
         let cmds = handle.commands();
         // The combined downgrade names both packages at their resolved versions
@@ -1436,7 +1644,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
         let report = PiReport::new(Config::default());
 
-        report
+        let res = report
             .perform_prepare(
                 &mut group,
                 &["pkg-a".to_owned(), "pkg-b".to_owned()],
@@ -1445,6 +1653,7 @@ mod tests {
                 false,
             )
             .await;
+        assert!(res.is_ok(), "PI prepare succeeds: {res:?}");
 
         assert!(
             handle
@@ -1463,9 +1672,10 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
         let report = ObsReport::new(Config::default());
 
-        report
+        let res = report
             .perform_downgrade(&mut group, &["pkg-a".to_owned()])
             .await;
+        assert!(res.is_ok(), "OBS downgrade succeeds: {res:?}");
 
         assert!(
             handle

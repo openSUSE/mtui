@@ -611,14 +611,32 @@ pub trait TestReport {
     /// `PlanProvider` (wired at the composition root). The default is a no-op —
     /// the null report has nothing to install — so only reports backed by real
     /// doer tables override it.
-    async fn perform_install(&self, _targets: &mut HostsGroup, _packages: &[String]) {}
+    ///
+    /// Returns `Err` when the install command failed on one or more hosts
+    /// (non-zero exit or non-empty stderr after the fan-out), aggregated the
+    /// same way [`perform_update`](Self::perform_update) reports failures. The
+    /// null object's default is a no-op `Ok(())`.
+    async fn perform_install(
+        &self,
+        _targets: &mut HostsGroup,
+        _packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
+        Ok(())
+    }
 
     /// Uninstalls `packages` from every host in `targets` (upstream
     /// `metadata.perform_uninstall` → `targets.perform_uninstall`).
     ///
     /// Drives the [`UninstallOperation`](mtui_hosts::UninstallOperation)
-    /// template; see [`perform_install`](Self::perform_install). Default no-op.
-    async fn perform_uninstall(&self, _targets: &mut HostsGroup, _packages: &[String]) {}
+    /// template; see [`perform_install`](Self::perform_install). Default no-op
+    /// `Ok(())`; returns `Err` on a per-host command failure.
+    async fn perform_uninstall(
+        &self,
+        _targets: &mut HostsGroup,
+        _packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
+        Ok(())
+    }
 
     /// Prepares `packages` on every host (upstream
     /// `HostsGroup.perform_prepare`).
@@ -631,6 +649,11 @@ pub trait TestReport {
     /// variant; `force` toggles `--force-resolution`; `installed_only` only
     /// touches already-installed packages. Default no-op (the null report has
     /// nothing to prepare); real reports override.
+    ///
+    /// Returns `Err` on a missing preparer, lock contention, a failed issue-repo
+    /// fan-out, a per-host prepare-command failure, or a prepare check failure —
+    /// aggregated like [`perform_update`](Self::perform_update). The null
+    /// object's default is a no-op `Ok(())`.
     async fn perform_prepare(
         &self,
         _targets: &mut HostsGroup,
@@ -638,7 +661,8 @@ pub trait TestReport {
         _force: bool,
         _testing: bool,
         _installed_only: bool,
-    ) {
+    ) -> Result<(), crate::update_workflow::UpdateError> {
+        Ok(())
     }
 
     /// Downgrades `packages` on every host (upstream
@@ -649,7 +673,18 @@ pub trait TestReport {
     /// for non-transactional hosts, combined into a single transaction for
     /// transactional hosts — runs the check, and reboots transactional hosts,
     /// under the operation lock. Default no-op; real reports override.
-    async fn perform_downgrade(&self, _targets: &mut HostsGroup, _packages: &[String]) {}
+    ///
+    /// Returns `Err` on a missing downgrader, lock contention, or a per-host
+    /// downgrade check failure — aggregated like
+    /// [`perform_update`](Self::perform_update). The null object's default is a
+    /// no-op `Ok(())`.
+    async fn perform_downgrade(
+        &self,
+        _targets: &mut HostsGroup,
+        _packages: &[String],
+    ) -> Result<(), crate::update_workflow::UpdateError> {
+        Ok(())
+    }
 
     /// Updates the hosts with this report's maintenance update (upstream
     /// `HostsGroup.perform_update`).
