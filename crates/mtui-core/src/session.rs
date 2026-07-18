@@ -1280,14 +1280,11 @@ impl Session {
                 continue;
             }
             // Group candidate host names by slot (preserving first-seen slot
-            // order for stable iteration).
-            let mut by_slot: Vec<(String, Vec<String>)> = Vec::new();
+            // order for stable iteration). IndexMap keeps insertion order, so the
+            // grouping is O(pairs) instead of the previous O(pairs × slots) scan.
+            let mut by_slot: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
             for (host, slot) in pairs {
-                let key = slot_key(&slot);
-                match by_slot.iter_mut().find(|(k, _)| *k == key) {
-                    Some((_, v)) => v.push(host.name),
-                    None => by_slot.push((key, vec![host.name])),
-                }
+                by_slot.entry(slot_key(&slot)).or_default().push(host.name);
             }
 
             for (slot, mut candidates) in by_slot {
@@ -2153,6 +2150,37 @@ mod tests {
         assert!(chosen.is_empty(), "all candidates busy → no claim");
         // Candidates are still recorded (for backup once one frees up).
         assert_eq!(slot_candidates.len(), 1);
+    }
+
+    /// The IndexMap slot grouping (0mop.12 lever 1) preserves **first-seen slot
+    /// order**: hosts are claimed in the order their slots first appear in the
+    /// `search_pool_by_query` output (arch fan-out order), exactly as the prior
+    /// `Vec`-of-pairs grouping did. Guards against an accidental switch to an
+    /// unordered map.
+    #[tokio::test]
+    async fn pool_select_preserves_first_seen_slot_order() {
+        // Interleave arches so the first-seen slot order is ppc → x86 (not
+        // alphabetical): the store rows and the arch list both lead with ppc.
+        let store = multi_host_store(&[
+            ("ppc-a", 15, 5, "ppc64le"),
+            ("x86-a", 15, 5, "x86_64"),
+            ("ppc-b", 15, 5, "ppc64le"),
+            ("x86-b", 15, 5, "x86_64"),
+        ]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec!["base=sles(major=15,minor=5);arch=[ppc64le,x86_64]".to_owned()];
+
+        let (chosen, slot_candidates) =
+            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+
+        // One host per slot, in first-seen (ppc-then-x86) slot order.
+        assert_eq!(
+            chosen,
+            vec!["ppc-a".to_owned(), "x86-a".to_owned()],
+            "chosen hosts must follow first-seen slot order"
+        );
+        assert_eq!(slot_candidates.len(), 2, "two distinct arch slots");
     }
 
     /// `fork_for_call` shares the canonical session's loaded reports (same entry
