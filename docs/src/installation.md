@@ -105,18 +105,72 @@ and declares the optional runtime tools as recommends.
 
 ## Cutting a release (maintainers)
 
-Releases are built and published through the **openSUSE Build Service (OBS)** from
-the `mtui-rs.spec`, not from CI. Tag the release commit so `git describe --tags`
-stamps the version into the binaries, then update the OBS package sources:
+Releases are built and published from the Build Service, **not from CI**
+(gitlab.suse.de shared runners can't run `cross`/dind). The package sources at the
+repo root — `_service` and `mtui-rs.spec` — build the RPM fully **offline from
+vendored crates** via the OBS source services, so nothing is fetched during the
+network-isolated build.
+
+### One-time maintainer setup
+
+Install the source-service packages and confirm your `ibs` alias (the same `oscrc`
+the native review backend reads):
 
 ```sh
-git tag v1.2.0
-git push origin v1.2.0
+zypper install obs-service-cargo osc obs-service-tar obs-service-obs_scm \
+  obs-service-recompress obs-service-set_version obs-service-format_spec_file \
+  cargo cargo-packaging
+osc -A ibs whoami        # confirms the `ibs` alias resolves
 ```
 
-To build a distributable tarball locally (e.g. to feed OBS or to test the layout),
-use the `xtask package` helper — it assembles the documented tree (both binaries,
-completions, man pages, `term.*.sh`, `LICENSE`, `README`) into a
+### Release recipe (build.suse.de / IBS, project `QA:Maintenance:Test`)
+
+1. **Tag the release commit** so `tar_scm`'s `revision=@PARENT_TAG@` resolves and
+   `git describe --tags` stamps the version into the binaries. The `_service`
+   `versionrewrite` strips a leading `v`, so `v1.2.0` becomes `Version: 1.2.0`.
+
+   ```sh
+   git tag v1.2.0
+   git push origin v1.2.0
+   ```
+
+2. **Check out the IBS package and drop in the sources:**
+
+   ```sh
+   osc -A ibs checkout QA:Maintenance:Test mtui-rs
+   cd QA:Maintenance:Test/mtui-rs
+   cp /path/to/mtui-rs/_service /path/to/mtui-rs/mtui-rs.spec .
+   ```
+
+3. **Run all source services.** This fetches the tagged source, compresses it,
+   fills the spec `Version:`, and vendors + audits every crate dependency:
+
+   ```sh
+   osc service ra
+   # emits: mtui-rs-<ver>.tar.zst, vendor.tar.zst (with .cargo/config +
+   #        Cargo.lock + vendor/), cargo_config, _servicedata
+   ```
+
+4. **Commit and build:**
+
+   ```sh
+   osc add _service _servicedata cargo_config \
+     mtui-rs-<ver>.tar.zst mtui-rs.spec vendor.tar.zst
+   osc ci
+   osc build          # local build against the service-generated tarballs
+   osc results        # watch the OBS build
+   ```
+
+`cargo_vendor` audits the vendored crates against RustSec and can fail on an
+advisory; triage it — `i-accept-the-risk=<RUSTSEC-ID>` is the security-reviewed
+escape hatch, not a default. `update=false` in `_service` pins the checked-in
+`Cargo.lock`; flip it to `true` only if a crate-conflict build error appears.
+
+### Local distributable tarball (optional)
+
+To build a plain binary tarball locally (e.g. to test the install layout) without
+OBS, use the `xtask package` helper — it assembles the documented tree (both
+binaries, completions, man pages, `term.*.sh`, `LICENSE`, `README`) into a
 `mtui-rs-<version>-<target>.tar.gz` plus a `.sha256`:
 
 ```sh
@@ -124,3 +178,6 @@ cargo build --release -p mtui-cli -p mtui-mcp --features mtui-mcp/mcp
 cargo xtask package --version v1.2.0 --target "$(rustc -vV | sed -n 's/host: //p')"
 # → dist/release/mtui-rs-v1.2.0-<target>.tar.gz (+ .sha256)
 ```
+
+This tarball is a local convenience only; the OBS build uses the git-tag source
+from `tar_scm`, not this artifact.

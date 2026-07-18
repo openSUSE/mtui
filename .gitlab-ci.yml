@@ -1,3 +1,10 @@
+include:
+  # Upstream Renovate runner templates (pinned via Renovate's gitlabci-include
+  # manager). They define the `renovate` and `renovate-config-validator` jobs we
+  # override below for the gitlab.suse.de environment.
+  - remote: https://gitlab.com/renovate-bot/renovate-runner/-/raw/main/templates/renovate.gitlab-ci.yml
+  - remote: https://gitlab.com/renovate-bot/renovate-runner/-/raw/main/templates/renovate-config-validator.gitlab-ci.yml
+
 default:
   image: rust:latest
 
@@ -5,10 +12,17 @@ variables:
   CARGO_TERM_COLOR: always
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   RUSTFLAGS: "-D warnings"
+  # Renovate config (path inside the repo).
+  RENOVATE_CONFIG_FILE: ".gitlab/renovate.json"
+  # Restrict Renovate to this project; never autodiscover or onboard others.
+  RENOVATE_EXTRA_FLAGS: "--autodiscover=false --onboarding=false"
+  RENOVATE_REPOSITORIES: "$CI_PROJECT_PATH"
 
 stages:
   - check
   - test
+  # Schedule-only `renovate` job (upstream template defaults to `deploy`).
+  - deploy
 
 # The mtui-hosts SSH integration tests run against an in-process russh server
 # that accepts any offered public key, but the client is pubkey/agent-only and
@@ -88,3 +102,102 @@ coverage:
       coverage_report:
         coverage_format: cobertura
         path: coverage.cobertura.xml
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Renovate (dependency automation; mtui-rs-f5u.8)
+#
+# Both jobs come from the upstream templates included at the top of this file.
+# We override only what the gitlab.suse.de environment requires:
+#   1. pull_policy: if-not-present  (runners forbid `always`)
+#   2. SUSE Trust Root CA           (so Renovate's git can reach gitlab.suse.de)
+#   3. rules: validator runs only on MRs that change .gitlab/renovate.json;
+#      the full renovate run happens only on schedule.
+#
+# Activation requires three one-time UI steps (do these once, in the project
+# settings — the files here are inert until then):
+#   1. Create a project access token with `api` + `write_repository` scope,
+#      store it as a MASKED + PROTECTED CI variable named RENOVATE_TOKEN.
+#   2. Create a pipeline schedule (e.g. Mon + Thu) so the `renovate` job runs.
+#   3. Add a github.com PAT as a MASKED + PROTECTED CI variable named
+#      GITHUB_COM_TOKEN (raises github-releases datasource rate limits;
+#      unused today but future-proofs custom managers).
+# ─────────────────────────────────────────────────────────────────────────────
+
+.renovate-suse-ca: &renovate_suse_ca |
+  mkdir -p $HOME/certs
+  cat > $HOME/certs/gitlab-ca.crt << 'EOF'
+  -----BEGIN CERTIFICATE-----
+  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
+  -----END CERTIFICATE-----
+  EOF
+  git config --global http.sslCAInfo $HOME/certs/gitlab-ca.crt
+
+renovate-config-validator:
+  stage: check
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    # Only when the renovate config itself changes; parallel with other checks.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - .gitlab/renovate.json
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - .gitlab/renovate.json
+  image:
+    name: ${CI_RENOVATE_IMAGE}
+    pull_policy: if-not-present
+  before_script: []
+
+renovate:
+  stage: deploy
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  image:
+    name: ${CI_RENOVATE_IMAGE}
+    pull_policy: if-not-present
+  variables:
+    # Renovate's image runs as user `ubuntu`; $HOME is /home/ubuntu. Hardcoded
+    # for robustness across renovate image upgrades.
+    NODE_EXTRA_CA_CERTS: "/home/ubuntu/certs/gitlab-ca.crt"
+    # github.com PAT for release/tags datasource lookups; raises the anonymous
+    # 60 req/h rate limit. Provide GITHUB_COM_TOKEN as a masked + protected var.
+    RENOVATE_GITHUB_COM_TOKEN: "$GITHUB_COM_TOKEN"
+  before_script:
+    - *renovate_suse_ca
