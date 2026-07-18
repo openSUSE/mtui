@@ -119,6 +119,10 @@ build-release:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
     CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+    # `cargo install cross` lands in $CARGO_HOME/bin, but CARGO_HOME is overridden
+    # to $CI_PROJECT_DIR/.cargo (for caching) whose bin/ is not on the image PATH.
+    # Prepend it so the `cross` binary is found in the script step.
+    PATH: "$CI_PROJECT_DIR/.cargo/bin:$PATH"
   parallel:
     matrix:
       - TARGET:
