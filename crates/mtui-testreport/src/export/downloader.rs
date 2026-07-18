@@ -166,8 +166,16 @@ async fn subdl(
     tracing::info!("Downloading log {remote}");
     match fetcher.get_bytes(remote).await {
         Ok(data) => {
-            if let Err(e) = atomic_write_file(&data, local) {
-                tracing::error!("Failed to write {}: {e}", local.display());
+            // Write off the async worker: a slow filesystem (network mount) must
+            // not block a Tokio thread mid-fan-out. Best-effort, unchanged: any
+            // write (or join) failure is logged and the download still returns Ok.
+            let local_owned = local.to_path_buf();
+            let write =
+                tokio::task::spawn_blocking(move || atomic_write_file(&data, &local_owned)).await;
+            match write {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::error!("Failed to write {}: {e}", local.display()),
+                Err(e) => tracing::error!("Write task for {} failed: {e}", local.display()),
             }
             Ok(())
         }

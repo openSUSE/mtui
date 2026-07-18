@@ -75,7 +75,14 @@ impl Command for SftpPut {
             .expect("filename is required")
             .clone();
 
-        let files = collect_files(&filename)
+        // Walk the local tree off the async worker: a deep directory on a slow
+        // filesystem must not block a Tokio thread during this pre-flight scan.
+        let scan_path = filename.clone();
+        let files = tokio::task::spawn_blocking(move || collect_files(&scan_path))
+            .await
+            .map_err(|e| {
+                CommandError::Other(format!("{}: scan task failed: {e}", filename.display()))
+            })?
             .map_err(|e| CommandError::Other(format!("{}: {e}", filename.display())))?;
         if files.is_empty() {
             return Err(CommandError::Other(format!(

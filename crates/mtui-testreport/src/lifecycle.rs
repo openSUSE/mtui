@@ -369,7 +369,7 @@ async fn handle_stale_hash(
         _ => false,
     };
     if delete {
-        let _ = std::fs::remove_dir_all(rrid_dir);
+        let _ = tokio::fs::remove_dir_all(rrid_dir).await;
         info!("Removed checked out template {}", rrid_dir.display());
     }
     None
@@ -416,7 +416,7 @@ async fn regenerate_via_teregen(
 
     // The job was accepted: it is now safe to drop the stale local checkout.
     if rrid_dir.exists() {
-        let _ = std::fs::remove_dir_all(rrid_dir);
+        let _ = tokio::fs::remove_dir_all(rrid_dir).await;
         info!("Removed stale checked out template {}", rrid_dir.display());
     }
 

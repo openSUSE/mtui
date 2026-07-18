@@ -7,6 +7,8 @@
 
 #[path = "export_idempotency.rs"]
 mod export_idempotency;
+#[path = "fs_responsiveness.rs"]
+mod fs_responsiveness;
 #[path = "lifecycle.rs"]
 mod lifecycle;
 #[path = "metadata_parsers.rs"]

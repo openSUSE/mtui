@@ -74,10 +74,11 @@ impl KernelExport {
         )
         .await;
 
-        // Return the *.log filenames now in the install-logs directory.
+        // Return the *.log filenames now in the install-logs directory. Scan off
+        // the async worker so a slow filesystem does not block a Tokio thread.
         let mut filenames = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&in_path) {
-            for entry in entries.flatten() {
+        if let Ok(mut entries) = tokio::fs::read_dir(&in_path).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("log")
                     && let Some(name) = path.file_name().and_then(|n| n.to_str())

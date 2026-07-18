@@ -168,7 +168,7 @@ async fn reload(session: &mut Session, rrid: &str) {
     // not fatal.
     let trdir = session.config.template_dir.join(rrid);
     if trdir.exists() {
-        match std::fs::remove_dir_all(&trdir) {
+        match tokio::fs::remove_dir_all(&trdir).await {
             Ok(()) => info!("Removed stale checked out template {}", trdir.display()),
             Err(e) => info!(
                 "Could not remove stale template {}: {e} (continuing)",
