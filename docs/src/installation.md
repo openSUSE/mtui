@@ -1,37 +1,8 @@
 # Installation
 
 mtui-rs ships as two static binaries — `mtui` (the REPL) and `mtui-mcp` (the MCP
-server) — with no runtime interpreter or virtualenv. On openSUSE the packaged
-route is the `mtui-rs.spec` build; everywhere else, use a prebuilt release
-tarball or build from source.
-
-## Prebuilt release binaries
-
-Each tagged release attaches a static tarball per target to the project's
-**Releases** page, plus a `SHA256SUMS` manifest. Targets:
-
-- `x86_64-unknown-linux-musl`
-- `aarch64-unknown-linux-musl`
-
-Both are fully static (musl) — no glibc floor, no shared-library dependencies.
-Each tarball is named `mtui-rs-<tag>-<target>.tar.gz` and unpacks to a single
-`mtui-rs-<tag>-<target>/` directory containing both binaries plus the
-completions, man pages, and terminal-launcher scripts described below.
-
-Download the tarball for your target and the `SHA256SUMS`, verify, then unpack:
-
-```sh
-sha256sum -c SHA256SUMS --ignore-missing
-tar xzf mtui-rs-<tag>-<target>.tar.gz
-cd mtui-rs-<tag>-<target>
-install -Dm755 mtui     /usr/local/bin/mtui
-install -Dm755 mtui-mcp /usr/local/bin/mtui-mcp
-```
-
-The `completions/`, `man/`, and `terms/` directories in the tarball install
-exactly as in [Shell completions](#shell-completions), [Man pages](#man-pages),
-and [Terminal-launcher scripts](#terminal-launcher-scripts) below (substitute the
-tarball's directory for `dist/`).
+server) — with no runtime interpreter or virtualenv. On openSUSE install the
+package from the openSUSE Build Service (OBS); everywhere else, build from source.
 
 ## Requirements
 
@@ -134,28 +105,22 @@ and declares the optional runtime tools as recommends.
 
 ## Cutting a release (maintainers)
 
-Releases are produced by the GitLab CI `release` stage, which runs **only** on a
-semver tag of the form `vMAJOR.MINOR.PATCH`:
+Releases are built and published through the **openSUSE Build Service (OBS)** from
+the `mtui-rs.spec`, not from CI. Tag the release commit so `git describe --tags`
+stamps the version into the binaries, then update the OBS package sources:
 
 ```sh
 git tag v1.2.0
 git push origin v1.2.0
 ```
 
-The tag pipeline cross-compiles both binaries to each musl target with `cross`,
-asserts the result is statically linked, packages each target with
-`cargo xtask package --version <tag> --target <triple>`, and publishes a GitLab
-Release with every `mtui-rs-<tag>-<target>.tar.gz` (and a combined `SHA256SUMS`)
-attached. Because version provenance comes from `git describe --tags`, the tag
-must exist before the pipeline runs — pushing the tag is what triggers it — so the
-release binaries stamp the tag (`mtui --version` prints `v1.2.0 …`) rather than a
-bare commit SHA.
-
-To build a tarball locally (e.g. to test the layout without tagging):
+To build a distributable tarball locally (e.g. to feed OBS or to test the layout),
+use the `xtask package` helper — it assembles the documented tree (both binaries,
+completions, man pages, `term.*.sh`, `LICENSE`, `README`) into a
+`mtui-rs-<version>-<target>.tar.gz` plus a `.sha256`:
 
 ```sh
-cargo build --release --target x86_64-unknown-linux-musl \
-  -p mtui-cli -p mtui-mcp --features mtui-mcp/mcp
-cargo xtask package --version vTEST --target x86_64-unknown-linux-musl
-# → dist/release/mtui-rs-vTEST-x86_64-unknown-linux-musl.tar.gz (+ .sha256)
+cargo build --release -p mtui-cli -p mtui-mcp --features mtui-mcp/mcp
+cargo xtask package --version v1.2.0 --target "$(rustc -vV | sed -n 's/host: //p')"
+# → dist/release/mtui-rs-v1.2.0-<target>.tar.gz (+ .sha256)
 ```
