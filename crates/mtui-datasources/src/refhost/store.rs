@@ -35,6 +35,10 @@ use crate::error::RefhostError;
 #[derive(Debug, Clone)]
 pub struct Refhosts {
     data: Vec<Host>,
+    /// `name → index into `data`` for O(1) [`host_by_name`](Self::host_by_name)
+    /// lookups. Built once at construction (`data` is immutable afterwards).
+    /// First occurrence wins, mirroring the linear-scan `find` it replaces.
+    by_name: std::collections::HashMap<String, usize>,
 }
 
 impl Refhosts {
@@ -44,7 +48,13 @@ impl Refhosts {
     /// obtained the rows via another path.
     #[must_use]
     pub fn from_hosts(data: Vec<Host>) -> Self {
-        Self { data }
+        let mut by_name = std::collections::HashMap::with_capacity(data.len());
+        for (i, host) in data.iter().enumerate() {
+            // First occurrence wins (parity with the prior first-match `find`);
+            // `load_refhosts` already de-dups, so this only guards a stray dup.
+            by_name.entry(host.name.clone()).or_insert(i);
+        }
+        Self { data, by_name }
     }
 
     /// Load and parse a `refhosts.yml` file into a store.
@@ -64,7 +74,7 @@ impl Refhosts {
             source,
         })?;
         let data = load_refhosts(&text)?;
-        Ok(Self { data })
+        Ok(Self::from_hosts(data))
     }
 
     /// The loaded host rows (flattened + de-duplicated).
@@ -114,7 +124,7 @@ impl Refhosts {
     /// Return the refhosts row whose `name` matches, or `None`.
     #[must_use]
     pub fn host_by_name(&self, name: &str) -> Option<&Host> {
-        self.data.iter().find(|c| c.name == name)
+        self.by_name.get(name).map(|&i| &self.data[i])
     }
 
     /// Return refhosts matching the filters, de-duplicated by host name.
@@ -530,6 +540,32 @@ mod tests {
             "ppc64le"
         );
         assert!(p.host_by_name("no-such-host").is_none());
+    }
+
+    /// The name index keeps **first-occurrence** semantics of the linear scan it
+    /// replaced: on a duplicate name (which `load_refhosts` normally de-dups,
+    /// but `from_hosts` accepts raw), the first row wins (0mop.12 lever 2).
+    #[test]
+    fn host_by_name_returns_first_on_duplicate() {
+        let rh = Refhosts::from_hosts(vec![
+            host(
+                "dup",
+                "x86_64",
+                sles(15, Some(VersionField::Num(5))),
+                vec![],
+            ),
+            host(
+                "dup",
+                "aarch64",
+                sles(15, Some(VersionField::Num(6))),
+                vec![],
+            ),
+        ]);
+        assert_eq!(
+            rh.host_by_name("dup").unwrap().arch,
+            "x86_64",
+            "first occurrence must win, as the linear find did"
+        );
     }
 
     // --- is_candidate_match branches ---

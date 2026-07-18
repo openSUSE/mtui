@@ -96,6 +96,24 @@ fn bench_from_testplatform(c: &mut Criterion) {
     });
 }
 
+/// Repeated `host_by_name` lookups over a growing store.
+///
+/// 0mop.12 lever 2: the lookup is now a `HashMap` index (O(1)) instead of a
+/// linear scan (O(hosts)). Looks up the last host (worst case for the scan) so
+/// the O(1) vs O(n) contrast shows if it clears measurement noise.
+fn bench_host_by_name(c: &mut Criterion) {
+    let mut g = c.benchmark_group("refhosts/host_by_name");
+    for &n in HOST_COUNTS {
+        let yaml = synthetic_refhosts_yaml(n);
+        let rh = Refhosts::from_hosts(load_refhosts(&yaml).expect("synthetic yaml parses"));
+        let target = format!("host-{:05}", n - 1);
+        g.bench_with_input(BenchmarkId::from_parameter(n), &rh, |b, rh| {
+            b.iter(|| black_box(rh.host_by_name(black_box(&target))));
+        });
+    }
+    g.finish();
+}
+
 fn bench_http_client_new(c: &mut Criterion) {
     c.bench_function("http/client_new", |b| {
         b.iter(|| {
@@ -237,6 +255,7 @@ criterion_group!(
     bench_refhosts_parse,
     bench_refhosts_search,
     bench_from_testplatform,
+    bench_host_by_name,
     bench_http_client_new,
     bench_gitea_approve,
     bench_oqa_single_incidents
