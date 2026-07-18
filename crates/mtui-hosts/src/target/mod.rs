@@ -54,7 +54,7 @@ pub mod spinner;
 
 pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
-pub use hostgroup::HostsGroup;
+pub use hostgroup::{HostsGroup, LockOutcome};
 pub use locks::{
     Clock, LockRow, LockSnapshot, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock,
     TARGET_LOCK_PATH, TargetLock, with_locked,
@@ -174,6 +174,34 @@ pub struct Target {
     /// [`Prompter`](crate::prompter::Prompter)-backed prompt via
     /// [`set_timeout_prompt`](Target::set_timeout_prompt) for the REPL.
     timeout_prompt: Option<crate::connection::TimeoutPrompt>,
+    /// Outcome of the last SFTP upload attempted via
+    /// [`sftp_put`](Target::sftp_put) / [`sftp_put_bytes`](Target::sftp_put_bytes),
+    /// exposed through [`last_upload`](Target::last_upload) so the `put` command
+    /// can aggregate per-host success/failure. The error is kept as a `String`
+    /// (not [`HostError`]) so the field stays `Clone`/simple. `None` means "not
+    /// attempted": a fresh target, or a [`Disabled`](TargetState::Disabled) host
+    /// the fan-out treats as skipped.
+    last_upload: Option<std::result::Result<(), String>>,
+    /// Outcome of the last SFTP download attempted via
+    /// [`sftp_get`](Target::sftp_get), exposed through
+    /// [`last_download`](Target::last_download). Same encoding as
+    /// [`last_upload`](Self::last_upload): `Some(Ok)` on success/dry-run,
+    /// `Some(Err(reason))` on failure, `None` when skipped (disabled) or not yet
+    /// attempted.
+    last_download: Option<std::result::Result<(), String>>,
+    /// Outcome of the last SFTP removal attempted via
+    /// [`sftp_remove`](Target::sftp_remove), exposed through
+    /// [`last_remove`](Target::last_remove). Same encoding as
+    /// [`last_upload`](Self::last_upload).
+    last_remove: Option<std::result::Result<(), String>>,
+    /// Outcome of the last repo change fanned out via
+    /// [`RepoManager::run_zypper`], exposed through
+    /// [`last_repo`](Target::last_repo). `run_zypper` runs several `zypper`
+    /// commands per host and only the *last* command's exit lands in the
+    /// [`HostLog`], so `lasterr()`/`lastexit()` cannot report an earlier
+    /// `ar`/`rr` failure that the trailing `ref` masks; this field aggregates the
+    /// whole run's verdict. Same encoding as [`last_upload`](Self::last_upload).
+    last_repo: Option<std::result::Result<(), String>>,
 }
 
 /// Builds the placeholder [`System`] a freshly-constructed [`Target`] carries
@@ -223,6 +251,10 @@ impl Target {
             rrid: String::new(),
             packages: Vec::new(),
             timeout_prompt: None,
+            last_upload: None,
+            last_download: None,
+            last_remove: None,
+            last_repo: None,
         }
     }
 
@@ -274,6 +306,10 @@ impl Target {
             rrid: String::new(),
             packages: Vec::new(),
             timeout_prompt: None,
+            last_upload: None,
+            last_download: None,
+            last_remove: None,
+            last_repo: None,
         }
     }
 
@@ -405,17 +441,37 @@ impl Target {
     ///
     /// A no-op when the target is not connected (no lock built yet).
     pub async fn unlock(&mut self, force: bool) {
+        let _ = self.unlock_reporting(force).await;
+    }
+
+    /// Releases this target's operation lock, returning the raw outcome so the
+    /// group [`unlock`](HostsGroup::unlock) fan-out can distinguish a benign
+    /// contended lock ([`HostError::TargetLocked`]) from a real transport
+    /// failure. Unlike [`unlock`](Self::unlock) — which swallows both — this
+    /// still logs each branch but hands the result back to the caller.
+    ///
+    /// `Ok(())` means released (or a no-op: not connected, or nothing to
+    /// release). `Err(HostError::TargetLocked(_))` means the lock is held by
+    /// another owner (benign contention). Any other `Err` is a real failure.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`HostError::TargetLocked`] for a foreign-owned lock and any
+    /// transport error from the underlying [`TargetLock::unlock`].
+    pub(crate) async fn unlock_reporting(&mut self, force: bool) -> Result<()> {
         let Some(lock) = self.lock.as_mut() else {
             tracing::debug!(host = %self.hostname, "unlock: no lock (not connected)");
-            return;
+            return Ok(());
         };
         match lock.unlock(force).await {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(HostError::TargetLocked(msg)) => {
                 tracing::debug!(host = %self.hostname, %msg, "unlock: lock held by another owner, ignoring");
+                Err(HostError::TargetLocked(msg))
             }
             Err(e) => {
                 tracing::warn!(host = %self.hostname, error = %e, "unlock failed");
+                Err(e)
             }
         }
     }
@@ -1085,6 +1141,60 @@ impl Target {
         self.out.last().map(|e| e.exitcode)
     }
 
+    /// The outcome of the last SFTP upload, or `None` when none was attempted.
+    ///
+    /// `Some(Ok(()))` is a successful (or dry-run) transfer; `Some(Err(reason))`
+    /// carries the per-host failure message. `None` means the host was skipped
+    /// ([`Disabled`](TargetState::Disabled)) or nothing has been uploaded yet.
+    /// The `put` command aggregates these across the group.
+    #[must_use]
+    pub fn last_upload(&self) -> Option<&std::result::Result<(), String>> {
+        self.last_upload.as_ref()
+    }
+
+    /// The outcome of the last SFTP download, or `None` when none was attempted.
+    ///
+    /// Same encoding as [`last_upload`](Self::last_upload): `Some(Ok(()))` is a
+    /// successful (or dry-run) transfer, `Some(Err(reason))` a per-host failure,
+    /// `None` a skipped ([`Disabled`](TargetState::Disabled)) or not-yet-attempted
+    /// host. The `get` command aggregates these across the group.
+    #[must_use]
+    pub fn last_download(&self) -> Option<&std::result::Result<(), String>> {
+        self.last_download.as_ref()
+    }
+
+    /// The outcome of the last SFTP removal, or `None` when none was attempted.
+    ///
+    /// Same encoding as [`last_upload`](Self::last_upload). The `remove` command
+    /// aggregates these across the group.
+    #[must_use]
+    pub fn last_remove(&self) -> Option<&std::result::Result<(), String>> {
+        self.last_remove.as_ref()
+    }
+
+    /// The outcome of the last repo change fanned out via
+    /// [`RepoManager::run_zypper`], or `None` when none was attempted.
+    ///
+    /// Same encoding as [`last_upload`](Self::last_upload). Unlike
+    /// [`lasterr`](Self::lasterr) / [`lastexit`](Self::lastexit) — which report
+    /// only the *last* command of the multi-command zypper run and so mask an
+    /// earlier `ar`/`rr` failure behind the trailing `ref` — this aggregates the
+    /// whole run into a single verdict. The `set_repo` command aggregates these
+    /// across the group.
+    #[must_use]
+    pub fn last_repo(&self) -> Option<&std::result::Result<(), String>> {
+        self.last_repo.as_ref()
+    }
+
+    /// Records the outcome of a repo change run for the `set_repo` aggregation.
+    ///
+    /// Called by [`RepoManager::run_zypper`] once per host after its multi-command
+    /// zypper run, so [`last_repo`](Self::last_repo) reflects the whole run rather
+    /// than only the trailing `ref`.
+    pub(crate) fn set_last_repo(&mut self, outcome: std::result::Result<(), String>) {
+        self.last_repo = Some(outcome);
+    }
+
     /// Uploads a local file to the host over SFTP, gated by [`TargetState`].
     ///
     /// [`Enabled`](TargetState::Enabled) delegates to
@@ -1096,14 +1206,19 @@ impl Target {
             TargetState::Enabled => {
                 let Some(conn) = self.connection.as_mut() else {
                     tracing::error!(host = %self.hostname, "sftp_put on unconnected target");
+                    self.last_upload = Some(Err("not connected".into()));
                     return;
                 };
-                if let Err(e) = conn.sftp_put(local, remote).await {
-                    tracing::error!(
-                        host = %self.hostname, local = %local.display(), error = %e,
-                        "failed to send"
-                    );
-                }
+                self.last_upload = match conn.sftp_put(local, remote).await {
+                    Ok(()) => Some(Ok(())),
+                    Err(e) => {
+                        tracing::error!(
+                            host = %self.hostname, local = %local.display(), error = %e,
+                            "failed to send"
+                        );
+                        Some(Err(e.to_string()))
+                    }
+                };
             }
             TargetState::Dryrun => {
                 tracing::info!(
@@ -1111,7 +1226,12 @@ impl Target {
                     "dryrun: put {} {}:{}",
                     local.display(), self.hostname, remote.display()
                 );
+                // Record the intended transfer as a success so the fan-out
+                // reports a dry-run host as "would upload", not as skipped.
+                self.last_upload = Some(Ok(()));
             }
+            // Left as `None` (not attempted) so the `put` aggregation treats a
+            // disabled host as skipped rather than a success or failure.
             TargetState::Disabled => {}
         }
     }
@@ -1127,14 +1247,19 @@ impl Target {
             TargetState::Enabled => {
                 let Some(conn) = self.connection.as_mut() else {
                     tracing::error!(host = %self.hostname, "sftp_put on unconnected target");
+                    self.last_upload = Some(Err("not connected".into()));
                     return;
                 };
-                if let Err(e) = conn.sftp_put_bytes(data, remote).await {
-                    tracing::error!(
-                        host = %self.hostname, remote = %remote.display(), error = %e,
-                        "failed to send"
-                    );
-                }
+                self.last_upload = match conn.sftp_put_bytes(data, remote).await {
+                    Ok(()) => Some(Ok(())),
+                    Err(e) => {
+                        tracing::error!(
+                            host = %self.hostname, remote = %remote.display(), error = %e,
+                            "failed to send"
+                        );
+                        Some(Err(e.to_string()))
+                    }
+                };
             }
             TargetState::Dryrun => {
                 tracing::info!(
@@ -1142,7 +1267,12 @@ impl Target {
                     "dryrun: put <{} bytes> {}:{}",
                     data.len(), self.hostname, remote.display()
                 );
+                // Record the intended transfer as a success so the fan-out
+                // reports a dry-run host as "would upload", not as skipped.
+                self.last_upload = Some(Ok(()));
             }
+            // Left as `None` (not attempted) so the `put` aggregation treats a
+            // disabled host as skipped rather than a success or failure.
             TargetState::Disabled => {}
         }
     }
@@ -1169,6 +1299,7 @@ impl Target {
             TargetState::Enabled => {
                 let Some(conn) = self.connection.as_mut() else {
                     tracing::error!(host = %self.hostname, "sftp_get on unconnected target");
+                    self.last_download = Some(Err("not connected".into()));
                     return;
                 };
                 let res = if is_folder {
@@ -1176,12 +1307,16 @@ impl Target {
                 } else {
                     conn.sftp_get(&remote_path, &local_target).await
                 };
-                if let Err(e) = res {
-                    tracing::error!(
-                        host = %self.hostname, remote = %remote, error = %e,
-                        "failed to get"
-                    );
-                }
+                self.last_download = match res {
+                    Ok(()) => Some(Ok(())),
+                    Err(e) => {
+                        tracing::error!(
+                            host = %self.hostname, remote = %remote, error = %e,
+                            "failed to get"
+                        );
+                        Some(Err(e.to_string()))
+                    }
+                };
             }
             TargetState::Dryrun => {
                 tracing::info!(
@@ -1189,7 +1324,12 @@ impl Target {
                     "dryrun: get {}:{} {}",
                     self.hostname, remote, local_target.display()
                 );
+                // Record the intended transfer as a success so the fan-out
+                // reports a dry-run host as "would download", not as skipped.
+                self.last_download = Some(Ok(()));
             }
+            // Left as `None` (not attempted) so the `get` aggregation treats a
+            // disabled host as skipped rather than a success or failure.
             TargetState::Disabled => {}
         }
     }
@@ -1208,19 +1348,26 @@ impl Target {
             TargetState::Enabled => {
                 let Some(conn) = self.connection.as_mut() else {
                     tracing::error!(host = %self.hostname, "sftp_remove on unconnected target");
+                    self.last_remove = Some(Err("not connected".into()));
                     return;
                 };
-                if conn.sftp_remove(path).await.is_err() {
+                self.last_remove = if conn.sftp_remove(path).await.is_ok() {
+                    Some(Ok(()))
+                } else {
                     // The path may be a directory rather than a file; fall back
                     // to rmdir before giving up, matching upstream's OSError
                     // recovery branch.
-                    if let Err(e) = conn.sftp_rmdir(path).await {
-                        tracing::warn!(
-                            host = %self.hostname, path = %path.display(), error = %e,
-                            "unable to remove"
-                        );
+                    match conn.sftp_rmdir(path).await {
+                        Ok(()) => Some(Ok(())),
+                        Err(e) => {
+                            tracing::warn!(
+                                host = %self.hostname, path = %path.display(), error = %e,
+                                "unable to remove"
+                            );
+                            Some(Err(e.to_string()))
+                        }
                     }
-                }
+                };
             }
             TargetState::Dryrun => {
                 tracing::info!(
@@ -1228,7 +1375,12 @@ impl Target {
                     "dryrun: remove {}:{}",
                     self.hostname, path.display()
                 );
+                // Record the intended removal as a success so the fan-out reports
+                // a dry-run host as "would remove", not as skipped.
+                self.last_remove = Some(Ok(()));
             }
+            // Left as `None` (not attempted) so the `remove` aggregation treats a
+            // disabled host as skipped rather than a success or failure.
             TargetState::Disabled => {}
         }
     }
@@ -1546,6 +1698,55 @@ mod tests {
                 remote: PathBuf::from("/remote"),
             }]
         );
+        assert_eq!(t.last_upload(), Some(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn sftp_put_records_failure() {
+        let conn = MockConnection::new("h1").with_sftp_put_failure("disk full");
+        let mut t = enabled_with(conn);
+
+        t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
+
+        let Some(Err(reason)) = t.last_upload() else {
+            panic!("expected recorded failure, got {:?}", t.last_upload());
+        };
+        assert!(reason.contains("disk full"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_put_bytes_records_failure() {
+        let conn = MockConnection::new("h1").with_sftp_put_failure("disk full");
+        let mut t = enabled_with(conn);
+
+        t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+
+        let Some(Err(reason)) = t.last_upload() else {
+            panic!("expected recorded failure, got {:?}", t.last_upload());
+        };
+        assert!(reason.contains("disk full"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_put_bytes_records_success() {
+        let conn = MockConnection::new("h1");
+        let mut t = enabled_with(conn);
+
+        t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+
+        assert_eq!(t.last_upload(), Some(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn sftp_put_unconnected_records_failure() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+
+        t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
+
+        let Some(Err(reason)) = t.last_upload() else {
+            panic!("expected recorded failure, got {:?}", t.last_upload());
+        };
+        assert!(reason.contains("not connected"), "reason was {reason:?}");
     }
 
     #[tokio::test]
@@ -1562,6 +1763,23 @@ mod tests {
         t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
 
         assert!(handle.sftp_ops().is_empty());
+        // Dry-run records the intended transfer as a success, not skipped.
+        assert_eq!(t.last_upload(), Some(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn sftp_put_disabled_leaves_upload_unattempted() {
+        let conn = MockConnection::new("h1");
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Disabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+
+        t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
+
+        assert_eq!(t.last_upload(), None);
     }
 
     #[tokio::test]
@@ -1613,6 +1831,71 @@ mod tests {
         t.sftp_get("/remote/file", Path::new("/local")).await;
 
         assert!(handle.sftp_ops().is_empty());
+        // Dry-run records the intended transfer as a success, not skipped.
+        assert_eq!(t.last_download(), Some(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn sftp_get_records_success() {
+        let conn = MockConnection::new("h1");
+        let mut t = enabled_with(conn);
+
+        t.sftp_get("/remote/file", Path::new("/local/file")).await;
+
+        assert_eq!(t.last_download(), Some(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn sftp_get_records_failure() {
+        let conn = MockConnection::new("h1").failing_sftp_get();
+        let mut t = enabled_with(conn);
+
+        t.sftp_get("/remote/file", Path::new("/local/file")).await;
+
+        let Some(Err(reason)) = t.last_download() else {
+            panic!("expected recorded failure, got {:?}", t.last_download());
+        };
+        assert!(reason.contains("sftp_get"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_get_folder_records_failure() {
+        let conn = MockConnection::new("h1").failing_sftp_get();
+        let mut t = enabled_with(conn);
+
+        t.sftp_get("/remote/dir/", Path::new("/local")).await;
+
+        let Some(Err(reason)) = t.last_download() else {
+            panic!("expected recorded failure, got {:?}", t.last_download());
+        };
+        assert!(reason.contains("sftp_get_folder"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_get_unconnected_records_failure() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+
+        t.sftp_get("/remote/file", Path::new("/local/file")).await;
+
+        let Some(Err(reason)) = t.last_download() else {
+            panic!("expected recorded failure, got {:?}", t.last_download());
+        };
+        assert!(reason.contains("not connected"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_get_disabled_leaves_download_unattempted() {
+        let conn = MockConnection::new("h1");
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Disabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+
+        t.sftp_get("/remote/file", Path::new("/local")).await;
+
+        assert_eq!(t.last_download(), None);
     }
 
     // --- sftp_remove --------------------------------------------------------
@@ -1629,6 +1912,46 @@ mod tests {
             handle.sftp_ops(),
             vec![MockSftpOp::Remove(PathBuf::from("/remote/file"))]
         );
+        assert_eq!(t.last_remove(), Some(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn sftp_remove_records_success_via_rmdir_fallback() {
+        // A failed file remove that succeeds via the rmdir fallback is a success.
+        let conn = MockConnection::new("h1").failing_sftp_remove();
+        let mut t = enabled_with(conn);
+
+        t.sftp_remove(Path::new("/remote/dir")).await;
+
+        assert_eq!(t.last_remove(), Some(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn sftp_remove_records_failure_when_both_paths_fail() {
+        // Both the file remove and the rmdir fallback fail: a real failure.
+        let conn = MockConnection::new("h1")
+            .failing_sftp_remove()
+            .failing_sftp_rmdir();
+        let mut t = enabled_with(conn);
+
+        t.sftp_remove(Path::new("/remote/dir")).await;
+
+        let Some(Err(reason)) = t.last_remove() else {
+            panic!("expected recorded failure, got {:?}", t.last_remove());
+        };
+        assert!(reason.contains("sftp_rmdir"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_remove_unconnected_records_failure() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+
+        t.sftp_remove(Path::new("/remote/file")).await;
+
+        let Some(Err(reason)) = t.last_remove() else {
+            panic!("expected recorded failure, got {:?}", t.last_remove());
+        };
+        assert!(reason.contains("not connected"), "reason was {reason:?}");
     }
 
     #[tokio::test]
@@ -1664,6 +1987,8 @@ mod tests {
         t.sftp_remove(Path::new("/remote/file")).await;
 
         assert!(handle.sftp_ops().is_empty());
+        // Dry-run records the intended removal as a success, not skipped.
+        assert_eq!(t.last_remove(), Some(&Ok(())));
     }
 
     #[tokio::test]
@@ -1680,6 +2005,7 @@ mod tests {
         t.sftp_remove(Path::new("/remote/file")).await;
 
         assert!(handle.sftp_ops().is_empty());
+        assert_eq!(t.last_remove(), None);
     }
 
     // --- connect() ----------------------------------------------------------

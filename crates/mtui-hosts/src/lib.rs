@@ -33,9 +33,9 @@ pub use error::{HostError, Result};
 pub use prompter::{Prompter, Reader};
 pub use target::{
     Check, CheckArgs, Clock, Command, Doer, HostArbiter, HostPlan, HostsGroup, InstallOperation,
-    LastOutput, Lockable, Operation, OperationGroup, Owner, POOL_LOCK_PATH, PackageQuerier,
-    PlanProvider, PoolLock, RemoteLock, RepoManager, RepoOp, RunCommand, SetRepo, Sink,
-    SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, TtySpinner,
+    LastOutput, LockOutcome, Lockable, Operation, OperationGroup, Owner, POOL_LOCK_PATH,
+    PackageQuerier, PlanProvider, PoolLock, RemoteLock, RepoManager, RepoOp, RunCommand, SetRepo,
+    Sink, SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, TtySpinner,
     UninstallOperation, get_arbiter, parse_os_release, parse_product, parse_system, run_parallel,
     set_test_sink, sftp_get_all, sftp_put_all, sftp_remove_all, spinner, suspend, with_locked,
 };

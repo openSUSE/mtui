@@ -657,6 +657,41 @@ async fn sftp_put_then_get_round_trips() {
     assert_eq!(got, b"#!/bin/sh\necho hi\n");
 }
 
+/// Regression for the SFTP "No such file" upload bug: a put to a *fresh*
+/// (non-existent) remote path must succeed. The old code opened WRITE-only
+/// (no CREATE), so a real sshd returned SSH_FX_NO_SUCH_FILE on every first
+/// upload. A >64KB payload also exercises the client's multi-chunk write path.
+#[tokio::test]
+async fn sftp_put_creates_fresh_remote_path() {
+    let fs = SharedFs::default();
+    let port = start_server(fs.clone()).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let dir = tempfile::tempdir().expect("tmp");
+    let local_src = dir.path().join("payload.bin");
+    // Comfortably past a single 64KB SFTP write chunk.
+    let payload: Vec<u8> = (0..80 * 1024).map(|i| (i % 251) as u8).collect();
+    tokio::fs::write(&local_src, &payload)
+        .await
+        .expect("write local");
+
+    // The remote path does not yet exist; the put must create it.
+    let remote = std::path::Path::new("/fresh/dir/payload.bin");
+    conn.sftp_put(&local_src, remote)
+        .await
+        .expect("put to fresh path");
+
+    // The bytes landed intact through the multi-chunk write path.
+    let stored = fs
+        .lock()
+        .await
+        .files
+        .get("/fresh/dir/payload.bin")
+        .cloned()
+        .expect("fresh file created on the remote");
+    assert_eq!(stored, payload);
+}
+
 #[tokio::test]
 async fn sftp_open_reads_remote_bytes() {
     let fs = SharedFs::default();

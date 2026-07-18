@@ -168,6 +168,12 @@ impl<'a> RepoManager<'a> {
         let is_ar = cmd.contains("ar");
         let is_rr = cmd.contains("rr");
 
+        // Aggregate the whole run's verdict for `Target::last_repo`: any non-zero
+        // zypper exit (a failed `ar`/`rr`, or the trailing `ref`) is a per-host
+        // failure, even though only the *last* command lands in the `HostLog` and
+        // so is visible via `lasterr()`/`lastexit()`. Recorded at every return.
+        let mut failure: Option<String> = None;
+
         // Snapshot the flattened system once so the borrow of `self.target`
         // does not overlap the mutable `run`/`unlock` calls below.
         let flattened = self.target.system().flatten();
@@ -228,6 +234,7 @@ impl<'a> RepoManager<'a> {
                         exit_display(self.target.lastexit()),
                         err,
                     );
+                    failure.get_or_insert_with(|| format!("adding repo {alias} failed"));
                 }
             } else if is_rr {
                 info!("Removing repo {url} on {hostname}");
@@ -245,6 +252,8 @@ impl<'a> RepoManager<'a> {
                     "unknown zypper sub-command; force-unlocking target and bailing"
                 );
                 self.target.unlock(true).await;
+                self.target
+                    .set_last_repo(Err(format!("unknown zypper sub-command: {cmd}")));
                 return false;
             }
         }
@@ -268,8 +277,10 @@ impl<'a> RepoManager<'a> {
                 exit_display(self.target.lastexit()),
                 err,
             );
+            failure.get_or_insert_with(|| format!("refreshing repos failed: {ref_cmd}"));
         }
 
+        self.target.set_last_repo(failure.map_or(Ok(()), Err));
         true
     }
 }
@@ -635,6 +646,71 @@ mod tests {
             handle.commands().last().map(String::as_str),
             Some("zypper -n ref")
         );
+    }
+
+    // --- run_zypper: last_repo outcome aggregation -------------------------
+
+    #[tokio::test]
+    async fn last_repo_records_success_on_normal_run() {
+        let sles = product("SLES", "15-SP5");
+        let (mut t, _conn) = target_with(system_of(sles.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+
+        assert_eq!(t.last_repo(), Some(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn last_repo_records_failure_when_add_fails_but_ref_succeeds() {
+        use mtui_types::hostlog::CommandLog;
+
+        // The `ar` fails (exit 4) but the trailing `ref` succeeds (exit 0), so
+        // `lastexit()` reads 0 — yet `last_repo` must still record the failure the
+        // masked `ar` produced. This is the exact case `lasterr()`/`lastexit()`
+        // cannot report.
+        let sles = product("SLES", "15-SP5");
+        let ar_cmd =
+            "zypper ar 'issue-SLES:15-SP5:p=1:2' https://example/repo 'issue-SLES:15-SP5:p=1:2'";
+        let conn = MockConnection::new("host1.example.com").with_response(
+            ar_cmd,
+            CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
+        );
+        let mut t = Target::with_connection(
+            "host1.example.com",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+        t.set_system(system_of(sles.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+
+        // The trailing refresh succeeded, so the log's last exit is 0 …
+        assert_eq!(t.lastexit(), Some(0));
+        // … but the aggregated verdict still reports the masked add failure.
+        let Some(Err(reason)) = t.last_repo() else {
+            panic!("expected recorded failure, got {:?}", t.last_repo());
+        };
+        assert!(reason.contains("adding repo"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn last_repo_records_failure_on_unknown_command() {
+        let sles = product("SLES", "15-SP5");
+        let (mut t, _conn) = target_with(system_of(sles.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("nosuch", &repos, &rrid()).await;
+
+        let Some(Err(reason)) = t.last_repo() else {
+            panic!("expected recorded failure, got {:?}", t.last_repo());
+        };
+        assert!(reason.contains("unknown"), "reason was {reason:?}");
     }
 
     // --- set: forwards to SetRepo ------------------------------------------

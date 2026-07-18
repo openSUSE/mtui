@@ -164,6 +164,23 @@ pub struct MockConnection {
     /// [`HostError::SftpNotFound`] (the file is already gone), so the unlock
     /// "ignore only already-missing" path can be exercised.
     sftp_remove_not_found: bool,
+    /// When `true`, [`sftp_rmdir`](Connection::sftp_rmdir) fails with a generic
+    /// [`HostError::Sftp`], so a caller's directory-removal fallback can be shown
+    /// to *fail* (both the file remove and the rmdir fallback error), exercising
+    /// the per-host removal-failure outcome on [`Target::sftp_remove`].
+    sftp_rmdir_fails: bool,
+    /// When `true`, [`sftp_get`](Connection::sftp_get) /
+    /// [`sftp_get_folder`](Connection::sftp_get_folder) fail with a generic
+    /// [`HostError::Sftp`], so a caller's per-host download outcome tracking can
+    /// be exercised. The op is still recorded before failing.
+    sftp_get_fails: bool,
+    /// When `Some`, the boot-id probe (`cat /proc/sys/kernel/random/boot_id`)
+    /// returns a *fresh* value on every call (`boot-<n>`, incrementing across
+    /// `Clone`d handles), modelling a host that actually rebooted (the pre- and
+    /// post-reboot reads differ). `None` (the default) leaves the boot-id command
+    /// answered by the normal response/default map, so scripting the same fixed
+    /// id both times models a host that did *not* reboot.
+    boot_id_counter: Option<Arc<Mutex<u64>>>,
     /// File paths whose *exclusive* [`sftp_write`](Connection::sftp_write) fails
     /// with a generic [`HostError::Sftp`] instead of the contention
     /// [`HostError::AlreadyExists`] — models a non-collision failure of the
@@ -175,6 +192,11 @@ pub struct MockConnection {
     /// failure (read-only/full remote fs) that callers such as `add_history`
     /// swallow.
     sftp_append_errors: HashSet<PathBuf>,
+    /// When `Some`, [`sftp_put`](Connection::sftp_put) /
+    /// [`sftp_put_bytes`](Connection::sftp_put_bytes) fail with
+    /// [`HostError::Sftp`] carrying this reason, so a caller's per-host upload
+    /// outcome tracking can be exercised. `None` (the default) keeps both `Ok`.
+    fail_sftp_put: Option<String>,
     /// Directory paths scripted to raise [`HostError::SftpNotFound`] from
     /// `sftp_listdir` (mirrors upstream `listdir` raising `OSError`, e.g. a host
     /// with no `/etc/products.d`). Distinct from unscripted paths, which return
@@ -234,8 +256,12 @@ impl MockConnection {
             links: HashMap::new(),
             sftp_remove_fails: false,
             sftp_remove_not_found: false,
+            sftp_rmdir_fails: false,
+            sftp_get_fails: false,
+            boot_id_counter: None,
             exclusive_write_errors: HashSet::new(),
             sftp_append_errors: HashSet::new(),
+            fail_sftp_put: None,
             missing_dirs: HashSet::new(),
             sftp_open_errors: HashSet::new(),
             listdir_transient_failures: Arc::new(Mutex::new(HashMap::new())),
@@ -269,6 +295,40 @@ impl MockConnection {
         self
     }
 
+    /// Makes [`sftp_rmdir`](Connection::sftp_rmdir) fail with a generic
+    /// [`HostError::Sftp`], so a caller's directory-removal fallback fails too —
+    /// combined with [`failing_sftp_remove`](Self::failing_sftp_remove) this
+    /// exercises the per-host *removal-failure* outcome on
+    /// [`Target::sftp_remove`], where both the file remove and the rmdir fallback
+    /// error.
+    #[must_use]
+    pub fn failing_sftp_rmdir(mut self) -> Self {
+        self.sftp_rmdir_fails = true;
+        self
+    }
+
+    /// Makes [`sftp_get`](Connection::sftp_get) /
+    /// [`sftp_get_folder`](Connection::sftp_get_folder) fail with a generic
+    /// [`HostError::Sftp`], so a caller's per-host download outcome tracking
+    /// ([`Target::sftp_get`]) can be exercised. The op is still recorded before
+    /// failing.
+    #[must_use]
+    pub fn failing_sftp_get(mut self) -> Self {
+        self.sftp_get_fails = true;
+        self
+    }
+
+    /// Makes the boot-id probe return a *fresh* value on every call, modelling a
+    /// host that actually rebooted (the pre- and post-reboot reads differ) so the
+    /// group reboot's boot-id verification records success. Without it, scripting
+    /// a fixed boot id both times models a host that did *not* reboot (unchanged
+    /// id ⇒ recorded failure).
+    #[must_use]
+    pub fn with_changing_boot_id(mut self) -> Self {
+        self.boot_id_counter = Some(Arc::new(Mutex::new(0)));
+        self
+    }
+
     /// Scripts an *exclusive* [`sftp_write`](Connection::sftp_write) to `path` to
     /// fail with a generic [`HostError::Sftp`] — a non-collision failure of the
     /// atomic create (e.g. permission denied). Unlike a real collision (which
@@ -286,6 +346,16 @@ impl MockConnection {
     #[must_use]
     pub fn with_sftp_append_error(mut self, path: impl Into<PathBuf>) -> Self {
         self.sftp_append_errors.insert(path.into());
+        self
+    }
+
+    /// Scripts [`sftp_put`](Connection::sftp_put) /
+    /// [`sftp_put_bytes`](Connection::sftp_put_bytes) to fail with a
+    /// [`HostError::Sftp`] carrying `msg`, so a caller's per-host upload outcome
+    /// tracking can be exercised. The op is still recorded before failing.
+    #[must_use]
+    pub fn with_sftp_put_failure(mut self, msg: impl Into<String>) -> Self {
+        self.fail_sftp_put = Some(msg.into());
         self
     }
 
@@ -701,6 +771,16 @@ impl Connection for MockConnection {
             tokio::time::sleep(self.run_delay).await;
         }
 
+        // A changing boot-id models a host that actually rebooted: each probe
+        // returns a fresh value, so the pre- and post-reboot reads differ.
+        if command == "cat /proc/sys/kernel/random/boot_id"
+            && let Some(counter) = &self.boot_id_counter
+        {
+            let mut n = counter.lock().expect("mock boot-id counter lock");
+            *n += 1;
+            return Ok(CommandLog::new(command, format!("boot-{n}\n"), "", 0, 0));
+        }
+
         let outcome = self.responses.get(command).unwrap_or(&self.default);
         match outcome {
             Outcome::Ok(log) => Ok(log.clone()),
@@ -762,6 +842,12 @@ impl Connection for MockConnection {
             local: local.to_path_buf(),
             remote: remote.to_path_buf(),
         });
+        if let Some(reason) = &self.fail_sftp_put {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: reason.clone(),
+            });
+        }
         Ok(())
     }
 
@@ -770,6 +856,12 @@ impl Connection for MockConnection {
             len: data.len(),
             remote: remote.to_path_buf(),
         });
+        if let Some(reason) = &self.fail_sftp_put {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: reason.clone(),
+            });
+        }
         Ok(())
     }
 
@@ -778,6 +870,12 @@ impl Connection for MockConnection {
             remote: remote.to_path_buf(),
             local: local.to_path_buf(),
         });
+        if self.sftp_get_fails {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: "scripted sftp_get failure".to_owned(),
+            });
+        }
         Ok(())
     }
 
@@ -786,6 +884,12 @@ impl Connection for MockConnection {
             remote: remote.to_path_buf(),
             local: local.to_path_buf(),
         });
+        if self.sftp_get_fails {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: "scripted sftp_get_folder failure".to_owned(),
+            });
+        }
         // Mirror the real `SshConnection::sftp_get_folder` loop so the
         // path-traversal trust boundary is exercised end-to-end: iterate the
         // canned listing, validate each server-supplied name through the *same*
@@ -922,6 +1026,12 @@ impl Connection for MockConnection {
 
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Rmdir(path.to_path_buf()));
+        if self.sftp_rmdir_fails {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: "scripted sftp_rmdir failure".to_owned(),
+            });
+        }
         Ok(())
     }
 
@@ -1119,6 +1229,35 @@ mod tests {
                 len: b"payload".len(),
                 remote: PathBuf::from("/remote/a"),
             }]
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_put_failure_knob_errors_but_still_records() {
+        let mut conn = MockConnection::new("h1").with_sftp_put_failure("disk full");
+        let err = conn
+            .sftp_put(Path::new("/tmp/a"), Path::new("/remote/a"))
+            .await
+            .expect_err("should fail");
+        assert!(matches!(err, HostError::Sftp { .. }));
+        let err = conn
+            .sftp_put_bytes(b"payload", Path::new("/remote/b"))
+            .await
+            .expect_err("should fail");
+        assert!(matches!(err, HostError::Sftp { .. }));
+        // The op is recorded before failing, so a caller can still inspect it.
+        assert_eq!(
+            conn.sftp_ops(),
+            [
+                MockSftpOp::Put {
+                    local: PathBuf::from("/tmp/a"),
+                    remote: PathBuf::from("/remote/a"),
+                },
+                MockSftpOp::PutBytes {
+                    len: b"payload".len(),
+                    remote: PathBuf::from("/remote/b"),
+                },
+            ]
         );
     }
 

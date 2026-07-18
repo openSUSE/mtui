@@ -1174,6 +1174,9 @@ impl Connection for SshConnection {
     }
 
     async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) -> Result<()> {
+        use russh_sftp::protocol::OpenFlags;
+        use tokio::io::AsyncWriteExt;
+
         let sftp = self.sftp().await?;
 
         // Create parent directories (best-effort; "already exists" is success).
@@ -1190,9 +1193,18 @@ impl Connection for SshConnection {
             let _ = sftp.create_dir(path.clone()).await;
         }
 
-        sftp.write(remote_str.to_string(), data)
+        // Open explicitly with CREATE so a fresh (non-existent) remote path is
+        // created; the russh-sftp `write` convenience opens WRITE-only, which
+        // returns SSH_FX_NO_SUCH_FILE for a not-yet-existing file.
+        let mut file = sftp
+            .open_with_flags(
+                remote_str.to_string(),
+                OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+            )
             .await
-            .map_err(|e| self.sftp_err(e))?;
+            .map_err(|e| self.sftp_err_at(e, remote))?;
+        file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
+        file.shutdown().await.map_err(|e| self.sftp_err(e))?;
         // Make executable (0770), matching upstream chmod after put.
         if let Ok(mut meta) = sftp.metadata(remote_str.to_string()).await {
             meta.permissions = Some(0o770);
@@ -1350,10 +1362,16 @@ impl Connection for SshConnection {
             file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
             file.shutdown().await.map_err(|e| self.sftp_err(e))?;
         } else {
-            // Truncating overwrite (paramiko mode "w+").
-            sftp.write(path_str, data)
+            // Truncating overwrite (paramiko mode "w+"). Open explicitly with
+            // CREATE so a fresh path is created; the `write` convenience opens
+            // WRITE-only and fails with NO_SUCH_FILE on a missing file.
+            let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
+            let mut file = sftp
+                .open_with_flags(path_str, flags)
                 .await
-                .map_err(|e| self.sftp_err(e))?;
+                .map_err(|e| self.sftp_err_at(e, path))?;
+            file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
+            file.shutdown().await.map_err(|e| self.sftp_err(e))?;
         }
         let _ = sftp.close().await;
         Ok(())

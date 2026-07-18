@@ -55,6 +55,36 @@ use super::operation::{HostCommandMap, HostPlan, LastOutput, OperationGroup, Pla
 use super::repo_manager::{RepoOp, SetRepo};
 use super::{LockRow, Target};
 
+/// The per-host result of a group [`lock`](HostsGroup::lock) /
+/// [`unlock`](HostsGroup::unlock) fan-out.
+///
+/// The lock fan-out stays best-effort (one contended host never aborts the
+/// batch), but a command now needs to tell a **benign** outcome apart from a
+/// **real** failure so it does not report contention as an error. This mirrors
+/// the map-returning style of [`close`](HostsGroup::close): each host's outcome
+/// is collected keyed by hostname.
+///
+/// * [`Acquired`](LockOutcome::Acquired) / [`Released`](LockOutcome::Released) —
+///   the operation succeeded (or was a no-op: an unconnected host has no lock to
+///   act on, treated as success so it is never reported as a failure).
+/// * [`Contended`](LockOutcome::Contended) — benign: the lock is held by another
+///   owner ([`HostError::TargetLocked`]); the fan-out skipped it, upstream's
+///   `suppress(TargetLockedError)`. A caller should **not** count this as a
+///   failure.
+/// * [`Failed`](LockOutcome::Failed) — a real transport/SFTP error acquiring or
+///   releasing the lock; the caller may name the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockOutcome {
+    /// The operation lock was acquired (or was already ours / a no-op).
+    Acquired,
+    /// The operation lock was released (or there was nothing to release).
+    Released,
+    /// The lock is held by another owner — benign contention, not a failure.
+    Contended,
+    /// A real transport/SFTP error occurred; the string is the reason.
+    Failed(String),
+}
+
 /// A composite over a group of [`Target`]s, keyed by hostname.
 ///
 /// All hosts in a group are expected to be enabled; the lifetime of the object
@@ -399,9 +429,18 @@ impl HostsGroup {
     /// suppressed (upstream wraps each call in `suppress(TargetLockedError)`) so
     /// one contended host never aborts the fan-out. Other transport errors are
     /// logged, not propagated.
-    pub async fn lock(&mut self, comment: &str) {
+    ///
+    /// Returns each host's [`LockOutcome`] keyed by hostname (collected exactly
+    /// like [`close`](Self::close), so the map is deterministic regardless of
+    /// completion order) so a command can report which hosts a real failure hit
+    /// while leaving benign [`Contended`](LockOutcome::Contended) hosts
+    /// unreported. Existing callers that ignore the return value keep compiling.
+    pub async fn lock(&mut self, comment: &str) -> BTreeMap<String, LockOutcome> {
+        use std::sync::Mutex;
+
         let (is_repl, prompter, max_parallel) =
             (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let collected: Mutex<BTreeMap<String, LockOutcome>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -411,20 +450,25 @@ impl HostsGroup {
             |_t| true,
             |t| {
                 let comment = comment.to_owned();
+                let collected = &collected;
                 Box::pin(async move {
-                    match t.lock(&comment).await {
-                        Ok(()) => {}
+                    let outcome = match t.lock(&comment).await {
+                        Ok(()) => LockOutcome::Acquired,
                         Err(HostError::TargetLocked(msg)) => {
                             tracing::debug!(host = %t.hostname(), %msg, "lock: held by another owner, skipping");
+                            LockOutcome::Contended
                         }
                         Err(e) => {
                             tracing::warn!(host = %t.hostname(), error = %e, "lock failed");
+                            LockOutcome::Failed(e.to_string())
                         }
-                    }
+                    };
+                    collected.lock().unwrap().insert(t.hostname().to_owned(), outcome);
                 }) as actions::BoxTargetFut<'_>
             },
         )
         .await;
+        collected.into_inner().unwrap()
     }
 
     /// Releases every host's operation lock, best-effort.
@@ -432,9 +476,18 @@ impl HostsGroup {
     /// Ports upstream `HostsGroup.unlock`: delegates to the per-target
     /// [`Target::unlock`] (which already suppresses [`HostError::TargetLocked`]
     /// for a foreign lock), so a contended host never aborts the fan-out.
-    pub async fn unlock(&mut self) {
+    ///
+    /// Returns each host's [`LockOutcome`] keyed by hostname (like
+    /// [`lock`](Self::lock)): [`Released`](LockOutcome::Released) on success,
+    /// [`Contended`](LockOutcome::Contended) for a benign foreign-owned lock, and
+    /// [`Failed`](LockOutcome::Failed) for a real transport error. Existing
+    /// callers that ignore the return value keep compiling.
+    pub async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
+        use std::sync::Mutex;
+
         let (is_repl, prompter, max_parallel) =
             (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let collected: Mutex<BTreeMap<String, LockOutcome>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -442,9 +495,23 @@ impl HostsGroup {
             max_parallel,
             Some("unlock"),
             |_t| true,
-            |t| Box::pin(async move { t.unlock(false).await }) as actions::BoxTargetFut<'_>,
+            |t| {
+                let collected = &collected;
+                Box::pin(async move {
+                    let outcome = match t.unlock_reporting(false).await {
+                        Ok(()) => LockOutcome::Released,
+                        Err(HostError::TargetLocked(_)) => LockOutcome::Contended,
+                        Err(e) => LockOutcome::Failed(e.to_string()),
+                    };
+                    collected
+                        .lock()
+                        .unwrap()
+                        .insert(t.hostname().to_owned(), outcome);
+                }) as actions::BoxTargetFut<'_>
+            },
         )
         .await;
+        collected.into_inner().unwrap()
     }
 
     /// Releases every host's pool claim, best-effort.
@@ -862,7 +929,7 @@ impl HostsGroup {
         if skipped.into_inner() {
             // Release the locks we did take, best-effort (concurrently), then
             // signal the abort.
-            self.unlock().await;
+            let _ = self.unlock().await;
             return Err(HostError::Update("Hosts locked".to_owned()));
         }
         Ok(())
@@ -884,12 +951,24 @@ impl HostsGroup {
     ///
     /// Works for both transactional and non-transactional hosts. A no-op when
     /// the group is empty.
-    pub async fn reboot(&mut self, command: &str, relock_comment: &str) {
+    ///
+    /// Returns each host's reboot outcome keyed by hostname, mirroring
+    /// [`close`](Self::close): `Ok(())` when the host rebooted (boot id changed,
+    /// or could not be confirmed) and reconnected; `Err(HostError)` when the
+    /// reconnect failed or the boot id was **unchanged** (the host did not
+    /// actually reboot). A reconnect failure takes precedence over a later
+    /// boot-id verdict for the same host. Existing callers that ignore the
+    /// return value keep compiling. An empty group returns an empty map.
+    pub async fn reboot(
+        &mut self,
+        command: &str,
+        relock_comment: &str,
+    ) -> BTreeMap<String, Result<()>> {
         use std::sync::Mutex;
 
         if self.data.is_empty() {
             tracing::info!("No hosts to reboot");
-            return;
+            return BTreeMap::new();
         }
         let names: Vec<String> = self.data.keys().cloned().collect();
         tracing::info!(hosts = %names.join(", "), "Rebooting");
@@ -935,6 +1014,12 @@ impl HostsGroup {
         )
         .await;
 
+        // Per-host outcome, collected across the reconnect + verify phases so the
+        // returned map is deterministic regardless of completion order (as in
+        // `close`). A reconnect failure is recorded first and takes precedence;
+        // the verify phase only downgrades a host that reconnected cleanly.
+        let outcomes: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
+
         // Phase 3: reconnect every host (concurrently) with retry + backoff.
         actions::run_fanout(
             &mut self.data,
@@ -944,18 +1029,28 @@ impl HostsGroup {
             Some("reconnect"),
             |_t| true,
             |t| {
+                let outcomes = &outcomes;
                 Box::pin(async move {
-                    if let Err(e) = t.reconnect().await {
-                        tracing::error!(host = %t.hostname(), error = %e, "reconnect after reboot failed");
-                    } else {
-                        tracing::info!(host = %t.hostname(), "is back up");
-                    }
+                    let hostname = t.hostname().to_owned();
+                    let outcome = match t.reconnect().await {
+                        Ok(()) => {
+                            tracing::info!(host = %hostname, "is back up");
+                            Ok(())
+                        }
+                        Err(e) => {
+                            tracing::error!(host = %hostname, error = %e, "reconnect after reboot failed");
+                            Err(e)
+                        }
+                    };
+                    outcomes.lock().unwrap().insert(hostname, outcome);
                 }) as actions::BoxTargetFut<'_>
             },
         )
         .await;
 
-        // Phase 4: verify each host's boot id changed (concurrently).
+        // Phase 4: verify each host's boot id changed (concurrently). Only a host
+        // that reconnected cleanly can be downgraded here — a reconnect failure
+        // already recorded above is the more fundamental error and is preserved.
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -965,9 +1060,18 @@ impl HostsGroup {
             |_t| true,
             |t| {
                 let old = old_boot_ids.get(t.hostname()).cloned().unwrap_or_default();
+                let outcomes = &outcomes;
                 Box::pin(async move {
+                    let hostname = t.hostname().to_owned();
                     let new_boot_id = t.boot_id().await;
-                    Self::verify_boot_id(t.hostname(), &old, &new_boot_id);
+                    if let Err(reason) = Self::verify_boot_id(&hostname, &old, &new_boot_id) {
+                        let mut map = outcomes.lock().unwrap();
+                        // Preserve a reconnect failure; only mark a cleanly
+                        // reconnected host as failed for an unchanged boot id.
+                        if !matches!(map.get(&hostname), Some(Err(_))) {
+                            map.insert(hostname, Err(HostError::Update(reason)));
+                        }
+                    }
                 }) as actions::BoxTargetFut<'_>
             },
         )
@@ -975,8 +1079,10 @@ impl HostsGroup {
 
         if !relock_comment.is_empty() {
             tracing::info!("Re-applying lock after reboot");
-            self.lock(relock_comment).await;
+            let _ = self.lock(relock_comment).await;
         }
+
+        outcomes.into_inner().unwrap()
     }
 
     /// Reboots the *transactional* hosts named in `reboot` and reconnects each.
@@ -1037,23 +1143,38 @@ impl HostsGroup {
         .await;
     }
 
-    /// Logs an error if `hostname`'s boot id did not change after a reboot.
+    /// Decides whether `hostname`'s boot id confirms a reboot, logging as before.
     ///
     /// Ports upstream `HostsGroup._verify_reboot`, factored to a pure
     /// (I/O-free) comparison so the boot-id read can fan out concurrently in
     /// [`reboot`](Self::reboot) and this just decides on the two values.
     /// `/proc/sys/kernel/random/boot_id` is regenerated on every boot, so an
-    /// unchanged value means the host did not actually reboot. A missing (empty)
-    /// old or new id is a warning (could not confirm); an unchanged non-empty id
-    /// is an error.
-    fn verify_boot_id(hostname: &str, old_boot_id: &str, new_boot_id: &str) {
+    /// unchanged value means the host did not actually reboot.
+    ///
+    /// Returns the per-host verdict for the [`reboot`](Self::reboot) outcome map:
+    ///
+    /// * an **unchanged** non-empty id is a definite failure (`Err`) — the host
+    ///   did not reboot (still logged at ERROR);
+    /// * a **missing** (empty) old or new id is *not* a failure (`Ok`) — the
+    ///   read could not confirm the reboot either way (still logged at WARN),
+    ///   so it does not mark the host failed;
+    /// * a **changed** id is success (`Ok`).
+    fn verify_boot_id(
+        hostname: &str,
+        old_boot_id: &str,
+        new_boot_id: &str,
+    ) -> std::result::Result<(), String> {
         if old_boot_id.is_empty() || new_boot_id.is_empty() {
             tracing::warn!(host = %hostname, "could not read boot id to confirm the reboot");
+            Ok(())
         } else if old_boot_id == new_boot_id {
             tracing::error!(
                 host = %hostname, boot_id = %new_boot_id,
                 "boot id unchanged after reboot -- the host may not have rebooted"
             );
+            Err("boot id unchanged after reboot -- the host may not have rebooted".to_owned())
+        } else {
+            Ok(())
         }
     }
 }
@@ -1139,7 +1260,7 @@ impl OperationGroup for HostsGroup {
     }
 
     async fn unlock(&mut self) {
-        HostsGroup::unlock(self).await;
+        let _ = HostsGroup::unlock(self).await;
     }
 
     fn last_output(&self, hostname: &str) -> LastOutput {
@@ -1585,8 +1706,10 @@ mod tests {
 
     // --- reboot lifecycle (P2.9) -------------------------------------------
 
-    /// A mock that answers the boot-id probe with `boot_id` and everything else
-    /// with "ok", so a group reboot can capture/verify a boot id.
+    /// A mock that answers the boot-id probe with a *fixed* `boot_id` (same value
+    /// on every read) and everything else with "ok". Because the pre- and
+    /// post-reboot reads are identical, this models a host that did **not**
+    /// reboot — the verify path records a failure.
     fn reboot_mock(hostname: &str, boot_id: &str) -> MockConnection {
         MockConnection::new(hostname)
             .with_default(CommandLog::new("", "ok", "", 0, 0))
@@ -1596,9 +1719,18 @@ mod tests {
             )
     }
 
+    /// A mock whose boot-id probe returns a *fresh* value on every read, modelling
+    /// a host that actually rebooted (pre- and post-reboot ids differ) so the
+    /// verify path records success.
+    fn rebooted_mock(hostname: &str) -> MockConnection {
+        MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_changing_boot_id()
+    }
+
     #[tokio::test]
     async fn reboot_fires_reconnects_and_verifies_all_hosts() {
-        let (m1, m2) = (reboot_mock("h1", "id-1"), reboot_mock("h2", "id-2"));
+        let (m1, m2) = (rebooted_mock("h1"), rebooted_mock("h2"));
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = HostsGroup::new(
             vec![
@@ -1618,13 +1750,17 @@ mod tests {
             false,
         );
 
-        g.reboot("systemctl reboot", "").await;
+        let outcomes = g.reboot("systemctl reboot", "").await;
 
         // Each host was sent the reboot fire-and-forget and reconnected once.
         assert_eq!(h1.fired_commands(), vec!["systemctl reboot".to_owned()]);
         assert_eq!(h2.fired_commands(), vec!["systemctl reboot".to_owned()]);
         assert_eq!(h1.reconnect_count(), 1);
         assert_eq!(h2.reconnect_count(), 1);
+        // Distinct boot ids on both reads ⇒ both hosts rebooted successfully.
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes["h1"].is_ok());
+        assert!(outcomes["h2"].is_ok());
     }
 
     #[tokio::test]
@@ -1651,15 +1787,16 @@ mod tests {
     #[tokio::test]
     async fn reboot_empty_group_is_noop() {
         let mut g = HostsGroup::new(vec![], false);
-        // Must not panic; nothing to reboot.
-        g.reboot("systemctl reboot", "relock").await;
+        // Must not panic; nothing to reboot, no per-host outcomes.
+        assert!(g.reboot("systemctl reboot", "relock").await.is_empty());
         assert!(g.is_empty());
     }
 
     #[tokio::test]
-    async fn reboot_verify_unchanged_boot_id_does_not_panic() {
+    async fn reboot_verify_unchanged_boot_id_records_failure() {
         // Same boot id on both reads models a host that did NOT reboot; the
-        // verify path logs an error but the group call still completes.
+        // verify path logs an error and records a per-host failure while the
+        // group call still completes.
         let m1 = reboot_mock("h1", "same-id");
         let h1 = m1.clone();
         let mut g = HostsGroup::new(
@@ -1671,8 +1808,14 @@ mod tests {
             )],
             false,
         );
-        g.reboot("systemctl reboot", "").await;
+        let outcomes = g.reboot("systemctl reboot", "").await;
         assert_eq!(h1.reconnect_count(), 1);
+        // Reconnect succeeded but the boot id was unchanged -> recorded failure.
+        assert!(
+            matches!(&outcomes["h1"], Err(HostError::Update(msg)) if msg.contains("boot id unchanged")),
+            "unchanged boot id must be recorded as a failure, got {:?}",
+            outcomes["h1"]
+        );
     }
 
     #[tokio::test]
@@ -1692,13 +1835,20 @@ mod tests {
             )],
             false,
         );
-        g.reboot("systemctl reboot", "").await;
+        let outcomes = g.reboot("systemctl reboot", "").await;
         assert_eq!(h1.reconnect_count(), 1);
         assert_eq!(h1.fired_commands(), vec!["systemctl reboot".to_owned()]);
+        // An empty (unreadable) boot id could not confirm the reboot either way,
+        // so it is NOT recorded as a failure (only warned).
+        assert!(
+            outcomes["h1"].is_ok(),
+            "an unconfirmable boot id must not be a failure, got {:?}",
+            outcomes["h1"]
+        );
     }
 
     #[tokio::test]
-    async fn reboot_reports_reconnect_failure_without_panicking() {
+    async fn reboot_records_reconnect_failure() {
         let m1 = reboot_mock("h1", "id-1");
         // Recreate with a failing reconnect.
         let m1 = m1.failing_reconnect();
@@ -1712,8 +1862,14 @@ mod tests {
             )],
             false,
         );
-        g.reboot("systemctl reboot", "").await;
+        let outcomes = g.reboot("systemctl reboot", "").await;
         assert_eq!(h1.reconnect_count(), 1);
+        // A reconnect failure is recorded as the host's failure.
+        assert!(
+            matches!(&outcomes["h1"], Err(HostError::ReconnectFailed { host }) if host == "h1"),
+            "reconnect failure must be recorded, got {:?}",
+            outcomes["h1"]
+        );
     }
 
     // --- _reboot (transactional subset, via OperationGroup) -----------------
@@ -1841,13 +1997,83 @@ mod tests {
     #[tokio::test]
     async fn lock_and_unlock_fan_out_over_group() {
         let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
-        g.lock("session").await;
+        let locked = g.lock("session").await;
+        assert_eq!(locked["h1"], LockOutcome::Acquired);
+        assert_eq!(locked["h2"], LockOutcome::Acquired);
         assert!(g.get_mut("h1").unwrap().is_locked().await.unwrap());
         assert!(g.get_mut("h2").unwrap().is_locked().await.unwrap());
 
-        g.unlock().await;
+        let unlocked = g.unlock().await;
+        assert_eq!(unlocked["h1"], LockOutcome::Released);
+        assert_eq!(unlocked["h2"], LockOutcome::Released);
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
         assert!(!g.get_mut("h2").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn lock_reports_benign_contention_distinct_from_failure() {
+        // h1 is free (Acquired); h2 carries a foreign lock (benign Contended);
+        // h3's atomic lock create fails with a non-contention SFTP error (real
+        // Failed). The command can tell contention apart from a true failure.
+        let foreign = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let failing = MockConnection::new("h3")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_exclusive_write_error(TARGET_LOCK_PATH);
+        let mut g = HostsGroup::new(
+            vec![
+                enabled("h1"),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(foreign),
+                ),
+                Target::with_connection(
+                    "h3",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(failing),
+                ),
+            ],
+            false,
+        );
+
+        let outcomes = g.lock("session").await;
+        assert_eq!(outcomes["h1"], LockOutcome::Acquired);
+        assert_eq!(outcomes["h2"], LockOutcome::Contended);
+        assert!(
+            matches!(&outcomes["h3"], LockOutcome::Failed(_)),
+            "a non-contention lock error must be Failed, got {:?}",
+            outcomes["h3"]
+        );
+    }
+
+    #[tokio::test]
+    async fn unlock_reports_benign_contention_distinct_from_release() {
+        // h1 is ours (locked below) -> Released; h2 is foreign -> benign
+        // Contended (not a failure).
+        let foreign = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let mut g = HostsGroup::new(
+            vec![
+                enabled("h1"),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(foreign),
+                ),
+            ],
+            false,
+        );
+        let _ = g.lock("session").await; // locks h1; h2 stays foreign-locked
+
+        let outcomes = g.unlock().await;
+        assert_eq!(outcomes["h1"], LockOutcome::Released);
+        assert_eq!(outcomes["h2"], LockOutcome::Contended);
     }
 
     #[tokio::test]
