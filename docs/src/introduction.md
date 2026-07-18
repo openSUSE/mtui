@@ -16,8 +16,8 @@ wire format that lets a Rust and a Python mtui share a host fleet).
 
 ## Two surfaces
 
-- **`mtui`** — the interactive REPL (line editing, tab completion, history) and a
-  non-interactive single-command mode.
+- **`mtui`** — the interactive REPL (line editing, tab completion, history). See
+  [Invocation](invocation.md) for how to launch it and seed a session.
 - **`mtui-mcp`** — a Model Context Protocol server whose tools are *synthesised
   from the same command registry* as the REPL, so the CLI and the MCP surface
   never drift. See [MCP server](mcp.md).
@@ -26,12 +26,20 @@ wire format that lets a Rust and a Python mtui share a host fleet).
 
 - [Installation](installation.md) — build from source, install the binaries,
   completions, man pages, and terminal-launcher scripts.
+- [Invocation](invocation.md) — the `mtui` and `mtui-mcp` binary flags and how to
+  start a session.
 - [Configuration](configuration.md) — the TOML config file, its resolution order,
   and every option with its default.
 - [Command reference](cli.md) — every REPL command and its arguments, generated
   directly from the command registry.
-- [MCP server](mcp.md) — running `mtui-mcp`, the tool surface, profiles, and the
-  security boundary.
+- [Workflow concepts](concepts.md) — fan-out across templates, reference-host pool
+  selection, host state, and locking.
+- [MCP server](mcp.md) — running `mtui-mcp`, the tool surface, the testreport and
+  job tools, profiles, and the security boundary.
+- [Architecture](architecture.md) — the crate layout and the data-format
+  contracts.
+- [Developer guide](developer.md) — the toolchain, quality gates, the command
+  trait, how to add a command, and testing conventions.
 - [FAQ](faq.md).
 
 For architecture and the phased implementation roadmap, see `PLAN-highlevel.md`;

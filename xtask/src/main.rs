@@ -7,10 +7,11 @@
 //! the rpm spec (`%files`) and any packaging can consume them without a build.
 //!
 //! Run with `cargo xtask gen` (see the `.cargo/config.toml` alias). A second
-//! task, `cargo xtask gen-docs`, regenerates the mdBook CLI reference
-//! (`docs/src/cli.md`) from the command registry. The actual generation lives in
-//! [`xtask::generate_into`] / [`xtask::generate_docs_into`] so it is
-//! unit-testable offline.
+//! task, `cargo xtask gen-docs`, regenerates the mdBook's generated pages — the
+//! CLI reference (`docs/src/cli.md`) from the command registry and the invocation
+//! reference (`docs/src/invocation.md`) from the two binary parsers. The actual
+//! generation lives in [`xtask::generate_into`] / [`xtask::generate_docs_into`]
+//! so it is unit-testable offline.
 
 use std::path::{Path, PathBuf};
 
@@ -40,7 +41,7 @@ fn print_usage() {
          USAGE:\n    cargo xtask <TASK>\n\n\
          TASKS:\n    \
          gen         Regenerate dist/ completions + man pages for both binaries\n    \
-         gen-docs    Regenerate docs/src/cli.md from the command registry\n    \
+         gen-docs    Regenerate docs/src/{{cli,invocation}}.md from the parsers\n    \
          package     Build a release tarball for a target\n\n\
          PACKAGE:\n    \
          cargo xtask package --version <VER> --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]\n    \
@@ -59,14 +60,16 @@ fn run_gen() -> Result<()> {
     Ok(())
 }
 
-/// Regenerate `docs/src/cli.md` (the mdBook CLI reference) from the command
-/// registry into the repo's checked-in `docs/` tree.
+/// Regenerate the mdBook's generated pages (`docs/src/cli.md` from the command
+/// registry, `docs/src/invocation.md` from the binary parsers) into the repo's
+/// checked-in `docs/` tree.
 fn run_gen_docs() -> Result<()> {
     let src = repo_root()?.join("docs").join("src");
     xtask::generate_docs_into(&src)?;
     println!(
-        "wrote {} under {}",
+        "wrote {} + {} under {}",
         xtask::CLI_REFERENCE_FILE,
+        xtask::INVOCATION_REFERENCE_FILE,
         src.display()
     );
     Ok(())

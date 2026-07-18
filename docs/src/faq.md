@@ -87,3 +87,65 @@ No. The QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`)
 talks to the OBS/IBS API natively — no `osc` subprocess. `svn` is still used for
 the SVN testreport backend, and a terminal emulator for `terms`/`switch`; both
 are optional and mtui degrades gracefully when they are absent.
+
+## How do I install packages the update newly introduces?
+
+Feature updates often add packages that only exist in the test-update repository,
+so `prepare` can't install them yet. Run `update --newpackage` to install the new
+packages right after the update applies.
+
+## How do I control what `prepare` installs?
+
+`prepare` has three switches:
+
+- `prepare -f` / `--force` — force installation even on package conflicts.
+- `prepare -i` / `--installed` — only prepare packages already installed (skip
+  pulling in additional patchinfo packages).
+- `prepare -u` / `--update` — enable the test-update repositories and install from
+  there.
+
+## Can I run a command on only some of the connected hosts?
+
+Yes — temporarily disable the rest with `set_host_state`, then re-enable:
+
+```
+set_host_state -t hostA -t hostC disabled
+run zypper lr            # runs only on the still-enabled hosts
+set_host_state enabled   # re-enable all
+```
+
+`disabled` hosts run nothing (and print nothing); `dryrun` hosts print the command
+they *would* run without executing it. You can also switch a host between
+`parallel` and `serial` execution the same way.
+
+## Can I export the update log from a specific refhost?
+
+Yes: `export -t <host>`. By default `export` writes the collected data for every
+host in the list — including disabled ones — so to keep a temporarily-added host
+out of the report, `remove_host -t <host>` before exporting.
+
+## Where are the per-host install logs stored?
+
+Under the loaded template's checkout, in
+`template_dir/<RRID>/install_logs/<host>.log` (one file per refhost). The
+`install_logs` sub-directory name is configurable under `[mtui]`; see
+[Configuration](configuration.md).
+
+## How do I remove a dangling lock left by a crashed session?
+
+Reconnect to the same hosts and run `unlock -f` (force) to remove locks left by
+another user or session. mtui also reaps locks older than `[lock] stale_age`
+automatically on connect (see [Configuration](configuration.md)); `unlock -p`
+removes a pool-claim lock instead of the operation lock.
+
+## Which update should I pick up next?
+
+`updates` lists the queue live from the TeReGen API, sorted by priority. By
+default it shows the actionable pickup queue — **unassigned** updates that are **in
+testing**. Widen or filter it:
+
+```
+updates --review-group qam-sle --limit 5
+updates --mine                # updates assigned to you
+updates --status all          # every status and assignee
+```

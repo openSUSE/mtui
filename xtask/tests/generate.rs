@@ -8,8 +8,9 @@
 use std::path::Path;
 
 use xtask::{
-    BINARIES, CLI_REFERENCE_FILE, PackageArgs, PackageInputs, generate_docs_into, generate_into,
-    package_stem, package_target, render_cli_reference, stage_package,
+    BINARIES, CLI_REFERENCE_FILE, INVOCATION_REFERENCE_FILE, PackageArgs, PackageInputs,
+    generate_docs_into, generate_into, package_stem, package_target, render_cli_reference,
+    render_invocation_reference, stage_package,
 };
 
 /// The two binaries and their per-shell completion file names, plus the man page.
@@ -96,14 +97,14 @@ fn generate_into_is_idempotent() {
     assert_eq!(first, second, "re-running gen must be byte-identical");
 }
 
-/// The checked-in CLI reference, resolved relative to this crate's manifest.
-fn checked_in_cli_reference() -> std::path::PathBuf {
+/// A checked-in generated doc page, resolved relative to this crate's manifest.
+fn checked_in_docs_page(file: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask manifest dir has a parent (workspace root)")
         .join("docs")
         .join("src")
-        .join(CLI_REFERENCE_FILE)
+        .join(file)
 }
 
 #[test]
@@ -129,27 +130,70 @@ fn cli_reference_lists_known_commands_with_aliases() {
 fn generate_docs_into_is_idempotent() {
     let dir = tempfile::tempdir().expect("tempdir");
     generate_docs_into(dir.path()).expect("first run");
-    let first = std::fs::read(dir.path().join(CLI_REFERENCE_FILE)).unwrap();
+    let first_cli = std::fs::read(dir.path().join(CLI_REFERENCE_FILE)).unwrap();
+    let first_inv = std::fs::read(dir.path().join(INVOCATION_REFERENCE_FILE)).unwrap();
     generate_docs_into(dir.path()).expect("second run");
-    let second = std::fs::read(dir.path().join(CLI_REFERENCE_FILE)).unwrap();
-    assert_eq!(first, second, "re-running gen-docs must be byte-identical");
+    let second_cli = std::fs::read(dir.path().join(CLI_REFERENCE_FILE)).unwrap();
+    let second_inv = std::fs::read(dir.path().join(INVOCATION_REFERENCE_FILE)).unwrap();
+    assert_eq!(
+        first_cli, second_cli,
+        "re-running gen-docs must be byte-identical"
+    );
+    assert_eq!(
+        first_inv, second_inv,
+        "re-running gen-docs must be byte-identical"
+    );
 }
 
-/// Drift guard: the committed `docs/src/cli.md` must match what the registry
-/// generates. If this fails, the command surface changed — run
+/// The invocation reference documents both binaries and their key flags, drawn
+/// straight from the clap parsers.
+#[test]
+fn invocation_reference_documents_both_binaries() {
+    let doc = render_invocation_reference();
+    assert!(doc.contains("## `mtui`"), "documents the mtui binary");
+    assert!(
+        doc.contains("## `mtui-mcp`"),
+        "documents the mtui-mcp binary"
+    );
+    // Representative flags from each parser (hyphenated long forms).
+    for flag in [
+        "--auto-review-id",
+        "--kernel-review-id",
+        "--sut",
+        "--config",
+        "--connection-timeout",
+    ] {
+        assert!(doc.contains(flag), "invocation ref should document {flag}");
+    }
+    for flag in ["--transport", "--host", "--port"] {
+        assert!(doc.contains(flag), "invocation ref should document {flag}");
+    }
+    // The REPL-only caveat is stated.
+    assert!(
+        doc.contains("REPL-only"),
+        "invocation ref should note mtui has no single-command mode"
+    );
+}
+
+/// Drift guard: the committed `docs/src/{cli,invocation}.md` must match what the
+/// generators produce. If this fails, the command/flag surface changed — run
 /// `cargo xtask gen-docs` and commit the result.
 #[test]
-fn checked_in_cli_reference_is_up_to_date() {
-    let path = checked_in_cli_reference();
-    let on_disk = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-    let generated = render_cli_reference();
-    assert_eq!(
-        on_disk,
-        generated,
-        "{} is stale; run `cargo xtask gen-docs` and commit the result",
-        path.display()
-    );
+fn checked_in_generated_docs_are_up_to_date() {
+    for (file, generated) in [
+        (CLI_REFERENCE_FILE, render_cli_reference()),
+        (INVOCATION_REFERENCE_FILE, render_invocation_reference()),
+    ] {
+        let path = checked_in_docs_page(file);
+        let on_disk = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        assert_eq!(
+            on_disk,
+            generated,
+            "{} is stale; run `cargo xtask gen-docs` and commit the result",
+            path.display()
+        );
+    }
 }
 
 // --- Release packaging --------------------------------------------------------
