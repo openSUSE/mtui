@@ -2327,6 +2327,7 @@ dependencies = [
  "futures",
  "indexmap",
  "insta",
+ "libc",
  "mtui-config",
  "mtui-datasources",
  "mtui-hosts",

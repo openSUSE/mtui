@@ -43,7 +43,7 @@ pub mod wiring;
 
 pub use args::{Args, ColorArg, Sut, Update};
 pub use command::{Command, Scope, resolve_command_rrids};
-pub use display::{ColorMode, CommandPromptDisplay, page};
+pub use display::{ColorMode, CommandPromptDisplay, page, page_interactive};
 pub use engine::{EngineError, command_parser, dispatch_argv, dispatch_command, dispatch_line};
 pub use entrypoint::{ExitStatus, run_once};
 pub use error::{CommandError, CommandResult};

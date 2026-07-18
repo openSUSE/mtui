@@ -14,9 +14,8 @@ use clap::ArgMatches;
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::support::complete_with_templates;
+use super::support::{complete_with_templates, page_output};
 use crate::command::{Command, Scope};
-use crate::display::page;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -188,9 +187,7 @@ impl Command for ShowDiff {
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let text = read_source_diff(session)?;
         let lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
-        let is_repl = session.is_repl;
-        let mut writer = |line: &str| session.display.println(line);
-        page(&lines, is_repl, Some(&mut writer));
+        page_output(session, &lines).await;
         Ok(())
     }
 }
@@ -452,6 +449,37 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("line one"), "{out}");
         assert!(out.contains("line two"), "{out}");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env)]
+    #[allow(unsafe_code)]
+    async fn show_diff_interactive_quits_early_on_q() {
+        use mtui_hosts::Prompter;
+
+        // Tiny screen (2 rows) + a `q`-answering prompter: paging stops after the
+        // first screen, so later lines are not shown. `ACCTEST_*` → `#[serial(env)]`.
+        unsafe {
+            std::env::set_var("ACCTEST_COLS", "80");
+            std::env::set_var("ACCTEST_ROWS", "3");
+        }
+        let (mut session, buf, _dir) = session_with_diff("first\nsecond\nthird\nfourth\nfifth\n");
+        session.is_repl = true;
+        session.set_prompter(Prompter::new(std::sync::Arc::new(|_t: String| {
+            Box::pin(async move { Ok("q".to_owned()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        })));
+        let args = matches(&ShowDiff, &[]);
+        ShowDiff.call(&mut session, &args).await.unwrap();
+        unsafe {
+            std::env::remove_var("ACCTEST_COLS");
+            std::env::remove_var("ACCTEST_ROWS");
+        }
+        let out = buf.contents();
+        assert!(out.contains("first") && out.contains("second"), "{out}");
+        assert!(!out.contains("fourth"), "should have quit early: {out}");
     }
 
     #[tokio::test]

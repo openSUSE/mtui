@@ -459,24 +459,205 @@ impl Default for CommandPromptDisplay {
     }
 }
 
-/// Displays long text in a pager-like fashion.
+/// Displays long text, non-interactively.
 ///
-/// Port of upstream `mtui.cli.term.page`, scoped to the tested non-interactive
-/// contract:
+/// Port of upstream `mtui.cli.term.page`'s non-interactive contract:
 /// * `interactive == false` and `writer` is `None` → no-op (historical
 ///   behaviour: no output, no error).
 /// * `interactive == false` and `writer` is `Some` → each line is forwarded to
-///   the writer with trailing `\r`/`\n` stripped (the MCP path).
+///   the writer with trailing `\r`/`\n` stripped (the MCP / headless path).
 ///
-/// Interactive TTY paging (scrollback) is a Phase-6 concern and is intentionally
-/// not implemented here; when `interactive == true` this currently forwards to
-/// the writer if present, else is a no-op.
+/// `interactive == true` is **not** handled here — the REPL uses the async
+/// [`page_interactive`] driver instead, which reads Enter/`q` through the
+/// session's [`Prompter`](mtui_hosts::Prompter). For safety, if a caller still
+/// passes `interactive == true` with a `writer`, this forwards every line
+/// unpaged (never blocks on a read it cannot perform); with no `writer` it is a
+/// no-op.
 pub fn page(text: &[String], interactive: bool, writer: Option<&mut dyn FnMut(&str)>) {
-    // Interactive TTY paging: Phase 6. For now, non-interactive contract only.
     let _ = interactive;
     if let Some(w) = writer {
         for line in text {
             w(line.trim_end_matches(['\r', '\n']));
+        }
+    }
+}
+
+/// Removes the ANSI escape codes upstream `mtui.cli.term.filter_ansi` strips.
+///
+/// Verbatim port of the upstream substitutions: a bare `ESC` (`\x1b`), the
+/// `[<params>m` / `[<params>A` SGR/cursor sequences, and the `[K` erase-line
+/// sequence. Applied to each line before it is width-wrapped in the interactive
+/// pager so escape bytes do not inflate the visible column count.
+#[must_use]
+fn filter_ansi(text: &str) -> String {
+    use std::sync::OnceLock;
+
+    use regex::Regex;
+
+    static SGR: OnceLock<Regex> = OnceLock::new();
+    static ERASE: OnceLock<Regex> = OnceLock::new();
+    let sgr = SGR.get_or_init(|| Regex::new(r"\[[0-9;]*[mA]").unwrap());
+    let erase = ERASE.get_or_init(|| Regex::new(r"\[K").unwrap());
+
+    let no_esc = text.replace('\u{1b}', "");
+    let no_sgr = sgr.replace_all(&no_esc, "");
+    erase.replace_all(&no_sgr, "").into_owned()
+}
+
+/// Returns the terminal size as `(cols, rows)`.
+///
+/// Port of upstream `mtui.cli.term.termsize`: reads `TIOCGWINSZ` via `ioctl`,
+/// falling back to the `ACCTEST_COLS`/`ACCTEST_ROWS` environment pair (used by
+/// the acceptance harness and by unit tests, which have no controlling TTY).
+///
+/// The tuple order is **`(cols, rows)`** on every path — upstream once had a
+/// transpose bug on the env fallback that swapped the geometry, so the order is
+/// pinned by test.
+// `ioctl(TIOCGWINSZ)` is the only portable way to read the tty geometry, mirroring
+// upstream `mtui.cli.term.termsize`; the block below is the sole `unsafe` use.
+#[allow(unsafe_code)]
+#[must_use]
+fn termsize() -> (usize, usize) {
+    #[cfg(unix)]
+    {
+        // SAFETY: `winsize` is POD; `ioctl(TIOCGWINSZ)` fills it or fails, in
+        // which case we fall through to the env/default path without reading it.
+        unsafe {
+            let mut ws: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &raw mut ws) == 0
+                && ws.ws_col > 0
+                && ws.ws_row > 0
+            {
+                return (ws.ws_col as usize, ws.ws_row as usize);
+            }
+        }
+    }
+    termsize_from_env().unwrap_or((80, 24))
+}
+
+/// Pure `ACCTEST_COLS`/`ACCTEST_ROWS` fallback, split out so the `(cols, rows)`
+/// ordering is unit-testable without a TTY. Returns `None` unless both parse.
+#[must_use]
+fn termsize_from_env() -> Option<(usize, usize)> {
+    let cols = std::env::var("ACCTEST_COLS").ok()?.parse().ok()?;
+    let rows = std::env::var("ACCTEST_ROWS").ok()?.parse().ok()?;
+    Some((cols, rows))
+}
+
+/// One screenful emitted by [`page_screen`], plus what remains.
+#[derive(Debug, PartialEq, Eq)]
+enum PageStep {
+    /// A full screen was printed; these lines are still unshown.
+    More(Vec<String>),
+    /// All input was printed; nothing remains.
+    Done,
+}
+
+/// Prints up to `height - 1` display rows (ANSI-filtered, wrapped to `width`
+/// columns) from `text` via `emit`, and returns the unconsumed remainder.
+///
+/// Mirrors upstream `term.py`'s inner loop: each logical line is `filter_ansi`'d
+/// then hard-wrapped into `width`-column chunks; an empty line still occupies one
+/// row; the screen holds `height - 1` rows (one reserved for the prompt).
+fn page_screen(
+    text: &[String],
+    width: usize,
+    height: usize,
+    emit: &mut dyn FnMut(&str),
+) -> PageStep {
+    let width = width.max(1);
+    let mut rows_left = height.saturating_sub(1).max(1);
+    let mut idx = 0;
+
+    while idx < text.len() {
+        let line = filter_ansi(text[idx].trim_end_matches(['\r', '\n']));
+        // Wrap into width-column chunks by char boundary; an empty line is one row.
+        let mut chunks: Vec<String> = Vec::new();
+        let chars: Vec<char> = line.chars().collect();
+        let mut c = 0;
+        while c < chars.len() {
+            let end = (c + width).min(chars.len());
+            chunks.push(chars[c..end].iter().collect());
+            c = end;
+        }
+        if chunks.is_empty() {
+            chunks.push(String::new());
+        }
+
+        if chunks.len() > rows_left {
+            // Print what fits; carry the rest of this same line into the remainder.
+            for chunk in chunks.iter().take(rows_left) {
+                emit(chunk);
+            }
+            let carried: String = chunks[rows_left..].concat();
+            let mut rest = Vec::with_capacity(text.len() - idx);
+            rest.push(carried);
+            rest.extend_from_slice(&text[idx + 1..]);
+            return PageStep::More(rest);
+        }
+
+        for chunk in &chunks {
+            emit(chunk);
+        }
+        rows_left -= chunks.len();
+        idx += 1;
+        if rows_left == 0 {
+            let rest = text[idx..].to_vec();
+            return if rest.is_empty() {
+                PageStep::Done
+            } else {
+                PageStep::More(rest)
+            };
+        }
+    }
+    PageStep::Done
+}
+
+/// Interactive TTY pager: prints `text` a screen at a time, blocking on
+/// `Press Enter to continue... (q to quit)` between screens.
+///
+/// The async analogue of upstream `mtui.cli.term.page(..., interactive=True)`.
+/// Reads the continue/quit answer through the session's serialised
+/// [`Prompter`](mtui_hosts::Prompter) (so a live spinner is suspended and
+/// concurrent host prompts stay serialised); typing `q` stops early. When no
+/// prompter is available (should not happen in the REPL, but keeps the function
+/// total) it prints everything without prompting.
+pub async fn page_interactive(
+    text: &[String],
+    display: &mut CommandPromptDisplay,
+    prompter: Option<&mtui_hosts::Prompter>,
+) {
+    let (width, height) = termsize();
+    let mut remaining: Vec<String> = text.to_vec();
+
+    loop {
+        let mut batch: Vec<String> = Vec::new();
+        let step = page_screen(&remaining, width, height, &mut |line| {
+            batch.push(line.to_owned())
+        });
+        for line in &batch {
+            display.println(line);
+        }
+        match step {
+            PageStep::Done => return,
+            PageStep::More(rest) => {
+                remaining = rest;
+                let Some(p) = prompter else {
+                    // No TTY read available: dump the rest unpaged and stop.
+                    for line in &remaining {
+                        display.println(&filter_ansi(line.trim_end_matches(['\r', '\n'])));
+                    }
+                    return;
+                };
+                // `q` quits; Enter (or anything else) continues.
+                let answer = p
+                    .ask("Press Enter to continue... (q to quit)")
+                    .await
+                    .unwrap_or_default();
+                if answer.trim().eq_ignore_ascii_case("q") {
+                    return;
+                }
+            }
         }
     }
 }
@@ -826,5 +1007,174 @@ mod tests {
             page(&text, false, Some(&mut w));
         }
         assert_eq!(captured, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn filter_ansi_strips_color_and_control_sequences() {
+        // A colored string round-trips to its bare text (upstream test_filter_ansi).
+        let colored = "err".red().to_string();
+        assert!(colored.contains('\u{1b}'));
+        assert_eq!(filter_ansi(&colored), "err");
+        // Bare ESC, an SGR/cursor code, and the erase-line code are all removed.
+        assert_eq!(filter_ansi("a\u{1b}b"), "ab");
+        assert_eq!(filter_ansi("a\u{1b}[2Ab"), "ab");
+        assert_eq!(filter_ansi("a\u{1b}[Kb"), "ab");
+        // Plain text is untouched.
+        assert_eq!(filter_ansi("plain"), "plain");
+    }
+
+    #[test]
+    #[serial_test::serial(env)]
+    #[allow(unsafe_code)]
+    fn termsize_from_env_returns_cols_then_rows() {
+        // The fallback must return (cols, rows) — never the transposed (rows, cols).
+        // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial(env)]`
+        // makes the mutation exclusive.
+        unsafe {
+            std::env::set_var("ACCTEST_COLS", "80");
+            std::env::set_var("ACCTEST_ROWS", "24");
+        }
+        assert_eq!(termsize_from_env(), Some((80, 24)));
+        unsafe {
+            std::env::remove_var("ACCTEST_COLS");
+            std::env::remove_var("ACCTEST_ROWS");
+        }
+        assert_eq!(termsize_from_env(), None);
+    }
+
+    #[test]
+    fn page_screen_wraps_to_width_and_stops_at_height() {
+        // width=3, height=3 → 2 display rows per screen. "abcdef" wraps to
+        // "abc"/"def" (2 rows), filling the screen; the second line spills over.
+        let text = vec!["abcdef".to_owned(), "next".to_owned()];
+        let mut out: Vec<String> = Vec::new();
+        let step = page_screen(&text, 3, 3, &mut |l| out.push(l.to_owned()));
+        assert_eq!(out, vec!["abc", "def"]);
+        assert_eq!(step, PageStep::More(vec!["next".to_owned()]));
+    }
+
+    #[test]
+    fn page_screen_empty_line_is_one_row_and_done_when_all_fit() {
+        let text = vec!["a".to_owned(), String::new(), "b".to_owned()];
+        let mut out: Vec<String> = Vec::new();
+        // height=10 → plenty of room; all three rows print, nothing remains.
+        let step = page_screen(&text, 80, 10, &mut |l| out.push(l.to_owned()));
+        assert_eq!(out, vec!["a", "", "b"]);
+        assert_eq!(step, PageStep::Done);
+    }
+
+    #[test]
+    fn page_screen_exact_fill_is_done_not_more() {
+        // Two lines exactly fill a 2-row screen with nothing left → Done, not
+        // More(empty) (the rows_left==0 && rest.is_empty() edge).
+        let text = vec!["a".to_owned(), "b".to_owned()];
+        let mut out: Vec<String> = Vec::new();
+        let step = page_screen(&text, 80, 3, &mut |l| out.push(l.to_owned()));
+        assert_eq!(out, vec!["a", "b"]);
+        assert_eq!(step, PageStep::Done);
+    }
+
+    #[test]
+    fn page_screen_full_screen_with_remainder_is_more() {
+        // Three lines, 2-row screen: fills exactly, one line remains → More.
+        let text = vec!["a".to_owned(), "b".to_owned(), "c".to_owned()];
+        let mut out: Vec<String> = Vec::new();
+        let step = page_screen(&text, 80, 3, &mut |l| out.push(l.to_owned()));
+        assert_eq!(out, vec!["a", "b"]);
+        assert_eq!(step, PageStep::More(vec!["c".to_owned()]));
+    }
+
+    #[test]
+    fn page_screen_carries_overflow_of_a_single_wrapped_line() {
+        // A line longer than one screen's worth of rows carries its tail forward.
+        // width=2, height=3 → 2 rows/screen. "abcdef" = ab|cd|ef → prints ab,cd;
+        // carries "ef".
+        let text = vec!["abcdef".to_owned()];
+        let mut out: Vec<String> = Vec::new();
+        let step = page_screen(&text, 2, 3, &mut |l| out.push(l.to_owned()));
+        assert_eq!(out, vec!["ab", "cd"]);
+        assert_eq!(step, PageStep::More(vec!["ef".to_owned()]));
+    }
+
+    /// A prompter whose reader always returns `answer`, for driving the pager.
+    fn fixed_prompter(answer: &'static str) -> mtui_hosts::Prompter {
+        mtui_hosts::Prompter::new(std::sync::Arc::new(move |_t: String| {
+            Box::pin(async move { Ok(answer.to_owned()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        }))
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env)]
+    #[allow(unsafe_code)]
+    async fn page_interactive_quits_on_q_after_first_screen() {
+        // Force a tiny screen so paging actually happens: 2 rows/screen.
+        // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial(env)]`
+        // makes the mutation exclusive.
+        unsafe {
+            std::env::set_var("ACCTEST_COLS", "80");
+            std::env::set_var("ACCTEST_ROWS", "3");
+        }
+        let (mut d, buf) = buffered(ColorMode::Never);
+        let text: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
+        page_interactive(&text, &mut d, Some(&fixed_prompter("q"))).await;
+        unsafe {
+            std::env::remove_var("ACCTEST_COLS");
+            std::env::remove_var("ACCTEST_ROWS");
+        }
+        let out = rendered(&buf);
+        // First screen (2 rows) shown, then `q` stopped it.
+        assert!(out.contains("line0") && out.contains("line1"), "{out}");
+        assert!(
+            !out.contains("line2"),
+            "should have quit after first screen: {out}"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env)]
+    #[allow(unsafe_code)]
+    async fn page_interactive_enter_pages_to_end() {
+        // `set_var`/`remove_var` are `unsafe` in edition 2024; serialised on `env`.
+        unsafe {
+            std::env::set_var("ACCTEST_COLS", "80");
+            std::env::set_var("ACCTEST_ROWS", "3");
+        }
+        let (mut d, buf) = buffered(ColorMode::Never);
+        let text: Vec<String> = (0..5).map(|i| format!("line{i}")).collect();
+        // Empty answer (Enter) continues through every screen.
+        page_interactive(&text, &mut d, Some(&fixed_prompter(""))).await;
+        unsafe {
+            std::env::remove_var("ACCTEST_COLS");
+            std::env::remove_var("ACCTEST_ROWS");
+        }
+        let out = rendered(&buf);
+        for i in 0..5 {
+            assert!(out.contains(&format!("line{i}")), "missing line{i}: {out}");
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env)]
+    #[allow(unsafe_code)]
+    async fn page_interactive_without_prompter_dumps_all() {
+        // `set_var`/`remove_var` are `unsafe` in edition 2024; serialised on `env`.
+        unsafe {
+            std::env::set_var("ACCTEST_COLS", "80");
+            std::env::set_var("ACCTEST_ROWS", "3");
+        }
+        let (mut d, buf) = buffered(ColorMode::Never);
+        let text: Vec<String> = (0..5).map(|i| format!("line{i}")).collect();
+        page_interactive(&text, &mut d, None).await;
+        unsafe {
+            std::env::remove_var("ACCTEST_COLS");
+            std::env::remove_var("ACCTEST_ROWS");
+        }
+        let out = rendered(&buf);
+        for i in 0..5 {
+            assert!(out.contains(&format!("line{i}")), "missing line{i}: {out}");
+        }
     }
 }

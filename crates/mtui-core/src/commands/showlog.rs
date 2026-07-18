@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::support::{add_hosts_arg, select_names};
+use super::support::{add_hosts_arg, page_output, select_names};
 use crate::command::{Command, Scope};
-use crate::display::{CommandPromptDisplay, page};
+use crate::display::CommandPromptDisplay;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -87,9 +87,7 @@ impl Command for ShowLog {
             CommandPromptDisplay::show_log(name, entries, &mut sink);
         }
 
-        let is_repl = session.is_repl;
-        let mut writer = |line: &str| session.display.println(line);
-        page(&output, is_repl, Some(&mut writer));
+        page_output(session, &output).await;
         Ok(())
     }
 }
@@ -147,5 +145,41 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("log from h1"), "{out}");
         assert!(out.contains("uname -a"), "{out}");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env)]
+    #[allow(unsafe_code)]
+    async fn interactive_paging_reads_prompter() {
+        use mtui_hosts::Prompter;
+
+        // A tall-enough screen means the whole log fits in one screen and no
+        // prompt read is needed; the interactive path must still print it all.
+        // `ACCTEST_*` → `#[serial(env)]`.
+        unsafe {
+            std::env::set_var("ACCTEST_COLS", "80");
+            std::env::set_var("ACCTEST_ROWS", "40");
+        }
+        let (mut session, buf) =
+            session_scripting("SUSE:Maintenance:1:1", "h1", "uname -a", "Linux\n");
+        session.targets_mut().run("uname -a").await;
+        session.is_repl = true;
+        session.set_prompter(Prompter::new(std::sync::Arc::new(|_t: String| {
+            Box::pin(async move { Ok(String::new()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        })));
+        let args = matches(&ShowLog, &["-t", "h1"]);
+        ShowLog.call(&mut session, &args).await.unwrap();
+        unsafe {
+            std::env::remove_var("ACCTEST_COLS");
+            std::env::remove_var("ACCTEST_ROWS");
+        }
+        let out = buf.contents();
+        assert!(
+            out.contains("log from h1") && out.contains("uname -a"),
+            "{out}"
+        );
     }
 }

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
-use super::support::{add_hosts_arg, complete_fanout, per_host, select_names};
+use super::support::{add_hosts_arg, complete_fanout, page_output, per_host, select_names};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -99,9 +99,10 @@ impl Command for Run {
             }
         }
 
-        for line in &output {
-            session.display.println(line);
-        }
+        // Page the aggregated per-host output, matching upstream `run.py`'s
+        // `page(output, ...)`. Interactive → screen-at-a-time; headless → every
+        // line forwarded unpaged (byte-identical to before).
+        page_output(session, &output).await;
 
         if !failed.is_empty() {
             // Sorted for determinism.
@@ -244,6 +245,59 @@ mod tests {
             !buf.contents().contains("FAILED on"),
             "unexpected summary: {}",
             buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(env)]
+    #[allow(unsafe_code)]
+    async fn interactive_pages_output_and_keeps_failed_summary() {
+        use crate::commands::testkit::session_with_targets;
+        use mtui_hosts::{MockConnection, Prompter, Target};
+        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::hostlog::CommandLog;
+
+        // Tiny screen so the aggregated output actually needs paging, and a
+        // prompter that answers `q` to quit after the first screen. The FAILED
+        // summary is printed *after* the paged body, so it must survive an early
+        // quit. `ACCTEST_*` is process-global → `#[serial(env)]`.
+        unsafe {
+            std::env::set_var("ACCTEST_COLS", "80");
+            std::env::set_var("ACCTEST_ROWS", "3");
+        }
+        let targets: Vec<Target> = [("h1", 0i16), ("h2", 1)]
+            .into_iter()
+            .map(|(name, code)| {
+                let conn =
+                    MockConnection::new(name).with_default(CommandLog::new("", "out", "", code, 0));
+                Target::with_connection(
+                    name,
+                    TargetState::Enabled,
+                    ExecutionMode::Serial,
+                    Box::new(conn),
+                )
+            })
+            .collect();
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", targets);
+        session.is_repl = true;
+        session.set_prompter(Prompter::new(std::sync::Arc::new(|_t: String| {
+            Box::pin(async move { Ok("q".to_owned()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        })));
+        let args = matches(&Run, &["false"]);
+        Run.call(&mut session, &args).await.unwrap();
+        unsafe {
+            std::env::remove_var("ACCTEST_COLS");
+            std::env::remove_var("ACCTEST_ROWS");
+        }
+
+        let out = buf.contents();
+        // The summary is unpaged and appended after the (possibly truncated) body.
+        assert!(
+            out.contains("FAILED on h2 (exit 1)"),
+            "summary must survive an early quit: {out}"
         );
     }
 

@@ -479,6 +479,26 @@ pub fn per_host(command: &str, hosts: &[String]) -> mtui_hosts::Command {
     )
 }
 
+/// Pages `output` through the session's display, matching upstream's
+/// `page(output, self.prompt.interactive, writer=self.display.println)`.
+///
+/// In the interactive REPL (`session.is_repl`) it drives the async
+/// [`page_interactive`](crate::display::page_interactive) pager, reading the
+/// Enter/`q` continuation through the session's serialised
+/// [`Prompter`](mtui_hosts::Prompter). Headless callers (MCP) take the
+/// non-interactive [`page`](crate::display::page) path, which forwards every
+/// line unpaged — keeping that output byte-identical. The prompter is cloned
+/// before the mutable `display` borrow to sidestep the split borrow.
+pub async fn page_output(session: &mut Session, output: &[String]) {
+    if session.is_repl {
+        let prompter = session.prompter().cloned();
+        crate::display::page_interactive(output, &mut session.display, prompter.as_ref()).await;
+    } else {
+        let mut writer = |line: &str| session.display.println(line);
+        crate::display::page(output, false, Some(&mut writer));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
