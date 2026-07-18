@@ -9,6 +9,7 @@ use mtui_types::{OpenQAResult, URLs};
 
 use super::base::{Job, OpenQABase};
 use super::install::install_logfile_for;
+use crate::error::OpenQAError;
 
 /// The openQA install-test job names the auto workflow tracks.
 const INSTALL_JOB_NAMES: &[&str] = &[
@@ -60,15 +61,22 @@ impl AutoOpenQA {
     ///
     /// Mirrors upstream `run`: results are the install-log URLs when all install
     /// jobs passed, else `None`; the pretty-print always covers every job.
-    pub async fn run(mut self) -> Self {
-        let jobs = self.base.get_jobs().await;
-        self.results = if Self::has_passed_install_jobs(jobs.as_deref()) {
-            self.get_logs_url(jobs.as_deref())
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpenQAError::Fetch`] when the jobs fetch fails (openQA
+    /// unreachable / non-2xx / malformed body), so the caller can tell an
+    /// unreachable instance apart from a genuinely-empty result. A
+    /// valid-but-empty response is `Ok`.
+    pub async fn run(mut self) -> Result<Self, OpenQAError> {
+        let jobs = self.base.try_get_jobs().await?;
+        self.results = if Self::has_passed_install_jobs(Some(&jobs)) {
+            self.get_logs_url(Some(&jobs))
         } else {
             None
         };
-        self.pp = self.pretty_print(jobs.as_deref());
-        self
+        self.pp = self.pretty_print(Some(&jobs));
+        Ok(self)
     }
 
     /// Whether all install jobs passed (or softfailed).

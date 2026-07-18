@@ -18,6 +18,7 @@ pub mod teregen;
 
 pub use error::{
     GiteaError, HttpError, OpenQAError, OqaSearchError, QemDashboardError, RefhostError, Result,
+    TeReGenError,
 };
 pub use gitea::{Comment, DEFAULT_GROUP, Gitea, assign_marker, pr_api_url, unassign_marker};
 pub use http::{

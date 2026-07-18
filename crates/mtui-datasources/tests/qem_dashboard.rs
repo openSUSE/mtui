@@ -95,7 +95,7 @@ async fn loads_incident_and_aggregate_jobs() {
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid);
-    dashboard.run().await;
+    dashboard.run().await.unwrap();
 
     let pp = dashboard.pp.concat();
     assert!(pp.contains("Incident jobs"));
@@ -145,7 +145,7 @@ async fn slfo_1_2_incident_uses_review_id() {
     assert_eq!(incident.incident_number, "12358");
 
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid);
-    dashboard.run().await;
+    dashboard.run().await.unwrap();
     // No jobs -> no results, no rendered block.
     assert!(dashboard.pp.is_empty());
     assert!(dashboard.results.is_none());
@@ -189,4 +189,60 @@ async fn oversized_incident_body_folds_to_absent() {
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident = QemIncident::with_client(rrid, client_for(&server)).await;
     assert!(!incident.is_present());
+}
+
+#[tokio::test]
+async fn run_errors_when_dashboard_unreachable() {
+    // Both settings endpoints 500: the dashboard could not be asked at all, so
+    // `run` surfaces the failure rather than folding to an empty result.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/incidents/12358"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"number": 12358})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/incident_settings/12358"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/update_settings/12358"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
+    let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
+    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid);
+    assert!(dashboard.run().await.is_err());
+}
+
+#[tokio::test]
+async fn run_ok_on_empty_success() {
+    // Valid but empty settings: a genuinely-empty successful response is Ok with
+    // no results, distinct from the unreachable-dashboard error above.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/incidents/12358"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"number": 12358})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/incident_settings/12358"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/update_settings/12358"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+
+    let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
+    let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
+    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid);
+    dashboard.run().await.unwrap();
+    assert!(dashboard.results.is_none());
+    assert!(dashboard.pp.is_empty());
 }

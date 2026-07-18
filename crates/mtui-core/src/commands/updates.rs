@@ -142,14 +142,20 @@ impl Command for Updates {
             with_assignment: want_assignment,
             no_cache: false,
         };
-        // `teregen.updates` returns `None` on any transport/API failure (or a
-        // response missing the `updates` key), and `Some(json)` on success. Only
-        // a genuinely-empty *successful* array is "No updates in the queue"; a
-        // fetch failure must surface as Err so the caller (REPL/MCP) sees it
-        // rather than an indistinguishable empty result.
-        let updates = teregen.updates(&query).await.ok_or_else(|| {
-            CommandError::Other("Update queue query failed (TeReGen unreachable)".to_owned())
+        // `teregen.updates` now returns a Result: `Err` on any transport/API
+        // failure (surfaced to the caller), `Ok(None)` on a successful response
+        // missing the `updates` key, and `Ok(Some(json))` on success. Only a
+        // genuinely-empty *successful* result is "No updates in the queue"; a
+        // fetch failure is no longer conflated with an empty queue.
+        let updates = teregen.updates(&query).await.map_err(|e| {
+            CommandError::Other(format!(
+                "Update queue query failed (TeReGen unreachable): {e}"
+            ))
         })?;
+        let Some(updates) = updates else {
+            session.display.println("No updates in the queue");
+            return Ok(());
+        };
         let rows = updates.as_array().ok_or_else(|| {
             CommandError::Other("Update queue query returned a malformed response".to_owned())
         })?;
@@ -319,8 +325,8 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_failure_returns_err_not_empty_queue() {
-        // A 5xx from TeReGen collapses to `None` in the datasource; the command
-        // must surface that as Err, distinct from a genuinely-empty queue.
+        // A 5xx from TeReGen is surfaced as `Err` by the datasource; the command
+        // must propagate that, distinct from a genuinely-empty queue.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -338,6 +344,27 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
         // Crucially it did NOT print the empty-queue message.
         assert!(!buf.contents().contains("No updates in the queue"));
+    }
+
+    #[tokio::test]
+    async fn missing_updates_key_is_empty_queue_not_err() {
+        // A successful response with no `updates` key is Ok(None): the command
+        // prints the empty-queue message rather than erroring.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"other": 1})))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = empty_session();
+        let mut config = Config::default();
+        config.teregen_api = server.uri();
+        session.config = config;
+
+        let args = matches(&Updates, &[]);
+        Updates.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("No updates in the queue"));
     }
 
     #[tokio::test]

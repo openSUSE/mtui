@@ -7,8 +7,11 @@
 //! product-composer routing, …), falling back to the locally checked-out
 //! `metadata.json` when the API is unreachable or doesn't carry a field.
 //!
-//! Every read is best-effort: any failure returns `None` so a TeReGen hiccup
-//! never breaks the surrounding command. The base URL comes from the
+//! Most reads are best-effort: any failure returns `None` so a TeReGen hiccup
+//! never breaks the surrounding command. The exception is
+//! [`updates`](TeReGen::updates), which returns a `Result` so its caller can tell
+//! a genuinely-empty queue apart from an unreachable TeReGen. The base URL comes
+//! from the
 //! `[teregen] api` option (upstream default `https://qam.suse.de/api/v1`);
 //! wiring that config field is deferred to a later phase, so [`TeReGen::new`]
 //! takes the base URL explicitly for now (mirroring the [`Gitea`](crate::gitea)
@@ -31,6 +34,7 @@ use std::time::Duration;
 use mtui_config::Config;
 use serde_json::{Value, json};
 
+use crate::error::TeReGenError;
 use crate::http::{
     HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, resolve_verify,
 };
@@ -150,6 +154,40 @@ impl TeReGen {
         }
     }
 
+    /// GET `path`, surfacing failures as `Err`.
+    ///
+    /// The fallible sibling of [`get`](Self::get): a transport failure, a
+    /// non-2xx status, or invalid JSON returns [`TeReGenError::Fetch`] (with a
+    /// URL-free description) instead of being folded to `None`, so a caller can
+    /// distinguish "unreachable" from a genuinely-empty successful response.
+    async fn try_get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, TeReGenError> {
+        let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
+        let qs = build_query_string(query);
+        if !qs.is_empty() {
+            url.push('?');
+            url.push_str(&qs);
+        }
+        let request = self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1);
+        let response = request.send().await.map_err(|e| {
+            tracing::debug!("TeReGen GET {path} failed: {e}");
+            TeReGenError::Fetch(e.to_string())
+        })?;
+        let response = response.error_for_status().map_err(|e| {
+            tracing::debug!("TeReGen GET {path} failed: {e}");
+            TeReGenError::Fetch(e.to_string())
+        })?;
+        let bytes = read_body_capped(response, MAX_API_BODY)
+            .await
+            .map_err(|e| {
+                tracing::debug!("TeReGen GET {path} failed: {e}");
+                TeReGenError::Fetch(e.to_string())
+            })?;
+        serde_json::from_slice::<Value>(&bytes).map_err(|e| {
+            tracing::debug!("TeReGen GET {path} returned invalid JSON: {e}");
+            TeReGenError::Fetch(format!("invalid JSON: {e}"))
+        })
+    }
+
     /// The main report endpoint (`GET /reports/{id}`): id, file list, and the
     /// live `priority`/`deadline` (refreshed from SMELT for SLFO). Returns
     /// `None` unless the body is a JSON object.
@@ -193,7 +231,7 @@ impl TeReGen {
         d.get("checkers").cloned()
     }
 
-    /// The unreleased update queue (live from SMELT), or `None`.
+    /// The unreleased update queue (live from SMELT).
     ///
     /// Optional `review_group` / `status` narrow the queue server-side.
     ///
@@ -209,7 +247,14 @@ impl TeReGen {
     ///   pickup moment).
     ///
     /// Empty string filters and unset flags are omitted from the query.
-    pub async fn updates(&self, opts: &UpdatesQuery<'_>) -> Option<Value> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TeReGenError::Fetch`] on any transport/status/JSON failure, so
+    /// the caller can tell an unreachable TeReGen apart from an empty queue.
+    /// `Ok(None)` is a successful response whose body carried no `updates` key;
+    /// `Ok(Some(v))` is the (possibly-empty) queue value.
+    pub async fn updates(&self, opts: &UpdatesQuery<'_>) -> Result<Option<Value>, TeReGenError> {
         let mut params: Vec<(&str, String)> = Vec::new();
         for (name, value) in [
             ("review_group", opts.review_group),
@@ -231,8 +276,8 @@ impl TeReGen {
                 params.push((name, "1".to_string()));
             }
         }
-        let d = self.get("updates", &params).await?;
-        d.get("updates").cloned()
+        let d = self.try_get("updates", &params).await?;
+        Ok(d.get("updates").cloned())
     }
 
     /// Enqueue a template regeneration job
@@ -603,7 +648,10 @@ mod tests {
             .mount(&server)
             .await;
         assert_eq!(
-            client(&server).updates(&UpdatesQuery::default()).await,
+            client(&server)
+                .updates(&UpdatesQuery::default())
+                .await
+                .unwrap(),
             Some(json!([1, 2]))
         );
     }
@@ -625,7 +673,8 @@ mod tests {
                     status: Some("testing"),
                     ..Default::default()
                 })
-                .await,
+                .await
+                .unwrap(),
             Some(json!([]))
         );
     }
@@ -647,7 +696,8 @@ mod tests {
                     status: Some("testing"),
                     ..Default::default()
                 })
-                .await,
+                .await
+                .unwrap(),
             Some(json!([]))
         );
     }
@@ -661,7 +711,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"updates": []})))
             .mount(&server)
             .await;
-        client(&server)
+        let _ = client(&server)
             .updates(&UpdatesQuery {
                 unassigned: true,
                 ..Default::default()
@@ -678,7 +728,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"updates": []})))
             .mount(&server)
             .await;
-        client(&server)
+        let _ = client(&server)
             .updates(&UpdatesQuery {
                 with_assignment: true,
                 ..Default::default()
@@ -696,7 +746,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"updates": []})))
             .mount(&server)
             .await;
-        client(&server)
+        let _ = client(&server)
             .updates(&UpdatesQuery {
                 assignee: Some("mpluskal"),
                 no_cache: true,
@@ -714,7 +764,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"updates": []})))
             .mount(&server)
             .await;
-        client(&server).updates(&UpdatesQuery::default()).await;
+        let _ = client(&server).updates(&UpdatesQuery::default()).await;
         // Assert the recorded request carried no query string.
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -733,7 +783,7 @@ mod tests {
             .await;
         // wiremock's query_param matcher compares decoded values, so a match
         // proves the raw '&'/space were percent-encoded on the wire.
-        client(&server)
+        let _ = client(&server)
             .updates(&UpdatesQuery {
                 review_group: Some("qam sle&x"),
                 status: Some("testing"),
@@ -750,9 +800,44 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"updates": []})))
             .mount(&server)
             .await;
-        client(&server).updates(&UpdatesQuery::default()).await;
+        let _ = client(&server).updates(&UpdatesQuery::default()).await;
         let requests = server.received_requests().await.unwrap();
         assert!(requests[0].url.query().is_none());
+    }
+
+    #[tokio::test]
+    async fn updates_errs_on_transport_failure() {
+        // A non-2xx status surfaces as Err, distinct from an empty queue.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let err = client(&server)
+            .updates(&UpdatesQuery::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TeReGenError::Fetch(_)));
+    }
+
+    #[tokio::test]
+    async fn updates_ok_none_when_key_absent() {
+        // A successful response missing the `updates` key is Ok(None), not an
+        // error — so the caller can print "no updates" rather than a failure.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"other": 1})))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            client(&server)
+                .updates(&UpdatesQuery::default())
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     // --- regenerate: unreachable vs refused ---

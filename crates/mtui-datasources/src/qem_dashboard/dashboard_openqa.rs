@@ -37,6 +37,7 @@ use tokio::time::timeout;
 
 use mtui_types::{OpenQAResult, RequestReviewID, URLs};
 
+use crate::error::QemDashboardError;
 use crate::openqa::{OPENQA_INSTALL_DISTRI, install_logfile_for};
 
 use super::client::{FAILED_RESULTS, FUTURE_TIMEOUT, QemDashboardClient};
@@ -288,29 +289,42 @@ impl DashboardAutoOpenQA {
     }
 
     /// Load, resolve, and render. Mirrors upstream `run`.
-    pub async fn run(&mut self) -> &mut Self {
-        self.jobs = self.load_jobs(FUTURE_TIMEOUT).await;
-        self.results = if Self::has_passed_install_jobs(&self.jobs) {
-            self.get_logs_url(&self.jobs)
-        } else {
-            None
-        };
-        self.pp = Self::pretty_print(&self.host, &self.jobs);
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QemDashboardError::Fetch`] when the dashboard could not be
+    /// asked at all — i.e. *both* top-level settings fetches hard-failed
+    /// (transport/non-2xx/JSON). A genuinely-empty-but-successful response is
+    /// `Ok` with `results = None`; a partial batch where some per-setting job
+    /// fetches timed out is also `Ok` (the timeouts are warn-and-skipped,
+    /// preserving upstream best-effort behaviour).
+    pub async fn run(&mut self) -> Result<&mut Self, QemDashboardError> {
+        self.run_inner(FUTURE_TIMEOUT).await
     }
 
     /// Test seam: run with a shortened per-fetch timeout so the timeout
     /// warn-and-skip paths can be exercised without a 60s wait.
     #[cfg(test)]
-    pub(crate) async fn run_with_timeout(&mut self, per_fetch: std::time::Duration) -> &mut Self {
-        self.jobs = self.load_jobs(per_fetch).await;
+    pub(crate) async fn run_with_timeout(
+        &mut self,
+        per_fetch: std::time::Duration,
+    ) -> Result<&mut Self, QemDashboardError> {
+        self.run_inner(per_fetch).await
+    }
+
+    /// Shared body of [`run`](Self::run) / `run_with_timeout`.
+    async fn run_inner(
+        &mut self,
+        per_fetch: std::time::Duration,
+    ) -> Result<&mut Self, QemDashboardError> {
+        self.jobs = self.load_jobs(per_fetch).await?;
         self.results = if Self::has_passed_install_jobs(&self.jobs) {
             self.get_logs_url(&self.jobs)
         } else {
             None
         };
         self.pp = Self::pretty_print(&self.host, &self.jobs);
-        self
+        Ok(self)
     }
 
     /// Test seam: expose the loaded-and-normalized job test names, so the
@@ -333,21 +347,42 @@ impl DashboardAutoOpenQA {
     /// per-setting job fetches fan out concurrently while the results are read
     /// back in submission order (incident settings first, then update settings)
     /// so the resulting list order is deterministic. Each fetch is guarded by a
-    /// [`FUTURE_TIMEOUT`] cap: a timed-out top-level settings fetch is treated as
-    /// empty, and a timed-out per-setting jobs fetch is skipped — both with a
-    /// `warn` — so one slow endpoint neither blocks nor corrupts the batch.
-    async fn load_jobs(&self, per_fetch: std::time::Duration) -> Vec<NormalizedJob> {
+    /// [`FUTURE_TIMEOUT`] cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QemDashboardError::Fetch`] only when *both* top-level settings
+    /// fetches hard-fail (the dashboard could not be asked at all). A single
+    /// settings fetch that fails or times out while the other answers is
+    /// warn-and-tolerated (treated as empty), and a timed-out *per-setting* jobs
+    /// fetch is skipped — so one slow/broken endpoint neither aborts nor
+    /// corrupts an otherwise-answering batch.
+    async fn load_jobs(
+        &self,
+        per_fetch: std::time::Duration,
+    ) -> Result<Vec<NormalizedJob>, QemDashboardError> {
         let n = &self.incident_number;
 
-        // Top-level settings: independent, fetched concurrently.
-        let (incident_settings, update_settings) = tokio::join!(
+        // Top-level settings: independent, fetched concurrently. Each surfaces a
+        // hard failure, but a batch is only fatal when *both* endpoints fail.
+        let (incident_res, update_res) = tokio::join!(
             Self::await_settings(
-                self.client.incident_settings(n),
+                self.client.try_incident_settings(n),
                 "incident_settings",
                 per_fetch
             ),
-            Self::await_settings(self.client.update_settings(n), "update_settings", per_fetch),
+            Self::await_settings(
+                self.client.try_update_settings(n),
+                "update_settings",
+                per_fetch
+            ),
         );
+        // Dashboard unreachable only when *both* settings lists failed; a single
+        // failing endpoint is tolerated (treated as empty).
+        let (incident_settings, update_settings) = match (incident_res, update_res) {
+            (Err(e), Err(_)) => return Err(e),
+            (incident, update) => (incident.unwrap_or_default(), update.unwrap_or_default()),
+        };
 
         // Flat task list preserving insertion order: incident settings first.
         let mut tasks: Vec<(&'static str, &Value, i64)> = Vec::new();
@@ -362,7 +397,7 @@ impl DashboardAutoOpenQA {
             }
         }
         if tasks.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Fan out per-setting jobs fetches; await in submission order.
@@ -409,23 +444,33 @@ impl DashboardAutoOpenQA {
                 }
             }
         }
-        jobs
+        Ok(jobs)
     }
 
-    /// Await a top-level settings future, returning `[]` on timeout.
+    /// Await a top-level settings future under the per-fetch timeout.
     ///
-    /// Mirrors `_await_settings`: a timeout is logged at `warn` and treated as
-    /// empty, so callers see the same shape whether the failure was an HTTP error
-    /// (already folded to `[]` by the client) or a timeout.
-    async fn await_settings<F>(fut: F, label: &str, per_fetch: std::time::Duration) -> Vec<Value>
+    /// Mirrors `_await_settings` but preserves the failure: a timeout or a
+    /// hard fetch failure both return `Err`, logged at `warn`. The caller
+    /// tolerates a *single* failed settings endpoint (treating it as empty) and
+    /// only fails the whole load when *both* endpoints err — so a timeout is no
+    /// longer silently indistinguishable from an empty result.
+    async fn await_settings<F>(
+        fut: F,
+        label: &str,
+        per_fetch: std::time::Duration,
+    ) -> Result<Vec<Value>, QemDashboardError>
     where
-        F: std::future::Future<Output = Vec<Value>>,
+        F: std::future::Future<Output = Result<Vec<Value>, QemDashboardError>>,
     {
         match timeout(per_fetch, fut).await {
-            Ok(settings) => settings,
+            Ok(Ok(settings)) => Ok(settings),
+            Ok(Err(e)) => {
+                tracing::warn!("QEM Dashboard {label} fetch failed: {e}");
+                Err(e)
+            }
             Err(_) => {
-                tracing::warn!("QEM Dashboard {label} fetch timed out; treating as empty");
-                Vec::new()
+                tracing::warn!("QEM Dashboard {label} fetch timed out");
+                Err(QemDashboardError::Fetch(format!("{label} fetch timed out")))
             }
         }
     }
@@ -1405,7 +1450,7 @@ mod tests {
         }
 
         let mut dashboard = dashboard_against(&server);
-        dashboard.run().await;
+        dashboard.run().await.unwrap();
 
         let expected: Vec<String> = incident_ids
             .iter()
@@ -1451,7 +1496,7 @@ mod tests {
             .await;
 
         let mut dashboard = dashboard_against(&server);
-        dashboard.run().await;
+        dashboard.run().await.unwrap();
 
         // Only the current run survives.
         assert_eq!(
@@ -1509,7 +1554,12 @@ mod tests {
             .await;
 
         let mut dashboard = dashboard_against(&server);
-        dashboard.run_with_timeout(Duration::from_millis(50)).await;
+        // One settings endpoint answered, so the batch is Ok despite the single
+        // per-setting jobs timeout (warn-and-skip).
+        dashboard
+            .run_with_timeout(Duration::from_millis(50))
+            .await
+            .unwrap();
 
         let names = dashboard.job_test_names();
         assert!(names.contains(&"qam-11".to_string()));
@@ -1518,8 +1568,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_jobs_top_level_settings_timeout_returns_empty() {
-        // Ported from test_load_jobs_top_level_settings_timeout_returns_empty.
+    async fn load_jobs_both_settings_timeout_is_err() {
+        // Both top-level settings endpoints hang past the timeout: the dashboard
+        // could not be asked at all, so `run` now surfaces the failure rather
+        // than silently resolving to an empty result.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/12358"))
@@ -1541,9 +1593,43 @@ mod tests {
             .await;
 
         let mut dashboard = dashboard_against(&server);
-        dashboard.run_with_timeout(Duration::from_millis(50)).await;
+        let err = dashboard
+            .run_with_timeout(Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, QemDashboardError::Fetch(_)));
+    }
 
-        assert!(dashboard.job_test_names().is_empty());
-        assert!(dashboard.pp.is_empty());
+    #[tokio::test]
+    async fn load_jobs_one_settings_failure_is_tolerated() {
+        // Incident settings 500s but update settings answers: a single failed
+        // top-level endpoint is warn-and-tolerated (treated as empty), so the
+        // batch is still Ok and the aggregate jobs come through.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/12358"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/update_settings/12358"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{"id": 2, "settings": {}}])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/jobs/update/2"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!([{"job_id": 42, "name": "mau-update-2", "status": "passed"}]),
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let mut dashboard = dashboard_against(&server);
+        dashboard.run().await.unwrap();
+        assert_eq!(dashboard.job_test_names(), vec!["mau-update-2".to_string()]);
     }
 }

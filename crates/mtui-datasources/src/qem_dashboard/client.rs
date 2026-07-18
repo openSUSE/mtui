@@ -108,6 +108,40 @@ impl QemDashboardClient {
         }
     }
 
+    /// GET `path` and parse the body as JSON, surfacing failures as `Err`.
+    ///
+    /// The fallible sibling of [`get`](Self::get): a transport error, a non-2xx
+    /// status, or a malformed JSON body returns [`QemDashboardError::Fetch`]
+    /// (with a URL-free description) instead of being folded to `None`, so a
+    /// caller can distinguish "unreachable" from "empty". A valid-but-`null`
+    /// body is `Ok(None)`.
+    async fn try_get(&self, path: &str) -> Result<Option<Value>, QemDashboardError> {
+        let url = format!("{}/{}", self.apiurl, path.trim_start_matches('/'));
+        let bytes = self
+            .http
+            .get_bytes_capped(&url, MAX_API_BODY)
+            .await
+            .map_err(|e| QemDashboardError::Fetch(e.to_string()))?;
+        match serde_json::from_slice::<Value>(&bytes) {
+            Ok(Value::Null) => Ok(None),
+            Ok(value) => Ok(Some(value)),
+            Err(e) => Err(QemDashboardError::Fetch(format!("invalid JSON: {e}"))),
+        }
+    }
+
+    /// GET a list endpoint, surfacing failures as `Err`.
+    ///
+    /// The fallible sibling of [`get_list`](Self::get_list): a fetch failure
+    /// returns [`QemDashboardError::Fetch`]. A successful non-array body is
+    /// treated as an empty list (matching `get_list`), so only a real fetch
+    /// failure — not a shape surprise — is an error.
+    async fn try_get_list(&self, path: &str) -> Result<Vec<Value>, QemDashboardError> {
+        match self.try_get(path).await? {
+            Some(Value::Array(items)) => Ok(items),
+            _ => Ok(Vec::new()),
+        }
+    }
+
     /// Fetch the incident record for `incident_number`.
     ///
     /// Returns `None` on any failure, mirroring upstream `incident`.
@@ -137,6 +171,36 @@ impl QemDashboardClient {
     /// Fetch the openQA jobs for an update settings id (empty on failure).
     pub async fn update_jobs(&self, update_settings_id: i64) -> Vec<Value> {
         self.get_list(&format!("jobs/update/{update_settings_id}"))
+            .await
+    }
+
+    /// Fallible sibling of [`incident_settings`](Self::incident_settings): a
+    /// fetch failure returns [`QemDashboardError::Fetch`] instead of `[]`.
+    ///
+    /// # Errors
+    ///
+    /// [`QemDashboardError::Fetch`] on a transport error, non-2xx status, or
+    /// malformed JSON body.
+    pub async fn try_incident_settings(
+        &self,
+        incident_number: &str,
+    ) -> Result<Vec<Value>, QemDashboardError> {
+        self.try_get_list(&format!("incident_settings/{incident_number}"))
+            .await
+    }
+
+    /// Fallible sibling of [`update_settings`](Self::update_settings): a fetch
+    /// failure returns [`QemDashboardError::Fetch`] instead of `[]`.
+    ///
+    /// # Errors
+    ///
+    /// [`QemDashboardError::Fetch`] on a transport error, non-2xx status, or
+    /// malformed JSON body.
+    pub async fn try_update_settings(
+        &self,
+        incident_number: &str,
+    ) -> Result<Vec<Value>, QemDashboardError> {
+        self.try_get_list(&format!("update_settings/{incident_number}"))
             .await
     }
 }
@@ -241,5 +305,59 @@ mod tests {
 
         let client = client_for(&server);
         assert!(client.incident_settings("1").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn try_settings_error_status_is_err() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/1"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client.try_incident_settings("1").await.unwrap_err();
+        assert!(matches!(err, QemDashboardError::Fetch(_)));
+    }
+
+    #[tokio::test]
+    async fn try_settings_invalid_json_is_err() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/update_settings/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client.try_update_settings("1").await.unwrap_err();
+        assert!(matches!(err, QemDashboardError::Fetch(_)));
+    }
+
+    #[tokio::test]
+    async fn try_settings_empty_success_is_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        assert!(client.try_incident_settings("1").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn try_settings_non_array_success_is_ok_empty() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"x": 1})))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        assert!(client.try_incident_settings("1").await.unwrap().is_empty());
     }
 }

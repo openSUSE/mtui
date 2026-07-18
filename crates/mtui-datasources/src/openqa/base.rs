@@ -12,6 +12,7 @@ use mtui_types::{RequestKind, RequestReviewID};
 use serde::Deserialize;
 
 use super::client::OpenQAClient;
+use crate::error::OpenQAError;
 use crate::http::{MAX_API_BODY, read_body_capped};
 
 /// The openQA `distri` query parameter.
@@ -144,13 +145,31 @@ impl OpenQABase {
         &self.params
     }
 
-    /// Fetch jobs from the openQA instance.
+    /// Fetch jobs from the openQA instance (best-effort).
     ///
     /// Returns `None` on *any* failure — request-build, transport, non-2xx
     /// status, or a malformed body — after logging at `error`/`debug`, matching
     /// upstream's "no URL/transport failure shape may escape as a traceback"
     /// contract. `Some(vec![])` is possible for a valid-but-empty response.
+    ///
+    /// Prefer [`try_get_jobs`](Self::try_get_jobs) when the caller needs to tell
+    /// a fetch failure apart from a genuinely-empty result.
     pub async fn get_jobs(&self) -> Option<Vec<Job>> {
+        self.try_get_jobs().await.ok()
+    }
+
+    /// Fetch jobs from the openQA instance, surfacing failures as `Err`.
+    ///
+    /// The fallible sibling of [`get_jobs`](Self::get_jobs): a request-build,
+    /// transport, non-2xx, or malformed-body failure returns
+    /// [`OpenQAError::Fetch`] (with a URL-free description) instead of being
+    /// folded to `None`, so a caller can distinguish "unreachable" from
+    /// "empty". `Ok(vec![])` is a valid-but-empty response.
+    ///
+    /// # Errors
+    ///
+    /// [`OpenQAError::Fetch`] on any fetch failure.
+    pub async fn try_get_jobs(&self) -> Result<Vec<Job>, OpenQAError> {
         tracing::debug!("Get data from openQA - {}", self.host);
 
         let param_refs: Vec<(&str, String)> = self
@@ -159,44 +178,35 @@ impl OpenQABase {
             .map(|(k, v)| (k.as_str(), v.clone()))
             .collect();
 
-        let builder = match self.client.build_get("jobs", &param_refs) {
-            Ok(b) => b,
-            Err(e) => {
+        let builder = self
+            .client
+            .build_get("jobs", &param_refs)
+            .inspect_err(|e| {
                 tracing::error!("openQA request to {} failed: {e}", self.host);
-                return None;
-            }
-        };
+            })?;
 
-        let response = match builder.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("openQA request to {} failed: {e}", self.host);
-                return None;
-            }
-        };
+        let response = builder.send().await.map_err(|e| {
+            tracing::error!("openQA request to {} failed: {e}", self.host);
+            OpenQAError::Fetch(e.to_string())
+        })?;
 
-        let response = match response.error_for_status() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::debug!("openQA returned an error status: {e}");
-                return None;
-            }
-        };
+        let response = response.error_for_status().map_err(|e| {
+            tracing::debug!("openQA returned an error status: {e}");
+            OpenQAError::Fetch(e.to_string())
+        })?;
 
-        let bytes = match read_body_capped(response, MAX_API_BODY).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
+        let bytes = read_body_capped(response, MAX_API_BODY)
+            .await
+            .map_err(|e| {
                 tracing::error!("openQA request to {} failed: {e}", self.host);
-                return None;
-            }
-        };
-        match serde_json::from_slice::<JobsResponse>(&bytes) {
-            Ok(body) => Some(body.jobs),
-            Err(e) => {
+                OpenQAError::Fetch(e.to_string())
+            })?;
+        serde_json::from_slice::<JobsResponse>(&bytes)
+            .map(|body| body.jobs)
+            .map_err(|e| {
                 tracing::error!("openQA request to {} failed: {e}", self.host);
-                None
-            }
-        }
+                OpenQAError::Fetch(e.to_string())
+            })
     }
 
     /// Borrow the API client (used by connectors that need it directly).

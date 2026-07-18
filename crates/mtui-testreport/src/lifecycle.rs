@@ -275,7 +275,14 @@ pub async fn make_testreport(
             Ok(incident) => {
                 info!("Getting data from QEM Dashboard");
                 let mut auto = DashboardAutoOpenQA::new(openqa_instance, &incident, rrid.clone());
-                auto.run().await;
+                // Load time is deliberately best-effort: a failed dashboard fetch
+                // is folded to "no results" here (the same as an empty result),
+                // so the workflow downgrades to manual rather than aborting the
+                // report load. The interactive `set_workflow`/`reload_openqa`
+                // commands surface the same failure as `Err` instead.
+                if let Err(e) = auto.run().await {
+                    warn!(error = %e, "QEM Dashboard fetch failed; treating as no results");
+                }
                 let no_results = auto.results.is_none();
                 report.base_mut().openqa.auto = Some(auto);
 

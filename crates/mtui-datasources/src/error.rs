@@ -94,20 +94,27 @@ pub enum RefhostError {
     ResolveFailed,
 }
 
-/// Errors from building an openQA API request.
+/// Errors from building an openQA API request or fetching jobs.
 ///
-/// The openQA connectors ([`crate::openqa`]) fold all *fetch* failures into a
-/// "no jobs" [`None`] result (mirroring upstream, where any transport error is
-/// logged and turned into `None` so a command never aborts on a flaky openQA).
-/// This error type therefore covers only the failures that surface *before* the
-/// request is dispatched — building the signed request — plus the HMAC/clock
-/// preconditions that must hold for signing.
+/// The connectors' best-effort helper [`OpenQABase::get_jobs`](crate::openqa)
+/// still folds all *fetch* failures into a "no jobs" [`None`] result (mirroring
+/// upstream). The fallible variant
+/// [`OpenQABase::try_get_jobs`](crate::openqa) instead surfaces a fetch failure
+/// as [`Fetch`](Self::Fetch) so a caller (e.g. `KernelOpenQA::run`) can tell a
+/// genuinely-empty result apart from an unreachable openQA. This type also
+/// covers the failures that surface *before* the request is dispatched —
+/// building the signed request — plus the HMAC/clock preconditions for signing.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OpenQAError {
     /// The underlying HTTP layer failed to build the request or client.
     #[error(transparent)]
     Http(#[from] HttpError),
+
+    /// A jobs fetch failed: a transport error, a non-2xx status, or a malformed
+    /// JSON body. Carries a sanitized description (never the raw URL).
+    #[error("openQA jobs fetch failed: {0}")]
+    Fetch(String),
 
     /// The system clock is before the Unix epoch, so a request microtime
     /// cannot be computed (required for the `X-API-Microtime` auth header).
@@ -194,14 +201,17 @@ impl From<HttpError> for OqaSearchError {
 
 /// Errors from the QEM Dashboard connector ([`crate::qem_dashboard`]).
 ///
-/// The dashboard client is read-only and best-effort: like upstream
+/// The dashboard client's default read helpers remain best-effort: like upstream
 /// `QEMDashboardClient._get`, every *fetch* failure (transport, non-2xx, bad
 /// JSON) is logged at `debug` and folded into a `None`/empty result, so a fetch
-/// error never escapes the client. This error type therefore covers only the
-/// failure that surfaces *before* any request — building the shared
-/// [`HttpClient`](crate::http::HttpClient) (e.g. an unreadable CA bundle) — via
-/// the `#[from] HttpError` conversion used by `QemDashboardClient::new` and
-/// `QemIncident::new`.
+/// error never escapes them. The fallible `try_*` variants instead surface a
+/// fetch failure as [`Fetch`](Self::Fetch), letting
+/// [`DashboardAutoOpenQA::run`](crate::qem_dashboard::DashboardAutoOpenQA)
+/// distinguish an unreachable dashboard from a genuinely-empty result. The
+/// [`Http`](Self::Http) variant still covers the failure that surfaces *before*
+/// any request — building the shared [`HttpClient`](crate::http::HttpClient)
+/// (e.g. an unreadable CA bundle) — via the `#[from] HttpError` conversion used
+/// by `QemDashboardClient::new` and `QemIncident::new`.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum QemDashboardError {
@@ -209,6 +219,27 @@ pub enum QemDashboardError {
     /// user-configured CA bundle could not be read or parsed).
     #[error(transparent)]
     Http(#[from] HttpError),
+
+    /// A dashboard fetch failed: a transport error, a non-2xx status, or a
+    /// malformed JSON body. Carries a sanitized description (never the raw URL).
+    #[error("QEM Dashboard fetch failed: {0}")]
+    Fetch(String),
+}
+
+/// Errors from the TeReGen Report API client ([`crate::teregen`]).
+///
+/// TeReGen reads are best-effort by default (like upstream `_get`): every fetch
+/// failure folds to `None` so a hiccup never aborts a command. The fallible
+/// `try_*` reads instead surface a fetch failure as [`Fetch`](Self::Fetch), so a
+/// caller can distinguish a genuinely-empty successful response from a
+/// transport/status/JSON failure.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum TeReGenError {
+    /// A TeReGen fetch failed: a transport error, a non-2xx status, or a
+    /// malformed JSON body. Carries a sanitized description (never the raw URL).
+    #[error("TeReGen fetch failed: {0}")]
+    Fetch(String),
 }
 
 /// Render the [`GiteaError::AssignInvalid`] message for an assignment state,

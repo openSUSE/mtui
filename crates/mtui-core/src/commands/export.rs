@@ -114,7 +114,12 @@ impl Command for Export {
                 let openqa_instance = session.config.openqa_instance.clone();
                 let incident = build_incident(rrid.clone(), dashboard_api, http).await;
                 let mut auto = build_auto_openqa(openqa_instance, &incident, rrid.clone());
-                auto.run().await;
+                // Best-effort, matching upstream export: a failed dashboard fetch
+                // is folded to "no results" so the export still renders the rest
+                // of the report rather than aborting.
+                if let Err(e) = auto.run().await {
+                    tracing::warn!(error = %e, "QEM Dashboard fetch failed during export; continuing without auto results");
+                }
                 session.metadata_mut().openqa_mut().auto = Some(auto);
             }
             let hosts = select_names(session.targets(), args, false)
@@ -368,7 +373,8 @@ mod tests {
             build_incident(rrid.clone(), format!("{}/api", oqa.uri()), http.clone()).await;
         let kernel = crate::commands::support::build_kernel_openqa(&incident, &oqa.uri(), http)
             .run()
-            .await;
+            .await
+            .unwrap();
         assert!(
             kernel.results().is_some_and(|r| !r.is_empty()),
             "mock kernel connector should populate"

@@ -91,6 +91,34 @@ async fn get_jobs_returns_none_on_connection_failure() {
 }
 
 #[tokio::test]
+async fn try_get_jobs_errs_on_error_status() {
+    // The fallible sibling surfaces a non-2xx as Err instead of folding to None.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let base = base_for(&server.uri(), ApiCredentials::default());
+    assert!(base.try_get_jobs().await.is_err());
+}
+
+#[tokio::test]
+async fn try_get_jobs_ok_empty_on_valid_empty_body() {
+    // A valid-but-empty response is Ok(vec![]), distinct from a fetch failure.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"jobs": []})))
+        .mount(&server)
+        .await;
+
+    let base = base_for(&server.uri(), ApiCredentials::default());
+    assert!(base.try_get_jobs().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn request_carries_accept_and_query_params() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

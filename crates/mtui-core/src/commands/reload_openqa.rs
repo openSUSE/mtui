@@ -63,7 +63,8 @@ impl Command for ReloadOpenQA {
                 for host in [openqa_instance.clone(), openqa_baremetal] {
                     let oqa = build_kernel_openqa(&incident, &host, http.clone())
                         .run()
-                        .await;
+                        .await
+                        .map_err(openqa_fetch_err)?;
                     session.metadata_mut().openqa_mut().kernel.push(oqa);
                 }
             } else {
@@ -72,7 +73,7 @@ impl Command for ReloadOpenQA {
                 let stale = std::mem::take(&mut session.metadata_mut().openqa_mut().kernel);
                 let mut refreshed = Vec::with_capacity(stale.len());
                 for oqa in stale {
-                    refreshed.push(oqa.run().await);
+                    refreshed.push(oqa.run().await.map_err(openqa_fetch_err)?);
                 }
                 session.metadata_mut().openqa_mut().kernel = refreshed;
             }
@@ -81,17 +82,29 @@ impl Command for ReloadOpenQA {
         if session.metadata().openqa().auto.is_none() {
             tracing::info!("Getting data from QEM Dashboard");
             let mut auto = build_auto_openqa(openqa_instance, &incident, rrid);
-            auto.run().await;
+            auto.run().await.map_err(dashboard_fetch_err)?;
             session.metadata_mut().openqa_mut().auto = Some(auto);
         } else {
             tracing::info!("Refreshing data from QEM Dashboard");
             if let Some(auto) = session.metadata_mut().openqa_mut().auto.as_mut() {
-                auto.run().await;
+                auto.run().await.map_err(dashboard_fetch_err)?;
             }
         }
 
         Ok(())
     }
+}
+
+/// Map a QEM Dashboard fetch failure to a user-facing command error.
+fn dashboard_fetch_err(e: mtui_datasources::QemDashboardError) -> CommandError {
+    CommandError::Other(format!(
+        "could not fetch openQA data from QEM Dashboard: {e}"
+    ))
+}
+
+/// Map an openQA jobs fetch failure to a user-facing command error.
+fn openqa_fetch_err(e: mtui_datasources::OpenQAError) -> CommandError {
+    CommandError::Other(format!("could not fetch openQA data: {e}"))
 }
 
 #[cfg(test)]
@@ -159,6 +172,21 @@ mod tests {
         // The auto holder is now present (install jobs were empty → no results).
         assert!(session.metadata().openqa().auto.is_some());
         assert!(session.metadata().openqa().kernel.is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_fetch_failure_returns_err() {
+        // Dashboard unreachable (no mounts -> settings 404): reload must surface
+        // the failure as Err rather than folding to an empty auto holder.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.set_workflow(Workflow::Auto);
+        let server = wiremock::MockServer::start().await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+
+        let args = matches(&ReloadOpenQA, &[]);
+        let err = ReloadOpenQA.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
     }
 
     #[tokio::test]

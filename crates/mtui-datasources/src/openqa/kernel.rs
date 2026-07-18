@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use mtui_types::{OpenQAResult, Test};
 
 use super::base::{Job, OpenQABase};
+use crate::error::OpenQAError;
 
 /// Job results that are excluded from the parsed test list (not real outcomes).
 const EXCLUDED_RESULTS: &[&str] = &[
@@ -73,12 +74,19 @@ impl KernelOpenQA {
     /// Fetch jobs, filter to kernel jobs, parse, and render.
     ///
     /// Mirrors upstream `run`.
-    pub async fn run(mut self) -> Self {
-        let jobs = self.base.get_jobs().await;
-        let filtered = Self::filter_jobs(jobs.as_deref());
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpenQAError::Fetch`] when the jobs fetch fails (openQA
+    /// unreachable / non-2xx / malformed body), so the caller can tell an
+    /// unreachable instance apart from a genuinely-empty result. A
+    /// valid-but-empty response is `Ok` with no results.
+    pub async fn run(mut self) -> Result<Self, OpenQAError> {
+        let jobs = self.base.try_get_jobs().await?;
+        let filtered = Self::filter_jobs(Some(&jobs));
         self.results = Self::parse_jobs(filtered.as_deref());
         self.pp = self.pretty_print();
-        self
+        Ok(self)
     }
 
     /// Keep only kernel-flavor jobs.

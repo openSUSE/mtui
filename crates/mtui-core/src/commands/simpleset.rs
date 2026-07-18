@@ -139,11 +139,11 @@ impl Command for SetWorkflow {
             Workflow::Kernel => {
                 if current == Workflow::Kernel {
                     tracing::info!("Desired workflow kernel is same as current");
-                    refresh_auto(session, &incident, &openqa_instance, rrid.clone()).await;
+                    refresh_auto(session, &incident, &openqa_instance, rrid.clone()).await?;
                     let stale = std::mem::take(&mut session.metadata_mut().openqa_mut().kernel);
                     let mut refreshed = Vec::with_capacity(stale.len());
                     for oqa in stale {
-                        refreshed.push(oqa.run().await);
+                        refreshed.push(oqa.run().await.map_err(openqa_fetch_err)?);
                     }
                     session.metadata_mut().openqa_mut().kernel = refreshed;
                     print_workflow(session);
@@ -152,14 +152,15 @@ impl Command for SetWorkflow {
                 tracing::info!("Setting workflow to 'kernel'");
                 session.set_workflow(Workflow::Kernel);
                 let mut auto = build_auto_openqa(openqa_instance.clone(), &incident, rrid.clone());
-                auto.run().await;
+                auto.run().await.map_err(dashboard_fetch_err)?;
                 session.metadata_mut().openqa_mut().auto = Some(auto);
                 let mut kernel = Vec::new();
                 for host in [openqa_instance, openqa_baremetal] {
                     kernel.push(
                         build_kernel_openqa(&incident, &host, http.clone())
                             .run()
-                            .await,
+                            .await
+                            .map_err(openqa_fetch_err)?,
                     );
                 }
                 session.metadata_mut().openqa_mut().kernel = kernel;
@@ -167,14 +168,14 @@ impl Command for SetWorkflow {
             Workflow::Auto => {
                 if current == Workflow::Auto {
                     tracing::info!("Desired workflow auto is same as current");
-                    refresh_auto(session, &incident, &openqa_instance, rrid).await;
+                    refresh_auto(session, &incident, &openqa_instance, rrid).await?;
                     print_workflow(session);
                     return Ok(());
                 }
                 tracing::info!("Setting workflow to 'auto'");
                 session.set_workflow(Workflow::Auto);
                 let mut auto = build_auto_openqa(openqa_instance, &incident, rrid);
-                auto.run().await;
+                auto.run().await.map_err(dashboard_fetch_err)?;
                 let no_results = auto.results.is_none();
                 session.metadata_mut().openqa_mut().auto = Some(auto);
                 session.metadata_mut().openqa_mut().kernel = Vec::new();
@@ -190,13 +191,13 @@ impl Command for SetWorkflow {
             Workflow::Manual => {
                 if current == Workflow::Manual {
                     tracing::info!("Desired workflow manual is same as current");
-                    refresh_auto(session, &incident, &openqa_instance, rrid).await;
+                    refresh_auto(session, &incident, &openqa_instance, rrid).await?;
                     print_workflow(session);
                     return Ok(());
                 }
                 tracing::info!("Setting workflow to 'manual'");
                 session.set_workflow(Workflow::Manual);
-                refresh_auto(session, &incident, &openqa_instance, rrid).await;
+                refresh_auto(session, &incident, &openqa_instance, rrid).await?;
                 session.metadata_mut().openqa_mut().kernel = Vec::new();
             }
         }
@@ -207,15 +208,27 @@ impl Command for SetWorkflow {
 }
 
 /// Prints the report's resulting workflow to the session display, so the caller
-/// (REPL/MCP) sees the outcome rather than an empty success. The openQA
-/// connectors used above do not expose a fetch-failure signal (a failed fetch is
-/// swallowed as "no jobs" by `DashboardAutoOpenQA::run`), so a network failure
-/// still resolves to `manual` here rather than surfacing as `Err`.
+/// (REPL/MCP) sees the outcome rather than an empty success. A *failed* openQA /
+/// dashboard fetch now surfaces as `Err` from the connectors' `run()`, so a
+/// network failure aborts before this point; an empty-but-successful `auto`
+/// result still auto-downgrades the workflow to `manual`.
 fn print_workflow(session: &mut Session) {
     let workflow = session.metadata().workflow();
     session
         .display
         .println(&format!("Workflow set to '{workflow}'"));
+}
+
+/// Map a QEM Dashboard fetch failure to a user-facing command error.
+fn dashboard_fetch_err(e: mtui_datasources::QemDashboardError) -> CommandError {
+    CommandError::Other(format!(
+        "could not fetch openQA data from QEM Dashboard: {e}"
+    ))
+}
+
+/// Map an openQA jobs fetch failure to a user-facing command error.
+fn openqa_fetch_err(e: mtui_datasources::OpenQAError) -> CommandError {
+    CommandError::Other(format!("could not fetch openQA data: {e}"))
 }
 
 /// Refreshes the report's "auto" openQA result in place, building a fresh one
@@ -224,20 +237,22 @@ fn print_workflow(session: &mut Session) {
 /// Upstream's same-workflow branches call `metadata.openqa.auto.run()`
 /// unconditionally, assuming `auto` was populated at load time. The Rust holder
 /// starts empty, so this guards the `None` case by building and running a fresh
-/// connector (the "get" semantics) rather than panicking.
+/// connector (the "get" semantics) rather than panicking. A fetch failure is
+/// propagated as `Err` so the caller can surface it.
 async fn refresh_auto(
     session: &mut Session,
     incident: &mtui_datasources::qem_dashboard::incident::QemIncident,
     openqa_instance: &str,
     rrid: mtui_types::RequestReviewID,
-) {
+) -> CommandResult {
     if let Some(auto) = session.metadata_mut().openqa_mut().auto.as_mut() {
-        auto.run().await;
+        auto.run().await.map_err(dashboard_fetch_err)?;
     } else {
         let mut auto = build_auto_openqa(openqa_instance.to_owned(), incident, rrid);
-        auto.run().await;
+        auto.run().await.map_err(dashboard_fetch_err)?;
         session.metadata_mut().openqa_mut().auto = Some(auto);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -371,6 +386,20 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("switching mode to manual"), "{out}");
         assert!(out.contains("Workflow set to 'manual'"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn auto_fetch_failure_returns_err() {
+        // Dashboard settings endpoints 500 (no mounts -> unreachable): switching
+        // workflow must surface the failure as Err, not silently downgrade.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.set_workflow(Workflow::Manual);
+        let server = wiremock::MockServer::start().await;
+        point_at(&mut session, &server);
+
+        let args = matches(&SetWorkflow, &["auto"]);
+        let err = SetWorkflow.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
     }
 
     #[tokio::test]
