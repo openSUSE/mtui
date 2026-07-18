@@ -9,9 +9,10 @@
 //! keeping the rmcp/axum server graph out of this dev tool's build.
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::CommandFactory;
 use clap_complete::Shell;
 
@@ -155,5 +156,241 @@ pub fn generate_docs_into(src: &Path) -> Result<()> {
     let path = src.join(CLI_REFERENCE_FILE);
     std::fs::write(&path, render_cli_reference())
         .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+// --- Release packaging (`xtask package`) --------------------------------------
+
+/// The two shipped binaries, in `%files` order.
+pub const BINARIES: [&str; 2] = ["mtui", "mtui-mcp"];
+
+/// Repo-root files copied verbatim into every release tarball.
+const ROOT_FILES: [&str; 2] = ["LICENSE", "README.md"];
+
+/// Inputs for assembling one release-tarball staging tree.
+///
+/// All paths are taken as-is (no discovery), so the staging assembly is a pure,
+/// offline-testable file-copy step: the caller (`run_package`) resolves the real
+/// `dist/`, compiled-binary, and repo-root locations from the workspace, while
+/// tests point every field at a fixture tempdir.
+pub struct PackageInputs<'a> {
+    /// Release version string, e.g. `v1.2.0` — names the staging dir + tarball.
+    pub version: &'a str,
+    /// Rust target triple, e.g. `x86_64-unknown-linux-musl`.
+    pub target: &'a str,
+    /// Directory holding the freshly built `mtui` / `mtui-mcp` binaries
+    /// (`target/<triple>/release`).
+    pub bin_dir: &'a Path,
+    /// The checked-in `dist/` tree (completions + man + terms).
+    pub dist_dir: &'a Path,
+    /// Repo root, source of `LICENSE` / `README.md`.
+    pub root_dir: &'a Path,
+    /// Where the staging dir + tarball are written.
+    pub out_dir: &'a Path,
+}
+
+/// The base name (no extension) shared by the staging dir and the tarball:
+/// `mtui-rs-<version>-<target>`.
+#[must_use]
+pub fn package_stem(version: &str, target: &str) -> String {
+    format!("mtui-rs-{version}-{target}")
+}
+
+/// Parsed `package` flags. A tiny hand-rolled parser (no clap in this dev tool),
+/// kept in the lib so the flag handling is unit-testable without spawning the
+/// `xtask` binary. `--version`/`--target` are required; `--bin-dir`/`--out-dir`
+/// override the workspace-relative defaults the caller supplies.
+pub struct PackageArgs {
+    /// Release version string (`--version`), e.g. `v1.2.0`.
+    pub version: String,
+    /// Rust target triple (`--target`).
+    pub target: String,
+    /// Optional override for where the compiled binaries live (`--bin-dir`).
+    pub bin_dir: Option<PathBuf>,
+    /// Optional override for the tarball output dir (`--out-dir`).
+    pub out_dir: Option<PathBuf>,
+}
+
+impl PackageArgs {
+    /// Parse `package` flags from an arg iterator (already past the task name).
+    ///
+    /// # Errors
+    /// Returns an error on an unknown flag, a flag missing its value, or a
+    /// missing required `--version`/`--target`.
+    pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Self> {
+        let mut version = None;
+        let mut target = None;
+        let mut bin_dir = None;
+        let mut out_dir = None;
+        while let Some(flag) = args.next() {
+            let mut value = || {
+                args.next()
+                    .with_context(|| format!("flag {flag} requires a value"))
+            };
+            match flag.as_str() {
+                "--version" => version = Some(value()?),
+                "--target" => target = Some(value()?),
+                "--bin-dir" => bin_dir = Some(PathBuf::from(value()?)),
+                "--out-dir" => out_dir = Some(PathBuf::from(value()?)),
+                other => bail!("unknown package flag: {other}"),
+            }
+        }
+        Ok(Self {
+            version: version.context("package requires --version")?,
+            target: target.context("package requires --target")?,
+            bin_dir,
+            out_dir,
+        })
+    }
+}
+
+/// Assemble the release staging tree under `<out_dir>/<stem>/` and return its
+/// path. Lays out exactly what `docs/src/installation.md` documents installing:
+///
+/// ```text
+/// mtui-rs-<version>-<target>/
+///   mtui  mtui-mcp
+///   completions/{bash,zsh,fish}/…
+///   man/*.1
+///   terms/*.sh
+///   LICENSE  README.md
+/// ```
+///
+/// Pure file I/O, no subprocess — this is the drift-prone part (must track
+/// `dist/`), so it is unit-tested offline against a fixture tree.
+pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
+    let stem = package_stem(inputs.version, inputs.target);
+    let staging = inputs.out_dir.join(&stem);
+    // Start clean so a re-run is deterministic (mirrors gen idempotency).
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)
+            .with_context(|| format!("clearing stale staging dir {}", staging.display()))?;
+    }
+    std::fs::create_dir_all(&staging)
+        .with_context(|| format!("creating staging dir {}", staging.display()))?;
+
+    for bin in BINARIES {
+        let from = inputs.bin_dir.join(bin);
+        let to = staging.join(bin);
+        std::fs::copy(&from, &to).with_context(|| format!("copying binary {}", from.display()))?;
+        set_executable(&to)?;
+    }
+
+    // completions/, man/, terms/ are copied wholesale from dist/ so the tarball
+    // never drifts from what `xtask gen` produced.
+    copy_dir_all(
+        &inputs.dist_dir.join("completions"),
+        &staging.join("completions"),
+    )
+    .context("copying completions/")?;
+    copy_dir_all(&inputs.dist_dir.join("man"), &staging.join("man")).context("copying man/")?;
+    copy_dir_all(&inputs.dist_dir.join("terms"), &staging.join("terms"))
+        .context("copying terms/")?;
+
+    for f in ROOT_FILES {
+        let from = inputs.root_dir.join(f);
+        std::fs::copy(&from, staging.join(f))
+            .with_context(|| format!("copying {}", from.display()))?;
+    }
+
+    Ok(staging)
+}
+
+/// Assemble + archive one target: stage the tree, `tar czf` it, and write a
+/// `<tarball>.sha256`. Returns the tarball path.
+///
+/// `tar`/`sha256sum` are shelled out (both are present on every CI runner and
+/// openSUSE); only the archive/checksum step touches a subprocess — the staging
+/// layout it archives is the offline-tested [`stage_package`].
+pub fn package_target(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
+    // Materialise the staging tree on disk; `tar` archives it by name below.
+    stage_package(inputs)?;
+    let stem = package_stem(inputs.version, inputs.target);
+    let tarball = inputs.out_dir.join(format!("{stem}.tar.gz"));
+
+    // `tar -C <out> <stem>` so the archive holds the versioned top-level dir, not
+    // absolute paths.
+    run(Command::new("tar")
+        .arg("czf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(inputs.out_dir)
+        .arg(&stem))
+    .with_context(|| format!("archiving {}", tarball.display()))?;
+
+    write_sha256(&tarball)?;
+    Ok(tarball)
+}
+
+/// Write `<file>.sha256` next to `file` containing `sha256sum`'s output for it
+/// (the `<hash>  <basename>` line, so `sha256sum -c` works from the artifact dir).
+fn write_sha256(file: &Path) -> Result<()> {
+    let dir = file.parent().context("artifact has no parent dir")?;
+    let name = file
+        .file_name()
+        .context("artifact has no file name")?
+        .to_str()
+        .context("artifact name is not UTF-8")?;
+    let out = Command::new("sha256sum")
+        .arg(name)
+        .current_dir(dir)
+        .output()
+        .context("running sha256sum")?;
+    if !out.status.success() {
+        bail!("sha256sum failed for {}", file.display());
+    }
+    // Append `.sha256` to the full name (`with_extension` would clobber `.gz`).
+    let sum_path = file.with_file_name(format!("{name}.sha256"));
+    std::fs::write(&sum_path, &out.stdout)
+        .with_context(|| format!("writing {}", sum_path.display()))?;
+    Ok(())
+}
+
+/// Recursively copy `src` into `dst`, creating `dst` (and parents) as needed.
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst).with_context(|| format!("creating {}", dst.display()))?;
+    for entry in std::fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), &to)
+                .with_context(|| format!("copying {}", entry.path().display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Mark a copied binary executable (0o755) on Unix; a no-op elsewhere. `std::fs::copy`
+/// preserves the source mode on Unix, but building via `cross`/CI can leave that
+/// mode inconsistent, so set it explicitly.
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut perms = std::fs::metadata(path)
+        .with_context(|| format!("stat {}", path.display()))?
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).with_context(|| format!("chmod {}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Run a command, failing with its stderr on a non-zero exit.
+fn run(cmd: &mut Command) -> Result<()> {
+    let out = cmd.output().context("spawning subprocess")?;
+    if !out.status.success() {
+        bail!(
+            "command {:?} failed:\n{}",
+            cmd,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
     Ok(())
 }

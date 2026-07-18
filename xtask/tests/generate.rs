@@ -7,7 +7,10 @@
 
 use std::path::Path;
 
-use xtask::{CLI_REFERENCE_FILE, generate_docs_into, generate_into, render_cli_reference};
+use xtask::{
+    BINARIES, CLI_REFERENCE_FILE, PackageArgs, PackageInputs, generate_docs_into, generate_into,
+    package_stem, package_target, render_cli_reference, stage_package,
+};
 
 /// The two binaries and their per-shell completion file names, plus the man page.
 /// clap names bash `<bin>.bash`, fish `<bin>.fish`, and zsh `_<bin>`.
@@ -147,4 +150,242 @@ fn checked_in_cli_reference_is_up_to_date() {
         "{} is stale; run `cargo xtask gen-docs` and commit the result",
         path.display()
     );
+}
+
+// --- Release packaging --------------------------------------------------------
+
+/// Build a minimal fixture tree (fake binaries, `dist/`, root files) under `root`
+/// and return `(bin_dir, dist_dir)`. Mirrors the real layout `stage_package`
+/// reads: `target/<triple>/release/{mtui,mtui-mcp}`, `dist/{completions,man,terms}`,
+/// and `LICENSE`/`README.md` at the root.
+fn make_fixture(root: &Path, target: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let bin_dir = root.join("target").join(target).join("release");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    for bin in BINARIES {
+        std::fs::write(bin_dir.join(bin), b"#!/bin/sh\n").unwrap();
+    }
+
+    let dist = root.join("dist");
+    std::fs::create_dir_all(dist.join("completions").join("bash")).unwrap();
+    std::fs::write(
+        dist.join("completions").join("bash").join("mtui.bash"),
+        b"# c",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dist.join("man")).unwrap();
+    std::fs::write(dist.join("man").join("mtui.1"), b".TH mtui 1").unwrap();
+    std::fs::create_dir_all(dist.join("terms")).unwrap();
+    std::fs::write(dist.join("terms").join("term.xterm.sh"), b"#!/bin/sh").unwrap();
+
+    std::fs::write(root.join("LICENSE"), b"license").unwrap();
+    std::fs::write(root.join("README.md"), b"readme").unwrap();
+    (bin_dir, dist)
+}
+
+#[test]
+fn package_stem_is_versioned_and_targeted() {
+    assert_eq!(
+        package_stem("v1.2.0", "x86_64-unknown-linux-musl"),
+        "mtui-rs-v1.2.0-x86_64-unknown-linux-musl"
+    );
+}
+
+#[test]
+fn stage_package_lays_out_documented_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let target = "x86_64-unknown-linux-musl";
+    let (bin_dir, dist) = make_fixture(root, target);
+    let out = root.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+
+    let inputs = PackageInputs {
+        version: "v9.9.9",
+        target,
+        bin_dir: &bin_dir,
+        dist_dir: &dist,
+        root_dir: root,
+        out_dir: &out,
+    };
+    let staging = stage_package(&inputs).expect("stage");
+
+    assert_eq!(
+        staging,
+        out.join("mtui-rs-v9.9.9-x86_64-unknown-linux-musl")
+    );
+    for bin in BINARIES {
+        assert!(staging.join(bin).is_file(), "{bin} missing from staging");
+    }
+    assert!(
+        staging
+            .join("completions")
+            .join("bash")
+            .join("mtui.bash")
+            .is_file()
+    );
+    assert!(staging.join("man").join("mtui.1").is_file());
+    assert!(staging.join("terms").join("term.xterm.sh").is_file());
+    assert!(staging.join("LICENSE").is_file());
+    assert!(staging.join("README.md").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn stage_package_marks_binaries_executable() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let target = "aarch64-unknown-linux-musl";
+    let (bin_dir, dist) = make_fixture(root, target);
+    let out = root.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+
+    let inputs = PackageInputs {
+        version: "v1.0.0",
+        target,
+        bin_dir: &bin_dir,
+        dist_dir: &dist,
+        root_dir: root,
+        out_dir: &out,
+    };
+    let staging = stage_package(&inputs).unwrap();
+    for bin in BINARIES {
+        let mode = std::fs::metadata(staging.join(bin))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "{bin} is not executable");
+    }
+}
+
+#[test]
+fn stage_package_is_idempotent_and_clears_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let target = "x86_64-unknown-linux-musl";
+    let (bin_dir, dist) = make_fixture(root, target);
+    let out = root.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let inputs = PackageInputs {
+        version: "v1.0.0",
+        target,
+        bin_dir: &bin_dir,
+        dist_dir: &dist,
+        root_dir: root,
+        out_dir: &out,
+    };
+
+    let staging = stage_package(&inputs).unwrap();
+    // Drop a stale file that a second run must remove.
+    std::fs::write(staging.join("STALE"), b"x").unwrap();
+    let staging2 = stage_package(&inputs).unwrap();
+    assert_eq!(staging, staging2);
+    assert!(
+        !staging2.join("STALE").exists(),
+        "stale file survived re-stage"
+    );
+}
+
+/// `tar` + `sha256sum` are shelled out; both exist on CI runners, openSUSE, and
+/// macOS dev boxes, so exercise the full archive path. Skips gracefully if a tool
+/// is missing (e.g. a minimal container) rather than failing spuriously.
+#[test]
+fn package_target_produces_tarball_and_checksum() {
+    if !have("tar") || !have("sha256sum") {
+        eprintln!("skipping: tar/sha256sum not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let target = "x86_64-unknown-linux-musl";
+    let (bin_dir, dist) = make_fixture(root, target);
+    let out = root.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+
+    let inputs = PackageInputs {
+        version: "v2.3.4",
+        target,
+        bin_dir: &bin_dir,
+        dist_dir: &dist,
+        root_dir: root,
+        out_dir: &out,
+    };
+    let tarball = package_target(&inputs).expect("package");
+    assert_eq!(
+        tarball.file_name().unwrap(),
+        "mtui-rs-v2.3.4-x86_64-unknown-linux-musl.tar.gz"
+    );
+    assert!(tarball.is_file(), "tarball not created");
+
+    let sum = out.join("mtui-rs-v2.3.4-x86_64-unknown-linux-musl.tar.gz.sha256");
+    assert!(sum.is_file(), "checksum not created");
+    let sum_body = std::fs::read_to_string(&sum).unwrap();
+    assert!(
+        sum_body.contains("mtui-rs-v2.3.4-x86_64-unknown-linux-musl.tar.gz"),
+        "checksum names the tarball"
+    );
+
+    // `sha256sum -c` from the artifact dir validates the recorded hash.
+    let check = std::process::Command::new("sha256sum")
+        .arg("-c")
+        .arg(sum.file_name().unwrap())
+        .current_dir(&out)
+        .output()
+        .unwrap();
+    assert!(check.status.success(), "sha256sum -c failed: {check:?}");
+}
+
+fn have(tool: &str) -> bool {
+    std::process::Command::new(tool)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn args(items: &[&str]) -> impl Iterator<Item = String> {
+    items
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect::<Vec<_>>()
+        .into_iter()
+}
+
+#[test]
+fn package_args_parse_required_only() {
+    let a = PackageArgs::parse(args(&["--version", "v1.0.0", "--target", "t"])).unwrap();
+    assert_eq!(a.version, "v1.0.0");
+    assert_eq!(a.target, "t");
+    assert!(a.bin_dir.is_none());
+    assert!(a.out_dir.is_none());
+}
+
+#[test]
+fn package_args_parse_all_overrides() {
+    let a = PackageArgs::parse(args(&[
+        "--version",
+        "v2",
+        "--target",
+        "t",
+        "--bin-dir",
+        "/b",
+        "--out-dir",
+        "/o",
+    ]))
+    .unwrap();
+    assert_eq!(a.bin_dir.unwrap(), std::path::Path::new("/b"));
+    assert_eq!(a.out_dir.unwrap(), std::path::Path::new("/o"));
+}
+
+#[test]
+fn package_args_missing_required_errors() {
+    assert!(PackageArgs::parse(args(&["--target", "t"])).is_err());
+    assert!(PackageArgs::parse(args(&["--version", "v"])).is_err());
+}
+
+#[test]
+fn package_args_unknown_flag_and_missing_value_error() {
+    assert!(PackageArgs::parse(args(&["--bogus", "x"])).is_err());
+    // `--version` with no following value.
+    assert!(PackageArgs::parse(args(&["--version"])).is_err());
 }

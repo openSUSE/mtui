@@ -13,3 +13,6 @@ plans/
 
 # Local RRID template checkouts (svn working dirs created at runtime)
 SUSE:*/
+
+# Release artifacts produced by `cargo xtask package` (built in CI, not committed)
+/dist/release/

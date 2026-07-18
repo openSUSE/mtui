@@ -21,6 +21,7 @@ fn main() -> Result<()> {
     match task.as_deref() {
         Some("gen") => run_gen(),
         Some("gen-docs") => run_gen_docs(),
+        Some("package") => run_package(),
         Some(other) => {
             eprintln!("unknown task: {other}\n");
             print_usage();
@@ -39,7 +40,13 @@ fn print_usage() {
          USAGE:\n    cargo xtask <TASK>\n\n\
          TASKS:\n    \
          gen         Regenerate dist/ completions + man pages for both binaries\n    \
-         gen-docs    Regenerate docs/src/cli.md from the command registry"
+         gen-docs    Regenerate docs/src/cli.md from the command registry\n    \
+         package     Build a release tarball for a target\n\n\
+         PACKAGE:\n    \
+         cargo xtask package --version <VER> --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]\n    \
+         Assembles <bin-dir>/{{mtui,mtui-mcp}} + dist/ + LICENSE/README into\n    \
+         mtui-rs-<VER>-<TRIPLE>.tar.gz (+ .sha256) under <out-dir> (default: dist/release).\n    \
+         --bin-dir defaults to target/<TRIPLE>/release."
     );
 }
 
@@ -62,6 +69,41 @@ fn run_gen_docs() -> Result<()> {
         xtask::CLI_REFERENCE_FILE,
         src.display()
     );
+    Ok(())
+}
+
+/// Build a release tarball for one target: `cargo xtask package --version <VER>
+/// --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]`.
+///
+/// Resolves the workspace-relative default locations (`target/<triple>/release`
+/// for binaries, `dist/` for data files, `dist/release/` for output) and hands
+/// them to [`xtask::package_target`], whose staging step is offline-tested.
+fn run_package() -> Result<()> {
+    let root = repo_root()?;
+    let args = xtask::PackageArgs::parse(std::env::args().skip(2))?;
+
+    let bin_dir = args
+        .bin_dir
+        .clone()
+        .unwrap_or_else(|| root.join("target").join(&args.target).join("release"));
+    let out_dir = args
+        .out_dir
+        .clone()
+        .unwrap_or_else(|| root.join("dist").join("release"));
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("creating out dir {}", out_dir.display()))?;
+
+    let inputs = xtask::PackageInputs {
+        version: &args.version,
+        target: &args.target,
+        bin_dir: &bin_dir,
+        dist_dir: &root.join("dist"),
+        root_dir: &root,
+        out_dir: &out_dir,
+    };
+    let tarball = xtask::package_target(&inputs)?;
+    println!("wrote {}", tarball.display());
+    println!("wrote {}.sha256", tarball.display());
     Ok(())
 }
 
