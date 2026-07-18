@@ -16,6 +16,9 @@
 #
 
 
+# System Vim runtime addon dir for the vim-plugin subpackage (matches upstream mtui).
+%global vimplugin_dir %{_datadir}/vim/site
+
 Name:           mtui-rs
 # Version is filled in by the set_version source service from the git tag.
 Version:        0
@@ -43,6 +46,15 @@ or reject. It drives osc/svn/Gitea and openQA/QEM natively under the hood.
 
 This package ships two static binaries: %{name}'s `mtui` interactive REPL and
 the `mtui-mcp` Model Context Protocol server.
+
+%package vim-plugin
+Summary:        VIM plugin with test report syntax
+Supplements:    (mtui-rs and vim)
+BuildArch:      noarch
+
+%description vim-plugin
+This plugin provides syntax highlighting and filetype detection for editing QAM
+test reports (the mtui-rs testreport/export text format).
 
 %prep
 # -a1 extracts vendor.tar.zst, placing .cargo/config + Cargo.lock + vendor/.
@@ -75,6 +87,12 @@ install -Dm644 dist/man/mtui-mcp.1 %{buildroot}%{_mandir}/man1/mtui-mcp.1
 # Terminal-launcher scripts for `terms`/`switch` (shared datadir).
 install -Dm755 dist/terms/*.sh -t %{buildroot}%{_datadir}/mtui/terms/
 
+# Vim plugin: filetype detection + testreport syntax (vim-plugin subpackage).
+install -d %{buildroot}%{vimplugin_dir}/ftdetect
+install -d %{buildroot}%{vimplugin_dir}/syntax
+install -pm 0644 dist/vim-plugin/ftdetect/testreport.vim %{buildroot}%{vimplugin_dir}/ftdetect
+install -pm 0644 dist/vim-plugin/syntax/testreport.vim   %{buildroot}%{vimplugin_dir}/syntax
+
 %check
 # The full suite needs the SSH integration fixture and network mocks; skip it in
 # the offline build worker and rely on the CI gate for behavioral coverage.
@@ -95,5 +113,13 @@ install -Dm755 dist/terms/*.sh -t %{buildroot}%{_datadir}/mtui/terms/
 %{_datadir}/fish/vendor_completions.d/mtui-mcp.fish
 %{_mandir}/man1/mtui.1%{?ext_man}
 %{_mandir}/man1/mtui-mcp.1%{?ext_man}
+
+%files vim-plugin
+%dir %{_datadir}/vim
+%dir %{vimplugin_dir}
+%dir %{vimplugin_dir}/ftdetect
+%dir %{vimplugin_dir}/syntax
+%{vimplugin_dir}/ftdetect/testreport.vim
+%{vimplugin_dir}/syntax/testreport.vim
 
 %changelog

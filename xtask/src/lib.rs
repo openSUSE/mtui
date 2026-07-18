@@ -253,6 +253,7 @@ impl PackageArgs {
 ///   completions/{bash,zsh,fish}/…
 ///   man/*.1
 ///   terms/*.sh
+///   vim-plugin/{ftdetect,syntax}/testreport.vim
 ///   LICENSE  README.md
 /// ```
 ///
@@ -276,8 +277,8 @@ pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
         set_executable(&to)?;
     }
 
-    // completions/, man/, terms/ are copied wholesale from dist/ so the tarball
-    // never drifts from what `xtask gen` produced.
+    // completions/, man/, terms/, vim-plugin/ are copied wholesale from dist/ so
+    // the tarball never drifts from what `xtask gen` produced.
     copy_dir_all(
         &inputs.dist_dir.join("completions"),
         &staging.join("completions"),
@@ -286,6 +287,11 @@ pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
     copy_dir_all(&inputs.dist_dir.join("man"), &staging.join("man")).context("copying man/")?;
     copy_dir_all(&inputs.dist_dir.join("terms"), &staging.join("terms"))
         .context("copying terms/")?;
+    copy_dir_all(
+        &inputs.dist_dir.join("vim-plugin"),
+        &staging.join("vim-plugin"),
+    )
+    .context("copying vim-plugin/")?;
 
     for f in ROOT_FILES {
         let from = inputs.root_dir.join(f);

@@ -176,6 +176,14 @@ fn make_fixture(root: &Path, target: &str) -> (std::path::PathBuf, std::path::Pa
     std::fs::write(dist.join("man").join("mtui.1"), b".TH mtui 1").unwrap();
     std::fs::create_dir_all(dist.join("terms")).unwrap();
     std::fs::write(dist.join("terms").join("term.xterm.sh"), b"#!/bin/sh").unwrap();
+    std::fs::create_dir_all(dist.join("vim-plugin").join("ftdetect")).unwrap();
+    std::fs::write(
+        dist.join("vim-plugin")
+            .join("ftdetect")
+            .join("testreport.vim"),
+        b"\" ftdetect",
+    )
+    .unwrap();
 
     std::fs::write(root.join("LICENSE"), b"license").unwrap();
     std::fs::write(root.join("README.md"), b"readme").unwrap();
@@ -225,6 +233,13 @@ fn stage_package_lays_out_documented_tree() {
     );
     assert!(staging.join("man").join("mtui.1").is_file());
     assert!(staging.join("terms").join("term.xterm.sh").is_file());
+    assert!(
+        staging
+            .join("vim-plugin")
+            .join("ftdetect")
+            .join("testreport.vim")
+            .is_file()
+    );
     assert!(staging.join("LICENSE").is_file());
     assert!(staging.join("README.md").is_file());
 }

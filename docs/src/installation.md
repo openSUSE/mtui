@@ -83,6 +83,27 @@ system install points at its shared datadir, e.g.
 `MTUI_TERMS_DIR=/usr/share/mtui/terms`); otherwise it uses
 `$XDG_DATA_HOME/mtui/terms`.
 
+## Vim syntax highlighting
+
+A Vim plugin for editing QAM test reports ships in `dist/vim-plugin/`: filetype
+detection plus syntax highlighting for the testreport/export text format
+(status keywords, section labels, and unfilled `YES/NO`/`PASSED/FAILED`
+placeholders shown as errors so you don't forget to fill them in). Filetype
+detection triggers on any file named `log` whose first line starts with
+`SUMMARY:` (i.e. an exported testreport).
+
+On openSUSE it is packaged as the `mtui-rs-vim-plugin` subpackage, installed into
+the system Vim runtime addon dir. To install manually:
+
+```sh
+install -Dm644 dist/vim-plugin/ftdetect/testreport.vim /usr/share/vim/site/ftdetect/testreport.vim
+install -Dm644 dist/vim-plugin/syntax/testreport.vim   /usr/share/vim/site/syntax/testreport.vim
+```
+
+For a per-user install without root, drop the two files under your Vim runtime
+directory instead (`~/.vim/{ftdetect,syntax}/testreport.vim`, or
+`~/.config/nvim/{ftdetect,syntax}/testreport.vim` for Neovim).
+
 ## Runtime dependencies
 
 Some backends shell out to external tools. They are optional — mtui-rs degrades
