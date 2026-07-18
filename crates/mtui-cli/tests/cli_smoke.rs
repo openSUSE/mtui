@@ -32,8 +32,9 @@ fn version_prints_provenance_block_and_exits_zero() {
     let out = mtui().arg("--version").output().expect("run --version");
     assert!(out.status.success(), "--version must exit 0");
     let stdout = String::from_utf8_lossy(&out.stdout);
+    // Assert `mtui <crate-version>` without hardcoding the number (tracks bumps).
     assert!(
-        stdout.contains("mtui 0.1.0"),
+        stdout.contains(&format!("mtui {}", env!("CARGO_PKG_VERSION"))),
         "expected version string, got: {stdout:?}"
     );
     // The provenance block is rendered as `mtui <ver> (<...>)`; assert the paren

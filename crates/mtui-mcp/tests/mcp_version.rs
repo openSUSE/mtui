@@ -23,9 +23,11 @@ fn version_prints_provenance_block_and_exits_zero() {
     let out = mtui_mcp().arg("--version").output().expect("run --version");
     assert!(out.status.success(), "--version must exit 0");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // clap renders `<bin-name> <long_version>`; the bin name is `mtui-mcp`.
+    // clap renders `<bin-name> <long_version>`; the bin name is `mtui-mcp`. Assert
+    // the crate version via env! rather than a literal so a version bump (or a
+    // tag-relative `git describe` ref like `v0.9.0-0-g…`) doesn't break this.
     assert!(
-        stdout.contains("mtui-mcp 0.1.0"),
+        stdout.contains(&format!("mtui-mcp {}", env!("CARGO_PKG_VERSION"))),
         "expected version string, got: {stdout:?}"
     );
     // The provenance block is rendered as `mtui-mcp <ver> (<...>)`; assert the
