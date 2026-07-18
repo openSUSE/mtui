@@ -162,13 +162,29 @@ fn session_keep_alive(idle_timeout_s: u64) -> Option<Duration> {
 /// stdout carries the MCP JSON-RPC stream. `-d/--debug` and `RUST_LOG` select the
 /// level; ANSI follows the resolved [`ColorMode`].
 fn init_tracing(debug: bool, color: ColorMode) {
-    let default = if debug { "debug" } else { "info" };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_directives(debug)));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .with_ansi(color.resolve())
         .try_init();
+}
+
+/// The default `EnvFilter` directive string when `RUST_LOG` is unset.
+///
+/// Beyond the base level (`debug` under `-d/--debug`, else `info`), this pins
+/// `rmcp::service=warn` so the http transport is not flooded by the client's
+/// post-completion `notifications/cancelled`: opencode (and other
+/// `AbortController`-based streamable-http clients) abort each per-request
+/// controller ~10-30ms *after* a successful `tools/call` result, which rmcp logs
+/// as a no-op `CancelledNotification` at INFO under `rmcp::service`. Silencing
+/// that target to `warn` drops the noise (and rmcp's one-time init breadcrumbs)
+/// while keeping every `mtui_*` INFO line. Any explicit `RUST_LOG` takes over
+/// completely — this directive only seeds the fallback.
+fn default_directives(debug: bool) -> String {
+    let base = if debug { "debug" } else { "info" };
+    format!("{base},rmcp::service=warn")
 }
 
 /// Build the runtime-synthesised stdio server from resolved args.
@@ -206,6 +222,14 @@ mod tests {
             server.get_info().capabilities.tools.is_some(),
             "server should advertise the tools capability"
         );
+    }
+
+    #[test]
+    fn default_directives_pin_rmcp_service_warn() {
+        // The fallback filter (RUST_LOG unset) carries both the base level and
+        // the rmcp::service=warn silencer for the http cancellation noise.
+        assert_eq!(default_directives(false), "info,rmcp::service=warn");
+        assert_eq!(default_directives(true), "debug,rmcp::service=warn");
     }
 
     #[test]
