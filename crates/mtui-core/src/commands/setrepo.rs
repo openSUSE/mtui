@@ -91,15 +91,44 @@ impl Command for SetRepo {
             session.restore_split_targets(selected, remainder);
             return Err(CommandError::NoRefhostsDefined);
         }
-
         // The active report must be able to set repos (SL/PI/OBS). The null
         // report cannot, which mirrors upstream's `@requires_update` guard.
-        let result = match session.metadata().as_set_repo() {
-            Some(set_repo) => {
-                selected.fanout_set_repo(operation, set_repo).await;
-                Ok(())
+        let has_set_repo = session.metadata().as_set_repo().is_some();
+        let result = if has_set_repo {
+            let set_repo = session.metadata().as_set_repo().expect("checked above");
+            selected.fanout_set_repo(operation, set_repo).await;
+            // `last_repo()` aggregates the whole per-host `zypper ar/rr` +
+            // refresh run (P3a-1). Report each host's verdict and fail if any
+            // host's run recorded an error, so an MCP call never silently
+            // "succeeds" on a repo that failed to apply.
+            let mut lines: Vec<String> = Vec::new();
+            let mut failed: Vec<String> = Vec::new();
+            for name in selected.names() {
+                let Some(outcome) = selected.get(&name).and_then(mtui_hosts::Target::last_repo)
+                else {
+                    continue;
+                };
+                match outcome {
+                    Ok(()) => lines.push(format!("{name}: ok")),
+                    Err(reason) => {
+                        lines.push(format!("{name}: FAILED ({reason})"));
+                        failed.push(name);
+                    }
+                }
             }
-            None => Err(CommandError::Other("No update loaded".to_owned())),
+            for line in &lines {
+                session.display.println(line);
+            }
+            if failed.is_empty() {
+                Ok(())
+            } else {
+                Err(CommandError::Other(format!(
+                    "set_repo failed on: {}",
+                    failed.join(", ")
+                )))
+            }
+        } else {
+            Err(CommandError::Other("No update loaded".to_owned()))
         };
         session.restore_split_targets(selected, remainder);
         result
@@ -109,7 +138,9 @@ impl Command for SetRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{
+        empty_session, matches, session_with_hosts, session_with_setrepo_outcomes,
+    };
 
     #[test]
     fn complete_offers_addremove_group_and_hosts() {
@@ -175,6 +206,36 @@ mod tests {
         assert!(matches!(err, CommandError::Other(m) if m == "No update loaded"));
         // The group is restored even on the capability-miss path.
         assert_eq!(session.targets().names(), vec!["h1"]);
+    }
+
+    #[tokio::test]
+    async fn all_hosts_succeed_prints_ok_summary() {
+        let (mut session, buf) =
+            session_with_setrepo_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", true)]);
+        let args = matches(&SetRepo, &["-A"]);
+        SetRepo.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("h1: ok"), "{out}");
+        assert!(out.contains("h2: ok"), "{out}");
+        assert!(!out.contains("FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn one_host_fails_errors_and_reports_both() {
+        let (mut session, buf) =
+            session_with_setrepo_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", false)]);
+        let args = matches(&SetRepo, &["-A"]);
+        let err = SetRepo.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => {
+                assert!(msg.contains("h2"), "{msg}");
+                assert!(!msg.contains("h1"), "only h2 failed: {msg}");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+        let out = buf.contents();
+        assert!(out.contains("h1: ok"), "{out}");
+        assert!(out.contains("h2: FAILED"), "{out}");
     }
 
     #[tokio::test]

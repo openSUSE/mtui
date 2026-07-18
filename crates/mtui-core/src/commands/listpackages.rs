@@ -195,6 +195,12 @@ impl ListPackages {
     /// `_run_just_wanted`), grouped by product, without touching any host.
     fn run_wanted(&self, session: &mut Session) -> CommandResult {
         let packages = session.metadata().base().packages.clone();
+        if packages.is_empty() {
+            session
+                .display
+                .println("No wanted package versions in the loaded report.");
+            return Ok(());
+        }
         let mut products: Vec<&String> = packages.keys().collect();
         products.sort();
         for product in products {
@@ -415,6 +421,19 @@ mod tests {
         assert!(out.contains("Packages for version SLES-15.5:"), "{out}");
         assert!(out.contains("bash"), "{out}");
         assert!(out.contains("5.1-1"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn wanted_empty_report_prints_none_line() {
+        let (mut session, buf) = empty_session();
+        let args = matches(&ListPackages, &["-w"]);
+        ListPackages.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents()
+                .contains("No wanted package versions in the loaded report."),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

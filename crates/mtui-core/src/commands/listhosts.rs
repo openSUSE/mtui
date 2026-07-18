@@ -50,6 +50,10 @@ impl Command for ListHosts {
                 )
             })
             .collect();
+        if rows.is_empty() {
+            session.display.println("No hosts connected.");
+            return Ok(());
+        }
         for (name, system, transactional, state, mode) in rows {
             session
                 .display
@@ -64,12 +68,26 @@ mod tests {
     use mtui_hosts::{MockConnection, Target};
 
     use super::*;
-    use crate::commands::testkit::{matches, session_with_hosts, session_with_targets};
+    use crate::commands::testkit::{
+        empty_session, matches, session_with_hosts, session_with_targets,
+    };
 
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(ListHosts.name(), "list_hosts");
         assert_eq!(ListHosts.scope(), Scope::Fanout);
+    }
+
+    #[tokio::test]
+    async fn no_hosts_prints_none_line() {
+        let (mut session, buf) = empty_session();
+        let args = matches(&ListHosts, &[]);
+        ListHosts.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("No hosts connected."),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

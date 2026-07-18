@@ -52,11 +52,22 @@ impl Command for ReloadProducts {
         let targets = session.targets_mut();
         let hosts =
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        // `reload_system` re-parses the host's product set in place and does not
+        // return an outcome (a parse failure only logs and keeps the previous
+        // system — P3a-1 did not add a reload accessor, out of scope here). Read
+        // the (possibly refreshed) base product back and confirm per host so the
+        // command is never silent for an MCP caller.
+        let mut lines: Vec<String> = Vec::new();
         for name in &hosts {
             if let Some(t) = targets.get_mut(name) {
                 t.reload_system().await;
                 tracing::info!(host = %name, "reloaded products");
+                let product = t.system().get_base().name.clone();
+                lines.push(format!("{name}: reloaded products ({product})"));
             }
+        }
+        for line in &lines {
+            session.display.println(line);
         }
         Ok(())
     }
@@ -91,7 +102,7 @@ mod tests {
             ExecutionMode::Serial,
             Box::new(conn),
         );
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
         session.targets_mut().add(target);
         assert_eq!(
             session
@@ -116,6 +127,12 @@ mod tests {
                 .get_base()
                 .name,
             "SLES"
+        );
+        // The confirmation names the host and the freshly re-parsed product.
+        assert!(
+            buf.contents().contains("h1: reloaded products (SLES)"),
+            "{}",
+            buf.contents()
         );
     }
 

@@ -160,6 +160,12 @@ impl Command for ListVersions {
             })
             .collect();
 
+        if groups.is_empty() {
+            session
+                .display
+                .println("No matching package versions found.");
+            return Ok(());
+        }
         session.display.list_versions(&groups);
         Ok(())
     }
@@ -194,6 +200,21 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("bash:"), "{out}");
         assert!(out.contains("5.1-1"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn empty_groups_prints_none_line() {
+        // Host queried but the output has no parseable `name version` line, so
+        // no version groups are built.
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok\n");
+        let args = matches(&ListVersions, &["-p", "bash", "-t", "h1"]);
+        ListVersions.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents()
+                .contains("No matching package versions found."),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

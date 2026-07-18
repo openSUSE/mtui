@@ -71,6 +71,9 @@ impl Command for RemoveHost {
                 .systems
                 .remove(name.as_str());
         }
+        session
+            .display
+            .println(&format!("Removed {}", hosts.join(", ")));
         Ok(())
     }
 }
@@ -88,11 +91,17 @@ mod tests {
 
     #[tokio::test]
     async fn removes_named_host() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
         let args = matches(&RemoveHost, &["-t", "h1"]);
         RemoveHost.call(&mut session, &args).await.unwrap();
         assert!(!session.targets().contains("h1"));
         assert!(session.targets().contains("h2"));
+        // A success line reaches the display so the MCP result is never empty.
+        assert!(
+            buf.contents().contains("Removed h1"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

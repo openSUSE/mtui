@@ -138,8 +138,9 @@ impl Command for OpenQAJobs {
             match oqa::get_incident_info(&http, &url_dashboard_qam, &effective_incident_id).await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::error!("Failed to query QEM Dashboard: {e}");
-                    return Ok(());
+                    return Err(CommandError::Other(format!(
+                        "QEM Dashboard query failed: {e}"
+                    )));
                 }
             };
 
@@ -147,8 +148,9 @@ impl Command for OpenQAJobs {
         {
             Ok(j) => j,
             Err(e) => {
-                tracing::error!("Failed to query openQA jobs: {e}");
-                return Ok(());
+                return Err(CommandError::Other(format!(
+                    "openQA jobs query failed: {e}"
+                )));
             }
         };
         if let Some(arch) = &arch_filter {
@@ -360,6 +362,62 @@ mod tests {
         );
         // ... but it is reported as pending.
         assert!(out.contains("1 still pending"), "{out}");
+    }
+
+    /// A 5xx on the dashboard build lookup surfaces as Err, not an empty Ok the
+    /// MCP surface would render as a bare success.
+    #[tokio::test]
+    async fn dashboard_failure_returns_err() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(
+            &OpenQAJobs,
+            &[
+                "--url-dashboard-qam",
+                &server.uri(),
+                "--url-openqa",
+                &server.uri(),
+            ],
+        );
+        let err = OpenQAJobs.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    /// A 5xx on the openQA jobs query (after a successful dashboard lookup) also
+    /// surfaces as Err.
+    #[tokio::test]
+    async fn openqa_jobs_failure_returns_err() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"settings": {"BUILD": "BUILD-42", "DISTRI": "sle", "VERSION": "15-SP5"}}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/jobs"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(
+            &OpenQAJobs,
+            &[
+                "--url-dashboard-qam",
+                &server.uri(),
+                "--url-openqa",
+                &server.uri(),
+            ],
+        );
+        let err = OpenQAJobs.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
     }
 
     /// In the default listing a pending job (`result:none`) is still shown and

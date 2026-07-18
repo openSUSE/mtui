@@ -36,6 +36,12 @@ impl Command for ListUpdateCommands {
         // touch the display, so no borrow conflict arises.
         let targets = session.targets();
         session.metadata().list_update_commands(targets);
+        // `list_update_commands` is a no-op across every report type today
+        // (unimplemented, bead mtui-rs-2d3.6): the delegate emits nothing, so
+        // print an explicit placeholder instead of returning empty success.
+        session
+            .display
+            .println("list_update_commands: not yet implemented");
         Ok(())
     }
 }
@@ -52,17 +58,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn null_report_is_noop() {
+    async fn null_report_prints_not_yet_implemented() {
         let (mut session, buf) = empty_session();
         let args = matches(&ListUpdateCommands, &[]);
         ListUpdateCommands.call(&mut session, &args).await.unwrap();
-        assert_eq!(buf.contents(), "");
+        assert!(
+            buf.contents()
+                .contains("list_update_commands: not yet implemented"),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]
-    async fn loaded_report_runs_without_error() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+    async fn loaded_report_prints_not_yet_implemented() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&ListUpdateCommands, &[]);
         ListUpdateCommands.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents()
+                .contains("list_update_commands: not yet implemented"),
+            "{}",
+            buf.contents()
+        );
     }
 }

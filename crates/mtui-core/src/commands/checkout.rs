@@ -53,7 +53,9 @@ impl Command for Checkout {
                 outcome.stderr.trim()
             )));
         }
-        tracing::info!(wd = %wd.display(), "template updated from SVN");
+        session
+            .display
+            .println(&format!("template updated from SVN ({})", wd.display()));
         Ok(())
     }
 }
@@ -86,5 +88,46 @@ mod tests {
         let args = matches(&Checkout, &[]);
         let err = Checkout.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    /// A successful `svn up` prints a confirmation to the display so the MCP
+    /// result is never empty. Drives `call` against a real local SVN repo so the
+    /// happy path (and its display line) is exercised end-to-end.
+    #[tokio::test]
+    async fn success_prints_confirmation_to_display() {
+        if std::process::Command::new("svn")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return; // svn not installed in this environment
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let wc = tmp.path().join("wc");
+        assert!(
+            std::process::Command::new("svnadmin")
+                .args(["create", repo.to_str().unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let repo_url = format!("file://{}", repo.display());
+        assert!(
+            std::process::Command::new("svn")
+                .args(["checkout", &repo_url, wc.to_str().unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
+
+        let args = matches(&Checkout, &[]);
+        Checkout.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("template updated from SVN"), "{out:?}");
     }
 }

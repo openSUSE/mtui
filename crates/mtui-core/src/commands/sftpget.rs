@@ -67,15 +67,57 @@ impl Command for SftpGet {
             .ok_or_else(|| CommandError::Other("invalid remote path".to_owned()))?;
         let targets = session.targets_mut();
         targets.sftp_get(remote_str, &local).await;
-        tracing::info!(remote = %remote.display(), "downloaded");
-        Ok(())
+
+        // Per-host download outcomes: `sftp_get` suffixes the local path with the
+        // hostname (`{local}.{host}`), so report that concrete path and fail if
+        // any enabled host's transfer errored — an MCP call must never silently
+        // "succeed" on a download that never happened. `None` (disabled /
+        // not-attempted) hosts are skipped.
+        let local_label = local.display().to_string();
+        let mut outcomes: Vec<(String, Result<(), String>)> = Vec::new();
+        for host in targets.names() {
+            let Some(outcome) = targets
+                .get(&host)
+                .and_then(mtui_hosts::Target::last_download)
+            else {
+                continue;
+            };
+            outcomes.push((host, outcome.clone()));
+        }
+
+        let mut failed: Vec<String> = Vec::new();
+        for (host, outcome) in &outcomes {
+            match outcome {
+                Ok(()) => {
+                    session
+                        .display
+                        .println(&format!("{local_label}.{host} <- {host}: ok"));
+                    tracing::info!(remote = %remote.display(), host = %host, "downloaded");
+                }
+                Err(reason) => {
+                    session.display.println(&format!(
+                        "{local_label}.{host} <- {host}: FAILED ({reason})"
+                    ));
+                    failed.push(host.clone());
+                }
+            }
+        }
+
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(CommandError::Other(format!(
+                "download failed on: {}",
+                failed.join(", ")
+            )))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{matches, session_with_hosts};
+    use crate::commands::testkit::{matches, session_with_download_outcomes, session_with_hosts};
 
     #[test]
     fn name_and_fanout_scope() {
@@ -101,5 +143,44 @@ mod tests {
         let args = matches(&SftpGet, &["/remote/file.log"]);
         let err = SftpGet.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    #[tokio::test]
+    async fn all_hosts_succeed_prints_ok_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut session, buf) = session_with_download_outcomes(
+            "SUSE:Maintenance:1:1",
+            &[("h1", true), ("h2", true)],
+            dir.path(),
+        );
+        let args = matches(&SftpGet, &["/remote/file.log"]);
+        SftpGet.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("<- h1: ok"), "{out}");
+        assert!(out.contains("<- h2: ok"), "{out}");
+        assert!(out.contains("file.log.h1"), "suffixed path: {out}");
+        assert!(!out.contains("FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn one_host_fails_errors_and_reports_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut session, buf) = session_with_download_outcomes(
+            "SUSE:Maintenance:1:1",
+            &[("h1", true), ("h2", false)],
+            dir.path(),
+        );
+        let args = matches(&SftpGet, &["/remote/file.log"]);
+        let err = SftpGet.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => {
+                assert!(msg.contains("h2"), "{msg}");
+                assert!(!msg.contains("h1"), "only h2 failed: {msg}");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+        let out = buf.contents();
+        assert!(out.contains("<- h1: ok"), "{out}");
+        assert!(out.contains("<- h2: FAILED"), "{out}");
     }
 }

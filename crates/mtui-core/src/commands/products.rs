@@ -61,6 +61,10 @@ impl Command for ListProducts {
                     .map(|t| (name.clone(), t.system().clone()))
             })
             .collect();
+        if rows.is_empty() {
+            session.display.println("No hosts connected.");
+            return Ok(());
+        }
         for (name, system) in rows {
             session.display.list_products(&name, &system);
         }
@@ -71,7 +75,7 @@ impl Command for ListProducts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{matches, session_with_hosts};
+    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
     fn name_and_active_scope() {
@@ -90,6 +94,18 @@ mod tests {
         // Upstream's (sic) label + the host name are rendered.
         assert!(out.contains("Referenece host"), "{out}");
         assert!(out.contains("h1"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn no_hosts_prints_none_line() {
+        let (mut session, buf) = empty_session();
+        let args = matches(&ListProducts, &[]);
+        ListProducts.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("No hosts connected."),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

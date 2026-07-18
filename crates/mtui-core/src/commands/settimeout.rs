@@ -60,9 +60,11 @@ impl Command for SetTimeout {
         for name in &hosts {
             if let Some(t) = targets.get_mut(name) {
                 t.set_timeout(value);
-                tracing::info!(host = %name, timeout = value, "timeout set");
             }
         }
+        session
+            .display
+            .println(&format!("timeout set to {value}s on {}", hosts.join(", ")));
         Ok(())
     }
 }
@@ -82,10 +84,16 @@ mod tests {
 
     #[tokio::test]
     async fn sets_timeout_on_host() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&SetTimeout, &["300", "-t", "h1"]);
         SetTimeout.call(&mut session, &args).await.unwrap();
         assert_eq!(session.targets().get("h1").unwrap().timeout_secs(), 300);
+        // A success line reaches the display so the MCP result is never empty.
+        assert!(
+            buf.contents().contains("timeout set to 300s on h1"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

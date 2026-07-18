@@ -103,21 +103,46 @@ pub(super) async fn drive(
         return Err(CommandError::NoRefhostsDefined);
     }
 
+    // The host names the op ran over, for the success confirmation line.
+    let hosts_label = selected.names().join(", ");
     let report = session.metadata();
-    match &op {
-        PerformOp::Install(pkgs) => report.perform_install(&mut selected, pkgs).await,
-        PerformOp::Uninstall(pkgs) => report.perform_uninstall(&mut selected, pkgs).await,
+    // These flows return a `Result` (P3a-2): map an `Err` onto `CommandError`
+    // (its message already names the failed host(s)/reason) and confirm success
+    // to the display so an MCP call is never a silent "success".
+    let (verb, outcome): (&str, Result<(), CommandError>) = match &op {
+        PerformOp::Install(pkgs) => (
+            "install",
+            report
+                .perform_install(&mut selected, pkgs)
+                .await
+                .map_err(|e| CommandError::Other(e.to_string())),
+        ),
+        PerformOp::Uninstall(pkgs) => (
+            "uninstall",
+            report
+                .perform_uninstall(&mut selected, pkgs)
+                .await
+                .map_err(|e| CommandError::Other(e.to_string())),
+        ),
         PerformOp::Prepare {
             packages,
             force,
             testing,
             installed_only,
-        } => {
+        } => (
+            "prepare",
             report
                 .perform_prepare(&mut selected, packages, *force, *testing, *installed_only)
-                .await;
-        }
-        PerformOp::Downgrade(pkgs) => report.perform_downgrade(&mut selected, pkgs).await,
+                .await
+                .map_err(|e| CommandError::Other(e.to_string())),
+        ),
+        PerformOp::Downgrade(pkgs) => (
+            "downgrade",
+            report
+                .perform_downgrade(&mut selected, pkgs)
+                .await
+                .map_err(|e| CommandError::Other(e.to_string())),
+        ),
         PerformOp::Update {
             noprepare,
             newpackage,
@@ -141,9 +166,13 @@ pub(super) async fn drive(
             render_diagnostics(session, &diagnostics);
             return update_result.map_err(|e| CommandError::Other(e.to_string()));
         }
-    }
+    };
 
     session.restore_split_targets(selected, remainder);
+    outcome?;
+    session
+        .display
+        .println(&format!("{verb} completed on {hosts_label}"));
     Ok(())
 }
 

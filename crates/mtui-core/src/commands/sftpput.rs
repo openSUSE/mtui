@@ -91,6 +91,11 @@ impl Command for SftpPut {
             )));
         }
 
+        // Per-(file, host) outcomes, aggregated as the fan-out proceeds: each
+        // `sftp_put` overwrites every target's `last_upload`, so we must read it
+        // before the next file's transfer clobbers it. `None` outcomes (disabled
+        // or not-attempted hosts) are skipped.
+        let mut outcomes: Vec<(String, String, Result<(), String>)> = Vec::new();
         for file in &files {
             let name = file
                 .file_name()
@@ -100,16 +105,49 @@ impl Command for SftpPut {
 
             let targets = session.targets_mut();
             targets.sftp_put(file, &remote).await;
-            tracing::info!(local = %file.display(), remote = %remote.display(), "uploaded");
+            let file_label = file.display().to_string();
+            for host in targets.names() {
+                let Some(outcome) = targets.get(&host).and_then(mtui_hosts::Target::last_upload)
+                else {
+                    continue;
+                };
+                outcomes.push((file_label.clone(), host, outcome.clone()));
+            }
         }
-        Ok(())
+
+        let mut failed: Vec<String> = Vec::new();
+        for (file, host, outcome) in &outcomes {
+            match outcome {
+                Ok(()) => {
+                    session.display.println(&format!("{file} -> {host}: ok"));
+                    tracing::info!(local = %file, host = %host, "uploaded");
+                }
+                Err(reason) => {
+                    session
+                        .display
+                        .println(&format!("{file} -> {host}: FAILED ({reason})"));
+                    if !failed.contains(host) {
+                        failed.push(host.clone());
+                    }
+                }
+            }
+        }
+
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(CommandError::Other(format!(
+                "upload failed on: {}",
+                failed.join(", ")
+            )))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{matches, session_with_hosts};
+    use crate::commands::testkit::{matches, session_with_hosts, session_with_upload_outcomes};
 
     #[test]
     fn name_and_fanout_scope() {
@@ -179,5 +217,69 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&SftpPut, &[f.to_str().unwrap()]);
         SftpPut.call(&mut session, &args).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn all_hosts_succeed_prints_ok_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("payload.txt");
+        std::fs::write(&f, "data").unwrap();
+        let (mut session, buf) =
+            session_with_upload_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", true)]);
+        let args = matches(&SftpPut, &[f.to_str().unwrap()]);
+        SftpPut.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("-> h1: ok"), "{out}");
+        assert!(out.contains("-> h2: ok"), "{out}");
+        assert!(!out.contains("FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn one_host_fails_errors_and_reports_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("payload.txt");
+        std::fs::write(&f, "data").unwrap();
+        let (mut session, buf) =
+            session_with_upload_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", false)]);
+        let args = matches(&SftpPut, &[f.to_str().unwrap()]);
+        let err = SftpPut.call(&mut session, &args).await.unwrap_err();
+
+        match err {
+            CommandError::Other(msg) => {
+                assert!(msg.contains("h2"), "{msg}");
+                assert!(!msg.contains("h1"), "only h2 failed: {msg}");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+        let out = buf.contents();
+        // Both hosts were attempted: h1 succeeded, h2 failed.
+        assert!(out.contains("-> h1: ok"), "{out}");
+        assert!(
+            out.contains("-> h2: FAILED (") && out.contains("h2 disk full"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_hosts_fail_errors_no_false_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("payload.txt");
+        std::fs::write(&f, "data").unwrap();
+        let (mut session, buf) =
+            session_with_upload_outcomes("SUSE:Maintenance:1:1", &[("h1", false), ("h2", false)]);
+        let args = matches(&SftpPut, &[f.to_str().unwrap()]);
+        let err = SftpPut.call(&mut session, &args).await.unwrap_err();
+
+        match err {
+            CommandError::Other(msg) => {
+                assert!(msg.contains("h1") && msg.contains("h2"), "{msg}");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+        let out = buf.contents();
+        assert!(out.contains("-> h1: FAILED"), "{out}");
+        assert!(out.contains("-> h2: FAILED"), "{out}");
+        assert!(!out.contains(": ok"), "no false success: {out}");
     }
 }

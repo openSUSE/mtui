@@ -124,6 +124,10 @@ impl Command for LoadTemplate {
                 None => format!("could not load template for {rrid}"),
             }));
         }
+        let connected = session.targets().len();
+        session
+            .display
+            .println(&format!("loaded {rrid} ({connected} hosts connected)"));
         Ok(())
     }
 }
@@ -197,7 +201,7 @@ mod tests {
     async fn kernel_load_registers_and_activates() {
         // A kernel load of an on-disk template registers + activates it without
         // connecting (kernel does not autoconnect).
-        let (mut session, _buf) = empty_session();
+        let (mut session, buf) = empty_session();
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:Maintenance:24993:275518";
         let dir = tmp.path().join(rrid);
@@ -216,6 +220,10 @@ mod tests {
         assert!(session.templates.contains(rrid));
         assert_eq!(session.templates.active_rrid(), Some(rrid));
         assert!(session.targets().is_empty());
+        // A success line reaches the display so the MCP result is never empty.
+        let out = buf.contents();
+        assert!(out.contains(&format!("loaded {rrid}")), "{out:?}");
+        assert!(out.contains("hosts connected"), "{out:?}");
     }
 
     #[test]

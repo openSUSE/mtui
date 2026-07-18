@@ -111,7 +111,8 @@ impl Command for Uninstall {
 mod tests {
     use super::*;
     use crate::commands::testkit::{
-        empty_session, matches, session_host_no_template, session_with_hosts,
+        empty_session, matches, session_host_no_template, session_with_failing_perform,
+        session_with_hosts,
     };
     use crate::error::CommandError;
 
@@ -166,13 +167,44 @@ mod tests {
 
     #[tokio::test]
     async fn install_over_loaded_report_succeeds() {
-        // FakeReport's perform_install is the trait no-op; the command plumbing
-        // (selection, restore) is what is exercised here.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        // FakeReport's perform_install returns Ok; the command plumbing
+        // (selection, restore) is exercised here, plus the success confirmation.
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Install, &["pkg"]);
         Install.call(&mut session, &args).await.unwrap();
         // Group restored after the op.
         assert_eq!(session.targets().names(), vec!["h1"]);
+        assert!(
+            buf.contents().contains("install completed on h1"),
+            "{}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn install_failure_errors_and_names_host() {
+        // perform_install returns Err naming h1 → drive maps it onto CommandError
+        // and does not print a false success.
+        let (mut session, buf) = session_with_failing_perform("SUSE:Maintenance:1:1", &["h1"]);
+        let args = matches(&Install, &["pkg"]);
+        let err = Install.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => assert!(msg.contains("h1"), "{msg}"),
+            other => panic!("expected Other, got {other:?}"),
+        }
+        assert!(
+            !buf.contents().contains("completed"),
+            "no false success: {}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn uninstall_failure_errors() {
+        let (mut session, _buf) = session_with_failing_perform("SUSE:Maintenance:1:1", &["h1"]);
+        let args = matches(&Uninstall, &["pkg"]);
+        let err = Uninstall.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("h1")));
     }
 
     #[tokio::test]

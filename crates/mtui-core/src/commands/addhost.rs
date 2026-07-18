@@ -7,7 +7,7 @@ use tracing::info;
 
 use super::support::complete_with_templates;
 use crate::command::{Command, Scope};
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Adds one or more reference hosts to the target host list.
@@ -84,14 +84,65 @@ impl Command for AddHost {
             .map(|it| it.cloned().collect())
             .unwrap_or_default();
 
+        // Snapshot the group before connecting so we can report which hosts were
+        // actually added vs. skipped/failed to connect.
+        let before: std::collections::HashSet<String> =
+            session.targets().names().into_iter().collect();
+
         if hosts.is_empty() {
             // No -t: resolve the report's testplatforms and connect the hosts.
             session.add_testplatform_hosts().await;
+            let mut added: Vec<String> = session
+                .targets()
+                .names()
+                .into_iter()
+                .filter(|n| !before.contains(n))
+                .collect();
+            added.sort();
+            if added.is_empty() {
+                session
+                    .display
+                    .println("no reference hosts resolved/connected");
+            } else {
+                session
+                    .display
+                    .println(&format!("added {}", added.join(", ")));
+            }
+            Ok(())
         } else {
             // Explicit -t: connect and add each named host.
-            session.add_named_hosts(hosts).await;
+            session.add_named_hosts(hosts.clone()).await;
+            let after: std::collections::HashSet<String> =
+                session.targets().names().into_iter().collect();
+            let mut added: Vec<String> = hosts
+                .iter()
+                .filter(|h| !before.contains(*h) && after.contains(*h))
+                .cloned()
+                .collect();
+            let mut skipped: Vec<String> = hosts
+                .iter()
+                .filter(|h| !added.contains(h))
+                .cloned()
+                .collect();
+            added.sort();
+            skipped.sort();
+
+            // A requested `-t` host that never connected is a hard failure: with
+            // zero added, surface an error so the caller (and, via MCP, the LLM)
+            // is not told a phantom success.
+            if added.is_empty() {
+                return Err(CommandError::Other(format!(
+                    "could not connect any requested host: {}",
+                    skipped.join(", ")
+                )));
+            }
+            let mut msg = format!("added {}", added.join(", "));
+            if !skipped.is_empty() {
+                msg.push_str(&format!("; skipped {}", skipped.join(", ")));
+            }
+            session.display.println(&msg);
+            Ok(())
         }
-        Ok(())
     }
 }
 
@@ -153,16 +204,16 @@ mod tests {
         assert!(!out.contains(&"h1".to_owned()), "{out:?}");
     }
 
-    /// Explicit `-t` hosts are connected and added to the active group. The
-    /// hosts named here are not backed by a mock connection, so their live
-    /// connect fails and they are skipped — the group keeps only the host it
-    /// started with. (The connect-and-add path itself is exercised over a mock
-    /// connection in `connects_and_adds_a_mock_backed_host`.)
+    /// Behavior change (bead w7w4.9): a requested `-t` host that cannot connect
+    /// is a hard failure, not a silent skip. When *zero* requested hosts are
+    /// added, `call` returns `Err` so the MCP result is an error rather than a
+    /// phantom success. (Previously this asserted an `Ok`-skip.)
     #[tokio::test]
-    async fn named_hosts_that_cannot_connect_are_skipped() {
+    async fn named_hosts_that_cannot_connect_are_error() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
-        AddHost.call(&mut session, &args).await.unwrap();
+        let err = AddHost.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("unreachable.invalid")));
         // The unreachable host could not connect, so it is not added.
         assert_eq!(session.targets().len(), 1);
         assert!(
@@ -174,26 +225,30 @@ mod tests {
     }
 
     /// A pre-connected mock host already in the group survives an `add_host` of
-    /// a *different* unreachable host: the failed connect is skipped and the
-    /// existing member is untouched (one bad host never disturbs the group).
+    /// a *different* unreachable host: the failed connect errors (zero added)
+    /// but the existing member is untouched (one bad host never disturbs the
+    /// group).
     #[tokio::test]
     async fn existing_mock_host_survives_a_failed_add() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         add_mock_host(&mut session, "h2");
         let before = session.targets().len();
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
-        AddHost.call(&mut session, &args).await.unwrap();
+        let err = AddHost.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
         assert_eq!(session.targets().len(), before);
         assert!(session.targets().names().contains(&"h2".to_owned()));
     }
 
-    /// Running `add_host` in the automatic workflow switches to manual.
+    /// Running `add_host` in the automatic workflow switches to manual — the
+    /// mode switch happens before the connect, so it stands even when the
+    /// unreachable `-t` host makes the command error.
     #[tokio::test]
     async fn switches_auto_workflow_to_manual() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Auto);
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
-        AddHost.call(&mut session, &args).await.unwrap();
+        let _ = AddHost.call(&mut session, &args).await;
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
     }
 
@@ -203,7 +258,7 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Auto);
         let args = matches(&AddHost, &["-t", "unreachable.invalid", "-k"]);
-        AddHost.call(&mut session, &args).await.unwrap();
+        let _ = AddHost.call(&mut session, &args).await;
         assert_eq!(session.metadata().workflow(), Workflow::Auto);
     }
 
@@ -213,7 +268,7 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Manual);
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
-        AddHost.call(&mut session, &args).await.unwrap();
+        let _ = AddHost.call(&mut session, &args).await;
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
     }
 
@@ -223,7 +278,7 @@ mod tests {
     /// are skipped — but the testplatform-resolution path is driven end to end.
     #[tokio::test]
     async fn no_target_resolves_testplatforms() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         use_path_refhosts(&mut session);
         set_testplatforms(&mut session, &["base=sles(major=15,minor=5);arch=[x86_64]"]);
         let args = matches(&AddHost, &[]);
@@ -231,5 +286,13 @@ mod tests {
         // Resolution ran (no panic); unreachable fixture hosts were skipped, so
         // the group is unchanged.
         assert_eq!(session.targets().len(), 1);
+        // Zero new hosts connected: the display still gets a non-empty line so
+        // the MCP result is never empty.
+        assert!(
+            buf.contents()
+                .contains("no reference hosts resolved/connected"),
+            "{:?}",
+            buf.contents()
+        );
     }
 }

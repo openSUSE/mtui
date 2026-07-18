@@ -92,7 +92,9 @@ impl Command for Prepare {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{
+        empty_session, matches, session_with_failing_perform, session_with_hosts,
+    };
     use crate::error::CommandError;
 
     #[test]
@@ -121,10 +123,24 @@ mod tests {
 
     #[tokio::test]
     async fn over_loaded_report_succeeds() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Prepare, &["-u"]);
         Prepare.call(&mut session, &args).await.unwrap();
         assert_eq!(session.targets().names(), vec!["h1"]);
+        assert!(
+            buf.contents().contains("prepare completed on h1"),
+            "{}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_errors_and_names_host() {
+        let (mut session, buf) = session_with_failing_perform("SUSE:Maintenance:1:1", &["h1"]);
+        let args = matches(&Prepare, &[]);
+        let err = Prepare.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("h1")));
+        assert!(!buf.contents().contains("completed"), "{}", buf.contents());
     }
 
     #[tokio::test]

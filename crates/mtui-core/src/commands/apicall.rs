@@ -214,12 +214,10 @@ impl Command for Assign {
         let rrid = require_update(session)?;
         if is_gitea_workflow(&rrid) {
             let gitea = gitea_client(session)?;
-            if let Err(e) = gitea
+            gitea
                 .assign(user_override(args).as_deref(), args.get_flag("force"))
                 .await
-            {
-                tracing::error!("{e}");
-            }
+                .map_err(|e| CommandError::Other(format!("gitea assign failed: {e}")))?;
         } else {
             tracing::info!("Assign request {}", rrid.review_id);
             let osc = Osc::new(session.config.clone(), rrid.clone());
@@ -229,6 +227,7 @@ impl Command for Assign {
         }
         pi_autolock(session, PiAction::Lock).await;
         show_priority_deadline(session, &rrid).await;
+        session.display.println(&format!("assigned {rrid}"));
         Ok(())
     }
 }
@@ -260,9 +259,10 @@ impl Command for Unassign {
         let rrid = require_update(session)?;
         if is_gitea_workflow(&rrid) {
             let gitea = gitea_client(session)?;
-            if let Err(e) = gitea.unassign(user_override(args).as_deref()).await {
-                tracing::error!("{e}");
-            }
+            gitea
+                .unassign(user_override(args).as_deref())
+                .await
+                .map_err(|e| CommandError::Other(format!("gitea unassign failed: {e}")))?;
         } else {
             tracing::info!("Unassign request {}", rrid.review_id);
             let osc = Osc::new(session.config.clone(), rrid.clone());
@@ -271,6 +271,7 @@ impl Command for Unassign {
                 .map_err(|e| CommandError::Other(format!("osc unassign failed: {e}")))?;
         }
         pi_autolock(session, PiAction::Unlock).await;
+        session.display.println(&format!("unassigned {rrid}"));
         Ok(())
     }
 }
@@ -338,12 +339,10 @@ impl Command for Reject {
 
         if is_gitea_workflow(&rrid) {
             let gitea = gitea_client(session)?;
-            if let Err(e) = gitea
+            gitea
                 .reject(&reason, user_override(args).as_deref(), &message)
                 .await
-            {
-                tracing::error!("{e}");
-            }
+                .map_err(|e| CommandError::Other(format!("gitea reject failed: {e}")))?;
         } else {
             tracing::info!("Reject request {}", rrid.review_id);
             let osc = Osc::new(session.config.clone(), rrid.clone());
@@ -352,6 +351,7 @@ impl Command for Reject {
                 .map_err(|e| CommandError::Other(format!("osc reject failed: {e}")))?;
         }
         pi_autolock(session, PiAction::Unlock).await;
+        session.display.println(&format!("rejected {rrid}"));
         Ok(())
     }
 }
@@ -409,15 +409,19 @@ impl Command for Comment {
         }
         if is_gitea_workflow(&rrid) {
             let gitea = gitea_client(session)?;
-            if let Err(e) = gitea.comment(&comment).await {
-                tracing::error!("{e}");
-            }
+            gitea
+                .comment(&comment)
+                .await
+                .map_err(|e| CommandError::Other(format!("gitea comment failed: {e}")))?;
         } else {
             let osc = Osc::new(session.config.clone(), rrid.clone());
             osc.comment(&comment)
                 .await
                 .map_err(|e| CommandError::Other(format!("osc comment failed: {e}")))?;
         }
+        session
+            .display
+            .println(&format!("comment posted on {rrid}"));
         Ok(())
     }
 }
@@ -555,12 +559,18 @@ mod tests {
 
     #[tokio::test]
     async fn assign_gitea_dispatch_uses_pr_api() {
-        use wiremock::matchers::method;
+        use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // A SLFO report routes to Gitea; point the PR API at a mock that accepts
-        // the review-request lookup + assignment marker post.
+        // A SLFO report routes to Gitea; the comments GET returns an empty
+        // history (unassigned, no decision) so `assign --force` posts the marker
+        // and succeeds. The PR GET is the catch-all fallback.
         let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/comments$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "requested_reviewers": [],
@@ -574,15 +584,46 @@ mod tests {
             .mount(&server)
             .await;
 
+        let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
+        session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_token = "tok".to_owned();
+
+        // Force assign skips the open-group guard; the mock accepts the marker
+        // post, so the Gitea call succeeds and the command confirms.
+        let args = matches(&Assign, &["--force"]);
+        Assign.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("assigned SUSE:SLFO:1.2:5"),
+            "expected success confirmation, got: {}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn comment_gitea_failure_is_surfaced() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A SLFO report routes to Gitea; the PR API returns 500 so the Gitea
+        // call fails. The failure must be surfaced as a CommandError, not
+        // swallowed into an Ok/empty success.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
         session.config.gitea_token = "tok".to_owned();
 
-        // Force assign skips the open-group guard; a Gitea error is logged, not
-        // returned — so the command completes Ok regardless of the mock's exact
-        // marker bookkeeping.
-        let args = matches(&Assign, &["--force"]);
-        Assign.call(&mut session, &args).await.unwrap();
+        let args = matches(&Comment, &["-m", "hi"]);
+        let err = Comment.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("gitea comment failed")));
     }
 
     #[tokio::test]
@@ -600,6 +641,11 @@ mod tests {
                 "priority": 700,
                 "deadline": "2026-08-01T00:00:00Z"
             })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/comments$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -642,6 +688,11 @@ mod tests {
         Mock::given(method("GET"))
             .and(path_regex(r"/reports/.+"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/comments$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&server)
             .await;
         Mock::given(method("GET"))

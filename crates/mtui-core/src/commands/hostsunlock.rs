@@ -2,10 +2,11 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
+use mtui_hosts::LockOutcome;
 
 use super::support::add_hosts_arg;
 use crate::command::{Command, Scope};
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Unlocks hosts previously locked with `lock`.
@@ -67,18 +68,63 @@ impl Command for HostsUnlock {
         let force = args.get_flag("force");
         if args.get_flag("pool") {
             // Remove the pool claim (RRID-based) instead of the operation lock.
+            // `pool_unlock` is best-effort (no per-host outcome map), so confirm
+            // the fan-out ran rather than leaving it silent.
+            let hosts = session.targets().names().join(", ");
             session.targets_mut().pool_unlock(force).await;
+            session
+                .display
+                .println(&format!("pool claim removed on: {hosts}"));
             return Ok(());
         }
-        // The group `unlock` fan-out always passes force=false; iterate targets
-        // so `--force` can remove foreign locks. Best-effort, like the group.
-        let targets = session.targets_mut();
-        for name in targets.names() {
-            if let Some(t) = targets.get_mut(&name) {
-                t.unlock(force).await;
+
+        if force {
+            // The group `unlock` fan-out always passes force=false; iterate
+            // targets so `--force` can remove foreign locks. Best-effort, like
+            // the group (per-target `unlock` yields no typed outcome), so confirm
+            // each host rather than leaving it silent.
+            let targets = session.targets_mut();
+            let names = targets.names();
+            for name in &names {
+                if let Some(t) = targets.get_mut(name) {
+                    t.unlock(true).await;
+                }
+            }
+            for name in &names {
+                session.display.println(&format!("{name}: unlocked"));
+            }
+            return Ok(());
+        }
+
+        // Non-forced: the group `unlock` returns a per-host `LockOutcome` map. A
+        // `Contended` host is a benign foreign lock (skipped without `--force`),
+        // not a failure; only a real transport error (`Failed`) fails.
+        let outcomes = session.targets_mut().unlock().await;
+        let mut failed: Vec<String> = Vec::new();
+        for (host, outcome) in &outcomes {
+            match outcome {
+                LockOutcome::Released => session.display.println(&format!("{host}: unlocked")),
+                LockOutcome::Contended => session
+                    .display
+                    .println(&format!("{host}: locked by another (use --force)")),
+                LockOutcome::Failed(reason) => {
+                    session
+                        .display
+                        .println(&format!("{host}: FAILED ({reason})"));
+                    failed.push(host.clone());
+                }
+                LockOutcome::Acquired => {}
             }
         }
-        Ok(())
+
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(CommandError::Other(format!(
+                "unlock failed on: {}",
+                failed.join(", ")
+            )))
+        }
     }
 }
 
@@ -95,16 +141,26 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_op_lock_succeeds() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &[]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("h1: unlocked"),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]
     async fn unlock_force_succeeds() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &["-f"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("h1: unlocked"),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]
@@ -113,9 +169,14 @@ mod tests {
         // unclaimed host this is a clean no-op (upstream routes to
         // `hosts.pool_unlock(force=False)`); the command must succeed rather than
         // return the old deferred error.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &["-p"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("pool claim removed on: h1"),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

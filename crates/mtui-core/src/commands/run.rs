@@ -72,6 +72,12 @@ impl Command for Run {
         targets.unlock().await;
 
         let mut output: Vec<String> = Vec::new();
+        // A non-zero remote exit is often expected (this stays `Ok`, matching
+        // upstream), but is collected here — while `targets` is still borrowed —
+        // to append one explicit summary line naming each failed host so the
+        // LLM/user gets an unambiguous signal. Hosts with no command run
+        // (`lastexit() == None`) are skipped.
+        let mut failed: Vec<(String, i16)> = Vec::new();
         for name in &hosts {
             let Some(t) = targets.get(name) else {
                 continue;
@@ -86,10 +92,26 @@ impl Command for Run {
                 output.push("stderr:".to_owned());
                 output.extend(t.lasterr().split('\n').map(str::to_owned));
             }
+            if let Some(code) = t.lastexit()
+                && code != 0
+            {
+                failed.push((name.clone(), code));
+            }
         }
 
         for line in &output {
             session.display.println(line);
+        }
+
+        if !failed.is_empty() {
+            // Sorted for determinism.
+            failed.sort();
+            let summary = failed
+                .iter()
+                .map(|(name, code)| format!("{name} (exit {code})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            session.display.println(&format!("FAILED on {summary}"));
         }
         Ok(())
     }
@@ -178,6 +200,51 @@ mod tests {
             "sh -c 'a; b'"
         );
         assert!(buf.contents().contains("h1:-> sh -c 'a; b' [0]"));
+    }
+
+    #[tokio::test]
+    async fn nonzero_exit_appends_failed_summary_but_returns_ok() {
+        use crate::commands::testkit::session_with_targets;
+        use mtui_hosts::{MockConnection, Target};
+        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::hostlog::CommandLog;
+
+        // h1 exits 0, h2 exits 1, h3 exits 127 — the summary lists only the
+        // failures, sorted by hostname, and the command still succeeds.
+        let targets: Vec<Target> = [("h1", 0i16), ("h3", 127), ("h2", 1)]
+            .into_iter()
+            .map(|(name, code)| {
+                let conn =
+                    MockConnection::new(name).with_default(CommandLog::new("", "out", "", code, 0));
+                Target::with_connection(
+                    name,
+                    TargetState::Enabled,
+                    ExecutionMode::Serial,
+                    Box::new(conn),
+                )
+            })
+            .collect();
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", targets);
+        let args = matches(&Run, &["false"]);
+        Run.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(
+            out.contains("FAILED on h2 (exit 1), h3 (exit 127)"),
+            "missing/wrong summary: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_zero_exit_appends_no_failed_summary() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "linux");
+        let args = matches(&Run, &["true"]);
+        Run.call(&mut session, &args).await.unwrap();
+        assert!(
+            !buf.contents().contains("FAILED on"),
+            "unexpected summary: {}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

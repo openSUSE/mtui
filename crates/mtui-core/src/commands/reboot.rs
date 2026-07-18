@@ -66,15 +66,44 @@ impl Command for Reboot {
         // Upstream `targets.reboot` uses the default reboot command; the group's
         // reboot drops each connection, reconnects, and re-applies the lock when
         // `relock` is non-empty.
-        targets.reboot("reboot", &relock).await;
-        Ok(())
+        let outcomes = targets.reboot("reboot", &relock).await;
+
+        // Report each host: `Ok` means it rebooted (boot id changed) and
+        // reconnected; `Err` means the reconnect failed or the boot id was
+        // unchanged (the host never rebooted). Fail if any host failed so an MCP
+        // caller never sees a silent "success" on a host that did not reboot.
+        let mut failed: Vec<String> = Vec::new();
+        for (host, outcome) in &outcomes {
+            match outcome {
+                Ok(()) => session
+                    .display
+                    .println(&format!("{host}: rebooted & reconnected")),
+                Err(reason) => {
+                    session
+                        .display
+                        .println(&format!("{host}: FAILED ({reason})"));
+                    failed.push(host.clone());
+                }
+            }
+        }
+
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(CommandError::Other(format!(
+                "reboot failed on: {}",
+                failed.join(", ")
+            )))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{
+        empty_session, matches, session_with_hosts, session_with_reboot_outcomes,
+    };
 
     #[test]
     fn complete_offers_target_and_hosts() {
@@ -94,11 +123,35 @@ mod tests {
 
     #[tokio::test]
     async fn reboots_connected_hosts() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
+        let (mut session, buf) =
+            session_with_reboot_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", true)]);
         let args = matches(&Reboot, &[]);
         Reboot.call(&mut session, &args).await.unwrap();
         // The group is preserved (reboot mutates in place, does not drop hosts).
         assert_eq!(session.targets().names(), vec!["h1", "h2"]);
+        let out = buf.contents();
+        assert!(out.contains("h1: rebooted & reconnected"), "{out}");
+        assert!(out.contains("h2: rebooted & reconnected"), "{out}");
+        assert!(!out.contains("FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn one_host_never_rebooted_errors_and_reports_both() {
+        // h2's boot id is unchanged → recorded failure; h1 rebooted cleanly.
+        let (mut session, buf) =
+            session_with_reboot_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", false)]);
+        let args = matches(&Reboot, &[]);
+        let err = Reboot.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => {
+                assert!(msg.contains("h2"), "{msg}");
+                assert!(!msg.contains("h1"), "only h2 failed: {msg}");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+        let out = buf.contents();
+        assert!(out.contains("h1: rebooted & reconnected"), "{out}");
+        assert!(out.contains("h2: FAILED"), "{out}");
     }
 
     #[tokio::test]

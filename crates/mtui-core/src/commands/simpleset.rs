@@ -64,7 +64,7 @@ impl Command for SetLogLevel {
         let level = LogLevel::parse(name)
             .ok_or_else(|| CommandError::Other(format!("unknown log level: {name}")))?;
         session.apply_log_level(level);
-        tracing::info!("Log level is set to {name}");
+        session.display.println(&format!("Log level set to {name}"));
         Ok(())
     }
 }
@@ -146,6 +146,7 @@ impl Command for SetWorkflow {
                         refreshed.push(oqa.run().await);
                     }
                     session.metadata_mut().openqa_mut().kernel = refreshed;
+                    print_workflow(session);
                     return Ok(());
                 }
                 tracing::info!("Setting workflow to 'kernel'");
@@ -167,6 +168,7 @@ impl Command for SetWorkflow {
                 if current == Workflow::Auto {
                     tracing::info!("Desired workflow auto is same as current");
                     refresh_auto(session, &incident, &openqa_instance, rrid).await;
+                    print_workflow(session);
                     return Ok(());
                 }
                 tracing::info!("Setting workflow to 'auto'");
@@ -178,7 +180,10 @@ impl Command for SetWorkflow {
                 session.metadata_mut().openqa_mut().kernel = Vec::new();
                 if no_results {
                     tracing::warn!("No install jobs or install jobs failed");
-                    tracing::info!("Switch mode to manual");
+                    let msg = session
+                        .display
+                        .yellow("No install jobs or install jobs failed; switching mode to manual");
+                    session.display.println(&msg);
                     session.set_workflow(Workflow::Manual);
                 }
             }
@@ -186,6 +191,7 @@ impl Command for SetWorkflow {
                 if current == Workflow::Manual {
                     tracing::info!("Desired workflow manual is same as current");
                     refresh_auto(session, &incident, &openqa_instance, rrid).await;
+                    print_workflow(session);
                     return Ok(());
                 }
                 tracing::info!("Setting workflow to 'manual'");
@@ -195,8 +201,21 @@ impl Command for SetWorkflow {
             }
         }
 
+        print_workflow(session);
         Ok(())
     }
+}
+
+/// Prints the report's resulting workflow to the session display, so the caller
+/// (REPL/MCP) sees the outcome rather than an empty success. The openQA
+/// connectors used above do not expose a fetch-failure signal (a failed fetch is
+/// swallowed as "no jobs" by `DashboardAutoOpenQA::run`), so a network failure
+/// still resolves to `manual` here rather than surfacing as `Err`.
+fn print_workflow(session: &mut Session) {
+    let workflow = session.metadata().workflow();
+    session
+        .display
+        .println(&format!("Workflow set to '{workflow}'"));
 }
 
 /// Refreshes the report's "auto" openQA result in place, building a fresh one
@@ -252,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn applies_level_through_installed_sink() {
-        let (mut session, _buf) = empty_session();
+        let (mut session, buf) = empty_session();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink_seen = Arc::clone(&seen);
         session.set_log_level_sink(Box::new(move |lvl| sink_seen.lock().unwrap().push(lvl)));
@@ -260,6 +279,12 @@ mod tests {
         let args = matches(&SetLogLevel, &["warning"]);
         SetLogLevel.call(&mut session, &args).await.unwrap();
         assert_eq!(*seen.lock().unwrap(), vec![LogLevel::Warning]);
+        // A success line reaches the display so the MCP result is never empty.
+        assert!(
+            buf.contents().contains("Log level set to warning"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]
@@ -332,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn auto_with_no_install_jobs_downgrades_to_manual() {
         // Empty settings → no install results → upstream switches to manual.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Manual);
         let server = dashboard_server("1").await;
         point_at(&mut session, &server);
@@ -342,6 +367,10 @@ mod tests {
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
         assert!(session.metadata().openqa().auto.is_some());
         assert!(session.metadata().openqa().kernel.is_empty());
+        // The downgrade and the resulting workflow reach the display, not just logs.
+        let out = buf.contents();
+        assert!(out.contains("switching mode to manual"), "{out}");
+        assert!(out.contains("Workflow set to 'manual'"), "{out}");
     }
 
     #[tokio::test]
@@ -371,7 +400,7 @@ mod tests {
         // Same-workflow manual: upstream only refreshes `auto` and returns
         // (kernel is left untouched). refresh_auto builds a fresh auto when the
         // holder was empty.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Manual);
         let server = dashboard_server("1").await;
         point_at(&mut session, &server);
@@ -380,6 +409,8 @@ mod tests {
         SetWorkflow.call(&mut session, &args).await.unwrap();
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
         assert!(session.metadata().openqa().auto.is_some());
+        // Same-workflow branch still reports the resulting workflow to display.
+        assert!(buf.contents().contains("Workflow set to 'manual'"));
     }
 
     #[tokio::test]

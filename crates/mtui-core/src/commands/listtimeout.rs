@@ -43,6 +43,10 @@ impl Command for ListTimeout {
                 )
             })
             .collect();
+        if rows.is_empty() {
+            session.display.println("No hosts connected.");
+            return Ok(());
+        }
         for (name, system, secs) in rows {
             session.display.list_timeout(&name, &system, secs);
         }
@@ -53,12 +57,24 @@ impl Command for ListTimeout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{matches, session_with_hosts};
+    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(ListTimeout.name(), "list_timeout");
         assert_eq!(ListTimeout.scope(), Scope::Fanout);
+    }
+
+    #[tokio::test]
+    async fn no_hosts_prints_none_line() {
+        let (mut session, buf) = empty_session();
+        let args = matches(&ListTimeout, &[]);
+        ListTimeout.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("No hosts connected."),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

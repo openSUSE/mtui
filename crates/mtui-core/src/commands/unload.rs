@@ -78,6 +78,15 @@ impl Command for Unload {
         for host in &removed.stragglers {
             tracing::warn!("still disconnecting from {host}");
         }
+        let mut msg = format!("unloaded {rrid}");
+        if !removed.failed.is_empty() || !removed.stragglers.is_empty() {
+            msg.push_str(&format!(
+                " ({} failed, {} still disconnecting)",
+                removed.failed.len(),
+                removed.stragglers.len()
+            ));
+        }
+        session.display.println(&msg);
         Ok(())
     }
 }
@@ -95,7 +104,7 @@ mod tests {
 
     #[tokio::test]
     async fn unload_loaded_template_removes_it() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session
             .templates
             .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
@@ -103,6 +112,12 @@ mod tests {
         Unload.call(&mut session, &args).await.unwrap();
         assert!(!session.templates.contains("SUSE:Maintenance:2:2"));
         assert!(session.templates.contains("SUSE:Maintenance:1:1"));
+        // A success line reaches the display so the MCP result is never empty.
+        assert!(
+            buf.contents().contains("unloaded SUSE:Maintenance:2:2"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

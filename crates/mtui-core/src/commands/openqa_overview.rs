@@ -174,8 +174,9 @@ impl Command for OpenQAOverview {
             match oqa::get_incident_info(&http, &url_dashboard_qam, &effective_incident_id).await {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::error!("Failed to query QEM Dashboard: {e}");
-                    return Ok(());
+                    return Err(CommandError::Other(format!(
+                        "QEM Dashboard query failed: {e}"
+                    )));
                 }
             };
 
@@ -290,7 +291,7 @@ impl Command for OpenQAOverview {
                 &aggregated,
                 &build_checks,
                 no_aggregated,
-            );
+            )?;
         }
         Ok(())
     }
@@ -304,18 +305,15 @@ fn export_to_testreport(
     aggregated: &[oqa::GroupResult],
     build_checks: &[oqa::BuildCheckResult],
     no_aggregated: bool,
-) {
+) -> CommandResult {
     let Some(path) = session.metadata().base().path.clone() else {
-        tracing::error!("No testreport path available; cannot export");
-        return;
+        return Err(CommandError::Other(
+            "No testreport path available; cannot export".to_owned(),
+        ));
     };
-    let mut file = match FileList::load(&path) {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::error!("Could not read testreport {}: {e}", path.display());
-            return;
-        }
-    };
+    let mut file = FileList::load(&path).map_err(|e| {
+        CommandError::Other(format!("Could not read testreport {}: {e}", path.display()))
+    })?;
     let modified = inject_overview(
         &mut file,
         single_incidents,
@@ -325,17 +323,24 @@ fn export_to_testreport(
     );
     // `FileList` derefs to `Vec<String>`, which `inject_overview` mutates in place.
     if modified {
-        if let Err(e) = file.write() {
-            tracing::error!("Failed to write overview to {}: {e}", path.display());
-            return;
-        }
-        tracing::info!("openqa_overview block written to {}", path.display());
+        file.write().map_err(|e| {
+            CommandError::Other(format!(
+                "Failed to write overview to {}: {e}",
+                path.display()
+            ))
+        })?;
+        let msg = format!("openqa_overview block written to {}", path.display());
+        session.display.println(&msg);
     } else {
-        tracing::warn!(
+        // Not a hard failure: the report simply has no place to inject; surface
+        // it to the user rather than silently succeeding.
+        let msg = session.display.yellow(&format!(
             "Could not locate 'regression tests:' section in {}; overview NOT exported",
             path.display()
-        );
+        ));
+        session.display.println(&msg);
     }
+    Ok(())
 }
 
 /// Drops a trailing `/api` to recover the Dashboard base URL (upstream
@@ -647,28 +652,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn export_without_report_path_is_a_noop_not_a_panic() {
-        // No path on the report → export logs an error and returns; command Ok.
-        use wiremock::matchers::method;
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&server)
-            .await;
+    async fn export_without_report_path_is_an_error() {
+        // No path on the report → export surfaces an Err (not a silent no-op).
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        // Dashboard 500 → returns before export, but exercise export helper too.
-        export_to_testreport(&mut session, &[], &[], &[], false);
+        let err = export_to_testreport(&mut session, &[], &[], &[], false).unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
     }
 
     #[tokio::test]
-    async fn dashboard_unreachable_prints_header_and_returns_ok() {
+    async fn dashboard_unreachable_returns_err() {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        // Any dashboard call 500s → get_incident_info errors → command logs and
-        // returns Ok after printing the header.
+        // Any dashboard call 500s → get_incident_info errors → command surfaces
+        // the failure as Err (not an empty Ok the LLM would hallucinate over).
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
@@ -684,7 +682,26 @@ mod tests {
                 &server.uri(),
             ],
         );
-        OpenQAOverview.call(&mut session, &args).await.unwrap();
+        let err = OpenQAOverview.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+        // The header was still printed before the failure.
         assert!(buf.contents().contains("OpenQA:"));
+    }
+
+    #[tokio::test]
+    async fn export_without_regression_section_reports_to_display() {
+        // A report whose `log` lacks the regression-tests section: inject_overview
+        // returns false, so nothing is written but the user is told, not silence.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("log");
+        std::fs::write(&log, "comment: hi\n").unwrap();
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().path = Some(log);
+        export_to_testreport(&mut session, &[], &[], &[], false).unwrap();
+        assert!(
+            buf.contents().contains("NOT exported"),
+            "{}",
+            buf.contents()
+        );
     }
 }

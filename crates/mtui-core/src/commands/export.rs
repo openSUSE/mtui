@@ -87,11 +87,9 @@ impl Command for Export {
         // fails loudly below via `select_names`. Auto/Kernel source from openQA
         // and proceed regardless of connected-host count.
         if workflow == Workflow::Manual && !named_hosts(args) && session.targets().is_empty() {
-            tracing::warn!(
-                command = self.name(),
-                rrid = %rrid,
-                "skipped: manual export needs a connected host",
-            );
+            session
+                .display
+                .println("skipped: manual export needs a connected host");
             return Ok(());
         }
 
@@ -159,7 +157,9 @@ impl Command for Export {
         out.write().map_err(|e| {
             CommandError::Other(format!("could not write template {filename:?}: {e}"))
         })?;
-        tracing::info!(path = %filename.display(), "template exported");
+        session
+            .display
+            .println(&format!("template exported to {}", filename.display()));
         Ok(())
     }
 
@@ -212,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn auto_writes_template_to_explicit_filename() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.metadata_mut().base_mut().workflow = Workflow::Auto;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("template.txt");
@@ -224,6 +224,12 @@ mod tests {
         let written = std::fs::read_to_string(&path).unwrap();
         // The auto exporter appends the system-info footer to any template.
         assert!(written.contains("## export MTUI:"));
+        // A success line reaches the display so the MCP result is never empty.
+        assert!(
+            buf.contents().contains("template exported to"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     /// Builds a `DashboardAutoOpenQA` with seeded `results`/`pp` (no network in
@@ -495,7 +501,7 @@ mod tests {
         // is nothing to fold, so export reports and skips it — without touching
         // the dashboard/openQA (config points nowhere; a real export attempt
         // would surface an error, proving the early return fired).
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
         assert!(session.targets().is_empty());
         let dir = tempfile::tempdir().unwrap();
@@ -513,6 +519,13 @@ mod tests {
         );
         // No openQA "auto" was lazily built — the body returned before that.
         assert!(session.metadata().openqa().auto.is_none());
+        // The skip reason reaches the display (not just a swallowed tracing warn).
+        assert!(
+            buf.contents()
+                .contains("skipped: manual export needs a connected host"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

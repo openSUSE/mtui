@@ -78,6 +78,9 @@ impl Command for HostState {
                 other => return Err(CommandError::Other(format!("unknown state: {other}"))),
             }
         }
+        session
+            .display
+            .println(&format!("set {state} on {}", hosts.join(", ")));
         Ok(())
     }
 }
@@ -94,12 +97,18 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_sets_state() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostState, &["disabled", "-t", "h1"]);
         HostState.call(&mut session, &args).await.unwrap();
         assert_eq!(
             session.targets().get("h1").unwrap().state(),
             TargetState::Disabled
+        );
+        // A success line reaches the display so the MCP result is never empty.
+        assert!(
+            buf.contents().contains("set disabled on h1"),
+            "{:?}",
+            buf.contents()
         );
     }
 

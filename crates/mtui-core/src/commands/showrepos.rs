@@ -39,6 +39,10 @@ impl Command for ShowUpdateRepos {
             .map(|(p, r)| (p.clone(), r.clone()))
             .collect();
         repos.sort_by(|a, b| a.0.name.cmp(&b.0.name).then(a.0.version.cmp(&b.0.version)));
+        if repos.is_empty() {
+            session.display.println("No update repos for this update.");
+            return Ok(());
+        }
         session.display.list_update_repos(&repos);
         Ok(())
     }
@@ -56,11 +60,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_report_lists_nothing() {
+    async fn empty_report_prints_none_line() {
         let (mut session, buf) = empty_session();
         let args = matches(&ShowUpdateRepos, &[]);
         ShowUpdateRepos.call(&mut session, &args).await.unwrap();
-        assert!(buf.contents().is_empty());
+        assert!(
+            buf.contents().contains("No update repos for this update."),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

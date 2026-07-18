@@ -2,10 +2,11 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
+use mtui_hosts::LockOutcome;
 
 use super::support::add_hosts_arg;
 use crate::command::{Command, Scope};
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Locks hosts for exclusive usage (the operation/zypper lock).
@@ -60,15 +61,43 @@ impl Command for HostLock {
             .get_many::<String>("comment")
             .map(|it| it.cloned().collect::<Vec<_>>().join(" "))
             .unwrap_or_default();
-        session.targets_mut().lock(&comment).await;
-        Ok(())
+        let outcomes = session.targets_mut().lock(&comment).await;
+
+        // Report each host's lock verdict. `Contended` is benign (the lock is
+        // held by another owner — upstream's `suppress(TargetLockedError)`), so
+        // it is *not* a failure; only a real transport error (`Failed`) fails.
+        let mut failed: Vec<String> = Vec::new();
+        for (host, outcome) in &outcomes {
+            match outcome {
+                LockOutcome::Acquired => session.display.println(&format!("{host}: locked")),
+                LockOutcome::Contended => session
+                    .display
+                    .println(&format!("{host}: already locked (skipped)")),
+                LockOutcome::Failed(reason) => {
+                    session
+                        .display
+                        .println(&format!("{host}: FAILED ({reason})"));
+                    failed.push(host.clone());
+                }
+                LockOutcome::Released => {}
+            }
+        }
+
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(CommandError::Other(format!(
+                "lock failed on: {}",
+                failed.join(", ")
+            )))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{matches, session_with_hosts};
+    use crate::commands::testkit::{matches, session_with_hosts, session_with_lock_outcomes};
 
     #[test]
     fn name_and_fanout_scope() {
@@ -78,10 +107,29 @@ mod tests {
 
     #[tokio::test]
     async fn lock_without_comment_succeeds() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostLock, &[]);
         // Best-effort fan-out over mock hosts must not error.
         HostLock.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("h1: locked"), "{}", buf.contents());
+    }
+
+    #[tokio::test]
+    async fn lock_failure_errors_and_names_host() {
+        let (mut session, buf) =
+            session_with_lock_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", false)]);
+        let args = matches(&HostLock, &[]);
+        let err = HostLock.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => {
+                assert!(msg.contains("h2"), "{msg}");
+                assert!(!msg.contains("h1"), "only h2 failed: {msg}");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+        let out = buf.contents();
+        assert!(out.contains("h1: locked"), "{out}");
+        assert!(out.contains("h2: FAILED"), "{out}");
     }
 
     #[tokio::test]

@@ -78,10 +78,8 @@ impl Command for Approve {
         let rrid = require_update(session)?;
 
         // -r/--reviewer: record + commit before approving; abort on failure.
-        if let Some(reviewer) = args.get_one::<String>("reviewer")
-            && !record_reviewer(session, reviewer).await?
-        {
-            return Ok(());
+        if let Some(reviewer) = args.get_one::<String>("reviewer") {
+            record_reviewer(session, reviewer).await?;
         }
 
         let groups: Vec<String> = args
@@ -112,9 +110,10 @@ impl Command for Approve {
                      refusing to approve non-interactively"
                 )));
             }
-            if let Err(e) = gitea.approve(user.as_deref()).await {
-                tracing::error!("{e}");
-            }
+            gitea
+                .approve(user.as_deref())
+                .await
+                .map_err(|e| CommandError::Other(format!("gitea approve failed: {e}")))?;
         } else {
             tracing::info!("Approving request {}", rrid.review_id);
             let osc = Osc::new(session.config.clone(), rrid.clone());
@@ -124,23 +123,25 @@ impl Command for Approve {
         }
 
         pi_autolock(session, PiAction::Unlock).await;
+        session.display.println(&format!("approved {rrid}"));
         Ok(())
     }
 }
 
 /// Records the reviewer and commits the testreport to SVN (upstream
-/// `_record_reviewer`). Returns `true` when the approval should proceed.
-async fn record_reviewer(session: &mut Session, name: &str) -> Result<bool, CommandError> {
+/// `_record_reviewer`). Returns `Err` when the record/commit fails so the
+/// approval is aborted and the failure is surfaced (not swallowed).
+async fn record_reviewer(session: &mut Session, name: &str) -> Result<(), CommandError> {
     let name = name.trim();
     if name.is_empty() {
-        tracing::error!("Reviewer must be a non-empty string; not approving");
-        return Ok(false);
+        return Err(CommandError::Other(
+            "reviewer must be a non-empty string; not approving".to_owned(),
+        ));
     }
 
-    if let Err(e) = session.metadata_mut().set_reviewer(name) {
-        tracing::error!("Failed to record reviewer, not approving: {e}");
-        return Ok(false);
-    }
+    session.metadata_mut().set_reviewer(name).map_err(|e| {
+        CommandError::Other(format!("failed to record reviewer, not approving: {e}"))
+    })?;
 
     let checkout = session
         .metadata()
@@ -150,11 +151,14 @@ async fn record_reviewer(session: &mut Session, name: &str) -> Result<bool, Comm
     let install_logs = session.config.install_logs.clone();
     let msg = vec!["-m".to_owned(), format!("Add Test Plan Reviewer: {name}")];
     let runner = TokioSvnRunner;
-    if let Err(e) = svn_commit_testreport(&runner, &checkout, &install_logs, &msg).await {
-        tracing::error!("Failed to commit testreport to SVN, not approving: {e}");
-        return Ok(false);
-    }
-    Ok(true)
+    svn_commit_testreport(&runner, &checkout, &install_logs, &msg)
+        .await
+        .map_err(|e| {
+            CommandError::Other(format!(
+                "failed to commit testreport to SVN, not approving: {e}"
+            ))
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -184,14 +188,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reviewer_with_no_template_path_aborts_gracefully() {
+    async fn reviewer_with_no_template_path_errors() {
         // The report has no `path`, so set_reviewer fails → record_reviewer
-        // returns false → approve aborts without error and never dispatches.
+        // returns Err → approve aborts with a surfaced error and never
+        // dispatches (previously this was swallowed as Ok).
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Approve, &["-r", "alice"]);
-        Approve.call(&mut session, &args).await.unwrap();
+        let err = Approve.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("record reviewer")));
         // Reviewer was NOT recorded (the write failed with no path).
         assert_eq!(session.metadata().base().reviewer, "");
+    }
+
+    #[tokio::test]
+    async fn empty_reviewer_errors() {
+        // A whitespace-only reviewer is rejected before any I/O.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&Approve, &["-r", "  "]);
+        let err = Approve.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("non-empty string")));
     }
 
     #[tokio::test]
@@ -223,13 +238,27 @@ mod tests {
 
     #[tokio::test]
     async fn gitea_hash_match_proceeds_to_approve() {
-        use wiremock::matchers::method;
+        use mtui_datasources::assign_marker;
+        use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         // SLFO report → Gitea path; the fake report's check_hash reports a match,
-        // so the guard passes and gitea.approve runs (its outcome is logged, not
-        // returned), exercising the gitea success branch + pi_autolock(Unlock).
+        // so the guard passes and gitea.approve runs. The comments GET reports
+        // the acting user assigned to the group (and no decision yet), so the
+        // approval posts its LGTM and succeeds, exercising the gitea success
+        // branch + pi_autolock(Unlock) + the success confirmation.
         let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/comments$"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "id": 1,
+                    "body": assign_marker("tester", "qam-sle"),
+                    "updated_at": "2026-01-01T00:00:00Z"
+                }])),
+            )
+            .mount(&server)
+            .await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "requested_reviewers": [], "state": "open", "head": {"sha": "abc"}
@@ -241,11 +270,42 @@ mod tests {
             .mount(&server)
             .await;
 
+        let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
+        session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_token = "tok".to_owned();
+        session.config.session_user = "tester".to_owned();
+        let args = matches(&Approve, &[]);
+        Approve.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("approved SUSE:SLFO:1.2:5"),
+            "expected success confirmation, got: {}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn gitea_approve_failure_is_surfaced() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // The comments GET returns 500 so gitea.approve fails; the failure must
+        // be surfaced as a CommandError, not swallowed into an empty success.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
         session.config.gitea_token = "tok".to_owned();
         let args = matches(&Approve, &[]);
-        Approve.call(&mut session, &args).await.unwrap();
+        let err = Approve.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("gitea approve failed")));
     }
 
     #[tokio::test]
