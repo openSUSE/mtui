@@ -33,6 +33,13 @@ stages:
   - mkdir -p ~/.ssh && chmod 700 ~/.ssh
   - ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
 
+# `svn` is a runtime dependency (testreport checkout). A handful of tests drive a
+# real *local* `file://` repo and skip cleanly when the binary is absent; the
+# stock `rust:latest` image has no `svn`, so install it to keep those paths
+# covered. Reused by every job whose suite exercises the SVN checkout path.
+.svn_fixture: &svn_fixture
+  - apt-get update -qq && apt-get install -y -qq subversion
+
 cache:
   key:
     files:
@@ -72,6 +79,7 @@ test:
   stage: test
   before_script:
     - *ssh_fixture
+    - *svn_fixture
   script:
     - cargo build --workspace
     - cargo test --workspace
@@ -91,6 +99,7 @@ coverage:
   stage: test
   before_script:
     - *ssh_fixture
+    - *svn_fixture
     - rustup component add llvm-tools-preview
     - cargo install cargo-llvm-cov --locked
   script:

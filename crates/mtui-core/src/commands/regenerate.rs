@@ -494,25 +494,62 @@ mod tests {
     /// kind-agnostic in `load_update`).
     #[tokio::test]
     async fn standalone_rrid_kernel_hint_loads_kernel_workflow() {
+        // `reload` deletes `template_dir/<rrid>` before loading, so the report
+        // must be re-checked-out from SVN. Drive that against a real *local*
+        // `file://` repo (never the `qam.suse.de` default) so the test is
+        // hermetic: no network, and skipped cleanly where `svn` is absent.
+        if std::process::Command::new("svn")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return; // svn not installed in this environment
+        }
+
         let rrid = "SUSE:Maintenance:24993:275518";
         let server = MockServer::start().await;
         mount_success(&server, rrid).await;
 
         let (mut session, _buf) = empty_session();
         let tmp = tempfile::tempdir().unwrap();
-        // Seed an on-disk template so the post-regenerate load actually reads a
-        // report (rather than degrading to a NullReport), letting us assert its
-        // workflow is Kernel.
-        let dir = tmp.path().join(rrid);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("log"), "log\n").unwrap();
+
+        // Build a local SVN repo whose `<rrid>/` tree holds the template, so
+        // `svn co <repo>/<rrid>` repopulates the dir `reload` removed and the
+        // post-regenerate load reads a real report (not a NullReport).
+        let repo = tmp.path().join("repo");
+        assert!(
+            std::process::Command::new("svnadmin")
+                .args(["create", repo.to_str().unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let repo_url = format!("file://{}", repo.display());
+        let import = tmp.path().join("import").join(rrid);
+        std::fs::create_dir_all(&import).unwrap();
+        std::fs::write(import.join("log"), "log\n").unwrap();
         std::fs::write(
-            dir.join("metadata.json"),
+            import.join("metadata.json"),
             format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
         )
         .unwrap();
+        assert!(
+            std::process::Command::new("svn")
+                .args([
+                    "import",
+                    "-m",
+                    "seed",
+                    import.parent().unwrap().to_str().unwrap(),
+                    &repo_url,
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+
         session.config = config_for(&server);
-        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.template_dir = tmp.path().join("templates");
+        session.config.svn_path = repo_url;
 
         let args = matches(&Regenerate, &["-k", rrid]);
         Regenerate.call(&mut session, &args).await.unwrap();
