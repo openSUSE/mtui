@@ -144,7 +144,7 @@ mod tests {
     fn mcp_session_bounds_default_to_upstream() {
         let d = Config::default();
         assert_eq!(d.mcp_session_cap, 32);
-        assert_eq!(d.mcp_session_idle_timeout, 1800);
+        assert_eq!(d.mcp_session_idle_timeout, 14_400);
         assert_eq!(d.mcp_sweep_parallel, 4);
     }
 

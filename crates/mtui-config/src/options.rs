@@ -273,7 +273,10 @@ pub(crate) fn default_mcp_session_cap() -> usize {
     32
 }
 pub(crate) fn default_mcp_session_idle_timeout() -> u64 {
-    1800
+    // 4 hours. Deliberately higher than upstream's 1800s: this value also pins
+    // the rmcp streamable-HTTP session keep-alive (`serve_http`), whose own
+    // default (300s) tore down idle http sessions mid-conversation.
+    14_400
 }
 pub(crate) fn default_mcp_sweep_parallel() -> usize {
     4
@@ -647,8 +650,11 @@ pub struct Config {
     /// (mtui-rs-odq8); this value is parsed and surfaced now.
     pub mcp_session_cap: usize,
     /// Seconds of inactivity after which an idle http session is swept. `0`
-    /// disables the sweeper. Upstream default is 1800. Enforcement is a
-    /// follow-up (mtui-rs-odq8).
+    /// disables the sweeper. Also pins the rmcp streamable-HTTP session
+    /// keep-alive (`serve_http`) so the transport does not tear a session down
+    /// before this sweeper would. Default is 14400 (4h) — deliberately higher
+    /// than upstream's 1800 (which would let rmcp's own 300s keep-alive drop
+    /// idle sessions mid-conversation).
     pub mcp_session_idle_timeout: u64,
     /// Max stale sessions the idle sweeper tears down concurrently in one sweep
     /// cycle (each teardown is bounded by the per-session disconnect timeout).

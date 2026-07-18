@@ -99,6 +99,11 @@ pub struct TestReportBase {
     /// Set when a load asked for autoconnect; the actual connect is deferred
     /// until after the host arbiter is wired.
     pub autoconnect_pending: bool,
+    /// The reason a load failed, stashed on the [`NullReport`](crate::reports::NullReport)
+    /// substituted by [`make_testreport`](crate::make_testreport) so the caller
+    /// can surface *why* (svn checkout / gitea / hash / read failure) rather than
+    /// a bare "could not load". `None` on a successfully loaded report.
+    pub load_error: Option<String>,
     /// Bugzilla `id -> title` map.
     pub bugs: HashMap<String, String>,
     /// Jira `id -> title` map.
@@ -172,6 +177,7 @@ impl TestReportBase {
             pool_claims: HashSet::new(),
             slot_candidates: HashMap::new(),
             autoconnect_pending: false,
+            load_error: None,
             bugs: HashMap::new(),
             jira: HashMap::new(),
             testplatforms: Vec::new(),

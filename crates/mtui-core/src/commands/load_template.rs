@@ -117,11 +117,12 @@ impl Command for LoadTemplate {
         // connects its reference hosts. autoconnect is always requested here
         // (upstream `load_update(..., autoconnect=True)`); the update kind
         // decides whether a connect actually happens.
-        let loaded = session.load_update(&update, true, kind).await;
+        let (loaded, reason) = session.load_update_reported(&update, true, kind).await;
         if loaded.is_empty() {
-            return Err(CommandError::Other(format!(
-                "could not load template for {rrid}"
-            )));
+            return Err(CommandError::Other(match reason {
+                Some(why) => format!("could not load template for {rrid}: {why}"),
+                None => format!("could not load template for {rrid}"),
+            }));
         }
         Ok(())
     }
@@ -182,7 +183,13 @@ mod tests {
 
         let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:1:1"]);
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
-        assert!(matches!(err, CommandError::Other(m) if m.contains("could not load")));
+        // The generic prefix plus the threaded underlying cause (svn checkout),
+        // so the operator (and, via MCP, the LLM) sees *why* it failed.
+        assert!(
+            matches!(&err, CommandError::Other(m)
+            if m.contains("could not load") && m.contains("svn checkout")),
+            "{err:?}"
+        );
         assert!(session.templates.is_empty());
     }
 

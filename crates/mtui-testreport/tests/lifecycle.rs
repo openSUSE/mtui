@@ -415,6 +415,17 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
         "unloaded report should be the null object"
     );
     assert_eq!(report.id(), "");
+    // The null report carries *why* the load failed (svn checkout), so the
+    // caller can surface it instead of a bare "could not load".
+    let reason = report
+        .base()
+        .load_error
+        .as_deref()
+        .expect("null report should carry a load_error");
+    assert!(
+        reason.contains("svn checkout"),
+        "load_error should name the svn checkout failure: {reason}"
+    );
 }
 
 // --- Gitea token + hash verification on load (SLFO / `SlReport`) ------------
@@ -510,6 +521,15 @@ async fn make_testreport_slfo_missing_token_yields_null() {
         "a missing Gitea token must abandon the load"
     );
     assert_eq!(report.id(), "");
+    let reason = report
+        .base()
+        .load_error
+        .as_deref()
+        .expect("null report should carry a load_error");
+    assert!(
+        reason.contains("token is not configured"),
+        "load_error should name the missing token: {reason}"
+    );
 }
 
 /// A stale template hash (differs from the Gitea PR head) abandons the load
@@ -535,6 +555,15 @@ async fn make_testreport_slfo_hash_mismatch_yields_null() {
         "a stale template hash must abandon the load (non-interactive)"
     );
     assert_eq!(report.id(), "");
+    let reason = report
+        .base()
+        .load_error
+        .as_deref()
+        .expect("null report should carry a load_error");
+    assert!(
+        reason.contains("hash mismatch"),
+        "load_error should name the hash mismatch: {reason}"
+    );
 }
 
 // --- Interactive stale-hash handling (upstream `_checkout` prompt sequence) --

@@ -14,11 +14,12 @@
 //!   keying), mounted on an `axum` router bound to `--host`/`--port`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::Parser;
 use mtui_core::{ColorMode, register_all};
 use rmcp::ServiceExt;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::session::local::{LocalSessionManager, SessionConfig};
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
@@ -83,11 +84,14 @@ async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
 /// server loop fails for a reason other than Ctrl-C.
 async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     let config = args.resolve_config();
+    let keep_alive = session_keep_alive(config.mcp_session_idle_timeout);
     tracing::info!(
         cap = config.mcp_session_cap,
         idle_timeout_s = config.mcp_session_idle_timeout,
+        keep_alive =
+            keep_alive.map_or_else(|| "disabled".to_owned(), |d| format!("{}s", d.as_secs())),
         "mtui-mcp: http transport — per-client session isolation \
-         (session cap + idle-TTL enforced)"
+         (session cap + idle-TTL enforced; rmcp keep-alive pinned)"
     );
 
     let registry = Arc::new(register_all());
@@ -101,10 +105,21 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     // The factory rmcp invokes once per new MCP session: each call yields a
     // fresh isolated server, or an `Err` (surfaced by rmcp as an internal-error
     // response) once the session cap is reached — a bounded DoS refusal.
+    //
+    // Pin rmcp's session keep-alive (default 300s) to our idle-TTL: its default
+    // is far shorter than our sweeper's horizon and would tear a quiet http
+    // session down mid-conversation. `StreamableHttpServerConfig::default()`'s
+    // 15s SSE ping cadence is kept — it only keeps the stream warm.
     let factory_sessions = sessions.clone();
+    // `LocalSessionManager` / `SessionConfig` are `#[non_exhaustive]`, so build
+    // from their defaults and set only the field we override.
+    let mut session_config = SessionConfig::default();
+    session_config.keep_alive = keep_alive;
+    let mut session_manager = LocalSessionManager::default();
+    session_manager.session_config = session_config;
     let service = StreamableHttpService::new(
         move || factory_sessions.try_make_server(),
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(session_manager),
         StreamableHttpServerConfig::default(),
     );
 
@@ -126,6 +141,17 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     }
     tracing::info!("mtui-mcp: shutting down");
     Ok(())
+}
+
+/// The rmcp session keep-alive to pin from `idle_timeout_s`.
+///
+/// Maps the config's `mcp_session_idle_timeout` to rmcp's
+/// [`SessionConfig::keep_alive`]: `0` disables it (matching how the same value
+/// disables our own idle sweeper), any positive value becomes that many seconds.
+/// This overrides rmcp's 300s default, which is shorter than our sweeper horizon
+/// and would otherwise drop a quiet http session.
+fn session_keep_alive(idle_timeout_s: u64) -> Option<Duration> {
+    (idle_timeout_s != 0).then(|| Duration::from_secs(idle_timeout_s))
 }
 
 /// Install a minimal stderr `tracing` subscriber.
@@ -179,6 +205,37 @@ mod tests {
         assert!(
             server.get_info().capabilities.tools.is_some(),
             "server should advertise the tools capability"
+        );
+    }
+
+    #[test]
+    fn keep_alive_maps_idle_timeout() {
+        // A positive idle-TTL becomes that many seconds; 0 disables keep-alive.
+        assert_eq!(
+            session_keep_alive(14_400),
+            Some(Duration::from_secs(14_400))
+        );
+        assert_eq!(session_keep_alive(1), Some(Duration::from_secs(1)));
+        assert_eq!(session_keep_alive(0), None);
+    }
+
+    #[test]
+    fn session_manager_pins_keep_alive_from_config() {
+        // The manager `serve_http` builds carries our config-derived keep-alive,
+        // overriding rmcp's 300s default (the bug that dropped idle sessions).
+        let keep_alive = session_keep_alive(14_400);
+        let mut session_config = SessionConfig::default();
+        session_config.keep_alive = keep_alive;
+        let mut manager = LocalSessionManager::default();
+        manager.session_config = session_config;
+        assert_eq!(
+            manager.session_config.keep_alive,
+            Some(Duration::from_secs(14_400)),
+        );
+        assert_ne!(
+            manager.session_config.keep_alive,
+            Some(SessionConfig::DEFAULT_KEEP_ALIVE),
+            "must not inherit rmcp's 300s default",
         );
     }
 }

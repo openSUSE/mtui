@@ -87,6 +87,18 @@ fn tr_factory(update: &UpdateID, config: Config) -> Box<dyn TestReport + Send + 
     }
 }
 
+/// A [`NullReport`] carrying the reason its load failed.
+///
+/// The load-failure substitute [`make_testreport`] returns instead of a real
+/// report. The reason is stashed on [`TestReportBase::load_error`] so the caller
+/// (`Session::load_update` → `load_template`) can surface *why* the load failed
+/// rather than a bare "could not load".
+fn null_with_error(config: Config, reason: String) -> NullReport {
+    let mut report = NullReport::new(config);
+    report.base_mut().load_error = Some(reason);
+    report
+}
+
 /// Builds and populates a [`TestReport`] for `update` (upstream
 /// `UpdateID.make_testreport` → `_checkout`).
 ///
@@ -138,12 +150,14 @@ pub async fn make_testreport(
     // seam's shape is inlined here (rather than via `checkout_and_read`) because
     // the `read` step must mutate `report`, which would otherwise clash with the
     // borrows the closures need — the three-step orchestration is small.
-    let loaded = match to_outcome(report.read(&trpath)) {
-        ReadOutcome::Ok => true,
+    // On failure, `Err(reason)` carries the human-readable cause so the caller
+    // (via `NullReport.base().load_error`) can surface *why* the load failed.
+    let loaded: Result<(), String> = match to_outcome(report.read(&trpath)) {
+        ReadOutcome::Ok => Ok(()),
         ReadOutcome::Io(e) if !e.is_not_found() => {
             // A non-ENOENT read error is not a "needs checkout" signal.
             info!("{e}");
-            false
+            Err(format!("reading {}: {e}", trpath.display()))
         }
         ReadOutcome::Io(_missing) => {
             match crate::checkout::testreport_svn_checkout(
@@ -154,18 +168,24 @@ pub async fn make_testreport(
             )
             .await
             {
-                Ok(()) => matches!(to_outcome(report.read(&trpath)), ReadOutcome::Ok),
+                Ok(()) => match to_outcome(report.read(&trpath)) {
+                    ReadOutcome::Ok => Ok(()),
+                    ReadOutcome::Io(e) => {
+                        info!("{e}");
+                        Err(format!("reading {} after checkout: {e}", trpath.display()))
+                    }
+                },
                 Err(e) => {
                     info!("{e}");
-                    false
+                    Err(format!("svn checkout of {rrid} failed: {e}"))
                 }
             }
         }
     };
 
-    if !loaded {
+    if let Err(reason) = loaded {
         info!("TestReport isn't loaded");
-        return Box::new(NullReport::new(checkout_config));
+        return Box::new(null_with_error(checkout_config, reason));
     }
 
     // Upstream runs `check_hash` at the tail of `TestReport.read`; because
@@ -180,18 +200,20 @@ pub async fn make_testreport(
             // Upstream `MissingGiteaTokenError`: the exact operator-facing
             // message, then the load is abandoned (a null report here mirrors
             // `make_testreport` catching the re-raised error into a null).
-            error!(
-                "Gitea API token is not configured. Pass -g/--gitea_token, \
+            let msg = "Gitea API token is not configured. Pass -g/--gitea_token, \
                  set GITEA_TOKEN in your environment, or add a [gitea] token \
-                 entry to ~/.mtuirc."
-            );
-            return Box::new(NullReport::new(checkout_config));
+                 entry to ~/.mtuirc.";
+            error!("{msg}");
+            return Box::new(null_with_error(checkout_config, msg.to_owned()));
         }
         HashCheck::Failed(e) => {
             // Upstream `FailedGiteaCallError`.
             error!("Gitea API call failed");
             info!(error = %e, "TestReport isn't loaded");
-            return Box::new(NullReport::new(checkout_config));
+            return Box::new(null_with_error(
+                checkout_config,
+                format!("Gitea API call failed: {e}"),
+            ));
         }
         HashCheck::Mismatch { .. } => {
             // Upstream `InvalidGiteaHashError` handling in `_checkout`: offer a
@@ -217,7 +239,14 @@ pub async fn make_testreport(
                     }
                     // else: force-continue kept the (stale) `report` as-is.
                 }
-                None => return Box::new(NullReport::new(checkout_config)),
+                None => {
+                    return Box::new(null_with_error(
+                        checkout_config,
+                        "template hash mismatch (stale checkout); regeneration \
+                         declined or unavailable"
+                            .to_owned(),
+                    ));
+                }
             }
         }
     }

@@ -582,12 +582,33 @@ impl Session {
     ///
     /// Returns the loaded report's RRID (empty when the load failed and the null
     /// report was substituted).
+    ///
+    /// A thin wrapper over [`load_update_reported`](Self::load_update_reported)
+    /// that discards the failure reason, for callers that only branch on
+    /// success/failure (REPL startup, `regenerate`).
     pub async fn load_update(
         &mut self,
         update: &UpdateID,
         autoconnect: bool,
         kind: UpdateKind,
     ) -> String {
+        self.load_update_reported(update, autoconnect, kind).await.0
+    }
+
+    /// [`load_update`](Self::load_update) that also returns *why* a load failed.
+    ///
+    /// Returns `(rrid, load_error)`: on success the RRID and `None`; on failure
+    /// an empty RRID and `Some(reason)` — the diagnostic
+    /// [`make_testreport`](make_testreport) stashed on the substituted null
+    /// report (svn checkout / gitea / hash / read failure). Lets `load_template`
+    /// surface the real cause to the operator (and, via MCP, the LLM) instead of
+    /// a bare "could not load".
+    pub async fn load_update_reported(
+        &mut self,
+        update: &UpdateID,
+        autoconnect: bool,
+        kind: UpdateKind,
+    ) -> (String, Option<String>) {
         let report = make_testreport(
             update,
             self.config.clone(),
@@ -599,6 +620,14 @@ impl Session {
         .await;
         let rrid = report.id();
         let pending = report.base().autoconnect_pending;
+        // Capture the failure reason before the report is moved into the registry
+        // (the null sentinel is dropped by `add_or_replace`; a real report has
+        // `None` here).
+        let load_error = if rrid.is_empty() {
+            report.base().load_error.clone()
+        } else {
+            None
+        };
 
         // Release any held active handle before the (possibly same-RRID) replace:
         // `add_or_replace` tears the old report down by locking its entry, which
@@ -633,7 +662,7 @@ impl Session {
         if pending && !rrid.is_empty() {
             self.autoconnect_active(&rrid).await;
         }
-        rrid
+        (rrid, load_error)
     }
 
     /// Connects the active report's reference hosts (the deferred half of
@@ -1747,10 +1776,18 @@ mod tests {
         let mut s = Session::new(config, false);
 
         let update = UpdateID::parse("SUSE:Maintenance:1:1").unwrap();
-        let loaded = s.load_update(&update, true, UpdateKind::Auto).await;
+        let (loaded, reason) = s
+            .load_update_reported(&update, true, UpdateKind::Auto)
+            .await;
 
         assert_eq!(loaded, "");
         assert!(s.templates.is_empty());
+        // The failure reason is threaded back for the caller to surface.
+        let reason = reason.expect("a failed load should report a reason");
+        assert!(
+            reason.contains("svn checkout"),
+            "reason should name the underlying cause: {reason}"
+        );
     }
 
     /// `set_workflow` mutates the active report's workflow mode.
