@@ -84,6 +84,18 @@ fn bench_refhosts_search(c: &mut Criterion) {
     g.finish();
 }
 
+/// Parse a representative SMELT `testplatform` string in a tight loop.
+///
+/// Isolates the `Attributes::from_testplatform` grammar parse (0mop.12 lever 3):
+/// the two internal regexes are now cached in `LazyLock` statics, so this no
+/// longer pays a per-call `Regex::new` compilation.
+fn bench_from_testplatform(c: &mut Criterion) {
+    let tp = "base=sles(major=15,minor=5);arch=[x86_64,aarch64];addon=ha(major=15,minor=5)";
+    c.bench_function("refhosts/from_testplatform", |b| {
+        b.iter(|| black_box(Attributes::from_testplatform(black_box(tp))));
+    });
+}
+
 fn bench_http_client_new(c: &mut Criterion) {
     c.bench_function("http/client_new", |b| {
         b.iter(|| {
@@ -224,6 +236,7 @@ criterion_group!(
     benches,
     bench_refhosts_parse,
     bench_refhosts_search,
+    bench_from_testplatform,
     bench_http_client_new,
     bench_gitea_approve,
     bench_oqa_single_incidents

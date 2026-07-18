@@ -14,8 +14,18 @@
 //! its grammar parser live here in `mtui-datasources` next to the search engine
 //! that consumes them (`store.rs`).
 
+use std::sync::LazyLock;
+
 use mtui_types::{Addon, Product, Version, version::VersionField};
 use regex::Regex;
+
+/// `arch=[a, b, c]` capture, anchored at start like upstream `re.match`.
+static ARCH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[(.*)\]").expect("static arch regex is valid"));
+
+/// `name(fields)` — greedy `.*` before `(` mirrors upstream `re.match`.
+static NAMED_VERSION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.*)\((.*)\)").expect("static named-version regex is valid"));
 
 /// A search query against a [`Refhosts`](super::store::Refhosts) database.
 ///
@@ -55,14 +65,8 @@ impl Attributes {
     /// skipped. With no `arch=[…]` segment, the result is empty (matching
     /// upstream, which fans out over an empty arch list).
     ///
-    /// # Panics
-    /// Never in practice: the two internal regexes are compile-time constants
-    /// validated by the unit tests; `expect` guards a logic error, not input.
     #[must_use]
     pub fn from_testplatform(testplatform: &str) -> Vec<Self> {
-        // `arch=[a, b, c]` capture. Anchored at start like upstream `re.match`.
-        let arch_re = Regex::new(r"^\[(.*)\]").expect("static arch regex is valid");
-
         let mut base = Self::default();
         let mut arch_list: Vec<String> = Vec::new();
 
@@ -74,7 +78,7 @@ impl Attributes {
 
             match key {
                 "arch" => {
-                    if let Some(cap) = arch_re.captures(content) {
+                    if let Some(cap) = ARCH_RE.captures(content) {
                         arch_list = cap[1].split(',').map(|x| x.trim().to_owned()).collect();
                     }
                 }
@@ -172,9 +176,7 @@ fn format_named_version(name: &str, version: Option<&Version>) -> String {
 /// parses as an integer, else kept as text — so `minor=` yields the empty-string
 /// [`VersionField::Text`] sentinel ("candidate must have no minor").
 fn parse_named_version(content: &str) -> Option<(String, Option<Version>)> {
-    // `name(fields)` — greedy `.*` before `(` mirrors upstream `re.match`.
-    let re = Regex::new(r"^(.*)\((.*)\)").expect("static named-version regex is valid");
-    let cap = re.captures(content)?;
+    let cap = NAMED_VERSION_RE.captures(content)?;
     let name = cap[1].to_owned();
 
     let mut major: Option<VersionField> = None;
