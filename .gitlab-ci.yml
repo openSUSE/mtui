@@ -103,9 +103,12 @@ coverage:
 
 # Build + package one static target. `cross` (prebuilt Docker images) handles the
 # aarch64 musl linker uniformly with x86_64, so it needs the docker:dind service.
-# GIT_DEPTH: 0 (a full clone with tags) is required so the build.rs version
-# stamping — `git describe --tags` — resolves the release tag (e.g. `v1.2.0`)
-# instead of degrading to a bare short SHA.
+# GIT_DEPTH: 0 makes GitLab's managed checkout a full clone *with tags* (and the
+# pipeline runs on the tag ref itself), so build.rs's `git describe --tags`
+# resolves the release tag (e.g. `v1.2.0`) instead of degrading to a bare SHA. We
+# rely on that managed checkout rather than a manual `git fetch`, which would
+# re-hit HTTPS without the runner's injected internal-CA trust and fail on
+# gitlab.suse.de's internal certificate.
 build-release:
   stage: release
   image: rust:latest
@@ -126,8 +129,6 @@ build-release:
     # Docker CLI for `cross` to talk to the dind daemon.
     - apt-get update && apt-get install -y --no-install-recommends docker.io
     - cargo install cross --locked
-    # Tags must be present for `git describe` even with GIT_DEPTH:0 fetches.
-    - git fetch --tags --force
   script:
     - cross build --release --target "$TARGET" -p mtui-cli -p mtui-mcp --features mtui-mcp/mcp
     # A musl build must be fully static; assert it so a regression fails the job.
