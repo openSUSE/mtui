@@ -1,7 +1,10 @@
 """Tests for the mtui refhost module."""
 
 import errno
+import os
 import re
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -715,3 +718,129 @@ class TestExtensionBaseMatching:
         rh = refhost.Refhosts(REFHOSTS_FIXTURE)
         attr = self._attr("base=SLES(major=15,minor=SP6);arch=[x86_64]")
         assert rh.is_candidate_match(self._host(), attr)
+
+
+# --- process-wide parse memo (load_refhosts) ---
+
+
+def test_load_refhosts_memoizes_same_instance():
+    """Repeated loads of one file return the same parsed store (one parse)."""
+    from mtui.hosts.refhost.store import load_refhosts
+
+    a = load_refhosts(REFHOSTS_FIXTURE)
+    b = load_refhosts(REFHOSTS_FIXTURE)
+    assert a is b
+
+
+def test_load_refhosts_reparses_when_file_changes(tmp_path):
+    """A changed file (new mtime/size) invalidates the memo entry."""
+    from mtui.hosts.refhost.store import load_refhosts
+
+    yml = tmp_path / "refhosts.yml"
+    yml.write_text("default: []\n")
+    a = load_refhosts(yml)
+    yml.write_text("default: []\nnuremberg: []\n")  # different size
+    b = load_refhosts(yml)
+    assert a is not b
+
+
+def test_load_refhosts_is_single_flight(monkeypatch, tmp_path):
+    """Concurrent cold-cache callers trigger exactly one parse, not N.
+
+    The single lock held across the parse is what prevents a thundering herd
+    of simultaneous ~1s parses under the mtui-mcp http transport; six threads
+    racing on a cold key must all receive the one shared instance.
+    """
+    from mtui.hosts.refhost import store
+
+    yml = tmp_path / "refhosts.yml"
+    yml.write_text("default: []\n")
+
+    n = 6
+    barrier = threading.Barrier(n)
+    real = store.Refhosts
+    parses: list[int] = []
+    parses_lock = threading.Lock()
+
+    def _counting(path):
+        with parses_lock:
+            parses.append(1)
+        # Hold the parse open past one GIL slice so, absent the single-flight
+        # lock, every waiting thread would already be inside its own miss and
+        # record a parse -- making this test fail on a no-lock revert.
+        time.sleep(0.02)
+        return real(path)
+
+    monkeypatch.setattr(store, "Refhosts", _counting)
+
+    results: list[object] = []
+    results_lock = threading.Lock()
+
+    def _work():
+        barrier.wait(timeout=10)  # all n threads race the cold key together
+        r = store.load_refhosts(yml)
+        with results_lock:
+            results.append(r)
+
+    threads = [threading.Thread(target=_work) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert len(parses) == 1
+    assert len(results) == n
+    assert all(r is results[0] for r in results)
+
+
+def test_load_refhosts_reparses_on_same_size_mtime_change(tmp_path):
+    """An equal-size edit still invalidates via st_mtime_ns.
+
+    Pins the mtime half of the key: a ``(path, size)``-only regression would
+    silently reopen the same-size staleness hole.
+    """
+    from mtui.hosts.refhost.store import load_refhosts
+
+    yml = tmp_path / "refhosts.yml"
+    yml.write_text("default: []\n")
+    a = load_refhosts(yml)
+
+    yml.write_text("hamburg: []\n")  # same byte length, different content
+    assert yml.stat().st_size == len("default: []\n")
+    os.utime(yml, ns=(a_ns := yml.stat().st_mtime_ns + 10_000_000, a_ns))
+
+    b = load_refhosts(yml)
+    assert a is not b
+
+
+def test_load_refhosts_evicts_oldest_beyond_maxsize(tmp_path):
+    """The cache is FIFO-bounded at _REFHOSTS_CACHE_MAXSIZE distinct files."""
+    from mtui.hosts.refhost import store
+
+    files = []
+    for i in range(store._REFHOSTS_CACHE_MAXSIZE + 1):
+        yml = tmp_path / f"refhosts_{i}.yml"
+        yml.write_text("default: []\n")
+        store.load_refhosts(yml)
+        files.append(yml)
+
+    assert len(store._refhosts_cache) == store._REFHOSTS_CACHE_MAXSIZE
+    # The first-loaded file was evicted; the last remains.
+    keys = list(store._refhosts_cache)
+    first_key = (os.fspath(files[0].resolve()), *_stat_key(files[0]))
+    last_key = (os.fspath(files[-1].resolve()), *_stat_key(files[-1]))
+    assert first_key not in keys
+    assert last_key in keys
+
+
+def _stat_key(path):
+    st = path.stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
+def test_load_refhosts_unstatable_path_surfaces_error():
+    """A missing file is not cached; the real parse error propagates."""
+    from mtui.hosts.refhost.store import load_refhosts
+
+    with pytest.raises(FileNotFoundError):
+        load_refhosts(Path("/nonexistent/does/not/exist/refhosts.yml"))

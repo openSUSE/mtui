@@ -9,6 +9,8 @@ the concrete resolvers without a circular import.
 """
 
 import fnmatch
+import os
+import threading
 from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
@@ -327,6 +329,64 @@ class Refhosts:
 
 class RefhostsResolveFailedError(RuntimeError):
     """Raised when no resolver can produce a usable ``refhosts.yml`` source."""
+
+
+# Process-wide single-flight cache of parsed refhosts stores. ``refhosts.yml``
+# is ~68KB and its ruamel parse is ~1s of GIL-held CPU; under the ``mtui-mcp``
+# http transport hundreds of concurrent sessions would otherwise each re-parse
+# it, serialising the interpreter on that one core. A parsed :class:`Refhosts`
+# is read-only, so one instance is safely shared across every caller.
+_refhosts_cache: "dict[tuple[str, int, int], Refhosts]" = {}
+_refhosts_cache_lock = threading.Lock()
+#: A handful of distinct sources at most (the local path + the HTTPS cache,
+#: plus room for tests); the bound just keeps a leak impossible.
+_REFHOSTS_CACHE_MAXSIZE = 8
+
+
+def load_refhosts(hostmap: Path) -> Refhosts:
+    """Return a process-wide cached :class:`Refhosts` for ``hostmap``.
+
+    Collapses the ~1s ruamel parse to once per file *version* across the whole
+    process, shared by every resolver and session. The cache key is
+    ``(resolved path, st_mtime_ns, st_size)`` so an edited file -- or the
+    periodic HTTPS cache refresh -- is picked up on its next load. (This
+    relies on the filesystem's ``st_mtime_ns`` resolution: a byte-identical-
+    size in-place edit landing in the same mtime bucket on a coarse-mtime
+    mount would be missed until the mtime advances or the process restarts.
+    The default ``https``-first resolver is immune -- it rewrites the cache
+    via atomic rename -- and the ``path`` fallback is an RPM-managed file on
+    a nanosecond-mtime root filesystem.) A single
+    lock held across the parse (not a bare ``functools.lru_cache``) makes
+    concurrent cold-cache callers wait for one parse instead of stampeding
+    into N simultaneous 1s parses. Cache *hits* are lock-free.
+
+    A source that cannot be ``stat``-ed is not cached: :class:`Refhosts` is
+    constructed directly so the real error surfaces exactly as before.
+    """
+    try:
+        st = hostmap.stat()
+        key = (os.fspath(hostmap.resolve()), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return Refhosts(hostmap)
+
+    cached = _refhosts_cache.get(key)
+    if cached is not None:
+        return cached
+    with _refhosts_cache_lock:
+        cached = _refhosts_cache.get(key)
+        if cached is None:
+            cached = Refhosts(hostmap)
+            if len(_refhosts_cache) >= _REFHOSTS_CACHE_MAXSIZE:
+                # FIFO-evict the oldest entry (dict preserves insertion order).
+                del _refhosts_cache[next(iter(_refhosts_cache))]
+            _refhosts_cache[key] = cached
+    return cached
+
+
+def _clear_refhosts_cache() -> None:
+    """Drop the process-wide refhosts parse cache (test hook)."""
+    with _refhosts_cache_lock:
+        _refhosts_cache.clear()
 
 
 class _RefhostsFactory:

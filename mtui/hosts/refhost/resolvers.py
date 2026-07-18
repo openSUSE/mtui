@@ -8,11 +8,12 @@ singleton tries them in the order named by ``config.refhosts_resolvers``.
 
 import errno
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from logging import getLogger
 from pathlib import Path
 
 from ...support.http import resolve_verify
-from .store import Refhosts
+from .store import Refhosts, load_refhosts
 
 logger = getLogger("mtui.refhost")
 
@@ -28,7 +29,9 @@ class Resolver(ABC):
 class PathResolver(Resolver):
     """Resolve refhosts from a local file at ``config.refhosts_path``."""
 
-    def __init__(self, refhosts_factory: type[Refhosts] = Refhosts) -> None:
+    def __init__(
+        self, refhosts_factory: Callable[[Path], Refhosts] = load_refhosts
+    ) -> None:
         self.refhosts_factory = refhosts_factory
 
     def resolve(self, config) -> Refhosts:
@@ -45,7 +48,7 @@ class HttpsResolver(Resolver):
         urlopener,
         file_writer,
         cache_path: Path,
-        refhosts_factory: type[Refhosts] = Refhosts,
+        refhosts_factory: Callable[[Path], Refhosts] = load_refhosts,
     ) -> None:
         """Initialize the resolver.
 

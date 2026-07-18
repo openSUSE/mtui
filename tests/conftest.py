@@ -11,6 +11,22 @@ from mtui.types.systems import System
 
 __root__: Path = Path(__file__).parent / "fixtures"
 
+
+@pytest.fixture(autouse=True)
+def _clear_refhosts_parse_cache():
+    """Isolate the process-wide refhosts parse memo between tests.
+
+    ``mtui.hosts.refhost.store.load_refhosts`` caches parsed stores keyed on
+    ``(path, mtime, size)`` for the process lifetime; clear it around every
+    test so a fixture path reused across tests never serves a stale store.
+    """
+    from mtui.hosts.refhost.store import _clear_refhosts_cache
+
+    _clear_refhosts_cache()
+    yield
+    _clear_refhosts_cache()
+
+
 # mutmut's stats run re-resolves the relative [tool.mutmut] source_paths
 # against the *current* working directory on every trampoline hit, so any
 # test that chdir()s away from the package root crashes stats collection

@@ -28,6 +28,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   updates. `refhosts.yml` is now parsed once per report and shared across every
   testplatform (and with the product-drift check) instead of being re-parsed
   (~1s each) for every testplatform during autoconnect / `add_host`.
+- `refhosts.yml` is now parsed at most once per file version for the whole
+  process, shared across all reports and sessions, instead of once per report.
+  This matters most under the `mtui-mcp` server, where many concurrent sessions
+  previously each spent ~1s of CPU re-parsing the same file; a single-flight
+  cache (keyed on the file's path, mtime and size) collapses that to one parse
+  and picks up an updated file on its next load.
 - Rebooting a host group is faster. After the reboot is dispatched, the hosts
   are now reconnected concurrently instead of one at a time, so the fixed
   per-host reconnect wait (~10s) overlaps across hosts rather than stacking.
