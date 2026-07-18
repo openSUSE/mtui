@@ -1022,10 +1022,19 @@ expression: pretty
           "description": "regenerate despite inconsistent metadata (e.g. arch mismatch)",
           "type": "boolean"
         },
+        "kernel": {
+          "default": false,
+          "description": "load the standalone RRID as a kernel update (default: auto)",
+          "type": "boolean"
+        },
         "no_wait": {
           "default": false,
           "description": "enqueue the job and return without waiting or reloading",
           "type": "boolean"
+        },
+        "rrid": {
+          "description": "template to regenerate even if not loaded (default: the loaded template)",
+          "type": "string"
         },
         "template": {
           "description": "RRID of a single loaded template to act on",

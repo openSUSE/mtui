@@ -243,6 +243,32 @@ mod tests {
         assert_reparses("set_log_level", &out);
     }
 
+    #[test]
+    fn regenerate_rrid_maps_to_positional_not_template_selector() {
+        // The load/regenerate catch-22 fix: `{rrid: <RRID>}` must land on the
+        // `regenerate` positional (a bare token), NOT the base `-T/--template`
+        // loaded-template selector — otherwise the engine rejects the unloaded
+        // RRID with `Template not loaded`.
+        let out = argv("regenerate", json!({ "rrid": "SUSE:SLFO:1.2:6311" }));
+        assert_eq!(out, vec!["SUSE:SLFO:1.2:6311"]);
+        assert!(
+            !out.iter().any(|t| t == "--template" || t == "-T"),
+            "RRID must not route through the -T selector: {out:?}"
+        );
+        assert_reparses("regenerate", &out);
+    }
+
+    #[test]
+    fn regenerate_kernel_hint_and_rrid_round_trip() {
+        let out = argv(
+            "regenerate",
+            json!({ "kernel": true, "rrid": "SUSE:Maintenance:1:1" }),
+        );
+        // Boolean flag first, positional in the tail.
+        assert_eq!(out, vec!["--kernel", "SUSE:Maintenance:1:1"]);
+        assert_reparses("regenerate", &out);
+    }
+
     // ---------------------------------------------------------------- lists
 
     #[test]

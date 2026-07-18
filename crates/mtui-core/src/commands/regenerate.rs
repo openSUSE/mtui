@@ -12,7 +12,7 @@ use crate::commands::support::{require_update, template_completion};
 use crate::error::CommandResult;
 use crate::session::Session;
 
-/// Regenerates the loaded update's test-report template via the TeReGen API.
+/// Regenerates a test-report template via the TeReGen API.
 ///
 /// Ports upstream `mtui.commands.regenerate.Regenerate`. Enqueues a regeneration
 /// job (`POST /reports/{id}/regenerate`); by default waits for the Minion job to
@@ -20,10 +20,19 @@ use crate::session::Session;
 /// template, `--ignore-inconsistent` regenerates despite inconsistent metadata,
 /// and `--no-wait` enqueues and returns immediately.
 ///
-/// After a successful wait, the freshly built template is **reloaded** (upstream
-/// `_reload`): the stale local checkout is dropped and the update is re-loaded
-/// via [`Session::load_update`] without autoconnect, so the new build is picked
-/// up in place without leaving mtui.
+/// The target template is named by an **optional `RRID` positional**. When given,
+/// that RRID is regenerated directly — *without* requiring it to be loaded first,
+/// which breaks the load/regenerate catch-22 for a never-generated report (a
+/// missing SLFO template cannot be loaded, and TeReGen is exactly what creates
+/// it). When omitted, the loaded/active template is used (upstream behaviour).
+///
+/// After a successful wait, the freshly built template is **loaded** in place
+/// (upstream `_reload`): any stale local checkout is dropped and the update is
+/// loaded via [`Session::load_update`] without autoconnect. The workflow kind is
+/// inferred from the loaded report when one exists; for a standalone RRID it
+/// defaults to [`UpdateKind::Auto`], or [`UpdateKind::Kernel`] with `-k/--kernel`.
+///
+/// It names its own target and never fans out ([`Scope::Single`]).
 pub struct Regenerate;
 
 #[async_trait]
@@ -33,11 +42,14 @@ impl Command for Regenerate {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Regenerates the loaded update's test-report template via the TeReGen API.")
+        Some(
+            "Regenerates a test-report template via the TeReGen API \
+             (a given RRID need not be loaded first).",
+        )
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Single
     }
 
     fn mutates_registry(&self) -> bool {
@@ -63,10 +75,22 @@ impl Command for Regenerate {
                 .action(ArgAction::SetTrue)
                 .help("enqueue the job and return without waiting or reloading"),
         )
+        .arg(
+            Arg::new("kernel")
+                .short('k')
+                .long("kernel")
+                .action(ArgAction::SetTrue)
+                .help("load the standalone RRID as a kernel update (default: auto)"),
+        )
+        .arg(
+            Arg::new("rrid")
+                .value_name("RRID")
+                .help("template to regenerate even if not loaded (default: the loaded template)"),
+        )
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        let mut out: Vec<String> = ["--force", "--ignore-inconsistent", "--no-wait"]
+        let mut out: Vec<String> = ["--force", "--ignore-inconsistent", "--no-wait", "-k"]
             .iter()
             .filter(|f| f.starts_with(text))
             .map(|s| (*s).to_owned())
@@ -76,13 +100,21 @@ impl Command for Regenerate {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        let rrid = require_update(session)?;
         let force = args.get_flag("force");
         let ignore_inconsistent = args.get_flag("ignore_inconsistent");
         let no_wait = args.get_flag("no_wait");
+        let kernel = args.get_flag("kernel");
+
+        // An explicit `RRID` positional regenerates that template without it
+        // being loaded first (breaks the load/regenerate catch-22); otherwise
+        // fall back to the loaded/active template (upstream behaviour). Only the
+        // fallback goes through the "load first" guard.
+        let rrid_str = match args.get_one::<String>("rrid") {
+            Some(rrid) => rrid.clone(),
+            None => require_update(session)?.to_string(),
+        };
 
         let teregen = teregen_client(session)?;
-        let rrid_str = rrid.to_string();
 
         if no_wait {
             let result = teregen
@@ -139,28 +171,44 @@ impl Command for Regenerate {
             return Ok(());
         }
 
-        // Success. Drop the stale checkout and reload the freshly built template
+        // Success. Drop any stale checkout and load the freshly built template
         // in place (upstream `_reload`).
         session
             .display
             .println(&format!("Template for {rrid_str} regenerated — reloading"));
-        reload(session, &rrid_str).await;
+        reload(session, &rrid_str, kernel).await;
         Ok(())
     }
 }
 
-/// Drops the stale local checkout and reloads the freshly built template
+/// Drops any stale local checkout and loads the freshly built template
 /// (upstream `Regenerate._reload`).
 ///
-/// Reconstructs the update kind from the active report's workflow
-/// ([`Workflow::Kernel`] → [`UpdateKind::Kernel`], else [`UpdateKind::Auto`],
-/// mirroring the upstream `KernelOBSUpdateID`/`AutoOBSUpdateID` factory choice),
-/// removes `template_dir/<rrid>` best-effort, then re-loads the update **without**
+/// Picks the update kind by:
+/// * a loaded report whose RRID matches `rrid` → its workflow
+///   ([`Workflow::Kernel`] → [`UpdateKind::Kernel`], else [`UpdateKind::Auto`],
+///   mirroring the upstream `KernelOBSUpdateID`/`AutoOBSUpdateID` choice);
+/// * otherwise (a standalone RRID with nothing matching loaded) →
+///   [`UpdateKind::Kernel`] when `kernel_hint` is set, else [`UpdateKind::Auto`].
+///
+/// Removes `template_dir/<rrid>` best-effort, then loads the update **without**
 /// autoconnect (no live-host grab on a regen-reload).
-async fn reload(session: &mut Session, rrid: &str) {
-    let kind = match session.metadata().workflow() {
-        Workflow::Kernel => UpdateKind::Kernel,
-        _ => UpdateKind::Auto,
+async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
+    // Infer the kind from a matching loaded report; fall back to the CLI hint for
+    // a standalone RRID that was never loaded (no workflow to read).
+    let loaded_matches = session
+        .metadata()
+        .rrid()
+        .is_some_and(|r| r.to_string() == rrid);
+    let kind = if loaded_matches {
+        match session.metadata().workflow() {
+            Workflow::Kernel => UpdateKind::Kernel,
+            _ => UpdateKind::Auto,
+        }
+    } else if kernel_hint {
+        UpdateKind::Kernel
+    } else {
+        UpdateKind::Auto
     };
 
     // Drop the stale checkout so the reload re-checks-out the new build. Upstream
@@ -251,9 +299,11 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
-    fn name_and_fanout_scope() {
+    fn name_and_single_scope() {
         assert_eq!(Regenerate.name(), "regenerate");
-        assert_eq!(Regenerate.scope(), Scope::Fanout);
+        // Single, not Fanout: it names its own target (positional RRID or the
+        // active template) and must never fan out across sibling templates.
+        assert_eq!(Regenerate.scope(), Scope::Single);
     }
 
     #[test]
@@ -409,6 +459,113 @@ mod tests {
             buf.contents().contains("TeReGen unreachable"),
             "{}",
             buf.contents()
+        );
+    }
+
+    /// The standalone `regenerate <RRID>` on an **empty** session (nothing
+    /// loaded) breaks the catch-22: it reaches the TeReGen POST (the finished
+    /// status only comes back if the POST landed) instead of erroring
+    /// `Metadata not loaded`, and proceeds to the reload leg. The auto workflow's
+    /// Gitea hash-check needs a token this offline test can't satisfy, so the
+    /// post-regenerate load degrades to a NullReport — registration on success is
+    /// proven by the kind-agnostic kernel test below.
+    #[tokio::test]
+    async fn standalone_rrid_regenerates_without_load_first() {
+        let rrid = "SUSE:SLFO:1.2:6311";
+        let server = MockServer::start().await;
+        mount_success(&server, rrid).await;
+
+        let (mut session, buf) = empty_session();
+        let tmp = tempfile::tempdir().unwrap();
+        session.config = config_for(&server);
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+
+        let args = matches(&Regenerate, &[rrid]);
+        // Crucially: no `require_update` error despite nothing being loaded.
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("regenerated — reloading"), "{out}");
+    }
+
+    /// A standalone `-k <RRID>` auto-loads with the kernel workflow (decision 3),
+    /// proving the success path registers the RRID (the registration is
+    /// kind-agnostic in `load_update`).
+    #[tokio::test]
+    async fn standalone_rrid_kernel_hint_loads_kernel_workflow() {
+        let rrid = "SUSE:Maintenance:24993:275518";
+        let server = MockServer::start().await;
+        mount_success(&server, rrid).await;
+
+        let (mut session, _buf) = empty_session();
+        let tmp = tempfile::tempdir().unwrap();
+        // Seed an on-disk template so the post-regenerate load actually reads a
+        // report (rather than degrading to a NullReport), letting us assert its
+        // workflow is Kernel.
+        let dir = tmp.path().join(rrid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log"), "log\n").unwrap();
+        std::fs::write(
+            dir.join("metadata.json"),
+            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
+        )
+        .unwrap();
+        session.config = config_for(&server);
+        session.config.template_dir = tmp.path().to_path_buf();
+
+        let args = matches(&Regenerate, &["-k", rrid]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            session.templates.contains(rrid),
+            "RRID should be registered"
+        );
+        assert_eq!(session.metadata().workflow(), Workflow::Kernel);
+    }
+
+    /// `--no-wait` with an explicit RRID on an empty session enqueues and returns
+    /// without loading anything (decision 2).
+    #[tokio::test]
+    async fn standalone_rrid_no_wait_enqueues_without_load() {
+        let rrid = "SUSE:SLFO:1.2:6311";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{rrid}/regenerate")))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 9})))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = empty_session();
+        session.config = config_for(&server);
+        let args = matches(&Regenerate, &["--no-wait", rrid]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("Regeneration job 9 enqueued"), "{out}");
+        assert!(out.contains("Not waiting"), "{out}");
+        // No reload / no registry change on --no-wait.
+        assert!(
+            !session.templates.contains(rrid),
+            "--no-wait must not load the template"
+        );
+    }
+
+    #[test]
+    fn accepts_optional_rrid_and_kernel_hint() {
+        let cmd = Regenerate.configure(clap::Command::new("regenerate").no_binary_name(true));
+        // Bare (no RRID) still parses (falls back to the loaded template).
+        assert!(cmd.clone().try_get_matches_from([] as [&str; 0]).is_ok());
+        // Positional RRID parses.
+        assert!(
+            cmd.clone()
+                .try_get_matches_from(["SUSE:SLFO:1.2:6311"])
+                .is_ok()
+        );
+        // -k with a positional RRID parses.
+        assert!(
+            cmd.try_get_matches_from(["-k", "SUSE:Maintenance:1:1"])
+                .is_ok()
         );
     }
 }

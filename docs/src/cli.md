@@ -960,10 +960,14 @@ Options:
 
 ## `regenerate`
 
-Regenerates the loaded update's test-report template via the TeReGen API.
+Regenerates a test-report template via the TeReGen API (a given RRID need not be loaded first).
 
 ```text
-Usage: regenerate [OPTIONS]
+Usage: regenerate [OPTIONS] [RRID]
+
+Arguments:
+  [RRID]
+          template to regenerate even if not loaded (default: the loaded template)
 
 Options:
       --force
@@ -974,6 +978,9 @@ Options:
 
       --no-wait
           enqueue the job and return without waiting or reloading
+
+  -k, --kernel
+          load the standalone RRID as a kernel update (default: auto)
 
   -h, --help
           Print help
