@@ -25,6 +25,8 @@ import asyncio
 import copy
 import logging
 import sys
+import weakref
+from contextlib import asynccontextmanager
 from logging import Logger
 from typing import TYPE_CHECKING
 
@@ -56,6 +58,12 @@ _SHUTDOWN_LEAVES: tuple[type[BaseException], ...] = (
     SystemExit,
     asyncio.CancelledError,
 )
+
+#: Event loops on which the mtui-mcp command pool has already been installed as
+#: the default executor. Under http the lifespan runs once per session on one
+#: shared loop, so this guards against reinstalling (and leaking) a pool per
+#: session; a WeakSet lets ephemeral test loops drop out on GC.
+_command_pool_loops: weakref.WeakSet[asyncio.AbstractEventLoop] = weakref.WeakSet()
 
 
 def _is_clean_shutdown_group(exc: BaseException) -> bool:
@@ -182,10 +190,47 @@ def main() -> int:
     else:
         provider = build_session(cfg, logger)
 
+    # Install a process-wide thread pool as the event loop's default executor,
+    # so ``asyncio.to_thread`` (which every blocking command body funnels
+    # through, session.py::_run_sync) uses an explicitly-sized, configurable
+    # pool instead of asyncio's implicit default. At the default size this is
+    # behaviourally equivalent to asyncio's own default; it lets an http
+    # deployment with a raised ``[mcp] session_cap`` also raise command
+    # concurrency past the ~32-thread default that would otherwise cap it
+    # regardless of session count. It is a :class:`ContextExecutor` so the
+    # per-call log-capture contextvars still propagate into the worker threads.
+    #
+    # Under the http transport FastMCP enters this lifespan once PER SESSION,
+    # all on the single shared event loop. Install the pool exactly once per
+    # loop (first session) and never tear it down per session -- shutting it
+    # down when one session ends would poison the shared default executor for
+    # every still-live peer (their next ``to_thread`` would raise "cannot
+    # schedule new futures after shutdown"). asyncio never shut down its own
+    # implicit default either; ``concurrent.futures``' atexit join reclaims the
+    # pool at interpreter exit.
+    @asynccontextmanager
+    async def _command_pool_lifespan(_server):
+        from ..support.concurrency import ContextExecutor
+
+        loop = asyncio.get_running_loop()
+        if loop not in _command_pool_loops:
+            pool = ContextExecutor(max_workers=cfg.mcp_command_pool_size)
+            loop.set_default_executor(pool)
+            _command_pool_loops.add(loop)
+            logger.info(
+                "mtui-mcp: command thread pool size=%d", cfg.mcp_command_pool_size
+            )
+        yield {}
+
     # ``host``/``port`` are constructor-time settings in the SDK and
     # only consulted under the ``streamable-http`` transport; passing
     # them under stdio is a harmless no-op.
-    mcp = FastMCP(name="mtui", host=args.host, port=args.port)
+    mcp = FastMCP(
+        name="mtui",
+        host=args.host,
+        port=args.port,
+        lifespan=_command_pool_lifespan,
+    )
     build_tools(mcp, provider)
     register_testreport_tools(mcp, provider)
     register_job_tools(mcp, provider)

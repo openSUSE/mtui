@@ -310,6 +310,23 @@ integer; set to ``0`` to disable reaping. Ignored under the ``stdio``
 transport. See :doc:`mcp`.
 
 
+``mcp.command_pool_size``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int
+  | **default**
+  |     ``min(32, cpu + 4)``
+
+Size of the thread pool that runs blocking command bodies under ``mtui-mcp``
+(installed as the asyncio event loop's default executor, which
+``asyncio.to_thread`` uses). The default matches asyncio's own default pool
+size, so ``stdio`` and modest ``http`` deployments are unchanged. When you
+raise ``session_cap`` to admit a large agent fleet on the ``http`` transport,
+raise this too -- otherwise the number of command bodies executing at once
+stays pinned near 32 regardless of how many sessions connect, and calls queue.
+Must be a positive integer. See :doc:`mcp`.
+
+
 ``mcp.tool_profile``
 ~~~~~~~~~~~~~~~~~~~~
   | **type**
@@ -599,6 +616,7 @@ Example
   [mcp]
   session_cap = 32
   session_idle_timeout = 1800
+  command_pool_size = 36
   tool_profile = full
   max_output_bytes = 100000
   

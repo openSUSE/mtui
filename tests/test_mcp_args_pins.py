@@ -332,8 +332,13 @@ def test_main_constructs_fastmcp_with_parsed_host_and_port_as_int(
     rc = mcp_main.main()
 
     assert rc == 0
-    fastmcp_cls.assert_called_once_with(name="mtui", host="0.0.0.0", port=9000)
+    fastmcp_cls.assert_called_once()
     call_kwargs: Mapping[str, Any] = fastmcp_cls.call_args.kwargs
+    assert (call_kwargs["name"], call_kwargs["host"], call_kwargs["port"]) == (
+        "mtui",
+        "0.0.0.0",
+        9000,
+    )
     assert isinstance(call_kwargs["port"], int)
     fastmcp_instance.run.assert_called_once_with(transport="streamable-http")
 
@@ -349,6 +354,12 @@ def test_main_constructs_fastmcp_with_default_host_and_port_under_stdio(
     rc = mcp_main.main()
 
     assert rc == 0
-    fastmcp_cls.assert_called_once_with(name="mtui", host="127.0.0.1", port=8000)
-    assert isinstance(fastmcp_cls.call_args.kwargs["port"], int)
+    fastmcp_cls.assert_called_once()
+    call_kwargs = fastmcp_cls.call_args.kwargs
+    assert (call_kwargs["name"], call_kwargs["host"], call_kwargs["port"]) == (
+        "mtui",
+        "127.0.0.1",
+        8000,
+    )
+    assert isinstance(call_kwargs["port"], int)
     fastmcp_instance.run.assert_called_once_with()

@@ -136,6 +136,7 @@ def stub_environment(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     cfg = MagicMock(name="Config")
     cfg.mcp_session_cap = 7
     cfg.mcp_session_idle_timeout = 123.0
+    cfg.mcp_command_pool_size = 17
     cfg.mcp_tool_profile = "readonly"
     cfg.mcp_tools_allow = ("whoami",)
     cfg.mcp_tools_deny = ("edit",)
@@ -427,7 +428,15 @@ def test_main_constructs_fastmcp_with_name_and_default_host_port(
     monkeypatch.setattr("sys.argv", ["mtui-mcp"])
     rc = mcp_main.main()
     assert rc == 0
-    fastmcp_cls.assert_called_once_with(name="mtui", host="127.0.0.1", port=8000)
+    fastmcp_cls.assert_called_once()
+    kwargs = fastmcp_cls.call_args.kwargs
+    assert (kwargs["name"], kwargs["host"], kwargs["port"]) == (
+        "mtui",
+        "127.0.0.1",
+        8000,
+    )
+    # The command-pool lifespan is wired in (installs the loop's default pool).
+    assert callable(kwargs["lifespan"])
 
 
 def test_main_constructs_fastmcp_with_custom_host_and_port(
@@ -439,7 +448,84 @@ def test_main_constructs_fastmcp_with_custom_host_and_port(
     monkeypatch.setattr("sys.argv", ["mtui-mcp", "--host", "0.0.0.0", "--port", "9001"])
     rc = mcp_main.main()
     assert rc == 0
-    fastmcp_cls.assert_called_once_with(name="mtui", host="0.0.0.0", port=9001)
+    fastmcp_cls.assert_called_once()
+    kwargs = fastmcp_cls.call_args.kwargs
+    assert (kwargs["name"], kwargs["host"], kwargs["port"]) == ("mtui", "0.0.0.0", 9001)
+    assert callable(kwargs["lifespan"])
+
+
+def test_command_pool_lifespan_installs_sized_context_executor(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_environment: dict[str, Any],
+) -> None:
+    """The lifespan installs a ContextExecutor of the configured size.
+
+    Entering the lifespan must set the event loop's default executor to a
+    ``ContextExecutor`` (so ``asyncio.to_thread`` for command bodies uses it
+    and per-call log-capture contextvars still propagate) sized to
+    ``[mcp] command_pool_size`` -- default ``min(32, cpu+4)``.
+    """
+    import asyncio
+
+    from mtui.support.concurrency import ContextExecutor
+
+    fastmcp_cls, _ = _install_fake_fastmcp(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["mtui-mcp"])
+    assert mcp_main.main() == 0
+    lifespan = fastmcp_cls.call_args.kwargs["lifespan"]
+
+    installed: list[Any] = []
+
+    async def _drive() -> None:
+        loop = asyncio.get_running_loop()
+        real_set = loop.set_default_executor
+
+        def _spy(ex):
+            installed.append(ex)
+            return real_set(ex)
+
+        loop.set_default_executor = _spy  # ty: ignore[invalid-assignment]
+        async with lifespan(None):
+            pass
+
+    asyncio.run(_drive())
+
+    assert len(installed) == 1
+    pool = installed[0]
+    assert isinstance(pool, ContextExecutor)
+    # Sized from cfg.mcp_command_pool_size (17 in the stub), proving the
+    # lifespan reads the config knob rather than a hardcoded default.
+    assert pool._max_workers == 17
+
+
+def test_command_pool_lifespan_survives_per_session_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_environment: dict[str, Any],
+) -> None:
+    """A second session's lifespan exit must not poison the shared pool.
+
+    Under http FastMCP enters the lifespan once per session on one shared
+    loop. Installing/tearing the loop default executor down per session would
+    break every live peer -- their next ``to_thread`` would raise "cannot
+    schedule new futures after shutdown". Entering the lifespan twice on one
+    loop and exiting the inner one must leave ``to_thread`` working; this test
+    is RED against a per-session install/shutdown implementation.
+    """
+    import asyncio
+
+    fastmcp_cls, _ = _install_fake_fastmcp(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["mtui-mcp"])
+    assert mcp_main.main() == 0
+    lifespan = fastmcp_cls.call_args.kwargs["lifespan"]
+
+    async def _drive() -> None:
+        async with lifespan(None):  # session A installs the pool
+            async with lifespan(None):  # session B on the same loop -- no-op
+                pass  # session B ends; must NOT shut the shared pool down
+            # peer A is still live: its next to_thread must still succeed
+            assert await asyncio.to_thread(lambda: "ok") == "ok"
+
+    asyncio.run(_drive())
 
     fastmcp_instance = fastmcp_cls.return_value
     # The same instance is what gets threaded into every registration call.

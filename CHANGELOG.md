@@ -35,6 +35,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   still-shutting-down sshd); only the serialization is removed. Most visible on
   transactional (SL Micro) updates, which reboot every host.
 
+### Added
+
+- New `[mcp] command_pool_size` option sizes the thread pool that runs blocking
+  command bodies under `mtui-mcp` (installed as the asyncio loop's default
+  executor). It defaults to `min(32, cpu+4)` — asyncio's own default — so stdio
+  and modest http deployments are unchanged. An http deployment that raises
+  `[mcp] session_cap` for a large agent fleet should raise this too; otherwise
+  command concurrency stays pinned near 32 regardless of how many sessions
+  connect.
+
 ## 19.0.1 - 2026-07-17
 
 ### Added

@@ -11,7 +11,7 @@ from argparse import Namespace
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from logging import getLogger
-from os import getenv
+from os import getenv, process_cpu_count
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -266,6 +266,7 @@ class Config:
     # -- mtui-mcp server (http transport) per-client session registry --
     mcp_session_cap: int
     mcp_session_idle_timeout: int
+    mcp_command_pool_size: int
 
     # -- mtui-mcp tool surface / output budget (both transports) --
     mcp_tool_profile: str
@@ -632,6 +633,26 @@ class Config:
                 "mcp_session_idle_timeout",
                 ("mcp", "session_idle_timeout"),
                 1800,
+                _parse_positive_int,
+                getint,
+            ),
+            # Size of the process-wide thread pool that runs blocking command
+            # bodies under ``mtui-mcp`` (installed as the asyncio loop's default
+            # executor, so ``asyncio.to_thread`` uses it). The default matches
+            # asyncio's own default pool size, ``min(32, cpu+4)``, so stdio and
+            # modest http deployments are unchanged. Operators running the http
+            # transport with a raised ``session_cap`` should raise this too --
+            # otherwise command concurrency stays pinned at ~32 regardless of
+            # how many sessions connect. Ignored effect under stdio (one client)
+            # but harmless to set.
+            ConfigOption(
+                "mcp_command_pool_size",
+                ("mcp", "command_pool_size"),
+                # Matches asyncio's own default executor size, which is
+                # affinity- and cgroup-aware via ``process_cpu_count`` rather
+                # than ``cpu_count``, so the default equals what asyncio's
+                # implicit ``to_thread`` pool used before this change.
+                min(32, (process_cpu_count() or 1) + 4),
                 _parse_positive_int,
                 getint,
             ),

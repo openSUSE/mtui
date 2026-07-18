@@ -394,6 +394,32 @@ def test_invalid_value_logs_one_error_and_falls_back(
     assert errors[0].exc_info is None  # one line, no traceback
 
 
+def test_mcp_command_pool_size_reads_and_defaults(tmp_path, monkeypatch):
+    """``[mcp] command_pool_size`` reads, defaults to min(32, cpu+4), rejects bad."""
+    from os import process_cpu_count
+
+    default = min(32, (process_cpu_count() or 1) + 4)
+
+    empty = tmp_path / "empty.cfg"
+    empty.write_text("")
+    assert config.Config(empty).mcp_command_pool_size == default
+
+    explicit = tmp_path / "set.cfg"
+    explicit.write_text("[mcp]\ncommand_pool_size = 128\n")
+    assert config.Config(explicit).mcp_command_pool_size == 128
+
+    bad = tmp_path / "bad.cfg"
+    bad.write_text("[mcp]\ncommand_pool_size = -1\n")
+    assert config.Config(bad).mcp_command_pool_size == default
+
+    # Host-independent shape pins (the build host's CPU count would otherwise
+    # mask the formula): below the cap the offset is +4; above it, capped at 32.
+    monkeypatch.setattr(config, "process_cpu_count", lambda: 4)
+    assert config.Config(empty).mcp_command_pool_size == 8
+    monkeypatch.setattr(config, "process_cpu_count", lambda: 64)
+    assert config.Config(empty).mcp_command_pool_size == 32
+
+
 @pytest.mark.parametrize(
     ("ini_section", "ini_key", "ini_value", "attr", "expected"),
     [
