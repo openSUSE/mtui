@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use xtask::generate_into;
+use xtask::{CLI_REFERENCE_FILE, generate_docs_into, generate_into, render_cli_reference};
 
 /// The two binaries and their per-shell completion file names, plus the man page.
 /// clap names bash `<bin>.bash`, fish `<bin>.fish`, and zsh `_<bin>`.
@@ -91,4 +91,60 @@ fn generate_into_is_idempotent() {
     let second = std::fs::read(dist.join("man").join("mtui.1")).unwrap();
 
     assert_eq!(first, second, "re-running gen must be byte-identical");
+}
+
+/// The checked-in CLI reference, resolved relative to this crate's manifest.
+fn checked_in_cli_reference() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask manifest dir has a parent (workspace root)")
+        .join("docs")
+        .join("src")
+        .join(CLI_REFERENCE_FILE)
+}
+
+#[test]
+fn cli_reference_lists_known_commands_with_aliases() {
+    let doc = render_cli_reference();
+    // A representative command from each wave appears as a section.
+    for name in ["run", "update", "checkout", "openqa_overview", "config"] {
+        assert!(
+            doc.contains(&format!("## `{name}`")),
+            "cli reference should document `{name}`"
+        );
+    }
+    // `quit`'s REPL aliases are surfaced.
+    assert!(
+        doc.contains("*Aliases:*") && doc.contains("`exit`") && doc.contains("`EOF`"),
+        "cli reference should list command aliases"
+    );
+    // The shared template flags are documented once, in the preamble.
+    assert!(doc.contains("`-T/--template <RRID>`") && doc.contains("`--all-templates`"));
+}
+
+#[test]
+fn generate_docs_into_is_idempotent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    generate_docs_into(dir.path()).expect("first run");
+    let first = std::fs::read(dir.path().join(CLI_REFERENCE_FILE)).unwrap();
+    generate_docs_into(dir.path()).expect("second run");
+    let second = std::fs::read(dir.path().join(CLI_REFERENCE_FILE)).unwrap();
+    assert_eq!(first, second, "re-running gen-docs must be byte-identical");
+}
+
+/// Drift guard: the committed `docs/src/cli.md` must match what the registry
+/// generates. If this fails, the command surface changed — run
+/// `cargo xtask gen-docs` and commit the result.
+#[test]
+fn checked_in_cli_reference_is_up_to_date() {
+    let path = checked_in_cli_reference();
+    let on_disk = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    let generated = render_cli_reference();
+    assert_eq!(
+        on_disk,
+        generated,
+        "{} is stale; run `cargo xtask gen-docs` and commit the result",
+        path.display()
+    );
 }

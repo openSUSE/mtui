@@ -183,7 +183,7 @@ and treat them as golden.
   encodes the exact expected behavior.
 
 ## Style & error handling
-- Edition 2024, MSRV 1.85. `rustfmt` defaults; `clippy` clean with
+- Edition 2024, MSRV 1.96. `rustfmt` defaults; `clippy` clean with
   `-D warnings`.
 - Errors: `thiserror` enums in library crates, `anyhow` only at binary
   boundaries. Prefer a typed `Result` over MTUI's `log + return None`; where you

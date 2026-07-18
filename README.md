@@ -1,11 +1,12 @@
 # mtui-rs
 
-> **Status: early work in progress (Phase 0 complete).** This is a ground-up Rust
-> rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The architecture
-> and phased plan are defined (`PLAN-highlevel.md`; per-phase tasks tracked in beads). The
-> Cargo workspace skeleton builds and is CI-gated; no domain logic has landed yet
-> (Phase 1+). Commands and flags below describe the **intended** interface, not a
-> shipped one.
+> **Status: feature-complete, in packaging (Phase 8).** This is a ground-up Rust
+> rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The core
+> maintenance workflow, parallel SSH host fan-out, the native OBS/IBS and Gitea
+> review backends, openQA/QEM integration, the testreport lifecycle, and the
+> `mtui-mcp` server have all landed and are CI-gated; work now focuses on
+> packaging and distribution (`PLAN-highlevel.md`; per-phase tasks tracked in
+> beads). See [`docs/`](docs) for the user guide and command reference.
 
 An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
 **U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
@@ -46,7 +47,7 @@ authorization. HTTP session isolation is likewise not caller authentication.
 Keep the HTTP transport on its default loopback interface or place it behind an
 authenticated boundary trusted to operate the remaining maintenance tools.
 
-## Planned features
+## Features
 
 - Parallel SSH command execution across reference hosts (`run`, `update`,
   `install`, `prepare`, `downgrade`, …) with per-host `enabled`/`disabled`/
@@ -67,7 +68,8 @@ authenticated boundary trusted to operate the remaining maintenance tools.
 
 Requires a Rust toolchain (edition 2024, **MSRV 1.96**). MSRV is pinned via
 `rust-version` in `Cargo.toml`; there is no `rust-toolchain.toml` (the reference
-dev environment uses a Homebrew rustc with no `rustup`).
+dev environment uses a Homebrew rustc with no `rustup`). See [`docs/`](docs) for
+build-from-source, install, and packaging details.
 
 ```sh
 cargo build --workspace              # build all crates
@@ -97,6 +99,9 @@ configured via the `[obs]` table (`api_url`, `request_timeout`).
 
 ## Documentation
 
+- [`docs/`](docs) — the user guide (mdBook): installation, configuration, the
+  generated command reference, the MCP server, and an FAQ. Build with
+  `mdbook build docs`, or read the Markdown under `docs/src/` directly.
 - [`PLAN-highlevel.md`](PLAN-highlevel.md) — architecture, crate layout,
   dependency mapping, and the 8-phase roadmap.
 - Per-phase task breakdown is tracked in [beads](https://github.com/Dicklesworthstone/beads_rust)
