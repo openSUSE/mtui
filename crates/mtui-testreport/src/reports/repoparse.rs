@@ -36,6 +36,21 @@ use tracing::error;
 
 use crate::products::{normalize, normalize_16};
 
+/// A product string sourced from external metadata (`metadata.json`) was not
+/// shaped `"<name> <version> (<archs>)"`.
+///
+/// [`parse_product`] returns this instead of panicking so a malformed template
+/// degrades to "no repos for that entry" rather than aborting the process under
+/// release `panic=abort`.
+#[derive(Debug, thiserror::Error)]
+#[error("malformed product string {product:?}: {reason}")]
+pub struct ProductParseError {
+    /// The offending product string.
+    pub product: String,
+    /// Why it failed to parse.
+    pub reason: &'static str,
+}
+
 /// Validates a derived repository URL before it becomes part of an
 /// `update_repos` map (and thus a root `zypper ar`/`rr` argument).
 ///
@@ -74,25 +89,28 @@ fn urljoin(base: &str, tail: &str) -> String {
 /// `")"`, splits the arch list on `", "`, and the base on `" "` — taking the
 /// first two whitespace tokens as `(name, version)`.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Mirrors upstream, which indexes `base[0]`/`base[1]` and splits on `" ("`
-/// unconditionally: a string not shaped `"<name> <version> (<archs>)"` is a
-/// malformed template and panics rather than silently producing wrong repos.
-#[must_use]
-pub fn parse_product(product: &str) -> Vec<SystemProduct> {
+/// Returns [`ProductParseError`] when `product` is not shaped
+/// `"<name> <version> (<archs>)"`: missing the `" ("` arch-list delimiter, or a
+/// base lacking a name or version token. Externally-sourced metadata is
+/// untrusted, so a malformed string is a typed error rather than a panic (which
+/// under release `panic=abort` would terminate the process).
+pub fn parse_product(product: &str) -> Result<Vec<SystemProduct>, ProductParseError> {
+    let err = |reason| ProductParseError {
+        product: product.to_owned(),
+        reason,
+    };
     let (b, a) = product
         .split_once(" (")
-        .expect("product string must contain ' (' before the arch list");
+        .ok_or_else(|| err("missing ' (' before the arch list"))?;
     let archs = a.trim_end_matches(')').split(", ");
     let mut base = b.split(' ');
-    let name = base.next().expect("product string must have a name token");
-    let version = base
-        .next()
-        .expect("product string must have a version token");
-    archs
+    let name = base.next().ok_or_else(|| err("missing name token"))?;
+    let version = base.next().ok_or_else(|| err("missing version token"))?;
+    Ok(archs
         .map(|arch| SystemProduct::new(name, version, arch))
-        .collect()
+        .collect())
 }
 
 /// Derives the update-repo map for SUSE Linux (maintenance `1.1`, still in IBS).
@@ -103,12 +121,27 @@ pub fn parse_product(product: &str) -> Vec<SystemProduct> {
 pub fn slrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProduct, String> {
     products
         .iter()
-        .flat_map(|pd| parse_product(pd))
+        .flat_map(|pd| parse_products(pd))
         .filter_map(|x| {
             let tail = format!("images/repo/{}-{}-{}/", x.name, x.version, x.arch);
             validated_url(urljoin(repository, &tail)).map(|url| (x, url))
         })
         .collect()
+}
+
+/// Parses a product string, dropping (and logging at ERROR) a malformed one so a
+/// single bad entry never poisons the whole `*repoparse` batch.
+///
+/// This is the lenient wrapper the `*repoparse` helpers use, mirroring
+/// [`validated_url`]'s drop-and-log stance for invalid URLs.
+fn parse_products(product: &str) -> Vec<SystemProduct> {
+    match parse_product(product) {
+        Ok(ps) => ps,
+        Err(e) => {
+            error!(error = %e, "skipping malformed product string");
+            Vec::new()
+        }
+    }
 }
 
 /// Derives the update-repo map for git-backed reports.
@@ -119,7 +152,7 @@ pub fn slrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProdu
 pub fn gitrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProduct, String> {
     products
         .iter()
-        .flat_map(|pd| parse_product(pd))
+        .flat_map(|pd| parse_products(pd))
         .filter_map(|x| validated_url(urljoin(repository, "standard")).map(|url| (x, url)))
         .collect()
 }
@@ -136,7 +169,7 @@ pub fn reporepoparse(
 ) -> HashMap<SystemProduct, String> {
     let mut out = HashMap::new();
     for pd in products {
-        for ps in parse_product(pd) {
+        for ps in parse_products(pd) {
             let needle = format!("{}-{}-{}", ps.name, ps.version, ps.arch);
             for repo in repositories {
                 if repo.contains(&needle)

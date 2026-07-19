@@ -12,9 +12,50 @@ use mtui_types::SystemProduct;
 
 #[test]
 fn parse_product_splits_archs() {
-    let products = parse_product("SLES 15 (x86_64, aarch64)");
+    let products = parse_product("SLES 15 (x86_64, aarch64)").expect("well-formed product");
     assert!(products.contains(&SystemProduct::new("SLES", "15", "x86_64")));
     assert!(products.contains(&SystemProduct::new("SLES", "15", "aarch64")));
+}
+
+#[test]
+fn parse_product_rejects_malformed_strings() {
+    // Externally-sourced (metadata.json) product strings are untrusted: a string
+    // not shaped "<name> <version> (<archs>)" is a typed error, never a panic
+    // (which under release panic=abort would terminate the process).
+    assert!(
+        parse_product("no-paren-here").is_err(),
+        "missing ' (' should error"
+    );
+    assert!(
+        parse_product(" (x86_64)").is_err(),
+        "missing name/version token should error"
+    );
+}
+
+#[test]
+fn repoparse_variants_skip_malformed_and_keep_valid() {
+    // A single malformed entry must be dropped-and-logged, never poisoning the
+    // rest of the batch. Each variant keeps the well-formed product's repo.
+    let products = vec!["garbage".to_string(), "SLES 15 (x86_64)".to_string()];
+    let product = SystemProduct::new("SLES", "15", "x86_64");
+
+    let repos = slrepoparse("https://example.com", &products);
+    assert_eq!(repos.len(), 1);
+    assert_eq!(
+        repos[&product],
+        "https://example.com/images/repo/SLES-15-x86_64/"
+    );
+
+    let repos = gitrepoparse("https://example.com", &products);
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[&product], "https://example.com/standard");
+
+    let repos = reporepoparse(
+        &["https://example.com/SLES-15-x86_64/".to_string()],
+        &products,
+    );
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[&product], "https://example.com/SLES-15-x86_64/");
 }
 
 #[test]
