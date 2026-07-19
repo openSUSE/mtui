@@ -11,7 +11,10 @@ default:
 variables:
   CARGO_TERM_COLOR: always
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
-  RUSTFLAGS: "-D warnings"
+  # NB: RUSTFLAGS="-D warnings" is set per-job (see .deny_warnings) rather than
+  # globally: as a global it would also apply while `cargo install`-ing tooling
+  # (e.g. cargo-llvm-cov in `coverage`), where an upstream dependency emitting a
+  # warning would fail the install for reasons unrelated to our code.
   # Renovate config (path inside the repo).
   RENOVATE_CONFIG_FILE: ".gitlab/renovate.json"
   # Restrict Renovate to this project; never autodiscover or onboard others.
@@ -40,6 +43,13 @@ stages:
 .svn_fixture: &svn_fixture
   - apt-get update -qq && apt-get install -y -qq subversion
 
+# Turn warnings into errors for jobs that compile our workspace, mirroring the
+# local DoD. Kept off the global `variables:` so it never leaks into `cargo
+# install` of CI tooling (see the note above `variables:`).
+.deny_warnings:
+  variables:
+    RUSTFLAGS: "-D warnings"
+
 cache:
   key:
     files:
@@ -57,6 +67,7 @@ fmt:
 
 clippy:
   stage: check
+  extends: .deny_warnings
   before_script:
     - rustup component add clippy
   script:
@@ -65,18 +76,20 @@ clippy:
 # Catch feature-gate rot: code that only compiles under the default feature set,
 # or breaks when the optional features (mcp/notify/shell) are toggled. Bounding
 # the two extremes (--no-default-features and --all-features) exercises every
-# gate; RUSTFLAGS=-D warnings (from variables:) keeps gated code warning-clean.
+# gate; RUSTFLAGS=-D warnings (via .deny_warnings) keeps gated code warning-clean.
 # Compile-only on purpose: the default `test` job covers behavior, and a full
 # --all-features test run roughly doubles an already long suite for little added
 # signal beyond compilation.
 feature-matrix:
   stage: check
+  extends: .deny_warnings
   script:
     - cargo build --workspace --no-default-features
     - cargo build --workspace --all-features
 
 test:
   stage: test
+  extends: .deny_warnings
   before_script:
     - *ssh_fixture
     - *svn_fixture
@@ -92,6 +105,7 @@ test:
 # axum/rmcp tree that a full --all-features test run would (see AGENTS.md DoD).
 test-mcp:
   stage: test
+  extends: .deny_warnings
   script:
     - cargo test -p mtui-mcp -F mcp
 

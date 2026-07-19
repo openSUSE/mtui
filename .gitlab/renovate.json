@@ -4,14 +4,14 @@
     "config:recommended",
     ":disableMajorUpdates"
   ],
+  "timezone": "Europe/Prague",
   "enabledManagers": [
     "cargo",
-    "gitlabci",
-    "pre-commit"
+    "gitlabci"
   ],
-  "pre-commit": {
-    "enabled": true
-  },
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["* * * * 1,4"]
@@ -28,5 +28,10 @@
       "groupName": "dependency updates",
       "automerge": false
     }
-  ]
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "automerge": false
+  },
+  "osvVulnerabilityAlerts": true
 }

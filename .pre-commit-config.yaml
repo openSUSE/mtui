@@ -1,6 +1,8 @@
 # Rust-native pre-commit hooks mirroring the CI `check` stage. Install with
 # `pre-commit install`; run against everything with `pre-commit run --all-files`.
-# Renovate's `pre-commit` manager keeps the (none-currently-remote) revs fresh.
+# All hooks are `repo: local` (no pinned remote revs), so Renovate's pre-commit
+# manager has nothing to update and is intentionally left disabled in
+# .gitlab/renovate.json. If a remote hook repo is added here, re-enable it there.
 repos:
   - repo: local
     hooks:
