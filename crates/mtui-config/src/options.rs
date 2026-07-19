@@ -209,6 +209,17 @@ pub(crate) fn default_openqa_instance() -> String {
 pub(crate) fn default_openqa_instance_baremetal() -> String {
     "http://openqa.qam.suse.cz".to_owned()
 }
+/// Default trusted Gitea origin the PR-review token may be sent to.
+///
+/// A redesign addition with no upstream counterpart (upstream mtui derives the
+/// Gitea host solely from attacker-influenceable checked-out metadata). The
+/// token is only attached to requests whose origin matches this value, so it
+/// defaults to the internal SUSE Gitea (`src.suse.de`) that serves SLFO so the
+/// standard workflow keeps working out-of-the-box; point it elsewhere (e.g.
+/// `https://src.opensuse.org`) for other instances.
+pub(crate) fn default_gitea_url() -> String {
+    "https://src.suse.de".to_owned()
+}
 pub(crate) fn default_openqa_install_distri() -> String {
     "sle".to_owned()
 }
@@ -387,6 +398,7 @@ pub(crate) struct TargetSection {
 #[serde(default)]
 pub(crate) struct GiteaSection {
     pub token: Option<String>,
+    pub url: Option<String>,
 }
 
 /// `[lock]` table — remote-lock behaviour on target hosts.
@@ -509,6 +521,7 @@ impl RawConfig {
         take!(svn, path);
         take!(target, tempdir);
         take!(gitea, token);
+        take!(gitea, url);
         take!(lock, reap_stale);
         take!(lock, stale_age);
         take!(lock, pi_autolock);
@@ -609,6 +622,11 @@ pub struct Config {
     /// API token for the Gitea PR review workflow. Empty by default; the Gitea
     /// connector refuses to build without it.
     pub gitea_token: String,
+    /// Trusted Gitea origin the [`gitea_token`](Self::gitea_token) may be sent
+    /// to. The Gitea connector attaches the token only to requests whose origin
+    /// (scheme/host/port) matches this; metadata-supplied PR URLs pointing
+    /// anywhere else are refused. Defaults to `https://src.suse.de`.
+    pub gitea_url: String,
 
     // [target]
     /// Remote scratch directory on target hosts.
@@ -715,6 +733,7 @@ impl Default for Config {
             openqa_install_distri: default_openqa_install_distri(),
             svn_path: default_svn_path(),
             gitea_token: String::new(),
+            gitea_url: default_gitea_url(),
             target_tempdir: default_target_tempdir(),
             lock_reap_stale: default_lock_reap_stale(),
             lock_stale_age: default_lock_stale_age(),
@@ -858,6 +877,7 @@ impl Config {
             openqa_install_distri: raw.openqa.distri.unwrap_or(d.openqa_install_distri),
             svn_path: raw.svn.path.unwrap_or(d.svn_path),
             gitea_token: raw.gitea.token.unwrap_or(d.gitea_token),
+            gitea_url: validated_url!(raw.gitea.url, "gitea_url", d.gitea_url),
             target_tempdir: raw
                 .target
                 .tempdir
@@ -1023,6 +1043,19 @@ mod tests {
         // A [gitea] table sets it.
         let raw: RawConfig = toml::from_str("[gitea]\ntoken = \"abc123\"\n").unwrap();
         assert_eq!(Config::from_raw(raw).gitea_token, "abc123");
+    }
+
+    #[test]
+    fn gitea_url_defaults_to_src_suse_de_and_parses() {
+        // Default is the internal SUSE Gitea (the token's only trusted origin).
+        assert_eq!(Config::default().gitea_url, "https://src.suse.de");
+        // A [gitea] table overrides it (validated as an http(s) URL).
+        let raw: RawConfig =
+            toml::from_str("[gitea]\nurl = \"https://src.opensuse.org\"\n").unwrap();
+        assert_eq!(Config::from_raw(raw).gitea_url, "https://src.opensuse.org");
+        // A malformed value falls back to the default (lenient loading).
+        let bad: RawConfig = toml::from_str("[gitea]\nurl = \"not a url\"\n").unwrap();
+        assert_eq!(Config::from_raw(bad).gitea_url, "https://src.suse.de");
     }
 
     #[test]

@@ -490,6 +490,7 @@ async fn make_testreport_slfo_hash_match_loads() {
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    config.gitea_url = server.uri();
     point_dashboard(&mut config, &dashboard);
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
@@ -546,6 +547,7 @@ async fn make_testreport_slfo_hash_mismatch_yields_null() {
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    config.gitea_url = server.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
     let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
@@ -605,6 +607,7 @@ async fn make_testreport_slfo_mismatch_force_continue_keeps_stale() {
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    config.gitea_url = server.uri();
     point_dashboard(&mut config, &dashboard);
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
@@ -642,6 +645,7 @@ async fn make_testreport_slfo_mismatch_decline_deletes_checkout() {
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    config.gitea_url = server.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
     // Regenerate? no.  Force continue? no.  Delete? yes.
@@ -682,6 +686,7 @@ async fn make_testreport_slfo_mismatch_decline_keeps_checkout_when_delete_declin
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    config.gitea_url = server.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
     // Regenerate? no.  Force continue? no.  Delete? no (default is yes, but an
@@ -735,6 +740,7 @@ async fn make_testreport_slfo_regenerate_refused_falls_back_to_manual() {
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    config.gitea_url = gitea.uri();
     config.teregen_api = teregen.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
@@ -795,6 +801,7 @@ async fn make_testreport_slfo_regenerate_job_unfinished_removes_checkout() {
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    config.gitea_url = gitea.uri();
     config.teregen_api = teregen.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
@@ -840,6 +847,7 @@ async fn make_testreport_slfo_regenerate_finished_but_reload_fails() {
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    config.gitea_url = gitea.uri();
     config.teregen_api = teregen.uri();
     // The stale checkout is removed after the job is accepted; the fresh `svn co`
     // then fails fast offline against a nonexistent local repo.

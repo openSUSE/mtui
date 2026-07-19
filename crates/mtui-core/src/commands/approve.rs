@@ -272,6 +272,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         session.config.session_user = "tester".to_owned();
         let args = matches(&Approve, &[]);
@@ -302,6 +303,7 @@ mod tests {
 
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         let args = matches(&Approve, &[]);
         let err = Approve.call(&mut session, &args).await.unwrap_err();

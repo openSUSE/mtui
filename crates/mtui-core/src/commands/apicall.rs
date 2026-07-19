@@ -69,13 +69,15 @@ pub(crate) fn gitea_client(session: &Session) -> Result<Gitea, CommandError> {
     let http = session
         .http_client()
         .map_err(|e| CommandError::Other(format!("could not build Gitea client: {e}")))?;
-    Ok(Gitea::with_client(
+    Gitea::with_client(
         http,
         session.config.gitea_token.clone(),
         session.config.session_user.clone(),
         &apiurl,
+        &session.config.gitea_url,
         None,
-    ))
+    )
+    .map_err(|e| CommandError::Other(format!("could not build Gitea client: {e}")))
 }
 
 /// Builds a TeReGen client for the loaded report, reusing the session-scoped
@@ -586,6 +588,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
 
         // Force assign skips the open-group guard; the mock accepts the marker
@@ -619,6 +622,7 @@ mod tests {
 
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
 
         let args = matches(&Comment, &["-m", "hi"]);
@@ -663,6 +667,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         session.config.teregen_api = server.uri();
 
@@ -710,6 +715,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         session.config.teregen_api = server.uri();
 

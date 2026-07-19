@@ -168,6 +168,17 @@ pub enum GiteaError {
     #[error("not a Gitea PR URL: {0}")]
     InvalidPrUrl(String),
 
+    /// The metadata-supplied Gitea URL is not the configured trusted origin (or
+    /// is not `https`, or carries userinfo), so the token was **not** sent. The
+    /// payload is the sanitised URL — never the token or any credential. Set
+    /// `[gitea] url` (`config set gitea_url`) to the trusted Gitea origin.
+    #[error(
+        "refusing to send Gitea token to untrusted URL {0}: it must be an https \
+         URL whose origin matches the configured trusted Gitea origin \
+         ([gitea] url / `config set gitea_url`)"
+    )]
+    UntrustedOrigin(String),
+
     /// The underlying HTTP layer failed to build the request or client.
     #[error(transparent)]
     Http(#[from] HttpError),

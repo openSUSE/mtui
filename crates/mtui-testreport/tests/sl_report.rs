@@ -116,10 +116,12 @@ async fn mount_pr_head_sha(server: &MockServer, sha: &str) {
         .await;
 }
 
-fn config_with_gitea() -> Config {
+fn config_with_gitea(server: &MockServer) -> Config {
     let mut cfg = Config::default();
     // `Gitea::new` rejects an empty token; a non-empty one lets the client build.
     cfg.gitea_token = "tok".to_string();
+    // Trust the (loopback) mock origin so the token guard allows the request.
+    cfg.gitea_url = server.uri();
     cfg
 }
 
@@ -128,7 +130,7 @@ async fn check_hash_gitea_compare_match() {
     let server = MockServer::start().await;
     mount_pr_head_sha(&server, "abc").await;
 
-    let mut r = SlReport::new(config_with_gitea());
+    let mut r = SlReport::new(config_with_gitea(&server));
     r.base_mut().rrid = Some(rrid_with_maint("2.0"));
     r.base_mut().giteacohash = Some("abc".to_string());
     r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));
@@ -141,7 +143,7 @@ async fn check_hash_gitea_compare_mismatch() {
     let server = MockServer::start().await;
     mount_pr_head_sha(&server, "xyz").await;
 
-    let mut r = SlReport::new(config_with_gitea());
+    let mut r = SlReport::new(config_with_gitea(&server));
     r.base_mut().rrid = Some(rrid_with_maint("2.0"));
     r.base_mut().giteacohash = Some("abc".to_string());
     r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));

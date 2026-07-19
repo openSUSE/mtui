@@ -28,7 +28,15 @@ const GROUP: &str = "qam-sle";
 fn gitea_for(server: &MockServer) -> Gitea {
     let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
     let pr_api = format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri());
-    Gitea::with_client(http, "tok".to_string(), USER.to_string(), &pr_api, None)
+    Gitea::with_client(
+        http,
+        "tok".to_string(),
+        USER.to_string(),
+        &pr_api,
+        &server.uri(),
+        None,
+    )
+    .expect("gitea client builds")
 }
 
 const PR_PATH: &str = "/api/v1/repos/owner/repo/pulls/1";
@@ -498,19 +506,25 @@ where
 #[tokio::test]
 async fn request_logs_and_error_redact_url_credentials() {
     let server = MockServer::start().await;
-    // Any request to the comments endpoint 404s, driving both the failure `warn!`
-    // and the `FailedCall` error through the sanitizing path.
-    Mock::given(method("GET"))
-        .and(path(COMMENTS_PATH))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
-        .await;
 
-    // Embed `user:s3cret@` credentials in the target authority.
+    // Embed `user:s3cret@` credentials in the target authority. A userinfo-
+    // bearing PR URL is refused by the origin guard *before* any request is
+    // sent (the token must never reach such a URL), so this drives both the
+    // refusal `warn!` and the `UntrustedOrigin` error through the sanitizing
+    // path.
     let authority = server.uri().replace("http://", "http://user:s3cret@");
     let pr_api = format!("{authority}/api/v1/repos/owner/repo/pulls/1");
     let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
-    let client = Gitea::with_client(http, "tok".to_string(), USER.to_string(), &pr_api, None);
+    // Trust the (loopback) mock origin; the PR URL differs only by userinfo.
+    let client = Gitea::with_client(
+        http,
+        "tok".to_string(),
+        USER.to_string(),
+        &pr_api,
+        &server.uri(),
+        None,
+    )
+    .expect("gitea client builds");
 
     let mut err = String::new();
     let logs = capture_logs(|| async {
@@ -535,4 +549,114 @@ async fn assignee_none_when_unassigned() {
     mount_comments(&server, json!([])).await;
 
     assert_eq!(gitea_for(&server).assignee().await.unwrap(), None);
+}
+
+// --- token-origin restriction (mtui-rs-9po9) ---
+
+/// Build a Gitea client whose metadata PR URL points at `pr_host` but whose
+/// configured trusted origin is `trusted`. Used to drive hostile-metadata cases.
+fn gitea_with_trust(pr_host: &str, trusted: &str) -> Gitea {
+    let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
+    let pr_api = format!("{pr_host}/api/v1/repos/owner/repo/pulls/1");
+    Gitea::with_client(
+        http,
+        "s3cr3t-token".to_string(),
+        USER.to_string(),
+        &pr_api,
+        trusted,
+        None,
+    )
+    .expect("gitea client builds")
+}
+
+/// When the metadata PR origin matches the configured trusted origin, the token
+/// *is* sent (the request reaches the mock and the auth header is present).
+#[tokio::test]
+async fn token_sent_to_trusted_origin() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(COMMENTS_PATH))
+        .and(header("Authorization", "token s3cr3t-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = gitea_with_trust(&server.uri(), &server.uri());
+    assert_eq!(client.assignee().await.unwrap(), None);
+    // `expect(1)` on drop verifies exactly one authorized request was made.
+}
+
+/// A metadata PR URL on a *different host* than the trusted origin is refused
+/// before any request is sent: the mock records zero hits and the error is
+/// `UntrustedOrigin`, never leaking the token.
+#[tokio::test]
+async fn token_refused_for_foreign_host() {
+    let server = MockServer::start().await;
+    // Any request at all would be a leak; assert zero.
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Trust a different (loopback) origin than the PR host.
+    let other = "http://127.0.0.1:1";
+    let client = gitea_with_trust(&server.uri(), other);
+    let err = client.assignee().await.unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("refusing to send Gitea token"),
+        "unexpected error: {msg}"
+    );
+    assert!(!msg.contains("s3cr3t-token"), "error leaked token: {msg}");
+    assert!(
+        !format!("{err:?}").contains("s3cr3t-token"),
+        "debug leaked token"
+    );
+}
+
+/// A same-host but *different-port* PR URL is refused (origin is exact).
+#[tokio::test]
+async fn token_refused_for_foreign_port() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    // Trust the same host on a port that is guaranteed not to be the mock's.
+    let trusted = server.uri().replace(
+        server.address().port().to_string().as_str(),
+        // pick a different port string; port 1 is never the ephemeral mock port.
+        "1",
+    );
+    let client = gitea_with_trust(&server.uri(), &trusted);
+    assert!(matches!(
+        client.assignee().await,
+        Err(mtui_datasources::error::GiteaError::UntrustedOrigin(_))
+    ));
+}
+
+/// An empty or unparseable `gitea_url` cannot build a client at all — there is
+/// no trust anchor, so the token can never be sent anywhere.
+#[test]
+fn empty_or_bad_trusted_url_refuses_to_build() {
+    let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
+    for bad in [
+        "",
+        "not a url",
+        "http://example.com", /* non-loopback http */
+    ] {
+        let r = Gitea::with_client(
+            http.clone(),
+            "tok".to_string(),
+            USER.to_string(),
+            "https://src.suse.de/api/v1/repos/o/r/pulls/1",
+            bad,
+            None,
+        );
+        assert!(r.is_err(), "should refuse to build with gitea_url={bad:?}");
+    }
 }

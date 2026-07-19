@@ -123,6 +123,7 @@ Defaults below are the built-in (upstream-matching) values.
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `token` | string (**secret**) | *(empty)* | API token for the Gitea PR review workflow. The Gitea connector refuses to build without it. Masked as `<set>` in `config` output; sent only in an `Authorization` header, never logged. |
+| `url` | URL | `https://src.suse.de` | Trusted Gitea origin the `token` may be sent to. A PR API URL comes from checked-out metadata (which is not fully trusted), so the token is attached **only** to requests whose origin (scheme/host/port) matches this value, over `https`, with no embedded userinfo. Point it at another instance (e.g. `https://src.opensuse.org`) to use that one. A metadata URL on any other origin is refused before the token is sent. |
 
 ### `[lock]`
 

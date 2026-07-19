@@ -163,8 +163,10 @@ async fn gitea_approve_fixture(server: &MockServer) -> Gitea {
         "tok".to_string(),
         "benchuser".to_string(),
         &pr_api,
+        &server.uri(),
         None,
     )
+    .expect("gitea client builds")
 }
 
 /// Time one happy-path `approve` against a latency-injecting mock server. Fewer

@@ -114,8 +114,102 @@ pub fn pr_api_url(web_url: &str) -> Result<String, GiteaError> {
 fn host_of(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
     let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
     let host = authority.split(':').next()?;
     (!host.is_empty()).then(|| host.to_string())
+}
+
+/// A URL origin: scheme (lower-cased), host (lower-cased), and effective port.
+///
+/// The security anchor for [`Gitea`]: the token is attached only to a request
+/// whose origin equals the client's configured trusted origin. Comparison is
+/// exact on all three components, with the scheme's default port filled in so
+/// `https://h` and `https://h:443` compare equal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Origin {
+    scheme: String,
+    host: String,
+    port: u16,
+}
+
+/// Parse an `scheme://[userinfo@]host[:port]` URL into an [`Origin`], rejecting
+/// any URL that carries userinfo (`user:pass@host`) — such a URL could smuggle
+/// a credential and its host is easy to misread, so it is never trusted.
+///
+/// Returns `None` for a non-URL, an empty host, a non-numeric/out-of-range
+/// port, a scheme without a known default port, or any userinfo present.
+fn parse_origin(url: &str) -> Option<Origin> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme.is_empty() {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    // Reject any userinfo: an `@` in the authority means `user[:pass]@host`.
+    if authority.contains('@') {
+        return None;
+    }
+    let default_port = match scheme.as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (h, p.parse::<u16>().ok()?),
+        None => (authority, default_port),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(Origin {
+        scheme,
+        host: host.to_ascii_lowercase(),
+        port,
+    })
+}
+
+/// Whether `host` is a loopback address, for which a plaintext `http` origin is
+/// acceptable (a test/mock server, never a real exfiltration target).
+fn is_loopback(host: &str) -> bool {
+    host == "localhost"
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host == "[::1]"
+        || host.starts_with("127.")
+}
+
+/// Whether the origin `o` is allowed to carry the token: it must be `https`,
+/// unless the host is loopback (a test/mock server).
+fn scheme_ok(o: &Origin) -> bool {
+    o.scheme == "https" || (o.scheme == "http" && is_loopback(&o.host))
+}
+
+/// Whether `url` carries no userinfo, has an acceptable scheme, and shares the
+/// exact origin (scheme/host/port) of `trusted`. The single predicate guarding
+/// token attachment; a `None` origin (non-URL, userinfo, bad port) is never
+/// trusted.
+fn is_trusted(url: &str, trusted: &Origin) -> bool {
+    parse_origin(url).is_some_and(|o| scheme_ok(&o) && &o == trusted)
+}
+
+/// Parse the operator-configured trusted Gitea origin (`config.gitea_url`),
+/// requiring a usable origin the token may be sent to (`https`, or plaintext
+/// `http` only for a loopback test server).
+///
+/// # Errors
+///
+/// [`GiteaError::UntrustedOrigin`] (carrying the sanitised URL) if the value is
+/// empty, not a URL, not `https` (and not loopback `http`), carries userinfo, or
+/// has a bad port — so the client can never be built with a trust anchor that
+/// would silently accept a plaintext or credential-bearing endpoint.
+fn parse_trusted_origin(gitea_url: &str) -> Result<Origin, GiteaError> {
+    match parse_origin(gitea_url) {
+        Some(o) if scheme_ok(&o) => Ok(o),
+        _ => Err(GiteaError::UntrustedOrigin(sanitize_url(gitea_url))),
+    }
 }
 
 /// Whether any comment records a decision for `group`
@@ -209,6 +303,10 @@ pub struct Gitea {
     pr: String,
     /// The PR issue-comments API URL (`.../issues/<n>/comments`).
     prissues: String,
+    /// The only origin the [`token`](Self::token) may be sent to. Every request
+    /// URL is checked against this before the `Authorization` header is
+    /// attached; a mismatch is [`GiteaError::UntrustedOrigin`].
+    trusted_origin: Origin,
     assign_re: Regex,
     unassign_re: Regex,
 }
@@ -223,8 +321,9 @@ impl Gitea {
     /// # Errors
     ///
     /// Returns [`GiteaError::MissingToken`] if `config.gitea_token` is empty,
-    /// or [`GiteaError::Http`] if the shared HTTP client cannot be built (e.g. a
-    /// configured CA bundle cannot be read).
+    /// [`GiteaError::UntrustedOrigin`] if `config.gitea_url` is not a usable
+    /// `https` origin, or [`GiteaError::Http`] if the shared HTTP client cannot
+    /// be built (e.g. a configured CA bundle cannot be read).
     pub fn new(config: &Config, giteaprapi: &str, group: Option<&str>) -> Result<Self, GiteaError> {
         if config.gitea_token.is_empty() {
             return Err(GiteaError::MissingToken);
@@ -234,13 +333,14 @@ impl Gitea {
             Some(VerifyPolicy::from_config(&config.ssl_verify)),
         );
         let http = HttpClient::new(verify)?;
-        Ok(Self::with_client(
+        Self::with_client(
             http,
             config.gitea_token.clone(),
             config.session_user.clone(),
             giteaprapi,
+            &config.gitea_url,
             group,
-        ))
+        )
     }
 
     /// Build a client from an already-constructed [`HttpClient`] and explicit
@@ -249,24 +349,35 @@ impl Gitea {
     /// The composition-root / test seam: it lets a caller inject a client whose
     /// TLS posture (or base host, under `wiremock`) is already fixed. The token
     /// is trusted as non-empty here — [`new`](Self::new) is the guarded entry.
-    #[must_use]
+    ///
+    /// `trusted_gitea_url` is the operator-configured origin (`config.gitea_url`)
+    /// the token may be sent to; requests to any other origin are refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GiteaError::UntrustedOrigin`] if `trusted_gitea_url` is not a
+    /// usable `https` origin (bad URL, userinfo present, non-https, or a
+    /// non-numeric/out-of-range port).
     pub fn with_client(
         http: HttpClient,
         token: String,
         user: String,
         giteaprapi: &str,
+        trusted_gitea_url: &str,
         group: Option<&str>,
-    ) -> Self {
+    ) -> Result<Self, GiteaError> {
+        let trusted_origin = parse_trusted_origin(trusted_gitea_url)?;
         // `.../pulls/<n>` -> `.../issues/<n>/comments`, matching upstream's
         // `giteaprapi.replace("pulls", "issues") + "/comments"`.
         let prissues = format!("{}/comments", giteaprapi.replace("pulls", "issues"));
-        Self {
+        Ok(Self {
             http,
             token,
             user,
             group: group.unwrap_or(DEFAULT_GROUP).to_string(),
             pr: giteaprapi.to_string(),
             prissues,
+            trusted_origin,
             assign_re: Regex::new(
                 r"^<MTUI: PR - UV assigned to user: (?P<user>.*) - group: (?P<group>.*) >",
             )
@@ -275,7 +386,7 @@ impl Gitea {
                 r"^<MTUI: PR - UV unassigned user: (?P<user>.*) - group: (?P<group>.*) >",
             )
             .expect("static unassign regex is valid"),
-        }
+        })
     }
 
     /// The PR API URL this client targets.
@@ -308,6 +419,19 @@ impl Gitea {
         url: &str,
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, GiteaError> {
+        // Never attach the token to a URL that is not the configured trusted
+        // origin. Metadata (`gitea_pr_api`) is attacker-influenceable, so a
+        // hostile PR URL — or a non-https/userinfo-bearing one — must not
+        // receive the credential. reqwest additionally strips the Authorization
+        // header on any *cross-origin* redirect, so a same-origin request can
+        // never leak the token to another host.
+        if !is_trusted(url, &self.trusted_origin) {
+            tracing::warn!(
+                "Refusing to send Gitea token to untrusted URL {}",
+                sanitize_url(url)
+            );
+            return Err(GiteaError::UntrustedOrigin(sanitize_url(url)));
+        }
         tracing::debug!("Requesting {method} on {}", sanitize_url(url));
         let mut builder = self
             .http
@@ -643,8 +767,10 @@ mod tests {
             "tok".to_string(),
             "testuser".to_string(),
             "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1",
+            "https://gitea.example.com",
             None,
         )
+        .unwrap()
     }
 
     fn comment(serial: i64, body: &str, date: &str) -> Comment {
@@ -865,5 +991,87 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, GiteaError::MissingToken));
+    }
+
+    #[test]
+    fn new_refuses_untrusted_gitea_url() {
+        let mut cfg = Config::default();
+        cfg.gitea_token = "tok".to_string();
+        // A non-https trusted origin (and non-loopback) is refused up front.
+        cfg.gitea_url = "http://gitea.example.com".to_string();
+        let err = Gitea::new(
+            &cfg,
+            "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1",
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, GiteaError::UntrustedOrigin(_)));
+    }
+
+    #[test]
+    fn default_config_trusts_src_suse_de() {
+        // The shipped default is https://src.suse.de, so a matching PR URL builds.
+        let mut cfg = Config::default();
+        cfg.gitea_token = "tok".to_string();
+        assert_eq!(cfg.gitea_url, "https://src.suse.de");
+        let g = Gitea::new(&cfg, "https://src.suse.de/api/v1/repos/o/r/pulls/1", None).unwrap();
+        assert!(g.pr_url().starts_with("https://src.suse.de/"));
+    }
+
+    // --- origin parsing / trust predicate ---
+
+    #[test]
+    fn parse_origin_fills_default_port_and_lowercases() {
+        let a = parse_origin("https://Gitea.Example.com/x").unwrap();
+        assert_eq!(a.scheme, "https");
+        assert_eq!(a.host, "gitea.example.com");
+        assert_eq!(a.port, 443);
+        let b = parse_origin("https://gitea.example.com:443/y").unwrap();
+        assert_eq!(a, b, "explicit default port equals implicit");
+    }
+
+    #[test]
+    fn parse_origin_rejects_userinfo_and_bad_shapes() {
+        for bad in [
+            "https://user:pass@gitea.example.com/x", // userinfo
+            "https://user@gitea.example.com/x",      // userinfo (no pass)
+            "ftp://gitea.example.com/x",             // unknown scheme
+            "https://:443/x",                        // empty host
+            "https://gitea.example.com:notaport/x",  // bad port
+            "not a url",                             // no scheme sep
+            "://gitea.example.com",                  // empty scheme
+        ] {
+            assert!(parse_origin(bad).is_none(), "should reject: {bad}");
+        }
+    }
+
+    #[test]
+    fn is_trusted_matches_only_exact_https_origin() {
+        let trusted = parse_origin("https://src.suse.de").unwrap();
+        // Exact https origin (any path) is trusted.
+        assert!(is_trusted(
+            "https://src.suse.de/api/v1/repos/o/r/pulls/1",
+            &trusted
+        ));
+        assert!(is_trusted("https://SRC.SUSE.DE/x", &trusted));
+        // Everything hostile is refused.
+        for bad in [
+            "http://src.suse.de/x",            // plaintext, non-loopback
+            "https://evil.example.com/x",      // foreign host
+            "https://src.suse.de:8443/x",      // foreign port
+            "https://user:pass@src.suse.de/x", // userinfo
+            "https://src.suse.de.evil.com/x",  // suffix trick
+        ] {
+            assert!(!is_trusted(bad, &trusted), "should refuse: {bad}");
+        }
+    }
+
+    #[test]
+    fn loopback_http_is_trusted_for_mock_servers() {
+        let trusted = parse_origin("http://127.0.0.1:8080").unwrap();
+        assert!(is_trusted("http://127.0.0.1:8080/api/x", &trusted));
+        // A non-loopback http trusted origin can't even be parsed as trusted.
+        assert!(parse_trusted_origin("http://example.com").is_err());
+        assert!(parse_trusted_origin("http://127.0.0.1:9000").is_ok());
     }
 }

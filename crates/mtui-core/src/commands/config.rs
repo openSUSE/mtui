@@ -48,6 +48,7 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
                 SECRET_MASK.to_owned()
             }
         }
+        "gitea_url" => config.gitea_url.clone(),
         "target_tempdir" => config.target_tempdir.display().to_string(),
         "lock_reap_stale" => config.lock_reap_stale.to_string(),
         "lock_stale_age" => config.lock_stale_age.to_string(),
@@ -83,7 +84,7 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 29] = [
+const ATTRS: [&str; 30] = [
     "template_dir",
     "local_tempdir",
     "session_user",
@@ -107,6 +108,7 @@ const ATTRS: [&str; 29] = [
     "openqa_instance_baremetal",
     "openqa_install_distri",
     "gitea_token",
+    "gitea_url",
     "target_tempdir",
     "lock_reap_stale",
     "lock_stale_age",
@@ -143,6 +145,7 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "openqa_instance_baremetal" => config.openqa_instance_baremetal = raw.to_owned(),
         "openqa_install_distri" => config.openqa_install_distri = raw.to_owned(),
         "gitea_token" => config.gitea_token = raw.to_owned(),
+        "gitea_url" => config.gitea_url = raw.to_owned(),
         // Goes through the same coercion as config-file loading (a boolean
         // spelling toggles verification, anything else is a CA-bundle path), so
         // a runtime `set` cannot store a value the file would reject.
