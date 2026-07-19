@@ -105,6 +105,38 @@ fn host_tail(host: &str) -> &str {
     host.rsplit('/').next().unwrap_or(host)
 }
 
+/// Whether `s` is a single, ordinary path component safe to embed in a local
+/// filename.
+///
+/// [`plan`] interpolates openQA-controlled strings (`host_tail`, `test.arch`,
+/// `test.name`) into local write paths; a value containing a separator, a `..`
+/// component, or a control byte would let a hostile response escape the export
+/// directories and overwrite arbitrary files. This mirrors
+/// `mtui_hosts::connection::ssh::validate_sftp_component` (ported rather than
+/// shared, as `mtui-testreport` must not depend on the lower `mtui-hosts`).
+fn is_safe_component(s: &str) -> bool {
+    // Fast rejects: empty, dot components, separators (both platforms), and any
+    // control byte. `\` is rejected regardless of host OS because the *local*
+    // side may be Windows.
+    if s.is_empty()
+        || s == "."
+        || s == ".."
+        || s.contains('/')
+        || s.contains('\\')
+        || s.chars().any(char::is_control)
+    {
+        return false;
+    }
+    // Structural check: the string must resolve to exactly one normal component
+    // identical to the input (catches drive/root prefixes and any separator form
+    // the byte checks above might miss on other platforms).
+    let mut comps = Path::new(s).components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(c)), None) if c == s
+    )
+}
+
 /// Builds the `(remote_url, local_path)` for a test, or `None` for an empty log.
 fn plan(
     host: &str,
@@ -112,7 +144,24 @@ fn plan(
     resultsdir: &Path,
     installlogsdir: &Path,
 ) -> Option<(String, PathBuf)> {
-    match LogKind::for_name(&test.name) {
+    let kind = LogKind::for_name(&test.name);
+    // Reject openQA-controlled components that would escape the export dirs
+    // before they reach a local write path. `Empty` has no local path, so skip
+    // the check (and its ERROR log) for it.
+    let tail = host_tail(host);
+    if kind != LogKind::Empty
+        && !(is_safe_component(tail)
+            && is_safe_component(&test.arch)
+            && is_safe_component(&test.name))
+    {
+        tracing::error!(
+            "Refusing unsafe export path component for test {:?} (arch {:?}) on {host}",
+            test.name,
+            test.arch
+        );
+        return None;
+    }
+    match kind {
         LogKind::Ltp => {
             let remote = join_url(
                 host,
@@ -250,13 +299,11 @@ mod tests {
     use std::sync::Mutex;
 
     fn test(name: &str) -> Test {
-        Test::new(
-            name,
-            "passed",
-            42,
-            "x86_64",
-            std::collections::BTreeMap::new(),
-        )
+        test_arch(name, "x86_64")
+    }
+
+    fn test_arch(name: &str, arch: &str) -> Test {
+        Test::new(name, "passed", 42, arch, std::collections::BTreeMap::new())
     }
 
     struct OkFetcher {
@@ -278,6 +325,33 @@ mod tests {
         async fn get_bytes(&self, _url: &str) -> Result<Vec<u8>, String> {
             Err("404".to_string())
         }
+    }
+
+    #[test]
+    fn is_safe_component_accepts_benign_and_rejects_traversal() {
+        for ok in ["h", "x86_64", "install_kernel", "install_kernel.foo", "a-b"] {
+            assert!(is_safe_component(ok), "should accept {ok:?}");
+        }
+        for bad in [
+            "", ".", "..", "../x", "a/b", "a\\b", "a\0b", "/abs", "a\nb", "sub/",
+        ] {
+            assert!(!is_safe_component(bad), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn plan_rejects_traversal_components() {
+        let r = Path::new("/res");
+        let i = Path::new("/inst");
+        // Traversal in test name.
+        assert!(plan("http://h", &test("install_../../evil"), r, i).is_none());
+        assert!(plan("http://h", &test("ltp/../../evil"), r, i).is_none());
+        // Traversal in arch (keep a downloadable name prefix).
+        assert!(plan("http://h", &test_arch("install_k", "../etc"), r, i).is_none());
+        assert!(plan("http://h", &test_arch("ltp", "a/b"), r, i).is_none());
+        // Unsafe host tail.
+        assert!(plan("http://h/..", &test("install_k"), r, i).is_none());
+        assert!(plan("http://h/", &test("install_k"), r, i).is_none());
     }
 
     #[test]
@@ -336,6 +410,30 @@ mod tests {
             b"log-bytes"
         );
         assert!(res.join("h-x86_64-ltp.json").exists());
+    }
+
+    #[tokio::test]
+    async fn traversal_named_test_is_skipped_and_not_fetched() {
+        let dir = tempfile::tempdir().unwrap();
+        let res = dir.path().join("results");
+        let inst = dir.path().join("install");
+        let fetcher = OkFetcher {
+            seen: Mutex::new(Vec::new()),
+        };
+        let connectors = vec![(
+            "http://h".to_string(),
+            vec![test("install_../../evil"), test("ltp/../../evil")],
+        )];
+
+        download_logs(&fetcher, &connectors, &res, &inst, ErrorMode::Tolerant)
+            .await
+            .unwrap();
+
+        // No fetch attempted and nothing written anywhere under the temp root.
+        assert!(fetcher.seen.lock().unwrap().is_empty());
+        assert!(!dir.path().join("evil").exists());
+        assert!(!res.exists() || std::fs::read_dir(&res).unwrap().next().is_none());
+        assert!(!inst.exists() || std::fs::read_dir(&inst).unwrap().next().is_none());
     }
 
     #[tokio::test]
