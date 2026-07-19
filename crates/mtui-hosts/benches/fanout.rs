@@ -167,6 +167,54 @@ fn bench_sftp(c: &mut Criterion) {
     get.finish();
 }
 
+/// `locks/lock` (whole-group) vs. `locks/lock_scoped` (a `-t` subset): the
+/// operation-lock fan-out cost, and the baseline for the scoped variant added
+/// with the `run` lock-enforcement fix (`mtui-rs-bwu2`). Scoping to a subset
+/// must never be slower than the whole-group lock over the same fleet — it only
+/// narrows the `run_fanout` predicate. Wall-clock is advisory (see module docs);
+/// the deterministic oracle is the per-host `Connection` call count in the unit
+/// tests, not timed here.
+fn bench_lock(c: &mut Criterion) {
+    let rt = rt();
+
+    let mut whole = c.benchmark_group("locks/lock");
+    for &n in FLEET_SIZES {
+        whole.throughput(criterion::Throughput::Elements(n as u64));
+        whole.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.to_async(&rt).iter_batched(
+                || build_group(n, PER_HOST_DELAY),
+                |mut group| async move {
+                    group.lock(black_box("")).await;
+                    group
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    whole.finish();
+
+    let mut scoped = c.benchmark_group("locks/lock_scoped");
+    for &n in FLEET_SIZES {
+        // Select half the fleet (at least one host) to exercise the predicate.
+        let selected: std::collections::BTreeSet<String> = (0..n.max(1))
+            .step_by(2)
+            .map(|i| format!("host-{i:04}"))
+            .collect();
+        scoped.throughput(criterion::Throughput::Elements(selected.len() as u64));
+        scoped.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
+            b.to_async(&rt).iter_batched(
+                || (build_group(n, PER_HOST_DELAY), selected.clone()),
+                |(mut group, names)| async move {
+                    group.lock_selected(black_box(""), &names).await;
+                    group
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
+    scoped.finish();
+}
+
 fn bench_report_locks(c: &mut Criterion) {
     let rt = rt();
     let mut g = c.benchmark_group("locks/report");
@@ -320,6 +368,7 @@ criterion_group!(
     bench_fanout_run,
     bench_fanout_run_bounded,
     bench_sftp,
+    bench_lock,
     bench_report_locks,
     bench_discovery_parse_system,
     bench_discovery_per_op_reads,

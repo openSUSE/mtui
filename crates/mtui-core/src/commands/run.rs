@@ -1,7 +1,10 @@
 //! The `run` command.
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
+use mtui_hosts::LockOutcome;
 
 use super::support::{add_hosts_arg, complete_fanout, page_output, per_host, select_names};
 use crate::command::{Command, Scope};
@@ -66,10 +69,57 @@ impl Command for Run {
         }
 
         // The operation lock guards the serialized remote transaction, mirroring
-        // upstream's `with LockedTargets(...)` around the run.
-        targets.lock("").await;
+        // upstream's `with LockedTargets(...)` around the run. Lock exactly the
+        // selected hosts (not the whole group) and require every one to be
+        // `Acquired` before running: unlike `hostslock`, a `Contended` host is a
+        // blocker here, because the operation lock exists to serialize this
+        // remote transaction — running while another owner holds it would break
+        // that guarantee. A `Failed` (transport error) host is likewise a
+        // blocker. On any non-`Acquired` host we roll back the locks we did
+        // acquire and abort without running.
+        let selected: BTreeSet<String> = hosts.iter().cloned().collect();
+        let outcomes = targets.lock_selected("", &selected).await;
+
+        // Classify while `targets` is borrowed; defer display writes (which would
+        // be a second `session` borrow) until after the borrow is released.
+        let mut acquired: BTreeSet<String> = BTreeSet::new();
+        let mut blocked: Vec<String> = Vec::new();
+        let mut report: Vec<String> = Vec::new();
+        for (host, outcome) in &outcomes {
+            match outcome {
+                LockOutcome::Acquired => {
+                    acquired.insert(host.clone());
+                }
+                LockOutcome::Contended => {
+                    report.push(format!("{host}: locked by another owner (skipped)"));
+                    blocked.push(host.clone());
+                }
+                LockOutcome::Failed(reason) => {
+                    report.push(format!("{host}: lock FAILED ({reason})"));
+                    blocked.push(host.clone());
+                }
+                LockOutcome::Released => {}
+            }
+        }
+
+        if !blocked.is_empty() {
+            // Roll back the locks we acquired this call, then abort without
+            // running the command on any host.
+            if !acquired.is_empty() {
+                targets.unlock_selected(&acquired).await;
+            }
+            for line in &report {
+                session.display.println(line);
+            }
+            blocked.sort();
+            return Err(CommandError::Other(format!(
+                "could not lock: {}",
+                blocked.join(", ")
+            )));
+        }
+
         targets.run(per_host(&command, &hosts)).await;
-        targets.unlock().await;
+        targets.unlock_selected(&selected).await;
 
         let mut output: Vec<String> = Vec::new();
         // A non-zero remote exit is often expected (this stays `Ok`, matching
@@ -315,5 +365,151 @@ mod tests {
         let args = matches(&Run, &["-t", "ghost", "true"]);
         let err = Run.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    /// The operation-lock file path a foreign lock is planted at to script a
+    /// `Contended` outcome (mirrors `TARGET_LOCK_PATH` in `mtui-hosts`).
+    const LOCK_PATH: &str = "/var/lock/mtui.lock";
+
+    use crate::commands::testkit::session_with_targets;
+    use mtui_hosts::{MockConnection, Target};
+    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::hostlog::CommandLog;
+
+    /// A free, enabled host that locks cleanly (Acquired) and echoes its run.
+    fn free_host(name: &str) -> Target {
+        let conn = MockConnection::new(name).with_default(CommandLog::new("", "ok", "", 0, 0));
+        Target::with_connection(
+            name,
+            TargetState::Enabled,
+            ExecutionMode::Serial,
+            Box::new(conn),
+        )
+    }
+
+    /// An enabled host carrying a foreign operation lock → `Contended`.
+    fn foreign_locked_host(name: &str) -> Target {
+        let conn = MockConnection::new(name)
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        Target::with_connection(
+            name,
+            TargetState::Enabled,
+            ExecutionMode::Serial,
+            Box::new(conn),
+        )
+    }
+
+    /// An enabled host whose lock-file write hard-fails → `Failed`.
+    fn lock_failing_host(name: &str) -> Target {
+        let conn = MockConnection::new(name)
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_exclusive_write_error(LOCK_PATH);
+        Target::with_connection(
+            name,
+            TargetState::Enabled,
+            ExecutionMode::Serial,
+            Box::new(conn),
+        )
+    }
+
+    #[tokio::test]
+    async fn contended_host_aborts_without_running_and_rolls_back() {
+        // h1 free (Acquired), h2 foreign-locked (Contended). The whole run must
+        // abort: the command runs on neither host, and h1's acquired lock is
+        // rolled back.
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![free_host("h1"), foreign_locked_host("h2")],
+        );
+        let args = matches(&Run, &["true"]);
+        let err = Run.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("could not lock") && m.contains("h2")),
+            "expected lock-abort error naming h2, got {err:?}"
+        );
+        assert!(buf.contents().contains("h2: locked by another owner"));
+
+        let targets = session.targets_mut();
+        // Neither host ran the command.
+        assert!(targets.get("h1").unwrap().lastexit().is_none(), "h1 ran");
+        assert!(targets.get("h2").unwrap().lastexit().is_none(), "h2 ran");
+        // h1's acquired lock was rolled back.
+        assert!(
+            !targets.get_mut("h1").unwrap().is_locked().await.unwrap(),
+            "h1 lock not rolled back"
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_failure_aborts_without_running_and_rolls_back() {
+        // h1 free (Acquired), h2 transport-failure on lock (Failed). Abort,
+        // don't run, roll back h1.
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![free_host("h1"), lock_failing_host("h2")],
+        );
+        let args = matches(&Run, &["true"]);
+        let err = Run.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("could not lock") && m.contains("h2")),
+            "expected lock-abort error naming h2, got {err:?}"
+        );
+        assert!(buf.contents().contains("h2: lock FAILED"));
+
+        let targets = session.targets_mut();
+        assert!(targets.get("h1").unwrap().lastexit().is_none(), "h1 ran");
+        assert!(targets.get("h2").unwrap().lastexit().is_none(), "h2 ran");
+        assert!(
+            !targets.get_mut("h1").unwrap().is_locked().await.unwrap(),
+            "h1 lock not rolled back"
+        );
+    }
+
+    #[tokio::test]
+    async fn unselected_bad_host_does_not_block_scoped_run() {
+        // h2 is foreign-locked but NOT selected: `-t h1` must run on h1 only and
+        // never touch h2's lock.
+        let (mut session, _buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![free_host("h1"), foreign_locked_host("h2")],
+        );
+        let args = matches(&Run, &["-t", "h1", "true"]);
+        Run.call(&mut session, &args).await.unwrap();
+
+        let targets = session.targets_mut();
+        assert_eq!(
+            targets.get("h1").unwrap().lastexit(),
+            Some(0),
+            "h1 should have run"
+        );
+        assert!(
+            targets.get("h2").unwrap().lastexit().is_none(),
+            "unselected h2 must not run"
+        );
+        // h2's foreign lock is untouched (still present).
+        assert!(
+            targets.get_mut("h2").unwrap().is_locked().await.unwrap(),
+            "unselected h2 lock must be untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_acquired_runs_and_unlocks_selected() {
+        // Happy path: both hosts lock cleanly, run, then unlock.
+        let (mut session, _buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![free_host("h1"), free_host("h2")],
+        );
+        let args = matches(&Run, &["true"]);
+        Run.call(&mut session, &args).await.unwrap();
+
+        let targets = session.targets_mut();
+        assert_eq!(targets.get("h1").unwrap().lastexit(), Some(0));
+        assert_eq!(targets.get("h2").unwrap().lastexit(), Some(0));
+        assert!(!targets.get_mut("h1").unwrap().is_locked().await.unwrap());
+        assert!(!targets.get_mut("h2").unwrap().is_locked().await.unwrap());
     }
 }

@@ -436,6 +436,33 @@ impl HostsGroup {
     /// while leaving benign [`Contended`](LockOutcome::Contended) hosts
     /// unreported. Existing callers that ignore the return value keep compiling.
     pub async fn lock(&mut self, comment: &str) -> BTreeMap<String, LockOutcome> {
+        self.lock_where(comment, |_t| true).await
+    }
+
+    /// Locks only the named hosts for `comment`, best-effort, otherwise
+    /// identical to [`lock`](Self::lock).
+    ///
+    /// The returned [`LockOutcome`] map contains an entry for every host in
+    /// `names` that exists in the group (unknown names are silently skipped, like
+    /// the whole-group fan-out). Callers that must serialize a remote transaction
+    /// on a `-t` subset (e.g. `run`) lock exactly that subset instead of the
+    /// whole fleet.
+    pub async fn lock_selected(
+        &mut self,
+        comment: &str,
+        names: &std::collections::BTreeSet<String>,
+    ) -> BTreeMap<String, LockOutcome> {
+        self.lock_where(comment, |t| names.contains(t.hostname()))
+            .await
+    }
+
+    /// Shared implementation for [`lock`](Self::lock) /
+    /// [`lock_selected`](Self::lock_selected): the only difference is the
+    /// `select` predicate handed to [`run_fanout`](super::actions::run_fanout).
+    async fn lock_where<S>(&mut self, comment: &str, select: S) -> BTreeMap<String, LockOutcome>
+    where
+        S: Fn(&Target) -> bool + Send + Sync,
+    {
         use std::sync::Mutex;
 
         let (is_repl, prompter, max_parallel) =
@@ -447,7 +474,7 @@ impl HostsGroup {
             prompter.as_ref(),
             max_parallel,
             Some("lock"),
-            |_t| true,
+            select,
             |t| {
                 let comment = comment.to_owned();
                 let collected = &collected;
@@ -483,6 +510,28 @@ impl HostsGroup {
     /// [`Failed`](LockOutcome::Failed) for a real transport error. Existing
     /// callers that ignore the return value keep compiling.
     pub async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
+        self.unlock_where(|_t| true).await
+    }
+
+    /// Releases the operation lock on only the named hosts, best-effort,
+    /// otherwise identical to [`unlock`](Self::unlock).
+    ///
+    /// Used to roll back a partial [`lock_selected`](Self::lock_selected): a
+    /// caller that aborts a subset operation unlocks exactly the hosts it
+    /// acquired this call, leaving every other host untouched.
+    pub async fn unlock_selected(
+        &mut self,
+        names: &std::collections::BTreeSet<String>,
+    ) -> BTreeMap<String, LockOutcome> {
+        self.unlock_where(|t| names.contains(t.hostname())).await
+    }
+
+    /// Shared implementation for [`unlock`](Self::unlock) /
+    /// [`unlock_selected`](Self::unlock_selected).
+    async fn unlock_where<S>(&mut self, select: S) -> BTreeMap<String, LockOutcome>
+    where
+        S: Fn(&Target) -> bool + Send + Sync,
+    {
         use std::sync::Mutex;
 
         let (is_repl, prompter, max_parallel) =
@@ -494,7 +543,7 @@ impl HostsGroup {
             prompter.as_ref(),
             max_parallel,
             Some("unlock"),
-            |_t| true,
+            select,
             |t| {
                 let collected = &collected;
                 Box::pin(async move {
@@ -2048,6 +2097,47 @@ mod tests {
             "a non-contention lock error must be Failed, got {:?}",
             outcomes["h3"]
         );
+    }
+
+    #[tokio::test]
+    async fn lock_selected_touches_only_named_hosts() {
+        // h1 selected + free (Acquired); h2 selected + foreign-locked
+        // (Contended); h3 NOT selected -> absent from the map and left unlocked.
+        let foreign = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let mut g = HostsGroup::new(
+            vec![
+                enabled("h1"),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(foreign),
+                ),
+                enabled("h3"),
+            ],
+            false,
+        );
+
+        let names: std::collections::BTreeSet<String> =
+            ["h1".to_owned(), "h2".to_owned()].into_iter().collect();
+        let outcomes = g.lock_selected("session", &names).await;
+
+        assert_eq!(outcomes["h1"], LockOutcome::Acquired);
+        assert_eq!(outcomes["h2"], LockOutcome::Contended);
+        assert!(
+            !outcomes.contains_key("h3"),
+            "unselected host must be absent from the outcome map: {outcomes:?}"
+        );
+        // The unselected host was never locked.
+        assert!(!g.get_mut("h3").unwrap().is_locked().await.unwrap());
+
+        // Rolling back the acquired subset releases h1 without touching h3.
+        let released = g.unlock_selected(&names).await;
+        assert_eq!(released["h1"], LockOutcome::Released);
+        assert!(!released.contains_key("h3"));
+        assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
     }
 
     #[tokio::test]
