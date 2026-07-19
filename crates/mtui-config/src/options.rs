@@ -222,7 +222,9 @@ pub(crate) fn default_refhosts_https_expiration() -> u64 {
     3600 * 12
 }
 pub(crate) fn default_refhosts_path() -> PathBuf {
-    PathBuf::from("/usr/share/qam-metadata/refhosts.yml")
+    // Deliberate deviation from upstream (which hardcodes
+    // /usr/share/qam-metadata/refhosts.yml): mtui-rs defaults to a per-user path.
+    expanduser(&PathBuf::from("~/.local/share/refdb/refhosts.yml"))
 }
 pub(crate) fn default_install_logs() -> PathBuf {
     PathBuf::from("install_logs")
@@ -926,10 +928,12 @@ mod tests {
             c.refhosts_https_uri,
             "https://qam.suse.de/refhosts/refhosts.yml"
         );
-        assert_eq!(
-            c.refhosts_path,
-            PathBuf::from("/usr/share/qam-metadata/refhosts.yml")
-        );
+        if let Some(base) = directories::BaseDirs::new() {
+            assert_eq!(
+                c.refhosts_path,
+                base.home_dir().join(".local/share/refdb/refhosts.yml")
+            );
+        }
         assert_eq!(c.install_logs, PathBuf::from("install_logs"));
         assert_eq!(c.target_tempdir, PathBuf::from("/tmp"));
         // [lock] defaults mirror upstream config.py exactly.

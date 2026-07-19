@@ -87,6 +87,9 @@ install -Dm644 dist/man/mtui-mcp.1 %{buildroot}%{_mandir}/man1/mtui-mcp.1
 # Terminal-launcher scripts for `terms`/`switch` (shared datadir).
 install -Dm755 dist/terms/*.sh -t %{buildroot}%{_datadir}/mtui/terms/
 
+# Fully-commented example config, installed as documentation.
+install -Dm644 dist/mtui.toml.example %{buildroot}%{_docdir}/%{name}/mtui.toml.example
+
 # Vim plugin: filetype detection + testreport syntax (vim-plugin subpackage).
 install -d %{buildroot}%{vimplugin_dir}/ftdetect
 install -d %{buildroot}%{vimplugin_dir}/syntax
@@ -100,6 +103,7 @@ install -pm 0644 dist/vim-plugin/syntax/testreport.vim   %{buildroot}%{vimplugin
 %files
 %license LICENSE
 %doc README.md
+%doc %{_docdir}/%{name}/mtui.toml.example
 %{_bindir}/mtui
 %{_bindir}/mtui-mcp
 %dir %{_datadir}/mtui

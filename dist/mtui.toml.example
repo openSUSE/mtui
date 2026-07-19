@@ -1,0 +1,124 @@
+# Example mtui-rs configuration.
+#
+# Every key below is shown at its built-in default, commented out. Uncomment
+# and edit only the options you want to change — an absent option always
+# falls back to its default, and mtui-rs never requires a config file to run.
+#
+# File resolution order (highest precedence first): `--config <file>` flag,
+# `$MTUI_CONF`, then the default pair merged lowest-precedence first:
+# `/etc/mtui.toml` -> `~/.mtui.toml` -> `$XDG_CONFIG_HOME/mtui/mtui.toml`.
+# Loading is lenient: a missing or malformed file, or a single bad value, is
+# logged and skipped in favor of the default. See `docs/src/configuration.md`
+# for the full reference.
+
+[mtui]
+# Directory holding checked-out testreport templates.
+# template_dir = "."
+# Local scratch directory.
+# tempdir = "/tmp"
+# User attributed to this session (locks, logs). Defaults to the current login user.
+# user = "qauser"
+# Sub-directory (single relative name, no separators) where install logs are written per update.
+# install_logs = "install_logs"
+# chdir into the template dir on load.
+# chdir_to_template_dir = false
+# TLS verification for outbound HTTP: a bool, a boolean spelling
+# ("yes"/"no"/"on"/"off"/...), or a path to a custom CA bundle.
+# ssl_verify = true
+
+[connection]
+# SSH connect + command timeout, in seconds.
+# connection_timeout = 300
+# Max hosts to fan out to concurrently (SSH/SFTP/lock/connect batches).
+# max_parallel = 50
+# Max concurrent openQA/QAM HTTP requests in the overview search.
+# max_oqa_parallel = 8
+# SSH host-key checking policy (auto_add, strict, warn, ...).
+# ssh_strict_host_key_checking = "auto_add"
+
+[refhosts]
+# Comma-separated ordered list of refhosts resolvers.
+# resolvers = "https,path"
+# HTTPS URI of the refhosts database.
+# https_uri = "https://qam.suse.de/refhosts/refhosts.yml"
+# Seconds before a cached HTTPS fetch is considered stale.
+# https_expiration = 43200
+# Local filesystem path to a refhosts database.
+# path = "~/.local/share/refdb/refhosts.yml"
+
+[url]
+# Bugzilla base URL.
+# bugzilla = "https://bugzilla.suse.com"
+# Testreports base URL.
+# testreports = "https://qam.suse.de/testreports"
+# "Fancy" reports base URL.
+# fancy_reports = "https://qam.suse.de/reports"
+
+[svn]
+# SVN base path for testreport checkout.
+# path = "svn+ssh://svn@qam.suse.de/testreports"
+
+[target]
+# Remote scratch directory on target hosts.
+# tempdir = "/tmp"
+
+[qem_dashboard]
+# QEM Dashboard API base URL.
+# api = "http://dashboard.qam.suse.de/api"
+
+[teregen]
+# TeReGen report/queue API base URL.
+# api = "https://qam.suse.de/api/v1"
+
+[openqa]
+# openQA instance URL.
+# openqa = "https://openqa.suse.de"
+# Baremetal openQA instance URL.
+# baremetal = "http://openqa.qam.suse.cz"
+# openQA install `distri` parameter.
+# distri = "sle"
+
+[gitea]
+# API token for the Gitea PR review workflow (secret: masked as <set> by
+# `config show`/`config set`, never logged). Empty by default; the Gitea
+# connector refuses to build without it.
+# token = ""
+
+[lock]
+# On connect, force-remove a pre-existing lock older than `stale_age`, regardless of owner.
+# reap_stale = true
+# Age (seconds) beyond which a lock is stale and reapable. 0 disables reaping.
+# stale_age = 86400
+# When testing a Product Increment (PI), auto-lock all refhosts on `assign` and unlock at end of testing.
+# pi_autolock = true
+# Pool-claim queueing budget, in seconds. 0 fails fast on a busy host.
+# wait = 0
+# Poll interval (seconds) while waiting for a busy pool lock to free.
+# wait_poll = 15
+
+[mcp]
+# Upper bound (bytes) on a single mtui-mcp tool result. 0 disables the cap.
+# max_output_bytes = 100000
+# Ceiling on concurrent background jobs per session. 0 disables.
+# max_active_jobs = 16
+# Ceiling on retained terminal (done/failed/cancelled) job records per session. 0 disables.
+# max_completed_jobs = 128
+# Ceiling on concurrent per-client sessions under --transport http.
+# session_cap = 32
+# Seconds of inactivity after which an idle http session is swept.
+# session_idle_timeout = 14400
+# Max stale sessions the idle sweeper tears down concurrently per cycle.
+# sweep_parallel = 4
+# Tool-surface profile: "full" (every synthesised tool) or "core" (curated everyday subset).
+# profile = "full"
+# Extra tool names to keep on top of the profile.
+# tools_allow = []
+# Tool names to remove regardless of profile/allow (deny wins last).
+# tools_deny = []
+
+[obs]
+# The OBS/IBS API URL the native QAM review backend acts against. Must equal
+# a section header in your oscrc ($OSC_CONFIG -> $XDG_CONFIG_HOME/osc/oscrc -> ~/.oscrc).
+# api_url = "https://api.suse.de"
+# Coarse wall-clock budget (seconds) for a whole native OBS operation.
+# request_timeout = 180
