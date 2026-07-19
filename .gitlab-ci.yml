@@ -50,6 +50,16 @@ stages:
   variables:
     RUSTFLAGS: "-D warnings"
 
+# Schedule pipelines exist solely to run Renovate; the build/test suite carries
+# no signal there (nothing changed since the last push pipeline). Skip these
+# jobs on schedule so a dependency scan doesn't drag a full workspace compile
+# with it, while keeping them on pushes and merge requests.
+.not_on_schedule:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
+
 cache:
   key:
     files:
@@ -60,6 +70,7 @@ cache:
 
 fmt:
   stage: check
+  extends: .not_on_schedule
   before_script:
     - rustup component add rustfmt
   script:
@@ -67,7 +78,9 @@ fmt:
 
 clippy:
   stage: check
-  extends: .deny_warnings
+  extends:
+    - .deny_warnings
+    - .not_on_schedule
   before_script:
     - rustup component add clippy
   script:
@@ -82,14 +95,18 @@ clippy:
 # signal beyond compilation.
 feature-matrix:
   stage: check
-  extends: .deny_warnings
+  extends:
+    - .deny_warnings
+    - .not_on_schedule
   script:
     - cargo build --workspace --no-default-features
     - cargo build --workspace --all-features
 
 test:
   stage: test
-  extends: .deny_warnings
+  extends:
+    - .deny_warnings
+    - .not_on_schedule
   before_script:
     - *ssh_fixture
     - *svn_fixture
@@ -105,12 +122,15 @@ test:
 # axum/rmcp tree that a full --all-features test run would (see AGENTS.md DoD).
 test-mcp:
   stage: test
-  extends: .deny_warnings
+  extends:
+    - .deny_warnings
+    - .not_on_schedule
   script:
     - cargo test -p mtui-mcp -F mcp
 
 coverage:
   stage: test
+  extends: .not_on_schedule
   before_script:
     - *ssh_fixture
     - *svn_fixture
@@ -210,6 +230,11 @@ renovate-config-validator:
 
 renovate:
   stage: deploy
+  # Independent of the build/test jobs: an empty `needs` decouples this job from
+  # stage ordering so it starts immediately, and the build/test jobs skip on
+  # schedule pipelines anyway (see .not_on_schedule), so a dependency scan never
+  # waits on — or triggers — a full workspace compile.
+  needs: []
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
   image:
