@@ -44,29 +44,39 @@ impl Command for Reboot {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // `HostsGroup::reboot` reboots the whole group; honour `-t` by rejecting
-        // an explicit host that is not connected (upstream `parse_hosts`), then
-        // reboot. An empty group is `NoRefhostsDefined`.
-        if named_hosts(args) {
-            let targets = session.targets();
-            if let Some(hosts) = super::support::hosts_arg(args) {
-                for name in &hosts {
-                    if name != "all" && !targets.contains(name) {
-                        return Err(CommandError::HostNotConnected(name.clone()));
-                    }
-                }
-            }
-        }
-
-        let relock = session.metadata().base().lock_comment.clone();
-        let targets = session.targets_mut();
+        // Honour `-t`: reboot only the selected hosts of the active template.
+        // Reject an explicit host that is not connected (upstream `parse_hosts`);
+        // the deprecated `all` sentinel means every connected host. Without `-t`
+        // (or with `all`) every connected host of the fan-out–selected template
+        // is rebooted. An empty group is `NoRefhostsDefined`.
+        let targets = session.targets();
         if targets.is_empty() {
             return Err(CommandError::NoRefhostsDefined);
         }
+        let all_names: std::collections::BTreeSet<String> = targets.names().into_iter().collect();
+        let selected: std::collections::BTreeSet<String> = if named_hosts(args) {
+            match super::support::hosts_arg(args) {
+                Some(hosts) if hosts.iter().any(|h| h == "all") => all_names.clone(),
+                Some(hosts) => {
+                    for name in &hosts {
+                        if !all_names.contains(name) {
+                            return Err(CommandError::HostNotConnected(name.clone()));
+                        }
+                    }
+                    hosts.into_iter().collect()
+                }
+                None => all_names.clone(),
+            }
+        } else {
+            all_names.clone()
+        };
+
+        let relock = session.metadata().base().lock_comment.clone();
+        let targets = session.targets_mut();
         // Upstream `targets.reboot` uses the default reboot command; the group's
-        // reboot drops each connection, reconnects, and re-applies the lock when
-        // `relock` is non-empty.
-        let outcomes = targets.reboot("reboot", &relock).await;
+        // reboot drops each selected connection, reconnects, and re-applies the
+        // lock (to the selected hosts) when `relock` is non-empty.
+        let outcomes = targets.reboot_selected("reboot", &relock, &selected).await;
 
         // Report each host: `Ok` means it rebooted (boot id changed) and
         // reconnected; `Err` means the reconnect failed or the boot id was
@@ -133,6 +143,25 @@ mod tests {
         assert!(out.contains("h1: rebooted & reconnected"), "{out}");
         assert!(out.contains("h2: rebooted & reconnected"), "{out}");
         assert!(!out.contains("FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn target_selection_reboots_only_named_host() {
+        // Regression for mtui-rs-issz: `-t h1` must reboot only h1 and leave h2
+        // untouched. Both hosts would reboot cleanly if the whole group were
+        // rebooted, so the absence of any h2 line proves h2 was skipped.
+        let (mut session, buf) =
+            session_with_reboot_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", true)]);
+        let args = matches(&Reboot, &["-t", "h1"]);
+        Reboot.call(&mut session, &args).await.unwrap();
+        // The group is preserved intact (both hosts remain members).
+        assert_eq!(session.targets().names(), vec!["h1", "h2"]);
+        let out = buf.contents();
+        assert!(out.contains("h1: rebooted & reconnected"), "{out}");
+        assert!(
+            !out.contains("h2"),
+            "h2 was not selected and must be untouched: {out}"
+        );
     }
 
     #[tokio::test]

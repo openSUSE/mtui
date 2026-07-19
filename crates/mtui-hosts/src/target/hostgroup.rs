@@ -1013,13 +1013,57 @@ impl HostsGroup {
         command: &str,
         relock_comment: &str,
     ) -> BTreeMap<String, Result<()>> {
+        self.reboot_where(command, relock_comment, |_t| true).await
+    }
+
+    /// Reboots only the named hosts and reconnects each, otherwise identical to
+    /// [`reboot`](Self::reboot).
+    ///
+    /// The boot-id snapshot, reboot, reconnect, and verify phases all restrict to
+    /// hosts in `names`; the post-reboot relock re-applies only to that subset.
+    /// The returned outcome map contains an entry for every named host that
+    /// exists in the group (unknown names are silently skipped, like the
+    /// whole-group fan-out). Honours the command's `-t/--target` selection so an
+    /// operator never reboots hosts they did not ask for.
+    pub async fn reboot_selected(
+        &mut self,
+        command: &str,
+        relock_comment: &str,
+        names: &std::collections::BTreeSet<String>,
+    ) -> BTreeMap<String, Result<()>> {
+        self.reboot_where(command, relock_comment, |t| names.contains(t.hostname()))
+            .await
+    }
+
+    /// Shared implementation for [`reboot`](Self::reboot) /
+    /// [`reboot_selected`](Self::reboot_selected): the only difference is the
+    /// `select` predicate handed to each [`run_fanout`](super::actions::run_fanout)
+    /// phase (and to the relock).
+    async fn reboot_where<S>(
+        &mut self,
+        command: &str,
+        relock_comment: &str,
+        select: S,
+    ) -> BTreeMap<String, Result<()>>
+    where
+        S: Fn(&Target) -> bool + Send + Sync,
+    {
         use std::sync::Mutex;
 
         if self.data.is_empty() {
             tracing::info!("No hosts to reboot");
             return BTreeMap::new();
         }
-        let names: Vec<String> = self.data.keys().cloned().collect();
+        let names: Vec<String> = self
+            .data
+            .values()
+            .filter(|t| select(t))
+            .map(|t| t.hostname().to_owned())
+            .collect();
+        if names.is_empty() {
+            tracing::info!("No selected hosts to reboot");
+            return BTreeMap::new();
+        }
         tracing::info!(hosts = %names.join(", "), "Rebooting");
         let (is_repl, prompter, max_parallel) =
             (self.is_repl, self.prompter.clone(), self.max_parallel);
@@ -1033,7 +1077,7 @@ impl HostsGroup {
             prompter.as_ref(),
             max_parallel,
             Some("boot_id"),
-            |_t| true,
+            &select,
             |t| {
                 let old_boot_ids = &old_boot_ids;
                 Box::pin(async move {
@@ -1055,7 +1099,7 @@ impl HostsGroup {
             prompter.as_ref(),
             max_parallel,
             Some("reboot"),
-            |_t| true,
+            &select,
             |t| {
                 let command = command.to_owned();
                 Box::pin(async move { t.reboot(&command).await }) as actions::BoxTargetFut<'_>
@@ -1076,7 +1120,7 @@ impl HostsGroup {
             prompter.as_ref(),
             max_parallel,
             Some("reconnect"),
-            |_t| true,
+            &select,
             |t| {
                 let outcomes = &outcomes;
                 Box::pin(async move {
@@ -1106,7 +1150,7 @@ impl HostsGroup {
             prompter.as_ref(),
             max_parallel,
             Some("verify_reboot"),
-            |_t| true,
+            &select,
             |t| {
                 let old = old_boot_ids.get(t.hostname()).cloned().unwrap_or_default();
                 let outcomes = &outcomes;
@@ -1128,7 +1172,10 @@ impl HostsGroup {
 
         if !relock_comment.is_empty() {
             tracing::info!("Re-applying lock after reboot");
-            let _ = self.lock(relock_comment).await;
+            // Re-lock only the hosts that were rebooted (a reboot clears
+            // `/var/lock`); a targeted reboot must not touch unselected hosts.
+            let relock: std::collections::BTreeSet<String> = names.iter().cloned().collect();
+            let _ = self.lock_selected(relock_comment, &relock).await;
         }
 
         outcomes.into_inner().unwrap()
@@ -1810,6 +1857,44 @@ mod tests {
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes["h1"].is_ok());
         assert!(outcomes["h2"].is_ok());
+    }
+
+    #[tokio::test]
+    async fn reboot_selected_touches_only_named_hosts() {
+        // Regression for mtui-rs-issz: a `-t`-scoped reboot must fire the reboot,
+        // reconnect, and verify only on the named subset; unselected hosts see no
+        // reboot command, no reconnect, and produce no outcome entry.
+        let (m1, m2) = (rebooted_mock("h1"), rebooted_mock("h2"));
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(m1),
+                ),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(m2),
+                ),
+            ],
+            false,
+        );
+
+        let only_h1: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let outcomes = g.reboot_selected("systemctl reboot", "", &only_h1).await;
+
+        // h1 was rebooted and reconnected; h2 was left entirely untouched.
+        assert_eq!(h1.fired_commands(), vec!["systemctl reboot".to_owned()]);
+        assert_eq!(h1.reconnect_count(), 1);
+        assert!(h2.fired_commands().is_empty());
+        assert_eq!(h2.reconnect_count(), 0);
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes["h1"].is_ok());
+        assert!(!outcomes.contains_key("h2"));
     }
 
     #[tokio::test]
