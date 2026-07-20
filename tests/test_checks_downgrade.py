@@ -7,7 +7,11 @@ import logging
 import pytest
 
 from mtui.support.exceptions import UpdateError
-from mtui.update_workflow.checks.downgrade import downgrade_checks, zypper
+from mtui.update_workflow.checks.downgrade import (
+    downgrade_checks,
+    transactional_update,
+    zypper,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +70,15 @@ def test_zypper_dep_conflict_raises() -> None:
         zypper("h", "(c): c", "in pkg", "", 0)
 
 
+def test_zypper_exitcode_minus_one_raises() -> None:
+    """Exit -1 (``Target.run``'s marker for a timed-out or unrunnable command)
+    raises instead of letting the flow continue past an interrupted rollback."""
+    with pytest.raises(UpdateError) as ei:
+        zypper("h", "", "in pkg", "", -1)
+    assert ei.value.reason == "downgrade command timed out or failed to run"
+    assert ei.value.host == "h"
+
+
 def test_zypper_exitcode_104_raises() -> None:
     """Exitcode 104 raises ``UpdateError("Unspecified Error", host)``."""
     with pytest.raises(UpdateError):
@@ -96,7 +109,24 @@ def test_zypper_failure_log_labels_stdout_as_stdout(caplog) -> None:
     assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
+def test_transactional_update_exitcode_minus_one_raises() -> None:
+    """The slmicro check raises on a dead command (exit -1): without it the
+    registry falls back to a no-op and a dead transactional-update sails on
+    to the reboot with no snapshot staged."""
+    with pytest.raises(UpdateError) as ei:
+        transactional_update("h", "", "tu pkg in", "", -1)
+    assert ei.value.reason == "downgrade command timed out or failed to run"
+    assert ei.value.host == "h"
+
+
+def test_transactional_update_clean_run_returns_none() -> None:
+    """A clean transactional-update run passes the check."""
+    assert transactional_update("h", "", "tu pkg in", "", 0) is None
+
+
 def test_downgrade_checks_dispatch_keys() -> None:
-    """The ``downgrade_checks`` registry maps SLE keys to ``zypper``."""
+    """The ``downgrade_checks`` registry maps SLE keys to ``zypper`` and the
+    transactional slmicro key to its own check (NOT the no-op fallback)."""
     assert downgrade_checks[("15", False)] is zypper
     assert downgrade_checks[("12", False)] is zypper
+    assert downgrade_checks[("slmicro", True)] is transactional_update

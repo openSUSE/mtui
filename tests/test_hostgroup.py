@@ -712,6 +712,9 @@ def test_perform_downgrade_picks_highest_version_then_runs(mock_run):
     t1 = _stub_target("h1")
     # Pretend list_command output is parsed: ``pkg-a = 1.0`` and ``pkg-a = 1.5``.
     t1.lastout.return_value = "pkg-a = 1.0-1\npkg-a = 1.5-1\n"
+    # A real successful probe records exit 0 -- pins that the dead-probe gate
+    # lets the happy path through (not just non-int mock exits).
+    t1.lastexit.return_value = 0
     t1.doer.return_value = {
         **_doer_dict(reboot="", init_snapshot=""),
         "list_command": MagicMock(safe_substitute=MagicMock(return_value="rpm -qa")),
@@ -726,6 +729,113 @@ def test_perform_downgrade_picks_highest_version_then_runs(mock_run):
     cmd_tpl = t1.doer.return_value["command"]
     cmd_tpl.safe_substitute.assert_any_call(package="pkg-a", version="1.5-1")
     t1.unlock.assert_called()
+
+
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_downgrade_dead_probe_aborts(mock_run):
+    """A dead version probe (SSH no-output timeout records exit -1) aborts the
+    downgrade instead of 'completing' it with zero downgrade commands run.
+
+    Without the abort, the empty probe output parses to an empty version map,
+    no downgrade command is built, and every package silently stays at the
+    update version behind a success-looking flow.
+    """
+    t1 = _stub_target("h1")
+    t1.lastout.return_value = ""
+    t1.lastexit.return_value = -1
+    t1.doer.return_value = {
+        **_doer_dict(reboot="", init_snapshot=""),
+        "list_command": MagicMock(safe_substitute=MagicMock(return_value="probe")),
+        "command": MagicMock(safe_substitute=MagicMock(return_value="zypper in")),
+    }
+    hg = HostsGroup([t1])
+    with pytest.raises(UpdateError) as ei:
+        hg.perform_downgrade(["pkg-a"], MagicMock())
+    assert ei.value.host == "h1"
+    # No downgrade command may be built after a dead probe.
+    t1.doer.return_value["command"].safe_substitute.assert_not_called()
+    t1.unlock.assert_called()
+
+
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_downgrade_partial_dead_probe_continues_on_healthy_hosts(mock_run):
+    """One host's dead probe skips THAT host and still rolls back the rest.
+
+    The dead host is excluded from the version parse, the command build, and
+    the post-command checks (its stale -1 record must not trip the timeout
+    check mid-loop); the error naming it is raised only at the end.
+    """
+    t1 = _stub_target("h1")
+    t1.lastout.return_value = "pkg-a = 1.0-1\npkg-a = 1.5-1\n"
+    t1.lastexit.return_value = 0
+    t1.doer.return_value = {
+        **_doer_dict(reboot="", init_snapshot=""),
+        "list_command": MagicMock(safe_substitute=MagicMock(return_value="probe")),
+        "command": MagicMock(safe_substitute=MagicMock(return_value="zypper in")),
+    }
+    t1.check.return_value = MagicMock()
+    t2 = _stub_target("h2")
+    t2.lastout.return_value = ""
+    t2.lastexit.return_value = -1
+    t2.doer.return_value = {
+        **_doer_dict(reboot="", init_snapshot=""),
+        "list_command": MagicMock(safe_substitute=MagicMock(return_value="probe")),
+        "command": MagicMock(safe_substitute=MagicMock(return_value="zypper in")),
+    }
+    t2.check.return_value = MagicMock()
+    hg = HostsGroup([t1, t2])
+    with pytest.raises(UpdateError) as ei:
+        hg.perform_downgrade(["pkg-a"], MagicMock())
+    assert ei.value.host == "h2"
+    # The healthy host rolled back (highest released version picked) and was
+    # checked; the dead host built no command and was never checked.
+    t1.doer.return_value["command"].safe_substitute.assert_any_call(
+        package="pkg-a", version="1.5-1"
+    )
+    t1.check.return_value.assert_called()
+    t2.doer.return_value["command"].safe_substitute.assert_not_called()
+    t2.check.return_value.assert_not_called()
+    t1.unlock.assert_called()
+    t2.unlock.assert_called()
+
+
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_downgrade_transactional_dead_command_aborts_before_reboot(mock_run):
+    """A dead combined transactional-update command (exit -1) aborts BEFORE the
+    reboot: rebooting with no snapshot staged would activate nothing while
+    looking like a completed rollback. Exercises the real ``("slmicro", True)``
+    check the registry dispatches to."""
+    from mtui.update_workflow.checks.downgrade import transactional_update
+
+    t1 = _stub_target("h1", transactional=True)
+    t1.lastout.return_value = "pkg-a = 1.0-1\n"
+    # Probe exits 0 (two gate reads), then the combined command records -1.
+    t1.lastexit.side_effect = [0, 0] + [-1] * 5
+    t1.doer.return_value = {
+        **_doer_dict(reboot="reboot"),
+        "list_command": MagicMock(safe_substitute=MagicMock(return_value="probe")),
+        "command": MagicMock(safe_substitute=MagicMock(return_value="tu pkg in")),
+    }
+    t1.check.return_value = transactional_update
+    hg = HostsGroup([t1])
+    with (
+        patch.object(HostsGroup, "_reboot") as reboot_mock,
+        pytest.raises(UpdateError),
+    ):
+        hg.perform_downgrade(["pkg-a"], MagicMock())
+    reboot_mock.assert_not_called()
+    t1.unlock.assert_called()
+
+
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_downgrade_empty_package_list_is_a_noop(mock_run):
+    """An empty package list returns before locking or probing: the probe
+    template with zero names would ask zypper to list the entire catalog."""
+    t1 = _stub_target("h1")
+    hg = HostsGroup([t1])
+    hg.perform_downgrade([], MagicMock())
+    mock_run.assert_not_called()
+    t1.unlock.assert_not_called()
 
 
 @patch("mtui.hosts.target.hostgroup.RunCommand")
@@ -786,6 +896,8 @@ def test_perform_downgrade_transactional_combines_packages(mock_run):
     t1 = _stub_target("h1", transactional=True)
     # list_command output parsed into versions: pkg-a -> 1.5-1, pkg-b -> 2.0-1.
     t1.lastout.return_value = "pkg-a = 1.5-1\npkg-b = 2.0-1\n"
+    # A real successful probe records exit 0 (see the zypper-path test above).
+    t1.lastexit.return_value = 0
     command = MagicMock(safe_substitute=MagicMock(return_value="tu pkg in ..."))
     t1.doer.return_value = {
         **_doer_dict(reboot=""),

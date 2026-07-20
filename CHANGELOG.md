@@ -35,6 +35,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   still-shutting-down sshd); only the serialization is removed. Most visible on
   transactional (SL Micro) updates, which reboot every host.
 
+### Fixed
+
+- `downgrade` can no longer end as a silent half-rollback. The version probe
+  now runs a single `zypper se -s` invocation for the whole package list
+  instead of one per package (the per-package loop, block-buffered behind the
+  pipeline, emitted no output until the end and blew the SSH no-output timeout
+  on slow hosts, e.g. ppc64le with many packages). When the probe or a
+  downgrade command dies (times out or fails to run) or hits a recognized
+  zypper failure, the flow now aborts with an explicit error instead of
+  "completing" with nothing rolled back — per host: a dead probe on one host
+  no longer cancels the rollback of the healthy ones. After a completed run,
+  the final check names, per host at ERROR level, every package still at or
+  above the update's shipped version — previously the only hint was a bare
+  "downgrade not completed" warning. Headless (MCP) callers now get a failed
+  command instead of a success-looking log. An empty package list no longer
+  probes the entire repository catalog.
+
 ## 19.0.1 - 2026-07-17
 
 ### Added

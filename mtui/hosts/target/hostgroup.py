@@ -450,6 +450,14 @@ class HostsGroup(UserDict[str, Target]):
         ver_re = re.compile(r"(.*) = (.*)")
         versions: dict[str, dict[str, str]] = {}
 
+        # Nothing to downgrade: return before locking or touching repos. The
+        # guard also keeps the probe template from rendering with an empty
+        # package list -- ``zypper se`` without names would list the entire
+        # repository catalog.
+        if not packages:
+            logger.warning("no packages to downgrade")
+            return
+
         # Resolve the per-host doer commands *before* taking the lock: if a host
         # has no downgrader the early return below must not leave the group
         # locked (the finally that unlocks only guards the second try block).
@@ -481,7 +489,38 @@ class HostsGroup(UserDict[str, Target]):
 
             self.run(list_cmd)
 
+            # A dead probe must abort that host's downgrade, not degrade it.
+            # When the probe dies (an SSH no-output timeout records exit -1)
+            # its stdout is empty, the version map below stays empty, and the
+            # flow would "complete" having run zero downgrade commands --
+            # leaving every package at the update version behind a
+            # success-looking run. The pipeline's exit status is awk's, so a
+            # non-zero int here always means the probe itself broke, never
+            # "package not found". Handled per host: the healthy hosts still
+            # roll back (and transactional ones still reboot); the error for
+            # the dead ones is raised at the end.
+            dead_probes = sorted(
+                hn
+                for hn in list_cmd
+                if isinstance(self.data[hn].lastexit(), int)
+                and self.data[hn].lastexit() != 0
+            )
+            for hn in dead_probes:
+                logger.critical(
+                    "%s: package version probe failed (exit %s); "
+                    "skipping downgrade on this host",
+                    hn,
+                    self.data[hn].lastexit(),
+                )
+            if dead_probes and len(dead_probes) == len(list_cmd):
+                raise UpdateError(
+                    "package version probe failed", ", ".join(dead_probes)
+                )
+
             for hn, t in self.data.items():
+                # A dead probe's partial output must not feed the version map.
+                if hn in dead_probes:
+                    continue
                 lines: list[str] = t.lastout().split("\n")
                 release: dict[str, list[str]] = {}
 
@@ -512,15 +551,19 @@ class HostsGroup(UserDict[str, Target]):
                 if cmd:
                     self.run(cmd)
 
-                    for h, t in self.data.items():
-                        if h not in transactional_hosts:
-                            t.check("downgrader")(
-                                t.hostname,
-                                t.lastout(),
-                                t.lastin(),
-                                t.lasterr(),
-                                t.lastexit(),
-                            )
+                    # Check only the hosts that actually ran this command: a
+                    # host outside ``cmd`` still carries its previous record
+                    # (a dead probe's -1 would trip the timeout check here and
+                    # cancel the healthy hosts' rollback mid-loop).
+                    for h in cmd:
+                        t = self.data[h]
+                        t.check("downgrader")(
+                            t.hostname,
+                            t.lastout(),
+                            t.lastin(),
+                            t.lasterr(),
+                            t.lastexit(),
+                        )
 
             # Transactional hosts: downgrade ALL packages in a SINGLE
             # transaction/snapshot. A per-package loop opens a snapshot per
@@ -551,7 +594,14 @@ class HostsGroup(UserDict[str, Target]):
                         t.lastexit(),
                     )
 
-            self._reboot(reboot)
+            # Reboot the healthy transactional hosts first (their staged
+            # snapshots must still activate), then surface the dead probes as
+            # the command's failure.
+            self._reboot({h: r for h, r in reboot.items() if h not in dead_probes})
+            if dead_probes:
+                raise UpdateError(
+                    "package version probe failed", ", ".join(dead_probes)
+                )
         except MissingDowngraderError:
             return
         finally:

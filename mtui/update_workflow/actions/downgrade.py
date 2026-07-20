@@ -13,10 +13,14 @@ def zypper() -> dict[str, Template]:
         A dictionary of command templates.
 
     """
+    # ONE zypper invocation for the whole package list. A per-package ``for``
+    # loop loads the repo metadata once per package and, piped through a
+    # block-buffered awk (no PTY), emits nothing until the last iteration --
+    # on a slow host a long package list blows the SSH no-output timeout
+    # (``connection_timeout``, default 300s) and the probe dies with no
+    # versions resolved.
     list_command_template = r"""
-for p in $packages; do \
-zypper -n se -s --match-exact -t package $$p; \
-done \
+zypper -n se -s --match-exact -t package $packages \
 | grep -v "(System" \
 | grep ^[iv] \
 | sed "s, ,,g" \
@@ -38,10 +42,10 @@ def slmicro() -> dict[str, Template]:
         A dictionary of command templates.
 
     """
+    # One invocation for the whole list -- see ``zypper()`` above for why a
+    # per-package loop is a timeout trap on slow hosts.
     list_command_template = r"""
-for p in $packages; do \
-zypper -n se -s --match-exact -t package $$p; \
-done \
+zypper -n se -s --match-exact -t package $packages \
 | grep -v "(System" \
 | grep ^[iv] \
 | sed "s, ,,g" \

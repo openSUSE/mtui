@@ -764,6 +764,20 @@ downgrade
 Downgrades all related packages to the last released version (using
 the UPDATE channel).
 
+If the rollback cannot complete on a host — the version probe or a
+downgrade command dies (times out or fails to run) or hits a recognized
+zypper failure — the command aborts for that host with an error instead
+of finishing quietly (the remaining hosts still roll back). Treat any
+such error as "the host may be half rolled back": verify with ``rpm -q``
+and re-run ``downgrade``.
+
+After a completed run, every package still found at or above the
+update's version is listed per host as an error. New packages (which
+have no released version to go back to) and multiversion packages such
+as the kernel (where the update's version legitimately stays installed
+alongside older ones) always appear in this list; re-running
+``downgrade`` will not clear them.
+
 reboot
 ++++++
 

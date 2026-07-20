@@ -14,6 +14,28 @@ def test_zypper_downgrade_uses_oldpackage() -> None:
     assert "bash=1.2-3" in sub
 
 
+def test_zypper_list_command_probes_all_packages_in_one_call() -> None:
+    """The version probe runs ONE zypper invocation for the whole list.
+
+    The old per-package ``for`` loop loaded repo metadata once per package
+    and, piped through a block-buffered awk, produced no output until the
+    last iteration -- on a slow host a long package list blew the SSH
+    no-output timeout and the downgrade rolled back nothing.
+    """
+    sub = zypper()["list_command"].safe_substitute(packages="pkg-a pkg-b pkg-c")
+    assert "for p in" not in sub
+    assert sub.count("zypper") == 1
+    assert "zypper -n se -s --match-exact -t package pkg-a pkg-b pkg-c" in sub
+
+
+def test_slmicro_list_command_probes_all_packages_in_one_call() -> None:
+    """The slmicro probe is the same single-invocation shape as zypper's."""
+    sub = slmicro()["list_command"].safe_substitute(packages="pkg-a pkg-b")
+    assert "for p in" not in sub
+    assert sub.count("zypper") == 1
+    assert "zypper -n se -s --match-exact -t package pkg-a pkg-b" in sub
+
+
 def test_slmicro_downgrade_uses_oldpackage() -> None:
     """The transactional-update downgrade command allows older versions and takes
     the full ``name=version`` spec list as ``$package`` so all packages downgrade
