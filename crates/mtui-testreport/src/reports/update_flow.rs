@@ -472,6 +472,15 @@ pub async fn perform_downgrade(
     report: &dyn SetRepo,
     packages: &[String],
 ) -> Result<(), UpdateError> {
+    // Nothing to downgrade: return before locking or touching repos (upstream
+    // PR #336). The guard also keeps the probe template from rendering with an
+    // empty package list — `zypper se` without names would list the entire
+    // repository catalog.
+    if packages.is_empty() {
+        warn!("no packages to downgrade");
+        return Ok(());
+    }
+
     let registry = WorkflowRegistry::default();
 
     // Resolve reboot before locking so a missing downgrader early-returns
@@ -525,12 +534,50 @@ async fn downgrade_body(
         m
     };
     if !list_map.is_empty() {
-        targets.run(Command::PerHost(list_map)).await;
+        targets.run(Command::PerHost(list_map.clone())).await;
     }
 
-    // hostname -> { package -> highest available version }
+    // A dead probe must abort that host's downgrade, not degrade it (upstream
+    // PR #336). When the probe dies (an SSH no-output timeout records exit -1)
+    // its stdout is empty, the version map below stays empty, and the flow would
+    // "complete" having run zero downgrade commands — leaving every package at
+    // the update version behind a success-looking run. The pipeline's exit
+    // status is awk's, so a recorded non-zero exit here always means the probe
+    // itself broke, never "package not found". Handled per host: the healthy
+    // hosts still roll back (and transactional ones still reboot); the error for
+    // the dead ones is raised at the end. All probes dead aborts immediately.
+    let dead_probes: std::collections::BTreeSet<String> = list_map
+        .keys()
+        .filter(|hn| {
+            targets
+                .get(hn)
+                .and_then(mtui_hosts::Target::lastexit)
+                .is_some_and(|c| c != 0)
+        })
+        .cloned()
+        .collect();
+    for hn in &dead_probes {
+        let exit = targets.get(hn).and_then(mtui_hosts::Target::lastexit);
+        error!(
+            host = %hn,
+            exit = ?exit,
+            "package version probe failed; skipping downgrade on this host"
+        );
+    }
+    if !dead_probes.is_empty() && dead_probes.len() == list_map.len() {
+        return Err(UpdateError::new(
+            "package version probe failed",
+            dead_probes.iter().cloned().collect::<Vec<_>>().join(", "),
+        ));
+    }
+
+    // hostname -> { package -> highest available version }. A dead probe's
+    // (empty / partial) output must not feed the version map.
     let mut versions: HashMap<String, HashMap<String, String>> = HashMap::new();
     for target in targets.targets() {
+        if dead_probes.contains(target.hostname()) {
+            continue;
+        }
         let host_versions = parse_downgrade_versions(target.lastout());
         if !host_versions.is_empty() {
             versions.insert(target.hostname().to_owned(), host_versions);
@@ -576,9 +623,14 @@ async fn downgrade_body(
             }
         }
         if !cmd.is_empty() {
-            targets.run(Command::PerHost(cmd)).await;
+            targets.run(Command::PerHost(cmd.clone())).await;
+            // Check only the hosts that actually ran this command: a host
+            // outside `cmd` (e.g. a dead-probe host) still carries its previous
+            // record, whose stale -1 would trip the new timeout gate and cancel
+            // the healthy hosts' rollback (upstream PR #336).
             for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
-                if !transactional_hosts.contains(e.host.as_deref().unwrap_or("")) {
+                let host = e.host.as_deref().unwrap_or("");
+                if cmd.contains_key(host) && !transactional_hosts.contains(host) {
                     error!(error = %e, "downgrade check failed");
                     failures.push(e);
                 }
@@ -616,56 +668,113 @@ async fn downgrade_body(
         }
     }
     if !combined.is_empty() {
-        targets.run(Command::PerHost(combined)).await;
+        targets.run(Command::PerHost(combined.clone())).await;
+        // Same scoping as the per-package loop: only check the transactional
+        // hosts that ran this combined command.
         for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
-            if transactional_hosts.contains(e.host.as_deref().unwrap_or("")) {
+            let host = e.host.as_deref().unwrap_or("");
+            if combined.contains_key(host) && transactional_hosts.contains(host) {
                 error!(error = %e, "downgrade check failed");
                 failures.push(e);
             }
         }
     }
 
-    reboot_transactional(targets, reboot).await;
+    // Reboot the healthy transactional hosts first (their staged snapshots must
+    // still activate), then surface the dead probes as the command's failure
+    // (upstream PR #336).
+    let healthy_reboot: BTreeMap<String, String> = reboot
+        .into_iter()
+        .filter(|(h, _)| !dead_probes.contains(h))
+        .collect();
+    reboot_transactional(targets, healthy_reboot).await;
 
-    downgrade_verdict(targets).await;
+    let not_downgraded = downgrade_verdict(targets).await;
 
-    aggregate_failures("downgrade", failures)
+    // A per-host check failure aborts first (matches the pre-#336 aggregation).
+    aggregate_failures("downgrade", failures)?;
+
+    // Then the dead probes: the healthy hosts have rolled back and rebooted, so
+    // now name the hosts whose probe died as the command's failure.
+    if !dead_probes.is_empty() {
+        return Err(UpdateError::new(
+            "package version probe failed",
+            dead_probes.iter().cloned().collect::<Vec<_>>().join(", "),
+        ));
+    }
+
+    // Finally the honest verdict: any package still at or above the update's
+    // shipped version means the rollback did not complete. `downgrade_verdict`
+    // has already logged the per-host detail at ERROR; fail the command so a
+    // caller (REPL or MCP) can't mistake a half-rollback for success.
+    if !not_downgraded.is_empty() {
+        return Err(UpdateError::reason_only("downgrade not completed"));
+    }
+
+    Ok(())
 }
 
 /// Emits the post-downgrade "done" / "downgrade not completed" verdict.
 ///
-/// Ports upstream `commands/downgrade.py:51-72`: re-query each host, then rotate
-/// `before = after; after = current` per package. If any package's rotated
-/// `before == after` (both known) the downgrade did not move that version, so the
-/// whole run is reported as **not completed** (a warning) and the scan
-/// short-circuits; otherwise it is **done** (info). Iterated in sorted hostname
-/// order to keep the log deterministic.
-async fn downgrade_verdict(targets: &mut HostsGroup) {
+/// Ports upstream PR #336's `commands/downgrade.py` post-loop: re-query each
+/// host, rotate `before = after; after = current` per package, then compare each
+/// package's re-queried `current` against the update's `required` version. Every
+/// package still `current >= required` did **not** roll back; it is named per
+/// host, at ERROR, with versions — with no short-circuit, so the bookkeeping
+/// still advances for the packages that did move. New packages (no released
+/// version to go back to) and multiversion packages (e.g. the kernel, whose
+/// update version legitimately stays installed alongside older ones) always
+/// appear here; re-running `downgrade` will not clear them.
+///
+/// Returns the `hostname -> ["name (at <current>, update ships <required>)", …]`
+/// map of packages still at or above the update version — empty on a fully
+/// completed rollback. Iterated in sorted hostname order (the group's own
+/// ordering) so the log is deterministic.
+async fn downgrade_verdict(targets: &mut HostsGroup) -> BTreeMap<String, Vec<String>> {
     // Query every host's versions concurrently (serial hosts one at a time)
     // via the shared fan-out, then run the pure verdict scan below.
     targets.query_versions().await;
 
-    let mut completed = true;
-    'hosts: for target in targets.targets_mut() {
+    let mut not_downgraded: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for target in targets.targets_mut() {
+        let hostname = target.hostname().to_owned();
         for pkg in target.packages_mut() {
             let after = pkg.after().cloned();
             pkg.set_before_version(after);
             let current = pkg.current().cloned();
             pkg.set_after_version(current);
-            if let (Some(before), Some(after)) = (pkg.before(), pkg.after())
-                && before == after
+            if let (Some(current), Some(required)) = (pkg.current(), pkg.required())
+                && current >= required
             {
-                completed = false;
-                break 'hosts;
+                not_downgraded
+                    .entry(hostname.clone())
+                    .or_default()
+                    .push(format!(
+                        "{} (at {current}, update ships {required})",
+                        pkg.name
+                    ));
             }
         }
     }
 
-    if completed {
+    if not_downgraded.is_empty() {
         tracing::info!("done");
     } else {
-        warn!("downgrade not completed");
+        for (hostname, names) in &not_downgraded {
+            error!(
+                "{hostname}: still at or above the update's shipped version \
+                 after downgrade: {}",
+                names.join(", ")
+            );
+        }
+        error!(
+            "downgrade not completed; verify with 'rpm -q'. New packages \
+             (no released version to go back to) and multiversion packages \
+             (e.g. the kernel) always appear here; re-running downgrade will \
+             not clear them"
+        );
     }
+    not_downgraded
 }
 
 /// Parses the downgrader `list_command` output into a `name -> highest version`
@@ -1266,39 +1375,137 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn downgrade_verdict_warns_when_version_did_not_move() {
-        // The re-query returns pkg-a 1.0-1; seeding `after` to the same version
-        // means the rotated before == after ⇒ "downgrade not completed".
-        let (mut t, _h) = sles_target("h1", "pkg-a 1.0-1\n");
-        let mut pkg = mtui_types::package::Package::new("pkg-a");
-        pkg.set_after(Some("1.0-1")).unwrap();
-        t.set_packages(vec![pkg]);
+    async fn perform_downgrade_empty_package_list_is_a_noop() {
+        // An empty package list returns before locking or probing: the probe
+        // template with zero names would list the entire catalog (upstream #336).
+        let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t], false);
 
-        downgrade_verdict(&mut group).await;
-
-        // After the rotation, `after` holds the re-queried `current`.
-        let p = &group.get("h1").unwrap().packages()[0];
-        assert_eq!(
-            p.before(),
-            p.after(),
-            "unchanged version leaves before == after"
+        let res = perform_downgrade(&mut group, &NoopRepo, &[]).await;
+        assert!(res.is_ok(), "empty list is a no-op Ok: {res:?}");
+        assert!(
+            handle.commands().is_empty(),
+            "no command should run for an empty package list: {:?}",
+            handle.commands()
         );
     }
 
     #[tokio::test]
-    async fn downgrade_verdict_done_when_version_moved() {
-        // Re-query returns 0.9-1 but `after` was 1.0-1 ⇒ before != after ⇒ done.
-        let (mut t, _h) = sles_target("h1", "pkg-a 0.9-1\n");
+    async fn perform_downgrade_dead_probe_aborts() {
+        // A dead version probe (exit -1 for every command) aborts instead of
+        // "completing" with zero downgrade commands run (upstream PR #336).
+        let (t, handle) = sles_target_with_exit("h1", "", -1);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        let err = res.expect_err("a dead probe must abort");
+        assert_eq!(err.reason, "package version probe failed");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        // No downgrade command was built (only the failing probe ran).
+        assert!(
+            !handle.commands().iter().any(|c| c.contains("--oldpackage")),
+            "no downgrade command may run after a dead probe: {:?}",
+            handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_downgrade_partial_dead_probe_rolls_back_healthy_host() {
+        // h1's probe succeeds (rolls back), h2's probe dies (exit -1). h2 is
+        // skipped but h1 still rolls back; the error names only h2 at the end
+        // (upstream PR #336).
+        let (t1, h1) = sles_target("h1", "pkg-a = 1.0-1\n");
+        let (t2, h2) = sles_target_with_exit("h2", "", -1);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        let err = res.expect_err("a partial dead probe still fails the command");
+        assert_eq!(err.reason, "package version probe failed");
+        assert_eq!(err.host.as_deref(), Some("h2"));
+        // The healthy host rolled back to the resolved version.
+        assert!(
+            h1.commands()
+                .iter()
+                .any(|c| c.contains("pkg-a") && c.contains("1.0-1")),
+            "healthy host must roll back: {:?}",
+            h1.commands()
+        );
+        // The dead host built no downgrade command.
+        assert!(
+            !h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "dead host must build no downgrade command: {:?}",
+            h2.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn downgrade_verdict_names_packages_still_at_update_version() {
+        // Re-query returns pkg-a still at 1.5-1, which is the update's `required`
+        // version ⇒ current >= required ⇒ named as not-downgraded (upstream
+        // PR #336). The bookkeeping still rotates before/after for it.
+        let (mut t, _h) = sles_target("h1", "pkg-a 1.5-1\n");
         let mut pkg = mtui_types::package::Package::new("pkg-a");
-        pkg.set_after(Some("1.0-1")).unwrap();
+        pkg.set_required(Some("1.5-1")).unwrap();
+        pkg.set_after(Some("1.5-1")).unwrap();
         t.set_packages(vec![pkg]);
         let mut group = HostsGroup::new(vec![t], false);
 
-        downgrade_verdict(&mut group).await;
+        let not_downgraded = downgrade_verdict(&mut group).await;
 
+        assert_eq!(
+            not_downgraded.get("h1").map(Vec::as_slice),
+            Some(&["pkg-a (at 1.5-1, update ships 1.5-1)".to_owned()][..])
+        );
+        // Bookkeeping advanced: before <- old after, after <- re-queried current.
         let p = &group.get("h1").unwrap().packages()[0];
-        assert_ne!(p.before(), p.after(), "moved version ⇒ before != after");
+        assert_eq!(
+            p.before().map(ToString::to_string).as_deref(),
+            Some("1.5-1")
+        );
+        assert_eq!(p.after().map(ToString::to_string).as_deref(), Some("1.5-1"));
+    }
+
+    #[tokio::test]
+    async fn downgrade_verdict_no_short_circuit_names_every_host() {
+        // Two hosts each still at the update version: BOTH are named, not just
+        // the first (upstream PR #336 removed the short-circuit).
+        let (mut t1, _h1) = sles_target("h1", "pkg-a 2.0-1\n");
+        let mut p1 = mtui_types::package::Package::new("pkg-a");
+        p1.set_required(Some("2.0-1")).unwrap();
+        t1.set_packages(vec![p1]);
+        let (mut t2, _h2) = sles_target("h2", "pkg-b 3.0-1\n");
+        let mut p2 = mtui_types::package::Package::new("pkg-b");
+        p2.set_required(Some("3.0-1")).unwrap();
+        t2.set_packages(vec![p2]);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let not_downgraded = downgrade_verdict(&mut group).await;
+
+        assert!(not_downgraded.contains_key("h1"), "{not_downgraded:?}");
+        assert!(not_downgraded.contains_key("h2"), "{not_downgraded:?}");
+    }
+
+    #[tokio::test]
+    async fn downgrade_verdict_done_when_below_required() {
+        // Re-query returns 0.9-1, below the update's required 1.5-1 ⇒ rolled back
+        // ⇒ not named; the map is empty ⇒ "done".
+        let (mut t, _h) = sles_target("h1", "pkg-a 0.9-1\n");
+        let mut pkg = mtui_types::package::Package::new("pkg-a");
+        pkg.set_required(Some("1.5-1")).unwrap();
+        pkg.set_after(Some("1.5-1")).unwrap();
+        t.set_packages(vec![pkg]);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let not_downgraded = downgrade_verdict(&mut group).await;
+
+        assert!(not_downgraded.is_empty(), "{not_downgraded:?}");
+        // Bookkeeping still advanced.
+        let p = &group.get("h1").unwrap().packages()[0];
+        assert_eq!(
+            p.before().map(ToString::to_string).as_deref(),
+            Some("1.5-1")
+        );
+        assert_eq!(p.after().map(ToString::to_string).as_deref(), Some("0.9-1"));
     }
 
     /// Builds an enabled SL Micro (transactional) target on a mock returning
@@ -1440,7 +1647,37 @@ mod tests {
         // A check failure (exit 104) drives the rollback wrapper: it re-surfaces
         // the original UpdateError AND issues a downgrade (rollback). The mock
         // returns a resolvable version line so the downgrade command renders.
-        let (t, handle) = sles_target_with_exit("h1", "pkg-a = 1.0-1\n", 104);
+        //
+        // The downgrade version probe must exit 0 (a non-zero probe exit is now a
+        // dead-probe abort, upstream PR #336); the shared `sles_target_with_exit`
+        // would apply 104 to the probe too, so script the probe explicitly.
+        let probe = {
+            let cmds = crate::update_workflow::actions::downgrade::downgrader("15", false).unwrap();
+            let vars: std::collections::HashMap<&str, &str> =
+                [("packages", "pkg-a")].into_iter().collect();
+            cmds.render_list_command(&vars).unwrap().unwrap()
+        };
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("zypper", "pkg-a = 1.0-1\n", "", 104, 0))
+            .with_response(
+                probe,
+                CommandLog::new("zypper", "pkg-a = 1.0-1\n", "", 0, 0),
+            );
+        let handle = conn.clone();
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
         let mut group = HostsGroup::new(vec![t], false);
         let mut report = crate::reports::SlReport::new(Config::default());
         seed_rrid_and_package(&mut report);

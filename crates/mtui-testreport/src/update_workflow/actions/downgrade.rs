@@ -2,9 +2,10 @@
 //! `downgrader`).
 //!
 //! Downgrade carries a `list_command` (enumerate installed/available versions)
-//! and a `command`. The zypper list loop embeds `$$p` (a shell loop variable)
-//! and awk `$2`/`$4` field refs alongside the real `$packages`, and the command
-//! interpolates `$package` / `$version`; the call sites use `.safe_substitute`
+//! and a `command`. The zypper list probes every package in a **single** zypper
+//! invocation (the real `$packages`) and pipes it through awk (`$2`/`$4` field
+//! refs survive `SubstMode::Safe`), and the command interpolates `$package` /
+//! `$version`; the call sites use `.safe_substitute`
 //! (see `hostgroup.py::perform_downgrade`) so the shell/awk `$`-tokens survive.
 //! The `slmicro` entry is transactional with a reboot.
 //!
@@ -14,10 +15,15 @@ use crate::update_workflow::actions::{ActionCommands, SubstMode};
 
 /// zypper/slmicro downgrade list command (upstream `list_command_template`),
 /// verbatim and shared by both.
+///
+/// One `zypper -n se -s` invocation for the whole package list (upstream
+/// PR #336): a per-package `for p in $packages; do zypper ... $$p; done` loop
+/// loads the repo metadata once per package and, piped through a block-buffered
+/// awk with no PTY, emits nothing until the last iteration — on a slow host a
+/// long package list blows the SSH no-output timeout (`connection_timeout`,
+/// default 300s) and the probe dies with no versions resolved.
 const LIST_COMMAND: &str = r#"
-for p in $packages; do \
-zypper -n se -s --match-exact -t package $$p; \
-done \
+zypper -n se -s --match-exact -t package $packages \
 | grep -v "(System" \
 | grep ^[iv] \
 | sed "s, ,,g" \
@@ -97,16 +103,38 @@ mod tests {
     }
 
     #[test]
-    fn list_command_preserves_shell_and_awk_dollars() {
+    fn list_command_probes_all_packages_in_one_call() {
+        // The version probe runs ONE zypper invocation for the whole list
+        // (upstream PR #336). The old per-package `for` loop, piped through a
+        // block-buffered awk, produced no output until the last iteration and
+        // blew the SSH no-output timeout on slow hosts.
         let cmds = downgrader("15", false).unwrap();
-        let vars: HashMap<&str, &str> = [("packages", "a b")].into_iter().collect();
+        let vars: HashMap<&str, &str> = [("packages", "a b c")].into_iter().collect();
         let listed = cmds.render_list_command(&vars).unwrap().unwrap();
-        // `$packages` expanded.
-        assert!(listed.contains("for p in a b; do"));
-        // `$$p` -> literal `$p` for the shell loop.
-        assert!(listed.contains("-t package $p;"));
+        // No per-package loop.
+        assert!(!listed.contains("for p in"), "{listed}");
+        // Exactly one zypper invocation, over the whole list.
+        assert_eq!(listed.matches("zypper").count(), 1, "{listed}");
+        assert!(
+            listed.contains("zypper -n se -s --match-exact -t package a b c"),
+            "{listed}"
+        );
         // awk field refs preserved.
         assert!(listed.contains("print $2,\"=\",$4"));
+    }
+
+    #[test]
+    fn slmicro_list_command_probes_all_packages_in_one_call() {
+        // The slmicro probe is the same single-invocation shape as zypper's.
+        let cmds = downgrader("slmicro", true).unwrap();
+        let vars: HashMap<&str, &str> = [("packages", "a b")].into_iter().collect();
+        let listed = cmds.render_list_command(&vars).unwrap().unwrap();
+        assert!(!listed.contains("for p in"), "{listed}");
+        assert_eq!(listed.matches("zypper").count(), 1, "{listed}");
+        assert!(
+            listed.contains("zypper -n se -s --match-exact -t package a b"),
+            "{listed}"
+        );
     }
 
     #[test]

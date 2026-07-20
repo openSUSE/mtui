@@ -11,19 +11,26 @@ use crate::session::Session;
 
 /// Downgrades all related packages to the last released version.
 ///
-/// Ports upstream `mtui.commands.downgrade.Downgrade`. Drives
+/// Ports upstream `mtui.commands.downgrade.Downgrade` (including PR #336). Drives
 /// [`TestReport::perform_downgrade`](mtui_testreport::TestReport::perform_downgrade),
-/// which removes the issue repos, resolves each package's available downgrade
-/// version, downgrades (per-package for non-transactional hosts, combined for
-/// transactional), runs the check, and reboots transactional hosts.
+/// which removes the issue repos, probes each package's available downgrade
+/// version in a single `zypper se -s` invocation, downgrades (per-package for
+/// non-transactional hosts, combined for transactional), runs the check, and
+/// reboots transactional hosts.
 ///
-/// The post-downgrade version diffing upstream performs to emit its
-/// "done" / "downgrade not completed" summary (upstream `commands/downgrade.py`)
-/// is done by the workflow itself: `perform_downgrade` ends with a per-package
-/// `before = after; after = current` rotation and logs `done` or warns
-/// `downgrade not completed` when a version did not move.
+/// The post-downgrade verdict upstream performs (upstream `commands/downgrade.py`)
+/// is done by the workflow itself: `perform_downgrade` re-queries versions,
+/// rotates `before = after; after = current` per package, and — crucially —
+/// **aborts loudly** rather than half-rolling back silently. A dead version
+/// probe (an SSH no-output timeout records exit `-1`) or a dead downgrade command
+/// fails the host; any package still at or above the update's `required` version
+/// after the run is named per host at ERROR. Because `drive` maps that
+/// [`UpdateError`](mtui_testreport::UpdateError) onto a `CommandError`, a
+/// half-rollback fails the command for both the REPL and headless (MCP) callers
+/// instead of returning a success-looking log.
 ///
-/// Warning: this command cannot work for new packages.
+/// Warning: this command cannot work for new packages (they have no released
+/// version to go back to, so they always appear in the not-downgraded list).
 pub struct Downgrade;
 
 #[async_trait]
