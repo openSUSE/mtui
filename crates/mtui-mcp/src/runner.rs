@@ -85,6 +85,8 @@ async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
 async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     let config = args.resolve_config();
     let keep_alive = session_keep_alive(config.mcp_session_idle_timeout);
+    // Captured before `config` moves into the registry (usize is Copy).
+    let body_limit = resolve_body_limit(config.mcp_max_request_bytes);
     tracing::info!(
         cap = config.mcp_session_cap,
         idle_timeout_s = config.mcp_session_idle_timeout,
@@ -123,7 +125,23 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
         StreamableHttpServerConfig::default(),
     );
 
-    let app = axum::Router::new().fallback_service(service);
+    // Cap the inbound request body before rmcp buffers it: an unauthenticated
+    // pre-session request must not be bufferable until memory exhaustion. `0`
+    // fully disables mtui's limit (removing even axum's implicit 2 MB floor);
+    // any positive value becomes a hard `413` ceiling. (`body_limit` resolved
+    // above, before `config` moved into the registry.)
+    tracing::info!(
+        request_body_limit =
+            body_limit.map_or_else(|| "disabled".to_owned(), |n| format!("{n} bytes")),
+        "mtui-mcp: http request-body limit"
+    );
+    let body_layer = match body_limit {
+        Some(n) => axum::extract::DefaultBodyLimit::max(n),
+        None => axum::extract::DefaultBodyLimit::disable(),
+    };
+    let app = axum::Router::new()
+        .fallback_service(service)
+        .layer(body_layer);
     let addr = format!("{}:{}", args.host, args.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!(%addr, "mtui-mcp: serving on http");
@@ -152,6 +170,16 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
 /// and would otherwise drop a quiet http session.
 fn session_keep_alive(idle_timeout_s: u64) -> Option<Duration> {
     (idle_timeout_s != 0).then(|| Duration::from_secs(idle_timeout_s))
+}
+
+/// The http request-body limit to apply, from `config.mcp_max_request_bytes`.
+///
+/// `0` means "no mtui-imposed limit" (`None` → the caller disables axum's
+/// `DefaultBodyLimit` entirely, dropping even its implicit 2 MB floor); any
+/// positive value becomes a hard `Some(n)`-byte ceiling enforced before rmcp
+/// buffers the body.
+fn resolve_body_limit(max_request_bytes: usize) -> Option<usize> {
+    (max_request_bytes != 0).then_some(max_request_bytes)
 }
 
 /// Install a minimal stderr `tracing` subscriber.
@@ -230,6 +258,15 @@ mod tests {
         // the rmcp::service=warn silencer for the http cancellation noise.
         assert_eq!(default_directives(false), "info,rmcp::service=warn");
         assert_eq!(default_directives(true), "debug,rmcp::service=warn");
+    }
+
+    #[test]
+    fn body_limit_maps_max_request_bytes() {
+        // A positive cap becomes a hard ceiling; 0 disables mtui's limit
+        // (None → the caller drops even axum's implicit 2 MB floor).
+        assert_eq!(resolve_body_limit(10_000_000), Some(10_000_000));
+        assert_eq!(resolve_body_limit(1), Some(1));
+        assert_eq!(resolve_body_limit(0), None);
     }
 
     #[test]

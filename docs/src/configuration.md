@@ -145,6 +145,7 @@ fleet).
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `max_output_bytes` | bytes | `100000` | Upper bound on a single tool result (truncated at the tail with a notice). `0` disables the cap. |
+| `max_request_bytes` | bytes | `10000000` | Upper bound on an inbound HTTP request body under `--transport http` (oversized requests are rejected with `413` before rmcp buffers them). `0` disables mtui's limit entirely, dropping even axum's implicit 2 MB floor. |
 | `max_active_jobs` | int | `16` | Ceiling on concurrent background jobs per session. `0` disables. |
 | `max_completed_jobs` | int | `128` | Ceiling on retained terminal job records per session (FIFO eviction). `0` disables. |
 | `session_cap` | int (>0) | `32` | Ceiling on concurrent per-client sessions under `--transport http`. |

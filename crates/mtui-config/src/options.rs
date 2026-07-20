@@ -285,6 +285,9 @@ pub(crate) fn default_mcp_max_output_bytes() -> usize {
 pub(crate) fn default_mcp_max_input_bytes() -> usize {
     10_000_000
 }
+pub(crate) fn default_mcp_max_request_bytes() -> usize {
+    10_000_000
+}
 pub(crate) fn default_mcp_session_cap() -> usize {
     32
 }
@@ -436,6 +439,7 @@ pub(crate) struct LockSection {
 pub(crate) struct McpSection {
     pub max_output_bytes: Option<usize>,
     pub max_input_bytes: Option<usize>,
+    pub max_request_bytes: Option<usize>,
     pub max_active_jobs: Option<usize>,
     pub max_completed_jobs: Option<usize>,
     pub session_cap: Option<usize>,
@@ -533,6 +537,7 @@ impl RawConfig {
         take!(lock, wait_poll);
         take!(mcp, max_output_bytes);
         take!(mcp, max_input_bytes);
+        take!(mcp, max_request_bytes);
         take!(mcp, max_active_jobs);
         take!(mcp, max_completed_jobs);
         take!(mcp, session_cap);
@@ -667,6 +672,15 @@ pub struct Config {
     /// truncated with a notice (never refused). `0` disables the cap. No upstream
     /// equivalent — this is a hardening addition. Default is 10_000_000.
     pub mcp_max_input_bytes: usize,
+    /// Upper bound (bytes) on an inbound HTTP request body the `--transport http`
+    /// MCP server will buffer before rejecting it (413). Distinct from
+    /// `mcp_max_input_bytes` (a testreport *source* read budget): this guards the
+    /// http transport itself, so an unauthenticated pre-session request cannot be
+    /// buffered until memory exhaustion. `0` disables mtui's limit entirely
+    /// (`DefaultBodyLimit::disable()`), removing even axum's implicit 2 MB floor.
+    /// No upstream equivalent — this is a hardening addition. Default is
+    /// 10_000_000.
+    pub mcp_max_request_bytes: usize,
     /// Ceiling on concurrent (running) background jobs a single `mtui-mcp`
     /// session may hold (DoS guard). A `start`/`start_jobs` request that would
     /// exceed this is rejected *before* any worker is spawned. `0` disables the
@@ -755,6 +769,7 @@ impl Default for Config {
             lock_wait_poll: default_lock_wait_poll(),
             mcp_max_output_bytes: default_mcp_max_output_bytes(),
             mcp_max_input_bytes: default_mcp_max_input_bytes(),
+            mcp_max_request_bytes: default_mcp_max_request_bytes(),
             mcp_max_active_jobs: default_mcp_max_active_jobs(),
             mcp_max_completed_jobs: default_mcp_max_completed_jobs(),
             mcp_session_cap: default_mcp_session_cap(),
@@ -907,6 +922,7 @@ impl Config {
             ),
             mcp_max_output_bytes: raw.mcp.max_output_bytes.unwrap_or(d.mcp_max_output_bytes),
             mcp_max_input_bytes: raw.mcp.max_input_bytes.unwrap_or(d.mcp_max_input_bytes),
+            mcp_max_request_bytes: raw.mcp.max_request_bytes.unwrap_or(d.mcp_max_request_bytes),
             mcp_max_active_jobs: raw.mcp.max_active_jobs.unwrap_or(d.mcp_max_active_jobs),
             mcp_max_completed_jobs: raw
                 .mcp

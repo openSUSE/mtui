@@ -153,6 +153,18 @@ mod tests {
     }
 
     #[test]
+    fn mcp_max_request_bytes_defaults_to_10m() {
+        assert_eq!(Config::default().mcp_max_request_bytes, 10_000_000);
+    }
+
+    #[test]
+    fn load_reads_mcp_max_request_bytes() {
+        let path = write_tmp("mcp_req.toml", "[mcp]\nmax_request_bytes = 8192\n");
+        let cfg = Config::load(Some(path));
+        assert_eq!(cfg.mcp_max_request_bytes, 8192);
+    }
+
+    #[test]
     fn mcp_session_bounds_default_to_upstream() {
         let d = Config::default();
         assert_eq!(d.mcp_session_cap, 32);
