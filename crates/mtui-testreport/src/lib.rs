@@ -22,8 +22,9 @@ pub use checkout::{
     testreport_svn_checkout,
 };
 pub use export::{
-    AutoExport, BytesFetcher, DenyOverwrite, ErrorMode, ExportContext, Exporter, KernelExport,
-    ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs, inject_overview,
+    AutoExport, BytesFetcher, DenyOverwrite, DownloadError, ErrorMode, ExportContext, Exporter,
+    KernelExport, ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs,
+    inject_overview,
 };
 pub use lifecycle::{UpdateKind, make_testreport};
 pub use metadata_parsers::{JSONParser, MetadataEnvelope, ReducedMetadataParser, patchinfo_titles};

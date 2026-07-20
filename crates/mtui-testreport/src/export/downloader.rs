@@ -9,9 +9,11 @@
 //!
 //! ## Error modes
 //!
-//! * `tolerant` — a failed download is logged and skipped.
-//! * `full` — a failed download yields a [`ResultsMissingError`]; after the
-//!   whole batch finishes, the first such error is returned.
+//! * `tolerant` — a failed download *or* a failed local write is logged and
+//!   skipped.
+//! * `full` — a failed download yields a [`ResultsMissingError`], and a failed
+//!   local write (or write-task join failure) yields a [`DownloadError::Write`];
+//!   after the whole batch finishes, the first such error is returned.
 //!
 //! ## Fetch seam
 //!
@@ -50,6 +52,32 @@ pub struct ResultsMissingError {
     pub test: String,
     /// The architecture.
     pub arch: String,
+}
+
+/// A download failure surfaced under [`ErrorMode::Full`].
+///
+/// Separates a *download* failure (the openQA log could not be fetched — upstream
+/// `ResultsMissingError`) from a *write* failure (the log was fetched but could
+/// not be persisted locally, or its off-thread write task failed to join). The
+/// latter is a robustness fix over upstream, which had no local-write signal.
+///
+/// Not `Clone`/`Eq`: the [`Write`](DownloadError::Write) variant carries a
+/// non-clonable [`std::io::Error`].
+#[derive(Debug, thiserror::Error)]
+pub enum DownloadError {
+    /// The openQA log could not be downloaded.
+    #[error(transparent)]
+    ResultsMissing(#[from] ResultsMissingError),
+    /// The downloaded log could not be written to its local path (a filesystem
+    /// error, or the [`spawn_blocking`](tokio::task::spawn_blocking) write task
+    /// failed to join).
+    #[error("Failed to write {path}: {source}")]
+    Write {
+        /// The local path the log was to be written to.
+        path: PathBuf,
+        /// The underlying I/O (or synthesized join) failure.
+        source: std::io::Error,
+    },
 }
 
 /// Fetches the bytes at a URL. The fetch seam for [`download_logs`].
@@ -203,30 +231,39 @@ fn plan(
 
 /// Downloads one log (upstream `_subdl`): fetch + atomic write.
 ///
-/// Under [`ErrorMode::Full`] a fetch failure returns [`ResultsMissingError`];
-/// under [`ErrorMode::Tolerant`] it is logged and swallowed.
+/// Under [`ErrorMode::Full`] a fetch failure returns [`ResultsMissingError`] and
+/// a local-write (or write-task join) failure returns [`DownloadError::Write`];
+/// under [`ErrorMode::Tolerant`] both are logged and swallowed.
 async fn subdl(
     fetcher: &dyn BytesFetcher,
     remote: &str,
     local: &Path,
     test: &Test,
     mode: ErrorMode,
-) -> Result<(), ResultsMissingError> {
+) -> Result<(), DownloadError> {
     tracing::info!("Downloading log {remote}");
     match fetcher.get_bytes(remote).await {
         Ok(data) => {
             // Write off the async worker: a slow filesystem (network mount) must
-            // not block a Tokio thread mid-fan-out. Best-effort, unchanged: any
-            // write (or join) failure is logged and the download still returns Ok.
+            // not block a Tokio thread mid-fan-out. Under `Full` a write (or
+            // join) failure is surfaced as `DownloadError::Write`; under
+            // `Tolerant` it is logged and swallowed (unchanged best-effort).
             let local_owned = local.to_path_buf();
             let write =
                 tokio::task::spawn_blocking(move || atomic_write_file(&data, &local_owned)).await;
-            match write {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::error!("Failed to write {}: {e}", local.display()),
-                Err(e) => tracing::error!("Write task for {} failed: {e}", local.display()),
+            let err = match write {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(e)) => e,
+                Err(join) => std::io::Error::other(format!("write task failed: {join}")),
+            };
+            tracing::error!("Failed to write {}: {err}", local.display());
+            match mode {
+                ErrorMode::Full => Err(DownloadError::Write {
+                    path: local.to_path_buf(),
+                    source: err,
+                }),
+                ErrorMode::Tolerant => Ok(()),
             }
-            Ok(())
         }
         Err(error) => {
             tracing::error!("Download from {remote} failed: {error}");
@@ -234,7 +271,8 @@ async fn subdl(
                 ErrorMode::Full => Err(ResultsMissingError {
                     test: test.name.clone(),
                     arch: test.arch.clone(),
-                }),
+                }
+                .into()),
                 ErrorMode::Tolerant => Ok(()),
             }
         }
@@ -245,20 +283,22 @@ async fn subdl(
 ///
 /// Ports upstream `download_logs`: builds the `(host, test)` matrix, dispatches
 /// each to its downloader, runs them with bounded concurrency, and — under
-/// [`ErrorMode::Full`] — returns the first [`ResultsMissingError`] after the
-/// whole batch has finished.
+/// [`ErrorMode::Full`] — returns the first [`DownloadError`] after the whole
+/// batch has finished.
 ///
 /// # Errors
 ///
-/// Returns the first [`ResultsMissingError`] when `mode` is [`ErrorMode::Full`]
-/// and any download failed.
+/// Returns the first [`DownloadError`] when `mode` is [`ErrorMode::Full`] and any
+/// download or local write failed (a fetch failure as
+/// [`DownloadError::ResultsMissing`], a persist failure as
+/// [`DownloadError::Write`]).
 pub async fn download_logs(
     fetcher: &dyn BytesFetcher,
     connectors: &[(String, Vec<Test>)],
     resultsdir: &Path,
     installlogsdir: &Path,
     mode: ErrorMode,
-) -> Result<(), ResultsMissingError> {
+) -> Result<(), DownloadError> {
     // Flatten to jobs, keeping only those with a log to fetch. The `Test` is
     // cloned into each job so the download future owns all its data — a borrow
     // of `test` across the async block below defeats higher-ranked-lifetime
@@ -274,7 +314,7 @@ pub async fn download_logs(
         .collect();
 
     let total = jobs.len();
-    let results: Vec<Result<(), ResultsMissingError>> =
+    let results: Vec<Result<(), DownloadError>> =
         stream::iter(jobs)
             .map(|(test, remote, local)| async move {
                 subdl(fetcher, &remote, &local, &test, mode).await
@@ -283,7 +323,7 @@ pub async fn download_logs(
             .collect()
             .await;
 
-    let failures: Vec<ResultsMissingError> = results.into_iter().filter_map(Result::err).collect();
+    let failures: Vec<DownloadError> = results.into_iter().filter_map(Result::err).collect();
     if !failures.is_empty() {
         tracing::warn!("{} of {total} openQA log downloads failed", failures.len());
         if mode == ErrorMode::Full {
@@ -464,8 +504,58 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(err.test, "install_kernel");
-        assert_eq!(err.arch, "x86_64");
-        assert!(err.to_string().contains("missing results.json file"));
+        let DownloadError::ResultsMissing(missing) = err else {
+            panic!("expected ResultsMissing, got {err:?}");
+        };
+        assert_eq!(missing.test, "install_kernel");
+        assert_eq!(missing.arch, "x86_64");
+        assert!(missing.to_string().contains("missing results.json file"));
+    }
+
+    /// A download that succeeds but cannot be persisted: point the install-logs
+    /// dir at a path whose parent is a *regular file*, so `atomic_write_file`
+    /// fails deterministically on any OS (no perms/root tricks).
+    fn unwritable_dirs(dir: &Path) -> (PathBuf, PathBuf) {
+        let file = dir.join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        // Both resultsdir and installlogsdir live *under* the regular file.
+        (file.join("results"), file.join("install"))
+    }
+
+    #[tokio::test]
+    async fn full_propagates_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let (res, inst) = unwritable_dirs(dir.path());
+        let fetcher = OkFetcher {
+            seen: Mutex::new(Vec::new()),
+        };
+        let connectors = vec![("http://h".to_string(), vec![test("install_kernel")])];
+
+        let err = download_logs(&fetcher, &connectors, &res, &inst, ErrorMode::Full)
+            .await
+            .unwrap_err();
+
+        // The fetch succeeded, so this is a Write failure, not ResultsMissing.
+        assert_eq!(fetcher.seen.lock().unwrap().len(), 1);
+        let DownloadError::Write { path, .. } = err else {
+            panic!("expected Write, got {err:?}");
+        };
+        assert!(path.ends_with("h-zypper-x86_64.log"), "path was {path:?}");
+    }
+
+    #[tokio::test]
+    async fn tolerant_swallows_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let (res, inst) = unwritable_dirs(dir.path());
+        let fetcher = OkFetcher {
+            seen: Mutex::new(Vec::new()),
+        };
+        let connectors = vec![("http://h".to_string(), vec![test("install_kernel")])];
+
+        let out = download_logs(&fetcher, &connectors, &res, &inst, ErrorMode::Tolerant).await;
+
+        // Fetch happened, write failed, but tolerant mode still returns Ok.
+        assert_eq!(fetcher.seen.lock().unwrap().len(), 1);
+        assert!(out.is_ok());
     }
 }
