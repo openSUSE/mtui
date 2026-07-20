@@ -66,7 +66,7 @@ tempfile = "3"
 # agent-path enveloped bytes with a file key (proving both backends agree), and
 # `base64ct` to decode the raw SSHSIG blob back for round-trip assertions.
 # Pinned to the versions ssh-key 0.7 resolves so the traits/types unify.
-signature = "3.0.0-rc.5"
+signature = "3.0.0"
 base64ct = { version = "1", features = ["alloc"] }
 # RNG for encrypting a test key in the auth ssh-agent fallback tests. `rand`
 # 0.10 matches russh's resolved rand_core 0.10 (ssh-key's CryptoRng bound), the

@@ -126,7 +126,7 @@ serial_test = "3"
 # `harness = false` so they compile only under `cargo bench`, never in the
 # default `cargo test` gate. Startup timing is measured externally with
 # `hyperfine` (documented in plans/perf-baseline-0mop1.md), not a crate dep.
-criterion = { version = "0.7", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 dhat = "0.3"
 tempfile = "3"
 # internal crates (path deps)
