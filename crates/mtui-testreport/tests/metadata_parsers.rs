@@ -39,6 +39,52 @@ fn reduced_metadata_parser_parses_hosts_jira_bugs() {
 }
 
 #[test]
+fn reduced_metadata_parser_reads_back_the_slack_review_marker() {
+    // The read-back half of the marker contract: `approve` gates on this, so
+    // if the parser stops wiring the line up, an approval that should be
+    // refused would sail through instead.
+    let mut report = empty_report();
+
+    ReducedMetadataParser::parse(&mut report, "Slack Review: C0123456789 1700000000.000100");
+
+    let marker = report.slack_review.expect("marker parsed");
+    assert_eq!(marker.channel, "C0123456789");
+    assert_eq!(marker.ts, "1700000000.000100");
+}
+
+#[test]
+fn reduced_metadata_parser_keeps_the_first_slack_marker() {
+    // First-wins, matching the writer's duplicate collapsing: read and write
+    // must agree on which message the gate checks.
+    let mut report = empty_report();
+
+    ReducedMetadataParser::parse(&mut report, "Slack Review: CFIRST 1.0");
+    ReducedMetadataParser::parse(&mut report, "Slack Review: CSECOND 2.0");
+
+    let marker = report.slack_review.expect("marker parsed");
+    assert_eq!(marker.channel, "CFIRST");
+}
+
+#[test]
+fn reduced_metadata_parser_ignores_a_malformed_slack_marker() {
+    // A truncated marker points at no real message. Treating it as absent
+    // makes `approve` refuse (safe); half-parsing it could make the gate check
+    // the wrong message.
+    let mut report = empty_report();
+
+    ReducedMetadataParser::parse(&mut report, "Slack Review: CONLYCHANNEL");
+    assert!(report.slack_review.is_none());
+
+    ReducedMetadataParser::parse(&mut report, "Slack Review: C1 1.0 extra");
+    assert!(report.slack_review.is_none());
+
+    // A marker line must not be mistaken for the other metadata kinds.
+    assert!(report.hostnames.is_empty());
+    assert!(report.jira.is_empty());
+    assert!(report.bugs.is_empty());
+}
+
+#[test]
 fn reduced_metadata_parser_skips_placeholder_host_and_ignores_other_lines() {
     // Upstream guards `"?" not in match.group(1)`; unmatched lines are no-ops.
     let mut report = empty_report();
