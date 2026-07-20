@@ -1,5 +1,6 @@
 ---
 source: crates/mtui-mcp/tests/slim_profile.rs
+assertion_line: 40
 expression: pretty
 ---
 [
@@ -1690,7 +1691,7 @@ expression: pretty
           "type": "boolean"
         },
         "review_group": {
-          "description": "filter by review group, e.g. qam-sle",
+          "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack)",
           "type": "string"
         },
         "status": {
