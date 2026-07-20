@@ -1,0 +1,36 @@
+---
+name: dependency-review
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  # Write only so the action can post its summary comment on the PR.
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  dependency-review:
+    # Block PRs that add a vulnerable dependency before merge. Complements
+    # Dependabot, which only alerts once the code is already on main.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Dependency review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+          # No `deny-licenses` here, deliberately. mtui is GPL-2.0-only while
+          # russh, rmcp and ring are Apache-2.0-*only*, which is generally read
+          # as GPLv2-incompatible. That question predates this workflow and
+          # needs a real decision (relicense to -or-later, or replace those
+          # stacks); gating every PR on it would just paint CI red without
+          # moving it forward.

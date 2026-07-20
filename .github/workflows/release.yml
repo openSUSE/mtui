@@ -25,7 +25,12 @@ jobs:
     env:
       TARGET: x86_64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The release is published with `gh release create` using
+          # ${{ github.token }}; no git push happens, so the checkout does not
+          # need a credential left behind in .git/config.
+          persist-credentials: false
 
       - name: Verify tag matches workspace version
         run: |
@@ -42,10 +47,13 @@ jobs:
       - name: Install musl tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      # `--locked` so a release is built from the dependency versions committed
+      # in Cargo.lock. Without it a newly published (or yanked-and-replaced)
+      # transitive crate could differ from anything CI ever tested.
       - name: Build release binaries
         run: |
-          cargo build --release --target "$TARGET" -p mtui-cli
-          cargo build --release --target "$TARGET" -p mtui-mcp --features mcp
+          cargo build --release --locked --target "$TARGET" -p mtui-cli
+          cargo build --release --locked --target "$TARGET" -p mtui-mcp --features mcp
 
       - name: Package release tarball
         run: cargo xtask package --version "$GITHUB_REF_NAME" --target "$TARGET"
