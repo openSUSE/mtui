@@ -76,6 +76,18 @@ _The entries below document the final Python releases, retained for history._
   gate is turned off by configuration (`slack_enabled = false`), which is
   explicit and auditable. `reject` is never gated. With Slack disabled (the
   default) `approve` behaves exactly as before.
+### Security
+
+- Release binaries are now built with `cargo build --locked`, so a published
+  release is compiled from exactly the dependency versions recorded in
+  `Cargo.lock` rather than whatever resolved at tag time.
+- Pull requests are now gated by `dependency-review`, which blocks a change that
+  introduces a dependency with a known high-severity advisory. The code and the
+  workflows are additionally scanned by CodeQL and OpenSSF Scorecard, and
+  Dependabot now opens security updates for known-vulnerable crates.
+- `SECURITY.md` has been rewritten for the Rust tool; it previously asked
+  reporters for their Python and paramiko versions and scoped out dependencies
+  the project no longer has.
 
 ## 19.0.1 - 2026-07-17
 
