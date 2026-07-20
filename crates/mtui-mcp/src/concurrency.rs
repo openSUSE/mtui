@@ -98,11 +98,16 @@ impl RwGate {
     /// The returned [`ExclusiveGuard`] releases the hold on drop. `writers_waiting`
     /// is bumped for the whole wait so pending shared acquisitions block behind
     /// this writer.
+    ///
+    /// **Cancellation-safe:** the `writers_waiting` bump is owned by a
+    /// [`PendingWriter`] RAII guard, so dropping this future while parked (e.g. a
+    /// cancelled MCP request) restores the counter and wakes waiters rather than
+    /// leaking the bump and deadlocking readers (`mtui-rs-b8yi`). On success the
+    /// pending guard is disarmed and the count is handed to the [`ExclusiveGuard`],
+    /// which decrements it on its own drop — so success-path accounting is
+    /// unchanged.
     pub async fn exclusive(&self) -> ExclusiveGuard {
-        {
-            let mut inner = self.inner.lock().expect("rw gate poisoned");
-            inner.writers_waiting += 1;
-        }
+        let mut pending = PendingWriter::new(Arc::clone(&self.inner), Arc::clone(&self.notify));
         loop {
             let notified = self.notify.notified();
             tokio::pin!(notified);
@@ -111,6 +116,9 @@ impl RwGate {
                 let mut inner = self.inner.lock().expect("rw gate poisoned");
                 if inner.readers == 0 && !inner.writer_active {
                     inner.writer_active = true;
+                    // Hand the `writers_waiting` bump to the ExclusiveGuard; it
+                    // will decrement on its own drop.
+                    pending.armed = false;
                     return ExclusiveGuard {
                         inner: Arc::clone(&self.inner),
                         notify: Arc::clone(&self.notify),
@@ -119,6 +127,44 @@ impl RwGate {
             }
             notified.await;
         }
+    }
+}
+
+/// RAII guard owning the `writers_waiting` bump of a *pending* (not-yet-acquired)
+/// writer.
+///
+/// Constructed the moment [`RwGate::exclusive`] starts waiting; if that future is
+/// dropped before it acquires (cancellation), `drop` restores the counter and
+/// wakes waiters. On success it is disarmed and the bump is inherited by the
+/// [`ExclusiveGuard`], so the counter is decremented exactly once either way.
+struct PendingWriter {
+    inner: Arc<Mutex<Inner>>,
+    notify: Arc<Notify>,
+    /// `true` while this guard owns the `writers_waiting` bump.
+    armed: bool,
+}
+
+impl PendingWriter {
+    fn new(inner: Arc<Mutex<Inner>>, notify: Arc<Notify>) -> Self {
+        inner.lock().expect("rw gate poisoned").writers_waiting += 1;
+        Self {
+            inner,
+            notify,
+            armed: true,
+        }
+    }
+}
+
+impl Drop for PendingWriter {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        {
+            let mut inner = self.inner.lock().expect("rw gate poisoned");
+            inner.writers_waiting -= 1;
+        }
+        self.notify.notify_waiters();
     }
 }
 
@@ -254,6 +300,97 @@ mod tests {
         assert_eq!(writer_done.load(Ordering::SeqCst), 1, "writer ran");
         reader2.await.unwrap();
         assert_eq!(shared_done.load(Ordering::SeqCst), 1, "second reader ran");
+    }
+
+    /// Cancelling a *waiting* writer (its `exclusive()` future is dropped before
+    /// it ever acquires) must not leak `writers_waiting`, or new shared
+    /// acquisitions would be blocked forever. Regression for `mtui-rs-b8yi`.
+    #[tokio::test]
+    async fn cancelled_writer_does_not_block_readers() {
+        let gate = RwGate::new();
+        let held = gate.shared().await; // one reader live -> writer must park
+
+        // A writer starts waiting; it parks because readers == 1.
+        let gw = gate.clone();
+        let writer = tokio::spawn(async move {
+            let _e = gw.exclusive().await;
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Cancel the waiting writer before it ever acquires.
+        writer.abort();
+        let _ = writer.await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Release the reader and prove a fresh shared acquisition completes
+        // promptly rather than deadlocking behind the leaked writer count.
+        drop(held);
+        let g = gate.clone();
+        tokio::time::timeout(Duration::from_millis(500), async move {
+            let _s = g.shared().await;
+        })
+        .await
+        .expect("shared must acquire after a cancelled writer");
+
+        let inner = gate.inner.lock().unwrap();
+        assert_eq!(
+            inner.writers_waiting, 0,
+            "cancelled writer must not leak writers_waiting"
+        );
+    }
+
+    /// After a waiting writer is cancelled, a *subsequent* writer must still be
+    /// able to acquire (no `writer_active`/`writers_waiting` corruption).
+    #[tokio::test]
+    async fn cancelled_writer_lets_other_writer_proceed() {
+        let gate = RwGate::new();
+        let held = gate.shared().await;
+
+        let gw = gate.clone();
+        let writer = tokio::spawn(async move {
+            let _e = gw.exclusive().await;
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        writer.abort();
+        let _ = writer.await;
+
+        drop(held);
+        let g = gate.clone();
+        tokio::time::timeout(Duration::from_millis(500), async move {
+            let _e = g.exclusive().await;
+        })
+        .await
+        .expect("a fresh writer must acquire after a cancelled writer");
+    }
+
+    /// Cancelling a *waiting* reader must not leak `readers`. Documents the
+    /// already-correct reader path (the count is only bumped on success).
+    #[tokio::test]
+    async fn cancelled_shared_does_not_leak_readers() {
+        let gate = RwGate::new();
+        let excl = gate.exclusive().await; // reader must park behind this
+
+        let gr = gate.clone();
+        let reader = tokio::spawn(async move {
+            let _s = gr.shared().await;
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        reader.abort();
+        let _ = reader.await;
+
+        {
+            let inner = gate.inner.lock().unwrap();
+            assert_eq!(inner.readers, 0, "cancelled reader must not leak readers");
+        }
+
+        // A fresh writer must still be able to acquire after release.
+        drop(excl);
+        let g = gate.clone();
+        tokio::time::timeout(Duration::from_millis(500), async move {
+            let _e = g.exclusive().await;
+        })
+        .await
+        .expect("writer must acquire after a cancelled reader");
     }
 
     /// Two exclusive holders run strictly one at a time.
