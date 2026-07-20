@@ -1,0 +1,59 @@
+[package]
+name = "mtui-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "mtui"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mtui-core.workspace = true
+mtui-config.workspace = true
+# Direct dep (previously transitive via mtui-core): the interactive `shell` TTY
+# bridge drives `Target::shell`/`ShellChannel` directly, and enables the
+# `mtui-hosts` `shell` feature so the primitive is compiled into the `mtui`
+# binary under default features.
+mtui-hosts = { workspace = true, features = ["shell"] }
+clap.workspace = true
+anyhow.workspace = true
+reedline.workspace = true
+# Raw-mode terminal + async EventStream for the `shell` bridge (mtui-rs-jww).
+crossterm.workspace = true
+# `StreamExt` for the crossterm `EventStream` in the bridge input pump.
+futures.workspace = true
+# dyn-compatible async `BridgeIo` trait for the (offline-testable) shell bridge.
+async-trait.workspace = true
+# shlex-split the `shell` line to route it to the bridge (mirrors the engine).
+shlex.workspace = true
+nu-ansi-term.workspace = true
+# Level-token coloring in the custom tracing format layer (mtui-rs-ilt), matching
+# the escapes `mtui-core`'s display uses for the `error` token.
+owo-colors.workspace = true
+# `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).
+mtui-types.workspace = true
+# `UpdateKind` maps the `-a`/`-k` workflow onto `Session::load_update` in the
+# startup seeding path (upstream `run_mtui`'s pre-`cmdloop` `load_update`).
+mtui-testreport.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# Optional desktop-notification backend (feature `notify`); a headless no-op
+# without it (see `notification.rs`).
+notify-rust = { workspace = true, optional = true }
+
+[features]
+default = []
+# Desktop toast notifications on start/finish of long operations (upstream
+# `notify` extra). No-op when the process is headless (no TTY / no display).
+notify = ["dep:notify-rust"]
+
+[dev-dependencies]
+# Temp scripts standing in for `$EDITOR` in the offline `edit`-spawn tests.
+tempfile = "3"

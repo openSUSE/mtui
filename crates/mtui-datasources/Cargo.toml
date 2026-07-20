@@ -1,0 +1,78 @@
+[package]
+name = "mtui-datasources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Integration tests are consolidated into a single `tests/it.rs` binary so the
+# crate + heavy deps (reqwest/rustls/wiremock) link once, not once per file.
+autotests = false
+
+[lints]
+workspace = true
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+# Perf baseline benches (mtui-rs-0mop.1). `harness = false` -> criterion main,
+# compiled only under `cargo bench`.
+[[bench]]
+name = "datasources"
+path = "benches/datasources.rs"
+harness = false
+
+[dependencies]
+mtui-types.workspace = true
+mtui-config.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true }
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ini.workspace = true
+directories.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+regex.workspace = true
+scraper.workspace = true
+quick-xml.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+hmac.workspace = true
+sha1.workspace = true
+hex.workspace = true
+urlencoding.workspace = true
+# OBS "Signature" (SSH) auth (G1c). `ssh-key` provides the SSHSIG wire-format
+# signer (`sshsig` module) + `Fingerprint` for any key type; pinned to the exact
+# version russh 0.62 resolves so Cargo unifies on one copy and the file-key and
+# ssh-agent (russh) paths share `ssh_key::PublicKey`/`PrivateKey`. `crypto`
+# enables ed25519/ecdsa/rsa/p256 signing (RSA is signed rsa-sha2-512, not SHA-1).
+ssh-key = { version = "=0.7.0-rc.11", features = ["crypto", "std", "encryption"] }
+base64ct = { version = "1", features = ["alloc"] }
+# ssh-agent client for headless agent signing (select by SHA256 fingerprint /
+# `.pub` blob / passphrase-protected counterpart). russh is already a workspace
+# dep and shares `ssh_key` types with the file-key path — no second crypto stack.
+russh.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+wiremock.workspace = true
+insta.workspace = true
+serial_test.workspace = true
+tempfile = "3"
+# Golden-vector tests for the SSHSIG signer: `signature::Signer` to sign the
+# agent-path enveloped bytes with a file key (proving both backends agree), and
+# `base64ct` to decode the raw SSHSIG blob back for round-trip assertions.
+# Pinned to the versions ssh-key 0.7 resolves so the traits/types unify.
+signature = "3.0.0"
+base64ct = { version = "1", features = ["alloc"] }
+# RNG for encrypting a test key in the auth ssh-agent fallback tests. `rand`
+# 0.10 matches russh's resolved rand_core 0.10 (ssh-key's CryptoRng bound), the
+# same version mtui-hosts uses for test key-gen.
+rand = { workspace = true }
+# Scoped subscriber to capture the oscrc loose-permissions warning in tests.
+tracing-subscriber.workspace = true
+# Perf baseline benches (mtui-rs-0mop.1): refhosts parse/search + client build.
+criterion.workspace = true

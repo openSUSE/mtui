@@ -1,0 +1,46 @@
+[package]
+name = "mtui-testreport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Integration tests are consolidated into a single `tests/it.rs` binary so the
+# crate + its deps link once, not once per file.
+autotests = false
+
+[lints]
+workspace = true
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+# Perf baseline bench (mtui-rs-0mop.1). `harness = false` -> criterion main.
+[[bench]]
+name = "testreport"
+path = "benches/testreport.rs"
+harness = false
+
+[dependencies]
+mtui-types.workspace = true
+mtui-config.workspace = true
+mtui-hosts.workspace = true
+mtui-datasources.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+quick-xml.workspace = true
+regex.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tempfile = "3"
+wiremock.workspace = true
+# Perf baseline bench (mtui-rs-0mop.1): metadata JSON parse hot path.
+criterion.workspace = true

@@ -1,23 +1,20 @@
----
-# Run: pre-commit install (once per checkout) and the hooks below
-# fire on every git commit. Run pre-commit run --all-files to
-# sweep the whole tree.
-#
-# Versions are pinned to match the resolved versions in uv.lock so
-# local hooks and CI agree. Bump alongside the dev dependency group.
+# Rust-native pre-commit hooks mirroring the CI `check` stage. Install with
+# `pre-commit install`; run against everything with `pre-commit run --all-files`.
+# All hooks are `repo: local` (no pinned remote revs), so Renovate's pre-commit
+# manager has nothing to update and is intentionally left disabled in
+# .gitlab/renovate.json. If a remote hook repo is added here, re-enable it there.
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.12
-    hooks:
-      - id: ruff-format
-      - id: ruff-check
-        args: [--fix]
-
   - repo: local
     hooks:
-      - id: ty
-        name: ty type check
-        entry: uv run ty check
+      - id: cargo-fmt
+        name: cargo fmt --all --check
+        entry: cargo fmt --all --check
         language: system
-        types: [python]
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy --workspace --all-targets -- -D warnings
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types: [rust]
         pass_filenames: false

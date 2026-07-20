@@ -1,0 +1,68 @@
+[package]
+name = "mtui-hosts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Integration tests are consolidated into a single `tests/it.rs` binary so the
+# crate + its deps (russh/tokio) link once, not once per file.
+autotests = false
+
+[lints]
+workspace = true
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+# Perf baseline benches (mtui-rs-0mop.1). `harness = false` -> criterion's own
+# main, compiled only under `cargo bench`, never in the default `cargo test` gate.
+[[bench]]
+name = "fanout"
+path = "benches/fanout.rs"
+harness = false
+
+[features]
+# Interactive PTY shell primitive (P2.10). Adds `Connection::shell` /
+# `Target::shell` and the `ShellChannel` duplex handle. Off by default: the
+# raw-termios stdin<->stdout bridge and the `shell` REPL command that consume
+# this primitive live in the CLI crate (Phase 6), so only that surface needs
+# the feature.
+shell = []
+
+[dependencies]
+mtui-types.workspace = true
+mtui-config.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true }
+futures.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+russh-config = "0.58"
+quick-xml.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tempfile = "3"
+# Used only in tests to assert command lines re-split to a single literal token.
+shlex.workspace = true
+insta.workspace = true
+# Serialises the spinner tests that install the process-global test sink
+# (`set_test_sink`); in the consolidated `it` binary they run in one process, so
+# their shared global must not race.
+serial_test.workspace = true
+# rand 0.10 to match russh 0.62's rand_core 0.10 (ssh-key's CryptoRng bound
+# is tied to that exact rand_core; 0.9 pulls a second, incompatible copy).
+# `rand::rng()` mirrors upstream russh's own key-gen in tests.
+rand = "0.10"
+russh-sftp = { workspace = true }
+# Only for the hashed-known_hosts test line; mirrors russh's own matcher
+# (HMAC-SHA1 + BASE64_MIME). Versions match those already resolved via russh.
+hmac.workspace = true
+sha1.workspace = true
+data-encoding = "2"
+# Perf baseline benches (mtui-rs-0mop.1): fan-out scaling / SFTP / lock reporting.
+criterion.workspace = true

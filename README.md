@@ -1,53 +1,115 @@
-[![CI](https://github.com/openSUSE/mtui/actions/workflows/ci.yml/badge.svg)](https://github.com/openSUSE/mtui/actions/workflows/ci.yml)
-[![Codecov](https://codecov.io/github/openSUSE/mtui/branch/main/graph/badge.svg?token=60D3XUROAF)](https://codecov.io/github/openSUSE/mtui)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/openSUSE/mtui)
+# mtui-rs
 
-# MTUI
+> **Status: feature-complete, in packaging (Phase 8).** This is a ground-up Rust
+> rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The core
+> maintenance workflow, parallel SSH host fan-out, the native OBS/IBS and Gitea
+> review backends, openQA/QEM integration, the testreport lifecycle, and the
+> `mtui-mcp` server have all landed and are CI-gated; work now focuses on
+> packaging and distribution (`PLAN-highlevel.md`; per-phase tasks tracked in
+> beads). See [`docs/`](docs) for the user guide and command reference.
 
-The Maintenance Test Update Installer (MTUI) allows you to run shell commands on multiple hosts in parallel.
+An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
+**U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
+a request by RRID, install and test it on reference hosts over SSH in parallel,
+then approve or reject. It drives `osc`/`svn`/Gitea and openQA/QEM under the hood.
 
-In addition, MTUI provides convenience commands to help with maintenance update testing and integrating with other systems like Bugzilla and test report templates.
+This is a **redesign, not a transpile**: MTUI is the behavioral reference and
+source of domain truth, but mtui-rs aims to be memory-safe, async-native, and
+distributable as a single static binary — while preserving the data-format and
+workflow contracts that keep it interoperable with the SUSE maintenance
+ecosystem.
+
+## Why a rewrite
+
+- **Safety & robustness** — strong types, exhaustive error enums, no interpreter.
+- **Performance** — async I/O (`tokio`), true parallel host fan-out, fast startup.
+- **Distribution** — two static binaries (`mtui`, `mtui-mcp`), no Python runtime
+  or virtualenv; generated shell completions and man pages.
+- **Maintainability** — a Cargo workspace with clean crate boundaries and one
+  composition root.
+
+## Two surfaces
+
+- `mtui` — interactive REPL (line editing, tab completion, history) **and**
+  non-interactive single-command mode.
+- `mtui-mcp` — a Model Context Protocol server whose tools are **synthesised from
+  the command registry**, so the CLI and the MCP surface never drift.
+
+### MCP security boundary
+
+`lrun` executes commands as the local process user. It remains available through
+direct `mtui` use and trusted callers of the core engine, but MCP synthesis and
+routing never expose it over stdio or HTTP. This permanent deny applies under
+every MCP profile and cannot be reversed with `[mcp] tools_allow`.
+
+MCP profiles reduce the advertised tool surface; they are not authentication or
+authorization. HTTP session isolation is likewise not caller authentication.
+Keep the HTTP transport on its default loopback interface or place it behind an
+authenticated boundary trusted to operate the remaining maintenance tools.
 
 ## Features
 
-- Parallel SSH command execution across SUSE reference hosts (`run`, `prepare`, `update`, `install`, `uninstall`, `downgrade`, `reboot`, …) with per-host `enabled` / `disabled` / `dryrun` states and `parallel` / `serial` execution modes.
-- OBS / IBS maintenance-request workflow: `assign`, `unassign`, `approve`, `reject`, `comment`, dispatched to the native OBS/IBS API for `SUSE:Maintenance` and Product Increment requests (no `osc` subprocess; credentials and the SSH signing key are read from the user's oscrc, discovered like `osc` via `$OSC_CONFIG`, `$XDG_CONFIG_HOME/osc/oscrc`, then `~/.oscrc`) or to Gitea for SLFO / SL-Micro requests. `approve -r REVIEWER` records the reviewer in the testreport and commits to SVN in one step.
-- Update-queue and template workflow: `updates` lists the actionable pickup queue (unassigned updates in testing) from the TeReGen API sorted by priority, `checkers` shows the build-check result runs for the loaded update, and `regenerate` rebuilds a loaded update's test-report template via TeReGen and reloads it in place.
-- Multiple templates in one session: `load_template` adds each RRID to the session, `list_templates` / `switch` / `unload` manage the loaded set, and action commands fan out across every loaded template by default (scope a single one with `-T RRID` or force fan-out with `--all-templates`). Fan-out arbitrates a distinct free reference host per test-target slot from the shared pool so templates never collide on a host.
-- openQA integration: `reload_openqa`, `set_workflow {auto,manual,kernel}`, `openqa_overview` (port of `oqa-search`) which prints PASSED/FAILED/RUNNING per SLE version, aggregated-update builds, and parsed build-check summaries (with `--export` to inject the block into the testreport's `regression tests:` section), and `openqa_jobs` which lists the individual openQA jobs for the incident build so you can see which scenarios passed or failed.
-- Reference-host lock management: cooperative lock files, automatic locking of every connected host while a Product Increment is under test (`[lock] pi_autolock`), automatic reaping of stale locks left over from crashed sessions (`[lock] reap_stale`, `[lock] stale_age`), and independent host-pool claims (`list_locks -p`, `unlock -p`) that queue politely on an exhausted pool (`[lock] wait`, `[lock] wait_poll`).
-- Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`, with SVN and Gitea checkout backends.
-- Reference-host discovery: HTTPS- or filesystem-resolved `refhosts.yml` with a single merged host pool and configurable cache expiry, plus offline inventory search (`list_refhosts`) that filters the fleet by hostname glob, arch, product, version, addon, or testplatform query (and optionally probes live lock state) without connecting, locking, or loading a template.
-- File transfer: `put` (glob upload to all hosts, preserving directory trees) and `get` (download with per-host filename suffix or recursive folder mode).
-- Interactive `prompt_toolkit`-based shell: tab completion over the live command registry, persistent history with reverse-search (Ctrl-R), autosuggest-from-history (right-arrow to accept), lexer-highlighted command tokens, a bottom toolbar showing the loaded-template count and the active RRID, per-command `--help`, configurable log level, optional desktop notifications (`notify` extra), and OS-keyring credential storage (`keyring` extra).
-- Shell-completion script via the `completion` extra (`register-python-argcomplete mtui`).
-- MCP server (`mtui-mcp`, optional `mcp` extra): exposes every non-interactive mtui command as a [Model Context Protocol](https://modelcontextprotocol.io) tool, plus dedicated `testreport_read` / `testreport_patch` / `testreport_write` tools, so LLM clients can drive a headless mtui session over `stdio` or `http`. The HTTP transport isolates state per client, slow host commands can run as backgrounded jobs (`job_list` / `job_status` / `job_result` / `job_cancel`), and the exposed tool surface is tunable through the `[mcp]` config section.
+- Parallel SSH command execution across reference hosts (`run`, `update`,
+  `install`, `prepare`, `downgrade`, …) with per-host `enabled`/`disabled`/
+  `dryrun` states and `parallel`/`serial` modes. **Pubkey auth only.**
+- OBS/IBS and Gitea maintenance-request workflow (`assign`, `approve`, `reject`,
+  `comment`, …) via the native OBS/IBS API (no `osc` subprocess).
+- openQA / QEM Dashboard integration, incl. an `openqa_overview` (port of
+  `oqa-search`) with `--export` into the testreport.
+- Reference-host discovery via `refhosts.yml` (HTTPS- or filesystem-resolved,
+  cached) and offline inventory search (`list_refhosts`).
+- Cooperative reference-host locking (`/var/lock/mtui.lock`), interoperable with
+  Python MTUI on a shared fleet.
+- Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`
+  (SVN and Gitea backends).
+- File transfer (`put`/`get`) over SFTP.
+
+## Build
+
+Requires a Rust toolchain (edition 2024, **MSRV 1.96**). MSRV is pinned via
+`rust-version` in `Cargo.toml`; there is no `rust-toolchain.toml` (the reference
+dev environment uses a Homebrew rustc with no `rustup`). See [`docs/`](docs) for
+build-from-source, install, and packaging details.
+
+```sh
+cargo build --workspace              # build all crates
+cargo run -p mtui-cli -- --help      # run the REPL binary (mtui)
+cargo run -p mtui-mcp -- --help      # run the MCP server (mtui-mcp)
+cargo test --workspace               # run tests
+cargo fmt --all --check              # formatting gate
+cargo clippy --workspace --all-targets -- -D warnings   # lint gate
+```
+
+## Runtime dependencies
+
+Some backends shell out to external tools (kept optional; degrade gracefully when
+absent):
+
+- `svn` — testreport checkout/commit (SVN backend)
+- a terminal emulator — for the `terms`/`switch` commands. The `term.*.sh`
+  launcher scripts ship in [`dist/terms/`](dist/terms); packaging installs them
+  into the datadir (`$XDG_DATA_HOME/mtui/terms`), and `MTUI_TERMS_DIR` overrides
+  where the `terms` command looks for them (e.g. a system path like
+  `/usr/share/mtui/terms`).
+
+The QAM review workflow talks to the OBS/IBS API natively (no `osc` subprocess);
+it reads credentials from the user's oscrc — located exactly like `osc` itself
+(`$OSC_CONFIG`, then `$XDG_CONFIG_HOME/osc/oscrc`, then `~/.oscrc`) — and is
+configured via the `[obs]` table (`api_url`, `request_timeout`).
+
+## Documentation
+
+- [`docs/`](docs) — the user guide (mdBook): installation, configuration, the
+  generated command reference, the MCP server, and an FAQ. Build with
+  `mdbook build docs`, or read the Markdown under `docs/src/` directly.
+- [`PLAN-highlevel.md`](PLAN-highlevel.md) — architecture, crate layout,
+  dependency mapping, and the 8-phase roadmap.
+- Per-phase task breakdown is tracked in [beads](https://github.com/Dicklesworthstone/beads_rust)
+  (`br ready`, `br epic status`, `br show <id>`); the detailed per-phase plans were
+  migrated from the former `PLAN-phase0..8.md` files into beads epics + tasks.
+- [`AGENTS.md`](AGENTS.md) — contributor/agent guide: conventions, contracts, and
+  the definition of done.
 
 ## License
 
-This project is licensed under the GPLv2 license, see the COPYING file for details.
-
-## Contents
-
-- [Installation](Documentation/installation.rst)
-- [User Guide](Documentation/user.rst)
-- [Developer Guide](Documentation/developer.rst)
-- [Support](Documentation/support.rst)
-- [FAQ](Documentation/faq.rst)
-
-## Authors
-
-MTUI was originally written by:
-
-- Christian Kornacker
-- Heiko Rommel <rommel@suse.de>
-- Jan Matějka
-- Roman Neuhauser
-- David Santiago
-
-The project is currently maintained mainly by:
-
-- Ondřej Súkup <osukup@suse.cz>
-- Jan Baier <jbaier@suse.cz>
-
-Besides that, numerous other contributors have committed to MTUI. Thanks everyone for their contributions!
+GPL-2.0-only, matching upstream MTUI. See `LICENSE`.

@@ -1,0 +1,12 @@
+---
+source: crates/mtui-datasources/src/qem_dashboard/dashboard_openqa.rs
+expression: render(&jobs)
+---
+
+Results from openQA jobs:
+=========================
+
+Incident jobs:
+  Summary:
+      version: 15-SP5 - flavor: Server-DVD-Incidents - arch: x86_64 -> passed: 1, other: 1, total: 2
+  No failed jobs, but some groups need review (see Summary above).

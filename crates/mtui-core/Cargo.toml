@@ -1,0 +1,47 @@
+[package]
+name = "mtui-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mtui-types.workspace = true
+mtui-config.workspace = true
+mtui-hosts.workspace = true
+mtui-datasources.workspace = true
+mtui-testreport.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+shlex.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+futures.workspace = true
+tracing.workspace = true
+owo-colors.workspace = true
+indexmap.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+# `~user` resolution in file-path tab completion (`complete_path`), mirroring
+# Python's `os.path.expanduser` getpwnam lookup. Unix-only `user` feature; the
+# call sites are `#[cfg(unix)]`-gated with an unexpanded fallback elsewhere.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", features = ["user"] }
+# `ioctl(TIOCGWINSZ)` for the interactive pager's terminal size (`display::termsize`),
+# mirroring upstream `mtui.cli.term.termsize`. Already deep in the tree.
+libc = "0.2"
+
+[dev-dependencies]
+mtui-types.workspace = true
+insta.workspace = true
+serial_test.workspace = true
+tempfile = "3"
+wiremock.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

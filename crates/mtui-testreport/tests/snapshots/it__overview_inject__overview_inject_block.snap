@@ -1,0 +1,39 @@
+---
+source: crates/mtui-testreport/tests/overview_inject.rs
+expression: body(&template)
+---
+Maintenance Test Update Installer
+
+Some preamble line.
+
+regression tests:
+-----------------
+
+(put your details here)
+
+<!-- mtui openqa_overview begin -->
+## OpenQA Overview
+
+### Single Incidents - Core
+
+- 15-SP5 -> https://oqa/u1
+  - PASSED
+- 15-SP4 -> https://oqa/u2
+  - FAILED (3 jobs)
+
+### Aggregated Updates - Core
+
+- 15-SP5 -> https://oqa/agg
+  - PASSED
+
+### Build Checks
+
+- https://qam/xz.x86_64.log
+  - All 9 tests passed
+
+<!-- mtui openqa_overview end -->
+
+build log review:
+-----------------
+
+TEST_SUITE_PRESENT: NO

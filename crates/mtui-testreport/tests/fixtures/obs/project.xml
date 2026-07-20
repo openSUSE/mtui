@@ -1,0 +1,6 @@
+<project>
+  <repository name="SLE-15-x86_64">
+    <path repository="update" project="SUSE:SLE-15:Update"/>
+    <releasetarget project="SLE-Product-SLES:15:x86_64"/>
+  </repository>
+</project>

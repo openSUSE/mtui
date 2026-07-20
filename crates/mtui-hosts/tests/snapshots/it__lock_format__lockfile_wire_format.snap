@@ -1,0 +1,7 @@
+---
+source: crates/mtui-hosts/tests/lock_format.rs
+expression: rendered
+---
+operation:          1700000000:alice:4242
+operation exclusive: 1700000000:alice:4242:update in progress
+pool claim:          1700000000:alice:4242:mtui pool SUSE:Maintenance:1:2 [alice]

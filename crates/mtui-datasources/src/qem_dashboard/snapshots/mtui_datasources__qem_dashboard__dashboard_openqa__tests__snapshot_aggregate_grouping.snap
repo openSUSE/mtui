@@ -1,0 +1,16 @@
+---
+source: crates/mtui-datasources/src/qem_dashboard/dashboard_openqa.rs
+expression: render(&jobs)
+---
+
+Results from openQA jobs:
+=========================
+
+Aggregate jobs:
+  build: 20240101-1
+  Summary:
+      product: SLES-15-SP6 - arch: x86_64 -> failed: 1, total: 1
+      product: SLES-15-SP5 - archs: x86_64, aarch64 -> passed: 2, total: 2 (2 arches)
+  Failed jobs:
+    SLES-15-SP6 / x86_64 (1 failed):
+      mau-c  https://openqa.example.com/tests/4002

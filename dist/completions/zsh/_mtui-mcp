@@ -1,0 +1,53 @@
+#compdef mtui-mcp
+
+autoload -U is-at-least
+
+_mtui-mcp() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-t+[Override config \`mtui.template_dir\`]:DIR:_files' \
+'--template-dir=[Override config \`mtui.template_dir\`]:DIR:_files' \
+'-w+[Override config \`mtui.connection_timeout\` (seconds)]:SECONDS:_default' \
+'--connection-timeout=[Override config \`mtui.connection_timeout\` (seconds)]:SECONDS:_default' \
+'-c+[Override the default config path]:FILE:_files' \
+'--config=[Override the default config path]:FILE:_files' \
+'--color=[Control coloured (log) output. Logs go to stderr; stdout is the transport]:COLOR:((auto\:"Colour iff stderr is a TTY and \`NO_COLOR\` is unset. The default"
+always\:"Always emit colour escapes"
+never\:"Never emit colour escapes"))' \
+'-g+[Gitea access token]:TOKEN:_default' \
+'--gitea-token=[Gitea access token]:TOKEN:_default' \
+'--ssl-verify=[Override config \`mtui.ssl_verify\`\: TLS certificate verification for all outbound HTTP. Accepts \`true\`/\`false\` (and the spellings \`yes\`/\`no\`/ \`on\`/\`off\`/\`1\`/\`0\`), or a path to a custom CA bundle/certificate]:BOOL|PATH:_default' \
+'--transport=[MCP transport to serve on\: \`stdio\` (default, one client) or \`http\` (streamable HTTP, per-client session isolation)]:TRANSPORT:((stdio\:"Serve over stdin/stdout (default). One process serves one client"
+http\:"Serve over streamable HTTP. One process serves many isolated clients"))' \
+'--host=[Bind address for \`--transport http\` (default\: 127.0.0.1). Ignored under stdio. Loopback only — rmcp'\''s DNS-rebinding guard rejects non-loopback hosts]:ADDR:_default' \
+'--port=[Bind port for \`--transport http\` (default\: 8000). Ignored under stdio]:PORT:_default' \
+'-d[Enable debugging output]' \
+'--debug[Enable debugging output]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+&& ret=0
+}
+
+(( $+functions[_mtui-mcp_commands] )) ||
+_mtui-mcp_commands() {
+    local commands; commands=()
+    _describe -t commands 'mtui-mcp commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_mtui-mcp" ]; then
+    _mtui-mcp "$@"
+else
+    compdef _mtui-mcp mtui-mcp
+fi

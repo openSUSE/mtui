@@ -1,0 +1,15 @@
+---
+source: crates/mtui-datasources/src/qem_dashboard/dashboard_openqa.rs
+expression: render(&jobs)
+---
+
+Results from openQA jobs:
+=========================
+
+Incident jobs:
+  Summary:
+      version: 15-SP5 - flavor: Server-DVD-Incidents - arch: x86_64 -> passed: 1, failed: 1, incomplete: 1, total: 3
+  Failed jobs:
+    15-SP5 / Server-DVD-Incidents / x86_64 (2 failed):
+      qam-failure     https://openqa.example.com/tests/3100
+      qam-incomplete  [incomplete]  https://openqa.example.com/tests/3101

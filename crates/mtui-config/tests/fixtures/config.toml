@@ -1,0 +1,46 @@
+# Realistic minimal mtui-rs config fixture used by the integration tests to
+# exercise the TOML parser end-to-end (multiple sections, multiple value types).
+#
+# This is the TOML translation of upstream `tests/fixtures/mtuirc`, restricted
+# to the Phase-1 option subset that `mtui-config` currently models.
+
+[mtui]
+user = "qauser"
+chdir_to_template_dir = true      # inline comment: boolean value
+# ssl_verify accepts a native bool (true/false), a boolean-spelling string
+# ("yes"/"no"/"on"/"off"/...), or a path to a custom certificate/CA bundle:
+ssl_verify = "warn.example/ca.pem"
+
+[connection]
+connection_timeout = 450          # integer value
+max_parallel = 8                  # integer value
+max_oqa_parallel = 4              # integer value
+ssh_strict_host_key_checking = "warn"
+
+[refhosts]
+resolvers = "https,path"
+https_expiration = 3600
+path = "~/qam/refhosts.yml"       # tilde must expand
+
+[url]
+bugzilla = "https://bugzilla.example.com"
+testreports = "https://qam.example.com/testreports"
+
+[svn]
+path = "svn+ssh://svn@svn.example/testreports"
+
+[lock]
+reap_stale = false                # boolean value
+stale_age = 3600                  # integer value
+wait = 30
+# wait_poll omitted on purpose: it must keep its upstream default (15)
+
+[mcp]
+max_output_bytes = 65536          # integer value
+profile = "core"                  # tool-surface profile
+tools_allow = ["whoami"]          # extra tools kept on top of the profile
+tools_deny = ["run"]              # tools removed regardless of profile/allow
+
+[obs]
+api_url = "https://api.example.de"
+request_timeout = 90              # integer value

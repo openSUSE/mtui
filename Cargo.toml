@@ -1,0 +1,152 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version = "0.9.3"
+edition = "2024"
+rust-version = "1.96"
+license = "GPL-2.0-only"       # match upstream mtui
+repository = "https://gitlab.suse.de/osukup/mtui-rs"
+
+[workspace.dependencies]
+# runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+# cli
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+# Man-page generation for both binaries (P8.3). Used only by the `xtask` dev
+# tool, not by any shipped binary, so it never enters a release build.
+clap_mangen = { version = "0.3", features = ["env"] }
+reedline = "0.49"
+# raw-mode terminal + async input/resize stream for the interactive `shell`
+# TTY bridge (P6, mtui-rs-jww). Pinned to reedline 0.49's `crossterm` major so
+# the two share one copy; `event-stream` enables the async `EventStream` the
+# bridge selects over (keystrokes + `Event::Resize` → SIGWINCH forwarding).
+crossterm = { version = "0.29", features = ["event-stream"] }
+# terminal styling for the REPL input highlighter; pinned to reedline 0.49's
+# `nu-ansi-term` major so `StyledText.buffer: Vec<(Style, String)>` types match.
+nu-ansi-term = "0.50"
+# POSIX shell-splitting of a REPL input line into argv (engine line-dispatch),
+# mirroring upstream's `shlex.split` in `Command.parse_args`.
+shlex = "2"
+# ser/de + config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9" # or serde_yml; decide in Phase 1
+toml = "1"
+# INI parsing for the native oscrc credential reader (obs backend, G1b).
+# osc writes genuine INI (`[https://api.suse.de]` headers, bare `key = value`),
+# not TOML, so this is a configparser-parity reader distinct from the app's TOML
+# config. Parse errors are mapped to a fixed message (never interpolating the
+# parser's Display) so a malformed oscrc's source line — possibly a password —
+# is not leaked.
+ini = { package = "rust-ini", version = "0.21" }
+# XML parsing for /etc/products.d/*.prod product files (host system parser).
+quick-xml = "0.41"
+directories = "6"
+# rpm version comparison — pure-Rust replacement for upstream's libc
+# `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
+# contract. Verified against every upstream `test_rpm_version` golden vector.
+sandogasa-rpmvercmp = "0.17"
+# http
+reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
+# openQA API auth: HMAC-SHA1 request signing (X-API-Hash), matching the
+# third-party python `openqa_client` auth design (openQA/lib/OpenQA/client.pm).
+hmac = "0.13"
+sha1 = "0.11"
+hex = "0.4"
+# percent-encoding of the request path before HMAC signing (openQA quirks:
+# %20 -> +, ~ -> %7E)
+urlencoding = "2"
+# regex — SMELT testplatform grammar parsing (refhost Attributes::from_testplatform)
+regex = "1"
+# HTML parsing — extract `.log` hrefs from the qam.suse.de build_checks directory
+# index (oqa_search build-check overview), replacing upstream's minimal
+# html.parser LogFileLinkParser.
+scraper = "0.27"
+# datetime — parse/sort Gitea comment `updated_at` timestamps (RFC3339 with
+# offset), matching upstream `datetime.fromisoformat`. std only, no clock/oldtime
+# baggage; keeps the single-static-binary contract clean.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+# ssh (Phase 2)
+russh = "0.62"
+russh-sftp = "2"
+async-trait = "0.1"
+# mcp (Phase 7). `server` for the ServerHandler surface + model types;
+# `transport-io` for the stdio runner (P7.7); `transport-async-rw` for the
+# in-memory duplex round-trip test. No `macros` — tools are synthesised from the
+# runtime command registry, so we hand-build schemas/handlers, not `#[tool]`.
+rmcp = { version = "2", default-features = false, features = [
+    "server",
+    "client",
+    "transport-io",
+    "transport-async-rw",
+    # `--transport http` (P7.10): the runtime-keyed streamable-HTTP server whose
+    # per-session `service_factory` is our per-client `McpSession` isolation hook.
+    "transport-streamable-http-server",
+] }
+# HTTP host for the mtui-mcp `--transport http` server: mounts rmcp's
+# `StreamableHttpService` (a `tower::Service`) via `Router::fallback_service`
+# and binds it with `axum::serve`. Feature-gated behind `mcp`, so the default
+# `mtui` build never pulls in a web framework.
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
+# CancellationToken for the mtui-mcp http idle-sweeper's cooperative shutdown
+# (bead mtui-rs-odq8). Feature-gated behind `mcp`; also rmcp's own transport dep.
+tokio-util = { version = "0.7", default-features = false }
+# observability + errors
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+thiserror = "2"
+anyhow = "1"
+# terminal color (CommandPromptDisplay) — supports_color-gated ANSI wrapping
+owo-colors = "4"
+# optional desktop notifications (feature `notify`, Phase 6). Pure-Rust
+# freedesktop/DBus (Linux) + NSUserNotification (macOS) toast backend, keeping
+# the single-static-binary / no-Python-runtime contract. Best-effort + headless
+# no-op, so a build without the feature never pulls it.
+notify-rust = "4"
+# stable insertion-ordered map (TemplateRegistry entries) + per-registry id
+indexmap = "2"
+uuid = { version = "1", features = ["v4"] }
+# random shuffle of per-slot pool candidates so load spreads across
+# interchangeable refhosts (upstream `random.shuffle`); test-seamed for
+# determinism.
+rand = "0.10"
+# dev / test
+insta = "1"
+wiremock = "0.6"
+# serialises tests that mutate process-global env vars ($OSC_CONFIG, $HOME,
+# $XDG_CONFIG_HOME) for the osc-parity oscrc discovery reader — cargo runs tests
+# in parallel threads, so env mutation must not race.
+serial_test = "3"
+# perf baselines (mtui-rs-0mop.1): criterion for in-process latency/throughput
+# benches, dhat for allocation + peak-heap profiles. Dev-only; benches use
+# `harness = false` so they compile only under `cargo bench`, never in the
+# default `cargo test` gate. Startup timing is measured externally with
+# `hyperfine` (documented in plans/perf-baseline-0mop1.md), not a crate dep.
+criterion = { version = "0.8", features = ["async_tokio"] }
+dhat = "0.3"
+tempfile = "3"
+# internal crates (path deps)
+mtui-types = { path = "crates/mtui-types" }
+mtui-config = { path = "crates/mtui-config" }
+mtui-hosts = { path = "crates/mtui-hosts" }
+mtui-datasources = { path = "crates/mtui-datasources" }
+mtui-testreport = { path = "crates/mtui-testreport" }
+mtui-core = { path = "crates/mtui-core" }
+mtui-mcp = { path = "crates/mtui-mcp" }
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[profile.release]
+lto = "thin"
+strip = true
+# One codegen unit trades slower release builds for a smaller/faster binary.
+codegen-units = 1
+# Abort on panic: no unwinding tables, smaller binary. Release-only — the `test`
+# profile keeps unwinding (Cargo forbids `panic = "abort"` there and the suite
+# relies on it).
+panic = "abort"
