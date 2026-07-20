@@ -986,6 +986,27 @@ Options:
           Print help
 ```
 
+## `request_review`
+
+Requests review of the loaded update in Slack.
+
+```text
+Usage: request_review [OPTIONS]
+
+Options:
+  -c, --channel <CHANNEL>
+          Channel to post to, overriding the configured one
+
+  -m, --message <TEXT>
+          Extra context appended to the review request
+
+  -w, --watch
+          After posting, watch the message for reviewer reactions until a verdict or timeout (Ctrl-C stops it). Over MCP, pair this with background=true so the call does not outlive the client timeout
+
+  -h, --help
+          Print help
+```
+
 ## `export`
 
 Exports the gathered update data to the testing template.

@@ -184,6 +184,72 @@ pub enum GiteaError {
     Http(#[from] HttpError),
 }
 
+/// Errors from the Slack review-request connector ([`crate::slack`]).
+///
+/// Slack's Web API is unusual in two ways this enum has to model explicitly.
+/// It reports application-level failures as **HTTP 200** with `{"ok": false,
+/// "error": "&lt;code&gt;"}`, so a successful status tells you nothing —
+/// [`Api`](Self::Api) carries that code. And it rate-limits with `429` plus a
+/// `Retry-After` header, which callers must treat as "back off and keep going"
+/// rather than as a failure — hence the dedicated
+/// [`RateLimited`](Self::RateLimited) variant, so a watch loop can distinguish
+/// throttling from a genuine error instead of counting it as one.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum SlackError {
+    /// The Slack bot token is empty, so the client cannot authenticate.
+    #[error(
+        "Slack API token is empty; set it with `config set slack_token &lt;token&gt;` \
+         or the `[slack] token` config key"
+    )]
+    MissingToken,
+
+    /// No Slack channel is configured to post the review request to.
+    #[error(
+        "no Slack channel configured; set it with `config set slack_channel &lt;channel&gt;` \
+         or the `[slack] channel` config key"
+    )]
+    MissingChannel,
+
+    /// The Slack integration is switched off in the configuration.
+    #[error("Slack integration is disabled ([slack] enabled = false)")]
+    Disabled,
+
+    /// A call failed at the transport level or returned a non-2xx status. The
+    /// payload is the upstream-style `"{method} - {url}"` context, always
+    /// sanitized — never the token.
+    #[error("Slack API call failed: {0}")]
+    FailedCall(String),
+
+    /// The call reached Slack but was refused at the application level
+    /// (HTTP 200 with `ok: false`). The payload is Slack's own error code,
+    /// such as `channel_not_found`, `not_in_channel` or `invalid_auth`.
+    #[error("Slack API returned an error: {0}")]
+    Api(String),
+
+    /// Slack rate-limited the call (`429 Too Many Requests`). A watch loop
+    /// treats this as "still watching" and backs off; it is not a failure.
+    #[error("Slack API rate limited{}", retry_after_suffix(*retry_after))]
+    RateLimited {
+        /// The `Retry-After` header in seconds, when the server sent one.
+        retry_after: Option<u64>,
+    },
+
+    /// The configured API base is not the trusted Slack origin (or is not
+    /// `https`, or carries userinfo), so the token was **not** sent. The
+    /// payload is the sanitized URL — never the token.
+    #[error(
+        "refusing to send Slack token to untrusted URL {0}: it must be an https \
+         URL whose origin matches the configured Slack API base \
+         ([slack] api_url / `config set slack_api_url`)"
+    )]
+    UntrustedOrigin(String),
+
+    /// The underlying HTTP layer failed to build the request or client.
+    #[error(transparent)]
+    Http(#[from] HttpError),
+}
+
 /// Errors from the openQA / QAM Dashboard overview search ([`crate::oqa_search`]).
 ///
 /// Mirrors upstream's single `_HTTPError` (raised by `_get_json` /
@@ -251,6 +317,16 @@ pub enum TeReGenError {
     /// malformed JSON body. Carries a sanitized description (never the raw URL).
     #[error("TeReGen fetch failed: {0}")]
     Fetch(String),
+}
+
+/// Render the trailing `" (retry after Ns)"` clause of
+/// [`SlackError::RateLimited`], omitted entirely when Slack sent no
+/// `Retry-After` header.
+fn retry_after_suffix(retry_after: Option<u64>) -> String {
+    match retry_after {
+        Some(secs) => format!(" (retry after {secs}s)"),
+        None => String::new(),
+    }
 }
 
 /// Render the [`GiteaError::AssignInvalid`] message for an assignment state,

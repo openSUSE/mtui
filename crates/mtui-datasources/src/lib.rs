@@ -14,11 +14,12 @@ pub mod openqa;
 pub mod oqa_search;
 pub mod qem_dashboard;
 pub mod refhost;
+pub mod slack;
 pub mod teregen;
 
 pub use error::{
     GiteaError, HttpError, OpenQAError, OqaSearchError, QemDashboardError, RefhostError, Result,
-    TeReGenError,
+    SlackError, TeReGenError,
 };
 pub use gitea::{Comment, DEFAULT_GROUP, Gitea, assign_marker, pr_api_url, unassign_marker};
 pub use http::{
@@ -38,4 +39,7 @@ pub use oqa_search::{
 };
 pub use qem_dashboard::{DashboardAutoOpenQA, QemDashboardClient, QemIncident};
 pub use refhost::{Attributes, ProductDiff, Refhosts};
+pub use slack::{
+    PostedMessage, Reaction, Reply, Slack, is_ack_reaction, is_nack_reaction, normalize_reaction,
+};
 pub use teregen::{RegenOutcome, TeReGen, UpdatesQuery};

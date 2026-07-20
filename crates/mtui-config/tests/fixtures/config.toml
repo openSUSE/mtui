@@ -35,6 +35,13 @@ stale_age = 3600                  # integer value
 wait = 30
 # wait_poll omitted on purpose: it must keep its upstream default (15)
 
+[slack]
+enabled = true                    # boolean value
+token = "xoxb-fixture"
+channel = "#qam-review"
+poll_interval = 90                # integer value
+# watch_timeout omitted on purpose: it must keep its default (3600)
+
 [mcp]
 max_output_bytes = 65536          # integer value
 profile = "core"                  # tool-surface profile

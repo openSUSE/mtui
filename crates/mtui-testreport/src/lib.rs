@@ -35,7 +35,8 @@ pub use reports::repoparse::{
 pub use reports::{NullReport, ObsReport, PiReport, SlReport};
 pub use support::{FileList, atomic_write_file, detect_system, system_info, timestamp};
 pub use testreport::{
-    HashCheck, ReadError, ReportOpenQA, ReviewerError, TestReport, TestReportBase,
+    HashCheck, ReadError, ReportOpenQA, ReviewerError, SlackReviewError, SlackReviewMarker,
+    TestReport, TestReportBase,
 };
 pub use update_workflow::{
     CheckProvider, Diagnostic, DoerProvider, Role, TemplateError, UpdateError, WorkflowKey,
