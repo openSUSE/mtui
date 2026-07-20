@@ -1,0 +1,22 @@
+[package]
+name = "mtui-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mtui-types.workspace = true
+serde.workspace = true
+toml.workspace = true
+directories.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+directories.workspace = true
+tempfile = "3"

@@ -1,0 +1,434 @@
+//! The production MCP server handler (P7.7).
+//!
+//! A hand-written [`ServerHandler`] whose [`list_tools`](ServerHandler::list_tools)
+//! and [`call_tool`](ServerHandler::call_tool) are built at *runtime* from the
+//! command [`Registry`] — the Rust-idiomatic equivalent of upstream Python's
+//! dynamic FastMCP registration. This grew out of the P7.1 spike (which proved
+//! the runtime-registration approach against rmcp 2.x with a single hard-coded
+//! `whoami` tool); it now synthesises the **full** tool surface via
+//! [`crate::tools`].
+//!
+//! On construction the server precomputes, once:
+//!
+//! * the `rmcp::model::Tool` list (command tools from [`build_tools`] + the four
+//!   job tools from [`job_tool_descriptors`]), each carrying a `readOnlyHint`;
+//! * the tool-name → [`ToolRoute`] map from [`tool_routes`], so a call dispatches
+//!   through the *same* engine entry the REPL uses.
+//!
+//! Deny-listed commands never enter the surface — [`build_tools`]
+//! filters them — so a `call_tool` for e.g. `lrun`/`shell` resolves to no route
+//! and returns `method_not_found`.
+//!
+//! Scope: this handler serves **one** [`McpSession`]. Under stdio a single
+//! server instance serves the process's one client; under http the
+//! [`SessionRegistry`](crate::provider::SessionRegistry) mints a fresh server
+//! (hence a fresh isolated session) per MCP session. The testreport tools are
+//! bead `mtui-rs-76e.8`; the job tools drive the session's background-job table
+//! (bead `mtui-rs-76e.12`).
+
+use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use std::future::Future;
+use std::pin::Pin;
+
+use mtui_core::Registry;
+use rmcp::handler::server::ServerHandler;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
+    ProgressNotificationParam, ProgressToken, ServerCapabilities, ServerInfo, Tool,
+    ToolAnnotations,
+};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData as McpError, Peer, RoleServer};
+use serde_json::{Map, Value};
+
+use crate::provider::SessionGuard;
+use crate::session::{McpSession, ProgressSink};
+use crate::testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
+use crate::tools::{
+    ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_tool_descriptors,
+    tool_routes,
+};
+
+/// The runtime-synthesised MCP server backing one [`McpSession`].
+///
+/// Holds the command [`Registry`], the client's [`McpSession`], and the
+/// precomputed tool list + route map. `McpSession` guards the underlying
+/// `Session` behind a mutex (because [`mtui_core::dispatch_argv`] needs
+/// `&mut Session` while `ServerHandler`'s methods take `&self`) and owns the
+/// capture sink for a command's display output.
+#[derive(Clone)]
+pub struct McpServer {
+    registry: Arc<Registry>,
+    session: Arc<McpSession>,
+    /// The full tool surface, built once at construction.
+    tools: Arc<Vec<Tool>>,
+    /// tool-name → command route, for dispatching command tools.
+    routes: Arc<BTreeMap<String, ToolRoute>>,
+    /// The set of job-control tool names (`job_list`/…), for dispatch routing.
+    job_tools: Arc<HashSet<String>>,
+    /// The set of hand-written testreport tool names (`testreport_read`/…).
+    testreport_tools: Arc<HashSet<String>>,
+    /// Last-touch timestamp (monotonic millis), bumped on every tool call and
+    /// `list_tools`, read by the http registry's idle sweeper. Under stdio /
+    /// tests it is a private throwaway atomic no sweeper observes.
+    last_touch: Arc<AtomicU64>,
+    /// RAII registry membership for an http-minted server: dropping it (when rmcp
+    /// drops the server on session close, or the sweeper evicts it) frees a
+    /// `session_cap` slot. `None` under stdio / tests (no registry). Held behind
+    /// an `Arc` so `McpServer` stays `Clone` — the slot is freed when the last
+    /// clone drops.
+    _guard: Option<Arc<SessionGuard>>,
+}
+
+impl McpServer {
+    /// Builds the server from a registry and the client's session (as resolved
+    /// through a [`crate::provider::SessionProvider`]).
+    ///
+    /// Synthesises the full tool surface once: command tools + the four job
+    /// tools, each converted to an `rmcp::model::Tool` with its `readOnlyHint`,
+    /// plus the route map used by [`call_tool`](ServerHandler::call_tool).
+    #[must_use]
+    pub fn new(registry: Arc<Registry>, session: Arc<McpSession>) -> Self {
+        // Untracked: stdio (one process, one client) and unit tests. No registry
+        // membership, and a private last-touch atomic no sweeper reads.
+        Self::build(registry, session, None, Arc::new(AtomicU64::new(0)))
+    }
+
+    /// Builds a server tracked by the http [`SessionRegistry`](crate::provider::SessionRegistry).
+    ///
+    /// Same synthesis as [`new`](Self::new), but the server carries the
+    /// registry's per-session [`SessionGuard`] (dropping it frees a
+    /// `session_cap` slot) and the shared `last_touch` timestamp the handler
+    /// bumps on every tool call so the idle sweeper only reaps quiet sessions.
+    #[must_use]
+    pub(crate) fn new_tracked(
+        registry: Arc<Registry>,
+        session: Arc<McpSession>,
+        guard: SessionGuard,
+        last_touch: Arc<AtomicU64>,
+    ) -> Self {
+        Self::build(registry, session, Some(Arc::new(guard)), last_touch)
+    }
+
+    /// Shared synthesis body for [`new`](Self::new) / [`new_tracked`](Self::new_tracked).
+    fn build(
+        registry: Arc<Registry>,
+        session: Arc<McpSession>,
+        guard: Option<Arc<SessionGuard>>,
+        last_touch: Arc<AtomicU64>,
+    ) -> Self {
+        let command_descriptors = build_tools(&registry);
+        let job_descriptors = job_tool_descriptors();
+        let testreport_descriptors = testreport_tool_descriptors();
+        let mut routes = tool_routes(&registry);
+
+        // The whole synthesised surface: command tools + the four job tools +
+        // the hand-written testreport tools.
+        let mut descriptors: Vec<ToolDescriptor> = command_descriptors
+            .into_iter()
+            .chain(job_descriptors)
+            .chain(testreport_descriptors)
+            .collect();
+
+        // Token-budget passes, in upstream's order (main.py): slim every tool's
+        // JSON schema of redundant boilerplate, then narrow the surface to the
+        // configured profile. `full` with no allow/deny override is a no-op.
+        for descriptor in &mut descriptors {
+            descriptor.input_schema = crate::slim::slim_input_schema(&descriptor.input_schema);
+        }
+        let kept = crate::profiles::apply_profile(
+            &mut descriptors,
+            session.profile(),
+            session.tools_allow(),
+            session.tools_deny(),
+        );
+        let kept: HashSet<String> = kept.into_iter().collect();
+
+        // Keep the dispatch views in lockstep with the (possibly filtered) tool
+        // list so a profiled-out tool cannot still be called.
+        routes.retain(|name, _| kept.contains(name));
+        let job_tools: HashSet<String> = job_tool_descriptors()
+            .iter()
+            .map(|d| d.name.clone())
+            .filter(|n| kept.contains(n))
+            .collect();
+        let testreport_tools: HashSet<String> = testreport_tool_descriptors()
+            .iter()
+            .map(|d| d.name.clone())
+            .filter(|n| kept.contains(n))
+            .collect();
+
+        let tools: Vec<Tool> = descriptors.iter().map(descriptor_to_tool).collect();
+
+        Self {
+            registry,
+            session,
+            tools: Arc::new(tools),
+            routes: Arc::new(routes),
+            job_tools: Arc::new(job_tools),
+            testreport_tools: Arc::new(testreport_tools),
+            last_touch,
+            _guard: guard,
+        }
+    }
+
+    /// Record activity on this session (monotonic millis), for the idle sweeper.
+    ///
+    /// Called at the top of the request handlers our server actually sees
+    /// (`call_tool` / `list_tools`). Under stdio / tests the atomic is private
+    /// and unobserved, so the bump is a cheap no-op consequence.
+    fn touch(&self) {
+        self.last_touch
+            .store(crate::provider::now_millis(), Ordering::Relaxed);
+    }
+}
+
+/// Convert a transport-free [`ToolDescriptor`] into an `rmcp::model::Tool`,
+/// carrying the conservative `readOnlyHint`.
+fn descriptor_to_tool(descriptor: &ToolDescriptor) -> Tool {
+    Tool::new(
+        descriptor.name.clone(),
+        descriptor.description.clone(),
+        Arc::new(descriptor.input_schema.clone()),
+    )
+    .with_annotations(ToolAnnotations::new().read_only(descriptor.read_only))
+}
+
+/// Extract the tool-call arguments as a JSON object (empty when omitted).
+fn call_arguments(request: &CallToolRequestParams) -> Map<String, Value> {
+    request.arguments.clone().unwrap_or_default()
+}
+
+/// The rmcp-backed [`ProgressSink`]: sends `notifications/progress` back to the
+/// client for the in-flight tool call.
+///
+/// Built in [`call_tool`](ServerHandler::call_tool) from the request's
+/// [`RequestContext`] — the cloned [`Peer`] plus the client-supplied
+/// `progressToken`. It exists only when the client actually requested progress
+/// (upstream: `report_progress` is a no-op without a token, so we simply do not
+/// build the sink), and it swallows transport failures so a flaky client can
+/// never mask the command's result.
+struct PeerProgressSink {
+    peer: Peer<RoleServer>,
+    token: ProgressToken,
+}
+
+impl ProgressSink for PeerProgressSink {
+    fn report<'a>(
+        &'a self,
+        progress: f64,
+        message: &'a str,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let param = ProgressNotificationParam::new(self.token.clone(), progress)
+                .with_message(message.to_owned());
+            if let Err(err) = self.peer.notify_progress(param).await {
+                tracing::debug!("progress notification failed: {err}");
+            }
+        })
+    }
+}
+
+impl ServerHandler for McpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        self.touch();
+        Ok(ListToolsResult::with_all_items((*self.tools).clone()))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        self.touch();
+        let name = request.name.as_ref().to_owned();
+        let kwargs = call_arguments(&request);
+
+        // A slow foreground tool call emits `notifications/progress` heartbeats so
+        // the client does not time out. Build the sink only when the client
+        // supplied a `progressToken` (upstream: no token → `report_progress` is a
+        // no-op, so the heartbeat costs nothing). Job-control tools are fast and
+        // stay unwrapped, matching upstream.
+        let sink: Option<PeerProgressSink> =
+            context
+                .meta
+                .get_progress_token()
+                .map(|token| PeerProgressSink {
+                    peer: context.peer.clone(),
+                    token,
+                });
+        let sink = sink.as_ref().map(|s| s as &dyn ProgressSink);
+
+        // A job-control tool: poll/control the session's background-job table.
+        if self.job_tools.contains(&name) {
+            return Ok(render(
+                dispatch_job_tool(&self.session, &name, &kwargs).await,
+            ));
+        }
+
+        // A hand-written testreport tool: acts directly on the loaded checkout.
+        if self.testreport_tools.contains(&name) {
+            let result = dispatch_testreport_tool(&self.session, &name, &kwargs, sink)
+                .await
+                // Serialise the JSON object result to a single text block, matching
+                // the command tools' single-content-block wire shape.
+                .map(|v| v.to_string());
+            return Ok(render(result));
+        }
+
+        // A synthesised command tool: dispatch through the shared engine.
+        if let Some(route) = self.routes.get(&name) {
+            return Ok(render(
+                dispatch_tool(&self.registry, &self.session, route, &kwargs, sink).await,
+            ));
+        }
+
+        // Unknown / deny-listed name: no route was synthesised for it.
+        Err(McpError::method_not_found::<
+            rmcp::model::CallToolRequestMethod,
+        >())
+    }
+}
+
+/// Render a dispatch result into a [`CallToolResult`].
+///
+/// Success returns the captured (output-capped) stdout; failure returns an error
+/// result whose text is the captured stdout followed by the error summary — the
+/// same envelope the P7.1 spike used, preserving any output produced before the
+/// failure.
+fn render(result: Result<String, crate::session::McpCommandError>) -> CallToolResult {
+    match result {
+        Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
+        Err(err) => CallToolResult::error(vec![ContentBlock::text(format!("{}{err}", err.stdout))]),
+    }
+}
+
+/// Backwards-compatible alias for the P7.1 spike name.
+///
+/// The spike round-trip test and early consumers referred to `SpikeServer`; the
+/// production handler is [`McpServer`]. Kept as a thin alias so the existing test
+/// keeps compiling while callers migrate.
+pub type SpikeServer = McpServer;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::SessionRegistry;
+    use mtui_config::Config;
+    use mtui_core::register_all;
+
+    fn server_with(config: Config) -> McpServer {
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        McpServer::new(registry, session)
+    }
+
+    fn tool_names(server: &McpServer) -> Vec<String> {
+        server.tools.iter().map(|t| t.name.to_string()).collect()
+    }
+
+    #[test]
+    fn full_profile_keeps_the_whole_surface() {
+        // Default config == full profile, no overrides: every synthesised tool
+        // plus job + testreport tools is present, and routes/tracking sets match.
+        let server = server_with(Config::default());
+        let names = tool_names(&server);
+        assert!(names.iter().any(|n| n == "run"));
+        assert!(names.iter().any(|n| n == "set_log_level"));
+        assert!(names.iter().any(|n| n == "job_list"));
+        assert!(names.iter().any(|n| n == "testreport_read"));
+        assert!(!names.iter().any(|n| n == "lrun"));
+        assert!(server.routes.contains_key("run"));
+        assert!(!server.routes.contains_key("lrun"));
+        assert!(server.job_tools.contains("job_list"));
+        assert!(server.testreport_tools.contains("testreport_read"));
+    }
+
+    #[test]
+    fn core_profile_filters_tools_and_dispatch_views() {
+        let mut config = Config::default();
+        config.mcp_profile = "core".to_owned();
+        let server = server_with(config);
+        let names = tool_names(&server);
+
+        // A core command stays; a non-core one is gone from the list *and* its route.
+        assert!(names.iter().any(|n| n == "run"), "core tool kept");
+        assert!(
+            !names.iter().any(|n| n == "set_log_level"),
+            "non-core tool removed from list"
+        );
+        assert!(server.routes.contains_key("run"), "core route kept");
+        assert!(
+            !server.routes.contains_key("set_log_level"),
+            "non-core route pruned"
+        );
+        // Job + testreport tools are always core.
+        assert!(server.job_tools.contains("job_list"));
+        assert!(server.testreport_tools.contains("testreport_read"));
+    }
+
+    #[test]
+    fn allow_and_deny_overrides_apply_at_construction() {
+        let mut config = Config::default();
+        config.mcp_profile = "core".to_owned();
+        config.mcp_tools_allow = vec!["whoami".to_owned()]; // not in core
+        config.mcp_tools_deny = vec!["run".to_owned()]; // in core
+        let server = server_with(config);
+        let names = tool_names(&server);
+
+        assert!(names.iter().any(|n| n == "whoami"), "allow adds back");
+        assert!(!names.iter().any(|n| n == "run"), "deny wins");
+        assert!(!server.routes.contains_key("run"), "denied route pruned");
+    }
+
+    #[test]
+    fn tools_allow_cannot_restore_lrun() {
+        let mut config = Config::default();
+        config.mcp_profile = "core".to_owned();
+        config.mcp_tools_allow = vec!["lrun".to_owned()];
+        let server = server_with(config);
+
+        assert!(!tool_names(&server).iter().any(|n| n == "lrun"));
+        assert!(!server.routes.contains_key("lrun"));
+    }
+
+    #[test]
+    fn http_factory_server_denies_lrun() {
+        let registry = SessionRegistry::new(Arc::new(register_all()), Config::default());
+        let server = registry.try_make_server().expect("http server");
+
+        assert!(!tool_names(&server).iter().any(|n| n == "lrun"));
+        assert!(!server.routes.contains_key("lrun"));
+    }
+
+    #[test]
+    fn schemas_are_slimmed_on_the_wire() {
+        // No tool schema carries a `title` keyword or a bare null arm after
+        // construction — the slimming pass ran over the live surface.
+        let server = server_with(Config::default());
+        for tool in server.tools.iter() {
+            let blob = serde_json::to_string(&*tool.input_schema).unwrap();
+            assert!(
+                !blob.contains("\"title\""),
+                "{} kept a title keyword",
+                tool.name
+            );
+            assert!(
+                !blob.contains("{\"type\":\"null\"}"),
+                "{} kept a null arm",
+                tool.name
+            );
+        }
+    }
+}

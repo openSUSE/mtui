@@ -5,6 +5,27 @@ All notable user-visible changes to MTUI are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [26.0.0]
+
+### Changed
+
+- **MTUI has been rewritten in Rust.** This release replaces the Python
+  implementation with an idiomatic Rust successor: two static binaries (`mtui`,
+  the interactive REPL, and `mtui-mcp`, the MCP server), no Python runtime or
+  virtualenv, async-native parallel host fan-out, and generated shell completions
+  and man pages. The command surface, RRID grammar, refhosts/testreport formats,
+  and MCP tool surface are preserved so the tool keeps interoperating with the
+  SUSE maintenance ecosystem. Configuration moves from INI (`~/.mtuirc`) to
+  sectioned TOML with XDG paths.
+
+  The version jumps to 26.0.0 to align with the maintenance-tooling release
+  calendar. The previous Python releases remain available on the `16.0.x`
+  through `19.0.x` maintenance branches.
+
+---
+
+_The entries below document the final Python releases, retained for history._
+
 ## [Unreleased]
 
 ### Changed

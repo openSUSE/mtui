@@ -1,0 +1,13 @@
+# cargo-audit configuration.
+#
+# RUSTSEC-2023-0071 (Marvin Attack: RSA timing sidechannel key recovery).
+# Pulled in transitively by the `russh` SSH stack via `rsa 0.10.0-rc.*`.
+# There is NO fixed upstream release of `rsa` available, and no alternate
+# version resolves the advisory. Severity is medium (5.9); mtui is pubkey-only
+# and does not perform RSA decryption in an attacker-timeable loop, so the
+# practical exposure is low.
+#
+# Re-review trigger: drop this ignore once `russh` bumps to an `rsa` release
+# that carries the fix (watch RustSec advisory-db / russh changelog).
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

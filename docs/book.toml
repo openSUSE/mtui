@@ -1,0 +1,9 @@
+[book]
+title = "mtui-rs"
+description = "An improved, idiomatic Rust successor to openSUSE/mtui."
+authors = ["The mtui-rs contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://gitlab.suse.de/osukup/mtui-rs"

@@ -1,0 +1,492 @@
+//! The interactive REPL: read → dispatch → repeat.
+//!
+//! Ports upstream `mtui.cli.repl.CommandPrompt.cmdloop` onto the Phase-5 engine.
+//! Every line is handed to [`mtui_core::dispatch_line`] (the *same* engine the
+//! MCP surface dispatches through), whose typed [`EngineError`] the loop renders
+//! and then keeps going — a bad command never tears down the session, matching
+//! upstream's `logger.error(e)` + continue.
+//!
+//! Control keys map onto [`reedline::Signal`]:
+//!
+//! * `Signal::Success(line)` → dispatch the line (empty lines are a no-op in the
+//!   engine), render any error, then honour a pending `quit`
+//!   ([`Session::should_exit`]).
+//! * `Signal::CtrlC` → abort the current input and reprompt (upstream Ctrl-C on
+//!   a partial line clears it); never exits.
+//! * `Signal::CtrlD` → graceful session exit (upstream Ctrl-D → `EOF` alias of
+//!   `quit`): break the loop, process exit 0.
+//!
+//! The read loop and dispatch are independent of the editor's input features:
+//! tab completion (P6.3), persistent history + Ctrl-R reverse-search + inline
+//! hint (P6.4), and the workflow-aware prompt + RRID status + input highlighter
+//! (P6.5) all live in the [`Reedline`] builder / [`MtuiPrompt`] in [`Repl::new`];
+//! the command-timeout prompter (P6.6) slots in later without changing this loop.
+
+use std::ops::ControlFlow;
+use std::sync::{Arc, Mutex};
+
+use mtui_core::{EngineError, Registry, Session, dispatch_line};
+use reedline::{
+    ColumnarMenu, DefaultHinter, Emacs, KeyCode, KeyModifiers, MenuBuilder, Reedline,
+    ReedlineEvent, ReedlineMenu, Signal, default_emacs_keybindings,
+};
+
+use crate::completer::MtuiCompleter;
+use crate::highlighter::MtuiHighlighter;
+use crate::prompt::MtuiPrompt;
+
+/// The reedline menu name the Tab keybinding activates.
+const COMPLETION_MENU: &str = "completion_menu";
+
+/// The banner printed once before the first prompt (upstream
+/// `cmdloop(intro="Maintenance Test Update Installer")`).
+const INTRO: &str = "Maintenance Test Update Installer";
+
+/// The interactive REPL, owning the line editor and the command registry.
+///
+/// The registry and session are held behind [`Arc`]/[`Arc<Mutex>`] so the
+/// [`MtuiCompleter`] (owned by the [`Reedline`] editor) can share them: reedline
+/// hands the completer no session, so it reads the live one through the same
+/// `Arc<Mutex<Session>>` this loop drives. Completion runs *during*
+/// `read_line`; dispatch runs *after* it returns, so the two never hold the lock
+/// at once.
+pub struct Repl {
+    line_editor: Reedline,
+    registry: Arc<Registry>,
+    session: Arc<Mutex<Session>>,
+    prompt: MtuiPrompt,
+}
+
+impl Repl {
+    /// Builds a REPL over `registry` and `session`, wiring tab completion,
+    /// persistent history, and the inline history hint.
+    ///
+    /// The line editor is given an [`MtuiCompleter`] sharing `registry`/`session`
+    /// plus a columnar completion menu bound to <kbd>Tab</kbd>; a
+    /// [`file_backed_history`](crate::history::file_backed_history) persisting to
+    /// `$XDG_DATA_HOME/mtui/history` (with Ctrl-R reverse-search from the default
+    /// emacs bindings); and a [`DefaultHinter`] showing the greyed inline
+    /// suggestion (upstream `AutoSuggestFromHistory`). The dynamic prompt/toolbar
+    /// (P6.5) and the prompter (P6.6) slot into this builder later without
+    /// changing the loop.
+    #[must_use]
+    pub fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
+        let completer = Box::new(MtuiCompleter::new(
+            Arc::clone(&registry),
+            Arc::clone(&session),
+        ));
+        let highlighter = Box::new(MtuiHighlighter::new(
+            Arc::clone(&registry),
+            Arc::clone(&session),
+        ));
+        let menu = Box::new(ColumnarMenu::default().with_name(COMPLETION_MENU));
+
+        let mut keybindings = default_emacs_keybindings();
+        keybindings.add_binding(
+            KeyModifiers::NONE,
+            KeyCode::Tab,
+            ReedlineEvent::UntilFound(vec![
+                ReedlineEvent::Menu(COMPLETION_MENU.to_owned()),
+                ReedlineEvent::MenuNext,
+            ]),
+        );
+        let edit_mode = Box::new(Emacs::new(keybindings));
+
+        let line_editor = Reedline::create()
+            .with_completer(completer)
+            .with_highlighter(highlighter)
+            .with_menu(ReedlineMenu::EngineCompleter(menu))
+            .with_edit_mode(edit_mode)
+            .with_history(crate::history::file_backed_history())
+            .with_hinter(Box::new(DefaultHinter::default()));
+
+        let prompt = MtuiPrompt::new(Arc::clone(&session));
+
+        Self {
+            line_editor,
+            registry,
+            session,
+            prompt,
+        }
+    }
+
+    /// Runs the read → dispatch loop until `quit`/Ctrl-D, driving the session.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a fatal editor I/O error from [`Reedline::read_line`] (e.g. a
+    /// broken terminal). Command failures are *not* errors here: they are
+    /// rendered to the session display and the loop continues.
+    ///
+    /// The session guard is held across `step`'s `.await`
+    /// (`clippy::await_holding_lock`, allowed below). It is sound: this REPL runs
+    /// on a current-thread `block_on`, and the editor's synchronous `read_line`
+    /// (the only other lock holder, via the completer) has already returned
+    /// before we lock. Nothing else contends — no host tasks are in flight
+    /// mid-line — so the guard can never block another task at the await point. A
+    /// `tokio::sync::Mutex` is the usual remedy, but its `blocking_lock` panics
+    /// inside `read_line`'s runtime context and its async `lock` is unreachable
+    /// from the synchronous completer, so the std `Mutex` + a scoped allow is the
+    /// correct fit for this single-threaded editor↔dispatch bridge.
+    #[allow(clippy::await_holding_lock)]
+    pub async fn run(&mut self) -> anyhow::Result<()> {
+        {
+            let mut session = self
+                .session
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            session.display.println(INTRO);
+        }
+
+        loop {
+            match self.line_editor.read_line(&self.prompt)? {
+                Signal::Success(line) => {
+                    // `shell` attaches an interactive PTY, which needs the local
+                    // TTY this REPL owns — the engine (shared with headless MCP)
+                    // can't do that, so its `shell` command is a headless-error
+                    // stub. Intercept the line *before* dispatch and drive the
+                    // raw-mode bridge here instead (mtui-rs-jww). Any other line
+                    // takes the normal engine path. A shell line never exits.
+                    if let Some(argv) = crate::shell::is_shell_line(&line) {
+                        let mut session = self
+                            .session
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Err(e) = crate::shell::run_shell(&mut session, &argv).await {
+                            tracing::error!("{e}");
+                        }
+                        continue;
+                    }
+                    // `edit` spawns `$EDITOR` on the controlling TTY (the same
+                    // reason as `shell`): the shared engine has no terminal, so
+                    // its `edit` command is a headless-error stub. Intercept the
+                    // line here and spawn the (blocking, foregrounded) editor,
+                    // which owns the TTY for its lifetime; report any failure
+                    // through `tracing::error!` like every other error. An edit
+                    // line never exits.
+                    if let Some(argv) = crate::edit::is_edit_line(&line) {
+                        let mut session = self
+                            .session
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Err(e) = crate::edit::run_edit(&mut session, &argv) {
+                            tracing::error!("{e}");
+                        }
+                        continue;
+                    }
+                    // Lock only for the dispatch; the completer's own lock during
+                    // `read_line` was released before this returned. (Guard held
+                    // across the await — justified on `run`'s doc comment.)
+                    let should_break = {
+                        let mut session = self
+                            .session
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        step(&self.registry, &mut session, &line).await.is_break()
+                    };
+                    if should_break {
+                        break;
+                    }
+                }
+                // Ctrl-C on a partial line: clear it and reprompt, never exit.
+                Signal::CtrlC => {
+                    let mut session = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    session.display.println("");
+                }
+                // Ctrl-D: graceful session exit (upstream `DEOF` → `Quit`).
+                // Dispatch the `EOF` command through the engine so the full quit
+                // teardown runs (pool-claim release + host close), then break —
+                // a bare `break` would skip that cleanup. reedline persists the
+                // `FileBackedHistory` when the editor is dropped after `run`
+                // returns, so no explicit history flush is needed here.
+                Signal::CtrlD => {
+                    let mut session = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let _ = step(&self.registry, &mut session, "EOF").await;
+                    break;
+                }
+                // `#[non_exhaustive]`: any future/host signal is ignored and we
+                // simply reprompt rather than crashing the session.
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Dispatches one input `line` and reports whether the loop should stop.
+///
+/// This is the testable heart of the loop, deliberately independent of the
+/// TTY-bound [`Reedline`] editor: it dispatches through the shared engine,
+/// reports any error through `tracing::error!` exactly once (the single
+/// operator log channel, alongside `info`/`warn`), and reports
+/// [`ControlFlow::Break`] iff the `quit` command asked the session to exit.
+///
+/// An empty/whitespace line is a no-op ([`ControlFlow::Continue`]) — the engine
+/// already treats it as such.
+pub async fn step(registry: &Registry, session: &mut Session, line: &str) -> ControlFlow<()> {
+    if let Err(err) = dispatch_line(registry, session, line).await {
+        render_error(&err);
+    }
+    if session.should_exit() {
+        ControlFlow::Break(())
+    } else {
+        ControlFlow::Continue(())
+    }
+}
+
+/// Reports a dispatch error through `tracing::error!`, the single operator log
+/// channel (upstream `logger.error(e)`).
+///
+/// Errors, warnings, and info all flow through the *same* path here: the
+/// `tracing` subscriber installed by [`init_tracing`](crate::init_tracing), whose
+/// [`CompactLevelFormat`](crate::logfmt::CompactLevelFormat) renders every level
+/// as a lowercased, colorized token — `error: <message>` (red), `warn: …`
+/// (yellow), `info: …` (green) — with one shared `--color` decision, exactly
+/// like upstream's single `ColorFormatter`. The error message is the event's
+/// *message* (not a structured field), so no `err=` noise appears; the default
+/// format carries no timestamp/target either.
+///
+/// This deliberately differs from the headless
+/// [`run_once`](mtui_core::entrypoint::run_once) entrypoint (`mtui-mcp` /
+/// embedding), which has no `tracing` subscriber and renders the same
+/// `error: <message>` text through its captured display buffer. The two present
+/// failures with identical *text*; each uses the channel appropriate to its
+/// surface (REPL → operator log on stderr; headless → captured display sink).
+fn render_error(err: &EngineError) {
+    tracing::error!("{err}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use clap::ArgMatches;
+    use mtui_config::Config;
+    use mtui_core::command::{Command, Scope};
+    use mtui_core::error::CommandResult;
+    use mtui_core::{ColorMode, CommandPromptDisplay};
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A command that counts its runs; on the deny-listed name `quit` it flips
+    /// the session's exit flag (mirroring the real `Quit`).
+    struct EchoCmd {
+        runs: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Command for EchoCmd {
+        fn name(&self) -> &'static str {
+            "echo"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Single
+        }
+        fn configure(&self, cmd: clap::Command) -> clap::Command {
+            cmd.arg(clap::Arg::new("word").num_args(0..=1))
+        }
+        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// A minimal `quit`: flips `request_exit`, like the real command.
+    struct QuitCmd;
+
+    #[async_trait]
+    impl Command for QuitCmd {
+        fn name(&self) -> &'static str {
+            "quit"
+        }
+        fn aliases(&self) -> &'static [&'static str] {
+            &["exit", "EOF"]
+        }
+        fn scope(&self) -> Scope {
+            Scope::Single
+        }
+        async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            session.request_exit();
+            Ok(())
+        }
+    }
+
+    /// A `Write` sink backed by a shared buffer so a test can read the output.
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn session_with_buffer() -> (Session, Arc<Mutex<Vec<u8>>>) {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let display = CommandPromptDisplay::with_sink(
+            Box::new(SharedBuf(Arc::clone(&buf))),
+            ColorMode::Never,
+        );
+        (Session::with_display(Config::default(), true, display), buf)
+    }
+
+    fn rendered(buf: &Arc<Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    }
+
+    /// A `MakeWriter` over a shared buffer, so a scoped `tracing` subscriber's
+    /// output (where `render_error` now sends the error) can be inspected.
+    #[derive(Clone)]
+    struct BufMaker(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufMaker {
+        type Writer = SharedBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedBuf(Arc::clone(&self.0))
+        }
+    }
+
+    /// Runs `step` on `line` with the REPL's real [`CompactLevelFormat`] layer
+    /// installed on a *scoped* subscriber, returning the captured log output.
+    /// This exercises the exact operator-facing error path the REPL uses.
+    ///
+    /// A local current-thread runtime drives the async `step` inside the
+    /// `with_default` scope, so the scoped subscriber (thread-local) is the one
+    /// `render_error`'s `tracing::error!` resolves against.
+    fn step_capturing_log(
+        registry: &Registry,
+        session: &mut Session,
+        line: &str,
+        ansi: bool,
+    ) -> (ControlFlow<()>, String) {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .event_format(crate::logfmt::CompactLevelFormat::new(ansi))
+            .with_writer(BufMaker(Arc::clone(&buf)))
+            .finish();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let flow = tracing::subscriber::with_default(subscriber, || {
+            rt.block_on(step(registry, session, line))
+        });
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        (flow, out)
+    }
+
+    fn registry() -> (Registry, Arc<AtomicUsize>) {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let mut r = Registry::new();
+        r.register(Arc::new(EchoCmd {
+            runs: Arc::clone(&runs),
+        }));
+        r.register(Arc::new(QuitCmd));
+        (r, runs)
+    }
+
+    #[tokio::test]
+    async fn known_command_runs_and_continues() {
+        let (r, runs) = registry();
+        let (mut s, buf) = session_with_buffer();
+        let flow = step(&r, &mut s, "echo hi").await;
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert!(rendered(&buf).is_empty(), "success renders nothing");
+    }
+
+    #[tokio::test]
+    async fn quit_breaks_the_loop() {
+        let (r, _) = registry();
+        let (mut s, _buf) = session_with_buffer();
+        let flow = step(&r, &mut s, "quit").await;
+        assert_eq!(flow, ControlFlow::Break(()));
+        assert!(s.should_exit());
+    }
+
+    #[tokio::test]
+    async fn eof_dispatches_quit_and_breaks() {
+        // The Ctrl-D handler dispatches the `EOF` alias through the engine (so
+        // the full quit teardown runs), which must break the loop and set exit.
+        let (r, _) = registry();
+        let (mut s, _buf) = session_with_buffer();
+        let flow = step(&r, &mut s, "EOF").await;
+        assert_eq!(flow, ControlFlow::Break(()));
+        assert!(s.should_exit());
+    }
+
+    #[test]
+    fn unknown_command_renders_error_and_continues() {
+        let (r, runs) = registry();
+        let (mut s, _buf) = session_with_buffer();
+        let (flow, out) = step_capturing_log(&r, &mut s, "nope", false);
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        assert!(out.contains("Unknown command"), "got: {out:?}");
+        assert_eq!(out.lines().count(), 1, "rendered exactly once");
+    }
+
+    /// The de-noised, single-channel error contract (mtui-rs-7h9 / -ilt): a
+    /// failing command yields exactly one `error: <message>` line through the
+    /// operator log, with none of the old `tracing` noise (a target, a
+    /// timestamp, or an `err=` field).
+    #[test]
+    fn error_line_is_prefixed_and_free_of_tracing_noise() {
+        let (r, _) = registry();
+        let (mut s, _buf) = session_with_buffer();
+        let (_flow, out) = step_capturing_log(&r, &mut s, "nope", false);
+        assert_eq!(out.lines().count(), 1, "rendered exactly once");
+        assert!(
+            out.starts_with("error: "),
+            "must carry the upstream `error: ` prefix, got: {out:?}"
+        );
+        assert!(!out.contains("mtui_cli"), "no tracing target");
+        assert!(!out.contains("err="), "no structured field noise");
+        assert!(!out.contains('Z'), "no ISO-8601 timestamp");
+    }
+
+    /// Under color, the `error` level token is red-wrapped while the message
+    /// text is not colorized — the same single `CompactLevelFormat` layer that
+    /// colors `info`/`warn`, so all three levels share one look (mtui-rs-ilt).
+    #[test]
+    fn error_level_token_is_colorized_message_is_not() {
+        let (r, _) = registry();
+        let (mut s, _buf) = session_with_buffer();
+        let (_flow, out) = step_capturing_log(&r, &mut s, "nope", true);
+        // The red escape wraps the lowercased `error` token before `: `.
+        assert!(out.contains('\u{1b}'), "colorized, got: {out:?}");
+        assert!(out.contains("error"), "level token present: {out:?}");
+        assert!(out.contains("Unknown command"), "message present: {out:?}");
+    }
+
+    #[tokio::test]
+    async fn empty_line_is_a_noop_continue() {
+        let (r, runs) = registry();
+        let (mut s, buf) = session_with_buffer();
+        let flow = step(&r, &mut s, "   ").await;
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+        assert!(rendered(&buf).is_empty());
+    }
+
+    #[test]
+    fn bad_flag_renders_error_and_continues() {
+        let (r, runs) = registry();
+        let (mut s, _buf) = session_with_buffer();
+        let (flow, out) = step_capturing_log(&r, &mut s, "echo --no-such-flag", false);
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(runs.load(Ordering::SeqCst), 0, "the body never ran");
+        assert!(!out.is_empty(), "usage error is rendered");
+    }
+}

@@ -1,0 +1,122 @@
+---
+source: crates/mtui-types/tests/refhost.rs
+expression: hosts
+---
+[
+    Host {
+        name: "host-default-x86",
+        arch: "x86_64",
+        product: Product {
+            name: "sles",
+            version: Some(
+                Version {
+                    major: Num(
+                        15,
+                    ),
+                    minor: Some(
+                        Num(
+                            5,
+                        ),
+                    ),
+                },
+            ),
+        },
+        addons: [
+            Addon {
+                name: "sdk",
+                version: Some(
+                    Version {
+                        major: Num(
+                            15,
+                        ),
+                        minor: Some(
+                            Num(
+                                5,
+                            ),
+                        ),
+                    },
+                ),
+            },
+        ],
+    },
+    Host {
+        name: "host-default-aarch64",
+        arch: "aarch64",
+        product: Product {
+            name: "sles",
+            version: Some(
+                Version {
+                    major: Num(
+                        15,
+                    ),
+                    minor: Some(
+                        Num(
+                            5,
+                        ),
+                    ),
+                },
+            ),
+        },
+        addons: [],
+    },
+    Host {
+        name: "host-default-noaddon",
+        arch: "x86_64",
+        product: Product {
+            name: "sles",
+            version: Some(
+                Version {
+                    major: Num(
+                        12,
+                    ),
+                    minor: Some(
+                        Text(
+                            "sp4",
+                        ),
+                    ),
+                },
+            ),
+        },
+        addons: [],
+    },
+    Host {
+        name: "host-nbg-x86",
+        arch: "x86_64",
+        product: Product {
+            name: "sles",
+            version: Some(
+                Version {
+                    major: Num(
+                        15,
+                    ),
+                    minor: Some(
+                        Num(
+                            5,
+                        ),
+                    ),
+                },
+            ),
+        },
+        addons: [],
+    },
+    Host {
+        name: "host-nbg-only-here",
+        arch: "ppc64le",
+        product: Product {
+            name: "sles",
+            version: Some(
+                Version {
+                    major: Num(
+                        15,
+                    ),
+                    minor: Some(
+                        Num(
+                            5,
+                        ),
+                    ),
+                },
+            ),
+        },
+        addons: [],
+    },
+]

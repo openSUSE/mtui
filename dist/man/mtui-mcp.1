@@ -1,0 +1,70 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH mtui-mcp 1  "mtui-mcp 26.0.0" 
+.SH NAME
+mtui\-mcp \- MCP server for mtui (tools synthesised from the command registry)
+.SH SYNOPSIS
+\fBmtui\-mcp\fR [\fB\-t\fR|\fB\-\-template\-dir\fR] [\fB\-w\fR|\fB\-\-connection\-timeout\fR] [\fB\-d\fR|\fB\-\-debug\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-color\fR] [\fB\-g\fR|\fB\-\-gitea\-token\fR] [\fB\-\-ssl\-verify\fR] [\fB\-\-transport\fR] [\fB\-\-host\fR] [\fB\-\-port\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+.SH DESCRIPTION
+MCP server for mtui (tools synthesised from the command registry)
+.SH OPTIONS
+.TP
+\fB\-t\fR, \fB\-\-template\-dir\fR \fI<DIR>\fR
+Override config `mtui.template_dir`
+.TP
+\fB\-w\fR, \fB\-\-connection\-timeout\fR \fI<SECONDS>\fR
+Override config `mtui.connection_timeout` (seconds)
+.TP
+\fB\-d\fR, \fB\-\-debug\fR
+Enable debugging output
+.TP
+\fB\-c\fR, \fB\-\-config\fR \fI<FILE>\fR
+Override the default config path
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Control coloured (log) output. Logs go to stderr; stdout is the transport
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Colour iff stderr is a TTY and `NO_COLOR` is unset. The default
+.IP \(bu 2
+always: Always emit colour escapes
+.IP \(bu 2
+never: Never emit colour escapes
+.RE
+.TP
+\fB\-g\fR, \fB\-\-gitea\-token\fR \fI<TOKEN>\fR
+Gitea access token
+.TP
+\fB\-\-ssl\-verify\fR \fI<BOOL|PATH>\fR
+Override config `mtui.ssl_verify`: TLS certificate verification for all outbound HTTP. Accepts `true`/`false` (and the spellings `yes`/`no`/ `on`/`off`/`1`/`0`), or a path to a custom CA bundle/certificate
+.TP
+\fB\-\-transport\fR \fI<TRANSPORT>\fR [default: stdio]
+MCP transport to serve on: `stdio` (default, one client) or `http` (streamable HTTP, per\-client session isolation)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+stdio: Serve over stdin/stdout (default). One process serves one client
+.IP \(bu 2
+http: Serve over streamable HTTP. One process serves many isolated clients
+.RE
+.TP
+\fB\-\-host\fR \fI<ADDR>\fR [default: 127.0.0.1]
+Bind address for `\-\-transport http` (default: 127.0.0.1). Ignored under stdio. Loopback only — rmcp\*(Aqs DNS\-rebinding guard rejects non\-loopback hosts
+.TP
+\fB\-\-port\fR \fI<PORT>\fR [default: 8000]
+Bind port for `\-\-transport http` (default: 8000). Ignored under stdio
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH VERSION
+v26.0.0

@@ -1,0 +1,1731 @@
+---
+source: crates/mtui-mcp/tests/slim_profile.rs
+assertion_line: 40
+expression: pretty
+---
+[
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "keep_mode": {
+          "default": false,
+          "description": "Do not switch to the manual workflow when in automatic mode",
+          "type": "boolean"
+        },
+        "target": {
+          "items": {
+            "description": "Address of the target host (FQDN). Can be repeated",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "add_host",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "analyze_diff",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "group": {
+          "items": {
+            "description": "Group to approve (not valid for the Gitea workflow)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reviewer": {
+          "description": "Record reviewer in the testreport, commit to SVN, then approve",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "user": {
+          "default": "",
+          "description": "User override for the Gitea workflow (Gitea only)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "approve",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "force": {
+          "default": false,
+          "description": "Force assign the review in Gitea even without an open group",
+          "type": "boolean"
+        },
+        "group": {
+          "items": {
+            "description": "Group to act on (not valid for the Gitea workflow)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "user": {
+          "default": "",
+          "description": "User override for the Gitea workflow (Gitea only)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "assign",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "checkers",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "checkout",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "message": {
+          "items": {
+            "description": "The comment body (required; interactive prompt lands in Phase 6)",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "comment",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "msg": {
+          "items": {
+            "description": "commit message",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "commit",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "attribute": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attribute",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "config_set",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "attributes": {
+          "items": {
+            "description": "Attribute(s) to show; all when omitted",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "name": "config_show",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "downgrade",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "filename": {
+          "description": "output template file name (defaults to the loaded template)",
+          "type": "string"
+        },
+        "force": {
+          "default": false,
+          "description": "force overwrite existing template and re-download openQA results present in the log",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "export",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "filename": {
+          "description": "file to download from the target hosts",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename"
+      ],
+      "type": "object"
+    },
+    "name": "get",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "package": {
+          "items": {
+            "description": "package to install",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package"
+      ],
+      "type": "object"
+    },
+    "name": "install",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_bugs",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "event": {
+          "items": {
+            "description": "event type to list (repeatable)",
+            "enum": [
+              "connect",
+              "disconnect",
+              "install",
+              "update",
+              "downgrade"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_history",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_hosts",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pool": {
+          "default": false,
+          "description": "list pool-claim locks instead of zypper/operation locks",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_locks",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_metadata",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "package": {
+          "items": {
+            "description": "package name to list (repeatable)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "wanted": {
+          "default": false,
+          "description": "print versions wanted by the testreport",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_packages",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_products",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "addon": {
+          "items": {
+            "description": "addon-name substring (repeatable)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "arch": {
+          "items": {
+            "description": "arch filter (repeatable): x86_64 / aarch64 / ppc64le / s390x",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "free": {
+          "default": false,
+          "description": "also probe live mtui-lock state (connects to each matched host)",
+          "type": "boolean"
+        },
+        "json": {
+          "default": false,
+          "description": "emit JSON",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "hostname glob, e.g. 'whale-*' or '*.qam.suse.cz'",
+          "type": "string"
+        },
+        "pool": {
+          "default": false,
+          "description": "group by test-target slot (product+version+arch+addons)",
+          "type": "boolean"
+        },
+        "product": {
+          "description": "base-product substring, e.g. sles / sled / SLE_HPC",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "testplatform": {
+          "description": "match a SMELT testplatform query",
+          "type": "string"
+        },
+        "verbose": {
+          "default": false,
+          "description": "include addons in the output",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_refhosts",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_sessions",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_templates",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_timeout",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_update_commands",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "package": {
+          "items": {
+            "description": "package name to show versions for (repeatable)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_versions",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "auto": {
+          "description": "OBS request review id, e.g. SUSE:Maintenance:1:1",
+          "type": "string"
+        },
+        "kernel": {
+          "description": "OBS kernel/live-patch request review id, e.g. SUSE:Maintenance:1:1",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "load_template",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "comment": {
+          "items": {
+            "description": "Lock comment (keeps the lock effective across sessions)",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "lock",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "default": false,
+          "description": "keep obsoleted jobs (superseded by a retrigger)",
+          "type": "boolean"
+        },
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "arch": {
+          "description": "only jobs for this architecture",
+          "type": "string"
+        },
+        "failed": {
+          "default": false,
+          "description": "show only genuinely failed jobs (pending/unfinished excluded)",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "url_dashboard_qam": {
+          "description": "Override QAM Dashboard base URL (default: derived from config)",
+          "type": "string"
+        },
+        "url_openqa": {
+          "description": "Override openQA URL (default: config openqa_instance)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "openqa_jobs",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregated_groups": {
+          "items": {
+            "description": "Job groups to search in Aggregated Updates (default: core)",
+            "enum": [
+              "core",
+              "containers",
+              "yast",
+              "security"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "days": {
+          "default": 5,
+          "description": "How many days to scan back for aggregated builds (1-30, default 5)",
+          "type": "integer"
+        },
+        "export": {
+          "default": false,
+          "description": "Also inject the overview into the loaded testreport's log",
+          "type": "boolean"
+        },
+        "no_aggregated": {
+          "default": false,
+          "description": "Skip the Aggregated Updates section",
+          "type": "boolean"
+        },
+        "no_fetch": {
+          "default": false,
+          "description": "(deferred) reuse cached overview; currently fetches anyway",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "test_pattern": {
+          "description": "Custom regex to extract test results from build-check logs",
+          "type": "string"
+        },
+        "url_dashboard_qam": {
+          "description": "Override QAM Dashboard base URL (default: derived from config)",
+          "type": "string"
+        },
+        "url_openqa": {
+          "description": "Override openQA URL (default: config openqa_instance)",
+          "type": "string"
+        },
+        "url_qam": {
+          "description": "Override QAM base URL (default: derived from config reports_url)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "openqa_overview",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "force": {
+          "default": false,
+          "description": "force package installation",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "installed": {
+          "default": false,
+          "description": "prepare only installed packages",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "update": {
+          "default": false,
+          "description": "enable test update repositories",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "prepare",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "filename": {
+          "description": "file (or directory) to upload to all hosts",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename"
+      ],
+      "type": "object"
+    },
+    "name": "put",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "reboot",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "force": {
+          "default": false,
+          "description": "overwrite an existing (but unedited) template",
+          "type": "boolean"
+        },
+        "ignore_inconsistent": {
+          "default": false,
+          "description": "regenerate despite inconsistent metadata (e.g. arch mismatch)",
+          "type": "boolean"
+        },
+        "kernel": {
+          "default": false,
+          "description": "load the standalone RRID as a kernel update (default: auto)",
+          "type": "boolean"
+        },
+        "no_wait": {
+          "default": false,
+          "description": "enqueue the job and return without waiting or reloading",
+          "type": "boolean"
+        },
+        "rrid": {
+          "description": "template to regenerate even if not loaded (default: the loaded template)",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "regenerate",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "group": {
+          "items": {
+            "description": "Group to act on (not valid for the Gitea workflow)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "message": {
+          "items": {
+            "description": "Rejection message (takes the remainder of the command)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "description": "Reason to reject the update (required)",
+          "enum": [
+            "admin",
+            "retracted",
+            "build_problem",
+            "not_fixed",
+            "regression",
+            "false_reject",
+            "tracking_issue"
+          ],
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "user": {
+          "default": "",
+          "description": "User override for the Gitea workflow (Gitea only)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "name": "reject",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "reload_openqa",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "reload_products",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "remove_host",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "command": {
+          "items": {
+            "description": "Command to run on refhost",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "run",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "state": {
+          "description": "enabled | disabled | dryrun | parallel | serial",
+          "enum": [
+            "parallel",
+            "serial",
+            "dryrun",
+            "disabled",
+            "enabled"
+          ],
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
+    "name": "set_host_state",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "level": {
+          "description": "log level for mtui - info, warning, error or debug",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "debug"
+          ],
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "name": "set_log_level",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "add": {
+          "default": false,
+          "description": "Add issue repos to refhosts",
+          "type": "boolean"
+        },
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "remove": {
+          "default": false,
+          "description": "Remove issue repos from refhosts",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "set_repo",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Timeout in seconds; \"0\" disables it",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "timeout"
+      ],
+      "type": "object"
+    },
+    "name": "set_timeout",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "workflow": {
+          "description": "desired workflow - auto, manual or kernel",
+          "enum": [
+            "auto",
+            "manual",
+            "kernel"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "workflow"
+      ],
+      "type": "object"
+    },
+    "name": "set_workflow",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "show_diff",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "show_log",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "show_update_repos",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "group": {
+          "items": {
+            "description": "Group to act on (not valid for the Gitea workflow)",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "user": {
+          "default": "",
+          "description": "User override for the Gitea workflow (Gitea only)",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "unassign",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "package": {
+          "items": {
+            "description": "package to remove",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package"
+      ],
+      "type": "object"
+    },
+    "name": "uninstall",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "rrid": {
+          "description": "RRID of the loaded template to unload",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rrid"
+      ],
+      "type": "object"
+    },
+    "name": "unload",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "force": {
+          "default": false,
+          "description": "Force unlock - remove locks set by other users or sessions",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pool": {
+          "default": false,
+          "description": "Remove the pool claim instead of the zypper/operation lock",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "unlock",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "hosts": {
+          "items": {
+            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "newpackage": {
+          "default": false,
+          "description": "Install new packages after update",
+          "type": "boolean"
+        },
+        "noprepare": {
+          "default": false,
+          "description": "Skip prepare procedure",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "update",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_assignees": {
+          "default": false,
+          "description": "show every update regardless of assignee, overriding the unassigned default",
+          "type": "boolean"
+        },
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "assignee": {
+          "description": "filter to updates assigned to this user (any qam group)",
+          "type": "string"
+        },
+        "limit": {
+          "default": 0,
+          "description": "cap the number of rows (0 = all)",
+          "type": "integer"
+        },
+        "mine": {
+          "default": false,
+          "description": "filter to updates assigned to the current session user",
+          "type": "boolean"
+        },
+        "review_group": {
+          "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack)",
+          "type": "string"
+        },
+        "status": {
+          "default": "testing",
+          "description": "filter by status (default: testing); use 'all' for every status",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "updates",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "whoami",
+    "read_only": true
+  }
+]

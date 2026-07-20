@@ -1,0 +1,55 @@
+#compdef mtui
+
+autoload -U is-at-least
+
+_mtui() {
+    typeset -A opt_args
+    typeset -a _arguments_options
+    local ret=1
+
+    if is-at-least 5.2; then
+        _arguments_options=(-s -S -C)
+    else
+        _arguments_options=(-s -C)
+    fi
+
+    local context curcontext="$curcontext" state line
+    _arguments "${_arguments_options[@]}" : \
+'-t+[Override config \`mtui.template_dir\`]:DIR:_files' \
+'--template-dir=[Override config \`mtui.template_dir\`]:DIR:_files' \
+'*-s+[Cumulatively override the default hosts from the template (format\: \`hostname,hostname2\`). May be given more than once]:HOSTS:_default' \
+'*--sut=[Cumulatively override the default hosts from the template (format\: \`hostname,hostname2\`). May be given more than once]:HOSTS:_default' \
+'-w+[Override config \`mtui.connection_timeout\` (seconds)]:SECONDS:_default' \
+'--connection-timeout=[Override config \`mtui.connection_timeout\` (seconds)]:SECONDS:_default' \
+'-c+[Override the default config path]:FILE:_files' \
+'--config=[Override the default config path]:FILE:_files' \
+'--color=[Control coloured output]:COLOR:((auto\:"Colour iff stderr is a TTY and \`NO_COLOR\` is unset. The default"
+always\:"Always emit colour escapes"
+never\:"Never emit colour escapes"))' \
+'-g+[Gitea access token]:TOKEN:_default' \
+'--gitea-token=[Gitea access token]:TOKEN:_default' \
+'--ssl-verify=[Override config \`mtui.ssl_verify\`\: TLS certificate verification for all outbound HTTP. Accepts \`true\`/\`false\` (and the spellings \`yes\`/\`no\`/ \`on\`/\`off\`/\`1\`/\`0\`), or a path to a custom CA bundle/certificate]:BOOL|PATH:_default' \
+'-a+[OBS request review id, run under the automatic workflow (example\: \`SUSE\:Maintenance\:1\:1\`)]:RequestReviewID:_default' \
+'--auto-review-id=[OBS request review id, run under the automatic workflow (example\: \`SUSE\:Maintenance\:1\:1\`)]:RequestReviewID:_default' \
+'-k+[OBS kernel/live-patch request review id, run under the kernel workflow (example\: \`SUSE\:Maintenance\:1\:1\`)]:RequestReviewID:_default' \
+'--kernel-review-id=[OBS kernel/live-patch request review id, run under the kernel workflow (example\: \`SUSE\:Maintenance\:1\:1\`)]:RequestReviewID:_default' \
+'-d[Enable debugging output]' \
+'--debug[Enable debugging output]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'-V[Print version]' \
+'--version[Print version]' \
+&& ret=0
+}
+
+(( $+functions[_mtui_commands] )) ||
+_mtui_commands() {
+    local commands; commands=()
+    _describe -t commands 'mtui commands' commands "$@"
+}
+
+if [ "$funcstack[1]" = "_mtui" ]; then
+    _mtui "$@"
+else
+    compdef _mtui mtui
+fi

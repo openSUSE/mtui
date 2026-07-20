@@ -1,0 +1,262 @@
+//! The `install` and `uninstall` commands.
+
+use async_trait::async_trait;
+use clap::{Arg, ArgAction, ArgMatches};
+
+use super::perform::{PerformOp, drive};
+use super::support::{add_hosts_arg, complete_fanout};
+use crate::command::{Command, Scope};
+use crate::error::CommandResult;
+use crate::session::Session;
+
+/// Reads the required `package` positional list.
+fn packages(args: &ArgMatches) -> Vec<String> {
+    args.get_many::<String>("package")
+        .map(|it| it.cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Adds the shared `package …` positional (`nargs="+"`) argument.
+fn add_package_arg(cmd: clap::Command, help: &'static str) -> clap::Command {
+    cmd.arg(
+        Arg::new("package")
+            .num_args(1..)
+            .required(true)
+            .action(ArgAction::Append)
+            .value_name("PACKAGE")
+            .help(help),
+    )
+}
+
+/// Installs packages from the current active repositories.
+///
+/// Ports upstream `mtui.commands.zypper.Install`. Drives
+/// [`TestReport::perform_install`](mtui_testreport::TestReport::perform_install)
+/// over the selected hosts.
+pub struct Install;
+
+#[async_trait]
+impl Command for Install {
+    fn name(&self) -> &'static str {
+        "install"
+    }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Installs packages from the current active repositories.")
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::Fanout
+    }
+
+    fn configure(&self, cmd: clap::Command) -> clap::Command {
+        add_hosts_arg(add_package_arg(cmd, "package to install"))
+    }
+
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_fanout(
+            session,
+            &[],
+            session.metadata().get_package_list(),
+            line,
+            text,
+        )
+    }
+
+    async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        drive(session, args, PerformOp::Install(packages(args))).await
+    }
+}
+
+/// Removes packages from the system.
+///
+/// Ports upstream `mtui.commands.zypper.Uninstall`. Drives
+/// [`TestReport::perform_uninstall`](mtui_testreport::TestReport::perform_uninstall).
+pub struct Uninstall;
+
+#[async_trait]
+impl Command for Uninstall {
+    fn name(&self) -> &'static str {
+        "uninstall"
+    }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Removes packages from the system.")
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::Fanout
+    }
+
+    fn configure(&self, cmd: clap::Command) -> clap::Command {
+        add_hosts_arg(add_package_arg(cmd, "package to remove"))
+    }
+
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_fanout(
+            session,
+            &[],
+            session.metadata().get_package_list(),
+            line,
+            text,
+        )
+    }
+
+    async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        drive(session, args, PerformOp::Uninstall(packages(args))).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::testkit::{
+        empty_session, matches, session_host_no_template, session_with_failing_perform,
+        session_with_hosts,
+    };
+    use crate::error::CommandError;
+
+    #[test]
+    fn names_and_scopes() {
+        assert_eq!(Install.name(), "install");
+        assert_eq!(Uninstall.name(), "uninstall");
+        assert_eq!(Install.scope(), Scope::Fanout);
+        assert_eq!(Uninstall.scope(), Scope::Fanout);
+    }
+
+    #[test]
+    fn complete_offers_target_and_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
+        for out in [
+            Install.complete(&session, "", "install "),
+            Uninstall.complete(&session, "", "uninstall "),
+        ] {
+            assert!(out.contains(&"-t".to_owned()), "{out:?}");
+            assert!(out.contains(&"h1".to_owned()), "{out:?}");
+            assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
+        }
+    }
+
+    #[test]
+    fn complete_empty_session_offers_flags() {
+        let (session, _buf) = empty_session();
+        assert!(
+            Install
+                .complete(&session, "--t", "install --t")
+                .contains(&"--target".to_owned())
+        );
+    }
+
+    #[test]
+    fn package_is_required() {
+        // No positional package → clap rejects (mirrors nargs="+").
+        let base = clap::Command::new("install").no_binary_name(true);
+        assert!(
+            Install
+                .configure(base)
+                .try_get_matches_from([""; 0])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_multiple_packages() {
+        let args = matches(&Install, &["vim", "less"]);
+        assert_eq!(packages(&args), vec!["vim".to_owned(), "less".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn install_over_loaded_report_succeeds() {
+        // FakeReport's perform_install returns Ok; the command plumbing
+        // (selection, restore) is exercised here, plus the success confirmation.
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&Install, &["pkg"]);
+        Install.call(&mut session, &args).await.unwrap();
+        // Group restored after the op.
+        assert_eq!(session.targets().names(), vec!["h1"]);
+        assert!(
+            buf.contents().contains("install completed on h1"),
+            "{}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn install_failure_errors_and_names_host() {
+        // perform_install returns Err naming h1 → drive maps it onto CommandError
+        // and does not print a false success.
+        let (mut session, buf) = session_with_failing_perform("SUSE:Maintenance:1:1", &["h1"]);
+        let args = matches(&Install, &["pkg"]);
+        let err = Install.call(&mut session, &args).await.unwrap_err();
+        match err {
+            CommandError::Other(msg) => assert!(msg.contains("h1"), "{msg}"),
+            other => panic!("expected Other, got {other:?}"),
+        }
+        assert!(
+            !buf.contents().contains("completed"),
+            "no false success: {}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn uninstall_failure_errors() {
+        let (mut session, _buf) = session_with_failing_perform("SUSE:Maintenance:1:1", &["h1"]);
+        let args = matches(&Uninstall, &["pkg"]);
+        let err = Uninstall.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("h1")));
+    }
+
+    #[tokio::test]
+    async fn install_with_no_hosts_is_no_refhosts_defined() {
+        // Loaded report but no hosts: passes the requires_update guard, then the
+        // empty selection yields NoRefhostsDefined.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        let args = matches(&Install, &["pkg"]);
+        let err = Install.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::NoRefhostsDefined));
+    }
+
+    #[tokio::test]
+    async fn install_no_template_loaded_errors() {
+        // No report loaded → requires_update guard fires first (upstream
+        // @requires_update / TestReportNotLoadedError).
+        let (mut session, _buf) = empty_session();
+        let args = matches(&Install, &["pkg"]);
+        let err = Install.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    #[tokio::test]
+    async fn install_hosts_present_no_template_refuses() {
+        // Regression: hosts present but no report loaded must NOT silently
+        // succeed via the null report's no-op perform_install. Upstream refuses
+        // with TestReportNotLoadedError; the guard maps to CommandError::Other.
+        let (mut session, _buf) = session_host_no_template(&["h1"], "ok");
+        let args = matches(&Install, &["pkg"]);
+        let err = Install.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    #[tokio::test]
+    async fn install_t_subset_keeps_unselected_host() {
+        // The bead's required regression: `install -t h1` on a two-host report
+        // must leave h2 in the live report afterwards (upstream shares Target
+        // references; the Rust split+merge preserves the unselected host).
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
+        let args = matches(&Install, &["-t", "h1", "pkg"]);
+        Install.call(&mut session, &args).await.unwrap();
+        assert_eq!(
+            session.targets().names(),
+            vec!["h1".to_owned(), "h2".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn uninstall_unknown_host_errors() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&Uninstall, &["-t", "ghost", "pkg"]);
+        let err = Uninstall.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+    }
+}

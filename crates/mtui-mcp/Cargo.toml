@@ -1,0 +1,89 @@
+[package]
+name = "mtui-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Integration tests are consolidated into a single `tests/it.rs` binary so the
+# crate + its heavy deps (rmcp/axum under `--all-features`) link once, not once
+# per file. Only test autodiscovery is disabled; the `[[bin]]` is explicit.
+autotests = false
+
+[lib]
+name = "mtui_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mtui-mcp"
+path = "src/main.rs"
+
+# Perf baseline bench (mtui-rs-0mop.1). Requires the `mcp` feature (the session +
+# job model live behind it); `harness = false` -> criterion main. Run with
+# `cargo bench -p mtui-mcp --features mcp --bench mcp_jobs`.
+[[bench]]
+name = "mcp_jobs"
+path = "benches/mcp_jobs.rs"
+harness = false
+required-features = ["mcp"]
+
+# Contention measurement for different-RRID dispatch (mtui-rs-0mop.11). Requires
+# the `mcp` feature. Run with
+# `cargo bench -p mtui-mcp --features mcp --bench dispatch_concurrency`.
+[[bench]]
+name = "dispatch_concurrency"
+path = "benches/dispatch_concurrency.rs"
+harness = false
+required-features = ["mcp"]
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Gates the rmcp server so the default build and the `mtui` REPL never drag in
+# the MCP SDK. The stdio runner + tool synthesiser live behind this.
+mcp = [
+    "dep:rmcp",
+    "dep:serde_json",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:axum",
+    "dep:tokio-util",
+    "dep:mtui-testreport",
+    "dep:futures",
+]
+
+[dependencies]
+mtui-core.workspace = true
+mtui-config.workspace = true
+mtui-testreport = { workspace = true, optional = true }
+clap.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+rmcp = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
+insta.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+mtui-config.workspace = true
+mtui-testreport.workspace = true
+mtui-hosts.workspace = true
+mtui-types.workspace = true
+tokio-util = { workspace = true }
+futures.workspace = true
+tempfile = "3"
+# Perf baseline bench (mtui-rs-0mop.1): MCP scoped-lock acquire/release contention.
+criterion.workspace = true

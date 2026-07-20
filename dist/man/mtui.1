@@ -1,0 +1,60 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH mtui 1  "mtui 26.0.0" 
+.SH NAME
+mtui \- Maintenance Test Update Installer
+.SH SYNOPSIS
+\fBmtui\fR [\fB\-t\fR|\fB\-\-template\-dir\fR] [\fB\-s\fR|\fB\-\-sut\fR] [\fB\-w\fR|\fB\-\-connection\-timeout\fR] [\fB\-d\fR|\fB\-\-debug\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-color\fR] [\fB\-g\fR|\fB\-\-gitea\-token\fR] [\fB\-\-ssl\-verify\fR] [\fB\-a\fR|\fB\-\-auto\-review\-id\fR] [\fB\-k\fR|\fB\-\-kernel\-review\-id\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+.SH DESCRIPTION
+Maintenance Test Update Installer
+.SH OPTIONS
+.TP
+\fB\-t\fR, \fB\-\-template\-dir\fR \fI<DIR>\fR
+Override config `mtui.template_dir`
+.TP
+\fB\-s\fR, \fB\-\-sut\fR \fI<HOSTS>\fR
+Cumulatively override the default hosts from the template (format: `hostname,hostname2`). May be given more than once
+.TP
+\fB\-w\fR, \fB\-\-connection\-timeout\fR \fI<SECONDS>\fR
+Override config `mtui.connection_timeout` (seconds)
+.TP
+\fB\-d\fR, \fB\-\-debug\fR
+Enable debugging output
+.TP
+\fB\-c\fR, \fB\-\-config\fR \fI<FILE>\fR
+Override the default config path
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Control coloured output
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Colour iff stderr is a TTY and `NO_COLOR` is unset. The default
+.IP \(bu 2
+always: Always emit colour escapes
+.IP \(bu 2
+never: Never emit colour escapes
+.RE
+.TP
+\fB\-g\fR, \fB\-\-gitea\-token\fR \fI<TOKEN>\fR
+Gitea access token
+.TP
+\fB\-\-ssl\-verify\fR \fI<BOOL|PATH>\fR
+Override config `mtui.ssl_verify`: TLS certificate verification for all outbound HTTP. Accepts `true`/`false` (and the spellings `yes`/`no`/ `on`/`off`/`1`/`0`), or a path to a custom CA bundle/certificate
+.TP
+\fB\-a\fR, \fB\-\-auto\-review\-id\fR \fI<RequestReviewID>\fR
+OBS request review id, run under the automatic workflow (example: `SUSE:Maintenance:1:1`)
+.TP
+\fB\-k\fR, \fB\-\-kernel\-review\-id\fR \fI<RequestReviewID>\fR
+OBS kernel/live\-patch request review id, run under the kernel workflow (example: `SUSE:Maintenance:1:1`)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH VERSION
+v26.0.0

@@ -1,0 +1,45 @@
+<services>
+  <!--
+    OBS source services for mtui (openSUSE "Packaging Rust Software" wiki
+    4-service skeleton). Run all of them with `osc service ra`, which emits:
+      - mtui-<version>.tar.zst      (source, from the git tag)
+      - vendor.tar.zst              (bundled deps incl. .cargo/config + Cargo.lock)
+      - cargo_config               (committed alongside; not hand-written)
+      - _servicedata               (records the resolved revision)
+    See docs/src/installation.md "Cutting a release" for the full recipe.
+  -->
+
+  <!-- Fetch the tagged source from git and name the tarball by the tag. -->
+  <service name="tar_scm" mode="manual">
+    <param name="scm">git</param>
+    <param name="url">https://github.com/openSUSE/mtui.git</param>
+    <param name="revision">@PARENT_TAG@</param>
+    <!-- Derive the package version from the nearest tag, stripping a leading v. -->
+    <param name="versionformat">@PARENT_TAG@</param>
+    <param name="versionrewrite-pattern">v?([0-9].*)</param>
+    <param name="versionrewrite-replacement">\1</param>
+    <param name="changesgenerate">enable</param>
+    <param name="changesauthor">osukup@suse.de</param>
+  </service>
+
+  <!-- Compress the plain .tar into the zstd tarball the spec's Source0 expects. -->
+  <service name="recompress" mode="manual">
+    <param name="file">*.tar</param>
+    <param name="compression">zst</param>
+  </service>
+
+  <!-- Auto-fill the spec Version: from the tarball produced above. -->
+  <service name="set_version" mode="manual"/>
+
+  <!--
+    Vendor all crate dependencies offline into vendor.tar.zst (with .cargo/config
+    inside) and audit them against RustSec. update=false respects the checked-in
+    Cargo.lock (the wiki's fix for crate-conflict build errors); flip to true only
+    if a conflict surfaces.
+  -->
+  <service name="cargo_vendor" mode="manual">
+    <param name="src">mtui</param>
+    <param name="compression">zst</param>
+    <param name="update">false</param>
+  </service>
+</services>

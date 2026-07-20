@@ -1,0 +1,22 @@
+---
+source: crates/mtui-core/tests/help_listing.rs
+expression: out
+---
+Documented commands (type help <topic>):
+========================================
+add_host              analyze_diff          approve               assign
+checkers              checkout              comment               commit
+config                downgrade             edit                  export
+get                   help                  install               list_bugs
+list_history          list_hosts            list_locks            list_metadata
+list_packages         list_products         list_refhosts         list_sessions
+list_templates        list_timeout          list_update_commands  list_versions
+load_template         lock                  lrun                  openqa_jobs
+openqa_overview       prepare               put                   quit
+reboot                regenerate            reject                reload_openqa
+reload_products       remove_host           run                   set_host_state
+set_log_level         set_repo              set_timeout           set_workflow
+shell                 show_diff             show_log              show_update_repos
+switch                terms                 unassign              uninstall
+unload                unlock                update                updates
+whoami

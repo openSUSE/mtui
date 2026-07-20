@@ -1,8 +1,9 @@
 # Contributing to MTUI
 
 Thanks for your interest in improving MTUI. This document covers the
-day-to-day workflow; see `Documentation/developer.rst` for a deeper
-walk-through of the codebase.
+day-to-day workflow; see `docs/src/developer.md` for a deeper walk-through
+of the codebase and `AGENTS.md` for the full architecture and Definition
+of Done.
 
 ## Branching and pull requests
 
@@ -10,7 +11,9 @@ walk-through of the codebase.
 - Larger refactors should be split into reviewable commits or, if they
   cross subsystems, into a series of PRs.
 - Rebase rather than merge when bringing your branch up to date.
-- CI must be green before review (ruff, ty, pytest on Python 3.11 to 3.14).
+- CI must be green before review (fmt, clippy, test, and the feature matrix).
+- Keep **both surfaces** (`mtui` and `mtui-mcp`) building and passing when
+  touching commands, `Session`, the registry, or the entrypoints.
 
 ## Commit messages
 
@@ -29,23 +32,20 @@ keywords (`bsc#NNNN`, `boo#NNNN`) in the commit body when applicable.
 
 ## Development setup
 
-The project uses [`uv`](https://docs.astral.sh/uv/) for environment and
-dependency management.
+The project is a Cargo workspace and uses the standard Rust toolchain
+(edition 2024, MSRV 1.96); no `rustup` is assumed.
+
+Build everything:
 
 ```sh
-uv sync --extra norpm --extra mcp --group dev
+cargo build --workspace
 ```
 
-This creates a virtualenv under `.venv/` containing mtui in editable
-mode plus the test and lint tooling. The `norpm` extra pulls in
-`version_utils` so the test suite runs without the system `rpm` Python
-bindings. The `mcp` extra pulls in `mcp`/`pydantic`, without which the
-`test_mcp_*` suites fail to import.
-
-To run mtui from the checkout:
+Run mtui from the checkout:
 
 ```sh
-uv run python -m mtui --help
+cargo run -p mtui-cli -- --help
+cargo run -p mtui-mcp --features mcp -- --help
 ```
 
 ## Quality gates
@@ -53,39 +53,55 @@ uv run python -m mtui --help
 Run these locally before opening a PR (CI runs the same commands):
 
 ```sh
-uv run ruff format --check .
-uv run ruff check .
-uv run ty check
-uv run pytest
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-Auto-fix formatting:
+Warnings are errors under clippy. Tests run against default features; the
+long pole is cold compilation, not the test run itself.
+
+Also run the compile-only feature matrix, which catches feature-gate rot:
 
 ```sh
-uv run ruff format .
-uv run ruff check --fix .
+cargo build --workspace --no-default-features
+cargo build --workspace --all-features
+```
+
+Do **not** routinely *test* `--all-features` — CI only compiles it.
+
+Auto-format:
+
+```sh
+cargo fmt --all
 ```
 
 ### pre-commit (optional)
 
 ```sh
-uv run pre-commit install
+pre-commit install
 ```
 
-Installs hooks for ruff format, ruff check and `ty check`. CI runs the
-same gates, so pre-commit is purely a convenience.
+Installs hooks for `cargo fmt` and `cargo clippy`. CI runs the same gates,
+so pre-commit is purely a convenience.
 
 ## Tests
 
-- Place new tests under `tests/`, mirroring the module path of the code
-  under test (`mtui/foo/bar.py` → `tests/test_bar.py`).
-- Mark slow / network / integration tests with the registered pytest
-  markers (`slow`, `network`, `integration`).
-- Prefer `pytest.mark.parametrize` over copy-pasted test bodies.
+- Unit tests are colocated (`#[cfg(test)]`); integration tests live in
+  `crates/*/tests/`.
+- Add a new integration test as a `mod` line in the crate's `tests/it.rs`
+  (one integration-test binary per crate), not as a new top-level
+  `tests/*.rs`.
+- Mock, don't hit the network/hosts: HTTP via `wiremock`, SSH via a
+  `MockConnection`, `svn`/`osc` via a command-runner trait or a stub on
+  `PATH`. Gate real hosts/containers behind `#[ignore]` + a CI env flag.
+- Snapshot text contracts (testreport/export rendering, metadata parsing,
+  MCP schemas, lock-file format) with `insta`.
+- New/changed code needs >=80% patch coverage.
 
 ## Changelog
 
-User-visible changes belong in the `[Unreleased]` section of
+User-visible changes belong in the top-most unreleased section of
 `CHANGELOG.md`. Internal refactors do not need an entry.
 
 ## Code of Conduct
