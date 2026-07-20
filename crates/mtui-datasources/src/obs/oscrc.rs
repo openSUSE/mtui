@@ -32,8 +32,11 @@ fn is_fingerprint(value: &str) -> bool {
     }
 }
 
-/// `credentials_mgr_class` values that route credentials through a mechanism the
-/// native SSH-signature backend cannot use. Mirrors upstream `_UNSUPPORTED_MGR`.
+/// `credentials_mgr_class` values whose secret lives outside the oscrc (a system
+/// keyring, or a transient prompt), so the native backend can never read it and
+/// will not prompt. Only consulted when no usable `sshkey` is configured: a
+/// working key authenticates by signature regardless of the manager. Mirrors
+/// upstream `_UNSUPPORTED_MGR`.
 const UNSUPPORTED_MGR: [&str; 2] = ["keyring", "transient"];
 
 /// Resolved OBS Signature-auth credentials for one apiurl.
@@ -235,9 +238,9 @@ pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
         )));
     };
 
-    // `sshkey` (and any credentials manager) inherit from [general] when the
-    // host section omits them, matching osc's FromParent resolution; `user`
-    // does not inherit (osc requires it per host).
+    // `sshkey` inherits from [general] when the host section omits it, matching
+    // osc's FromParent resolution; `user` and `credentials_mgr_class` do not
+    // inherit (osc requires `user` per host and gives the manager no parent).
     let inherited = |key: &str| -> String {
         let from_section = ini
             .get_from(Some(section_name.as_str()), key)
@@ -252,18 +255,6 @@ pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
             .to_owned()
     };
 
-    let mgr = inherited("credentials_mgr_class");
-    if !mgr.is_empty() {
-        let lower = mgr.to_lowercase();
-        if UNSUPPORTED_MGR.iter().any(|bad| lower.contains(bad)) {
-            return Err(ObsError::Config(format!(
-                "oscrc [{apiurl}] uses credentials_mgr_class={mgr:?}; the native \
-                 OBS backend supports only SSH-signature auth (an 'sshkey' entry) \
-                 — keyring/transient-password managers are not supported"
-            )));
-        }
-    }
-
     let user = ini
         .get_from(Some(section_name.as_str()), "user")
         .unwrap_or("")
@@ -272,8 +263,31 @@ pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
         return Err(ObsError::Config(format!("oscrc [{apiurl}] has no 'user'")));
     }
 
+    // Resolve the ssh key FIRST and ignore `credentials_mgr_class` entirely when
+    // one is configured: osc disables its password path for the transient manager
+    // and orders Signature ahead of Basic, so an oscrc carrying both authenticates
+    // by signature under osc too. Rejecting it up front turned a working
+    // configuration into a hard failure.
     let sshkey = inherited("sshkey");
     if sshkey.is_empty() {
+        // Only now does the credentials manager matter. Unlike 'sshkey', osc does
+        // not inherit `credentials_mgr_class` from [general], so read it from the
+        // host section only.
+        let mgr = ini
+            .get_from(Some(section_name.as_str()), "credentials_mgr_class")
+            .unwrap_or("")
+            .trim();
+        if !mgr.is_empty() {
+            let lower = mgr.to_lowercase();
+            if UNSUPPORTED_MGR.iter().any(|bad| lower.contains(bad)) {
+                return Err(ObsError::Config(format!(
+                    "oscrc [{apiurl}] has no 'sshkey' and uses \
+                     credentials_mgr_class={mgr:?}, whose secret is not stored in \
+                     the file; the native OBS backend cannot read it and never \
+                     prompts. Add an 'sshkey' entry to authenticate by SSH signature"
+                )));
+            }
+        }
         return Err(ObsError::Config(format!(
             "oscrc [{apiurl}] has no 'sshkey' (in the section or [general]); the \
              native OBS backend requires SSH-signature auth (plaintext-password \

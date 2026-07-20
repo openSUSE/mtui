@@ -224,7 +224,11 @@ fn missing_sshkey_raises() {
 
 #[test]
 #[serial(osc_config_env)]
-fn unsupported_credentials_manager_raises() {
+fn credentials_manager_ignored_when_sshkey_usable() {
+    // A usable 'sshkey' wins; `credentials_mgr_class` is not consulted. osc orders
+    // Signature auth ahead of Basic and disables the password path for the
+    // transient manager, so an oscrc carrying both authenticates by signature
+    // there too. Rejecting it turned a working configuration into a hard failure.
     let guard = EnvGuard::new();
     let dir = TempDir::new().unwrap();
     let key = dir.path().join("k");
@@ -237,6 +241,54 @@ fn unsupported_credentials_manager_raises() {
             key.display()
         ),
         Some(&key),
+    );
+    let creds = read().unwrap();
+    assert_eq!(creds.sshkey_path, Some(key));
+    assert_eq!(creds.user, "bob");
+}
+
+#[test]
+#[serial(osc_config_env)]
+fn reported_transient_manager_with_sshkey_and_pass() {
+    // Regression for the reported failure: sshkey + transient mgr + pass. This
+    // exact oscrc shape made `approve` fail with "supports only SSH-signature
+    // auth" even though the sshkey was usable. The password must never be read,
+    // nor leak into the credentials' Debug.
+    let guard = EnvGuard::new();
+    let dir = TempDir::new().unwrap();
+    let key = dir.path().join("id_rsa");
+    write_oscrc(
+        &guard,
+        dir.path(),
+        &format!(
+            "[{API}]\nuser = simonlm\nsshkey = {}\n\
+             credentials_mgr_class = osc.credentials.TransientCredentialsManager\n\
+             pass = s3cret-not-read\n",
+            key.display()
+        ),
+        Some(&key),
+    );
+    let creds = read().unwrap();
+    assert_eq!(creds.sshkey_path, Some(key));
+    assert_eq!(creds.user, "simonlm");
+    assert!(!format!("{creds:?}").contains("s3cret-not-read"));
+}
+
+#[test]
+#[serial(osc_config_env)]
+fn unsupported_credentials_manager_without_sshkey_raises() {
+    // With no usable key, a keyring/transient manager still fails closed: its
+    // secret is not in the file and mtui never prompts.
+    let guard = EnvGuard::new();
+    let dir = TempDir::new().unwrap();
+    write_oscrc(
+        &guard,
+        dir.path(),
+        &format!(
+            "[{API}]\nuser = bob\n\
+             credentials_mgr_class = osc.credentials.KeyringCredentialsManager\n"
+        ),
+        None,
     );
     let err = read().unwrap_err();
     assert!(err.to_string().contains("credentials_mgr_class"), "{err}");
@@ -347,7 +399,8 @@ fn sshkey_inherited_from_general() {
 
 #[test]
 #[serial(osc_config_env)]
-fn credentials_manager_inherited_from_general() {
+fn general_credentials_manager_does_not_veto_host_sshkey() {
+    // A [general] manager must not veto a per-host key.
     let guard = EnvGuard::new();
     let dir = TempDir::new().unwrap();
     let key = dir.path().join("k");
@@ -361,8 +414,33 @@ fn credentials_manager_inherited_from_general() {
         ),
         Some(&key),
     );
+    let creds = read().unwrap();
+    assert_eq!(creds.sshkey_path, Some(key));
+    assert_eq!(creds.user, "bob");
+}
+
+#[test]
+#[serial(osc_config_env)]
+fn credentials_manager_not_inherited_from_general() {
+    // `credentials_mgr_class` is host-section only (osc gives it no parent).
+    // Discriminating case: with NO sshkey anywhere, a [general] manager must not
+    // be picked up — the failure must be the plain "no 'sshkey'" one, never the
+    // manager-specific message.
+    let guard = EnvGuard::new();
+    let dir = TempDir::new().unwrap();
+    write_oscrc(
+        &guard,
+        dir.path(),
+        &format!(
+            "[general]\ncredentials_mgr_class = osc.credentials.KeyringCredentialsManager\n\n\
+             [{API}]\nuser = bob\n"
+        ),
+        None,
+    );
     let err = read().unwrap_err();
-    assert!(err.to_string().contains("credentials_mgr_class"), "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("no 'sshkey'"), "{msg}");
+    assert!(!msg.contains("credentials_mgr_class"), "{msg}");
 }
 
 #[test]
