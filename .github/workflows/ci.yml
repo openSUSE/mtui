@@ -47,6 +47,17 @@ jobs:
     name: MTUI tests
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      # The SSH integration suite authenticates the client from an identity file;
+      # the in-process fixture accepts any key but the runner ships none. Generate
+      # a throwaway ed25519 key so the pubkey path is exercised.
+      - name: SSH fixture
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+      # `svn` is a runtime dependency; a few tests drive a local file:// repo and
+      # skip cleanly when absent, so install it to keep those paths covered.
+      - name: SVN fixture
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
       - name: Build tests
         run: cargo build --workspace
       - name: Run tests (default features)
@@ -60,6 +71,12 @@ jobs:
     name: MTUI coverage
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: SSH fixture
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+      - name: SVN fixture
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
       - name: Install llvm-tools
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
