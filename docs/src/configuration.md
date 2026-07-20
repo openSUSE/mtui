@@ -134,6 +134,23 @@ effect, so it never happens implicitly: `enabled` must be `true` *and* both
 `token` and `channel` must be set. An mtui with no `[slack]` section never
 contacts Slack, and `request_review` refuses with the reason.
 
+**Enabling it also gates `approve`.** Once `enabled = true`, an update can only
+be approved after its Slack review request has been acknowledged. `approve`
+refuses unless all three hold:
+
+1. `request_review` recorded a marker for the update (and committed it, so a
+   reviewer approving from a different checkout sees it);
+2. the marked Slack message still names that RRID — a marker copied between
+   templates cannot launder an approval;
+3. somebody other than the bot left an approving reaction (👍, ✅; skin tone
+   ignored).
+
+If Slack cannot be read, `approve` fails closed — an unreadable review request
+is not an approved one. There is deliberately **no per-command bypass flag**: a
+gate with one is not a gate. Turning it off is a config change
+(`config set slack_enabled false`), which is explicit and auditable. `reject` is
+never gated — blocking it would strand an update a reviewer wants stopped.
+
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `enabled` | bool | `false` | Whether the integration is available at all. Set `true` to opt in; leaving it unset (or `false`) makes `request_review` refuse up front, which is how a site that does not use Slack — or wants the feature switched off despite credentials being present — runs mtui. |

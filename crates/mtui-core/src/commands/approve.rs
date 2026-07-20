@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::Osc;
+use mtui_datasources::{Osc, Slack, is_ack_reaction};
 use mtui_testreport::{HashCheck, TokioSvnRunner, svn_commit_testreport};
 
 use crate::command::{Command, Scope};
@@ -77,6 +77,11 @@ impl Command for Approve {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
 
+        // Slack gate: when the site has opted into Slack review, an approval
+        // requires an acknowledged review request. Runs before any state
+        // changes so a refused approval leaves nothing half-done.
+        slack_review_gate(session, &rrid).await?;
+
         // -r/--reviewer: record + commit before approving; abort on failure.
         if let Some(reviewer) = args.get_one::<String>("reviewer") {
             record_reviewer(session, reviewer).await?;
@@ -128,6 +133,86 @@ impl Command for Approve {
     }
 }
 
+/// Refuse the approval unless the update's Slack review request was acked.
+///
+/// Only engages when the site has opted into the integration
+/// (`[slack] enabled = true`); with Slack off this is a no-op and `approve`
+/// behaves exactly as it always has. Once on, the gate is deliberately strict,
+/// because a gate with a per-invocation bypass flag is not a gate: turning it
+/// off is a config change (`config set slack_enabled false`), which is
+/// explicit and auditable rather than a habit that creeps into muscle memory.
+///
+/// Three things must hold, and each rules out a distinct way of approving
+/// something nobody reviewed:
+///
+/// 1. A marker exists — otherwise no review was ever requested.
+/// 2. The marked message still names this RRID — otherwise a marker copied
+///    from another template (or a re-used message) would launder an approval
+///    for an update nobody looked at.
+/// 3. Someone other than the bot left an approving reaction.
+///
+/// Only `approve` is gated. `reject` is the conservative direction: blocking
+/// it would strand an update that a reviewer wants stopped.
+async fn slack_review_gate(
+    session: &mut Session,
+    rrid: &mtui_types::RequestReviewID,
+) -> Result<(), CommandError> {
+    if !session.config.slack_enabled {
+        return Ok(());
+    }
+
+    let Some(marker) = session.metadata().base().slack_review.clone() else {
+        return Err(CommandError::Other(format!(
+            "Slack review is enabled but no review was requested for {rrid}; \
+             run `request_review` first (or disable the gate with \
+             `config set slack_enabled false`)"
+        )));
+    };
+
+    let slack = Slack::new(&session.config)
+        .map_err(|e| CommandError::Other(format!("could not check the Slack review: {e}")))?;
+    let message = slack
+        .get_message(&marker.channel, &marker.ts)
+        .await
+        .map_err(|e| {
+            CommandError::Other(format!(
+                "could not read the Slack review request for {rrid}, not approving: {e}"
+            ))
+        })?;
+
+    // Bind the marker to this update: a message that does not name this RRID
+    // is not this update's review, whatever the template claims.
+    if !message.text.contains(&rrid.to_string()) {
+        return Err(CommandError::Other(format!(
+            "the recorded Slack message does not mention {rrid}, not approving; \
+             re-run `request_review`"
+        )));
+    }
+
+    let bot = slack.auth_test().await.ok();
+    let acked: Vec<String> = message
+        .reactions
+        .iter()
+        .filter(|r| is_ack_reaction(&r.name))
+        .flat_map(|r| r.users.clone())
+        // The bot acking its own request would approve nothing.
+        .filter(|u| bot.as_deref() != Some(u.as_str()))
+        .collect();
+
+    if acked.is_empty() {
+        return Err(CommandError::Other(format!(
+            "the Slack review request for {rrid} has not been acknowledged, not approving; \
+             ask a reviewer for a :+1: on the request"
+        )));
+    }
+
+    session.display.println(&format!(
+        "Slack review acknowledged by {}",
+        acked.join(", ")
+    ));
+    Ok(())
+}
+
 /// Records the reviewer and commits the testreport to SVN (upstream
 /// `_record_reviewer`). Returns `Err` when the record/commit fails so the
 /// approval is aborted and the failure is surfaced (not swallowed).
@@ -177,6 +262,166 @@ mod tests {
         let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let out = Approve.complete(&session, "-r", "");
         assert_eq!(out, vec!["-r"]);
+    }
+
+    /// Enable the Slack gate against a mock server, with a marker recorded.
+    fn gated_session(
+        server: &wiremock::MockServer,
+        rrid: &str,
+        marker: Option<(&str, &str)>,
+    ) -> (Session, crate::commands::testkit::Buffer) {
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config.slack_enabled = true;
+        session.config.slack_token = "xoxb-test".to_owned();
+        session.config.slack_channel = "C1".to_owned();
+        session.config.slack_api_url = server.uri();
+        if let Some((channel, ts)) = marker {
+            session.metadata_mut().base_mut().slack_review =
+                Some(mtui_testreport::SlackReviewMarker {
+                    channel: channel.to_owned(),
+                    ts: ts.to_owned(),
+                });
+        }
+        (session, buf)
+    }
+
+    async fn mount_message(
+        server: &wiremock::MockServer,
+        text: &str,
+        reactions: serde_json::Value,
+    ) {
+        use wiremock::matchers::path;
+        use wiremock::{Mock, ResponseTemplate};
+        Mock::given(path("/reactions.get"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "message": { "text": text, "reactions": reactions }
+            })))
+            .mount(server)
+            .await;
+        Mock::given(path("/auth.test"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": true, "user_id": "UBOT" })),
+            )
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn slack_gate_is_inert_when_the_integration_is_off() {
+        // The default posture. Approve must behave exactly as it always has,
+        // so every pre-existing approve test stays meaningful.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        assert!(!session.config.slack_enabled);
+        let rrid = require_update(&session).unwrap();
+        slack_review_gate(&mut session, &rrid).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn slack_gate_refuses_when_no_review_was_requested() {
+        let server = wiremock::MockServer::start().await;
+        let (mut session, _buf) = gated_session(&server, "SUSE:Maintenance:1:1", None);
+        let rrid = require_update(&session).unwrap();
+
+        let err = slack_review_gate(&mut session, &rrid).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no review was requested"), "{msg}");
+        assert!(msg.contains("request_review"), "says what to do: {msg}");
+        // Nothing was asked of Slack: the marker check short-circuits.
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn slack_gate_refuses_a_marker_pointing_at_another_update() {
+        // The defence against a marker copied between templates: the message
+        // must actually name this RRID, or it is not this update's review.
+        let server = wiremock::MockServer::start().await;
+        mount_message(
+            &server,
+            "Please review SUSE:Maintenance:9:9",
+            serde_json::json!([{ "name": "+1", "users": ["U1"] }]),
+        )
+        .await;
+        let (mut session, _buf) =
+            gated_session(&server, "SUSE:Maintenance:1:1", Some(("C1", "1.0")));
+        let rrid = require_update(&session).unwrap();
+
+        let err = slack_review_gate(&mut session, &rrid).await.unwrap_err();
+        assert!(err.to_string().contains("does not mention"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn slack_gate_refuses_an_unacknowledged_request() {
+        let server = wiremock::MockServer::start().await;
+        mount_message(
+            &server,
+            "Please review SUSE:Maintenance:1:1",
+            serde_json::json!([{ "name": "eyes", "users": ["U1"] }]),
+        )
+        .await;
+        let (mut session, _buf) =
+            gated_session(&server, "SUSE:Maintenance:1:1", Some(("C1", "1.0")));
+        let rrid = require_update(&session).unwrap();
+
+        let err = slack_review_gate(&mut session, &rrid).await.unwrap_err();
+        assert!(err.to_string().contains("not been acknowledged"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn slack_gate_ignores_the_bots_own_acknowledgement() {
+        // A workspace that auto-reacts must not be able to self-approve.
+        let server = wiremock::MockServer::start().await;
+        mount_message(
+            &server,
+            "Please review SUSE:Maintenance:1:1",
+            serde_json::json!([{ "name": "+1", "users": ["UBOT"] }]),
+        )
+        .await;
+        let (mut session, _buf) =
+            gated_session(&server, "SUSE:Maintenance:1:1", Some(("C1", "1.0")));
+        let rrid = require_update(&session).unwrap();
+
+        let err = slack_review_gate(&mut session, &rrid).await.unwrap_err();
+        assert!(err.to_string().contains("not been acknowledged"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn slack_gate_passes_on_a_human_acknowledgement() {
+        let server = wiremock::MockServer::start().await;
+        mount_message(
+            &server,
+            "Please review SUSE:Maintenance:1:1 (recommended)",
+            serde_json::json!([{ "name": "+1::skin-tone-2", "users": ["U1", "UBOT"] }]),
+        )
+        .await;
+        let (mut session, buf) =
+            gated_session(&server, "SUSE:Maintenance:1:1", Some(("C1", "1.0")));
+        let rrid = require_update(&session).unwrap();
+
+        slack_review_gate(&mut session, &rrid).await.unwrap();
+        // The human is named; the bot that shares the reaction is not.
+        let out = buf.contents();
+        assert!(out.contains("acknowledged by U1"), "{out}");
+        assert!(!out.contains("UBOT"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn slack_gate_refuses_when_slack_is_unreachable() {
+        // Fail closed: an unreadable review request is not an approved one.
+        let server = wiremock::MockServer::start().await;
+        use wiremock::matchers::path;
+        use wiremock::{Mock, ResponseTemplate};
+        Mock::given(path("/reactions.get"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let (mut session, _buf) =
+            gated_session(&server, "SUSE:Maintenance:1:1", Some(("C1", "1.0")));
+        let rrid = require_update(&session).unwrap();
+
+        let err = slack_review_gate(&mut session, &rrid).await.unwrap_err();
+        assert!(err.to_string().contains("not approving"), "{err}");
     }
 
     #[tokio::test]

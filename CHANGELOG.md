@@ -60,7 +60,7 @@ _The entries below document the final Python releases, retained for history._
 
 - New `request_review` command: posts a review request for the loaded update to
   a Slack channel and records the resulting message in the testreport template,
-  so a request is traceable back to the update it belongs to. With `--watch` it
+  committing it so the request is visible from any checkout. With `--watch` it
   then polls the message for reviewer reactions (👍 approves, 👎 rejects, skin
   tone ignored) until a verdict or timeout, and Ctrl-C stops watching without
   killing mtui. The integration is **off by default** and configured under
@@ -68,6 +68,14 @@ _The entries below document the final Python releases, retained for history._
   token is masked as `<set>` in `config` output and never logged. Over
   `mtui-mcp` the command is exposed with `background=true`, which is how a
   `--watch` run should be started there.
+- Enabling the Slack integration also gates `approve`: an update can only be
+  approved once its review request has been acknowledged in Slack by someone
+  other than the bot, and only if the recorded message still names that RRID
+  (so a marker copied between templates cannot launder an approval). If Slack
+  cannot be read, `approve` fails closed. There is no per-command bypass — the
+  gate is turned off by configuration (`slack_enabled = false`), which is
+  explicit and auditable. `reject` is never gated. With Slack disabled (the
+  default) `approve` behaves exactly as before.
 
 ## 19.0.1 - 2026-07-17
 

@@ -13,10 +13,10 @@
 //!   blocking call that outlives the client's timeout is indistinguishable from
 //!   a hang. Posting is fast and total; watching is the long-running extra the
 //!   caller asks for, and over MCP it belongs in a background job.
-//! * **The marker is written but not committed.** Persisting it to SVN would
-//!   couple posting a chat message to a working checkout and a network commit.
-//!   mtui already has an explicit `commit`, and the marker rides along with it
-//!   like every other template edit.
+//! * **The marker is committed, not just written.** `approve` gates on it, and
+//!   the reviewer who approves is often not the person who asked: the marker
+//!   has to be visible from another checkout, so it goes to SVN immediately
+//!   rather than waiting for a later `commit`.
 //! * **Rate limiting is not failure.** Slack throttles routinely; a `429`
 //!   leaves the watch running rather than counting against it, or a busy
 //!   channel would end the watch early and report "no reaction" when the truth
@@ -27,7 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::{PostedMessage, Slack, SlackError, is_ack_reaction, is_nack_reaction};
-use mtui_testreport::SlackReviewMarker;
+use mtui_testreport::{SlackReviewMarker, SvnRunner, TokioSvnRunner, svn_commit_testreport};
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, template_completion};
@@ -224,6 +224,39 @@ async fn sleep_or_interrupt(dur: Duration, deadline: Instant) -> bool {
     }
 }
 
+/// Write the marker into the template and commit it to SVN.
+///
+/// The commit matters because the marker is what `approve` gates on: a
+/// reviewer approving from a different checkout needs to see that a review was
+/// actually requested. Mirrors `approve`'s `record_reviewer`, including its
+/// ordering — the in-memory field is only set once the write succeeded, so a
+/// caller that treats a failure as fatal cannot proceed believing otherwise.
+async fn record_marker(
+    session: &mut Session,
+    marker: &SlackReviewMarker,
+    rrid: &str,
+    runner: &dyn SvnRunner,
+) -> Result<(), CommandError> {
+    session
+        .metadata_mut()
+        .set_slack_review(marker)
+        .map_err(|e| CommandError::Other(format!("failed to record the marker: {e}")))?;
+
+    let checkout = session
+        .metadata()
+        .base()
+        .report_wd()
+        .map_err(|e| CommandError::Other(format!("no report loaded: {e}")))?;
+    let install_logs = session.config.install_logs.clone();
+    let msg = vec![
+        "-m".to_owned(),
+        format!("Add Slack review request for {rrid}"),
+    ];
+    svn_commit_testreport(runner, &checkout, &install_logs, &msg)
+        .await
+        .map_err(|e| CommandError::Other(format!("failed to commit the testreport: {e}")))
+}
+
 /// Requests review of the loaded update in Slack.
 pub struct RequestReview;
 
@@ -311,18 +344,22 @@ impl Command for RequestReview {
             channel: posted.channel.clone(),
             ts: posted.ts.clone(),
         };
-        let recorded = match session.metadata_mut().set_slack_review(&marker) {
-            Ok(()) => true,
-            Err(e) => {
-                // The request is already posted; failing the whole command here
-                // would misreport a real, visible message as not sent.
-                let msg = session.display.yellow(&format!(
-                    "warning: review request posted, but recording it in the template failed: {e}"
-                ));
-                session.display.println(&msg);
-                false
-            }
-        };
+        let recorded =
+            match record_marker(session, &marker, &rrid.to_string(), &TokioSvnRunner).await {
+                Ok(()) => true,
+                Err(e) => {
+                    // The request is already posted; failing the whole command here
+                    // would misreport a real, visible message as not sent. But the
+                    // approval gate reads this marker, so an un-recorded request
+                    // will later refuse the approval — say so now, loudly.
+                    let msg = session.display.yellow(&format!(
+                        "warning: review request posted, but recording it failed: {e}\n\
+                     approve will not see this request; re-run request_review once fixed"
+                    ));
+                    session.display.println(&msg);
+                    false
+                }
+            };
 
         session
             .display
@@ -330,7 +367,7 @@ impl Command for RequestReview {
         if recorded {
             session
                 .display
-                .println("recorded the request in the template (commit to share it)");
+                .println("recorded the request in the testreport and committed it");
         }
 
         if !args.get_flag("watch") {
@@ -480,26 +517,70 @@ mod tests {
         assert!(server.received_requests().await.unwrap().is_empty());
     }
 
-    #[tokio::test]
-    async fn posts_and_records_the_marker() {
-        let server = MockServer::start().await;
-        mount_post_path(&server).await;
-        let (mut session, buf) = slack_session(&server);
+    /// An `SvnRunner` that records argv and replays a fixed outcome, so the
+    /// commit step can be driven both ways without a real working copy.
+    #[derive(Debug)]
+    struct StubSvn {
+        succeed: bool,
+        calls: std::sync::Mutex<Vec<Vec<String>>>,
+    }
 
-        // Give the report a template file so the marker can be written.
-        let dir = tempfile::tempdir().unwrap();
+    impl StubSvn {
+        fn new(succeed: bool) -> Self {
+            Self {
+                succeed,
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+        fn argv(&self) -> Vec<Vec<String>> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl SvnRunner for StubSvn {
+        async fn run(
+            &self,
+            args: &[String],
+            _cwd: &std::path::Path,
+        ) -> std::io::Result<mtui_testreport::SvnOutcome> {
+            self.calls.lock().unwrap().push(args.to_vec());
+            Ok(mtui_testreport::SvnOutcome {
+                success: self.succeed,
+                stderr: if self.succeed {
+                    String::new()
+                } else {
+                    "E155007: not a working copy".to_owned()
+                },
+            })
+        }
+    }
+
+    /// A loaded report backed by a real template file, so the marker can be
+    /// written; returns the template path for assertions.
+    fn report_with_template(session: &mut Session, dir: &tempfile::TempDir) -> std::path::PathBuf {
         let path = dir.path().join("log");
         std::fs::write(&path, "Test Plan Reviewer: bob\n").unwrap();
         session.metadata_mut().base_mut().path = Some(path.clone());
+        path
+    }
 
-        let args = matches(&RequestReview, &[]);
-        RequestReview.call(&mut session, &args).await.unwrap();
+    #[tokio::test]
+    async fn record_marker_writes_the_template_and_commits_it() {
+        let server = MockServer::start().await;
+        let (mut session, _buf) = slack_session(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let path = report_with_template(&mut session, &dir);
+        let svn = StubSvn::new(true);
 
-        assert!(
-            buf.contents().contains("requested review"),
-            "{}",
-            buf.contents()
-        );
+        let marker = SlackReviewMarker {
+            channel: CHANNEL.to_owned(),
+            ts: TS.to_owned(),
+        };
+        record_marker(&mut session, &marker, "SUSE:Maintenance:1:2", &svn)
+            .await
+            .unwrap();
+
         // The canonical channel from the post response is what gets recorded,
         // not the configured name.
         let written = std::fs::read_to_string(&path).unwrap();
@@ -511,6 +592,58 @@ mod tests {
             session.metadata().base().slack_review.as_ref().unwrap().ts,
             TS
         );
+        // The commit really happened, and its message names the update — this
+        // is what makes the marker visible from another reviewer's checkout.
+        let argv = svn.argv();
+        assert!(!argv.is_empty(), "svn was invoked");
+        let ci = argv.iter().find(|a| a.first().is_some_and(|s| s == "ci"));
+        let ci = ci.expect("an `svn ci` was issued");
+        assert!(
+            ci.iter().any(|a| a.contains("SUSE:Maintenance:1:2")),
+            "commit message names the update: {ci:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_commit_is_reported_as_a_failure_to_record() {
+        let server = MockServer::start().await;
+        let (mut session, _buf) = slack_session(&server);
+        let dir = tempfile::tempdir().unwrap();
+        report_with_template(&mut session, &dir);
+        let svn = StubSvn::new(false);
+
+        let marker = SlackReviewMarker {
+            channel: CHANNEL.to_owned(),
+            ts: TS.to_owned(),
+        };
+        let err = record_marker(&mut session, &marker, "SUSE:Maintenance:1:2", &svn)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("commit"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn posts_and_reports_the_request() {
+        let server = MockServer::start().await;
+        mount_post_path(&server).await;
+        let (mut session, buf) = slack_session(&server);
+        let dir = tempfile::tempdir().unwrap();
+        let path = report_with_template(&mut session, &dir);
+
+        let args = matches(&RequestReview, &[]);
+        RequestReview.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("requested review"), "{out}");
+        // The marker reaches the template even though the real `svn ci` cannot
+        // succeed here (the tempdir is not a working copy) — the write is what
+        // must not depend on the commit.
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains(&format!("Slack Review: {CHANNEL} {TS}")),
+            "{written}"
+        );
     }
 
     #[tokio::test]
@@ -518,7 +651,7 @@ mod tests {
         let server = MockServer::start().await;
         mount_post_path(&server).await;
         let (mut session, buf) = slack_session(&server);
-        // No template path: the marker write fails.
+        // No template path: the marker write fails before any commit.
         session.metadata_mut().base_mut().path = None;
 
         let args = matches(&RequestReview, &[]);
@@ -528,6 +661,10 @@ mod tests {
         // The message really was posted; reporting failure would be a lie.
         assert!(out.contains("requested review"), "{out}");
         assert!(out.contains("warning"), "{out}");
+        // And the user is told the consequence: approve will refuse.
+        assert!(out.contains("approve will not see"), "{out}");
+        // The success line must NOT appear when nothing was recorded.
+        assert!(!out.contains("committed it"), "{out}");
     }
 
     #[tokio::test]

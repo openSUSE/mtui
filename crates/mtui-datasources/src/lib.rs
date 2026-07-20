@@ -40,6 +40,7 @@ pub use oqa_search::{
 pub use qem_dashboard::{DashboardAutoOpenQA, QemDashboardClient, QemIncident};
 pub use refhost::{Attributes, ProductDiff, Refhosts};
 pub use slack::{
-    PostedMessage, Reaction, Reply, Slack, is_ack_reaction, is_nack_reaction, normalize_reaction,
+    Message, PostedMessage, Reaction, Reply, Slack, is_ack_reaction, is_nack_reaction,
+    normalize_reaction,
 };
 pub use teregen::{RegenOutcome, TeReGen, UpdatesQuery};
