@@ -45,7 +45,10 @@ impl Command for Updates {
             Arg::new("review_group")
                 .long("review-group")
                 .value_name("GROUP")
-                .help("filter by review group, e.g. qam-sle"),
+                .help(
+                    "filter by review group as the bare group name, e.g. qam-sle \
+                     (not the '<group>-review' login form, which classic rows lack)",
+                ),
         )
         .arg(
             Arg::new("status")
@@ -190,12 +193,14 @@ fn render_row(u: &serde_json::Value, want_assignment: bool) -> String {
             .map(json_scalar)
             .unwrap_or_else(|| "?".to_owned())
     };
-    // deadline is an ISO timestamp; the date alone is enough for a row.
-    let deadline = obj
-        .get("deadline")
-        .and_then(serde_json::Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map_or_else(|| "-".to_owned(), |s| s.chars().take(10).collect());
+    // deadline is normally an ISO timestamp; the date alone is enough for a
+    // row. Stringify first so shape drift (a non-string value) shows its raw
+    // form rather than crashing or vanishing the whole row (upstream
+    // `str(u.get("deadline") or "")[:10] or "-"`).
+    let deadline = obj.get("deadline").filter(|v| !is_falsy(v)).map_or_else(
+        || "-".to_owned(),
+        |v| json_scalar(v).chars().take(10).collect(),
+    );
 
     let mut row = format!(
         "  prio={:<5} {:<10} {:<12} {:<11} {}",
@@ -214,6 +219,19 @@ fn render_row(u: &serde_json::Value, want_assignment: bool) -> String {
         row.push_str(&format!(" assignee={assignee}"));
     }
     row
+}
+
+/// Whether a JSON value is "falsy" the way Python's `x or ""` treats it: null,
+/// `false`, numeric zero, or the empty string. Used to collapse an
+/// absent/blank `deadline` to `-`.
+fn is_falsy(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Null => true,
+        serde_json::Value::Bool(b) => !b,
+        serde_json::Value::Number(n) => n.as_f64() == Some(0.0),
+        serde_json::Value::String(s) => s.is_empty(),
+        _ => false,
+    }
 }
 
 /// Renders a JSON scalar the way upstream's `str()` interpolation would.
@@ -300,6 +318,19 @@ mod tests {
             row.contains(" - "),
             "missing deadline should render '-': {row}"
         );
+    }
+
+    #[test]
+    fn render_row_non_string_deadline_shows_raw_value() {
+        // Shape drift: a numeric `deadline` must render its raw value (first 10
+        // chars), not crash and not vanish to '-' (upstream str() behavior).
+        let u = serde_json::json!({
+            "priority": 100, "status": "testing", "kind": "Maintenance",
+            "deadline": 12345, "id": "SUSE:Maintenance:1:2"
+        });
+        let row = render_row(&u, false);
+        assert!(row.contains("12345"), "{row}");
+        assert!(row.contains("SUSE:Maintenance:1:2"), "{row}");
     }
 
     #[tokio::test]

@@ -706,7 +706,7 @@ Usage: updates [OPTIONS]
 
 Options:
       --review-group <GROUP>
-          filter by review group, e.g. qam-sle
+          filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack)
 
       --status <STATUS>
           filter by status (default: testing); use 'all' for every status

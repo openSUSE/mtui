@@ -124,13 +124,20 @@ pub(crate) async fn pi_autolock(session: &mut Session, action: PiAction) {
     }
 }
 
-/// Prints the loaded update's priority + deadline from TeReGen, if available
+/// Prints best-effort TeReGen context for the loaded update
 /// (upstream `BaseApiCall._show_priority_deadline`).
 ///
-/// Best-effort context for the tester picking up an update: silent when TeReGen
-/// has nothing for this request (both values `None`) or is unreachable. A
-/// failure to build the client is logged and ignored — it never fails the
-/// command.
+/// Sourced from a single `GET /reports/{id}` fetch: the live priority/deadline
+/// and, when the report already carries assignment state, who currently holds
+/// or has decided each review group.
+///
+/// Context only, never a gate. It runs **after** the assign has already
+/// succeeded, so it is fully infallible: silent when TeReGen has nothing (or is
+/// unreachable), and malformed payloads are filtered rather than raised — a
+/// panic here would dress a successful action up as an error. An empty
+/// `assignees` map is not authoritative (it is also what an upstream lookup
+/// failure yields, and the server caches this endpoint for ~300s), so its
+/// absence prints nothing.
 async fn show_priority_deadline(session: &mut Session, rrid: &mtui_types::RequestReviewID) {
     let teregen = match teregen_client(session) {
         Ok(t) => t,
@@ -139,15 +146,57 @@ async fn show_priority_deadline(session: &mut Session, rrid: &mtui_types::Reques
             return;
         }
     };
-    let (priority, deadline) = teregen.priority_deadline(&rrid.to_string()).await;
-    if priority.is_none() && deadline.is_none() {
+    let Some(info) = teregen.info(&rrid.to_string()).await else {
         return;
+    };
+
+    let priority = info.get("priority").and_then(serde_json::Value::as_i64);
+    let deadline = info
+        .get("deadline")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty());
+    if priority.is_some() || deadline.is_some() {
+        let p = priority.map_or_else(|| "?".to_owned(), |v| v.to_string());
+        let d = deadline.unwrap_or("?");
+        session
+            .display
+            .println(&format!("TeReGen: priority {p}, deadline {d}"));
     }
-    let p = priority.map_or_else(|| "?".to_owned(), |v| v.to_string());
-    let d = deadline.unwrap_or_else(|| "?".to_owned());
-    session
-        .display
-        .println(&format!("TeReGen: priority {p}, deadline {d}"));
+
+    // Best-effort assignment context: warn when someone already holds (or has
+    // decided) a review group. Non-list group values are skipped, non-object
+    // entries filtered, and a null/missing user or state renders as '?'.
+    let Some(assignees) = info.get("assignees").and_then(serde_json::Value::as_object) else {
+        return;
+    };
+    let mut groups: Vec<(&String, &serde_json::Value)> = assignees.iter().collect();
+    groups.sort_by(|a, b| a.0.cmp(b.0));
+    for (group, entries) in groups {
+        let Some(entries) = entries.as_array() else {
+            continue;
+        };
+        let holders = entries
+            .iter()
+            .filter_map(serde_json::Value::as_object)
+            .map(|e| {
+                let user = e
+                    .get("user")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("?");
+                let state = e
+                    .get("state")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("?");
+                format!("{user} ({state})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !holders.is_empty() {
+            session.display.println(&format!(
+                "TeReGen: {group} assignment state (may lag ~5 min): {holders}"
+            ));
+        }
+    }
 }
 
 /// Adds the common `-g/--group` + `-u/--user` args (upstream base
@@ -727,5 +776,111 @@ mod tests {
             "expected no TeReGen line, got: {}",
             buf.contents()
         );
+    }
+
+    /// Runs `assign` against a mock server whose `GET /reports/{rrid}` returns
+    /// `report_body`, with the Gitea PR API stubbed to succeed, and returns the
+    /// display buffer contents. Mirrors the wiremock harness of the
+    /// priority/deadline tests above.
+    async fn assign_with_report(report_body: serde_json::Value) -> String {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/reports/.+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(report_body))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/comments$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requested_reviewers": [],
+                "state": "open",
+                "head": {"sha": "abc"}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
+        session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.config.gitea_url = server.uri();
+        session.config.gitea_token = "tok".to_owned();
+        session.config.teregen_api = server.uri();
+
+        let args = matches(&Assign, &["--force"]);
+        Assign.call(&mut session, &args).await.unwrap();
+        buf.contents()
+    }
+
+    #[tokio::test]
+    async fn assign_shows_existing_assignment_holders() {
+        // Current holders (and past decisions) are surfaced; a group may carry
+        // both a decision entry and a live assignment (decider != tester).
+        let out = assign_with_report(serde_json::json!({
+            "priority": 700,
+            "deadline": "2026-07-09",
+            "assignees": {
+                "qam-sle": [
+                    {"user": "pluskalm", "state": "accepted"},
+                    {"user": "mpluskal", "state": "assigned"},
+                ]
+            }
+        }))
+        .await;
+        assert!(
+            out.contains(
+                "TeReGen: qam-sle assignment state (may lag ~5 min): \
+                 pluskalm (accepted), mpluskal (assigned)"
+            ),
+            "expected holders line, got: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn assign_empty_assignees_map_prints_nothing() {
+        // An empty map is not authoritative (also what a lookup failure yields),
+        // so it stays silent and never gates the action.
+        let out = assign_with_report(serde_json::json!({
+            "priority": 700,
+            "deadline": "2026-07-09",
+            "assignees": {}
+        }))
+        .await;
+        assert!(!out.contains("assignment state"), "got: {out}");
+        assert!(out.contains("TeReGen: priority 700"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn assign_malformed_assignees_never_breaks_the_flow() {
+        // Malformed payloads are filtered, never raised — this prints after the
+        // assign already succeeded. Non-list group values are skipped, non-dict
+        // entries filtered, and an explicit null user/state renders as '?'.
+        let out = assign_with_report(serde_json::json!({
+            "assignees": {
+                "a": null,
+                "b": ["not-a-dict"],
+                "c": [{"user": null, "state": "assigned"}],
+                "d": [{"user": "bob", "state": "assigned"}],
+            }
+        }))
+        .await;
+        assert!(
+            out.contains("c assignment state (may lag ~5 min): ? (assigned)"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("d assignment state (may lag ~5 min): bob (assigned)"),
+            "got: {out}"
+        );
+        assert!(!out.contains("not-a-dict"), "got: {out}");
     }
 }

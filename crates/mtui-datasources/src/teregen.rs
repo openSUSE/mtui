@@ -208,27 +208,63 @@ impl TeReGen {
         d.is_object().then_some(d)
     }
 
-    /// `(priority, deadline)` from the main report endpoint, best-effort.
-    ///
-    /// Returns `(None, None)` when the report is unreachable.
-    pub async fn priority_deadline(&self, rrid: &str) -> (Option<i64>, Option<String>) {
-        let Some(info) = self.info(rrid).await else {
-            return (None, None);
-        };
-        let priority = info.get("priority").and_then(Value::as_i64);
-        let deadline = info
-            .get("deadline")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        (priority, deadline)
-    }
-
     /// Live checker (build-check) result runs for a report, or `None`.
     ///
     /// Unwraps the `checkers` key of the response object.
     pub async fn checkers(&self, rrid: &str) -> Option<Value> {
         let d = self.get(&format!("reports/{rrid}/checkers"), &[]).await?;
         d.get("checkers").cloned()
+    }
+
+    /// The parsed report (`GET /reports/{id}/parsed[/{section}]`).
+    ///
+    /// Without `section`: the full normalized parse (keys `sections`,
+    /// `summary`, `metadata`, `packages`, `products`, `bugs`, `new_bugs`,
+    /// `testers`, `completeness`). With `section`: an `{id, section, data}`
+    /// envelope with the slice under `data`. New metadata consumers should
+    /// prefer the `metadata` section (the canonical, snake_case superset) over
+    /// the frozen raw [`metadata`](Self::metadata) endpoint. Returns `None`
+    /// unless the body is a JSON object.
+    pub async fn parsed(&self, rrid: &str, section: Option<&str>) -> Option<Value> {
+        let mut path = format!("reports/{rrid}/parsed");
+        if let Some(section) = section.filter(|s| !s.is_empty()) {
+            path.push('/');
+            path.push_str(&urlencoding::encode(section));
+        }
+        let d = self.get(&path, &[]).await?;
+        d.is_object().then_some(d)
+    }
+
+    /// The parsed bug index or one bug
+    /// (`GET /reports/{id}/bugs[/{bug_id}]`).
+    ///
+    /// The index carries rows of `{id, description, status, is_new}`; a single
+    /// bug comes back as an `{id, bug_id, bug}` envelope. A `bug_id` like
+    /// `bsc#1196693` is percent-encoded (`#` → `%23`) so it survives the URL
+    /// path rather than being parsed as a fragment separator. Returns `None`
+    /// unless the body is a JSON object.
+    pub async fn bugs(&self, rrid: &str, bug_id: Option<&str>) -> Option<Value> {
+        let mut path = format!("reports/{rrid}/bugs");
+        if let Some(bug_id) = bug_id.filter(|s| !s.is_empty()) {
+            path.push('/');
+            path.push_str(&urlencoding::encode(bug_id));
+        }
+        let d = self.get(&path, &[]).await?;
+        d.is_object().then_some(d)
+    }
+
+    /// Report fill state (`GET /reports/{id}/completeness`).
+    ///
+    /// The canonical, flat shape: `{id, complete, unfilled: [{field, value}]}`.
+    /// (The parsed hash also carries a `completeness` key, but
+    /// `/parsed/completeness` is unspecified section behaviour the server may
+    /// close — this hits the dedicated endpoint.) Returns `None` unless the
+    /// body is a JSON object.
+    pub async fn completeness(&self, rrid: &str) -> Option<Value> {
+        let d = self
+            .get(&format!("reports/{rrid}/completeness"), &[])
+            .await?;
+        d.is_object().then_some(d)
     }
 
     /// The unreleased update queue (live from SMELT).
@@ -581,32 +617,94 @@ mod tests {
         );
     }
 
+    // --- granular parsed endpoints (teregen b22f755) ---
+
     #[tokio::test]
-    async fn priority_deadline_from_info() {
+    async fn parsed_full_report() {
         let server = MockServer::start().await;
+        let body = json!({"sections": [], "summary": {}, "completeness": {"complete": true}});
         Mock::given(method("GET"))
-            .and(path(format!("/reports/{RRID}")))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"priority": 700, "deadline": "2026-07-01"})),
-            )
+            .and(path(format!("/reports/{RRID}/parsed")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
             .mount(&server)
             .await;
+        assert_eq!(client(&server).parsed(RRID, None).await, Some(body));
+    }
+
+    #[tokio::test]
+    async fn parsed_section_slice() {
+        let server = MockServer::start().await;
+        let body = json!({"id": RRID, "section": "metadata", "data": {"rating": "important"}});
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID}/parsed/metadata")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
+            .mount(&server)
+            .await;
+        // The server wraps a section in an {id, section, data} envelope.
         assert_eq!(
-            client(&server).priority_deadline(RRID).await,
-            (Some(700), Some("2026-07-01".to_string()))
+            client(&server).parsed(RRID, Some("metadata")).await,
+            Some(body)
         );
     }
 
     #[tokio::test]
-    async fn priority_deadline_when_unreachable() {
+    async fn parsed_non_dict_payload_is_none() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path(format!("/reports/{RRID}")))
-            .respond_with(ResponseTemplate::new(404))
+            .and(path(format!("/reports/{RRID}/parsed")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(["x"])))
             .mount(&server)
             .await;
-        assert_eq!(client(&server).priority_deadline(RRID).await, (None, None));
+        assert_eq!(client(&server).parsed(RRID, None).await, None);
+    }
+
+    #[tokio::test]
+    async fn bugs_index() {
+        let server = MockServer::start().await;
+        let body = json!({"bugs": [{"id": "bsc#1", "status": "NEW", "is_new": true}]});
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID}/bugs")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
+            .mount(&server)
+            .await;
+        assert_eq!(client(&server).bugs(RRID, None).await, Some(body));
+    }
+
+    #[tokio::test]
+    async fn bugs_single_id_is_percent_encoded() {
+        // 'bsc#1196693' must reach the server as bugs/bsc%231196693: an
+        // unencoded '#' would be a fragment separator and truncate the path.
+        let server = MockServer::start().await;
+        let body = json!({"id": RRID, "bug_id": "bsc#1196693", "bug": {"status": "RESOLVED"}});
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID}/bugs/bsc%231196693")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
+            .mount(&server)
+            .await;
+        let out = client(&server).bugs(RRID, Some("bsc#1196693")).await;
+        assert_eq!(out, Some(body));
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests[0].url.path().ends_with("/bugs/bsc%231196693"),
+            "path not percent-encoded: {}",
+            requests[0].url.path()
+        );
+    }
+
+    #[tokio::test]
+    async fn completeness_flat_shape() {
+        let server = MockServer::start().await;
+        let body = json!({
+            "id": RRID,
+            "complete": false,
+            "unfilled": [{"field": "put here", "value": ""}],
+        });
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{RRID}/completeness")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
+            .mount(&server)
+            .await;
+        assert_eq!(client(&server).completeness(RRID).await, Some(body));
     }
 
     #[tokio::test]

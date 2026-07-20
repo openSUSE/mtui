@@ -122,3 +122,13 @@ comment naming the request — and releases this session's locks at the end of
 testing (`unassign` / `approve` / `reject`). Hosts added with `add_host` while the
 assignment is active are locked too. A [`reboot`](cli.md#reboot) clears
 `/var/lock`, so the per-host testing lock is re-applied after the host comes back.
+
+### Assignment context on `assign`
+
+After the assignment succeeds, [`assign`](cli.md#assign) prints best-effort
+context from the TeReGen report API: the update's live priority and deadline
+and, when the report already carries assignment state, who currently holds or
+has decided each review group (one line per group). This is informational only
+and never blocks the action — its absence can also mean the lookup simply
+failed, and the server caches the state for a few minutes, so a line may lag by
+up to ~5 minutes.
