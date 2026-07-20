@@ -13,7 +13,20 @@ use serde::Deserialize;
 
 use super::client::OpenQAClient;
 use crate::error::OpenQAError;
-use crate::http::{MAX_API_BODY, read_body_capped};
+use crate::http::{MAX_API_BODY, read_body_capped, sanitize_url};
+
+/// Redact any URL userinfo from a displayable error before it reaches a log or
+/// an [`OpenQAError::Fetch`] value.
+///
+/// reqwest's `Error` `Display` appends `" for url ({url})"`. reqwest strips
+/// userinfo from the URL it stores, but this is the defensive backstop that
+/// honours [`OpenQAError::Fetch`]'s "never the raw URL" contract regardless of
+/// the error's source: [`sanitize_url`] scans the whole string and rewrites any
+/// `scheme://user:pass@host` substring to `scheme://***@host`, and is a no-op
+/// when no userinfo is present.
+fn redact(e: &impl std::fmt::Display) -> String {
+    sanitize_url(&e.to_string())
+}
 
 /// The openQA `distri` query parameter.
 ///
@@ -100,6 +113,9 @@ pub struct OpenQABase {
     client: OpenQAClient,
     params: Vec<(String, String)>,
     host: String,
+    /// [`sanitize_url`]-redacted `host`, for logs/errors/display so a
+    /// credentialed base URL (`scheme://user:pass@host`) never leaks userinfo.
+    safe_host: String,
 }
 
 impl OpenQABase {
@@ -126,10 +142,12 @@ impl OpenQABase {
             ("build".to_string(), build),
         ];
         let host = client.base_url().to_string();
+        let safe_host = sanitize_url(&host);
         Self {
             client,
             params,
             host,
+            safe_host,
         }
     }
 
@@ -170,7 +188,7 @@ impl OpenQABase {
     ///
     /// [`OpenQAError::Fetch`] on any fetch failure.
     pub async fn try_get_jobs(&self) -> Result<Vec<Job>, OpenQAError> {
-        tracing::debug!("Get data from openQA - {}", self.host);
+        tracing::debug!("Get data from openQA - {}", self.safe_host);
 
         let param_refs: Vec<(&str, String)> = self
             .params
@@ -182,30 +200,42 @@ impl OpenQABase {
             .client
             .build_get("jobs", &param_refs)
             .inspect_err(|e| {
-                tracing::error!("openQA request to {} failed: {e}", self.host);
+                tracing::error!("openQA request to {} failed: {}", self.safe_host, redact(e));
             })?;
 
         let response = builder.send().await.map_err(|e| {
-            tracing::error!("openQA request to {} failed: {e}", self.host);
-            OpenQAError::Fetch(e.to_string())
+            tracing::error!(
+                "openQA request to {} failed: {}",
+                self.safe_host,
+                redact(&e)
+            );
+            OpenQAError::Fetch(redact(&e))
         })?;
 
         let response = response.error_for_status().map_err(|e| {
-            tracing::debug!("openQA returned an error status: {e}");
-            OpenQAError::Fetch(e.to_string())
+            tracing::debug!("openQA returned an error status: {}", redact(&e));
+            OpenQAError::Fetch(redact(&e))
         })?;
 
         let bytes = read_body_capped(response, MAX_API_BODY)
             .await
             .map_err(|e| {
-                tracing::error!("openQA request to {} failed: {e}", self.host);
-                OpenQAError::Fetch(e.to_string())
+                tracing::error!(
+                    "openQA request to {} failed: {}",
+                    self.safe_host,
+                    redact(&e)
+                );
+                OpenQAError::Fetch(redact(&e))
             })?;
         serde_json::from_slice::<JobsResponse>(&bytes)
             .map(|body| body.jobs)
             .map_err(|e| {
-                tracing::error!("openQA request to {} failed: {e}", self.host);
-                OpenQAError::Fetch(e.to_string())
+                tracing::error!(
+                    "openQA request to {} failed: {}",
+                    self.safe_host,
+                    redact(&e)
+                );
+                OpenQAError::Fetch(redact(&e))
             })
     }
 
@@ -270,6 +300,33 @@ pub(crate) mod tests {
             .map(|(_, v)| v.as_str())
             .unwrap();
         assert_eq!(build, ":git:1.1:bash");
+    }
+
+    #[test]
+    fn safe_host_redacts_url_credentials() {
+        use crate::http::{HttpClient, VerifyPolicy};
+        let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
+        let client = OpenQAClient::new(
+            http,
+            "https://alice:s3cret@openqa.example.com",
+            crate::openqa::client::ApiCredentials::default(),
+        );
+        let base = OpenQABase::new(client, &rrid("Maintenance"), &MockIncident::new("bash"));
+        // The log-facing host never carries userinfo...
+        assert!(!base.safe_host.contains("s3cret"));
+        assert!(base.safe_host.contains("***"));
+        // ...but the functional host() keeps the raw URL for building requests.
+        assert!(base.host().contains("s3cret"));
+    }
+
+    #[test]
+    fn redact_strips_userinfo_from_error_display() {
+        // Mirrors reqwest's `... for url (scheme://user:pass@host)` shape.
+        let msg =
+            "error sending request for url (https://alice:s3cret@openqa.example.com/api/v1/jobs)";
+        let out = redact(&msg);
+        assert!(!out.contains("s3cret"), "leaked credential: {out}");
+        assert!(out.contains("***"), "missing redaction marker: {out}");
     }
 
     #[test]

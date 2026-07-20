@@ -105,6 +105,18 @@ async fn try_get_jobs_errs_on_error_status() {
 }
 
 #[tokio::test]
+async fn try_get_jobs_error_never_leaks_url_credentials() {
+    // A fetch failure against a credentialed base URL must never surface the
+    // userinfo in the error. `redact` (over reqwest's error Display) is the
+    // backstop even though reqwest also strips userinfo from its stored URL, so
+    // this asserts the end-to-end contract on both a transport and a status
+    // failure path.
+    let base = base_for("http://user:s3cret@127.0.0.1:1", ApiCredentials::default());
+    let err = base.try_get_jobs().await.unwrap_err().to_string();
+    assert!(!err.contains("s3cret"), "error leaked credential: {err}");
+}
+
+#[tokio::test]
 async fn try_get_jobs_ok_empty_on_valid_empty_body() {
     // A valid-but-empty response is Ok(vec![]), distinct from a fetch failure.
     let server = MockServer::start().await;

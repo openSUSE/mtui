@@ -11,6 +11,7 @@ use mtui_types::{OpenQAResult, Test};
 
 use super::base::{Job, OpenQABase};
 use crate::error::OpenQAError;
+use crate::http::sanitize_url;
 
 /// Job results that are excluded from the parsed test list (not real outcomes).
 const EXCLUDED_RESULTS: &[&str] = &[
@@ -143,7 +144,10 @@ impl KernelOpenQA {
         if !self.has_results() {
             return Vec::new();
         }
-        let mut lines = vec![format!("openQA instance: {} :\n", self.base.host())];
+        let mut lines = vec![format!(
+            "openQA instance: {} :\n",
+            sanitize_url(self.base.host())
+        )];
         if let Some(results) = &self.results {
             lines.extend(Self::result_matrix(results));
         }
