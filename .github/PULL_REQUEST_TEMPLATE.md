@@ -15,13 +15,17 @@ checklist below. See CONTRIBUTING.md for the full workflow.
 
 ## Checklist
 
+<!-- CI runs the same gates; see CONTRIBUTING.md "Quality gates". -->
+
 - [ ] Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
-- [ ] `uv run ruff format --check .` is clean.
-- [ ] `uv run ruff check .` is clean.
-- [ ] `uv run ty check` is clean.
-- [ ] `uv run pytest` passes.
-- [ ] User-visible changes are recorded under `[Unreleased]` in `CHANGELOG.md`.
-- [ ] Documentation under `Documentation/` updated where relevant.
+- [ ] `cargo fmt --all --check` is clean.
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` is clean.
+- [ ] `cargo test --workspace` passes.
+- [ ] `cargo test -p mtui-mcp -F mcp` passes (when touching commands, `Session`, the registry, or entrypoints).
+- [ ] The compile-only feature matrix builds: `cargo build --workspace --no-default-features` and `--all-features`.
+- [ ] New/changed code is covered (>= 80% patch coverage).
+- [ ] User-visible changes are recorded in `CHANGELOG.md`.
+- [ ] Documentation under `docs/src/` updated where relevant; generated pages re-run with `cargo xtask gen-docs`.
 
 ## Related issues
 

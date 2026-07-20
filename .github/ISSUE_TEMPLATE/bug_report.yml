@@ -46,15 +46,8 @@ body:
       description: Output of `mtui -V`.
     validations:
       required: true
-  - type: input
-    id: python
-    attributes:
-      label: Python version
-      description: Output of `python3 --version`.
-    validations:
-      required: true
   - type: textarea
     id: environment
     attributes:
       label: Environment
-      description: OS / distribution, install method (zypper / uv / pip from source), relevant config snippets (with secrets redacted).
+      description: OS / distribution, install method (zypper package / built from source), relevant config snippets (with secrets redacted).
