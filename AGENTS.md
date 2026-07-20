@@ -220,11 +220,13 @@ shells out to `osc`/`osc-plugin-qam` — it talks to the OBS/IBS API natively (s
 the native OBS backend and `[obs]` config), reading credentials from `oscrc`.
 
 ## Further reading
-- `PLAN-highlevel.md` — the implementation roadmap (architecture, crate layout,
-  phased overview). The per-phase task detail now lives in beads (`br epic status`,
-  `br show <id>`); the former `PLAN-phase0..8.md` files were migrated into beads.
-- Upstream `Documentation/developer.rst` (architecture) and `iui.rst` (interactive
-  command reference) remain the deepest behavioral references while porting.
+- `docs/src/architecture.md` — architecture map (crate layout, composition root,
+  contracts) and the rest of the mdBook under `docs/src/` (installation,
+  configuration, developer, invocation, mcp).
+- The former Python implementation and its `Documentation/*.rst` (architecture,
+  interactive command reference) remain the deepest behavioral references while
+  porting; they are preserved on the `archive/python-main` tag and the
+  `16.0.x`..`19.0.x` maintenance branches.
 
 <!-- br-agent-instructions-v1 -->
 

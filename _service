@@ -1,8 +1,8 @@
 <services>
   <!--
-    OBS source services for mtui-rs (openSUSE "Packaging Rust Software" wiki
+    OBS source services for mtui (openSUSE "Packaging Rust Software" wiki
     4-service skeleton). Run all of them with `osc service ra`, which emits:
-      - mtui-rs-<version>.tar.zst   (source, from the git tag)
+      - mtui-<version>.tar.zst      (source, from the git tag)
       - vendor.tar.zst              (bundled deps incl. .cargo/config + Cargo.lock)
       - cargo_config               (committed alongside; not hand-written)
       - _servicedata               (records the resolved revision)
@@ -12,7 +12,7 @@
   <!-- Fetch the tagged source from git and name the tarball by the tag. -->
   <service name="tar_scm" mode="manual">
     <param name="scm">git</param>
-    <param name="url">https://gitlab.suse.de/osukup/mtui-rs.git</param>
+    <param name="url">https://github.com/openSUSE/mtui.git</param>
     <param name="revision">@PARENT_TAG@</param>
     <!-- Derive the package version from the nearest tag, stripping a leading v. -->
     <param name="versionformat">@PARENT_TAG@</param>
@@ -38,7 +38,7 @@
     if a conflict surfaces.
   -->
   <service name="cargo_vendor" mode="manual">
-    <param name="src">mtui-rs</param>
+    <param name="src">mtui</param>
     <param name="compression">zst</param>
     <param name="update">false</param>
   </service>

@@ -4,38 +4,51 @@ name: release
 on:
   push:
     tags:
-      # Version tags: 18.3.0, optionally with a pre-release suffix
-      # (18.3.0rc1). The project tags without a "v" prefix.
-      - '[0-9]+.[0-9]+.[0-9]+'
-      - '[0-9]+.[0-9]+.[0-9]+*'
+      # Version tags: v26.0.0, optionally with a pre-release suffix
+      # (v26.0.0-rc1). The Rust project tags with a "v" prefix.
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       # required for `gh release create`
       contents: write
+    env:
+      TARGET: x86_64-unknown-linux-musl
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          python-version: '3.13'
-          cache-suffix: release
 
-      - name: Verify tag matches package version
+      - name: Verify tag matches workspace version
         run: |
-          pkg="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' mtui/__init__.py)"
-          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag '$GITHUB_REF_NAME' != mtui.__version__ '$pkg'"
+          pkg="$(sed -n 's/^version = "\(.*\)".*/\1/p' Cargo.toml | head -1)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag '$GITHUB_REF_NAME' != workspace version '$pkg'"
             exit 1
           fi
 
-      - name: Build sdist and wheel
-        run: uv build
+      - name: Add musl target
+        run: rustup target add "$TARGET"
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --target "$TARGET" -p mtui-cli
+          cargo build --release --target "$TARGET" -p mtui-mcp --features mcp
+
+      - name: Package release tarball
+        run: cargo xtask package --version "$GITHUB_REF_NAME" --target "$TARGET"
 
       - name: Create GitHub release
         env:
@@ -44,4 +57,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME"
           --title "$GITHUB_REF_NAME"
           --generate-notes
-          dist/*
+          dist/release/*

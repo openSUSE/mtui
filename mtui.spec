@@ -1,5 +1,5 @@
 #
-# spec file for package mtui-rs
+# spec file for package mtui
 #
 # Copyright (c) 2026 SUSE LLC
 #
@@ -12,20 +12,20 @@
 # license that conforms to the Open Source Definition (Version 1.9)
 # published by the Open Source Initiative.
 #
-# Please submit bugfixes or comments via https://gitlab.suse.de/osukup/mtui-rs
+# Please submit bugfixes or comments via https://github.com/openSUSE/mtui
 #
 
 
 # System Vim runtime addon dir for the vim-plugin subpackage (matches upstream mtui).
 %global vimplugin_dir %{_datadir}/vim/site
 
-Name:           mtui-rs
+Name:           mtui
 # Version is filled in by the set_version source service from the git tag.
 Version:        0
 Release:        0
 Summary:        Rust successor to the Maintenance Test Update Installer
 License:        GPL-2.0-only
-URL:            https://gitlab.suse.de/osukup/mtui-rs
+URL:            https://github.com/openSUSE/mtui
 Source0:        %{name}-%{version}.tar.zst
 Source1:        vendor.tar.zst
 BuildRequires:  cargo
@@ -33,7 +33,7 @@ BuildRequires:  cargo
 BuildRequires:  cargo-packaging >= 1.2.0
 BuildRequires:  zstd
 ExclusiveArch:  %{rust_tier1_arches}
-# Optional runtime tools; mtui-rs degrades gracefully when they are absent.
+# Optional runtime tools; mtui degrades gracefully when they are absent.
 Recommends:     subversion
 # Any of these terminal emulators satisfies the `terms`/`switch` launchers.
 Recommends:     (gnome-terminal or konsole or sakura or rxvt-unicode or xterm or tmux or screen)
@@ -49,12 +49,12 @@ the `mtui-mcp` Model Context Protocol server.
 
 %package vim-plugin
 Summary:        VIM plugin with test report syntax
-Supplements:    (mtui-rs and vim)
+Supplements:    (mtui and vim)
 BuildArch:      noarch
 
 %description vim-plugin
 This plugin provides syntax highlighting and filetype detection for editing QAM
-test reports (the mtui-rs testreport/export text format).
+test reports (the mtui testreport/export text format).
 
 %prep
 # -a1 extracts vendor.tar.zst, placing .cargo/config + Cargo.lock + vendor/.

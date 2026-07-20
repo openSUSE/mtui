@@ -12,78 +12,62 @@ concurrency:
   # Only PR runs are cancelled by a newer push; a main/tag run must finish
   # so its Codecov upload lands (PR comparisons need the main baseline).
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: always
 jobs:
-  lint:
+  fmt:
     runs-on: ubuntu-latest
-    name: MTUI lint + format
+    name: MTUI format
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: astral-sh/ruff-action@0ce1b0bf8b818ef400413f810f8a11cdbda0034b # v4.0.0
-        with:
-          args: "--version"
-      - name: Check ruff style
-        run: ruff format --check --diff .
-      - name: Check ruff lint
-        run: ruff check --diff .
-  typecheck:
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+      - name: Check formatting
+        run: cargo fmt --all --check
+  clippy:
     runs-on: ubuntu-latest
-    name: MTUI typecheck
+    name: MTUI lint
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --extra norpm --extra mcp --group dev
-      - name: Run ty check
-        run: uv run ty check
-  docs:
+      - name: Install clippy
+        run: rustup component add clippy
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+  feature-matrix:
     runs-on: ubuntu-latest
-    name: MTUI docs
+    name: MTUI feature matrix (compile-only)
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          enable-cache: true
-          # The default cache key ignores the job, and caches are immutable
-          # per key: without a suffix this job and typecheck would fight
-          # over one cache holding the wrong wheel set for the loser.
-          cache-suffix: docs
-      - name: Build documentation (warnings as errors)
-        # ``uv run --group doc`` syncs the doc group implicitly; a separate
-        # ``uv sync`` step would resolve the same environment twice.
-        run: >-
-          uv run --group doc sphinx-build -W -b html
-          Documentation Documentation/.build/html
+      - name: Build with no default features
+        run: cargo build --workspace --no-default-features
+      - name: Build with all features
+        run: cargo build --workspace --all-features
   test:
     runs-on: ubuntu-latest
-    name: MTUI tests + coverage
-    strategy:
-      matrix:
-        python-version: ['3.13', '3.14']
+    name: MTUI tests
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          python-version: ${{ matrix.python-version }}
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --extra norpm --extra mcp --group dev
-      - name: Test run ${{ matrix.python-version }}
-        run: >-
-          uv run pytest -v --cov=./mtui --cov-report=xml --cov-report=term
-          --junitxml=junit.xml -o junit_family=legacy
+      - name: Build tests
+        run: cargo build --workspace
+      - name: Run tests (default features)
+        run: cargo test --workspace
+      # mtui-mcp's server/transport tests are gated behind `-F mcp`, so the
+      # default workspace test run never exercises them.
+      - name: Run mtui-mcp tests
+        run: cargo test -p mtui-mcp -F mcp
+  coverage:
+    runs-on: ubuntu-latest
+    name: MTUI coverage
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - name: Upload coverage to CodeCov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
-        if: ${{ matrix.python-version == '3.14' }}
         with:
-          files: coverage.xml
+          files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
-      - name: Upload test results to CodeCov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
-        if: ${{ !cancelled() }}
-        with:
-          files: junit.xml
-          token: ${{ secrets.CODECOV_TOKEN }}
-          report_type: test_results

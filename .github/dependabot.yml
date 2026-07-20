@@ -1,17 +1,17 @@
 ---
-# Dependabot keeps Python deps (via the uv ecosystem, which updates both
-# pyproject.toml and uv.lock) and GitHub Actions versions current.
+# Dependabot keeps Cargo deps (updating both Cargo.toml and Cargo.lock) and
+# GitHub Actions versions current.
 # See https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 version: 2
 updates:
-  - package-ecosystem: "uv"
+  - package-ecosystem: "cargo"
     directory: "/"
     target-branch: "main"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
-      uv-minor-and-patch:
+      cargo-minor-and-patch:
         update-types:
           - "minor"
           - "patch"
