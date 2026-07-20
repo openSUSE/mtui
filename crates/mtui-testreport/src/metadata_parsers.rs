@@ -67,6 +67,18 @@ impl ReducedMetadataParser {
     /// Parses a single line and records any hostname / jira / bug it carries
     /// into `results`.
     pub fn parse(results: &mut TestReportBase, line: &str) {
+        // First-wins, like every other arm here: if a template somehow carries
+        // several markers, the first is authoritative and the writer collapses
+        // the rest, so read and write agree on which message the gate checks.
+        if line.starts_with("Slack Review:") {
+            if results.slack_review.is_none()
+                && let Some(marker) = crate::testreport::SlackReviewMarker::parse_line(line)
+            {
+                results.slack_review = Some(marker);
+            }
+            return;
+        }
+
         if let Some(caps) = HOSTNAMES_RE.captures(line) {
             let host = &caps[1];
             if !host.contains('?') {

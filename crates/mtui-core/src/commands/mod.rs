@@ -48,6 +48,7 @@ mod openqa_jobs;
 mod openqa_overview;
 mod regenerate;
 mod reload_openqa;
+mod request_review;
 mod simpleset;
 mod updates;
 
@@ -112,6 +113,7 @@ pub use openqa_jobs::OpenQAJobs;
 pub use openqa_overview::OpenQAOverview;
 pub use regenerate::Regenerate;
 pub use reload_openqa::ReloadOpenQA;
+pub use request_review::RequestReview;
 pub use simpleset::{SetLogLevel, SetWorkflow};
 pub use updates::Updates;
 
@@ -785,6 +787,10 @@ mod mcp_nonempty_success_guard {
         // change (build_incident/refresh_auto), so success needs the QEM
         // Dashboard + openQA backends its own tests mock per case.
         "set_workflow",
+        // why: posts to the Slack Web API; the success line is printed only
+        // after a live `auth.test` + `chat.postMessage` succeed, so driving it
+        // needs the wiremock backend its own tests stand up per case.
+        "request_review",
         // why: connects a brand-new host over SSH; success needs a reachable
         // reference host (its tests only exercise the connect-failure path).
         "add_host",

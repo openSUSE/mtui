@@ -223,6 +223,36 @@ pub(crate) fn default_gitea_url() -> String {
 pub(crate) fn default_openqa_install_distri() -> String {
     "sle".to_owned()
 }
+/// The Slack integration is **opt-in**: off unless a site turns it on.
+///
+/// Posting to a chat workspace is an outward-facing side effect, so it should
+/// never happen because a default said so. Most mtui users have no Slack
+/// integration at all, and for them the feature staying dark — and saying why
+/// when invoked — is the correct behaviour. Turning it on is one explicit
+/// `enabled = true` alongside the token and channel it needs anyway.
+pub(crate) fn default_slack_enabled() -> bool {
+    false
+}
+/// Trusted Slack API origin the [`slack_token`](Config::slack_token) may be
+/// sent to, mirroring the `gitea_url` reasoning: the token is only ever
+/// attached to requests against this base, so pointing it elsewhere is an
+/// explicit, auditable act rather than something a checked-out template can
+/// influence. Overridable mainly so tests can aim at a local mock server.
+pub(crate) fn default_slack_api_url() -> String {
+    "https://slack.com/api".to_owned()
+}
+/// Seconds between reaction polls while watching a review request. Slack's
+/// Web API tier-3 methods allow ~50 requests/minute; two minutes per poll keeps
+/// a multi-template watch far inside that even before jitter.
+pub(crate) fn default_slack_poll_interval() -> u64 {
+    120
+}
+/// Seconds a `request_review` watch runs before giving up, defaulting to one
+/// hour: long enough for a reviewer to notice, short enough that a forgotten
+/// foreground watch does not pin a terminal indefinitely.
+pub(crate) fn default_slack_watch_timeout() -> u64 {
+    3600
+}
 pub(crate) fn default_refhosts_resolvers() -> String {
     "https,path".to_owned()
 }
@@ -407,6 +437,23 @@ pub(crate) struct GiteaSection {
     pub url: Option<String>,
 }
 
+/// `[slack]` table — the Slack review-request integration.
+///
+/// Off by default, and gated twice over: `enabled` must be `true`, and
+/// `token`/`channel` must both be set. An unconfigured mtui therefore never
+/// reaches Slack, and `request_review` refuses with the reason rather than
+/// failing somewhere inside the API.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct SlackSection {
+    pub enabled: Option<bool>,
+    pub token: Option<String>,
+    pub channel: Option<String>,
+    pub api_url: Option<String>,
+    pub poll_interval: Option<u64>,
+    pub watch_timeout: Option<u64>,
+}
+
 /// `[lock]` table — remote-lock behaviour on target hosts.
 ///
 /// Mirrors upstream `mtui/support/config.py`'s `lock_*` options (which live
@@ -489,6 +536,7 @@ pub(crate) struct RawConfig {
     pub svn: SvnSection,
     pub target: TargetSection,
     pub gitea: GiteaSection,
+    pub slack: SlackSection,
     pub lock: LockSection,
     pub mcp: McpSection,
     pub obs: ObsSection,
@@ -530,6 +578,12 @@ impl RawConfig {
         take!(target, tempdir);
         take!(gitea, token);
         take!(gitea, url);
+        take!(slack, enabled);
+        take!(slack, token);
+        take!(slack, channel);
+        take!(slack, api_url);
+        take!(slack, poll_interval);
+        take!(slack, watch_timeout);
         take!(lock, reap_stale);
         take!(lock, stale_age);
         take!(lock, pi_autolock);
@@ -637,6 +691,26 @@ pub struct Config {
     /// (scheme/host/port) matches this; metadata-supplied PR URLs pointing
     /// anywhere else are refused. Defaults to `https://src.suse.de`.
     pub gitea_url: String,
+
+    // [slack]
+    /// Whether the Slack review-request integration is available at all.
+    /// `false` by default — the feature is opt-in, so an unconfigured mtui
+    /// never posts anywhere; `request_review` refuses and says why.
+    pub slack_enabled: bool,
+    /// Bot token for the Slack Web API (scopes: `chat:write`, `reactions:read`,
+    /// `channels:history`). Empty by default; `request_review` refuses without
+    /// it, so the integration stays inert until deliberately configured.
+    pub slack_token: String,
+    /// Channel the review request is posted to (an ID such as `C01234567` or a
+    /// `#name`). Empty by default; `request_review` refuses without it.
+    pub slack_channel: String,
+    /// Trusted Slack API origin the [`slack_token`](Self::slack_token) may be
+    /// sent to. Defaults to `https://slack.com/api`.
+    pub slack_api_url: String,
+    /// Seconds between reaction polls while watching a review request.
+    pub slack_poll_interval: u64,
+    /// Seconds a `request_review` watch runs before giving up.
+    pub slack_watch_timeout: u64,
 
     // [target]
     /// Remote scratch directory on target hosts.
@@ -761,6 +835,12 @@ impl Default for Config {
             svn_path: default_svn_path(),
             gitea_token: String::new(),
             gitea_url: default_gitea_url(),
+            slack_enabled: default_slack_enabled(),
+            slack_token: String::new(),
+            slack_channel: String::new(),
+            slack_api_url: default_slack_api_url(),
+            slack_poll_interval: default_slack_poll_interval(),
+            slack_watch_timeout: default_slack_watch_timeout(),
             target_tempdir: default_target_tempdir(),
             lock_reap_stale: default_lock_reap_stale(),
             lock_stale_age: default_lock_stale_age(),
@@ -907,6 +987,21 @@ impl Config {
             svn_path: raw.svn.path.unwrap_or(d.svn_path),
             gitea_token: raw.gitea.token.unwrap_or(d.gitea_token),
             gitea_url: validated_url!(raw.gitea.url, "gitea_url", d.gitea_url),
+
+            slack_enabled: raw.slack.enabled.unwrap_or(d.slack_enabled),
+            slack_token: raw.slack.token.unwrap_or(d.slack_token),
+            slack_channel: raw.slack.channel.unwrap_or(d.slack_channel),
+            slack_api_url: validated_url!(raw.slack.api_url, "slack_api_url", d.slack_api_url),
+            slack_poll_interval: validated_positive!(
+                raw.slack.poll_interval,
+                "slack_poll_interval",
+                d.slack_poll_interval
+            ),
+            slack_watch_timeout: validated_positive!(
+                raw.slack.watch_timeout,
+                "slack_watch_timeout",
+                d.slack_watch_timeout
+            ),
             target_tempdir: raw
                 .target
                 .tempdir
@@ -1087,6 +1182,89 @@ mod tests {
         // A malformed value falls back to the default (lenient loading).
         let bad: RawConfig = toml::from_str("[gitea]\nurl = \"not a url\"\n").unwrap();
         assert_eq!(Config::from_raw(bad).gitea_url, "https://src.suse.de");
+    }
+
+    #[test]
+    fn slack_is_off_until_explicitly_enabled() {
+        let d = Config::default();
+        // Opt-in by default: posting into a chat workspace is an outward-facing
+        // side effect that must never follow from an unconfigured install.
+        assert!(!d.slack_enabled);
+        assert_eq!(d.slack_token, "");
+        assert_eq!(d.slack_channel, "");
+        assert_eq!(d.slack_api_url, "https://slack.com/api");
+        assert_eq!(d.slack_poll_interval, 120);
+        assert_eq!(d.slack_watch_timeout, 3600);
+    }
+
+    #[test]
+    fn slack_section_parses_and_overrides() {
+        let raw: RawConfig = toml::from_str(
+            "[slack]\nenabled = true\ntoken = \"xoxb-abc\"\nchannel = \"#qam\"\n\
+             api_url = \"https://slack.example.com/api\"\npoll_interval = 45\n\
+             watch_timeout = 600\n",
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        assert!(c.slack_enabled);
+        assert_eq!(c.slack_token, "xoxb-abc");
+        assert_eq!(c.slack_channel, "#qam");
+        assert_eq!(c.slack_api_url, "https://slack.example.com/api");
+        assert_eq!(c.slack_poll_interval, 45);
+        assert_eq!(c.slack_watch_timeout, 600);
+    }
+
+    #[test]
+    fn slack_partial_keeps_defaults() {
+        // Enabling the integration must not disturb the other options, so a
+        // site can switch it on without restating the whole section.
+        let raw: RawConfig = toml::from_str("[slack]\nenabled = true\n").unwrap();
+        let c = Config::from_raw(raw);
+        assert!(c.slack_enabled);
+        assert_eq!(c.slack_api_url, "https://slack.com/api");
+        assert_eq!(c.slack_poll_interval, 120);
+    }
+
+    #[test]
+    fn slack_invalid_values_fall_back_to_defaults() {
+        // Lenient loading: a bad value is logged and defaulted, never fatal.
+        let bad_url: RawConfig = toml::from_str("[slack]\napi_url = \"not a url\"\n").unwrap();
+        assert_eq!(
+            Config::from_raw(bad_url).slack_api_url,
+            "https://slack.com/api"
+        );
+
+        // A zero poll interval would busy-loop against a rate-limited API.
+        let zero_poll: RawConfig = toml::from_str("[slack]\npoll_interval = 0\n").unwrap();
+        assert_eq!(Config::from_raw(zero_poll).slack_poll_interval, 120);
+
+        // A zero timeout would mean a watch that ends before it begins.
+        let zero_timeout: RawConfig = toml::from_str("[slack]\nwatch_timeout = 0\n").unwrap();
+        assert_eq!(Config::from_raw(zero_timeout).slack_watch_timeout, 3600);
+    }
+
+    #[test]
+    fn slack_options_survive_the_file_merge() {
+        // Every field needs its own `take!` line; a forgotten one silently
+        // drops that option when a per-user file overrides /etc.
+        let mut base: RawConfig = toml::from_str(
+            "[slack]\nenabled = true\ntoken = \"etc\"\nchannel = \"#etc\"\n\
+             api_url = \"https://etc.example.com\"\npoll_interval = 10\nwatch_timeout = 20\n",
+        )
+        .unwrap();
+        let user: RawConfig = toml::from_str(
+            "[slack]\nenabled = false\ntoken = \"user\"\nchannel = \"#user\"\n\
+             api_url = \"https://user.example.com\"\npoll_interval = 30\nwatch_timeout = 40\n",
+        )
+        .unwrap();
+        base.merge(user);
+        let c = Config::from_raw(base);
+        assert!(!c.slack_enabled);
+        assert_eq!(c.slack_token, "user");
+        assert_eq!(c.slack_channel, "#user");
+        assert_eq!(c.slack_api_url, "https://user.example.com");
+        assert_eq!(c.slack_poll_interval, 30);
+        assert_eq!(c.slack_watch_timeout, 40);
     }
 
     #[test]

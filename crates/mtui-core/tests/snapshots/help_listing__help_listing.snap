@@ -14,9 +14,9 @@ list_templates        list_timeout          list_update_commands  list_versions
 load_template         lock                  lrun                  openqa_jobs
 openqa_overview       prepare               put                   quit
 reboot                regenerate            reject                reload_openqa
-reload_products       remove_host           run                   set_host_state
-set_log_level         set_repo              set_timeout           set_workflow
-shell                 show_diff             show_log              show_update_repos
-switch                terms                 unassign              uninstall
-unload                unlock                update                updates
-whoami
+reload_products       remove_host           request_review        run
+set_host_state        set_log_level         set_repo              set_timeout
+set_workflow          shell                 show_diff             show_log
+show_update_repos     switch                terms                 unassign
+uninstall             unload                unlock                update
+updates               whoami

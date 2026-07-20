@@ -56,6 +56,19 @@ _The entries below document the final Python releases, retained for history._
   still-shutting-down sshd); only the serialization is removed. Most visible on
   transactional (SL Micro) updates, which reboot every host.
 
+### Added
+
+- New `request_review` command: posts a review request for the loaded update to
+  a Slack channel and records the resulting message in the testreport template,
+  so a request is traceable back to the update it belongs to. With `--watch` it
+  then polls the message for reviewer reactions (👍 approves, 👎 rejects, skin
+  tone ignored) until a verdict or timeout, and Ctrl-C stops watching without
+  killing mtui. The integration is **off by default** and configured under
+  `[slack]`: set `enabled = true` plus a `token` and `channel` to opt in. The
+  token is masked as `<set>` in `config` output and never logged. Over
+  `mtui-mcp` the command is exposed with `background=true`, which is how a
+  `--watch` run should be started there.
+
 ## 19.0.1 - 2026-07-17
 
 ### Added

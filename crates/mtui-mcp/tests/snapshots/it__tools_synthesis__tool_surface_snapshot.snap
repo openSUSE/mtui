@@ -42,6 +42,7 @@ reject read_only=false
 reload_openqa read_only=false
 reload_products read_only=false
 remove_host read_only=false
+request_review read_only=false
 run read_only=false
 set_host_state read_only=false
 set_log_level read_only=false

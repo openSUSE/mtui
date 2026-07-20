@@ -209,6 +209,7 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::Comment));
     registry.register(Arc::new(commands::Approve));
     registry.register(Arc::new(commands::Regenerate));
+    registry.register(Arc::new(commands::RequestReview));
     // Phase 5 follow-ups — deferred commands now unblocked.
     registry.register(Arc::new(commands::Export));
     registry.register(Arc::new(commands::ListRefhosts));
@@ -353,6 +354,7 @@ mod tests {
             "comment",
             "approve",
             "regenerate",
+            "request_review",
         ] {
             assert!(r.contains(name), "expected {name} to be registered");
         }
@@ -360,12 +362,12 @@ mod tests {
 
     #[test]
     fn register_all_command_count() {
-        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 11 Wave 4 + 4 P5 follow-ups
-        // (export, list_refhosts, load_template, list_locks) + 2 openQA-holder
-        // follow-ups (reload_openqa, set_workflow: mtui-rs-zs4/plt) + 3 Phase 6
-        // (help: mtui-rs-lhz.9; edit: mtui-rs-lhz.10; terms: mtui-rs-lhz.11)
-        // = 61 canonical commands.
-        assert_eq!(register_all().len(), 61);
+        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 12 Wave 4 (incl. request_review)
+        // + 4 P5 follow-ups (export, list_refhosts, load_template, list_locks)
+        // + 2 openQA-holder follow-ups (reload_openqa, set_workflow:
+        // mtui-rs-zs4/plt) + 3 Phase 6 (help: mtui-rs-lhz.9; edit:
+        // mtui-rs-lhz.10; terms: mtui-rs-lhz.11) = 62 canonical commands.
+        assert_eq!(register_all().len(), 62);
     }
 
     #[test]

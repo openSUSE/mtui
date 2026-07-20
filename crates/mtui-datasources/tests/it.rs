@@ -29,3 +29,5 @@ mod oqa_search;
 mod qem_dashboard;
 #[path = "refhost.rs"]
 mod refhost;
+#[path = "slack.rs"]
+mod slack;

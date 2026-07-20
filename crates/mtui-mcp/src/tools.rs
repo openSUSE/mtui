@@ -50,6 +50,11 @@ const SLOW_COMMANDS: &[&str] = &[
     "set_repo",
     "reboot",
     "regenerate",
+    // `--watch` polls Slack for up to `[slack] watch_timeout` (an hour by
+    // default), far past any MCP client timeout, so the caller needs the
+    // `background` escape hatch. Without `--watch` the command just posts and
+    // returns, which is fast enough to run in the foreground.
+    "request_review",
 ];
 
 /// The one command whose `clap` subcommands are fanned out into per-subcommand

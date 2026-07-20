@@ -68,6 +68,13 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.mcp_tools_allow, vec!["whoami".to_owned()]);
     assert_eq!(cfg.mcp_tools_deny, vec!["run".to_owned()]);
 
+    // [slack] section: explicit overrides land, an omitted key keeps its default.
+    assert!(cfg.slack_enabled);
+    assert_eq!(cfg.slack_token, "xoxb-fixture");
+    assert_eq!(cfg.slack_channel, "#qam-review");
+    assert_eq!(cfg.slack_poll_interval, 90);
+    assert_eq!(cfg.slack_watch_timeout, 3600);
+
     // [obs] section: explicit overrides land, an omitted key keeps its default.
     assert_eq!(cfg.obs_api_url, "https://api.example.de");
     assert_eq!(cfg.obs_request_timeout, 90);

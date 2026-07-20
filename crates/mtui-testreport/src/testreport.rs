@@ -118,6 +118,12 @@ pub struct TestReportBase {
     pub packager: String,
     /// Reviewer.
     pub reviewer: String,
+    /// The Slack message this update's review was requested on, if any.
+    ///
+    /// Written by `request_review` and read back on load, so a later `approve`
+    /// can verify the ack against the exact message rather than trusting that
+    /// a review happened. `None` when no request was posted.
+    pub slack_review: Option<SlackReviewMarker>,
     /// Update repository string.
     pub repository: String,
     /// Update repository URLs (upstream `repositories`, a `frozenset[str]`).
@@ -185,6 +191,7 @@ impl TestReportBase {
             category: String::new(),
             packager: String::new(),
             reviewer: String::new(),
+            slack_review: None,
             repository: String::new(),
             repositories: HashSet::new(),
             packages: HashMap::new(),
@@ -564,6 +571,13 @@ pub trait TestReport {
             ("Category".to_owned(), base.category.clone()),
             ("Hosts".to_owned(), hosts),
             ("Reviewer".to_owned(), base.reviewer.clone()),
+            (
+                "Slack Review".to_owned(),
+                base.slack_review
+                    .as_ref()
+                    .map(|m| format!("{} {}", m.channel, m.ts))
+                    .unwrap_or_default(),
+            ),
             ("Packager".to_owned(), base.packager.clone()),
             (
                 "Bugs".to_owned(),
@@ -840,15 +854,164 @@ pub trait TestReport {
         self.base_mut().reviewer = name;
         Ok(())
     }
+
+    /// Records the Slack message a review was requested on, in the loaded
+    /// template on disk.
+    ///
+    /// Unlike [`set_reviewer`](TestReport::set_reviewer), the line being
+    /// written does **not** pre-exist in a server-generated template, so this
+    /// replaces an existing marker when there is one and otherwise *inserts*
+    /// immediately after the `Test Plan Reviewer:` line. Replacing-only would
+    /// fail on every first use.
+    ///
+    /// A pre-existing marker is overwritten rather than duplicated, so
+    /// re-running `request_review` re-points the gate at the newest message
+    /// instead of leaving two markers to disagree.
+    ///
+    /// The in-memory field is updated only after the write succeeds, matching
+    /// `set_reviewer`: a caller that treats the error as fatal then cannot
+    /// proceed believing a marker was persisted when it was not.
+    ///
+    /// # Errors
+    ///
+    /// * [`SlackReviewError::NoTemplate`] when no template is loaded.
+    /// * [`SlackReviewError::NoAnchor`] when the template has no
+    ///   `Test Plan Reviewer:` line to insert after.
+    /// * [`SlackReviewError::Io`] when reading or rewriting the file fails.
+    fn set_slack_review(&mut self, marker: &SlackReviewMarker) -> Result<(), SlackReviewError> {
+        let path = self
+            .base()
+            .path
+            .clone()
+            .ok_or(SlackReviewError::NoTemplate)?;
+
+        let text = std::fs::read_to_string(&path).map_err(SlackReviewError::Io)?;
+        let line = marker.to_line();
+        let existing = slack_review_line_re();
+
+        let new_text = if existing.is_match(&text) {
+            // `replace` (not `replace_all`) rewrites the first marker; the
+            // duplicate-collapsing below removes any others.
+            let replaced = existing.replace(&text, line.as_str()).into_owned();
+            collapse_extra_marker_lines(&replaced)
+        } else {
+            let anchor = reviewer_line_re();
+            let Some(m) = anchor.find(&text) else {
+                return Err(SlackReviewError::NoAnchor);
+            };
+            let mut out = String::with_capacity(text.len() + line.len() + 1);
+            out.push_str(&text[..m.end()]);
+            out.push('\n');
+            out.push_str(&line);
+            out.push_str(&text[m.end()..]);
+            out
+        };
+
+        crate::support::atomic_write_file(new_text.as_bytes(), &path)
+            .map_err(SlackReviewError::Io)?;
+        self.base_mut().slack_review = Some(marker.clone());
+        Ok(())
+    }
+}
+
+/// Drop every `Slack Review:` line after the first.
+///
+/// A template that somehow accumulated several markers (a merge, a hand edit)
+/// would otherwise leave the reader picking one arbitrarily; collapsing on
+/// write makes the file agree with the first-wins read.
+fn collapse_extra_marker_lines(text: &str) -> String {
+    let mut seen = false;
+    let mut out: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("Slack Review:") {
+            if seen {
+                continue;
+            }
+            seen = true;
+        }
+        out.push(line);
+    }
+    let mut joined = out.join("\n");
+    // `lines()` drops a trailing newline; keep the file's original ending.
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// Matches the `Test Plan Reviewer:` (or legacy `Suggested Test Plan
 /// Reviewer:`) metadata line, ported from upstream `_reviewer_line`.
 ///
-/// Compiled on demand; only [`TestReport::set_reviewer`] uses it.
+/// Compiled on demand; [`TestReport::set_reviewer`] replaces it, and
+/// [`TestReport::set_slack_review`] uses it as the anchor to insert after.
 fn reviewer_line_re() -> regex::Regex {
     regex::Regex::new(r"(?m)^(?:Suggested )?Test Plan Reviewer:.*$")
         .expect("static reviewer-line regex is valid")
+}
+
+/// Matches the `Slack Review:` marker line written by `request_review`.
+fn slack_review_line_re() -> regex::Regex {
+    regex::Regex::new(r"(?m)^Slack Review:.*$").expect("static slack-review regex is valid")
+}
+
+/// The Slack message a review request was posted to.
+///
+/// Both halves are Slack's own canonical identifiers as returned by
+/// `chat.postMessage` — never the configured channel *name*, which does not
+/// work for the reaction and reply reads that verify the ack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlackReviewMarker {
+    /// Canonical channel ID, e.g. `C0123456789`.
+    pub channel: String,
+    /// Message timestamp, which is also its ID within the channel.
+    pub ts: String,
+}
+
+impl SlackReviewMarker {
+    /// Render the marker as it appears in the template.
+    #[must_use]
+    pub fn to_line(&self) -> String {
+        format!("Slack Review: {} {}", self.channel, self.ts)
+    }
+
+    /// Parse a `Slack Review: <channel> <ts>` line.
+    ///
+    /// Returns `None` for anything that is not exactly that shape, so a
+    /// hand-edited or truncated marker is treated as absent rather than
+    /// producing a marker that points at no real message.
+    #[must_use]
+    pub fn parse_line(line: &str) -> Option<Self> {
+        let rest = line.strip_prefix("Slack Review:")?;
+        let mut parts = rest.split_whitespace();
+        let channel = parts.next()?;
+        let ts = parts.next()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            channel: channel.to_owned(),
+            ts: ts.to_owned(),
+        })
+    }
+}
+
+/// Failures from [`TestReport::set_slack_review`].
+#[derive(Debug, thiserror::Error)]
+pub enum SlackReviewError {
+    /// No template is loaded, so there is nothing to write the marker into.
+    #[error("Called while missing path")]
+    NoTemplate,
+    /// The template has no `Test Plan Reviewer:` line to anchor the marker to.
+    ///
+    /// Unlike the reviewer line the marker never pre-exists, so it has to be
+    /// inserted somewhere deterministic rather than replaced; without the
+    /// anchor there is no such place, and guessing risks corrupting the
+    /// template.
+    #[error("no 'Test Plan Reviewer:' line found in template to anchor the Slack marker to")]
+    NoAnchor,
+    /// Reading or atomically rewriting the template file failed.
+    #[error("failed to write the Slack review marker to template: {0}")]
+    Io(#[source] std::io::Error),
 }
 
 /// The outcome of [`TestReport::check_hash`] (upstream's `check_hash` plus the
@@ -1159,6 +1322,141 @@ mod tests {
         assert_eq!(r.giteaprapi(), Some("https://gitea/api/pr/1"));
         assert_eq!(r.giteacohash(), Some("deadbeef"));
         assert_eq!(r.workflow(), Workflow::Kernel);
+    }
+
+    /// Build a report backed by a temp template containing `body`.
+    fn report_with_template(dir: &tempfile::TempDir, body: &str) -> (MetaReport, PathBuf) {
+        let path = dir.path().join("log");
+        std::fs::write(&path, body).unwrap();
+        let mut base = TestReportBase::new(config());
+        base.path = Some(path.clone());
+        (MetaReport { base }, path)
+    }
+
+    fn marker(channel: &str, ts: &str) -> SlackReviewMarker {
+        SlackReviewMarker {
+            channel: channel.to_owned(),
+            ts: ts.to_owned(),
+        }
+    }
+
+    #[test]
+    fn set_slack_review_inserts_when_the_marker_is_absent() {
+        // The load-bearing case: the marker line never pre-exists in a
+        // server-generated template, so a replace-only implementation (like
+        // set_reviewer's) would fail on every first use.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut r, path) = report_with_template(
+            &dir,
+            "Category: recommended\nTest Plan Reviewer: bob\nEnd\n",
+        );
+
+        r.set_slack_review(&marker("C123", "1700000000.000100"))
+            .unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            written,
+            "Category: recommended\nTest Plan Reviewer: bob\nSlack Review: C123 1700000000.000100\nEnd\n"
+        );
+        assert_eq!(
+            r.base().slack_review,
+            Some(marker("C123", "1700000000.000100"))
+        );
+    }
+
+    #[test]
+    fn set_slack_review_replaces_an_existing_marker() {
+        // Re-running request_review must re-point the gate at the new message,
+        // not leave two markers for the reader to choose between.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut r, path) = report_with_template(
+            &dir,
+            "Test Plan Reviewer: bob\nSlack Review: COLD 1.0\nEnd\n",
+        );
+
+        r.set_slack_review(&marker("CNEW", "2.0")).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("Slack Review: CNEW 2.0"), "{written}");
+        assert!(!written.contains("COLD"), "{written}");
+        assert_eq!(written.matches("Slack Review:").count(), 1, "{written}");
+    }
+
+    #[test]
+    fn set_slack_review_collapses_duplicate_markers() {
+        // A hand-edited or merged template can carry several markers; the
+        // writer must leave exactly the one the reader would have picked.
+        let dir = tempfile::tempdir().unwrap();
+        let (mut r, path) = report_with_template(
+            &dir,
+            "Test Plan Reviewer: bob\nSlack Review: C1 1.0\nmiddle\nSlack Review: C2 2.0\nEnd\n",
+        );
+
+        r.set_slack_review(&marker("CNEW", "3.0")).unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written.matches("Slack Review:").count(), 1, "{written}");
+        assert!(written.contains("Slack Review: CNEW 3.0"), "{written}");
+        // Unrelated content between the markers survives.
+        assert!(written.contains("middle"), "{written}");
+        assert!(
+            written.ends_with('\n'),
+            "trailing newline kept: {written:?}"
+        );
+    }
+
+    #[test]
+    fn set_slack_review_needs_an_anchor_and_a_template() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // No reviewer line: refuse rather than guess where the marker goes.
+        let (mut r, _) = report_with_template(&dir, "Category: recommended\nEnd\n");
+        assert!(matches!(
+            r.set_slack_review(&marker("C1", "1.0")).unwrap_err(),
+            SlackReviewError::NoAnchor
+        ));
+
+        // No template loaded at all.
+        let mut unloaded = MetaReport {
+            base: TestReportBase::new(config()),
+        };
+        assert!(matches!(
+            unloaded.set_slack_review(&marker("C1", "1.0")).unwrap_err(),
+            SlackReviewError::NoTemplate
+        ));
+    }
+
+    #[test]
+    fn set_slack_review_leaves_memory_untouched_when_the_write_fails() {
+        // Mirrors set_reviewer's contract: a caller that aborts on the error
+        // must not be left believing a marker was persisted.
+        let dir = tempfile::tempdir().unwrap();
+        let mut base = TestReportBase::new(config());
+        base.path = Some(dir.path().join("does/not/exist/log"));
+        let mut r = MetaReport { base };
+
+        assert!(r.set_slack_review(&marker("C1", "1.0")).is_err());
+        assert_eq!(r.base().slack_review, None);
+    }
+
+    #[test]
+    fn slack_marker_round_trips_through_its_line() {
+        let m = marker("C0123456789", "1700000000.000100");
+        assert_eq!(SlackReviewMarker::parse_line(&m.to_line()), Some(m));
+    }
+
+    #[test]
+    fn slack_marker_rejects_malformed_lines() {
+        // A truncated or over-long marker points at no real message; treating
+        // it as absent is safer than acting on half of one.
+        assert_eq!(SlackReviewMarker::parse_line("Slack Review: C1"), None);
+        assert_eq!(SlackReviewMarker::parse_line("Slack Review:"), None);
+        assert_eq!(
+            SlackReviewMarker::parse_line("Slack Review: C1 1.0 extra"),
+            None
+        );
+        assert_eq!(SlackReviewMarker::parse_line("Reviewer: bob"), None);
     }
 
     #[test]

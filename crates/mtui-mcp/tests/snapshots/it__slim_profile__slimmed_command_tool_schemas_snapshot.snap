@@ -1,6 +1,5 @@
 ---
 source: crates/mtui-mcp/tests/slim_profile.rs
-assertion_line: 40
 expression: pretty
 ---
 [
@@ -1205,6 +1204,43 @@ expression: pretty
       "type": "object"
     },
     "name": "remove_host",
+    "read_only": false
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "channel": {
+          "description": "Channel to post to, overriding the configured one",
+          "type": "string"
+        },
+        "message": {
+          "description": "Extra context appended to the review request",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a single loaded template to act on",
+          "type": "string"
+        },
+        "watch": {
+          "default": false,
+          "description": "After posting, watch the message for reviewer reactions until a verdict or timeout (Ctrl-C stops it). Over MCP, pair this with background=true so the call does not outlive the client timeout",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "name": "request_review",
     "read_only": false
   },
   {

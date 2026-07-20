@@ -49,6 +49,19 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
             }
         }
         "gitea_url" => config.gitea_url.clone(),
+        // Also a secret, masked on the same terms as the Gitea token.
+        "slack_token" => {
+            if config.slack_token.is_empty() {
+                String::new()
+            } else {
+                SECRET_MASK.to_owned()
+            }
+        }
+        "slack_enabled" => config.slack_enabled.to_string(),
+        "slack_channel" => config.slack_channel.clone(),
+        "slack_api_url" => config.slack_api_url.clone(),
+        "slack_poll_interval" => config.slack_poll_interval.to_string(),
+        "slack_watch_timeout" => config.slack_watch_timeout.to_string(),
         "target_tempdir" => config.target_tempdir.display().to_string(),
         "lock_reap_stale" => config.lock_reap_stale.to_string(),
         "lock_stale_age" => config.lock_stale_age.to_string(),
@@ -69,7 +82,7 @@ const SECRET_MASK: &str = "<set>";
 /// echoed. The single source of truth for `show`'s mask and `set`'s redacted
 /// acknowledgement; add a new secret field here to cover both paths at once.
 fn is_secret_attr(attr: &str) -> bool {
-    attr == "gitea_token"
+    matches!(attr, "gitea_token" | "slack_token")
 }
 
 /// Render an [`SslVerify`] back to the string form `config set`/the config file
@@ -84,7 +97,7 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 30] = [
+const ATTRS: [&str; 36] = [
     "template_dir",
     "local_tempdir",
     "session_user",
@@ -109,6 +122,12 @@ const ATTRS: [&str; 30] = [
     "openqa_install_distri",
     "gitea_token",
     "gitea_url",
+    "slack_enabled",
+    "slack_token",
+    "slack_channel",
+    "slack_api_url",
+    "slack_poll_interval",
+    "slack_watch_timeout",
     "target_tempdir",
     "lock_reap_stale",
     "lock_stale_age",
@@ -146,6 +165,12 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "openqa_install_distri" => config.openqa_install_distri = raw.to_owned(),
         "gitea_token" => config.gitea_token = raw.to_owned(),
         "gitea_url" => config.gitea_url = raw.to_owned(),
+        "slack_token" => config.slack_token = raw.to_owned(),
+        "slack_channel" => config.slack_channel = raw.to_owned(),
+        "slack_api_url" => config.slack_api_url = raw.to_owned(),
+        "slack_enabled" => config.slack_enabled = parse_bool(raw)?,
+        "slack_poll_interval" => config.slack_poll_interval = parse_u64(raw)?,
+        "slack_watch_timeout" => config.slack_watch_timeout = parse_u64(raw)?,
         // Goes through the same coercion as config-file loading (a boolean
         // spelling toggles verification, anything else is a CA-bundle path), so
         // a runtime `set` cannot store a value the file would reject.

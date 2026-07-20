@@ -125,6 +125,33 @@ Defaults below are the built-in (upstream-matching) values.
 | `token` | string (**secret**) | *(empty)* | API token for the Gitea PR review workflow. The Gitea connector refuses to build without it. Masked as `<set>` in `config` output; sent only in an `Authorization` header, never logged. |
 | `url` | URL | `https://src.suse.de` | Trusted Gitea origin the `token` may be sent to. A PR API URL comes from checked-out metadata (which is not fully trusted), so the token is attached **only** to requests whose origin (scheme/host/port) matches this value, over `https`, with no embedded userinfo. Point it at another instance (e.g. `https://src.opensuse.org`) to use that one. A metadata URL on any other origin is refused before the token is sent. |
 
+### `[slack]`
+
+The Slack review-request integration behind the `request_review` command.
+
+**Off by default.** Posting into a chat workspace is an outward-facing side
+effect, so it never happens implicitly: `enabled` must be `true` *and* both
+`token` and `channel` must be set. An mtui with no `[slack]` section never
+contacts Slack, and `request_review` refuses with the reason.
+
+| Key | Type | Default | Meaning |
+|-----|------|---------|---------|
+| `enabled` | bool | `false` | Whether the integration is available at all. Set `true` to opt in; leaving it unset (or `false`) makes `request_review` refuse up front, which is how a site that does not use Slack — or wants the feature switched off despite credentials being present — runs mtui. |
+| `token` | string (**secret**) | *(empty)* | Slack bot token. Required scopes: `chat:write`, `reactions:read`, `channels:history`. Masked as `<set>` in `config` output; sent only in an `Authorization` header, never logged. |
+| `channel` | string | *(empty)* | Channel review requests are posted to — an ID (`C0123456789`) or a `#name`. Overridable per call with `request_review --channel`. |
+| `api_url` | URL | `https://slack.com/api` | Slack API base the `token` may be sent to. Refused unless it is `https` (or `http` to loopback, which is what makes the test suite's mock server possible) and carries no userinfo. |
+| `poll_interval` | int (seconds) | `120` | How often `request_review --watch` polls for reactions. Jittered by ±15% so several mtui instances watching the same channel do not synchronise. Slack's tier-3 methods allow roughly 50 requests/minute. |
+| `watch_timeout` | int (seconds) | `3600` | How long `request_review --watch` runs before giving up. |
+
+Example:
+
+```toml
+[slack]
+enabled = true
+token = "xoxb-…"
+channel = "#qam-review"
+```
+
 ### `[lock]`
 
 Remote-lock behaviour on target hosts (interoperable with Python mtui on a shared
