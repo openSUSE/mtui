@@ -349,6 +349,18 @@ mod tests {
         assert_eq!(out["type"], json!("object"));
     }
 
+    #[test]
+    fn slim_input_schema_preserves_additional_properties_false() {
+        // The strict-schema guard must survive slimming: dropping it would leave
+        // the wire schema open while the runtime dispatch still rejects extras.
+        let mut schema = Map::new();
+        schema.insert("type".to_owned(), json!("object"));
+        schema.insert("properties".to_owned(), json!({}));
+        schema.insert("additionalProperties".to_owned(), json!(false));
+        let out = slim_input_schema(&schema);
+        assert_eq!(out["additionalProperties"], json!(false));
+    }
+
     // -- cap_output ----------------------------------------------------------
 
     #[test]

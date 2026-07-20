@@ -724,6 +724,8 @@ fn schema(props: Vec<(&str, Value)>, required: &[&str]) -> Map<String, Value> {
             Value::Array(required.iter().map(|r| json!(r)).collect()),
         );
     }
+    // Strict: reject misspelled fields (see `schema::command_input_schema`).
+    s.insert("additionalProperties".to_owned(), Value::Bool(false));
     s
 }
 
@@ -920,6 +922,22 @@ async fn dispatch_testreport_tool_inner(
     name: &str,
     kwargs: &Map<String, Value>,
 ) -> Result<Value, McpCommandError> {
+    // Reject misspelled fields up front, mirroring the tool's strict schema. The
+    // allowed keys are exactly the descriptor's advertised properties, so the
+    // check can never drift from the schema.
+    if let Some(desc) = testreport_tool_descriptors()
+        .into_iter()
+        .find(|d| d.name == name)
+    {
+        let allowed = desc
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(|props| props.keys().map(String::as_str));
+        crate::tools::reject_unknown_kwargs(kwargs, allowed)?;
+    }
+
     let template = opt_str(kwargs, "template")?;
     match name {
         "testreport_read" => {
@@ -1522,6 +1540,26 @@ mod tests {
             .await
             .expect_err("unknown tool");
         assert!(err.stderr.contains("unknown testreport tool"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_refuses_unknown_property() {
+        // A misspelled field (`relpat` for `relpath`) must be refused, not
+        // silently dropped into a whole-`log` read.
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "a\nb\n").await;
+
+        let mut kwargs = Map::new();
+        kwargs.insert("relpat".into(), json!("source.diff"));
+        let err = dispatch_testreport_tool(&session, "testreport_read", &kwargs, None)
+            .await
+            .expect_err("typo refused");
+        assert_eq!(err.exit_code, 1);
+        assert!(
+            err.stderr.contains("unknown argument(s): relpat"),
+            "{err:?}"
+        );
     }
 
     #[test]

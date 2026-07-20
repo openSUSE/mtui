@@ -6,6 +6,7 @@ expression: pretty
   {
     "description": "Bulk-set the repetitive per-bug placeholder tokens an exported testreport ships with, in one atomic write. `reproducer` (YES/NO) sets every unfilled `REPRODUCER_PRESENT:` line; `status` (one of FIXED, NOT_FIXED, HYPOTHETICAL, NOT_REPRODUCIBLE, NO_ENVIRONMENT, TOO_COMPLEX, SKIPPED, OTHER) sets every unfilled templated `STATUS:` line; `summary` (PASSED/FAILED) sets the top `SUMMARY:` line. Only exact template placeholders are touched, so it is idempotent and never overwrites a value you already set by hand. Returns a `filled` count per token. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "reproducer": {
           "description": "Set every unfilled REPRODUCER_PRESENT: line.",
@@ -50,6 +51,7 @@ expression: pretty
   {
     "description": "List the auxiliary log files in the loaded testreport's checkout: the per-package/arch build-check logs (build_checks/) and the per-refhost install logs (install_logs/). Returns each file's name and size; fetch one with testreport_read (pass relpath). Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "template": {
           "description": "RRID of a loaded template to target (required when >1 loaded).",
@@ -64,6 +66,7 @@ expression: pretty
   {
     "description": "Splice an inclusive 1-indexed line range in the currently loaded testreport file. `end_line == start_line - 1` inserts before `start_line` without replacing anything. The write is atomic. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "end_line": {
           "description": "Last line of the inclusive range; start_line-1 to insert.",
@@ -95,6 +98,7 @@ expression: pretty
   {
     "description": "Read a file from the loaded testreport's checkout. Returns the path, total line count, and content (utf-8, errors replaced). By default (no `relpath`) reads the report's `log` file; pass `relpath` to read another checkout file instead, e.g. 'build_checks/<pkg>.<arch>.log', 'install_logs/<host>.log', 'source.diff' or 'patchinfo.xml' — the path may not escape the checkout directory. Pass `offset` (1-based first line) and/or `limit` (max lines) to read a line window instead of the whole file. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "limit": {
           "description": "Max lines to return (default: to end of file).",
@@ -124,6 +128,7 @@ expression: pretty
   {
     "description": "Overwrite the currently loaded testreport file with the given content. Atomic. Use this as the fallback when patching would require tracking line-number drift across many edits. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "content": {
           "description": "The full new file content.",

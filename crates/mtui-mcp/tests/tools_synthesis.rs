@@ -8,7 +8,8 @@
 #![cfg(feature = "mcp")]
 
 use mtui_core::register_all;
-use mtui_mcp::{build_tools, job_tool_descriptors};
+use mtui_mcp::{build_tools, job_tool_descriptors, testreport_tool_descriptors};
+use serde_json::Value;
 
 /// Deny-listed commands never appear as tools.
 #[test]
@@ -57,4 +58,25 @@ fn tool_surface_snapshot() {
         jobs.join("\n"),
     );
     insta::assert_snapshot!(rendered);
+}
+
+/// Every advertised tool schema — synthesised command tools, the job tools, and
+/// the hand-written testreport tools — must be strict (`additionalProperties:
+/// false`), so a client cannot silently pass a misspelled field. A drift guard:
+/// a future tool that regresses to an open schema fails here.
+#[test]
+fn every_tool_schema_rejects_unknown_properties() {
+    let all = build_tools(&register_all())
+        .into_iter()
+        .chain(job_tool_descriptors())
+        .chain(testreport_tool_descriptors());
+    for tool in all {
+        assert_eq!(
+            tool.input_schema.get("additionalProperties"),
+            Some(&Value::Bool(false)),
+            "tool `{}` schema must set additionalProperties:false, got {:?}",
+            tool.name,
+            tool.input_schema.get("additionalProperties"),
+        );
+    }
 }

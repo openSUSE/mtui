@@ -5,6 +5,7 @@ expression: pretty
 [
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -35,6 +36,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -53,6 +55,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -87,6 +90,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -122,6 +126,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -140,6 +145,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -158,6 +164,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -184,6 +191,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -210,6 +218,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "attribute": {
           "type": "string"
@@ -229,6 +238,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "attributes": {
           "items": {
@@ -245,6 +255,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -275,6 +286,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -309,6 +321,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -334,6 +347,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -375,6 +389,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -393,6 +408,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -432,6 +448,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -450,6 +467,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -480,6 +498,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -498,6 +517,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -535,6 +555,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -560,6 +581,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "addon": {
           "items": {
@@ -624,6 +646,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -649,6 +672,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -667,6 +691,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -685,6 +710,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -703,6 +729,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -735,6 +762,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -761,6 +789,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -794,6 +823,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all": {
           "default": false,
@@ -834,6 +864,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "aggregated_groups": {
           "items": {
@@ -901,6 +932,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -946,6 +978,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -971,6 +1004,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1001,6 +1035,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1048,6 +1083,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1101,6 +1137,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1119,6 +1156,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1144,6 +1182,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1169,6 +1208,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1206,6 +1246,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1245,6 +1286,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1276,6 +1318,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "add": {
           "default": false,
@@ -1316,6 +1359,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1348,6 +1392,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1378,6 +1423,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1396,6 +1442,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1421,6 +1468,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1439,6 +1487,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1469,6 +1518,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1510,6 +1560,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1535,6 +1586,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1570,6 +1622,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,
@@ -1610,6 +1663,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_assignees": {
           "default": false,
@@ -1656,6 +1710,7 @@ expression: pretty
   },
   {
     "input_schema": {
+      "additionalProperties": false,
       "properties": {
         "all_templates": {
           "default": false,

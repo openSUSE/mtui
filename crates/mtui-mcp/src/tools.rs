@@ -98,6 +98,49 @@ fn is_read_only(name: &str) -> bool {
     READ_ONLY_EXACT.contains(&name) || READ_ONLY_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
+/// Reject any tool-call kwarg not in `allowed`, mirroring the strict
+/// `additionalProperties: false` the advertised schema carries.
+///
+/// The schema half lets a schema-aware client fail fast on a typo; this is the
+/// runtime half for clients that do not validate — without it a misspelled field
+/// (`temlate=`, `mesage=`) is silently dropped and the command runs with it
+/// missing. Offending keys are reported sorted for a deterministic message.
+pub(crate) fn reject_unknown_kwargs<'a>(
+    kwargs: &Map<String, Value>,
+    allowed: impl IntoIterator<Item = &'a str>,
+) -> Result<(), McpCommandError> {
+    let allowed: std::collections::BTreeSet<&str> = allowed.into_iter().collect();
+    let mut unknown: Vec<&str> = kwargs
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !allowed.contains(k))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    let names = unknown.join(", ");
+    Err(McpCommandError {
+        stdout: String::new(),
+        stderr: format!("unknown argument(s): {names}"),
+        exit_code: 1,
+    })
+}
+
+/// The `clap` subcommand a fanned-out subparser tool's args live on.
+///
+/// For a subparser tool the schema is built from a subcommand
+/// (`command_input_schema(sub)`) and the route carries that subcommand's name as
+/// its single-element `argv_prefix`; return that subcommand so the allowed-arg
+/// set matches the advertised schema. `None` for a plain (non-fanned-out) tool.
+fn subparser_layer<'a>(
+    parser: &'a clap::Command,
+    argv_prefix: &[String],
+) -> Option<&'a clap::Command> {
+    let [sub_name] = argv_prefix else { return None };
+    parser.get_subcommands().find(|c| c.get_name() == sub_name)
+}
+
 /// Inject a `background` boolean (default false, not required) into a slow
 /// command's input schema.
 fn add_background_property(schema: &mut Map<String, Value>) {
@@ -270,6 +313,20 @@ pub async fn dispatch_tool(
         exit_code: 1,
     })?;
     let parser = command_parser(command.as_ref());
+
+    // Reject misspelled fields before argv reconstruction silently drops them.
+    // `background` was already popped above, so it needn't be in the allowed set;
+    // the allowed keys are exactly the callable clap args of the parser layer that
+    // produced this tool's schema. For a fanned-out subparser tool (`config_show`)
+    // that layer is the *subcommand* named by `argv_prefix`, not the parent — its
+    // args (`attributes`) live there, so match the schema by resolving it.
+    let arg_source = subparser_layer(&parser, &route.argv_prefix).unwrap_or(&parser);
+    let allowed = arg_source
+        .get_arguments()
+        .map(|a| a.get_id().as_str())
+        .filter(|id| *id != "help" && *id != "version");
+    reject_unknown_kwargs(&kwargs, allowed)?;
+
     let argv = crate::argv::kwargs_to_argv(&parser, &kwargs, &route.argv_prefix);
 
     if background {
@@ -330,12 +387,14 @@ pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
         schema.insert("type".to_owned(), Value::String("object".to_owned()));
         schema.insert("properties".to_owned(), Value::Object(props));
         schema.insert("required".to_owned(), json!(["job_id"]));
+        schema.insert("additionalProperties".to_owned(), Value::Bool(false));
         schema
     };
     let empty_schema = || {
         let mut schema = Map::new();
         schema.insert("type".to_owned(), Value::String("object".to_owned()));
         schema.insert("properties".to_owned(), Value::Object(Map::new()));
+        schema.insert("additionalProperties".to_owned(), Value::Bool(false));
         schema
     };
 
@@ -391,6 +450,11 @@ pub async fn dispatch_job_tool(
     name: &str,
     kwargs: &Map<String, Value>,
 ) -> Result<String, McpCommandError> {
+    // Reject misspelled fields, mirroring each job tool's strict schema:
+    // `job_list` takes nothing; the others take only `job_id`.
+    let allowed: &[&str] = if name == "job_list" { &[] } else { &["job_id"] };
+    reject_unknown_kwargs(kwargs, allowed.iter().copied())?;
+
     match name {
         "job_list" => {
             let jobs = session.job_list();
@@ -452,6 +516,31 @@ mod tests {
     use clap::ArgMatches;
     use mtui_config::Config;
     use mtui_core::{Command, CommandResult, Scope, Session, register_all};
+
+    // ------------------------------------------------------ reject_unknown_kwargs
+
+    #[test]
+    fn reject_unknown_kwargs_accepts_only_known_keys() {
+        let kwargs = json!({ "template": "a:b:1:1" });
+        let kwargs = kwargs.as_object().unwrap();
+        reject_unknown_kwargs(kwargs, ["template", "all_templates"]).expect("known key allowed");
+    }
+
+    #[test]
+    fn reject_unknown_kwargs_empty_is_ok() {
+        let kwargs = Map::new();
+        reject_unknown_kwargs(&kwargs, ["anything"]).expect("no kwargs is fine");
+    }
+
+    #[test]
+    fn reject_unknown_kwargs_reports_offenders_sorted() {
+        let kwargs = json!({ "zzz": 1, "aaa": 2, "template": "ok" });
+        let kwargs = kwargs.as_object().unwrap();
+        let err = reject_unknown_kwargs(kwargs, ["template"]).expect_err("typos refused");
+        assert_eq!(err.exit_code, 1);
+        assert!(err.stdout.is_empty());
+        assert_eq!(err.stderr, "unknown argument(s): aaa, zzz");
+    }
 
     struct AliasedCommand;
 
@@ -616,6 +705,53 @@ mod tests {
         assert!(out.contains("alice"), "got: {out:?}");
     }
 
+    #[tokio::test]
+    async fn dispatch_refuses_unknown_property_instead_of_dropping_it() {
+        // A misspelled field must be refused, not silently discarded (which would
+        // run `config show` with no attribute filter).
+        let session = McpSession::new(Config::default());
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("config_show").expect("config_show route");
+        let kwargs = json!({ "attribut": ["session_user"] }); // typo: attribut(e)s
+        let err = dispatch_tool(
+            &registry,
+            &session,
+            route,
+            kwargs.as_object().unwrap(),
+            None,
+        )
+        .await
+        .expect_err("typo refused");
+        assert_eq!(err.exit_code, 1);
+        assert!(
+            err.stderr.contains("unknown argument(s): attribut"),
+            "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_still_accepts_background_on_slow_route() {
+        // `background` is popped before validation, so a legit background call on
+        // a slow command is not falsely rejected as an unknown property.
+        let session = McpSession::new(Config::default());
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("run").expect("run route").clone();
+        assert!(route.slow, "run must be slow");
+        let kwargs = json!({ "background": true, "command": ["true"] });
+        let out = dispatch_tool(
+            &registry,
+            &session,
+            &route,
+            kwargs.as_object().unwrap(),
+            None,
+        )
+        .await
+        .expect("background start not rejected");
+        assert!(out.contains("started job"), "got: {out:?}");
+    }
+
     /// A `background=true` slow call with nothing loaded mints one job and
     /// returns the single-job "started job" reply naming the id to poll.
     #[tokio::test]
@@ -671,6 +807,30 @@ mod tests {
             .await
             .expect("job_list succeeds");
         assert_eq!(out, "no background jobs");
+    }
+
+    /// A job tool refuses a misspelled property rather than ignoring it.
+    #[tokio::test]
+    async fn dispatch_job_tool_refuses_unknown_property() {
+        let session = McpSession::new(Config::default());
+        // `job_list` takes no args.
+        let kwargs = json!({ "job_id": "x" });
+        let err = dispatch_job_tool(&session, "job_list", kwargs.as_object().unwrap())
+            .await
+            .expect_err("job_list takes nothing");
+        assert!(
+            err.stderr.contains("unknown argument(s): job_id"),
+            "got: {err:?}"
+        );
+        // `job_status` takes only `job_id`.
+        let kwargs = json!({ "job_id": "x", "jub_id": "typo" });
+        let err = dispatch_job_tool(&session, "job_status", kwargs.as_object().unwrap())
+            .await
+            .expect_err("typo refused");
+        assert!(
+            err.stderr.contains("unknown argument(s): jub_id"),
+            "got: {err:?}"
+        );
     }
 
     /// `job_status` requires a `job_id` (parse-style error when absent).

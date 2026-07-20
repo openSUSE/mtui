@@ -68,6 +68,10 @@ pub fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
     if !required.is_empty() {
         out.insert("required".to_owned(), Value::Array(required));
     }
+    // Reject unknown/misspelled fields: a strict schema lets schema-aware clients
+    // fail fast on a typo instead of silently dropping it (the runtime dispatch
+    // enforces the same, for clients that do not validate client-side).
+    out.insert("additionalProperties".to_owned(), Value::Bool(false));
     out
 }
 
@@ -558,6 +562,21 @@ mod tests {
         let schema = schema_for("updates");
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"].is_object());
+    }
+
+    #[test]
+    fn output_is_strict_rejecting_unknown_properties() {
+        // A strict schema advertises additionalProperties:false so a schema-aware
+        // client rejects a misspelled field rather than silently dropping it.
+        let schema = schema_for("updates");
+        assert_eq!(schema["additionalProperties"], Value::Bool(false));
+        // Also holds for an empty command.
+        let empty = command_input_schema(
+            &clap::Command::new("probe")
+                .no_binary_name(true)
+                .disable_help_flag(true),
+        );
+        assert_eq!(empty["additionalProperties"], Value::Bool(false));
     }
 
     #[test]
