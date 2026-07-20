@@ -184,9 +184,14 @@ impl AutoExport {
             return Vec::new();
         }
 
+        // Fan the downloads out concurrently (order-preserving), then write
+        // serially in input order — the write step touches the filesystem and
+        // may prompt on overwrite, so it must not run in parallel (upstream #331).
+        let downloads = results.iter().map(|url| self.installog_lines(fetcher, url));
+        let all_lines = futures::future::join_all(downloads).await;
+
         let mut filenames = Vec::new();
-        for url in results {
-            let lines = self.installog_lines(fetcher, url).await;
+        for (url, lines) in results.iter().zip(all_lines) {
             if lines.is_empty() {
                 continue;
             }
@@ -412,6 +417,126 @@ mod tests {
         assert_eq!(out, vec!["sles_15-SP5_x86_64.log".to_string()]);
         let written = std::fs::read_to_string(ex.ctx.install_logs_dir().join(&out[0])).unwrap();
         assert_eq!(written, "zypper install log\n");
+    }
+
+    /// A fetcher returning a distinct body per URL, or an error for URLs in
+    /// its `fail` set — lets tests assert content lands in the right file
+    /// regardless of download completion order.
+    struct KeyedFetcher {
+        bodies: std::collections::HashMap<String, Vec<u8>>,
+        fail: std::collections::HashSet<String>,
+    }
+
+    #[async_trait]
+    impl BytesFetcher for KeyedFetcher {
+        async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, String> {
+            if self.fail.contains(url) {
+                return Err(format!("boom: {url}"));
+            }
+            self.bodies
+                .get(url)
+                .cloned()
+                .ok_or_else(|| format!("no body for {url}"))
+        }
+    }
+
+    fn url_at(distri: &str, arch: &str, version: &str, path: &str) -> URLs {
+        URLs::new(distri, arch, version, path, "passed")
+    }
+
+    #[tokio::test]
+    async fn get_logs_preserves_order_under_concurrent_fanout() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = vec![
+            url_at("SLES", "x86_64", "15-SP5", "https://oqa/a/file/log.txt"),
+            url_at("SLED", "aarch64", "15-SP6", "https://oqa/b/file/log.txt"),
+            url_at("SLES", "s390x", "15-SP4", "https://oqa/c/file/log.txt"),
+        ];
+        let auto = seeded_auto(Some(results.clone()), vec![]);
+        let ex = AutoExport::new(ctx_in(dir.path(), &[]), Some(auto), None);
+
+        let bodies = [
+            ("https://oqa/a/file/log.txt", b"body-a\n".to_vec()),
+            ("https://oqa/b/file/log.txt", b"body-b\n".to_vec()),
+            ("https://oqa/c/file/log.txt", b"body-c\n".to_vec()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let fetcher = KeyedFetcher {
+            bodies,
+            fail: std::collections::HashSet::new(),
+        };
+
+        let out = ex
+            .get_logs(&fetcher, &super::super::base::DenyOverwrite)
+            .await;
+
+        // Filenames follow input order.
+        assert_eq!(
+            out,
+            vec![
+                "sles_15-SP5_x86_64.log".to_string(),
+                "sled_15-SP6_aarch64.log".to_string(),
+                "sles_15-SP4_s390x.log".to_string(),
+            ]
+        );
+        // Each file holds the body for its own URL (content correctly paired).
+        let dir = ex.ctx.install_logs_dir();
+        for (name, expect) in [
+            ("sles_15-SP5_x86_64.log", "body-a\n"),
+            ("sled_15-SP6_aarch64.log", "body-b\n"),
+            ("sles_15-SP4_s390x.log", "body-c\n"),
+        ] {
+            assert_eq!(std::fs::read_to_string(dir.join(name)).unwrap(), expect);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_logs_skips_failed_download_and_pairs_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let results = vec![
+            url_at("SLES", "x86_64", "15-SP5", "https://oqa/a/file/log.txt"),
+            url_at("SLED", "aarch64", "15-SP6", "https://oqa/b/file/log.txt"),
+            url_at("SLES", "s390x", "15-SP4", "https://oqa/c/file/log.txt"),
+        ];
+        let auto = seeded_auto(Some(results.clone()), vec![]);
+        let ex = AutoExport::new(ctx_in(dir.path(), &[]), Some(auto), None);
+
+        let bodies = [
+            ("https://oqa/a/file/log.txt", b"body-a\n".to_vec()),
+            ("https://oqa/c/file/log.txt", b"body-c\n".to_vec()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let fetcher = KeyedFetcher {
+            bodies,
+            fail: std::iter::once("https://oqa/b/file/log.txt".to_string()).collect(),
+        };
+
+        let out = ex
+            .get_logs(&fetcher, &super::super::base::DenyOverwrite)
+            .await;
+
+        // The failed middle download is skipped; the surrounding logs still pair.
+        assert_eq!(
+            out,
+            vec![
+                "sles_15-SP5_x86_64.log".to_string(),
+                "sles_15-SP4_s390x.log".to_string(),
+            ]
+        );
+        let dir = ex.ctx.install_logs_dir();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("sles_15-SP5_x86_64.log")).unwrap(),
+            "body-a\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("sles_15-SP4_s390x.log")).unwrap(),
+            "body-c\n"
+        );
+        assert!(!dir.join("sled_15-SP6_aarch64.log").exists());
     }
 
     #[tokio::test]
