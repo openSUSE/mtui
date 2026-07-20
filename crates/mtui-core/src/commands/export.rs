@@ -113,7 +113,12 @@ impl Command for Export {
                 let dashboard_api = session.config.qem_dashboard_api.clone();
                 let openqa_instance = session.config.openqa_instance.clone();
                 let incident = build_incident(rrid.clone(), dashboard_api, http).await;
-                let mut auto = build_auto_openqa(openqa_instance, &incident, rrid.clone());
+                let mut auto = build_auto_openqa(
+                    openqa_instance,
+                    &incident,
+                    rrid.clone(),
+                    session.config.max_parallel as usize,
+                );
                 // Best-effort, matching upstream export: a failed dashboard fetch
                 // is folded to "no results" so the export still renders the rest
                 // of the report rather than aborting.
@@ -255,7 +260,7 @@ mod tests {
             client,
             data: None,
         };
-        let mut auto = DashboardAutoOpenQA::new("http://oqa.invalid", &incident, rrid);
+        let mut auto = DashboardAutoOpenQA::new("http://oqa.invalid", &incident, rrid, 1);
         auto.results = Some(vec![mtui_types::URLs::new(
             "SLES", "x86_64", "15-SP5", log_url, "passed",
         )]);
@@ -456,8 +461,13 @@ mod tests {
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = session.http_client().unwrap();
         let incident = build_incident(rrid.clone(), format!("{}/api", server.uri()), http).await;
-        session.metadata_mut().openqa_mut().auto =
-            Some(build_auto_openqa(server.uri(), &incident, rrid));
+        let max_parallel = session.config.max_parallel as usize;
+        session.metadata_mut().openqa_mut().auto = Some(build_auto_openqa(
+            server.uri(),
+            &incident,
+            rrid,
+            max_parallel,
+        ));
 
         // Now point config at an unreachable dashboard: if export tried to
         // rebuild, it would still succeed (errors are surfaced), so instead we

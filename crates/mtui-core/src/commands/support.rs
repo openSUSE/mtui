@@ -49,15 +49,17 @@ pub async fn build_incident(
 
 /// Builds a fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow on
 /// the given openQA instance `host` (upstream `DashboardAutoOpenQA(config,
-/// config.openqa_instance, incident, rrid)`). Call [`DashboardAutoOpenQA::run`]
-/// to populate it.
+/// config.openqa_instance, incident, rrid)`). `max_parallel` bounds the
+/// connector's concurrent per-setting job fetches. Call
+/// [`DashboardAutoOpenQA::run`] to populate it.
 #[must_use]
 pub fn build_auto_openqa(
     host: String,
     incident: &QemIncident,
     rrid: RequestReviewID,
+    max_parallel: usize,
 ) -> DashboardAutoOpenQA {
-    DashboardAutoOpenQA::new(host, incident, rrid)
+    DashboardAutoOpenQA::new(host, incident, rrid, max_parallel)
 }
 
 /// Builds a fresh, unpopulated [`KernelOpenQA`] connector for a given openQA

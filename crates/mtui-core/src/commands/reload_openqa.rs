@@ -81,7 +81,12 @@ impl Command for ReloadOpenQA {
 
         if session.metadata().openqa().auto.is_none() {
             tracing::info!("Getting data from QEM Dashboard");
-            let mut auto = build_auto_openqa(openqa_instance, &incident, rrid);
+            let mut auto = build_auto_openqa(
+                openqa_instance,
+                &incident,
+                rrid,
+                session.config.max_parallel as usize,
+            );
             auto.run().await.map_err(dashboard_fetch_err)?;
             session.metadata_mut().openqa_mut().auto = Some(auto);
         } else {
@@ -203,8 +208,13 @@ mod tests {
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let openqa_instance = session.config.openqa_instance.clone();
         let incident = build_incident(rrid.clone(), dashboard_api, http).await;
-        session.metadata_mut().openqa_mut().auto =
-            Some(build_auto_openqa(openqa_instance, &incident, rrid));
+        let max_parallel = session.config.max_parallel as usize;
+        session.metadata_mut().openqa_mut().auto = Some(build_auto_openqa(
+            openqa_instance,
+            &incident,
+            rrid,
+            max_parallel,
+        ));
 
         let args = matches(&ReloadOpenQA, &[]);
         ReloadOpenQA.call(&mut session, &args).await.unwrap();

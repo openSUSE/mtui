@@ -303,7 +303,7 @@ mod tests {
             client,
             data: None,
         };
-        let mut auto = DashboardAutoOpenQA::new("http://oqa.invalid", &incident, rrid);
+        let mut auto = DashboardAutoOpenQA::new("http://oqa.invalid", &incident, rrid, 1);
         auto.results = results;
         auto.pp = pp;
         auto

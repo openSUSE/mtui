@@ -262,6 +262,7 @@ pub async fn make_testreport(
         // crosses `.await`).
         let dashboard_api = report.base().config.qem_dashboard_api.clone();
         let openqa_instance = report.base().config.openqa_instance.clone();
+        let max_parallel = report.base().config.max_parallel as usize;
         let policy = resolve_verify(
             VerifyPolicy::Default(true),
             Some(VerifyPolicy::from_config(&report.base().config.ssl_verify)),
@@ -274,7 +275,12 @@ pub async fn make_testreport(
         match QemIncident::new(rrid.clone(), dashboard_api, policy).await {
             Ok(incident) => {
                 info!("Getting data from QEM Dashboard");
-                let mut auto = DashboardAutoOpenQA::new(openqa_instance, &incident, rrid.clone());
+                let mut auto = DashboardAutoOpenQA::new(
+                    openqa_instance,
+                    &incident,
+                    rrid.clone(),
+                    max_parallel,
+                );
                 // Load time is deliberately best-effort: a failed dashboard fetch
                 // is folded to "no results" here (the same as an empty result),
                 // so the workflow downgrades to manual rather than aborting the

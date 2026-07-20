@@ -32,6 +32,7 @@
 
 use std::collections::BTreeMap;
 
+use futures::stream::{self, StreamExt};
 use serde_json::Value;
 use tokio::time::timeout;
 
@@ -268,6 +269,8 @@ pub struct DashboardAutoOpenQA {
     pub results: Option<Vec<URLs>>,
     /// The normalized jobs (populated by [`run`]).
     jobs: Vec<NormalizedJob>,
+    /// Upper bound on concurrent per-setting job fetches (clamped to `>=1`).
+    max_parallel: usize,
 }
 
 impl DashboardAutoOpenQA {
@@ -275,8 +278,16 @@ impl DashboardAutoOpenQA {
     pub const KIND: &'static str = "auto";
 
     /// Build the provider for an incident on a given openQA `host`.
+    ///
+    /// `max_parallel` bounds how many per-setting job fetches run concurrently
+    /// in [`load_jobs`](Self::load_jobs) (clamped to `>=1`).
     #[must_use]
-    pub fn new(host: impl Into<String>, incident: &QemIncident, rrid: RequestReviewID) -> Self {
+    pub fn new(
+        host: impl Into<String>,
+        incident: &QemIncident,
+        rrid: RequestReviewID,
+        max_parallel: usize,
+    ) -> Self {
         Self {
             host: host.into(),
             rrid,
@@ -285,6 +296,7 @@ impl DashboardAutoOpenQA {
             pp: Vec::new(),
             results: None,
             jobs: Vec::new(),
+            max_parallel,
         }
     }
 
@@ -344,10 +356,10 @@ impl DashboardAutoOpenQA {
     /// Fetch and normalize all incident + aggregate jobs.
     ///
     /// The two top-level settings lists are fetched concurrently; then the
-    /// per-setting job fetches fan out concurrently while the results are read
-    /// back in submission order (incident settings first, then update settings)
-    /// so the resulting list order is deterministic. Each fetch is guarded by a
-    /// [`FUTURE_TIMEOUT`] cap.
+    /// per-setting job fetches fan out with bounded concurrency
+    /// (`max_parallel`) while the results are read back in submission order
+    /// (incident settings first, then update settings) so the resulting list
+    /// order is deterministic. Each fetch is guarded by a [`FUTURE_TIMEOUT`] cap.
     ///
     /// # Errors
     ///
@@ -400,28 +412,39 @@ impl DashboardAutoOpenQA {
             return Ok(Vec::new());
         }
 
-        // Fan out per-setting jobs fetches; await in submission order.
-        let futures: Vec<_> = tasks
+        // Fan out per-setting jobs fetches with bounded concurrency, then read
+        // the results back in submission order. `buffer_unordered` yields in
+        // completion order, so each future carries its submission index and the
+        // collected results are re-sorted before consumption — one slow endpoint
+        // no longer serializes the whole batch, and ordering stays deterministic.
+        let fetch_specs: Vec<(usize, bool, i64)> = tasks
             .iter()
-            .map(|&(source, _, id)| {
-                let client = &self.client;
-                async move {
-                    let fut = async {
-                        if source == "incident" {
-                            client.incident_jobs(id).await
-                        } else {
-                            client.update_jobs(id).await
-                        }
-                    };
-                    (source, id, timeout(per_fetch, fut).await)
-                }
-            })
+            .enumerate()
+            .map(|(idx, &(source, _, id))| (idx, source == "incident", id))
             .collect();
-
-        let results = futures_join_all(futures).await;
+        let futures = fetch_specs.into_iter().map(|(idx, is_incident, id)| {
+            let client = self.client.clone();
+            async move {
+                let outcome = timeout(per_fetch, async {
+                    if is_incident {
+                        client.incident_jobs(id).await
+                    } else {
+                        client.update_jobs(id).await
+                    }
+                })
+                .await;
+                (idx, id, outcome)
+            }
+        });
+        let mut indexed: Vec<_> = stream::iter(futures)
+            .buffer_unordered(self.max_parallel.max(1))
+            .collect()
+            .await;
+        indexed.sort_by_key(|(idx, ..)| *idx);
+        let results = indexed.into_iter().map(|(_, id, outcome)| (id, outcome));
 
         let mut jobs = Vec::new();
-        for ((source, setting, _), (_, id, outcome)) in tasks.iter().zip(results) {
+        for ((source, setting, _), (id, outcome)) in tasks.iter().zip(results) {
             match outcome {
                 Ok(setting_jobs) => {
                     for job in &setting_jobs {
@@ -715,21 +738,6 @@ impl OpenQAResult for DashboardAutoOpenQA {
     fn has_results(&self) -> bool {
         self.is_present()
     }
-}
-
-/// Await a list of futures, preserving order. A tiny `join_all` avoiding a
-/// `futures` crate dependency (the fetches share no state; correctness only
-/// needs the results back in the same order they were submitted).
-async fn futures_join_all<F, T>(futures: Vec<F>) -> Vec<T>
-where
-    F: std::future::Future<Output = T>,
-{
-    let mut out = Vec::with_capacity(futures.len());
-    let mut pinned: Vec<std::pin::Pin<Box<F>>> = futures.into_iter().map(Box::pin).collect();
-    for fut in &mut pinned {
-        out.push(fut.as_mut().await);
-    }
-    out
 }
 
 /// Coerce a value to a display string, mapping empty to `"unknown"`. Mirrors
@@ -1234,6 +1242,7 @@ mod tests {
             pp: Vec::new(),
             results: None,
             jobs: Vec::new(),
+            max_parallel: 1,
         }
     }
 
@@ -1392,6 +1401,7 @@ mod tests {
             pp: Vec::new(),
             results: None,
             jobs: Vec::new(),
+            max_parallel: 4,
         }
     }
 
@@ -1631,5 +1641,73 @@ mod tests {
         let mut dashboard = dashboard_against(&server);
         dashboard.run().await.unwrap();
         assert_eq!(dashboard.job_test_names(), vec!["mau-update-2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn load_jobs_fans_out_concurrently_and_preserves_order() {
+        // Regression for mtui-rs-4sz1: per-setting fetches must run concurrently
+        // (bounded by max_parallel) yet be consumed in submission order. Four
+        // incident settings each delay their jobs response; the FIRST-submitted
+        // (id 11) gets the LONGEST delay, so a naive completion-order collect
+        // would reorder it last. `dashboard_against` uses max_parallel = 4, so
+        // all four run at once and wall-clock ~= the single longest delay.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/12358"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"id": 11, "settings": {}},
+                {"id": 12, "settings": {}},
+                {"id": 13, "settings": {}},
+                {"id": 14, "settings": {}}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/update_settings/12358"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&server)
+            .await;
+        // Longest delay first (id 11), descending after — completion order is the
+        // reverse of submission order.
+        let delays = [(11i64, 300u64), (12, 200), (13, 100), (14, 50)];
+        for (sid, delay_ms) in delays {
+            Mock::given(method("GET"))
+                .and(path(format!("/api/jobs/incident/{sid}")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_delay(Duration::from_millis(delay_ms))
+                        .set_body_json(json!([{
+                            "job_id": 1000 + sid,
+                            "name": format!("qam-{sid}"),
+                            "status": "passed"
+                        }])),
+                )
+                .mount(&server)
+                .await;
+        }
+
+        let mut dashboard = dashboard_against(&server);
+        let start = std::time::Instant::now();
+        dashboard.run().await.unwrap();
+        let elapsed = start.elapsed();
+
+        // Order follows submission (incident settings in listed order), NOT
+        // completion order — proves the index re-sort after buffer_unordered.
+        assert_eq!(
+            dashboard.job_test_names(),
+            vec![
+                "qam-11".to_string(),
+                "qam-12".to_string(),
+                "qam-13".to_string(),
+                "qam-14".to_string(),
+            ]
+        );
+        // Concurrent: elapsed is near the longest single delay (300ms), far below
+        // the serial sum (650ms). Generous margin to tolerate CI jitter while
+        // still failing the old sequential await (which would take >=650ms).
+        assert!(
+            elapsed < Duration::from_millis(600),
+            "expected concurrent fan-out (~300ms), took {elapsed:?}"
+        );
     }
 }

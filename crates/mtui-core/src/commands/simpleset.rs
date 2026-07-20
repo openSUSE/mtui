@@ -151,7 +151,12 @@ impl Command for SetWorkflow {
                 }
                 tracing::info!("Setting workflow to 'kernel'");
                 session.set_workflow(Workflow::Kernel);
-                let mut auto = build_auto_openqa(openqa_instance.clone(), &incident, rrid.clone());
+                let mut auto = build_auto_openqa(
+                    openqa_instance.clone(),
+                    &incident,
+                    rrid.clone(),
+                    session.config.max_parallel as usize,
+                );
                 auto.run().await.map_err(dashboard_fetch_err)?;
                 session.metadata_mut().openqa_mut().auto = Some(auto);
                 let mut kernel = Vec::new();
@@ -174,7 +179,12 @@ impl Command for SetWorkflow {
                 }
                 tracing::info!("Setting workflow to 'auto'");
                 session.set_workflow(Workflow::Auto);
-                let mut auto = build_auto_openqa(openqa_instance, &incident, rrid);
+                let mut auto = build_auto_openqa(
+                    openqa_instance,
+                    &incident,
+                    rrid,
+                    session.config.max_parallel as usize,
+                );
                 auto.run().await.map_err(dashboard_fetch_err)?;
                 let no_results = auto.results.is_none();
                 session.metadata_mut().openqa_mut().auto = Some(auto);
@@ -245,10 +255,11 @@ async fn refresh_auto(
     openqa_instance: &str,
     rrid: mtui_types::RequestReviewID,
 ) -> CommandResult {
+    let max_parallel = session.config.max_parallel as usize;
     if let Some(auto) = session.metadata_mut().openqa_mut().auto.as_mut() {
         auto.run().await.map_err(dashboard_fetch_err)?;
     } else {
-        let mut auto = build_auto_openqa(openqa_instance.to_owned(), incident, rrid);
+        let mut auto = build_auto_openqa(openqa_instance.to_owned(), incident, rrid, max_parallel);
         auto.run().await.map_err(dashboard_fetch_err)?;
         session.metadata_mut().openqa_mut().auto = Some(auto);
     }

@@ -94,7 +94,7 @@ async fn loads_incident_and_aggregate_jobs() {
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
-    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid);
+    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     dashboard.run().await.unwrap();
 
     let pp = dashboard.pp.concat();
@@ -144,7 +144,7 @@ async fn slfo_1_2_incident_uses_review_id() {
     let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
     assert_eq!(incident.incident_number, "12358");
 
-    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid);
+    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     dashboard.run().await.unwrap();
     // No jobs -> no results, no rendered block.
     assert!(dashboard.pp.is_empty());
@@ -214,7 +214,7 @@ async fn run_errors_when_dashboard_unreachable() {
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
-    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid);
+    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     assert!(dashboard.run().await.is_err());
 }
 
@@ -241,7 +241,7 @@ async fn run_ok_on_empty_success() {
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
     let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
-    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid);
+    let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     dashboard.run().await.unwrap();
     assert!(dashboard.results.is_none());
     assert!(dashboard.pp.is_empty());
