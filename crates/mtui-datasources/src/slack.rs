@@ -71,6 +71,15 @@ pub struct Reaction {
     pub users: Vec<String>,
 }
 
+/// A message read back from Slack: its body and its reactions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Message {
+    /// The message body as posted.
+    pub text: String,
+    /// Reactions on the message, skin-tone-normalised.
+    pub reactions: Vec<Reaction>,
+}
+
 /// A threaded reply to a posted message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reply {
@@ -380,6 +389,61 @@ impl Slack {
         })
     }
 
+    /// Read a message's body and reactions in one call.
+    ///
+    /// `reactions.get` returns the message itself alongside its reactions, so
+    /// a caller that must confirm *which* message it is looking at — an
+    /// approval gate verifying a stored marker still points at a review
+    /// request for the update in hand — gets both from a single request.
+    ///
+    /// # Errors
+    ///
+    /// Any [`SlackError`]; [`SlackError::Api`] carries `message_not_found`
+    /// when the message was deleted.
+    pub async fn get_message(&self, channel: &str, ts: &str) -> Result<Message, SlackError> {
+        let data = self
+            .request(
+                Method::GET,
+                "reactions.get",
+                &[("channel", channel), ("timestamp", ts)],
+                None,
+            )
+            .await?;
+        let message = data.get("message");
+        let text = message
+            .and_then(|m| m.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let reactions = message
+            .and_then(|m| m.get("reactions"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|r| {
+                        let name = r.get("name").and_then(Value::as_str)?;
+                        let users = r
+                            .get("users")
+                            .and_then(Value::as_array)
+                            .map(|us| {
+                                us.iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_owned)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        Some(Reaction {
+                            name: normalize_reaction(name).to_owned(),
+                            users,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Message { text, reactions })
+    }
+
     /// Read the reactions currently on the message identified by `channel`/`ts`.
     ///
     /// Reaction names come back skin-tone-normalised. An absent `reactions`
@@ -391,41 +455,7 @@ impl Slack {
     /// Any [`SlackError`]; [`SlackError::Api`] carries `message_not_found`
     /// when the message was deleted underneath the watch.
     pub async fn reactions(&self, channel: &str, ts: &str) -> Result<Vec<Reaction>, SlackError> {
-        let data = self
-            .request(
-                Method::GET,
-                "reactions.get",
-                &[("channel", channel), ("timestamp", ts)],
-                None,
-            )
-            .await?;
-        let Some(items) = data
-            .get("message")
-            .and_then(|m| m.get("reactions"))
-            .and_then(Value::as_array)
-        else {
-            return Ok(Vec::new());
-        };
-        Ok(items
-            .iter()
-            .filter_map(|r| {
-                let name = r.get("name").and_then(Value::as_str)?;
-                let users = r
-                    .get("users")
-                    .and_then(Value::as_array)
-                    .map(|us| {
-                        us.iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Some(Reaction {
-                    name: normalize_reaction(name).to_owned(),
-                    users,
-                })
-            })
-            .collect())
+        Ok(self.get_message(channel, ts).await?.reactions)
     }
 
     /// Read the threaded replies to the message identified by `channel`/`ts`.
