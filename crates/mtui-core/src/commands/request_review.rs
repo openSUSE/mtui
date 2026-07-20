@@ -41,6 +41,14 @@ const DEFAULT_BACKOFF: Duration = Duration::from_secs(30);
 /// cannot park the watch for hours.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
+/// Lower bound on any single back-off.
+///
+/// A `Retry-After: 0` — from a buggy proxy, or a server trying to make us
+/// misbehave — would otherwise mean a zero-length sleep, turning the back-off
+/// into a tight loop that hammers the very endpoint that just asked us to slow
+/// down. Backing off by less than a second is never what a 429 means.
+const MIN_BACKOFF: Duration = Duration::from_secs(1);
+
 /// Consecutive hard failures tolerated before the watch gives up.
 ///
 /// Transient errors happen; a persistent one (the message was deleted, the
@@ -181,7 +189,7 @@ async fn watch(
             Err(SlackError::RateLimited { retry_after }) => {
                 let wait = retry_after
                     .map_or(DEFAULT_BACKOFF, Duration::from_secs)
-                    .min(MAX_BACKOFF);
+                    .clamp(MIN_BACKOFF, MAX_BACKOFF);
                 tracing::debug!(?wait, "rate limited; backing off");
                 if sleep_or_interrupt(jittered(wait), deadline).await {
                     return WatchOutcome::Interrupted;
@@ -827,18 +835,60 @@ mod tests {
             ts: TS.to_owned(),
         };
 
+        // A zero timeout puts the deadline at the loop's own start, so it is
+        // already reached by the time the first poll returns — no matter how
+        // fast the machine. A small non-zero timeout would race: if the mock
+        // answers inside it, the loop sleeps ~0 and polls a second time.
         let outcome = watch(
             &slack,
             &posted,
             Duration::from_secs(60),
-            Duration::from_millis(1),
+            Duration::ZERO,
             None,
         )
         .await;
 
         assert_eq!(outcome, WatchOutcome::TimedOut);
-        // Exactly one look, even though the deadline had effectively passed.
+        // Exactly one look, even though the deadline had already passed: the
+        // loop polls before it sleeps, so an expired watch still reports what
+        // the message looks like rather than nothing at all.
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_zero_retry_after_does_not_become_a_tight_loop() {
+        let server = MockServer::start().await;
+        // A server that says "rate limited, retry after 0 seconds". Taken
+        // literally that is a zero-length back-off, and the watch would spin
+        // against the endpoint that just asked it to slow down.
+        Mock::given(path("/reactions.get"))
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "0"))
+            .mount(&server)
+            .await;
+        let slack = slack_for(&server);
+        let posted = PostedMessage {
+            channel: CHANNEL.to_owned(),
+            ts: TS.to_owned(),
+        };
+
+        let outcome = watch(
+            &slack,
+            &posted,
+            Duration::from_millis(10),
+            Duration::from_millis(250),
+            None,
+        )
+        .await;
+
+        assert_eq!(outcome, WatchOutcome::TimedOut);
+        // The floor holds the second poll past the deadline, so the quarter
+        // second buys one request, not hundreds. Without MIN_BACKOFF this runs
+        // into the thousands.
+        let polls = server.received_requests().await.unwrap().len();
+        assert!(
+            polls <= 2,
+            "backed off instead of spinning, got {polls} polls"
+        );
     }
 
     #[test]
