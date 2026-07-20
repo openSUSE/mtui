@@ -222,13 +222,8 @@ def test_sshkey_inherited_from_general(tmp_path, monkeypatch):
     assert creds.user == "bob"
 
 
-def test_credentials_manager_not_inherited_from_general(tmp_path, monkeypatch):
-    """``credentials_mgr_class`` is host-section only, and never beats a key.
-
-    osc inherits 'sshkey' from [general] but not ``credentials_mgr_class``
-    (which has no parent default), so a global manager must not veto a usable
-    per-host key.
-    """
+def test_general_credentials_manager_does_not_veto_host_sshkey(tmp_path, monkeypatch):
+    """A [general] manager must not veto a per-host key."""
     key = tmp_path / "k"
     _write(
         tmp_path,
@@ -240,6 +235,44 @@ def test_credentials_manager_not_inherited_from_general(tmp_path, monkeypatch):
     creds = oscrc.read_credentials(API)
     assert creds.sshkey_path == key
     assert creds.user == "bob"
+
+
+def test_credentials_manager_not_inherited_from_general(tmp_path, monkeypatch):
+    """``credentials_mgr_class`` is host-section only (osc gives it no parent).
+
+    Discriminating case: with NO sshkey anywhere, a [general] manager must not
+    be picked up — the failure must be the plain "no 'sshkey'" one, never the
+    manager-specific message.
+    """
+    _write(
+        tmp_path,
+        f"[general]\ncredentials_mgr_class = osc.credentials.KeyringCredentialsManager\n"
+        f"\n[{API}]\nuser = bob\n",
+        monkeypatch=monkeypatch,
+    )
+    with pytest.raises(ObsConfigError) as excinfo:
+        oscrc.read_credentials(API)
+    assert "no 'sshkey'" in str(excinfo.value)
+    assert "credentials_mgr_class" not in str(excinfo.value)
+
+
+def test_folded_pass_continuation_is_not_echoed(tmp_path, monkeypatch):
+    """A password folded into 'sshkey' must never reach the error message.
+
+    configparser folds an indented continuation into the previous option's
+    value, so ``sshkey = missing`` followed by `` pass = hunter2`` yields a
+    value carrying the password. Interpolating it raw would echo the secret
+    into the log and the mtui-mcp transcript.
+    """
+    _write(
+        tmp_path,
+        f"[{API}]\nuser = bob\nsshkey = /nonexistent/key\n pass = hunter2\n",
+        monkeypatch=monkeypatch,
+    )
+    with pytest.raises(ObsConfigError) as excinfo:
+        oscrc.read_credentials(API)
+    assert "hunter2" not in str(excinfo.value)
+    assert "<malformed>" in str(excinfo.value)
 
 
 def test_trailing_slash_section_header_matches(tmp_path, monkeypatch):

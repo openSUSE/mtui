@@ -13,9 +13,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `credentials_mgr_class` when a usable `sshkey` is also configured. `approve`
   and `reject` failed outright with "supports only SSH-signature auth" for the
   common oscrc that sets both an `sshkey` and a password manager (e.g.
-  `TransientCredentialsManager`), even though the key was perfectly usable —
-  and that is exactly what `osc` itself does, ordering SSH-signature auth ahead
-  of the password path. The key is now resolved first and the credentials
+  `TransientCredentialsManager`), even though the key was perfectly usable.
+  `osc` disables its own password path outright for that manager, so the same
+  oscrc authenticates by SSH signature under `osc` too. The key is now
+  resolved first and the credentials
   manager is only consulted when no usable key exists, where a
   keyring/transient manager still fails closed (its secret is not in the file
   and mtui never prompts). `credentials_mgr_class` is also no longer inherited

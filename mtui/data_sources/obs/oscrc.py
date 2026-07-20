@@ -34,6 +34,29 @@ logger = getLogger("mtui.data_sources.obs.oscrc")
 # resolves it through the agent at signing time.
 _FINGERPRINT_RE = re.compile(r"^[A-Z0-9]+:")
 
+#: Characters an oscrc ``sshkey`` / ``credentials_mgr_class`` value can legally
+#: contain. Anything else means the value is not what we think it is.
+_SAFE_VALUE = re.compile(r"[\w.:/~@+-]+")
+
+
+def _for_display(value: str) -> str:
+    """Render an oscrc value for an error message without leaking a secret.
+
+    configparser folds an indented continuation line into the *previous*
+    option's value, so a stanza like::
+
+        sshkey = id_rsa
+         pass = hunter2
+
+    yields ``sshkey == "id_rsa\\npass = hunter2"``. Interpolating that raw into
+    an error would echo the password into the log and the mtui-mcp transcript.
+    Only values matching :data:`_SAFE_VALUE` are shown verbatim; anything else
+    (a fold, whitespace, quotes) is replaced wholesale rather than truncated,
+    because a truncation length is a guess and an empty first line defeats it.
+    """
+    return repr(value) if _SAFE_VALUE.fullmatch(value) else "<malformed>"
+
+
 # credentials_mgr_class values whose secret lives outside the oscrc (a system
 # keyring, or a transient prompt), so the native backend can never read it and
 # will not prompt. Only consulted when no usable 'sshkey' is configured: a
@@ -188,11 +211,13 @@ def read_credentials(apiurl: str) -> ObsCredentials:
         raise ObsConfigError(f"oscrc [{apiurl}] has no 'user'")
 
     # Resolve the ssh key FIRST, and ignore ``credentials_mgr_class`` entirely
-    # whenever a usable key exists. osc itself orders Signature auth ahead of
-    # Basic and explicitly disables the password path for the transient
-    # manager, so an oscrc carrying both an 'sshkey' and a password manager
-    # authenticates by signature under osc too. Rejecting such an oscrc up
-    # front turned a perfectly working configuration into a hard failure.
+    # whenever one is configured. osc disables its password path outright for
+    # ``TransientCredentialsManager`` (an exact class match), so the reported
+    # oscrc -- sshkey + transient manager + pass -- authenticates by signature
+    # under osc too. For other managers osc actually *prefers* Basic once a
+    # password resolves; mtui has no Basic path at all, so a configured key is
+    # its only usable credential either way. Rejecting such an oscrc up front
+    # turned a perfectly working configuration into a hard failure.
     sshkey = _inherited("sshkey")
     if not sshkey:
         # Only now does the credentials manager matter. Unlike 'sshkey', osc
@@ -202,14 +227,15 @@ def read_credentials(apiurl: str) -> ObsCredentials:
         if mgr and any(bad in mgr.lower() for bad in _UNSUPPORTED_MGR):
             raise ObsConfigError(
                 f"oscrc [{apiurl}] has no 'sshkey' and uses "
-                f"credentials_mgr_class={mgr!r}, whose secret is not stored in "
-                "the file; the native OBS backend cannot read it and never "
-                "prompts. Add an 'sshkey' entry to authenticate by SSH signature."
+                f"credentials_mgr_class={_for_display(mgr)}, whose secret is not "
+                "stored in the file; the native OBS backend cannot read it and "
+                "never prompts. Add an 'sshkey' entry to authenticate by SSH "
+                "signature."
             )
         raise ObsConfigError(
             f"oscrc [{apiurl}] has no 'sshkey' (in the section or [general]); the "
-            "native OBS backend requires SSH-signature auth (plaintext-password "
-            "auth is not supported)"
+            "native OBS backend supports no password mechanism (plaintext, "
+            "obfuscated, keyring or transient) — add an 'sshkey' entry"
         )
     # NB: 'pass'/'passx' are intentionally never read for this Signature-only
     # target — see the module docstring.
@@ -217,7 +243,8 @@ def read_credentials(apiurl: str) -> ObsCredentials:
     key_path, fingerprint = _resolve_sshkey(sshkey)
     if key_path is not None and not _key_available(key_path):
         raise ObsConfigError(
-            f"ssh key {key_path} (from oscrc sshkey={sshkey!r}) does not exist"
+            f"ssh key {_for_display(str(key_path))} (from oscrc "
+            f"sshkey={_for_display(sshkey)}) does not exist"
         )
 
     return ObsCredentials(
