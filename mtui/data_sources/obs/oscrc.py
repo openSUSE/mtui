@@ -34,8 +34,10 @@ logger = getLogger("mtui.data_sources.obs.oscrc")
 # resolves it through the agent at signing time.
 _FINGERPRINT_RE = re.compile(r"^[A-Z0-9]+:")
 
-# credentials_mgr_class values that route credentials through a mechanism
-# the native SSH-signature backend cannot use.
+# credentials_mgr_class values whose secret lives outside the oscrc (a system
+# keyring, or a transient prompt), so the native backend can never read it and
+# will not prompt. Only consulted when no usable 'sshkey' is configured: a
+# working key authenticates by signature regardless of the manager.
 _UNSUPPORTED_MGR = ("keyring", "transient")
 
 
@@ -181,20 +183,29 @@ def read_credentials(apiurl: str) -> ObsCredentials:
             value = parser["general"].get(key, "").strip()
         return value
 
-    mgr = _inherited("credentials_mgr_class")
-    if mgr and any(bad in mgr.lower() for bad in _UNSUPPORTED_MGR):
-        raise ObsConfigError(
-            f"oscrc [{apiurl}] uses credentials_mgr_class={mgr!r}; the native "
-            "OBS backend supports only SSH-signature auth (an 'sshkey' entry) — "
-            "keyring/transient-password managers are not supported"
-        )
-
     user = section.get("user", "").strip()
     if not user:
         raise ObsConfigError(f"oscrc [{apiurl}] has no 'user'")
 
+    # Resolve the ssh key FIRST, and ignore ``credentials_mgr_class`` entirely
+    # whenever a usable key exists. osc itself orders Signature auth ahead of
+    # Basic and explicitly disables the password path for the transient
+    # manager, so an oscrc carrying both an 'sshkey' and a password manager
+    # authenticates by signature under osc too. Rejecting such an oscrc up
+    # front turned a perfectly working configuration into a hard failure.
     sshkey = _inherited("sshkey")
     if not sshkey:
+        # Only now does the credentials manager matter. Unlike 'sshkey', osc
+        # does not inherit ``credentials_mgr_class`` from [general], so read it
+        # from the host section only.
+        mgr = section.get("credentials_mgr_class", "").strip()
+        if mgr and any(bad in mgr.lower() for bad in _UNSUPPORTED_MGR):
+            raise ObsConfigError(
+                f"oscrc [{apiurl}] has no 'sshkey' and uses "
+                f"credentials_mgr_class={mgr!r}, whose secret is not stored in "
+                "the file; the native OBS backend cannot read it and never "
+                "prompts. Add an 'sshkey' entry to authenticate by SSH signature."
+            )
         raise ObsConfigError(
             f"oscrc [{apiurl}] has no 'sshkey' (in the section or [general]); the "
             "native OBS backend requires SSH-signature auth (plaintext-password "

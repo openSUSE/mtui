@@ -102,13 +102,58 @@ def test_missing_sshkey_raises(tmp_path, monkeypatch):
         oscrc.read_credentials(API)
 
 
-def test_unsupported_credentials_manager_raises(tmp_path, monkeypatch):
+def test_credentials_manager_ignored_when_sshkey_usable(tmp_path, monkeypatch):
+    """A usable 'sshkey' wins; ``credentials_mgr_class`` is not consulted.
+
+    osc orders Signature auth ahead of Basic and disables the password path for
+    the transient manager, so an oscrc carrying both authenticates by signature
+    there too. Rejecting it turned a working configuration into a hard failure.
+    """
     key = tmp_path / "k"
     _write(
         tmp_path,
         f"[{API}]\nuser = bob\nsshkey = {key}\n"
         "credentials_mgr_class = osc.credentials.KeyringCredentialsManager\n",
         keyfile=key,
+        monkeypatch=monkeypatch,
+    )
+    creds = oscrc.read_credentials(API)
+    assert creds.sshkey_path == key
+    assert creds.user == "bob"
+
+
+def test_reported_transient_manager_with_sshkey_and_pass(tmp_path, monkeypatch):
+    """Regression for the reported failure: sshkey + transient mgr + pass.
+
+    This exact oscrc shape made ``approve`` fail with "supports only
+    SSH-signature auth" even though the sshkey was perfectly usable. The
+    password must never be read, nor leak into the credentials' repr.
+    """
+    key = tmp_path / "id_rsa"
+    _write(
+        tmp_path,
+        f"[{API}]\nuser = simonlm\nsshkey = {key}\n"
+        "credentials_mgr_class = osc.credentials.TransientCredentialsManager\n"
+        "pass = s3cret-not-read\n",
+        keyfile=key,
+        monkeypatch=monkeypatch,
+    )
+    creds = oscrc.read_credentials(API)
+    assert creds.sshkey_path == key
+    assert creds.user == "simonlm"
+    assert "s3cret-not-read" not in repr(creds)
+
+
+def test_unsupported_credentials_manager_without_sshkey_raises(tmp_path, monkeypatch):
+    """With no usable key, a keyring/transient manager still fails closed.
+
+    Its secret is not in the file and mtui never prompts, so there is nothing
+    to authenticate with.
+    """
+    _write(
+        tmp_path,
+        f"[{API}]\nuser = bob\n"
+        "credentials_mgr_class = osc.credentials.KeyringCredentialsManager\n",
         monkeypatch=monkeypatch,
     )
     with pytest.raises(ObsConfigError, match="credentials_mgr_class"):
@@ -177,8 +222,13 @@ def test_sshkey_inherited_from_general(tmp_path, monkeypatch):
     assert creds.user == "bob"
 
 
-def test_credentials_manager_inherited_from_general(tmp_path, monkeypatch):
-    """A global keyring manager in [general] still fails closed."""
+def test_credentials_manager_not_inherited_from_general(tmp_path, monkeypatch):
+    """``credentials_mgr_class`` is host-section only, and never beats a key.
+
+    osc inherits 'sshkey' from [general] but not ``credentials_mgr_class``
+    (which has no parent default), so a global manager must not veto a usable
+    per-host key.
+    """
     key = tmp_path / "k"
     _write(
         tmp_path,
@@ -187,8 +237,9 @@ def test_credentials_manager_inherited_from_general(tmp_path, monkeypatch):
         keyfile=key,
         monkeypatch=monkeypatch,
     )
-    with pytest.raises(ObsConfigError, match="credentials_mgr_class"):
-        oscrc.read_credentials(API)
+    creds = oscrc.read_credentials(API)
+    assert creds.sshkey_path == key
+    assert creds.user == "bob"
 
 
 def test_trailing_slash_section_header_matches(tmp_path, monkeypatch):

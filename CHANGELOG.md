@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- The native OBS backend no longer refuses an oscrc that names a
+  `credentials_mgr_class` when a usable `sshkey` is also configured. `approve`
+  and `reject` failed outright with "supports only SSH-signature auth" for the
+  common oscrc that sets both an `sshkey` and a password manager (e.g.
+  `TransientCredentialsManager`), even though the key was perfectly usable —
+  and that is exactly what `osc` itself does, ordering SSH-signature auth ahead
+  of the password path. The key is now resolved first and the credentials
+  manager is only consulted when no usable key exists, where a
+  keyring/transient manager still fails closed (its secret is not in the file
+  and mtui never prompts). `credentials_mgr_class` is also no longer inherited
+  from `[general]`, matching osc.
+
 ### Changed
 
 - `mtui-mcp` starts faster and ships a leaner tool manifest. The headless
