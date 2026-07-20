@@ -9,6 +9,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- The TeReGen client is synced with the current report API. `assign` now also
+  surfaces who already holds (or has decided) each review group, sourced from
+  the report's live per-group assignment map — context only, never a gate,
+  since an empty map can also mean the upstream lookup failed. New client
+  calls expose the parsed-report endpoints (`parsed`, `bugs` — with `bsc#`
+  ids percent-encoded — and `completeness`) for consumers without a local
+  checkout. The `updates` listing no longer crashes on a malformed deadline
+  value, and the `--review-group` help clarifies the bare group-name form.
+
 - `mtui-mcp` starts faster and ships a leaner tool manifest. The headless
   server no longer imports `prompt_toolkit` (~115 modules, ~170ms) at startup —
   it is loaded lazily only when the interactive REPL actually reads a line — and

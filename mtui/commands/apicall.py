@@ -79,13 +79,34 @@ class BaseApiCall(Command, ABC):
         Sourced from the TeReGen report API. Best-effort context for the tester
         picking up an update: silent when TeReGen has nothing for this request.
         """
-        priority, deadline = TeReGen(self.config).priority_deadline(self.metadata.rrid)
-        if priority is None and deadline is None:
+        info = TeReGen(self.config).info(self.metadata.rrid)
+        if not info:
             return
-        self.println(
-            f"TeReGen: priority {priority if priority is not None else '?'}, "
-            f"deadline {deadline or '?'}"
-        )
+        priority, deadline = info.get("priority"), info.get("deadline")
+        if priority is not None or deadline is not None:
+            self.println(
+                f"TeReGen: priority {priority if priority is not None else '?'}, "
+                f"deadline {deadline or '?'}"
+            )
+        # Best-effort assignment context: warn when someone already holds (or
+        # has decided) a review group. An empty map is NOT authoritative — it
+        # is also what an upstream lookup failure yields, and the server caches
+        # this endpoint for up to ~300s — so absence prints nothing and nothing
+        # here ever gates the action.
+        assignees = info.get("assignees")
+        if isinstance(assignees, dict):
+            for group, entries in sorted(assignees.items()):
+                if not isinstance(entries, list):
+                    continue
+                holders = ", ".join(
+                    f"{e.get('user') or '?'} ({e.get('state') or '?'})"
+                    for e in entries
+                    if isinstance(e, dict)
+                )
+                if holders:
+                    self.println(
+                        f"TeReGen: {group} assignment state (may lag ~5 min): {holders}"
+                    )
 
     def _pi_autolock(self) -> None:
         """Locks/unlocks reference hosts around PI testing.

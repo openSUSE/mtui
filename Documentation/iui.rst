@@ -1294,7 +1294,11 @@ assign
 
 Assigns the current update to you. When no group is given, mtui infers the
 single open QA group you belong to; specify ``-g`` to disambiguate. Mirrors
-the `osc qam assign`_ workflow.
+the `osc qam assign`_ workflow. After the assignment, mtui prints best-effort
+context from the TeReGen report API: the update's live priority and deadline,
+and — when the report already carries assignment state — who currently holds
+or has decided each review group. The context is informational only and never
+blocks the action (its absence can also mean the lookup failed).
 
 .. _osc qam assign: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#assigning-updates
 

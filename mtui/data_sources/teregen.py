@@ -23,6 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -76,8 +77,10 @@ class TeReGen:
             return None
 
     def info(self, rrid: object) -> dict[str, Any] | None:
-        """The main report endpoint (``GET /reports/{id}``): id, file list, and
-        the live ``priority``/``deadline`` (refreshed from SMELT for SLFO)."""
+        """The main report endpoint (``GET /reports/{id}``): id, file list, the
+        live ``priority``/``deadline`` (refreshed from SMELT — v2 for SLFO,
+        GraphQL for classic Maintenance), and the live per-group ``assignees``
+        map (``{group: [{user, state}]}``, cached server-side up to ~300s)."""
         d = self._get(f"reports/{rrid}")
         return d if isinstance(d, dict) else None
 
@@ -91,17 +94,52 @@ class TeReGen:
         d = self._get(f"reports/{rrid}/status")
         return d if isinstance(d, dict) else None
 
-    def priority_deadline(self, rrid: object) -> tuple[int | None, str | None]:
-        """``(priority, deadline)`` from the main report endpoint, best-effort."""
-        info = self.info(rrid)
-        if not info:
-            return None, None
-        return info.get("priority"), info.get("deadline")
-
     def checkers(self, rrid: object) -> list[Any] | None:
         """Live checker (build-check) result runs for a report, or ``None``."""
         d = self._get(f"reports/{rrid}/checkers")
         return d.get("checkers") if isinstance(d, dict) else None
+
+    def parsed(self, rrid: object, section: str | None = None) -> dict[str, Any] | None:
+        """The parsed report (``GET /reports/{id}/parsed[/{section}]``).
+
+        Without ``section``: the full normalized parse (keys ``sections``,
+        ``summary``, ``metadata``, ``packages``, ``products``, ``bugs``,
+        ``new_bugs``, ``testers``, ``completeness``). With ``section``: an
+        ``{id, section, data}`` envelope with the slice under ``data``. New
+        metadata consumers should prefer the ``metadata`` section (the
+        canonical, snake_case superset) over the frozen raw ``/metadata``
+        endpoint.
+        """
+        path = f"reports/{rrid}/parsed"
+        if section:
+            path += f"/{quote(section, safe='')}"
+        d = self._get(path)
+        return d if isinstance(d, dict) else None
+
+    def bugs(self, rrid: object, bug_id: str | None = None) -> dict[str, Any] | None:
+        """Parsed bug index or one bug (``GET /reports/{id}/bugs[/{bug_id}]``).
+
+        The index carries rows of ``{id, description, status, is_new}``; a
+        single bug comes back as an ``{id, bug_id, bug}`` envelope. A
+        ``bug_id`` like ``bsc#1196693`` is percent-encoded (``#`` → ``%23``)
+        so it survives the URL path.
+        """
+        path = f"reports/{rrid}/bugs"
+        if bug_id:
+            path += f"/{quote(bug_id, safe='')}"
+        d = self._get(path)
+        return d if isinstance(d, dict) else None
+
+    def completeness(self, rrid: object) -> dict[str, Any] | None:
+        """Report fill state (``GET /reports/{id}/completeness``).
+
+        The canonical, flat shape: ``{id, complete, unfilled: [{field,
+        value}]}``. (The parsed hash also happens to carry a ``completeness``
+        key, but ``/parsed/completeness`` is unspecified section behaviour the
+        server may close — this hits the dedicated endpoint.)
+        """
+        d = self._get(f"reports/{rrid}/completeness")
+        return d if isinstance(d, dict) else None
 
     def updates(
         self,

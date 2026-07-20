@@ -219,10 +219,10 @@ def test_assign_prefers_teregen_priority_deadline(mock_config):
         patch("mtui.commands.apicall.TeReGen") as teregen_cls,
     ):
         teregen = teregen_cls.return_value
-        teregen.priority_deadline.return_value = (700, "2026-07-09")
+        teregen.info.return_value = {"priority": 700, "deadline": "2026-07-09"}
         Assign(args, mock_config, sysmock, prompt)()
 
-    teregen.priority_deadline.assert_called_once()
+    teregen.info.assert_called_once()
     out = sysmock.stdout.getvalue()
     assert "TeReGen: priority 700" in out
     assert "2026-07-09" in out
@@ -237,11 +237,66 @@ def test_assign_silent_when_teregen_has_nothing(mock_config):
         patch("mtui.commands.apicall.OSC"),
         patch("mtui.commands.apicall.TeReGen") as teregen_cls,
     ):
-        teregen_cls.return_value.priority_deadline.return_value = (None, None)
+        teregen_cls.return_value.info.return_value = None
         Assign(args, mock_config, sysmock, prompt)()
 
     out = sysmock.stdout.getvalue()
     assert "TeReGen" not in out
+
+
+def test_assign_shows_existing_assignment_holders(mock_config):
+    """Current holders (and past decisions) are surfaced; a group may carry
+    both a decision entry and a live assignment (decider != tester)."""
+    prompt = _prompt()
+    prompt.metadata.giteapr = None
+    args = Namespace(group=["qam-sle"], user="", force=False)
+    sysmock = _sysmock()
+
+    with (
+        patch("mtui.commands.apicall.OSC"),
+        patch("mtui.commands.apicall.TeReGen") as teregen_cls,
+    ):
+        teregen_cls.return_value.info.return_value = {
+            "priority": 700,
+            "deadline": "2026-07-09",
+            "assignees": {
+                "qam-sle": [
+                    {"user": "pluskalm", "state": "accepted"},
+                    {"user": "mpluskal", "state": "assigned"},
+                ]
+            },
+        }
+        Assign(args, mock_config, sysmock, prompt)()
+
+    out = sysmock.stdout.getvalue()
+    assert (
+        "qam-sle assignment state (may lag ~5 min): "
+        "pluskalm (accepted), mpluskal (assigned)"
+    ) in out
+
+
+def test_assign_empty_assignees_map_prints_nothing(mock_config):
+    """An empty map is not authoritative (it is also what an upstream lookup
+    failure yields), so it must stay silent and never gate the action."""
+    prompt = _prompt()
+    prompt.metadata.giteapr = None
+    args = Namespace(group=["qam-sle"], user="", force=False)
+    sysmock = _sysmock()
+
+    with (
+        patch("mtui.commands.apicall.OSC"),
+        patch("mtui.commands.apicall.TeReGen") as teregen_cls,
+    ):
+        teregen_cls.return_value.info.return_value = {
+            "priority": 700,
+            "deadline": "2026-07-09",
+            "assignees": {},
+        }
+        Assign(args, mock_config, sysmock, prompt)()
+
+    out = sysmock.stdout.getvalue()
+    assert "assignment state" not in out
+    assert "TeReGen: priority 700" in out
 
 
 def test_unassign_does_not_show_priority_deadline(mock_config):
@@ -256,4 +311,37 @@ def test_unassign_does_not_show_priority_deadline(mock_config):
     ):
         Unassign(args, mock_config, sysmock, prompt)()
 
-    teregen_cls.return_value.priority_deadline.assert_not_called()
+    teregen_cls.return_value.info.assert_not_called()
+
+
+def test_assign_malformed_assignees_never_breaks_the_flow(mock_config):
+    """Malformed assignment payloads are filtered, never raised.
+
+    The context prints after the assignment has already succeeded, so a
+    crash here would turn a successful action into an error. Non-list group
+    values are skipped, non-dict entries filtered, and an explicit null
+    user/state renders as '?'.
+    """
+    prompt = _prompt()
+    prompt.metadata.giteapr = None
+    args = Namespace(group=["qam-sle"], user="", force=False)
+    sysmock = _sysmock()
+
+    with (
+        patch("mtui.commands.apicall.OSC"),
+        patch("mtui.commands.apicall.TeReGen") as teregen_cls,
+    ):
+        teregen_cls.return_value.info.return_value = {
+            "assignees": {
+                "a": None,
+                "b": ["not-a-dict"],
+                "c": [{"user": None, "state": "assigned"}],
+                "d": [{"user": "bob", "state": "assigned"}],
+            }
+        }
+        Assign(args, mock_config, sysmock, prompt)()
+
+    out = sysmock.stdout.getvalue()
+    assert "c assignment state (may lag ~5 min): ? (assigned)" in out
+    assert "d assignment state (may lag ~5 min): bob (assigned)" in out
+    assert "not-a-dict" not in out

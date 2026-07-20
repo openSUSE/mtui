@@ -201,3 +201,16 @@ def test_updates_all_assignees_with_assignee_errors():
 def test_updates_mine_and_all_assignees_are_mutually_exclusive():
     with pytest.raises(ArgsParseFailureError):
         _parser().parse_args(["--mine", "--all-assignees"])
+
+
+def test_updates_non_string_deadline_does_not_crash(mock_config):
+    """Shape drift on 'deadline' (a non-string) must not kill the listing."""
+    sysmock = _sysmock()
+    with patch("mtui.commands.updates.TeReGen") as teregen_cls:
+        teregen_cls.return_value.updates.return_value = [
+            {"id": "SUSE:Maintenance:1:2", "priority": 100, "deadline": 12345},
+        ]
+        Updates(_args(), mock_config, sysmock, MagicMock())()
+    out = sysmock.stdout.getvalue()
+    assert "SUSE:Maintenance:1:2" in out
+    assert "12345" in out

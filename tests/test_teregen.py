@@ -3,7 +3,7 @@
 The command-level tests mock the ``TeReGen`` client wholesale, so the client's
 own request/parse/poll logic is exercised here directly against ``responses``-
 mocked HTTP. Every method is best-effort: a transport or decode failure must
-degrade to ``None`` (or ``(None, None)``) rather than raise.
+degrade to ``None`` rather than raise.
 """
 
 from __future__ import annotations
@@ -59,22 +59,6 @@ def test_metadata_and_status(mock_config):
     c = _client(mock_config)
     assert c.metadata(RRID) == {"rating": "low"}
     assert c.status(RRID) == {"template": True, "minion_state": "finished"}
-
-
-@responses.activate
-def test_priority_deadline_from_info(mock_config):
-    responses.add(
-        responses.GET,
-        f"{API}/reports/{RRID}",
-        json={"priority": 700, "deadline": "2026-07-01"},
-    )
-    assert _client(mock_config).priority_deadline(RRID) == (700, "2026-07-01")
-
-
-@responses.activate
-def test_priority_deadline_when_unreachable(mock_config):
-    responses.add(responses.GET, f"{API}/reports/{RRID}", status=404)
-    assert _client(mock_config).priority_deadline(RRID) == (None, None)
 
 
 @responses.activate
@@ -360,3 +344,73 @@ def test_regenerate_and_wait_unfinished(mock_config):
     assert outcome == RegenOutcome(
         ok=False, state="failed", minion_error="kaboom", job=8
     )
+
+
+# --- granular parsed endpoints (teregen b22f755) ---
+
+
+@responses.activate
+def test_parsed_full_report(mock_config):
+    body = {"sections": [], "summary": {}, "completeness": {"complete": True}}
+    responses.add(responses.GET, f"{API}/reports/{RRID}/parsed", json=body, status=200)
+    assert _client(mock_config).parsed(RRID) == body
+
+
+@responses.activate
+def test_parsed_section_slice(mock_config):
+    body = {"id": RRID, "section": "metadata", "data": {"rating": "important"}}
+    responses.add(
+        responses.GET,
+        f"{API}/reports/{RRID}/parsed/metadata",
+        json=body,
+        status=200,
+    )
+    # The server wraps a section in an {id, section, data} envelope.
+    assert _client(mock_config).parsed(RRID, "metadata") == body
+
+
+@responses.activate
+def test_bugs_index(mock_config):
+    body = {"bugs": [{"id": "bsc#1", "status": "NEW", "is_new": True}]}
+    responses.add(responses.GET, f"{API}/reports/{RRID}/bugs", json=body, status=200)
+    assert _client(mock_config).bugs(RRID) == body
+
+
+@responses.activate
+def test_bugs_single_id_is_percent_encoded(mock_config):
+    """'bsc#1196693' must reach the server as bugs/bsc%231196693.
+
+    An unencoded '#' would be a fragment separator and truncate the path.
+    """
+    body = {"id": RRID, "bug_id": "bsc#1196693", "bug": {"status": "RESOLVED"}}
+    responses.add(
+        responses.GET,
+        f"{API}/reports/{RRID}/bugs/bsc%231196693",
+        json=body,
+        status=200,
+    )
+    out = _client(mock_config).bugs(RRID, "bsc#1196693")
+    assert out == body
+    assert (responses.calls[0].request.url or "").endswith("/bugs/bsc%231196693")
+
+
+@responses.activate
+def test_completeness(mock_config):
+    body = {
+        "id": RRID,
+        "complete": False,
+        "unfilled": [{"field": "put here", "value": ""}],
+    }
+    responses.add(
+        responses.GET,
+        f"{API}/reports/{RRID}/completeness",
+        json=body,
+        status=200,
+    )
+    assert _client(mock_config).completeness(RRID) == body
+
+
+@responses.activate
+def test_parsed_non_dict_payload_is_none(mock_config):
+    responses.add(responses.GET, f"{API}/reports/{RRID}/parsed", json=["x"], status=200)
+    assert _client(mock_config).parsed(RRID) is None

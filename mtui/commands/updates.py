@@ -40,7 +40,8 @@ class Updates(Command):
         parser.add_argument(
             "--review-group",
             default=None,
-            help="filter by review group, e.g. qam-sle",
+            help="filter by review group as the bare group name, e.g. qam-sle "
+            "(not the '<group>-review' login form, which classic rows lack)",
         )
         parser.add_argument(
             "--status",
@@ -115,7 +116,9 @@ class Updates(Command):
                 self.println(f"  {u}")
                 continue
             # deadline is an ISO timestamp; the date alone is enough for a row.
-            deadline = (u.get("deadline") or "")[:10] or "-"
+            # str() guards against shape drift (a non-string would crash the
+            # whole listing over one row).
+            deadline = str(u.get("deadline") or "")[:10] or "-"
             row = (
                 f"  prio={u.get('priority', '?')!s:<5} "
                 f"{u.get('status', '?')!s:<10} "
