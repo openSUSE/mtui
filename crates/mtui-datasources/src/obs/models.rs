@@ -151,7 +151,7 @@ fn parse_review(
                 });
             }
             Event::End(e) if e.local_name().as_ref() == b"review" => break,
-            Event::Eof => break,
+            Event::Eof => return Err(parse_err("request")),
             _ => {}
         }
     }
@@ -188,7 +188,7 @@ fn parse_history(
                 in_description = false;
             }
             Event::End(e) if e.local_name().as_ref() == b"history" => break,
-            Event::Eof => break,
+            Event::Eof => return Err(parse_err("request")),
             _ => {}
         }
     }
@@ -244,7 +244,7 @@ fn parse_request_element(
                 });
             }
             Event::End(e) if e.local_name().as_ref() == b"request" => break,
-            Event::Eof => break,
+            Event::Eof => return Err(parse_err("request")),
             _ => {}
         }
     }
@@ -490,6 +490,44 @@ mod tests {
         // A truncated/mismatched document surfaces as a typed ObsError::Parse.
         let err = parse_request(r#"<request id="1"><review></request>"#).unwrap_err();
         assert!(err.to_string().contains("malformed OBS request"), "{err}");
+    }
+
+    #[test]
+    fn parse_request_truncated_before_request_close_is_error() {
+        // A request body cut off before `</request>` (dropped connection /
+        // truncated response) must not parse as a partial success.
+        let err = parse_request(r#"<request id="1"><state name="review"/>"#).unwrap_err();
+        assert!(err.to_string().contains("malformed OBS request"), "{err}");
+    }
+
+    #[test]
+    fn parse_request_truncated_inside_review_is_error() {
+        // EOF before the review's `</review>` is rejected (parse_review guard).
+        let err = parse_request(r#"<request id="1"><review state="new" by_group="qam-sle">"#)
+            .unwrap_err();
+        assert!(err.to_string().contains("malformed OBS request"), "{err}");
+    }
+
+    #[test]
+    fn parse_request_truncated_inside_history_is_error() {
+        // EOF before the history's `</history>` is rejected (parse_history guard).
+        let err = parse_request(concat!(
+            r#"<request id="1"><review state="new" by_group="qam-sle">"#,
+            r#"<history who="bob" when="2020-01-01T00:00:00"><description>hi"#,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("malformed OBS request"), "{err}");
+    }
+
+    #[test]
+    fn toplevel_parsers_still_tolerate_natural_eof() {
+        // Regression guard: the out-of-scope top-level loops (no single wrapping
+        // element) legitimately end on EOF and must keep parsing cleanly.
+        assert!(parse_group_directory(r#"<directory count="0"/>"#).is_ok());
+        assert!(parse_reject_reason_values("<attributes/>").is_ok());
+        assert!(parse_request_collection("<collection/>").is_ok());
+        // And a complete, well-formed request still parses.
+        assert!(parse_request(REQUEST_XML).is_ok());
     }
 
     #[test]
