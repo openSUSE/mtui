@@ -333,6 +333,10 @@ pub struct McpSession {
     /// `0` disables the cap. Retained here so [`run_command`](Self::run_command)
     /// need not hold the whole [`Config`].
     max_output_bytes: usize,
+    /// Source read-size budget (bytes), from `config.mcp_max_input_bytes`. `0`
+    /// disables the cap. Bounds how much of an on-disk checkout file the
+    /// hand-written `testreport_read` tool reads before stopping.
+    max_input_bytes: usize,
     /// Tool-surface profile (`config.mcp_profile`), consumed by
     /// [`McpServer::new`](crate::server::McpServer::new) to narrow the exposed
     /// tools. Retained here (with the two override lists below) for the same
@@ -412,6 +416,7 @@ impl McpSession {
     #[must_use]
     pub fn new(config: Config) -> Arc<Self> {
         let max_output_bytes = config.mcp_max_output_bytes;
+        let max_input_bytes = config.mcp_max_input_bytes;
         let profile = config.mcp_profile.clone();
         let tools_allow = config.mcp_tools_allow.clone();
         let tools_deny = config.mcp_tools_deny.clone();
@@ -423,6 +428,7 @@ impl McpSession {
             session: Arc::new(Mutex::new(session)),
             output,
             max_output_bytes,
+            max_input_bytes,
             profile,
             tools_allow,
             tools_deny,
@@ -465,6 +471,17 @@ impl McpSession {
     #[must_use]
     pub fn max_output_bytes(&self) -> usize {
         self.max_output_bytes
+    }
+
+    /// The configured source read-size budget (bytes); `0` disables it.
+    ///
+    /// Exposed for the hand-written [`testreport_read`](crate::testreport_tools)
+    /// tool, which stops reading a checkout file once this many bytes have been
+    /// consumed (appending a truncation notice) so a huge or slow file cannot
+    /// exhaust memory.
+    #[must_use]
+    pub fn max_input_bytes(&self) -> usize {
+        self.max_input_bytes
     }
 
     /// The configured tool-surface profile (`full` / `core`), consumed by

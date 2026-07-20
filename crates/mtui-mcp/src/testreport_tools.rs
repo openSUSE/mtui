@@ -40,6 +40,7 @@
 //! `testreport_write`) does not time the client out. The frames carry the tool
 //! name; a `None` sink takes the zero-overhead path.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use mtui_core::Session;
@@ -49,7 +50,7 @@ use serde_json::{Map, Value, json};
 use crate::session::{
     DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, run_with_heartbeat,
 };
-use crate::slim::cap_output;
+use crate::slim::{cap_output, truncation_notice};
 use crate::tools::ToolDescriptor;
 
 /// Warning glued onto every tool description so the LLM re-reads before patching.
@@ -268,10 +269,102 @@ fn write_atomic(path: &Path, text: &str) -> Result<usize, McpCommandError> {
 }
 
 /// Read a checkout file as UTF-8, replacing invalid sequences.
+///
+/// Used by the whole-file rewriters ([`testreport_patch`]/[`testreport_fill`]),
+/// which must materialise the entire file to splice it. The read path
+/// ([`testreport_read`]) instead uses [`stream_read`] so it never buffers more
+/// than the requested window and can stop at a byte cap.
 fn read_lossy(path: &Path) -> Result<String, McpCommandError> {
     let bytes = std::fs::read(path)
         .map_err(|e| refuse(format!("failed to read {}: {e}", path.display())))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Outcome of a streamed, bounded read of a checkout file.
+struct StreamRead {
+    /// Lines read (the whole file's total unless `truncated`, in which case the
+    /// lines observed up to `max_bytes`). Matches the `splitlines` convention.
+    line_count: usize,
+    /// The requested content: the whole (byte-capped) file for a non-windowed
+    /// read, or just the `[offset, offset+limit)` window otherwise.
+    content: String,
+    /// Lines in the returned window (windowed reads only; `None` for whole-file).
+    returned_lines: Option<usize>,
+}
+
+/// Stream `path` line-by-line, buffering only what the request needs.
+///
+/// Blocking; call inside [`spawn_blocking`](tokio::task::spawn_blocking). Reads
+/// at most `max_bytes` source bytes (`0` = unbounded), counting every line for
+/// `line_count` while buffering only the requested content, so a huge file costs
+/// O(1) memory beyond the window. `window` is `None` for a whole-file read (the
+/// byte-capped content is returned) or `Some((offset_1based, limit))` for a
+/// windowed read (only those lines are buffered). Decoding is UTF-8-lossy per
+/// line; splitting on the `\n` byte cannot split a codepoint.
+fn stream_read(
+    path: &Path,
+    max_bytes: usize,
+    window: Option<(usize, Option<usize>)>,
+) -> Result<StreamRead, McpCommandError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| refuse(format!("failed to read {}: {e}", path.display())))?;
+    let mut reader = BufReader::new(file);
+
+    let mut line_count = 0usize;
+    let mut read_bytes = 0usize;
+    let mut truncated = false;
+    let mut content = String::new();
+    let mut returned = 0usize;
+    // Window bounds as 0-based half-open [start, end) over line indices.
+    let (start, end) = match window {
+        Some((offset, limit)) => {
+            let start = offset - 1;
+            let end = limit.map(|n| start.saturating_add(n));
+            (start, end)
+        }
+        None => (0, None),
+    };
+
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        buf.clear();
+        let n = reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| refuse(format!("failed to read {}: {e}", path.display())))?;
+        if n == 0 {
+            break; // EOF
+        }
+        let idx = line_count;
+        line_count += 1;
+        read_bytes += n;
+
+        let keep = match window {
+            None => true,
+            Some(_) => idx >= start && end.is_none_or(|e| idx < e),
+        };
+        if keep {
+            content.push_str(&String::from_utf8_lossy(&buf));
+            returned += 1;
+        }
+
+        if max_bytes != 0 && read_bytes >= max_bytes {
+            // Byte cap reached: stop before EOF. `line_count` now reflects lines
+            // observed up to the cap, not the (unknown) file total.
+            truncated = true;
+            break;
+        }
+    }
+
+    if truncated {
+        let dropped = read_bytes.saturating_sub(max_bytes);
+        content.push_str(&truncation_notice(dropped, max_bytes));
+    }
+
+    Ok(StreamRead {
+        line_count,
+        content,
+        returned_lines: window.map(|_| returned),
+    })
 }
 
 // --------------------------------------------------------------------------- //
@@ -299,12 +392,17 @@ pub async fn testreport_read(
         return Err(refuse(format!("offset must be >= 1 (got {offset})")));
     }
 
-    // Serialise against same-template dispatch and keep the loaded set stable
-    // for this call (gate-shared) while tools on other templates run in parallel.
-    let _scope = session.scoped_lock(template).await;
-    let (path, content) = {
+    // Resolve the target path under the session lock, then release it before any
+    // filesystem I/O: only the `PathBuf` needs the guard, the bytes do not, so a
+    // slow read cannot stall concurrent same-lock work.
+    let path = {
+        // Serialise against same-template dispatch and keep the loaded set stable
+        // for this call (gate-shared) while tools on other templates run in
+        // parallel; the gate scope is held for the whole call, the inner mutex
+        // only for the path resolution.
+        let _scope = session.scoped_lock(template).await;
         let guard = session.session().lock().await;
-        let path = if let Some(rel) = relpath {
+        if let Some(rel) = relpath {
             let base = resolve_dir(&guard, template)?;
             let p = safe_template_file(&base, rel)?;
             if !p.is_file() {
@@ -315,38 +413,43 @@ pub async fn testreport_read(
             p
         } else {
             resolve_path(&guard, template)?
-        };
-        let content = read_lossy(&path)?;
-        (path, content)
+        }
     };
 
-    let cap = session.max_output_bytes();
     let windowed = offset != 1 || limit.is_some();
-    if !windowed {
-        return Ok(json!({
-            "path": path.to_string_lossy(),
-            "line_count": count_lines(&content),
-            "content": cap_output(content, cap),
-        }));
-    }
+    let window = windowed.then_some((offset, limit));
+    let max_input = session.max_input_bytes();
 
-    let lines = split_keepends(&content);
-    let start = offset - 1;
-    let sliced: String = match limit {
-        Some(n) => lines.iter().skip(start).take(n).cloned().collect(),
-        None => lines.iter().skip(start).cloned().collect(),
-    };
-    let returned = match limit {
-        Some(n) => lines.len().saturating_sub(start).min(n),
-        None => lines.len().saturating_sub(start),
-    };
-    Ok(json!({
-        "path": path.to_string_lossy(),
-        "line_count": lines.len(),
-        "offset": offset,
-        "returned_lines": returned,
-        "content": cap_output(sliced, cap),
-    }))
+    // Read off the runtime worker: a large or network-mounted file must not block
+    // a Tokio thread, and `stream_read` never buffers more than the window.
+    let read_path = path.clone();
+    let result = tokio::task::spawn_blocking(move || stream_read(&read_path, max_input, window))
+        .await
+        .map_err(|e| refuse(format!("read task failed: {e}")))??;
+
+    // Always apply the wire-result cap: the source cap (`max_input_bytes`) is
+    // typically far larger than the output budget (`max_output_bytes`), so even a
+    // source-truncated payload can still exceed the wire budget and must be
+    // trimmed. `stream_read` has already appended its own source-truncation
+    // notice at the tail; `cap_output` may trim into it, which is acceptable.
+    let cap = session.max_output_bytes();
+    let content = cap_output(result.content, cap);
+
+    if let Some(returned) = result.returned_lines {
+        Ok(json!({
+            "path": path.to_string_lossy(),
+            "line_count": result.line_count,
+            "offset": offset,
+            "returned_lines": returned,
+            "content": content,
+        }))
+    } else {
+        Ok(json!({
+            "path": path.to_string_lossy(),
+            "line_count": result.line_count,
+            "content": content,
+        }))
+    }
 }
 
 /// List the auxiliary log files (`build_checks/`, `install_logs/`) in the
@@ -881,6 +984,16 @@ mod tests {
         (McpSession::new(config), tmp)
     }
 
+    /// Like [`session_with_tmp`] but with an explicit source read cap
+    /// (`mcp_max_input_bytes`).
+    fn session_with_input_cap(max_input: usize) -> (std::sync::Arc<McpSession>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.template_dir = tmp.path().to_path_buf();
+        config.mcp_max_input_bytes = max_input;
+        (McpSession::new(config), tmp)
+    }
+
     /// Add a loaded `ObsReport` for `rrid` whose `log` file lives at `path`
     /// (with initial `content`), making it active. Creates the file on disk.
     async fn load_report(session: &McpSession, rrid: &str, path: &Path, content: &str) {
@@ -1020,6 +1133,88 @@ mod tests {
             .await
             .expect_err("traversal refused");
         assert!(escape.stderr.contains("escapes"), "{escape:?}");
+    }
+
+    #[tokio::test]
+    async fn read_reads_non_utf8_lossily() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "placeholder\n").await;
+        // Invalid UTF-8 byte 0xFF between valid text; decoded lossily (U+FFFD).
+        std::fs::write(&path, b"ab\xffcd\n").unwrap();
+
+        let res = testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        let content = res["content"].as_str().unwrap();
+        assert!(
+            content.contains('\u{FFFD}'),
+            "lossy replacement: {content:?}"
+        );
+        assert!(content.starts_with("ab"), "{content:?}");
+    }
+
+    #[tokio::test]
+    async fn read_source_cap_truncates_with_notice() {
+        // Cap the *source* read well below the file size: the read stops early,
+        // the notice is appended, and line_count reflects lines read to the cap.
+        let (session, tmp) = session_with_input_cap(10);
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await; // 15 bytes
+
+        let res = testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        let content = res["content"].as_str().unwrap();
+        assert!(content.contains("truncated"), "notice present: {content:?}");
+        assert!(content.contains("max_output_bytes=10"), "{content:?}");
+        // Read stopped after crossing 10 bytes: "l1\nl2\nl3\n" = 9, then "l4\n"
+        // → 12 ≥ 10, so 4 lines observed, not the full 5.
+        assert_eq!(res["line_count"], 4, "count reflects capped read: {res}");
+        assert!(content.starts_with("l1\nl2\nl3\nl4\n"), "{content:?}");
+        assert!(
+            !content.contains("l5"),
+            "tail past cap dropped: {content:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_source_cap_windowed_buffers_only_window() {
+        // A windowed read past a large file: only the window is buffered, but the
+        // source cap still bounds how far we scan. With a generous cap the window
+        // is returned intact and line_count is the true total.
+        let (session, tmp) = session_with_input_cap(0); // uncapped source
+        let path = log_path(&tmp);
+        let big: String = (0..1000).map(|i| format!("line{i}\n")).collect();
+        load_report(&session, RRID, &path, &big).await;
+
+        let res = testreport_read(&session, None, 500, Some(2), None)
+            .await
+            .unwrap();
+        assert_eq!(res["line_count"], 1000, "true total: {res}");
+        assert_eq!(res["offset"], 500);
+        assert_eq!(res["returned_lines"], 2);
+        assert_eq!(res["content"], "line499\nline500\n");
+    }
+
+    #[tokio::test]
+    async fn concurrent_reads_on_two_templates_both_succeed() {
+        // The read releases the session lock before file I/O, so two reads on
+        // different templates run without deadlocking on the inner mutex.
+        let (session, tmp) = session_with_tmp();
+        let p1 = tmp.path().join("c1").join("log");
+        let p2 = tmp.path().join("c2").join("log");
+        load_report(&session, "SUSE:Maintenance:1:1", &p1, "one\n").await;
+        load_report(&session, "SUSE:Maintenance:2:2", &p2, "two\n").await;
+
+        let s1 = session.clone();
+        let s2 = session.clone();
+        let (r1, r2) = tokio::join!(
+            async move { testreport_read(&s1, None, 1, None, Some("SUSE:Maintenance:1:1")).await },
+            async move { testreport_read(&s2, None, 1, None, Some("SUSE:Maintenance:2:2")).await },
+        );
+        assert_eq!(r1.unwrap()["content"], "one\n");
+        assert_eq!(r2.unwrap()["content"], "two\n");
     }
 
     // ---- logs ------------------------------------------------------------- //

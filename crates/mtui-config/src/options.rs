@@ -282,6 +282,9 @@ pub(crate) fn default_lock_wait_poll() -> u64 {
 pub(crate) fn default_mcp_max_output_bytes() -> usize {
     100_000
 }
+pub(crate) fn default_mcp_max_input_bytes() -> usize {
+    10_000_000
+}
 pub(crate) fn default_mcp_session_cap() -> usize {
     32
 }
@@ -432,6 +435,7 @@ pub(crate) struct LockSection {
 #[serde(default)]
 pub(crate) struct McpSection {
     pub max_output_bytes: Option<usize>,
+    pub max_input_bytes: Option<usize>,
     pub max_active_jobs: Option<usize>,
     pub max_completed_jobs: Option<usize>,
     pub session_cap: Option<usize>,
@@ -528,6 +532,7 @@ impl RawConfig {
         take!(lock, wait);
         take!(lock, wait_poll);
         take!(mcp, max_output_bytes);
+        take!(mcp, max_input_bytes);
         take!(mcp, max_active_jobs);
         take!(mcp, max_completed_jobs);
         take!(mcp, session_cap);
@@ -654,6 +659,14 @@ pub struct Config {
     /// (e.g. a fan-out `run`) cannot dwarf the client's context. `0` disables
     /// the cap. Upstream default is 100_000.
     pub mcp_max_output_bytes: usize,
+    /// Upper bound (bytes) on how much of an on-disk checkout file a
+    /// `testreport_read` MCP tool call will read before stopping. Distinct from
+    /// `mcp_max_output_bytes` (the wire-result cap): this bounds the *source*
+    /// read so a huge or slow file cannot exhaust memory, while still letting a
+    /// caller page through a large log via `offset`/`limit`. Reads past this are
+    /// truncated with a notice (never refused). `0` disables the cap. No upstream
+    /// equivalent — this is a hardening addition. Default is 10_000_000.
+    pub mcp_max_input_bytes: usize,
     /// Ceiling on concurrent (running) background jobs a single `mtui-mcp`
     /// session may hold (DoS guard). A `start`/`start_jobs` request that would
     /// exceed this is rejected *before* any worker is spawned. `0` disables the
@@ -741,6 +754,7 @@ impl Default for Config {
             lock_wait: default_lock_wait(),
             lock_wait_poll: default_lock_wait_poll(),
             mcp_max_output_bytes: default_mcp_max_output_bytes(),
+            mcp_max_input_bytes: default_mcp_max_input_bytes(),
             mcp_max_active_jobs: default_mcp_max_active_jobs(),
             mcp_max_completed_jobs: default_mcp_max_completed_jobs(),
             mcp_session_cap: default_mcp_session_cap(),
@@ -892,6 +906,7 @@ impl Config {
                 d.lock_wait_poll
             ),
             mcp_max_output_bytes: raw.mcp.max_output_bytes.unwrap_or(d.mcp_max_output_bytes),
+            mcp_max_input_bytes: raw.mcp.max_input_bytes.unwrap_or(d.mcp_max_input_bytes),
             mcp_max_active_jobs: raw.mcp.max_active_jobs.unwrap_or(d.mcp_max_active_jobs),
             mcp_max_completed_jobs: raw
                 .mcp
