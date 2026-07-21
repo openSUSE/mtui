@@ -269,7 +269,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -304,7 +304,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -361,7 +361,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -431,7 +431,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -476,7 +476,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -526,7 +526,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -564,7 +564,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -655,7 +655,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -738,7 +738,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -806,7 +806,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -951,7 +951,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1018,7 +1018,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1165,7 +1165,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1191,7 +1191,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1266,7 +1266,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1292,7 +1292,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1374,7 +1374,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1405,7 +1405,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1488,7 +1488,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1569,7 +1569,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1637,7 +1637,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
@@ -1673,7 +1673,7 @@ expression: pretty
         },
         "hosts": {
           "items": {
-            "description": "Host to act on. Can be used multiple times. If omitted all hosts are used",
+            "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
           },
           "type": "array"
