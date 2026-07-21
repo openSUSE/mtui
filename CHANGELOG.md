@@ -98,6 +98,10 @@ _The entries below document the final Python releases, retained for history._
   fails, the callers that waited on it fail over to the next resolver
   immediately instead of each repeating the doomed download, so a down
   server costs one transport timeout, not one per caller.
+- The `-t`/`--target` argument description is now correctly shortened on the
+  `mtui-mcp` wire. Its terse-rewrite rule had drifted from the actual help text
+  and silently stopped matching, so every host-targeting tool advertised the
+  long form; the manifest each client re-reads is now a little leaner again.
 
 ### Removed
 

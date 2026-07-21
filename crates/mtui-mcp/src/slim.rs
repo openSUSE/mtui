@@ -77,22 +77,21 @@ pub fn truncation_notice(dropped: usize, limit: usize) -> String {
 /// Long `clap`/argparse `help` strings shared across many synthesised tools,
 /// mapped to a terse equivalent. Rewriting only the MCP wire copy keeps the REPL
 /// `--help` output (sourced from the same `clap` args) verbose and unchanged.
-/// Keys are matched exactly against a field's `description`. Mirrors upstream
-/// `_slim._TERSE_DESCRIPTIONS`.
-const TERSE_DESCRIPTIONS: &[(&str, &str)] = &[
-    (
-        "RRID of a single loaded template to act on (default: all loaded templates)",
-        "RRID of one loaded template (default: all)",
-    ),
-    (
-        "Act on every loaded template (the default for this command)",
-        "Act on all loaded templates (default)",
-    ),
-    (
-        "Host to act on. Can be used multiple times. If is ommited all hosts are used",
-        "Host to act on (repeatable; default: all hosts)",
-    ),
-];
+/// Mirrors upstream `_slim._TERSE_DESCRIPTIONS`.
+///
+/// Keys are matched **exactly** against a field's `description`, so a key must
+/// stay byte-identical to the `help` its source arg builds: a drifted key
+/// silently stops firing and the verbose text then ships un-slimmed. The
+/// `terse_mappings_are_all_live` test guards against that. Only genuinely
+/// verbose shared help earns an entry — the `-T/--template` and `--all-templates`
+/// descriptions were trimmed at the source (see `commands::support` /
+/// `engine::base_subcommand`) and are already terse, so their former entries had
+/// drifted dead and are dropped rather than revived (reviving would only
+/// *lengthen* the wire copy).
+const TERSE_DESCRIPTIONS: &[(&str, &str)] = &[(
+    "Host to act on. Can be used multiple times. If omitted all hosts are used",
+    "Host to act on (repeatable; default: all hosts)",
+)];
 
 /// Schema keywords whose value is a mapping of *names* to sub-schemas. Under
 /// these, the map keys are parameter/definition names, not schema keywords, so
@@ -271,18 +270,57 @@ mod tests {
     }
 
     #[test]
-    fn slim_rewrites_known_verbose_description() {
+    fn slim_rewrites_a_known_verbose_description() {
+        // The `-t/--target` help is the one genuinely verbose shared description
+        // still in the table; slimming rewrites it to the terse form.
         let node = json!({
-            "type": "string",
-            "default": null,
+            "type": "array",
             "description":
-                "RRID of a single loaded template to act on (default: all loaded templates)",
+                "Host to act on. Can be used multiple times. If omitted all hosts are used",
         });
         let out = slim_tool_schema(&node);
         assert_eq!(
             out["description"],
-            json!("RRID of one loaded template (default: all)")
+            json!("Host to act on (repeatable; default: all hosts)")
         );
+    }
+
+    #[test]
+    fn terse_mappings_are_all_live() {
+        // Every TERSE_DESCRIPTIONS key must still match a real synthesised arg
+        // `description`, or the exact-match rewrite silently stops firing and the
+        // verbose text ships un-slimmed — the drift that had killed the
+        // `-t/--target` key and the (now removed) template keys. This builds the
+        // live tool surface from the registry and fails on any stale key, which a
+        // hardcoded per-string test cannot: both sides of such a test drift
+        // together, away from the real clap help, undetected.
+        use std::collections::BTreeSet;
+
+        fn collect(node: &Value, out: &mut BTreeSet<String>) {
+            match node {
+                Value::Object(map) => {
+                    if let Some(Value::String(desc)) = map.get("description") {
+                        out.insert(desc.clone());
+                    }
+                    for value in map.values() {
+                        collect(value, out);
+                    }
+                }
+                Value::Array(items) => items.iter().for_each(|v| collect(v, out)),
+                _ => {}
+            }
+        }
+
+        let mut live = BTreeSet::new();
+        for descriptor in crate::tools::build_tools(&mtui_core::register_all()) {
+            collect(&Value::Object(descriptor.input_schema), &mut live);
+        }
+        for (from, _) in TERSE_DESCRIPTIONS {
+            assert!(
+                live.contains(*from),
+                "stale terse-description key (matches no live arg help): {from:?}"
+            );
+        }
     }
 
     #[test]
