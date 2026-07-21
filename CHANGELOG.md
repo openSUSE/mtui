@@ -109,6 +109,9 @@ _The entries below document the final Python releases, retained for history._
   could store a `0` the file would reject, contradicting the command's own
   promise that it cannot store what the file refuses. `lock_stale_age` and
   `lock_wait` still accept `0`, as the file format does.
+- The `--connection-timeout` flag (on both `mtui` and `mtui-mcp`) now rejects
+  `0` at parse time, for the same reason: the config-file loader refuses a
+  non-positive `connection_timeout`, so the CLI must not be able to express one.
 
 ### Removed
 
