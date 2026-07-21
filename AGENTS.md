@@ -104,6 +104,11 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
 - Keep **both surfaces** (`mtui`, `mtui-mcp`) building and passing when touching
   commands, `Session`, the registry, or entrypoints.
 - Preserve the **Contracts** below unless the task explicitly changes one.
+- **Changelog:** add an entry to the top-most unreleased section of
+  `CHANGELOG.md` for user-visible changes (new/changed/removed commands or
+  flags, behavior a user or MCP client would notice, config format changes).
+  Internal refactors, perf/implementation-only fixes, and chore/CI-only
+  changes do not need one (`CONTRIBUTING.md` § Changelog is authoritative).
 
 ## Architecture (non-obvious bits — mirror these from MTUI)
 - **Command registry.** Every command implements the `Command` trait and is
