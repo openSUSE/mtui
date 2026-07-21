@@ -148,6 +148,17 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         s.parse::<u64>()
             .map_err(|e| format!("invalid integer: {e}"))
     };
+    // Positive-only variant for the keys the config-file loader guards with
+    // `validated_positive!` (0 is rejected there, falling back to the default).
+    // Runtime `set` must reject 0 too, so it cannot store a value the file would
+    // refuse — the guarantee this command's doc comment makes. Keys the loader
+    // accepts 0 for (`lock_stale_age`, `lock_wait`, via `unwrap_or`) keep the
+    // plain `parse_u64`.
+    let parse_positive_u64 = |s: &str| match s.parse::<u64>() {
+        Ok(0) => Err("expected a positive integer greater than 0".to_owned()),
+        Ok(value) => Ok(value),
+        Err(e) => Err(format!("invalid integer: {e}")),
+    };
 
     match attr {
         "session_user" => config.session_user = raw.to_owned(),
@@ -169,8 +180,8 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "slack_channel" => config.slack_channel = raw.to_owned(),
         "slack_api_url" => config.slack_api_url = raw.to_owned(),
         "slack_enabled" => config.slack_enabled = parse_bool(raw)?,
-        "slack_poll_interval" => config.slack_poll_interval = parse_u64(raw)?,
-        "slack_watch_timeout" => config.slack_watch_timeout = parse_u64(raw)?,
+        "slack_poll_interval" => config.slack_poll_interval = parse_positive_u64(raw)?,
+        "slack_watch_timeout" => config.slack_watch_timeout = parse_positive_u64(raw)?,
         // Goes through the same coercion as config-file loading (a boolean
         // spelling toggles verification, anything else is a CA-bundle path), so
         // a runtime `set` cannot store a value the file would reject.
@@ -178,12 +189,12 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "chdir_to_template_dir" => config.chdir_to_template_dir = parse_bool(raw)?,
         "lock_reap_stale" => config.lock_reap_stale = parse_bool(raw)?,
         "lock_pi_autolock" => config.lock_pi_autolock = parse_bool(raw)?,
-        "connection_timeout" => config.connection_timeout = parse_u64(raw)?,
-        "max_parallel" => config.max_parallel = parse_u64(raw)?,
-        "refhosts_https_expiration" => config.refhosts_https_expiration = parse_u64(raw)?,
+        "connection_timeout" => config.connection_timeout = parse_positive_u64(raw)?,
+        "max_parallel" => config.max_parallel = parse_positive_u64(raw)?,
+        "refhosts_https_expiration" => config.refhosts_https_expiration = parse_positive_u64(raw)?,
         "lock_stale_age" => config.lock_stale_age = parse_u64(raw)?,
         "lock_wait" => config.lock_wait = parse_u64(raw)?,
-        "lock_wait_poll" => config.lock_wait_poll = parse_u64(raw)?,
+        "lock_wait_poll" => config.lock_wait_poll = parse_positive_u64(raw)?,
         other => return Err(format!("unknown or read-only attribute: {other}")),
     }
     Ok(())
@@ -193,9 +204,9 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
 ///
 /// Ports upstream `mtui.commands.config.Config` (the command). `config show
 /// [attr ...]` prints the current values (all when none named); `config set
-/// <attr> <value>` updates one, going through the same value parsing/fixup as
-/// config-file loading so a runtime `set` cannot store a value the file would
-/// reject. Self-describing, so it runs once ([`Scope::Single`]).
+/// <attr> <value>` updates one, going through value parsing/validation at least
+/// as strict as config-file loading, so a runtime `set` cannot store a value the
+/// file would reject. Self-describing, so it runs once ([`Scope::Single`]).
 pub struct ConfigCmd;
 
 #[async_trait]
@@ -485,5 +496,80 @@ mod tests {
         let args = matches(&ConfigCmd, &["set", "nope", "x"]);
         let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("unknown or read-only")));
+    }
+
+    #[tokio::test]
+    async fn set_zero_rejected_for_positive_only_keys() {
+        // These keys are guarded by `validated_positive!` in the config-file
+        // loader, so runtime `set` must reject 0 too — otherwise it could store a
+        // value the file would refuse, breaking the command's own contract.
+        for attr in [
+            "connection_timeout",
+            "max_parallel",
+            "refhosts_https_expiration",
+            "slack_poll_interval",
+            "slack_watch_timeout",
+            "lock_wait_poll",
+        ] {
+            let (mut session, _buf) = empty_session();
+            let before = attr_value(&session.config, attr);
+            let args = matches(&ConfigCmd, &["set", attr, "0"]);
+            let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("positive integer greater than 0")),
+                "{attr}: expected a positive-integer rejection, got {err:?}"
+            );
+            assert_eq!(
+                attr_value(&session.config, attr),
+                before,
+                "{attr}: value must be unchanged after a rejected set"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn set_zero_allowed_for_keys_the_loader_also_accepts() {
+        // `lock_stale_age` / `lock_wait` are taken via `unwrap_or` in the loader
+        // (0 is a valid value there), so the positive-only guard must not
+        // over-reach to keys the file format permits. Set a non-zero value first,
+        // then 0, so the final assertion proves 0 was actually stored (lock_wait's
+        // default is already 0, which would otherwise mask a no-op).
+        for attr in ["lock_stale_age", "lock_wait"] {
+            let (mut session, _buf) = empty_session();
+            ConfigCmd
+                .call(&mut session, &matches(&ConfigCmd, &["set", attr, "9"]))
+                .await
+                .unwrap();
+            ConfigCmd
+                .call(&mut session, &matches(&ConfigCmd, &["set", attr, "0"]))
+                .await
+                .unwrap();
+            assert_eq!(attr_value(&session.config, attr).as_deref(), Some("0"));
+        }
+    }
+
+    #[tokio::test]
+    async fn set_positive_expiration_roundtrips() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&ConfigCmd, &["set", "refhosts_https_expiration", "3600"]);
+        ConfigCmd.call(&mut session, &args).await.unwrap();
+        assert_eq!(
+            attr_value(&session.config, "refhosts_https_expiration").as_deref(),
+            Some("3600")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_non_numeric_on_positive_key_is_invalid_integer_not_range_error() {
+        // A non-numeric value must surface the parse error, not the positive-only
+        // rejection — the two failure modes stay distinct.
+        let (mut session, _buf) = empty_session();
+        let args = matches(&ConfigCmd, &["set", "max_parallel", "abc"]);
+        let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.contains("invalid integer") && !m.contains("positive integer")),
+            "expected an invalid-integer error, got {err:?}"
+        );
     }
 }
