@@ -39,7 +39,15 @@ pub struct McpArgs {
     pub template_dir: Option<PathBuf>,
 
     /// Override config `mtui.connection_timeout` (seconds).
-    #[arg(short = 'w', long = "connection-timeout", value_name = "SECONDS")]
+    // Rejected at parse time if 0 via the value_parser range: the config-file
+    // loader guards this key with `validated_positive!`, so the CLI must not be
+    // able to express a 0 the file would refuse.
+    #[arg(
+        short = 'w',
+        long = "connection-timeout",
+        value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
     pub connection_timeout: Option<u64>,
 
     /// Enable debugging output.
@@ -129,6 +137,18 @@ mod tests {
         let mut full = vec!["mtui-mcp"];
         full.extend_from_slice(argv);
         McpArgs::try_parse_from(full)
+    }
+
+    #[test]
+    fn connection_timeout_zero_is_rejected_at_parse() {
+        // Same positive-only guard as the config-file loader: 0 is a usage error.
+        assert!(parse(&["--connection-timeout", "0"]).is_err());
+        assert_eq!(
+            parse(&["--connection-timeout", "1"])
+                .unwrap()
+                .connection_timeout,
+            Some(1)
+        );
     }
 
     #[test]

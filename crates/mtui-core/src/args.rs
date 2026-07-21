@@ -69,7 +69,15 @@ pub struct Args {
     pub sut: Vec<Sut>,
 
     /// Override config `mtui.connection_timeout` (seconds).
-    #[arg(short = 'w', long = "connection-timeout", value_name = "SECONDS")]
+    // Rejected at parse time if 0 via the value_parser range: the config-file
+    // loader guards this key with `validated_positive!`, so the CLI must not be
+    // able to express a 0 the file would refuse (keeps `apply_to`'s invariant).
+    #[arg(
+        short = 'w',
+        long = "connection-timeout",
+        value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
     pub connection_timeout: Option<u64>,
 
     /// Enable debugging output.
@@ -277,6 +285,19 @@ mod tests {
         let mut full = vec!["mtui"];
         full.extend_from_slice(argv);
         Args::try_parse_from(full)
+    }
+
+    #[test]
+    fn connection_timeout_zero_is_rejected_at_parse() {
+        // The file loader's `validated_positive!` rejects 0, so the CLI flag must
+        // too — a usage error, not a silently stored 0 that bypasses the guard.
+        assert!(parse(&["--connection-timeout", "0"]).is_err());
+        assert_eq!(
+            parse(&["--connection-timeout", "1"])
+                .unwrap()
+                .connection_timeout,
+            Some(1)
+        );
     }
 
     #[test]
