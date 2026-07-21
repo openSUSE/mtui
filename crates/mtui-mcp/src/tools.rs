@@ -552,11 +552,11 @@ mod tests {
     #[async_trait]
     impl Command for AliasedCommand {
         fn name(&self) -> &'static str {
-            "renamed_lrun"
+            "renamed_shell"
         }
 
         fn aliases(&self) -> &'static [&'static str] {
-            &["lrun"]
+            &["shell"]
         }
 
         fn scope(&self) -> Scope {
@@ -584,7 +584,7 @@ mod tests {
         let tools = build_tools(&register_all());
         let routes = tool_routes(&register_all());
         for denied in [
-            "quit", "exit", "EOF", "edit", "shell", "lrun", "help", "terms", "switch",
+            "quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch",
         ] {
             assert!(
                 !names(&tools).contains(&denied),

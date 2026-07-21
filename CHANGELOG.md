@@ -99,6 +99,14 @@ _The entries below document the final Python releases, retained for history._
   immediately instead of each repeating the doomed download, so a down
   server costs one transport timeout, not one per caller.
 
+### Removed
+
+- The `lrun` command (run a command in the local shell) has been removed from
+  both the REPL and the MCP server. It never made sense over MCP — the client
+  already has its own local execution, which is why it was permanently
+  deny-listed there — and in the REPL a tester is already at a shell. Use the
+  shell directly, or `run` for commands on the reference hosts.
+
 ## 19.0.1 - 2026-07-17
 
 ### Added

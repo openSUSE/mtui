@@ -23,22 +23,6 @@ Options:
           Print help
 ```
 
-## `lrun`
-
-Runs a command in the local shell.
-
-```text
-Usage: lrun [COMMAND]...
-
-Arguments:
-  [COMMAND]...
-          command to run on local shell
-
-Options:
-  -h, --help
-          Print help
-```
-
 ## `update`
 
 Applies the testing update to the target hosts.

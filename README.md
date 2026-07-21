@@ -37,10 +37,11 @@ ecosystem.
 
 ### MCP security boundary
 
-`lrun` executes commands as the local process user. It remains available through
-direct `mtui` use and trusted callers of the core engine, but MCP synthesis and
-routing never expose it over stdio or HTTP. This permanent deny applies under
-every MCP profile and cannot be reversed with `[mcp] tools_allow`.
+Interactive/REPL-only commands (`shell`, `edit`, `terms`, …) are permanently
+deny-listed: MCP synthesis and routing never expose them over stdio or HTTP,
+under every MCP profile, and the deny cannot be reversed with
+`[mcp] tools_allow`. Local process execution is not exposed at all — the former
+`lrun` command was removed from mtui entirely.
 
 MCP profiles reduce the advertised tool surface; they are not authentication or
 authorization. HTTP session isolation is likewise not caller authentication.

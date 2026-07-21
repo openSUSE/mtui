@@ -12,7 +12,7 @@
 //! An operator selects a profile with `[mcp] profile` and can fine-tune with
 //! `[mcp] tools_allow` / `[mcp] tools_deny` (see [`apply_profile`]).
 //! Profiles only filter the surface remaining after the permanent MCP deny-list;
-//! `tools_allow` cannot restore a command such as `lrun` that was never
+//! `tools_allow` cannot restore a command such as `shell` that was never
 //! synthesised.
 //!
 //! The default is `full` so existing deployments are unchanged; slimming the tool

@@ -16,7 +16,7 @@
 //!   through the *same* engine entry the REPL uses.
 //!
 //! Deny-listed commands never enter the surface — [`build_tools`]
-//! filters them — so a `call_tool` for e.g. `lrun`/`shell` resolves to no route
+//! filters them — so a `call_tool` for e.g. `shell`/`edit` resolves to no route
 //! and returns `method_not_found`.
 //!
 //! Scope: this handler serves **one** [`McpSession`]. Under stdio a single
@@ -348,9 +348,9 @@ mod tests {
         assert!(names.iter().any(|n| n == "set_log_level"));
         assert!(names.iter().any(|n| n == "job_list"));
         assert!(names.iter().any(|n| n == "testreport_read"));
-        assert!(!names.iter().any(|n| n == "lrun"));
+        assert!(!names.iter().any(|n| n == "shell"));
         assert!(server.routes.contains_key("run"));
-        assert!(!server.routes.contains_key("lrun"));
+        assert!(!server.routes.contains_key("shell"));
         assert!(server.job_tools.contains("job_list"));
         assert!(server.testreport_tools.contains("testreport_read"));
     }
@@ -393,23 +393,23 @@ mod tests {
     }
 
     #[test]
-    fn tools_allow_cannot_restore_lrun() {
+    fn tools_allow_cannot_restore_shell() {
         let mut config = Config::default();
         config.mcp_profile = "core".to_owned();
-        config.mcp_tools_allow = vec!["lrun".to_owned()];
+        config.mcp_tools_allow = vec!["shell".to_owned()];
         let server = server_with(config);
 
-        assert!(!tool_names(&server).iter().any(|n| n == "lrun"));
-        assert!(!server.routes.contains_key("lrun"));
+        assert!(!tool_names(&server).iter().any(|n| n == "shell"));
+        assert!(!server.routes.contains_key("shell"));
     }
 
     #[test]
-    fn http_factory_server_denies_lrun() {
+    fn http_factory_server_denies_shell() {
         let registry = SessionRegistry::new(Arc::new(register_all()), Config::default());
         let server = registry.try_make_server().expect("http server");
 
-        assert!(!tool_names(&server).iter().any(|n| n == "lrun"));
-        assert!(!server.routes.contains_key("lrun"));
+        assert!(!tool_names(&server).iter().any(|n| n == "shell"));
+        assert!(!server.routes.contains_key("shell"));
     }
 
     #[test]

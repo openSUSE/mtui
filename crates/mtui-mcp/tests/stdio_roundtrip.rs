@@ -82,8 +82,8 @@ async fn tools_list_reflects_synthesised_surface_and_denylist() {
                 "expected job tool `{expected}` in tools/list, got: {names:?}"
             );
         }
-        // Deny-listed commands must never surface, nor the bare `config` (it is
-        // fanned out into config_show/config_set).
+        // Deny-listed commands must never surface, nor the removed `lrun`, nor
+        // the bare `config` (it is fanned out into config_show/config_set).
         for denied in [
             "quit", "exit", "EOF", "edit", "shell", "lrun", "help", "terms", "switch", "config",
         ] {
@@ -145,10 +145,10 @@ async fn call_whoami_routes_through_the_engine() {
 #[tokio::test]
 async fn call_denied_tool_is_method_not_found() {
     with_client(|client| async move {
-        // `lrun` is deny-listed, so the server synthesised no local-process route
-        // and rejects the call as an unknown method.
+        // `shell` is deny-listed, so the server synthesised no route for it and
+        // rejects the call as an unknown method.
         let err = client
-            .call_tool(CallToolRequestParams::new("lrun"))
+            .call_tool(CallToolRequestParams::new("shell"))
             .await
             .expect_err("denied tool must be rejected");
         let msg = err.to_string();

@@ -36,7 +36,7 @@ consumers iterate that **one** registry:
 
 So adding, renaming, or removing a command updates the REPL, the docs, and the MCP
 tool surface together — they cannot drift. See [MCP server](mcp.md) for the
-deny-list that keeps REPL-only and local-execution commands off the wire.
+deny-list that keeps REPL-only commands off the wire.
 
 ## Session state, not globals
 
