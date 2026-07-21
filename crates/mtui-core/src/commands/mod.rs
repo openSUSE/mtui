@@ -6,7 +6,7 @@
 //! [`Session`](crate::Session).
 //!
 //! Ported in port-order "waves" (`PLAN-phase5.md §5.5`). Wave 1 — the core
-//! workflow that gates the phase — lands here: `run`, `lrun`, `update`,
+//! workflow that gates the phase — lands here: `run`, `update`,
 //! `install`/`uninstall`, `prepare`, `downgrade`, `reboot`, `set_repo`,
 //! `show_update_repos`.
 
@@ -15,7 +15,6 @@ pub mod support;
 mod perform;
 
 mod downgrade;
-mod localrun;
 mod prepare;
 mod reboot;
 mod run;
@@ -82,7 +81,6 @@ mod help;
 mod terms;
 
 pub use downgrade::Downgrade;
-pub use localrun::LocalRun;
 pub use prepare::Prepare;
 pub use reboot::Reboot;
 pub use run::Run;

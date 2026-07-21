@@ -117,8 +117,9 @@ impl Registry {
 /// Commands that must not be synthesised into MCP tools.
 ///
 /// Ports and hardens upstream's MCP deny-list (`AGENTS.md`): these commands drive
-/// the interactive shell, require a controlling terminal, or execute locally
-/// with the `mtui-mcp` process user's authority. The Phase-7 `mtui-mcp` tool
+/// the interactive shell or require a controlling terminal. (Local process
+/// execution used to be the third category; its `lrun` command was removed
+/// outright rather than merely denied.) The Phase-7 `mtui-mcp` tool
 /// synthesiser skips every registry command whose name or alias appears here,
 /// and warns at boot if a deny-list entry no longer resolves (so a
 /// renamed/removed command does not drift silently). Kept here, beside
@@ -132,7 +133,6 @@ pub const MCP_DENYLIST: &[&str] = &[
     "quit", "exit", "EOF",    // session exit (Wave 2)
     "switch", // active-template pointer, REPL-only (Wave 2)
     "shell",  // interactive PTY attach, Phase 6 (Wave 2)
-    "lrun",   // arbitrary local execution as the mtui-mcp process user
     "help",   // registry listing / per-command help, REPL-only (Phase 6)
     "edit",   // $EDITOR spawn on the controlling TTY, REPL-only (Phase 6)
     "terms",  // spawn terminal-launcher scripts to hosts, REPL-only (Phase 6)
@@ -152,7 +152,6 @@ pub fn register_all() -> Registry {
     let mut registry = Registry::new();
     // Wave 1 — core workflow (gates the phase).
     registry.register(Arc::new(commands::Run));
-    registry.register(Arc::new(commands::LocalRun));
     registry.register(Arc::new(commands::Update));
     registry.register(Arc::new(commands::Install));
     registry.register(Arc::new(commands::Uninstall));
@@ -269,7 +268,6 @@ mod tests {
         // Wave 1 — core workflow.
         for name in [
             "run",
-            "lrun",
             "update",
             "install",
             "uninstall",
@@ -362,12 +360,13 @@ mod tests {
 
     #[test]
     fn register_all_command_count() {
-        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 12 Wave 4 (incl. request_review)
-        // + 4 P5 follow-ups (export, list_refhosts, load_template, list_locks)
-        // + 2 openQA-holder follow-ups (reload_openqa, set_workflow:
+        // 9 Wave 1 (10 originally; `lrun` was later removed outright) + 14
+        // Wave 2 + 17 Wave 3 + 12 Wave 4 (incl. request_review) + 4 P5
+        // follow-ups (export, list_refhosts, load_template, list_locks) + 2
+        // openQA-holder follow-ups (reload_openqa, set_workflow:
         // mtui-rs-zs4/plt) + 3 Phase 6 (help: mtui-rs-lhz.9; edit:
-        // mtui-rs-lhz.10; terms: mtui-rs-lhz.11) = 62 canonical commands.
-        assert_eq!(register_all().len(), 62);
+        // mtui-rs-lhz.10; terms: mtui-rs-lhz.11) = 61 canonical commands.
+        assert_eq!(register_all().len(), 61);
     }
 
     #[test]
@@ -397,11 +396,18 @@ mod tests {
     }
 
     #[test]
-    fn mcp_denylist_blocks_local_execution() {
-        assert!(MCP_DENYLIST.contains(&"lrun"));
+    fn lrun_is_fully_removed() {
+        // `lrun` (arbitrary local execution) was removed as a design choice —
+        // not merely MCP-denied. It must be absent from the registry (so
+        // neither the REPL nor MCP can reach it) and absent from the deny-list
+        // (which would otherwise imply it still exists somewhere).
         assert!(
-            register_all().contains("lrun"),
-            "lrun remains a REPL command"
+            !register_all().contains("lrun"),
+            "lrun must not be a registered command"
+        );
+        assert!(
+            !MCP_DENYLIST.contains(&"lrun"),
+            "a removed command must not linger on the deny-list"
         );
     }
 
@@ -419,8 +425,8 @@ mod tests {
             let _reserved_or_registered = r.contains(name);
         }
         // Sanity: the currently-registered deny-listed commands are the Wave 2
-        // REPL-only set (quit+aliases, switch, shell), local execution (`lrun`),
-        // plus `help`, `edit`, and `terms` (Phase 6).
+        // REPL-only set (quit+aliases, switch, shell) plus `help`, `edit`, and
+        // `terms` (Phase 6).
         let registered_denied: Vec<&str> = MCP_DENYLIST
             .iter()
             .copied()
@@ -429,7 +435,7 @@ mod tests {
         assert_eq!(
             registered_denied,
             vec![
-                "quit", "exit", "EOF", "switch", "shell", "lrun", "help", "edit", "terms"
+                "quit", "exit", "EOF", "switch", "shell", "help", "edit", "terms"
             ]
         );
     }

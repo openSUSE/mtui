@@ -12,8 +12,8 @@
 //! `mtui-hosts` and `mtui-testreport` (and the repository-URL sinks) can reuse
 //! it without a crate cycle.
 //!
-//! Quoting uses [`shlex`], the same crate the REPL uses for `run`/`lrun`
-//! argument joining, so the whole codebase quotes consistently.
+//! Quoting uses [`shlex`], the same crate the REPL uses for `run` argument
+//! joining, so the whole codebase quotes consistently.
 
 /// Quotes each argument and joins them with single spaces.
 ///

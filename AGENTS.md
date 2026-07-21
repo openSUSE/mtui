@@ -131,8 +131,9 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
   converting the command's `clap` arg spec to a JSON schema, reconstructing argv
   from tool kwargs, and dispatching through the **same engine** as the REPL.
   REPL-only commands (`quit`, `exit`, `EOF`, `edit`, `shell`, `help`, `terms`,
-  `switch`) and local process execution (`lrun`) are deny-listed; the deny-list ∩
-  registry is consistency-tested and drift is warned about at boot.
+  `switch`) are deny-listed; the deny-list ∩ registry is consistency-tested and
+  drift is warned about at boot. Local process execution has no command at all —
+  `lrun` was removed by design; do not reintroduce it.
 
 ## Contracts (do not break without intent — these enable ecosystem interop)
 - **RRID grammar** `project:kind:maintenance_id:review_id` and its parse errors.

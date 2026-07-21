@@ -65,12 +65,14 @@ maintenance tools.
 Some commands are **never** synthesised into MCP tools, under every profile — this
 cannot be re-enabled with `[mcp] tools_allow`:
 
-- **`lrun`** — executes commands as the local `mtui-mcp` process user. It stays
-  available through direct `mtui` use and trusted callers of the core engine, but
-  is never exposed over stdio or HTTP.
 - The interactive/REPL-only commands, which require a controlling terminal or
   have no headless meaning: `quit`, `exit`, `EOF`, `switch`, `shell`, `help`,
   `edit`, `terms`.
+
+Local process execution is not on this list because it is not in mtui at all:
+the former `lrun` command (run a command as the local process user) was removed
+outright — an MCP client already has its own local execution, and a REPL user is
+already at a shell.
 
 The deny-list is intersected with the live registry and consistency-tested; a
 renamed or removed command that leaves a stale deny-list entry is warned about at
