@@ -30,8 +30,7 @@ ecosystem.
 
 ## Two surfaces
 
-- `mtui` — interactive REPL (line editing, tab completion, history) **and**
-  non-interactive single-command mode.
+- `mtui` — interactive REPL (line editing, tab completion, history).
 - `mtui-mcp` — a Model Context Protocol server whose tools are **synthesised from
   the command registry**, so the CLI and the MCP surface never drift.
 

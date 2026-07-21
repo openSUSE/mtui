@@ -30,7 +30,7 @@ maintenance ecosystem (see "Contracts" below).
 ## Two driving surfaces (keep both working)
 Like upstream, there are **two entrypoints**, and command/entrypoint changes must
 keep both green:
-- `mtui` — the interactive REPL (`reedline`) + non-interactive single-command mode.
+- `mtui` — the interactive REPL (`reedline`).
 - `mtui-mcp` — the MCP server, which **synthesises its tools from the command
   registry**. Adding/renaming/removing a command affects MCP tools automatically.
 
