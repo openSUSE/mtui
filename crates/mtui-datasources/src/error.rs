@@ -92,6 +92,18 @@ pub enum RefhostError {
     /// happen; this variant is the terminal "all strategies exhausted" signal.
     #[error("no refhosts resolver could produce a usable database")]
     ResolveFailed,
+
+    /// A concurrent HTTPS cache refresh failed while this resolve waited on it.
+    ///
+    /// The waiter does not retry the download itself: the failure it just
+    /// waited through would almost certainly repeat, and each retry costs a
+    /// full transport timeout — serialised behind the refresh lock, that would
+    /// multiply a down server's latency by the number of waiters. Failing fast
+    /// keeps the concurrent-failure cost at one timeout, and the caller falls
+    /// back to the next configured resolver exactly as it would for the
+    /// leader's own error.
+    #[error("refhosts refresh skipped: a concurrent download attempt just failed")]
+    RefreshJustFailed,
 }
 
 /// Errors from building an openQA API request or fetching jobs.

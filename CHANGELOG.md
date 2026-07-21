@@ -77,6 +77,16 @@ _The entries below document the final Python releases, retained for history._
   explicit and auditable. `reject` is never gated. With Slack disabled (the
   default) `approve` behaves exactly as before.
 
+### Fixed
+
+- Concurrent `refhosts.yml` HTTPS refreshes no longer stampede the server.
+  When several sessions or commands hit a stale cache at once, one of them
+  downloads while the rest wait and then read the freshly written cache —
+  a single download at a time instead of one per caller. If that download
+  fails, the callers that waited on it fail over to the next resolver
+  immediately instead of each repeating the doomed download, so a down
+  server costs one transport timeout, not one per caller.
+
 ## 19.0.1 - 2026-07-17
 
 ### Added
