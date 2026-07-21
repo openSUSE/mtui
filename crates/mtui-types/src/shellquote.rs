@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn nul_bearing_token_is_dropped_not_leaked() {
-        let out = quote_args(&["ok", "ba\0d"]);
+        let out = quote_args(&["ok", "x\0y"]);
         assert!(!out.contains('\0'), "NUL leaked: {out:?}");
         assert!(out.contains("ok"));
     }
