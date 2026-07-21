@@ -141,9 +141,20 @@ pub async fn run_once(
 /// display buffer. The two present the same `error: <message>` *text*; each uses
 /// the channel appropriate to its surface. No `tracing` event is emitted here so
 /// the failure never surfaces twice.
+///
+/// One exception: a [`EngineError::Parse`] here is always a genuine usage
+/// error (the `--help`/`--version` case is filtered out in [`run_once`]
+/// before `render_error` is ever called with it) and its message already
+/// carries clap's own `error: ` prefix (and whatever color clap itself
+/// applied). It is printed verbatim rather than wrapped a second time.
 fn render_error(session: &mut Session, err: &EngineError) {
-    let level = session.display.red("error");
-    session.display.println(&format!("{level}: {err}"));
+    match err {
+        EngineError::Parse { message, .. } => session.display.println(message),
+        _ => {
+            let level = session.display.red("error");
+            session.display.println(&format!("{level}: {err}"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -297,6 +308,14 @@ mod tests {
             1,
             "usage error must be rendered exactly once, got: {out:?}"
         );
+        // clap's own "error: " prefix must survive exactly once, not doubled
+        // with mtui's own level prefix.
+        assert_eq!(
+            out.matches("error: ").count(),
+            1,
+            "exactly one error prefix, got: {out:?}"
+        );
+        assert!(!out.contains("error: error:"), "no doubled prefix: {out:?}");
     }
 
     #[tokio::test]

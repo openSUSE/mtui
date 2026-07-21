@@ -31,6 +31,12 @@ use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
 
+/// Marks an event whose message is already fully rendered (e.g. clap's own
+/// colored `error: ...` usage text for a genuine parse error) so
+/// [`CompactLevelFormat::format_event`] must not prepend a second level
+/// prefix. Set via `tracing::error!(target: CLAP_PREFIXED_TARGET, "{msg}")`.
+pub(crate) const CLAP_PREFIXED_TARGET: &str = "mtui::clap_prefixed";
+
 /// A [`FormatEvent`] that renders `"{level}: {message}"` with a lowercased,
 /// optionally colorized level token and no timestamp/target.
 ///
@@ -84,7 +90,9 @@ where
         event: &Event<'_>,
     ) -> fmt::Result {
         let meta = event.metadata();
-        write!(writer, "{}: ", self.level_token(meta.level()))?;
+        if meta.target() != CLAP_PREFIXED_TARGET {
+            write!(writer, "{}: ", self.level_token(meta.level()))?;
+        }
         // The field formatter writes the `message` field (and any structured
         // fields) exactly as the stock compact format does — but without the
         // level/timestamp/target prefix we deliberately omit.
@@ -201,5 +209,24 @@ mod tests {
         assert_ne!(info, error);
         // Parity with the display's `error` token (both via owo-colors red).
         assert_eq!(error, "error".red().to_string());
+    }
+
+    /// An event marked with [`CLAP_PREFIXED_TARGET`] renders its message
+    /// verbatim, with no `"{level}: "` prefix added on top — the mechanism
+    /// that lets a genuine clap usage error (which already carries its own
+    /// `"error: "` prefix) avoid being double-prefixed.
+    #[test]
+    fn clap_prefixed_target_suppresses_level_prefix() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .event_format(CompactLevelFormat::new(false))
+            .with_writer(BufMaker(Arc::clone(&buf)))
+            .finish();
+        with_default(subscriber, || {
+            tracing::error!(target: CLAP_PREFIXED_TARGET, "error: already prefixed");
+        });
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert_eq!(out, "error: already prefixed\n");
     }
 }
