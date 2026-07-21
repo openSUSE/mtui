@@ -5,7 +5,8 @@ All notable user-visible changes to MTUI are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [26.0.0]
+
+## [Unreleased]
 
 ### Changed
 
@@ -21,40 +22,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   The version jumps to 26.0.0 to align with the maintenance-tooling release
   calendar. The previous Python releases remain available on the `16.0.x`
   through `19.0.x` maintenance branches.
-
----
-
-_The entries below document the final Python releases, retained for history._
-
-## [Unreleased]
-
-### Changed
-
-- `mtui-mcp` starts faster and ships a leaner tool manifest. The headless
-  server no longer imports `prompt_toolkit` (~115 modules, ~170ms) at startup —
-  it is loaded lazily only when the interactive REPL actually reads a line — and
-  the text-returning tools no longer advertise a redundant `{"result": string}`
-  `outputSchema` nor echo their output back as `structuredContent`. That trims
-  ~9KB (~2.4k tokens) from the `list_tools` manifest the client re-reads each
-  session; MCP clients should read tool output from the text content block (as
-  before) rather than `structuredContent`. Large single-command `run` output is
-  also accumulated without the previous quadratic buffer growth.
-- `openqa_overview` is substantially faster. Its independent openQA/OBS HTTP
-  round-trips -- the per-version single-incident queries, the per-group and
-  per-version aggregated day-walks, and the per-log `build_checks` downloads --
-  now run concurrently instead of one after another, while results are read back
-  in the original order so the rendered overview is unchanged. The openQA
-  job-group list is fetched once up front and shared across the fan-out.
-- Loading a template / connecting reference hosts is faster for multi-target
-  updates. `refhosts.yml` is now parsed once per report and shared across every
-  testplatform (and with the product-drift check) instead of being re-parsed
-  (~1s each) for every testplatform during autoconnect / `add_host`.
-- Rebooting a host group is faster. After the reboot is dispatched, the hosts
-  are now reconnected concurrently instead of one at a time, so the fixed
-  per-host reconnect wait (~10s) overlaps across hosts rather than stacking.
-  The wait itself is kept (it guards against reconnecting to a
-  still-shutting-down sshd); only the serialization is removed. Most visible on
-  transactional (SL Micro) updates, which reboot every host.
 
 ### Added
 
@@ -76,6 +43,7 @@ _The entries below document the final Python releases, retained for history._
   gate is turned off by configuration (`slack_enabled = false`), which is
   explicit and auditable. `reject` is never gated. With Slack disabled (the
   default) `approve` behaves exactly as before.
+
 ### Security
 
 - Release binaries are now built with `cargo build --locked`, so a published
@@ -121,6 +89,40 @@ _The entries below document the final Python releases, retained for history._
   deny-listed there — and in the REPL a tester is already at a shell. Use the
   shell directly, or `run` for commands on the reference hosts.
 
+---
+
+_The entries below document the final Python releases, retained for history._
+
+## [19.1.0]
+
+### Changed
+
+- `mtui-mcp` starts faster and ships a leaner tool manifest. The headless
+  server no longer imports `prompt_toolkit` (~115 modules, ~170ms) at startup —
+  it is loaded lazily only when the interactive REPL actually reads a line — and
+  the text-returning tools no longer advertise a redundant `{"result": string}`
+  `outputSchema` nor echo their output back as `structuredContent`. That trims
+  ~9KB (~2.4k tokens) from the `list_tools` manifest the client re-reads each
+  session; MCP clients should read tool output from the text content block (as
+  before) rather than `structuredContent`. Large single-command `run` output is
+  also accumulated without the previous quadratic buffer growth.
+- `openqa_overview` is substantially faster. Its independent openQA/OBS HTTP
+  round-trips -- the per-version single-incident queries, the per-group and
+  per-version aggregated day-walks, and the per-log `build_checks` downloads --
+  now run concurrently instead of one after another, while results are read back
+  in the original order so the rendered overview is unchanged. The openQA
+  job-group list is fetched once up front and shared across the fan-out.
+- Loading a template / connecting reference hosts is faster for multi-target
+  updates. `refhosts.yml` is now parsed once per report and shared across every
+  testplatform (and with the product-drift check) instead of being re-parsed
+  (~1s each) for every testplatform during autoconnect / `add_host`.
+- Rebooting a host group is faster. After the reboot is dispatched, the hosts
+  are now reconnected concurrently instead of one at a time, so the fixed
+  per-host reconnect wait (~10s) overlaps across hosts rather than stacking.
+  The wait itself is kept (it guards against reconnecting to a
+  still-shutting-down sshd); only the serialization is removed. Most visible on
+  transactional (SL Micro) updates, which reboot every host.
+
 ## 19.0.1 - 2026-07-17
 
 ### Added
@@ -144,7 +146,6 @@ _The entries below document the final Python releases, retained for history._
   passphrase: an encrypted key is used only via the agent, and anything
   unresolvable fails closed. A new `[obs]` config section (`api_url`,
   `request_timeout`) is introduced.
-
 - `mtui-mcp` is now much more token-efficient. Tool schemas are automatically
   slimmed of redundant pydantic boilerplate (the per-field `title` keys and the
   `anyOf: [T, null]` optional-field unions), shrinking the tool-list payload
