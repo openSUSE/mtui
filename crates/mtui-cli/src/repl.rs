@@ -259,8 +259,25 @@ pub async fn step(registry: &Registry, session: &mut Session, line: &str) -> Con
 /// `error: <message>` text through its captured display buffer. The two present
 /// failures with identical *text*; each uses the channel appropriate to its
 /// surface (REPL → operator log on stderr; headless → captured display sink).
+///
+/// One exception: a genuine usage error (`Parse { help_or_version: false,
+/// .. }`) carries clap's *own* already-rendered `error: ` prefix (and
+/// whatever color clap itself applied). Emitting it through the normal path
+/// would double that prefix, so it's tagged with
+/// [`CLAP_PREFIXED_TARGET`](crate::logfmt::CLAP_PREFIXED_TARGET) instead,
+/// which `CompactLevelFormat` recognizes and renders without adding a second
+/// one. `--help`/`--version` output (`help_or_version: true`) keeps flowing
+/// through the normal path unchanged.
 fn render_error(err: &EngineError) {
-    tracing::error!("{err}");
+    match err {
+        EngineError::Parse {
+            help_or_version: false,
+            message,
+        } => {
+            tracing::error!(target: crate::logfmt::CLAP_PREFIXED_TARGET, "{message}");
+        }
+        _ => tracing::error!("{err}"),
+    }
 }
 
 #[cfg(test)]
@@ -488,5 +505,13 @@ mod tests {
         assert_eq!(flow, ControlFlow::Continue(()));
         assert_eq!(runs.load(Ordering::SeqCst), 0, "the body never ran");
         assert!(!out.is_empty(), "usage error is rendered");
+        // clap's own "error: " prefix must survive exactly once, not doubled
+        // with mtui's own level prefix.
+        assert_eq!(
+            out.matches("error: ").count(),
+            1,
+            "exactly one error prefix, got: {out:?}"
+        );
+        assert!(!out.contains("error: error:"), "no doubled prefix: {out:?}");
     }
 }
