@@ -1,0 +1,48 @@
+# Configuration for crate-ci/typos (https://github.com/crate-ci/typos).
+# Allowlist ONLY: every entry below is a deliberate, load-bearing spelling, a
+# quoted historical/upstream string, or a captured data fixture — never a masked
+# real typo. A genuine typo is fixed in source, not silenced here.
+
+[files]
+extend-exclude = [
+  # SSH key + signature fixtures for the OBS backend tests: base64 key material,
+  # not prose to spell-check (e.g. "...NdOUL...", "...jkd9...").
+  "crates/mtui-datasources/tests/fixtures/obs/id_*",
+]
+
+[default.extend-words]
+# Accepted alternative spelling of "cannot be parsed", used consistently across
+# the datasources/testreport crates and their tests (error text, doc comments).
+unparseable = "unparseable"
+# Deliberate `sic`: upstream mtui literally prints "Referenece host"; the Rust
+# port preserves the byte-for-byte output for tool parity (see display.rs).
+referenece = "referenece"
+# SUSE product name: SLE-HAE (High Availability Extension), e.g. "SLE-HAE",
+# "sle-hae" in product-normalisation code and its tests.
+hae = "hae"
+# The Python `certifi` CA-bundle package, referenced by name in a doc comment
+# and in the retained Python-era CHANGELOG history.
+certifi = "certifi"
+# Quoted historical log strings, verbatim in the append-only CHANGELOG history
+# and (for "aviable") in a comment documenting the upstream typo that the Rust
+# port deliberately drops.
+aviable = "aviable"
+cannont = "cannont"
+errocode = "errocode"
+# The English prefix "mis-" (mis-decoded / mis-classifying / mis-encoded), split
+# on the hyphen by the tokenizer.
+mis = "mis"
+# Accepted alternative spelling in a doc comment ("non-clonable io::Error").
+clonable = "clonable"
+# Markdown bold-acronym artifact: "**I**nstaller" (expanding MTUI = Maintenance
+# Test Update Installer) renders the bolded initial separately, leaving
+# "nstaller" in the raw source.
+nstaller = "nstaller"
+# Deliberate misspellings in MCP tests/comments that exercise the
+# reject-unknown-kwargs path: a mistyped field name must be rejected, so the
+# wrong spelling is the point (see tools.rs).
+attribut = "attribut"
+mesage = "mesage"
+# A partial-read test slice: b"ome\n" is the tail of "welcome\n" read through a
+# 4-byte buffer in the SSH integration suite.
+ome = "ome"
