@@ -102,6 +102,13 @@ _The entries below document the final Python releases, retained for history._
   `mtui-mcp` wire. Its terse-rewrite rule had drifted from the actual help text
   and silently stopped matching, so every host-targeting tool advertised the
   long form; the manifest each client re-reads is now a little leaner again.
+- `config set` now rejects `0` for the positive-only integer keys
+  (`connection_timeout`, `max_parallel`, `refhosts_https_expiration`,
+  `slack_poll_interval`, `slack_watch_timeout`, `lock_wait_poll`), matching the
+  config-file loader's `validated_positive!` guard. Previously a runtime `set`
+  could store a `0` the file would reject, contradicting the command's own
+  promise that it cannot store what the file refuses. `lock_stale_age` and
+  `lock_wait` still accept `0`, as the file format does.
 
 ### Removed
 
