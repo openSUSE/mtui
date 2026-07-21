@@ -467,12 +467,21 @@ impl russh_sftp::server::Handler for SftpHandler {
 // Harness: start the server on an ephemeral port and connect a client.
 // ----------------------------------------------------------------------------
 
+/// Process-wide host key shared by every fixture server.
+///
+/// One key, not one per server: all tests append to the same `known_hosts`
+/// file, and the kernel recycles ephemeral loopback ports within a single
+/// run. A recycled port whose new server presented a *different* key would
+/// read as a changed key — rejected under every policy (`Unknown server
+/// key`), failing whichever test drew the reused port.
+static HOST_KEY: LazyLock<PrivateKey> =
+    LazyLock::new(|| PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("host key"));
+
 /// Starts the in-process server, returning its bound port and the shared FS.
 async fn start_server(fs: SharedFs) -> u16 {
-    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("host key");
     let config = Arc::new(russh::server::Config {
         auth_rejection_time: Duration::from_millis(1),
-        keys: vec![key],
+        keys: vec![HOST_KEY.clone()],
         ..Default::default()
     });
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
