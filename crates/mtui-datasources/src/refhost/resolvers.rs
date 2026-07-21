@@ -22,7 +22,9 @@
 //! production wiring uses [`SystemClock`], [`FsStat`], [`HttpFetcher`],
 //! [`AtomicFileWriter`], and [`PathRefhostsBuilder`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -269,6 +271,42 @@ impl Resolver for PathResolver {
     }
 }
 
+/// State shared by every refresh of one cache path, guarded by its
+/// [`refresh_lock`].
+///
+/// `failed_at` remembers when the last download attempt failed, as a monotonic
+/// [`std::time::Instant`] (deliberately not the scriptable [`Clock`] seam: the
+/// comparison is "did that failure happen while *I* was waiting", a monotonic
+/// ordering question, not a cache-age computation).
+#[derive(Default)]
+struct RefreshSlot {
+    /// When the most recent download attempt failed; cleared on success.
+    failed_at: Option<std::time::Instant>,
+}
+
+/// Process-wide per-cache-path refresh locks (single-flight, see
+/// [`HttpsResolver::refresh_if_needed`]).
+///
+/// The lock cannot live on the [`HttpsResolver`] instance:
+/// [`RefhostsFactory::production`] is constructed on demand at every call site
+/// (Session autoconnect, `list_refhosts`, `add_host`), so concurrent resolves
+/// each hold their own resolver and would never share an instance field. Keyed
+/// by cache path rather than a single global so unrelated caches (in practice:
+/// per-test temp paths — production configures exactly one
+/// `config.refhosts_path`) never serialise each other; entries are one `Arc` +
+/// one small `Mutex` each and are never removed, which is fine at that
+/// cardinality.
+static REFRESH_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<RefreshSlot>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The process-wide refresh lock for `cache_path`.
+fn refresh_lock(cache_path: &Path) -> Arc<tokio::sync::Mutex<RefreshSlot>> {
+    let mut locks = REFRESH_LOCKS
+        .lock()
+        .expect("refresh-lock registry poisoned");
+    Arc::clone(locks.entry(cache_path.to_path_buf()).or_default())
+}
+
 /// Resolve refhosts from an HTTPS URL, with on-disk caching.
 ///
 /// `resolve` runs the cache-refresh check (re-downloading only when the cache is
@@ -334,14 +372,48 @@ impl HttpsResolver {
     }
 
     /// Refresh the cache if it is missing or stale.
+    ///
+    /// Concurrent resolves **single-flight** the download: the first caller to
+    /// see a stale cache takes the per-cache-path [`refresh_lock`] and fetches;
+    /// callers arriving meanwhile wait on the same lock and then *re-check*
+    /// freshness — the leader's write bumped the cache mtime, so they build
+    /// from the fresh cache instead of stampeding the server with duplicate
+    /// downloads. One concurrent download, not one per caller — and that holds
+    /// on failure too: a waiter that waited through a *failed* download fails
+    /// fast ([`RefhostError::RefreshJustFailed`]) instead of repeating an
+    /// attempt that would almost certainly fail again, so a down server costs
+    /// the group one transport timeout, not one per waiter. A *later* caller
+    /// (one that was not yet waiting when the failure happened) retries
+    /// normally.
     async fn refresh_if_needed(&self, config: ResolveConfig<'_>) -> Result<(), RefhostError> {
+        // Unlocked fast path: the common case (fresh cache) takes no lock.
+        if !self.is_refresh_needed(config.refhosts_https_expiration)? {
+            return Ok(());
+        }
+        let wait_started = std::time::Instant::now();
+        let lock = refresh_lock(&self.cache_path);
+        let mut slot = lock.lock().await;
+        // Re-check under the lock: the cache may have been refreshed while
+        // this task waited for the leader to finish.
         if self.is_refresh_needed(config.refhosts_https_expiration)? {
+            // Still stale, so no successful refresh happened meanwhile. If a
+            // download *failed* while this task waited, adopt that outcome
+            // rather than serially re-fetching.
+            if slot.failed_at.is_some_and(|failed| failed > wait_started) {
+                return Err(RefhostError::RefreshJustFailed);
+            }
             // refhosts.yml is served from an internal SUSE host; verify by
             // default but let the global [mtui] ssl_verify policy override.
             let default = VerifyPolicy::Default(true);
             let override_ = policy_override(config.ssl_verify);
             let verify = resolve_verify(default, override_);
-            self.refresh(config.refhosts_https_uri, verify).await?;
+            match self.refresh(config.refhosts_https_uri, verify).await {
+                Ok(()) => slot.failed_at = None,
+                Err(e) => {
+                    slot.failed_at = Some(std::time::Instant::now());
+                    return Err(e);
+                }
+            }
         }
         Ok(())
     }
@@ -448,6 +520,9 @@ mod tests {
     //! _RefhostsFactory" block). Upstream drives each collaborator with a
     //! `MagicMock`; the Rust analogues are the mock seams below, which record
     //! their calls for assertion.
+    //!
+    //! The refresh single-flight tests are original (not ported): upstream is
+    //! single-threaded and has no locking to port.
 
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -679,6 +754,184 @@ default:
     }
 
     // --- HttpsResolver: is_refresh_needed ----------------------------------
+
+    // --- HttpsResolver: refresh single-flight ------------------------------
+
+    /// A fetcher that counts calls and dwells long enough for every concurrent
+    /// resolver to pass its unlocked staleness pre-check while the leader is
+    /// still mid-download — the exact window the thundering herd lived in.
+    struct SlowCountingFetcher {
+        calls: Arc<AtomicU64>,
+        payload: Vec<u8>,
+    }
+    #[async_trait]
+    impl Fetcher for SlowCountingFetcher {
+        async fn fetch(&self, _uri: &str, _verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            Ok(self.payload.clone())
+        }
+    }
+
+    /// A fetcher that counts calls, dwells like [`SlowCountingFetcher`], and
+    /// always fails — a down server with a real transport timeout.
+    struct SlowFailingFetcher {
+        calls: Arc<AtomicU64>,
+    }
+    #[async_trait]
+    impl Fetcher for SlowFailingFetcher {
+        async fn fetch(&self, _uri: &str, _verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            Err(RefhostError::ResolveFailed)
+        }
+    }
+
+    /// A fetcher whose first call fails and later calls succeed.
+    struct FailOnceFetcher {
+        calls: Arc<AtomicU64>,
+    }
+    #[async_trait]
+    impl Fetcher for FailOnceFetcher {
+        async fn fetch(&self, _uri: &str, _verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(RefhostError::ResolveFailed);
+            }
+            Ok(b"payload".to_vec())
+        }
+    }
+
+    /// One production-shaped resolver: real clock/stat/writer against a real
+    /// cache file, mirroring how every call site builds its own instance.
+    fn fs_resolver(fetcher: Box<dyn Fetcher>, cache: &Path) -> HttpsResolver {
+        HttpsResolver::new(
+            Box::new(SystemClock),
+            Box::new(FsStat),
+            fetcher,
+            Box::new(AtomicFileWriter),
+            Box::new(RecordingBuilder::new()),
+            cache.to_path_buf(),
+        )
+    }
+
+    #[tokio::test]
+    async fn concurrent_stale_resolves_share_one_fetch() {
+        // Four resolver *instances* over one missing cache file — the shape of
+        // four concurrent sessions each constructing their own factory. Only
+        // one download may happen; the waiters must re-check and build from
+        // the leader's freshly-written cache.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("refhosts.yml");
+        let calls = Arc::new(AtomicU64::new(0));
+        let ssl = SslVerify::Enabled;
+
+        let resolves = (0..4).map(|_| {
+            let fetcher = Box::new(SlowCountingFetcher {
+                calls: calls.clone(),
+                payload: b"payload".to_vec(),
+            });
+            let resolver = fs_resolver(fetcher, &cache);
+            let cache = cache.clone();
+            let ssl = &ssl;
+            async move {
+                resolver
+                    .resolve(cfg("https", &cache, "https://x", 3600, ssl))
+                    .await
+            }
+        });
+        let results = futures::future::join_all(resolves).await;
+
+        assert!(results.iter().all(Result::is_ok), "all resolves succeed");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "concurrent stale resolves must share a single download"
+        );
+        assert_eq!(
+            std::fs::read(&cache).unwrap(),
+            b"payload",
+            "the shared fetch was persisted to the cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn waiters_fail_fast_after_concurrent_failure() {
+        // Two concurrent resolves against a down server: the leader eats the
+        // full (slow) transport failure; the waiter, having waited through
+        // that failure, must fail fast instead of serially repeating it —
+        // one timeout for the group, not one per waiter.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("refhosts.yml");
+        let calls = Arc::new(AtomicU64::new(0));
+        let ssl = SslVerify::Enabled;
+
+        let resolves = (0..2).map(|_| {
+            let fetcher = Box::new(SlowFailingFetcher {
+                calls: calls.clone(),
+            });
+            let resolver = fs_resolver(fetcher, &cache);
+            let cache = cache.clone();
+            let ssl = &ssl;
+            async move {
+                resolver
+                    .resolve(cfg("https", &cache, "https://x", 3600, ssl))
+                    .await
+            }
+        });
+        let results = futures::future::join_all(resolves).await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the waiter must not repeat the failed download"
+        );
+        let errors: Vec<RefhostError> = results.into_iter().map(|r| r.unwrap_err()).collect();
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, RefhostError::ResolveFailed)),
+            "the leader surfaces the transport failure: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, RefhostError::RefreshJustFailed)),
+            "the waiter adopts the failure without re-fetching: {errors:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_is_retried_not_latched() {
+        // A failed download must propagate to its caller and leave the next
+        // caller free to retry (no poisoned/latched single-flight state).
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("refhosts.yml");
+        let calls = Arc::new(AtomicU64::new(0));
+        let ssl = SslVerify::Enabled;
+
+        let first = fs_resolver(
+            Box::new(FailOnceFetcher {
+                calls: calls.clone(),
+            }),
+            &cache,
+        );
+        let second = fs_resolver(
+            Box::new(FailOnceFetcher {
+                calls: calls.clone(),
+            }),
+            &cache,
+        );
+
+        first
+            .resolve(cfg("https", &cache, "https://x", 3600, &ssl))
+            .await
+            .unwrap_err();
+        second
+            .resolve(cfg("https", &cache, "https://x", 3600, &ssl))
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "second caller re-fetched");
+    }
 
     fn refresh_probe(clock: u64, stat: ScriptedStat) -> HttpsResolver {
         https_resolver(
