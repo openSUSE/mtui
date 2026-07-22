@@ -4,10 +4,10 @@ name: release
 on:
   push:
     tags:
-      # Version tags: v26.0.0, optionally with a pre-release suffix
-      # (v26.0.0-rc1). The Rust project tags with a "v" prefix.
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
+      # Version tags: 26.0.1, optionally with a pre-release suffix
+      # (26.0.1rc1). The project tags without a "v" prefix.
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+*'
 
 permissions:
   contents: read
@@ -35,8 +35,7 @@ jobs:
       - name: Verify tag matches workspace version
         run: |
           pkg="$(sed -n 's/^version = "\(.*\)".*/\1/p' Cargo.toml | head -1)"
-          tag="${GITHUB_REF_NAME#v}"
-          if [ "$pkg" != "$tag" ]; then
+          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
             echo "::error::tag '$GITHUB_REF_NAME' != workspace version '$pkg'"
             exit 1
           fi
