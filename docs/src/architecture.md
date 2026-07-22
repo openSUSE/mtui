@@ -3,9 +3,8 @@
 This page is a map, not a deep dive: it sketches how mtui-rs is put together so
 the rest of the book (and the source) is easier to navigate. For the day-to-day
 contributor workflow — toolchain, quality gates, adding a command, testing — see
-the [Developer guide](developer.md). For the full roadmap see `PLAN-highlevel.md`;
-for the authoritative contributor spec and definition of done see `AGENTS.md`.
-Both live in the repository root.
+the [Developer guide](developer.md). For the authoritative contributor spec and
+definition of done see `AGENTS.md`, which lives in the repository root.
 
 ## Workspace layout
 

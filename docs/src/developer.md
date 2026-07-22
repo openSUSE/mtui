@@ -266,23 +266,9 @@ mdbook build docs
 
 ## Issue tracking and commits
 
-Work is tracked in **beads** (`br`), stored under `.beads/` and committed with the
-code. The essentials:
-
-```sh
-br ready                     # actionable, unblocked work
-br show <id>                 # full issue detail + dependencies
-br update <id> --status=in_progress
-br close <id> --reason="..."
-br sync --flush-only         # export the DB to JSONL before committing
-```
-
-For the phased roadmap, `br epic status` shows progress; each phase is an epic
-whose child tasks carry the upstream behaviour, crate mapping, and DoD.
+Work is tracked in the project's issue tracker.
 
 Commits follow **Conventional Commits** (`feat`/`fix`/`docs`/`refactor`/`test`/
 `chore`/…), explaining **why** rather than restating the diff. Reference SUSE
 Bugzilla as `bsc#NNNN` / `boo#NNNN` where applicable. Only commit when asked;
-inspect `git status`/`git diff` first and stage only intended files. Before ending
-a session, run `br sync --flush-only` so the beads JSONL is committed alongside the
-code.
+inspect `git status`/`git diff` first and stage only intended files.

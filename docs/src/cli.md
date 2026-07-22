@@ -913,7 +913,7 @@ Usage: comment [OPTIONS]
 
 Options:
   -m, --message <message>...
-          The comment body (required; interactive prompt lands in Phase 6)
+          The comment body (required)
 
   -h, --help
           Print help
