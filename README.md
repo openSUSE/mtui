@@ -1,17 +1,10 @@
 # mtui
 
-> **Status: feature-complete, in packaging.** This is a ground-up Rust
-> rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The core
-> maintenance workflow, parallel SSH host fan-out, the native OBS/IBS and Gitea
-> review backends, openQA/QEM integration, the testreport lifecycle, and the
-> `mtui-mcp` server have all landed and are CI-gated; work now focuses on
-> packaging and distribution. See [`docs/`](docs) for the user guide and
-> command reference.
-
 An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
 **U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
 a request by RRID, install and test it on reference hosts over SSH in parallel,
-then approve or reject. It drives `osc`/`svn`/Gitea and openQA/QEM under the hood.
+then approve or reject. It drives OBS/IBS and Gitea review workflows, `svn`, and
+openQA/QEM under the hood.
 
 This is a **redesign, not a transpile**: MTUI is the behavioral reference and
 source of domain truth, but mtui aims to be memory-safe, async-native, and
@@ -54,8 +47,14 @@ authenticated boundary trusted to operate the remaining maintenance tools.
   `dryrun` states and `parallel`/`serial` modes. **Pubkey auth only.**
 - OBS/IBS and Gitea maintenance-request workflow (`assign`, `approve`, `reject`,
   `comment`, …) via the native OBS/IBS API (no `osc` subprocess).
+- Optional Slack review-request integration (`request_review`, off by default):
+  posts a review request to a channel, can watch for reviewer 👍/👎 reactions
+  until a verdict, and — once enabled — gates `approve` on an acknowledged
+  review.
 - openQA / QEM Dashboard integration, incl. an `openqa_overview` (port of
   `oqa-search`) with `--export` into the testreport.
+- TeReGen-backed maintenance-queue browsing (`updates`) and template
+  regeneration (`regenerate`).
 - Reference-host discovery via `refhosts.yml` (HTTPS- or filesystem-resolved,
   cached) and offline inventory search (`list_refhosts`).
 - Cooperative reference-host locking (`/var/lock/mtui.lock`), interoperable with
@@ -63,6 +62,8 @@ authenticated boundary trusted to operate the remaining maintenance tools.
 - Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`
   (SVN and Gitea backends).
 - File transfer (`put`/`get`) over SFTP.
+- Vim syntax highlighting for testreport files, packaged separately as
+  `vim-plugin`.
 
 ## Build
 

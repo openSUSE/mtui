@@ -195,7 +195,7 @@ fleet).
 | `max_active_jobs` | int | `16` | Ceiling on concurrent background jobs per session. `0` disables. |
 | `max_completed_jobs` | int | `128` | Ceiling on retained terminal job records per session (FIFO eviction). `0` disables. |
 | `session_cap` | int (>0) | `32` | Ceiling on concurrent per-client sessions under `--transport http`. |
-| `session_idle_timeout` | seconds (>0) | `1800` | Inactivity before an idle http session is swept. |
+| `session_idle_timeout` | seconds (>0) | `14400` | Inactivity before an idle http session is swept. Deliberately higher than upstream's `1800` so it comfortably exceeds rmcp's own HTTP session keep-alive floor. |
 | `sweep_parallel` | int (>0) | `4` | Max stale sessions the idle sweeper tears down concurrently per cycle. |
 | `profile` | string | `full` | Tool-surface profile: `full` (every synthesised tool) or `core` (curated everyday subset). Unknown → `full` with a warning. |
 | `tools_allow` | array of strings | *(empty)* | Extra tool names to keep on top of the profile. |

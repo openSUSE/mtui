@@ -18,6 +18,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   The `refhosts.yml` I/O error message no longer misreports a write failure as
   a read. `docs/src/configuration.md` now documents the real default
   (`~/.local/share/refdb/refhosts.yml`) instead of a stale path.
+- `docs/src/configuration.md` documented the default `[mcp]
+  session_idle_timeout` as `1800` (upstream Python mtui's value); the actual
+  default is `14400`, chosen so an idle HTTP MCP session outlasts rmcp's own
+  streamable-HTTP keep-alive floor. The runtime behaviour was never wrong —
+  only the documented value was.
 
 ## [26.0.1] - 2026-07-22
 
