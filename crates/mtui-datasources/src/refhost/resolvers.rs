@@ -118,6 +118,16 @@ pub trait RefhostsBuilder: Send + Sync {
     /// # Errors
     /// Returns [`RefhostError`] if the file cannot be read or parsed.
     fn build(&self, path: &Path) -> Result<Refhosts, RefhostError>;
+
+    /// Build a [`Refhosts`] directly from already-downloaded bytes, without
+    /// reading `path` back off disk.
+    ///
+    /// Lets a successful HTTPS download populate the store even when
+    /// persisting it to `path` failed (e.g. a read-only mirror location).
+    ///
+    /// # Errors
+    /// Returns [`RefhostError`] if `bytes` cannot be parsed.
+    fn build_from_bytes(&self, bytes: &[u8]) -> Result<Refhosts, RefhostError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +229,10 @@ pub struct PathRefhostsBuilder;
 impl RefhostsBuilder for PathRefhostsBuilder {
     fn build(&self, path: &Path) -> Result<Refhosts, RefhostError> {
         Refhosts::from_path(path)
+    }
+
+    fn build_from_bytes(&self, bytes: &[u8]) -> Result<Refhosts, RefhostError> {
+        Refhosts::from_bytes(bytes)
     }
 }
 
@@ -365,10 +379,21 @@ impl HttpsResolver {
         }
     }
 
-    /// Download `uri` under `verify` and persist it to the cache path.
-    async fn refresh(&self, uri: &str, verify: VerifyPolicy) -> Result<(), RefhostError> {
+    /// Download `uri` under `verify` and return the bytes, best-effort
+    /// persisting them to the cache path.
+    ///
+    /// A mirror-write failure (e.g. `refhosts.path` points at a read-only,
+    /// package-managed file) is logged and does not fail the download: the
+    /// caller still gets the freshly fetched bytes to build from in-memory.
+    async fn refresh(&self, uri: &str, verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
         let bytes = self.fetcher.fetch(uri, verify).await?;
-        self.writer.write(&bytes, &self.cache_path)
+        if let Err(e) = self.writer.write(&bytes, &self.cache_path) {
+            warn!(
+                "failed to write refhosts mirror to {}: {e}",
+                self.cache_path.display()
+            );
+        }
+        Ok(bytes)
     }
 
     /// Refresh the cache if it is missing or stale.
@@ -385,10 +410,19 @@ impl HttpsResolver {
     /// the group one transport timeout, not one per waiter. A *later* caller
     /// (one that was not yet waiting when the failure happened) retries
     /// normally.
-    async fn refresh_if_needed(&self, config: ResolveConfig<'_>) -> Result<(), RefhostError> {
+    ///
+    /// Returns `Some(bytes)` when this call performed the download (so
+    /// [`resolve`](Resolver::resolve) should build from those bytes rather
+    /// than re-reading a cache that may not have been written), or `None` when
+    /// no download happened (the cache was already fresh, or this task waited
+    /// and found the leader's fresh cache in place).
+    async fn refresh_if_needed(
+        &self,
+        config: ResolveConfig<'_>,
+    ) -> Result<Option<Vec<u8>>, RefhostError> {
         // Unlocked fast path: the common case (fresh cache) takes no lock.
         if !self.is_refresh_needed(config.refhosts_https_expiration)? {
-            return Ok(());
+            return Ok(None);
         }
         let wait_started = std::time::Instant::now();
         let lock = refresh_lock(&self.cache_path);
@@ -407,23 +441,28 @@ impl HttpsResolver {
             let default = VerifyPolicy::Default(true);
             let override_ = policy_override(config.ssl_verify);
             let verify = resolve_verify(default, override_);
-            match self.refresh(config.refhosts_https_uri, verify).await {
-                Ok(()) => slot.failed_at = None,
+            return match self.refresh(config.refhosts_https_uri, verify).await {
+                Ok(bytes) => {
+                    slot.failed_at = None;
+                    Ok(Some(bytes))
+                }
                 Err(e) => {
                     slot.failed_at = Some(std::time::Instant::now());
-                    return Err(e);
+                    Err(e)
                 }
-            }
+            };
         }
-        Ok(())
+        Ok(None)
     }
 }
 
 #[async_trait]
 impl Resolver for HttpsResolver {
     async fn resolve(&self, config: ResolveConfig<'_>) -> Result<Refhosts, RefhostError> {
-        self.refresh_if_needed(config).await?;
-        self.builder.build(&self.cache_path)
+        match self.refresh_if_needed(config).await? {
+            Some(bytes) => self.builder.build_from_bytes(&bytes),
+            None => self.builder.build(&self.cache_path),
+        }
     }
 }
 
@@ -440,6 +479,25 @@ fn policy_override(ssl_verify: &SslVerify) -> Option<VerifyPolicy> {
         SslVerify::Enabled => None,
         other => Some(VerifyPolicy::from_config(other)),
     }
+}
+
+/// Best-effort check whether `refhosts_path`'s parent directory looks
+/// writable, so a caller can forewarn that the https mirror write is likely
+/// to fail (upstream bug: a read-only, package-managed `refhosts.path`).
+///
+/// [`AtomicFileWriter`] creates its temp file in that same directory, so the
+/// directory — not the target file itself — is what must be writable. A
+/// missing directory counts as "not writable" here even though
+/// `mtui_config::atomic::write` would try to create it, since a directory
+/// missing at this level (e.g. `/usr/share/qam-metadata`) is typically
+/// root-owned and uncreatable by the caller either way. This is a plain
+/// permission-bit probe (no ACLs/mounts considered), so it only gates a
+/// warning, never a hard failure.
+fn refhosts_mirror_dir_writable(refhosts_path: &Path) -> bool {
+    let Some(parent) = refhosts_path.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return true;
+    };
+    std::fs::metadata(parent).is_ok_and(|meta| !meta.permissions().readonly())
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +563,13 @@ impl RefhostsFactory {
                 warn!("Refhosts: invalid resolver: {name}");
                 continue;
             };
+            if name == "https" && !refhosts_mirror_dir_writable(config.refhosts_path) {
+                warn!(
+                    "refhosts mirror directory for {} is missing or not writable; \
+                     the https download will not be cached on disk",
+                    config.refhosts_path.display()
+                );
+            }
             match resolver.resolve(config).await {
                 Ok(refhosts) => return Ok(refhosts),
                 Err(e) => warn!("Refhosts: resolver {name} failed: {e}"),
@@ -630,21 +695,29 @@ default:
         }
     }
 
-    /// A builder recording the path it was asked to build and serving a store.
+    /// A builder recording the path (or bytes) it was asked to build from and
+    /// serving a store.
     #[derive(Clone)]
     struct RecordingBuilder {
         built: Arc<Mutex<Vec<PathBuf>>>,
+        built_from_bytes: Arc<Mutex<Vec<Vec<u8>>>>,
     }
     impl RecordingBuilder {
         fn new() -> Self {
             Self {
                 built: Arc::new(Mutex::new(Vec::new())),
+                built_from_bytes: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
     impl RefhostsBuilder for RecordingBuilder {
         fn build(&self, path: &Path) -> Result<Refhosts, RefhostError> {
             self.built.lock().unwrap().push(path.to_path_buf());
+            Ok(Refhosts::from_hosts(Vec::new()))
+        }
+
+        fn build_from_bytes(&self, bytes: &[u8]) -> Result<Refhosts, RefhostError> {
+            self.built_from_bytes.lock().unwrap().push(bytes.to_vec());
             Ok(Refhosts::from_hosts(Vec::new()))
         }
     }
@@ -986,9 +1059,11 @@ default:
             RecordingBuilder::new(),
             "/dst",
         );
-        r.refresh("https://x/refhosts.yml", VerifyPolicy::Default(true))
+        let bytes = r
+            .refresh("https://x/refhosts.yml", VerifyPolicy::Default(true))
             .await
             .unwrap();
+        assert_eq!(bytes, b"yaml-bytes");
         assert_eq!(
             *fcalls.lock().unwrap(),
             vec![("https://x/refhosts.yml".to_string(), true)]
@@ -996,6 +1071,55 @@ default:
         assert_eq!(
             *writes.lock().unwrap(),
             vec![(b"yaml-bytes".to_vec(), PathBuf::from("/dst"))]
+        );
+    }
+
+    /// A writer that always fails (upstream: a read-only mirror location).
+    #[derive(Clone, Default)]
+    struct FailingWriter;
+    impl FileWriter for FailingWriter {
+        fn write(&self, _bytes: &[u8], path: &Path) -> Result<(), RefhostError> {
+            Err(RefhostError::Io {
+                path: path.display().to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_write_failure_is_non_fatal() {
+        // A read-only refhosts.path must not abort the resolve: the download
+        // succeeded, so the store is built from the in-memory bytes.
+        let fetcher = RecordingFetcher::new(b"yaml-bytes");
+        let builder = RecordingBuilder::new();
+        let built_from_bytes = builder.built_from_bytes.clone();
+        let built_from_path = builder.built.clone();
+        let r = HttpsResolver::new(
+            Box::new(FixedClock(1_000_000)),
+            Box::new(ScriptedStat::NotFound),
+            Box::new(fetcher),
+            Box::new(FailingWriter),
+            Box::new(builder),
+            PathBuf::from("/dst"),
+        );
+        let ssl = SslVerify::Enabled;
+        r.resolve(cfg(
+            "https",
+            Path::new("/x"),
+            "https://x/refhosts.yml",
+            3600,
+            &ssl,
+        ))
+        .await
+        .expect("a mirror-write failure must not fail the resolve");
+        assert_eq!(
+            *built_from_bytes.lock().unwrap(),
+            vec![b"yaml-bytes".to_vec()],
+            "store must be built from the downloaded bytes"
+        );
+        assert!(
+            built_from_path.lock().unwrap().is_empty(),
+            "must not re-read the (unwritten) cache path"
         );
     }
 
@@ -1079,6 +1203,35 @@ default:
             *fcalls.lock().unwrap(),
             vec![("https://example.invalid/refhosts.yml".to_string(), false)]
         );
+    }
+
+    // --- refhosts_mirror_dir_writable ---------------------------------------
+
+    #[test]
+    fn mirror_dir_writable_for_writable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refhosts.yml");
+        assert!(refhosts_mirror_dir_writable(&path));
+    }
+
+    #[test]
+    fn mirror_dir_not_writable_for_missing_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent-subdir").join("refhosts.yml");
+        assert!(!refhosts_mirror_dir_writable(&path));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mirror_dir_not_writable_for_readonly_dir() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let path = dir.path().join("refhosts.yml");
+        let writable = refhosts_mirror_dir_writable(&path);
+        // Restore permissions so `tempdir` can clean up on drop.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!writable);
     }
 
     // --- RefhostsFactory ---------------------------------------------------
