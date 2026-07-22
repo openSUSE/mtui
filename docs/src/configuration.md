@@ -76,7 +76,7 @@ Defaults below are the built-in (upstream-matching) values.
 | `resolvers` | string | `https,path` | Comma-separated ordered list of refhosts resolvers. |
 | `https_uri` | URL | `https://qam.suse.de/refhosts/refhosts.yml` | HTTPS URI of the refhosts database. |
 | `https_expiration` | seconds (>0) | `43200` (12h) | Age before a cached HTTPS fetch is considered stale. |
-| `path` | path | `/usr/share/qam-metadata/refhosts.yml` | Local filesystem refhosts database. |
+| `path` | path | `~/.local/share/refdb/refhosts.yml` | Local filesystem refhosts database (also used as the HTTPS resolver's on-disk mirror; shared with the refdb tooling). |
 
 ### `[url]`
 

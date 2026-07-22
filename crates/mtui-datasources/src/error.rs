@@ -70,10 +70,10 @@ pub enum HttpError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RefhostError {
-    /// The `refhosts.yml` file could not be read from disk.
-    #[error("failed to read refhosts.yml {path}: {source}")]
+    /// A `refhosts.yml` I/O operation (read, stat, or mirror write) failed.
+    #[error("refhosts.yml I/O error at {path}: {source}")]
     Io {
-        /// The path that could not be read.
+        /// The path the failing operation targeted.
         path: String,
         /// The underlying I/O failure.
         source: std::io::Error,
