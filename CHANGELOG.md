@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.0.2] - 2026-07-22
+
 ### Fixed
 
 - The `https` refhosts resolver no longer aborts when it cannot write its
