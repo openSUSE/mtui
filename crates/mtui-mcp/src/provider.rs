@@ -364,6 +364,59 @@ impl SessionRegistry {
     pub fn sweep_parallel(&self) -> usize {
         self.sweep_parallel
     }
+
+    /// Tear down **every** live session, for graceful process shutdown.
+    ///
+    /// The HTTP transport's counterpart to the stdio serve loop's
+    /// [`McpSession::close`]: cancelling the idle sweeper alone does **not**
+    /// release live sessions (its cancel branch just returns, and the registry
+    /// holds only [`Weak`] handles whose `Drop` cannot run the async pool-claim
+    /// release), so a clean Ctrl-C / SIGTERM of a busy server would otherwise
+    /// leak every active session's pool claims and SSH connections.
+    ///
+    /// Snapshots the live sessions, removes them from the live set, and closes
+    /// them concurrently under [`sweep_parallel`](Self::sweep_parallel) with a
+    /// single overall deadline (`DISCONNECT_TIMEOUT + 1s`) so one wedged host
+    /// close cannot hang process exit. Best-effort and idempotent: a second call
+    /// finds an empty set.
+    pub async fn close_all(&self) {
+        let sessions: Vec<Arc<McpSession>> = {
+            let mut set = match self.live.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let sessions = set.values().filter_map(|t| t.session.upgrade()).collect();
+            set.clear();
+            sessions
+        };
+        close_sessions(sessions, self.sweep_parallel).await;
+    }
+}
+
+/// Close a batch of sessions concurrently under `parallel`, bounded by a single
+/// overall deadline (`DISCONNECT_TIMEOUT + 1s`).
+///
+/// Shared by the idle sweep ([`sweep_once`]) and graceful shutdown
+/// ([`SessionRegistry::close_all`]): one budget (not N×) guarantees the batch
+/// returns even if every close wedges, keeping teardown latency ~independent of
+/// session count.
+async fn close_sessions(sessions: Vec<Arc<McpSession>>, parallel: usize) {
+    use futures::stream::StreamExt as _;
+
+    if sessions.is_empty() {
+        return;
+    }
+    let batch =
+        futures::stream::iter(sessions).for_each_concurrent(parallel, |session| async move {
+            session.close().await;
+        });
+    let deadline = DISCONNECT_TIMEOUT + Duration::from_secs(1);
+    if tokio::time::timeout(deadline, batch).await.is_err() {
+        tracing::warn!(
+            ?deadline,
+            "session teardown timed out; abandoning remaining closes"
+        );
+    }
 }
 
 /// Collect the ids + strong handles of sessions idle for at least `timeout`.
@@ -405,8 +458,6 @@ async fn sweep_loop(live: LiveSet, timeout: Duration, parallel: usize, cancel: C
 /// One sweep cycle: confirm the stale set under the lock, then close it
 /// concurrently under `parallel` with a single overall deadline.
 async fn sweep_once(live: &LiveSet, timeout: Duration, parallel: usize) {
-    use futures::stream::StreamExt as _;
-
     let now = now_millis();
     let timeout_ms = timeout.as_millis() as u64;
 
@@ -439,22 +490,9 @@ async fn sweep_once(live: &LiveSet, timeout: Duration, parallel: usize) {
 
     // Phase 2 (concurrent, unlocked): tear the confirmed-stale sessions down
     // under a small bound so one wedged host close cannot serialize reclamation
-    // of the rest. `close()` self-bounds each teardown to `DISCONNECT_TIMEOUT`;
-    // an overall deadline (one budget, not N×) guarantees the sweep returns even
-    // if every close wedges, keeping sweep latency ~independent of stale count.
-    // Entries are already out of the live set, so abandoned closes are a
-    // best-effort no-op the OS reclaims at process exit.
-    let batch =
-        futures::stream::iter(to_close).for_each_concurrent(parallel, |session| async move {
-            session.close().await;
-        });
-    let deadline = DISCONNECT_TIMEOUT + Duration::from_secs(1);
-    if tokio::time::timeout(deadline, batch).await.is_err() {
-        tracing::warn!(
-            ?deadline,
-            "idle sweep teardown timed out; abandoning remaining closes"
-        );
-    }
+    // of the rest. Entries are already out of the live set, so abandoned closes
+    // are a best-effort no-op the OS reclaims at process exit.
+    close_sessions(to_close, parallel).await;
 }
 
 #[cfg(test)]
@@ -722,6 +760,66 @@ mod tests {
             serial > concurrent * 2,
             "serial (bound=1) sweep {serial:?} must be much slower than concurrent {concurrent:?}"
         );
+    }
+
+    /// `close_all` tears down **every** live session (regardless of idle state)
+    /// and empties the live set — the graceful-shutdown path the HTTP transport
+    /// runs after `axum::serve` returns.
+    #[tokio::test]
+    async fn close_all_closes_every_live_session() {
+        let reg = reg_with_idle(Duration::from_secs(3600)); // effectively no sweep
+        // Two freshly-touched (non-idle) sessions, each holding a mock host.
+        let s1 = slow_close_session(Duration::from_millis(10)).await;
+        let s2 = slow_close_session(Duration::from_millis(10)).await;
+        track(&reg, &s1, now_millis());
+        track(&reg, &s2, now_millis());
+        assert_eq!(reg.live_count(), 2);
+
+        reg.close_all().await;
+
+        assert_eq!(reg.live_count(), 0, "close_all must empty the live set");
+        // Idempotent: a second call over the now-empty set is a no-op.
+        reg.close_all().await;
+        assert_eq!(reg.live_count(), 0);
+    }
+
+    /// `close_all` disconnects a live session's hosts (not just idle ones) — the
+    /// concrete leak Part A-HTTP fixes: a busy session's SSH/pool state must be
+    /// reclaimed on process shutdown.
+    #[tokio::test]
+    async fn close_all_disconnects_live_session_hosts() {
+        use mtui_hosts::{HostsGroup, MockConnection, Target};
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+        use mtui_types::enums::{ExecutionMode, TargetState};
+
+        let reg = reg_with_idle(Duration::from_secs(3600));
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let target = Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+        let session = reg.make_session();
+        {
+            let mut guard = session.session().lock().await;
+            let mut report = ObsReport::new(guard.config.clone());
+            report.base_mut().rrid = Some(RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap());
+            report.base_mut().targets = HostsGroup::new(vec![target], false);
+            guard.templates.add(Box::new(report));
+            guard.templates.set_active("SUSE:Maintenance:1:1");
+        }
+        track(&reg, &session, now_millis());
+
+        assert!(!handle.is_closed(), "host starts connected");
+        reg.close_all().await;
+        assert!(
+            handle.is_closed(),
+            "close_all must disconnect a live session's hosts on shutdown"
+        );
+        assert_eq!(reg.live_count(), 0);
     }
 
     /// Cancelling the token mid-sweep preempts a wedged teardown batch: the

@@ -27,6 +27,7 @@ use tracing_subscriber::EnvFilter;
 use crate::args::{McpArgs, Transport};
 use crate::provider::{SessionProvider, SessionRegistry, StdioProvider};
 use crate::server::McpServer;
+use crate::session::McpSession;
 
 /// Run the `mtui-mcp` server: the binary's entire body.
 ///
@@ -52,7 +53,7 @@ pub async fn run() -> anyhow::Result<()> {
 ///
 /// stdout is the JSON-RPC transport — logging goes to stderr only.
 async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
-    let server = build_stdio_server(args).await;
+    let (server, session) = build_stdio_server(args).await;
 
     tracing::info!("mtui-mcp: serving on stdio");
 
@@ -62,11 +63,50 @@ async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
         .serve((tokio::io::stdin(), tokio::io::stdout()))
         .await?;
 
-    // Block until the peer disconnects (or Ctrl-C ends the loop); a clean
-    // disconnect is a normal exit.
-    running.waiting().await?;
-    tracing::info!("mtui-mcp: shutting down");
+    // Block until the peer disconnects (stdin EOF — e.g. the MCP parent exits or
+    // `/exit`) or the process is signalled (Ctrl-C / SIGTERM), then run the
+    // teardown so the loaded template's remote pool claims are released and its
+    // hosts disconnected. Without this the `waiting()` future simply returns and
+    // the claims leak until a manual `unlock -f -p` (or the pool stale-reap).
+    tokio::select! {
+        r = running.waiting() => { r?; }
+        () = shutdown_signal() => {
+            tracing::info!("mtui-mcp: received shutdown signal");
+        }
+    }
+    tracing::info!("mtui-mcp: shutting down; releasing pool claims and disconnecting hosts");
+    session.close().await;
     Ok(())
+}
+
+/// Resolves when the process receives a termination signal (Ctrl-C or, on unix,
+/// SIGTERM).
+///
+/// The stdio serve loop races this against the transport's `waiting()` future so
+/// a `kill <pid>` (SIGTERM) or Ctrl-C triggers the same graceful teardown as a
+/// clean stdin EOF. SIGKILL cannot be caught in any language; the pool-claim
+/// stale-reap (`[lock] pool_stale_age`) is the recovery for that.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot install SIGTERM handler; Ctrl-C only");
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 /// Serve the tool surface over streamable HTTP (one process, many clients).
@@ -147,9 +187,7 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     tracing::info!(%addr, "mtui-mcp: serving on http");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await?;
 
     // Stop the sweeper and wait for it to unwind before returning.
@@ -157,7 +195,13 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     if let Some(handle) = sweeper {
         let _ = handle.await;
     }
-    tracing::info!("mtui-mcp: shutting down");
+    // Cancelling the sweeper does not release live sessions (its cancel branch is
+    // a bare return, and the registry holds only `Weak` handles whose `Drop`
+    // cannot run the async pool-claim release). Explicitly tear down every
+    // still-live session so a clean Ctrl-C / SIGTERM of a busy server releases
+    // its pool claims and disconnects hosts instead of leaking them.
+    tracing::info!("mtui-mcp: shutting down; releasing pool claims and disconnecting hosts");
+    sessions.close_all().await;
     Ok(())
 }
 
@@ -222,12 +266,15 @@ fn default_directives(debug: bool) -> String {
 /// [`StdioProvider`] (stdio = one process = one session) and wires it into an
 /// [`McpServer`]. Factored out of [`run`] so the wiring is testable without the
 /// blocking stdio serve loop.
-async fn build_stdio_server(args: &McpArgs) -> McpServer {
+///
+/// Returns the server **and** a handle to its session, so the serve loop can run
+/// [`McpSession::close`] (release pool claims + disconnect hosts) on shutdown.
+async fn build_stdio_server(args: &McpArgs) -> (McpServer, Arc<McpSession>) {
     let config = args.resolve_config();
     let registry = Arc::new(register_all());
     let provider = StdioProvider::new(config);
     let session = provider.get_or_create("<default>").await;
-    McpServer::new(registry, session)
+    (McpServer::new(registry, Arc::clone(&session)), session)
 }
 
 #[cfg(test)]
@@ -245,10 +292,57 @@ mod tests {
     #[tokio::test]
     async fn build_stdio_server_wires_the_synthesised_surface() {
         // A built server reports tools capability — proving the handler is wired.
-        let server = build_stdio_server(&args(&[])).await;
+        let (server, _session) = build_stdio_server(&args(&[])).await;
         assert!(
             server.get_info().capabilities.tools.is_some(),
             "server should advertise the tools capability"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_stdio_server_returns_a_closeable_session() {
+        // The serve loop needs the session handle to run teardown on shutdown;
+        // `close()` on a session with no loaded template is a harmless no-op.
+        let (_server, session) = build_stdio_server(&args(&[])).await;
+        session.close().await;
+    }
+
+    #[tokio::test]
+    async fn stdio_shutdown_close_disconnects_loaded_hosts() {
+        // The teardown the stdio serve loop runs on shutdown must disconnect a
+        // loaded template's hosts (and, in the real path, release its pool
+        // claims). Build a session holding one mock-connected target and assert
+        // `close()` closes it — the connection stdio shutdown would otherwise
+        // leak.
+        use mtui_config::Config;
+        use mtui_hosts::{HostsGroup, MockConnection, Target};
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+        use mtui_types::enums::{ExecutionMode, TargetState};
+
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let target = Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+        let session = McpSession::new(Config::default());
+        {
+            let mut guard = session.session().lock().await;
+            let mut report = ObsReport::new(guard.config.clone());
+            report.base_mut().rrid = Some(RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap());
+            report.base_mut().targets = HostsGroup::new(vec![target], false);
+            guard.templates.add(Box::new(report));
+            guard.templates.set_active("SUSE:Maintenance:1:1");
+        }
+
+        assert!(!handle.is_closed(), "target starts connected");
+        session.close().await;
+        assert!(
+            handle.is_closed(),
+            "shutdown teardown must disconnect the loaded template's hosts"
         );
     }
 

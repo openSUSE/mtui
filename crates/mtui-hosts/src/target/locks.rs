@@ -738,6 +738,14 @@ where
 pub struct PoolLock<C: Clock = SystemClock> {
     inner: TargetLock<C>,
     i_am_rrid: String,
+    /// Force-reap a pool claim older than [`Self::pool_stale_age`] on claim
+    /// (`pool_reap_stale`). The pool-claim analogue of the operation lock's
+    /// `lock_reap_stale`, kept separate because the inner [`TargetLock`]'s
+    /// reap fields govern the *operation* lock's stale age, not the pool claim's.
+    pool_reap_stale: bool,
+    /// Age (seconds) beyond which a pool claim is reapable (`pool_stale_age`);
+    /// `0` disables pool-claim reaping.
+    pool_stale_age: u64,
 }
 
 impl PoolLock<SystemClock> {
@@ -765,6 +773,8 @@ impl<C: Clock> PoolLock<C> {
                 PathBuf::from(POOL_LOCK_PATH),
             ),
             i_am_rrid: rrid.into(),
+            pool_reap_stale: config.pool_reap_stale,
+            pool_stale_age: config.pool_stale_age,
         }
     }
 
@@ -897,16 +907,52 @@ impl<C: Clock> PoolLock<C> {
         self.inner.lock(comment).await
     }
 
+    /// Force-removes the pool claim if it is older than the configured pool
+    /// stale age.
+    ///
+    /// The pool-claim analogue of [`TargetLock::reap_if_stale`], gated by
+    /// `pool_reap_stale` (default on) and `pool_stale_age` (default 86400s; `0`
+    /// disables reaping). Pool ownership is RRID-based, so a foreign claim's PID
+    /// disappearing never frees it — an orphan left by an uncatchable exit
+    /// (SIGKILL / panic / power loss) would otherwise block arbitration until a
+    /// manual `unlock -f -p`. This reaps any pool claim older than the TTL,
+    /// regardless of owner, via a forced [`unlock`](Self::unlock).
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the load/unlock path.
+    pub async fn reap_if_stale(&mut self) -> Result<bool> {
+        if !self.pool_reap_stale || self.pool_stale_age == 0 {
+            return Ok(false);
+        }
+        let Some(age) = self.inner.age_seconds().await? else {
+            return Ok(false);
+        };
+        if age <= self.pool_stale_age {
+            return Ok(false);
+        }
+        tracing::warn!(
+            host = %self.inner.hostname(),
+            user = %self.inner.current().user,
+            hours = age / 3600,
+            "removing stale pool claim"
+        );
+        self.unlock(true).await?;
+        Ok(true)
+    }
+
     /// Claims the pool lock without raising when it is already claimed.
     ///
     /// The non-raising counterpart to [`lock`](Self::lock), used by host
     /// arbitration. Ownership is RRID-based: a claim recording *our* RRID (even
-    /// from another process) counts as ours.
+    /// from another process) counts as ours. A foreign claim older than
+    /// `pool_stale_age` is force-reaped first (see
+    /// [`reap_if_stale`](Self::reap_if_stale)), the only automatic recovery for a
+    /// claim orphaned by an uncatchable exit.
     ///
     /// # Errors
     /// Propagates an SFTP error from the underlying calls.
     pub async fn try_claim(&mut self, comment: &str) -> Result<bool> {
-        if self.is_locked().await? && !self.is_mine()? {
+        if self.is_locked().await? && !self.is_mine()? && !self.reap_if_stale().await? {
             return Ok(false);
         }
         match self.lock(comment).await {
@@ -1801,6 +1847,91 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    /// A pool claim built from `conn`+`rrid` with an explicit `[lock]` `config`
+    /// (so reaping knobs can be toggled per test).
+    fn pool_with_cfg(conn: MockConnection, rrid: &str, config: &Config) -> PoolLock<FakeClock> {
+        PoolLock::with_clock(Box::new(conn), config, rrid, FakeClock::new(now()))
+    }
+
+    #[tokio::test]
+    async fn pool_try_claim_reaps_stale_foreign_claim() {
+        // A foreign pool claim older than pool_stale_age is force-reaped, then
+        // re-claimed for us — the only automatic recovery for a claim orphaned by
+        // an uncatchable exit (RRID ownership means the dead PID never frees it).
+        let stale = now() - 200_000; // >> default pool_stale_age (86400)
+        let foreign =
+            format!("{stale}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes();
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(
+            p.try_claim("mtui pool SUSE:Maintenance:1:2 [alice]")
+                .await
+                .unwrap(),
+            "a stale foreign claim must be reaped and re-claimed"
+        );
+        // The reap removed the pool lockfile, and we then wrote our own claim.
+        let contents = String::from_utf8(handle.file_contents(POOL_LOCK_PATH).unwrap()).unwrap();
+        assert!(contents.contains("SUSE:Maintenance:1:2"));
+    }
+
+    #[tokio::test]
+    async fn pool_try_claim_does_not_reap_fresh_foreign_claim() {
+        // A foreign claim younger than pool_stale_age is left alone and refused.
+        let fresh = now() - 10; // well under the 86400 default
+        let foreign =
+            format!("{fresh}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes();
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(
+            !p.try_claim("mtui pool SUSE:Maintenance:1:2 [alice]")
+                .await
+                .unwrap(),
+            "a fresh foreign claim must not be reaped"
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_try_claim_respects_reaping_disabled() {
+        // With pool_reap_stale=false (or pool_stale_age=0) even an ancient foreign
+        // claim is left in place and the claim is refused.
+        let stale = now() - 200_000;
+        let foreign =
+            format!("{stale}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes();
+
+        let mut disabled = cfg();
+        disabled.pool_reap_stale = false;
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign.clone());
+        let mut p = pool_with_cfg(conn, "SUSE:Maintenance:1:2", &disabled);
+        assert!(
+            !p.try_claim("mtui pool SUSE:Maintenance:1:2 [alice]")
+                .await
+                .unwrap(),
+            "pool_reap_stale=false must not reap"
+        );
+
+        let mut zero_age = cfg();
+        zero_age.pool_stale_age = 0;
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
+        let mut p = pool_with_cfg(conn, "SUSE:Maintenance:1:2", &zero_age);
+        assert!(
+            !p.try_claim("mtui pool SUSE:Maintenance:1:2 [alice]")
+                .await
+                .unwrap(),
+            "pool_stale_age=0 must disable reaping"
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_reap_if_stale_returns_false_for_fresh_claim() {
+        let fresh = now() - 10;
+        let foreign =
+            format!("{fresh}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes();
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(!p.reap_if_stale().await.unwrap());
     }
 
     #[tokio::test]

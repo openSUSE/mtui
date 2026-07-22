@@ -32,8 +32,10 @@ path = "svn+ssh://svn@svn.example/testreports"
 [lock]
 reap_stale = false                # boolean value
 stale_age = 3600                  # integer value
+pool_stale_age = 7200             # integer value
 wait = 30
 # wait_poll omitted on purpose: it must keep its upstream default (15)
+# pool_reap_stale omitted on purpose: it must keep its upstream default (true)
 
 [slack]
 enabled = true                    # boolean value

@@ -176,8 +176,10 @@ fleet).
 
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
-| `reap_stale` | bool | `true` | On connect, force-remove a pre-existing lock older than `stale_age`, regardless of owner. |
-| `stale_age` | seconds | `86400` | Age beyond which a lock is stale and reapable. `0` disables reaping. |
+| `reap_stale` | bool | `true` | On connect, force-remove a pre-existing operation lock older than `stale_age`, regardless of owner. |
+| `stale_age` | seconds | `86400` | Age beyond which an operation lock is stale and reapable. `0` disables reaping. |
+| `pool_reap_stale` | bool | `true` | On a pool claim attempt, force-remove a pre-existing pool claim older than `pool_stale_age`, regardless of owner. The only automatic recovery for a claim orphaned by an uncatchable exit (SIGKILL/panic/power loss). |
+| `pool_stale_age` | seconds | `86400` | Age beyond which a pool claim is stale and reapable. `0` disables pool-claim reaping. |
 | `pi_autolock` | bool | `true` | When testing a Product Increment (PI), auto-lock all refhosts on `assign` and unlock at end of testing. |
 | `wait` | seconds | `0` | Pool-claim queueing budget. `0` fails fast on a busy host. |
 | `wait_poll` | seconds (>0) | `15` | Poll interval while waiting for a busy pool lock to free. |

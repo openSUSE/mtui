@@ -59,6 +59,8 @@ fn config_toml_fixture_parses_all_sections() {
     // [lock] section: explicit overrides land, an omitted key keeps its default.
     assert!(!cfg.lock_reap_stale);
     assert_eq!(cfg.lock_stale_age, 3600);
+    assert_eq!(cfg.pool_stale_age, 7200);
+    assert!(cfg.pool_reap_stale); // omitted -> upstream default (true)
     assert_eq!(cfg.lock_wait, 30);
     assert_eq!(cfg.lock_wait_poll, 15); // omitted -> upstream default
 
