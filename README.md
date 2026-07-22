@@ -1,4 +1,4 @@
-# mtui-rs
+# mtui
 
 > **Status: feature-complete, in packaging.** This is a ground-up Rust
 > rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The core
@@ -14,7 +14,7 @@ a request by RRID, install and test it on reference hosts over SSH in parallel,
 then approve or reject. It drives `osc`/`svn`/Gitea and openQA/QEM under the hood.
 
 This is a **redesign, not a transpile**: MTUI is the behavioral reference and
-source of domain truth, but mtui-rs aims to be memory-safe, async-native, and
+source of domain truth, but mtui aims to be memory-safe, async-native, and
 distributable as a single static binary — while preserving the data-format and
 workflow contracts that keep it interoperable with the SUSE maintenance
 ecosystem.

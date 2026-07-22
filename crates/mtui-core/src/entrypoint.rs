@@ -23,14 +23,14 @@
 //! interactive loop. It is the headless single-command primitive for
 //! `mtui-mcp` (Phase 7) and embedding callers.
 //!
-//! It is **not** a CLI mode: upstream `mtui` — and the mtui-rs `mtui` binary —
+//! It is **not** a CLI mode: upstream `mtui` — and the mtui `mtui` binary —
 //! has only two surfaces, the interactive REPL and `mtui-mcp`, and neither takes
 //! a positional command. The interactive binary seeds the session and enters the
 //! REPL (`mtui-cli::seed_session` + `Repl`); it never calls `run_once`.
 //!
 //! ## Exit-code contract
 //!
-//! Upstream `run_mtui` collapses everything to `Literal[0, 1]`. mtui-rs
+//! Upstream `run_mtui` collapses everything to `Literal[0, 1]`. mtui
 //! **intentionally deviates**: it distinguishes clap/argparse's usage-error
 //! convention (exit `2`) from a runtime failure (exit `1`), while keeping
 //! `--help`/`--version` a success (exit `0`). See [`ExitStatus`].
@@ -42,7 +42,7 @@ use crate::session::Session;
 
 /// The process exit status a single non-interactive command run yields.
 ///
-/// mtui-rs deviates from upstream's collapsed `Literal[0, 1]` to preserve the
+/// mtui deviates from upstream's collapsed `Literal[0, 1]` to preserve the
 /// argparse/clap distinction between a *usage* error and a *runtime* failure:
 ///
 /// * [`Ok`](ExitStatus::Ok) → `0` — the command ran, or clap printed

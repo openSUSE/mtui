@@ -1,7 +1,7 @@
-# Agent Notes — mtui-rs
+# Agent Notes — mtui
 
 ## Mission
-`mtui-rs` is an **improved, idiomatic Rust successor to
+`mtui` is an **improved, idiomatic Rust successor to
 [openSUSE/mtui](https://github.com/openSUSE/mtui)** (Maintenance Test Update
 Installer) — the SUSE QE tool for validating maintenance updates: load a request
 by RRID, install/test it on reference hosts over SSH, then approve/reject. It
@@ -11,7 +11,7 @@ This is a **rewrite/redesign, not a 1:1 transpile.** Use MTUI as the behavioral
 reference and the source of domain truth, but build something better: memory-safe,
 fast, async-native, single static binary, with a cleaner architecture. Break
 compatibility only where it clearly improves the tool — and always preserve the
-**data-format and workflow contracts** that let mtui-rs interoperate with the SUSE
+**data-format and workflow contracts** that let mtui interoperate with the SUSE
 maintenance ecosystem (see "Contracts" below).
 
 ### What "improved successor" means here

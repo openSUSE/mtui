@@ -1,6 +1,6 @@
 # Developer guide
 
-This guide covers the day-to-day mtui-rs development workflow: the toolchain, the
+This guide covers the day-to-day mtui development workflow: the toolchain, the
 quality gates, how the command layer is structured, and how to add a command.
 [Architecture](architecture.md) has the higher-level crate map and the data-format
 contracts; `AGENTS.md` at the repo root is the authoritative contributor spec and
@@ -8,7 +8,7 @@ definition of done.
 
 ## Toolchain
 
-mtui-rs uses the standard Rust toolchain — no `rustup` is assumed (the reference
+mtui uses the standard Rust toolchain — no `rustup` is assumed (the reference
 dev box runs a Homebrew `rustc`). Edition 2024, **MSRV 1.96**, pinned via
 `rust-version` in `Cargo.toml`.
 

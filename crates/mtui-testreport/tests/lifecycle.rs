@@ -431,7 +431,7 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
 // --- Gitea token + hash verification on load (SLFO / `SlReport`) ------------
 //
 // Upstream runs `check_hash` at the tail of `TestReport.read` inside
-// `UpdateID._checkout`; mtui-rs runs it in `make_testreport` (async seam). These
+// `UpdateID._checkout`; mtui runs it in `make_testreport` (async seam). These
 // exercise the three non-`Ok` branches (the interactive TeReGen regenerate path
 // is covered in Phase C) plus the happy path.
 

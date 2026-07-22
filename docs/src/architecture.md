@@ -1,6 +1,6 @@
 # Architecture
 
-This page is a map, not a deep dive: it sketches how mtui-rs is put together so
+This page is a map, not a deep dive: it sketches how mtui is put together so
 the rest of the book (and the source) is easier to navigate. For the day-to-day
 contributor workflow — toolchain, quality gates, adding a command, testing — see
 the [Developer guide](developer.md). For the authoritative contributor spec and
@@ -8,7 +8,7 @@ definition of done see `AGENTS.md`, which lives in the repository root.
 
 ## Workspace layout
 
-mtui-rs is a Cargo workspace of single-purpose crates. Lower crates never depend on
+mtui is a Cargo workspace of single-purpose crates. Lower crates never depend on
 higher ones; `mtui-core` is the composition root that wires everything together.
 
 | Crate | Job |
@@ -54,7 +54,7 @@ composition root — never introduce a crate cycle.**
 
 ## Contracts
 
-These data-format and workflow contracts keep mtui-rs interoperable with the SUSE
+These data-format and workflow contracts keep mtui interoperable with the SUSE
 maintenance ecosystem and with a Python MTUI sharing the same fleet. They are
 preserved deliberately; upstream `tests/` fixtures are the authority for the
 formats.
@@ -73,7 +73,7 @@ formats.
 
 ## Intentional deviations from upstream
 
-mtui-rs is a redesign, not a transpile. The deliberate departures:
+mtui is a redesign, not a transpile. The deliberate departures:
 
 - **TOML config**, not INI (defaults still match upstream exactly).
 - **Native OBS/IBS API** for the QAM review workflow, not an `osc` subprocess.

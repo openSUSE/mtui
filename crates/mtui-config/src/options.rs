@@ -7,7 +7,7 @@
 //! their sections land.
 //!
 //! Every default here matches the corresponding upstream default value exactly,
-//! preserving behavioural parity for the options mtui-rs already understands.
+//! preserving behavioural parity for the options mtui already understands.
 //!
 //! ## Shape
 //!
@@ -108,7 +108,7 @@ impl<'de> Deserialize<'de> for SslVerify {
 //
 // Upstream validates a handful of options at parse time and, on failure, logs at
 // ERROR and falls back to the option's default (per-option, never hard-failing).
-// mtui-rs applies the same per-field fallback in `Config::from_raw`. Rust's typed
+// mtui applies the same per-field fallback in `Config::from_raw`. Rust's typed
 // `u64`/`usize` fields already reject non-numeric and negative literals at TOML
 // deserialise time, so the positive-int guard reduces to rejecting `0`.
 
@@ -264,7 +264,7 @@ pub(crate) fn default_refhosts_https_expiration() -> u64 {
 }
 pub(crate) fn default_refhosts_path() -> PathBuf {
     // Deliberate deviation from upstream (which hardcodes
-    // /usr/share/qam-metadata/refhosts.yml): mtui-rs defaults to a per-user path.
+    // /usr/share/qam-metadata/refhosts.yml): mtui defaults to a per-user path.
     expanduser(&PathBuf::from("~/.local/share/refdb/refhosts.yml"))
 }
 pub(crate) fn default_install_logs() -> PathBuf {
@@ -509,7 +509,7 @@ pub(crate) struct McpSection {
 ///
 /// Mirrors upstream `mtui/support/config.py`'s `obs_*` options (INI `[obs]`
 /// section), added when upstream cut over to the native OBS API backend and
-/// dropped the transitional `backend` selector (mtui-rs is native-only). No OBS
+/// dropped the transitional `backend` selector (mtui is native-only). No OBS
 /// credentials live here — the oscrc remains the sole credential source (see
 /// `mtui_datasources::obs::oscrc`).
 ///

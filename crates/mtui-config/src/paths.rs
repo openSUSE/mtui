@@ -10,7 +10,7 @@
 //! ## Deviation from upstream (intentional)
 //!
 //! Upstream reads INI from `--config` → `$MTUI_CONF` → `/etc/mtui.cfg` +
-//! `~/.mtuirc`. mtui-rs uses **TOML**; the config filename is always
+//! `~/.mtuirc`. mtui uses **TOML**; the config filename is always
 //! `mtui.toml`. Precedence, lowest → highest:
 //!
 //! ```text
@@ -85,7 +85,7 @@ pub fn xdg_config_file() -> Option<PathBuf> {
 /// The home-directory dotfile config path `~/.mtui.toml`, if a home dir can be
 /// resolved.
 ///
-/// The mtui-rs analogue of upstream's `~/.mtuirc`: a single dotfile in `$HOME`
+/// The mtui analogue of upstream's `~/.mtuirc`: a single dotfile in `$HOME`
 /// for operators who prefer it to the XDG config directory. Sits between `/etc`
 /// and the XDG file in precedence (see [`config_search_paths`]).
 #[must_use]
@@ -103,12 +103,12 @@ pub fn cache_dir() -> Option<PathBuf> {
 
 /// The user data directory for mtui (`$XDG_DATA_HOME/mtui`), if resolvable.
 ///
-/// Where mtui-rs persists durable per-user state such as the REPL history file.
+/// Where mtui persists durable per-user state such as the REPL history file.
 /// Distinct from [`cache_dir`] (disposable) and the config dir (user-authored):
 /// history is data the user grows and expects to survive a cache wipe.
 ///
 /// Deliberate deviation from upstream, which keeps history at `~/.mtui_history`;
-/// mtui-rs is XDG-first for config/cache/data alike.
+/// mtui is XDG-first for config/cache/data alike.
 #[must_use]
 pub fn data_dir() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.data_dir().to_path_buf())
@@ -128,7 +128,7 @@ pub fn data_dir() -> Option<PathBuf> {
 ///
 /// Upstream equivalent: `mtui.support.paths.terms_path()`, which resolves the
 /// `terms/` directory shipped as package data inside the installed `mtui`
-/// package. Rust has no package-data concept, so mtui-rs ships the scripts under
+/// package. Rust has no package-data concept, so mtui ships the scripts under
 /// `dist/terms/` and lets packaging install them to the datadir (or `MTUI_TERMS_DIR`
 /// point elsewhere). The `terms` command derives the available term names by
 /// globbing this directory, mirroring upstream's dynamic `_list_terms`.

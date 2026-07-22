@@ -49,7 +49,7 @@ pub enum UpdateFailure {
     /// One or more hosts failed the `updater` check after the command ran.
     Check(UpdateError),
     /// A concrete target has no updater doer (upstream `MissingUpdaterError`);
-    /// unlike upstream — which logs and returns as if successful — mtui-rs treats
+    /// unlike upstream — which logs and returns as if successful — mtui treats
     /// this as a hard failure so a target that cannot be updated never reports
     /// "finished".
     MissingUpdater(UpdateError),
@@ -957,7 +957,7 @@ async fn update_run_phase(
 /// Builds the per-host updater command map (with `$repa` + `$packages`) and the
 /// transactional reboot map. Returns `Err` with the offending host's
 /// [`UpdateError`] if any host is missing an updater (upstream's
-/// `MissingUpdaterError`) — a hard failure in mtui-rs.
+/// `MissingUpdaterError`) — a hard failure in mtui.
 fn build_update_maps(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -1295,7 +1295,7 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_aborts_cleanly_when_no_updater_doer() {
-        // An unknown release has no updater doer. mtui-rs treats this as a hard
+        // An unknown release has no updater doer. mtui treats this as a hard
         // fail: Err(MissingUpdater), no updater command issued, and the repo the
         // flow added is removed on the abort path.
         let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));

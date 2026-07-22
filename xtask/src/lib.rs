@@ -174,7 +174,7 @@ pub fn render_invocation_reference() -> String {
          parsers. Do not edit by hand; re-run the task to regenerate. -->\n\n",
     );
     out.push_str(
-        "mtui-rs ships two binaries. `mtui` is the interactive REPL; `mtui-mcp` is \
+        "mtui ships two binaries. `mtui` is the interactive REPL; `mtui-mcp` is \
          the [MCP server](mcp.md). Both read the same [configuration](configuration.md) \
          and accept overrides on the command line.\n\n",
     );
@@ -263,10 +263,10 @@ pub struct PackageInputs<'a> {
 }
 
 /// The base name (no extension) shared by the staging dir and the tarball:
-/// `mtui-rs-<version>-<target>`.
+/// `mtui-<version>-<target>`.
 #[must_use]
 pub fn package_stem(version: &str, target: &str) -> String {
-    format!("mtui-rs-{version}-{target}")
+    format!("mtui-{version}-{target}")
 }
 
 /// Parsed `package` flags. A tiny hand-rolled parser (no clap in this dev tool),
@@ -321,7 +321,7 @@ impl PackageArgs {
 /// path. Lays out exactly what `docs/src/installation.md` documents installing:
 ///
 /// ```text
-/// mtui-rs-<version>-<target>/
+/// mtui-<version>-<target>/
 ///   mtui  mtui-mcp
 ///   completions/{bash,zsh,fish}/…
 ///   man/*.1

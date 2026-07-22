@@ -5,7 +5,7 @@
 //! environment. A statically-compiled Rust binary has no such drift — every dep
 //! is compiled in at a lockfile-pinned version — so that block would be
 //! redundant. What *does* vary for an out-of-tree build (someone building
-//! `mtui-rs` outside a standard system package) is the build provenance: which
+//! `mtui` outside a standard system package) is the build provenance: which
 //! commit, which profile, which target. This build script captures that into the
 //! `MTUI_LONG_VERSION` env var, which `args.rs` feeds to clap's `long_version`.
 //!

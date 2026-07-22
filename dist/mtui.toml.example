@@ -1,8 +1,8 @@
-# Example mtui-rs configuration.
+# Example mtui configuration.
 #
 # Every key below is shown at its built-in default, commented out. Uncomment
 # and edit only the options you want to change — an absent option always
-# falls back to its default, and mtui-rs never requires a config file to run.
+# falls back to its default, and mtui never requires a config file to run.
 #
 # File resolution order (highest precedence first): `--config <file>` flag,
 # `$MTUI_CONF`, then the default pair merged lowest-precedence first:

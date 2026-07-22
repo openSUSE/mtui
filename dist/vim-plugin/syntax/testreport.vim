@@ -1,7 +1,7 @@
 " Vim syntax file
 " Language: QAM Testreport
 " Original maintainer: Jan Baier
-" Ported into mtui-rs (Rust successor to openSUSE/mtui)
+" Ported into mtui (Rust successor to openSUSE/mtui)
 " Latest Revision: 18 Jul 2026
 
 if exists("b:current_syntax")

@@ -17,7 +17,7 @@
 //! ## Async, not threads
 //!
 //! Upstream drives the spinner from an OS thread because its workers are
-//! threads. mtui-rs fans out with `tokio` tasks, so [`TtySpinner`] paints from a
+//! threads. mtui fans out with `tokio` tasks, so [`TtySpinner`] paints from a
 //! spawned task on a `tokio::time` interval. The paint lock is a
 //! [`std::sync::Mutex`] guarding only the short erase/paint critical sections
 //! (never held across `.await`), so it is sound to acquire it from both the

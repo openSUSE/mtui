@@ -3,7 +3,7 @@
 //! Today it has one job: **regenerate the checked-in packaging artifacts** under
 //! `dist/` — shell completions (bash/zsh/fish) and man pages for both binaries
 //! (`mtui`, `mtui-mcp`). Upstream mtui shipped completions via `argcomplete` at
-//! runtime; mtui-rs pre-generates them from the two top-level `clap` parsers so
+//! runtime; mtui pre-generates them from the two top-level `clap` parsers so
 //! the rpm spec (`%files`) and any packaging can consume them without a build.
 //!
 //! Run with `cargo xtask gen` (see the `.cargo/config.toml` alias). A second
@@ -37,7 +37,7 @@ fn main() -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "xtask - mtui-rs repo automation\n\n\
+        "xtask - mtui repo automation\n\n\
          USAGE:\n    cargo xtask <TASK>\n\n\
          TASKS:\n    \
          gen         Regenerate dist/ completions + man pages for both binaries\n    \
@@ -46,7 +46,7 @@ fn print_usage() {
          PACKAGE:\n    \
          cargo xtask package --version <VER> --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]\n    \
          Assembles <bin-dir>/{{mtui,mtui-mcp}} + dist/ + LICENSE/README into\n    \
-         mtui-rs-<VER>-<TRIPLE>.tar.gz (+ .sha256) under <out-dir> (default: dist/release).\n    \
+         mtui-<VER>-<TRIPLE>.tar.gz (+ .sha256) under <out-dir> (default: dist/release).\n    \
          --bin-dir defaults to target/<TRIPLE>/release."
     );
 }

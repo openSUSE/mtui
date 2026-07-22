@@ -1,6 +1,6 @@
 # Introduction
 
-**mtui-rs** is an improved, idiomatic Rust successor to
+**mtui** is an improved, idiomatic Rust successor to
 [openSUSE/mtui](https://github.com/openSUSE/mtui) — the **M**aintenance **T**est
 **U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
 a request by RRID, install and test it on reference hosts over SSH in parallel,
@@ -8,7 +8,7 @@ then approve or reject. It drives the OBS/IBS and Gitea review workflows and
 openQA/QEM under the hood.
 
 This is a redesign, not a transpile: MTUI is the behavioral reference and source
-of domain truth, but mtui-rs is memory-safe, async-native, and distributed as two
+of domain truth, but mtui is memory-safe, async-native, and distributed as two
 static binaries — while preserving the data-format and workflow contracts that
 keep it interoperable with the SUSE maintenance ecosystem (RRID grammar, the
 `refhosts.yml` schema, the testreport/export text format, and the remote-lock
