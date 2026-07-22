@@ -173,7 +173,7 @@ expression: pretty
         },
         "message": {
           "items": {
-            "description": "The comment body (required; interactive prompt lands in Phase 6)",
+            "description": "The comment body (required)",
             "type": "string"
           },
           "minItems": 1,
