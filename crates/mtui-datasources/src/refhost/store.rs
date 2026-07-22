@@ -73,8 +73,34 @@ impl Refhosts {
             path: path.display().to_string(),
             source,
         })?;
-        let data = load_refhosts(&text)?;
+        Self::from_text(&text)
+    }
+
+    /// Parse an already-in-memory `refhosts.yml` document into a store.
+    ///
+    /// Same flattening/dedup/degradation as [`from_path`](Self::from_path),
+    /// without the file read — used by [`HttpsResolver`](super::HttpsResolver)
+    /// to build the store from a freshly downloaded payload without re-reading
+    /// the on-disk mirror.
+    ///
+    /// # Errors
+    /// Returns [`RefhostError::Parse`] if `text` is not a valid `refhosts.yml`
+    /// document.
+    pub fn from_text(text: &str) -> Result<Self, RefhostError> {
+        let data = load_refhosts(text)?;
         Ok(Self::from_hosts(data))
+    }
+
+    /// Parse an already-in-memory `refhosts.yml` document from raw bytes.
+    ///
+    /// Invalid UTF-8 is replaced lossily rather than rejected outright, since
+    /// `refhosts.yml` is a YAML document expected to be UTF-8 in practice.
+    ///
+    /// # Errors
+    /// Returns [`RefhostError::Parse`] if the (lossily-decoded) contents are
+    /// not a valid `refhosts.yml` document.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, RefhostError> {
+        Self::from_text(&String::from_utf8_lossy(bytes))
     }
 
     /// The loaded host rows (flattened + de-duplicated).
@@ -495,6 +521,47 @@ mod tests {
 
     fn h() -> Host {
         host("h", "x86_64", sles(15, Some(VersionField::Num(5))), vec![])
+    }
+
+    // --- from_path / from_text / from_bytes ---
+
+    const FIXTURE_YAML: &str = "\
+default:
+  - name: host.example.com
+    arch: x86_64
+    product:
+      name: sles
+      version:
+        major: 15
+        minor: 5
+";
+
+    #[test]
+    fn from_text_and_from_bytes_parse_the_same_as_from_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refhosts.yml");
+        std::fs::write(&path, FIXTURE_YAML).unwrap();
+
+        let from_path = Refhosts::from_path(&path).unwrap();
+        let from_text = Refhosts::from_text(FIXTURE_YAML).unwrap();
+        let from_bytes = Refhosts::from_bytes(FIXTURE_YAML.as_bytes()).unwrap();
+
+        assert_eq!(from_path.hosts().len(), 1);
+        assert_eq!(names(from_path.hosts()), names(from_text.hosts()));
+        assert_eq!(names(from_text.hosts()), names(from_bytes.hosts()));
+    }
+
+    #[test]
+    fn from_bytes_lossily_decodes_invalid_utf8() {
+        // An invalid byte spliced into the host name is lossily replaced
+        // rather than rejected, keeping the surrounding YAML parseable.
+        let split = FIXTURE_YAML.find("host.example.com").unwrap() + "host".len();
+        let mut bytes = FIXTURE_YAML.as_bytes()[..split].to_vec();
+        bytes.push(0xFF);
+        bytes.extend_from_slice(&FIXTURE_YAML.as_bytes()[split..]);
+        let rh = Refhosts::from_bytes(&bytes).unwrap();
+        assert_eq!(rh.hosts().len(), 1);
+        assert!(rh.hosts()[0].name.contains('\u{FFFD}'));
     }
 
     // --- search / host_by_name ---

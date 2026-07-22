@@ -8,6 +8,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- The `https` refhosts resolver no longer aborts when it cannot write its
+  on-disk mirror to a read-only `refhosts.path` (e.g. a package-managed
+  `/usr/share/qam-metadata/refhosts.yml`): the freshly downloaded database is
+  now used in-memory and a warning is logged instead. A separate warning fires
+  when the configured `refhosts.path` directory is missing or not writable.
+  The `refhosts.yml` I/O error message no longer misreports a write failure as
+  a read. `docs/src/configuration.md` now documents the real default
+  (`~/.local/share/refdb/refhosts.yml`) instead of a stale path.
+
 ## [26.0.1] - 2026-07-22
 
 ### Changed
