@@ -1,12 +1,12 @@
 # mtui-rs
 
-> **Status: feature-complete, in packaging (Phase 8).** This is a ground-up Rust
+> **Status: feature-complete, in packaging.** This is a ground-up Rust
 > rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The core
 > maintenance workflow, parallel SSH host fan-out, the native OBS/IBS and Gitea
 > review backends, openQA/QEM integration, the testreport lifecycle, and the
 > `mtui-mcp` server have all landed and are CI-gated; work now focuses on
-> packaging and distribution (`PLAN-highlevel.md`; per-phase tasks tracked in
-> beads). See [`docs/`](docs) for the user guide and command reference.
+> packaging and distribution. See [`docs/`](docs) for the user guide and
+> command reference.
 
 An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
 **U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
@@ -102,11 +102,6 @@ configured via the `[obs]` table (`api_url`, `request_timeout`).
 - [`docs/`](docs) — the user guide (mdBook): installation, configuration, the
   generated command reference, the MCP server, and an FAQ. Build with
   `mdbook build docs`, or read the Markdown under `docs/src/` directly.
-- [`PLAN-highlevel.md`](PLAN-highlevel.md) — architecture, crate layout,
-  dependency mapping, and the 8-phase roadmap.
-- Per-phase task breakdown is tracked in [beads](https://github.com/Dicklesworthstone/beads_rust)
-  (`br ready`, `br epic status`, `br show <id>`); the detailed per-phase plans were
-  migrated from the former `PLAN-phase0..8.md` files into beads epics + tasks.
 - [`AGENTS.md`](AGENTS.md) — contributor/agent guide: conventions, contracts, and
   the definition of done.
 

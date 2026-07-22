@@ -42,6 +42,5 @@ wire format that lets a Rust and a Python mtui share a host fleet).
   trait, how to add a command, and testing conventions.
 - [FAQ](faq.md).
 
-For architecture and the phased implementation roadmap, see `PLAN-highlevel.md`;
-for contributor conventions and the definition of done, see `AGENTS.md`. Both
-live in the repository root.
+For contributor conventions and the definition of done, see `AGENTS.md`, which
+lives in the repository root.

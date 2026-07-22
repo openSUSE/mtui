@@ -435,7 +435,7 @@ impl Command for Comment {
                 .long("message")
                 .num_args(1..)
                 .action(ArgAction::Append)
-                .help("The comment body (required; interactive prompt lands in Phase 6)"),
+                .help("The comment body (required)"),
         )
     }
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
