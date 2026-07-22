@@ -383,7 +383,7 @@ pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
 /// layout it archives is the offline-tested [`stage_package`].
 pub fn package_target(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
     // Materialise the staging tree on disk; `tar` archives it by name below.
-    stage_package(inputs)?;
+    let staging = stage_package(inputs)?;
     let stem = package_stem(inputs.version, inputs.target);
     let tarball = inputs.out_dir.join(format!("{stem}.tar.gz"));
 
@@ -398,6 +398,13 @@ pub fn package_target(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
     .with_context(|| format!("archiving {}", tarball.display()))?;
 
     write_sha256(&tarball)?;
+
+    // Remove the now-archived staging dir so `out_dir` holds only the tarball +
+    // checksum — release.yml uploads `dist/release/*` verbatim, and `gh release
+    // create` errors on a bare directory in that glob.
+    std::fs::remove_dir_all(&staging)
+        .with_context(|| format!("removing staging dir {}", staging.display()))?;
+
     Ok(tarball)
 }
 
