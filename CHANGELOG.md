@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.0.1] - 2026-07-22
+
 ### Changed
 
 - **MTUI has been rewritten in Rust.** This release replaces the Python
