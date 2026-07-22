@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "26.0.1"
+version = "26.0.2"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-2.0-only"       # match upstream mtui
