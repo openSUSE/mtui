@@ -43,6 +43,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   gate is turned off by configuration (`slack_enabled = false`), which is
   explicit and auditable. `reject` is never gated. With Slack disabled (the
   default) `approve` behaves exactly as before.
+- New `[lock]` config keys `pool_reap_stale` (default `true`) and
+  `pool_stale_age` (default `86400` seconds) give the host-arbitration pool claim
+  the same stale-lock reaping the operation lock already had. A pool claim orphaned
+  by an uncatchable exit (`SIGKILL`, panic, power loss) is force-removed on the
+  next claim attempt once it is older than `pool_stale_age`, so pool arbitration
+  self-heals instead of blocking until a human runs `unlock -f -p`. Set
+  `pool_reap_stale = false` or `pool_stale_age = 0` to disable it. Both keys are
+  visible in `config show` and settable with `config set`.
 
 ### Security
 
@@ -59,6 +67,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `mtui-mcp` now releases remote pool claims and disconnects hosts when it shuts
+  down, on both transports. Over **stdio** the parent exiting (stdin EOF, e.g.
+  `/exit`) or a `SIGTERM` now runs the same teardown the REPL's `quit` does;
+  previously the process fell off the end of its serve loop and left the loaded
+  template's `/var/lock/mtui-pool.lock` claims held on the reference hosts. Over
+  **http** a clean Ctrl-C or `SIGTERM` now tears down **every** live client
+  session, not just idle ones; the idle sweeper only ever reclaimed quiet
+  sessions, so a busy server leaked active sessions' pool claims and SSH
+  connections on shutdown. (An uncatchable exit — `SIGKILL`, panic, power loss —
+  still cannot run teardown; the new pool-claim stale reaping below is the
+  recovery for those.)
 - Concurrent `refhosts.yml` HTTPS refreshes no longer stampede the server.
   When several sessions or commands hit a stale cache at once, one of them
   downloads while the rest wait and then read the freshly written cache —

@@ -65,6 +65,8 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "target_tempdir" => config.target_tempdir.display().to_string(),
         "lock_reap_stale" => config.lock_reap_stale.to_string(),
         "lock_stale_age" => config.lock_stale_age.to_string(),
+        "pool_reap_stale" => config.pool_reap_stale.to_string(),
+        "pool_stale_age" => config.pool_stale_age.to_string(),
         "lock_pi_autolock" => config.lock_pi_autolock.to_string(),
         "lock_wait" => config.lock_wait.to_string(),
         "lock_wait_poll" => config.lock_wait_poll.to_string(),
@@ -97,7 +99,7 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 36] = [
+const ATTRS: [&str; 38] = [
     "template_dir",
     "local_tempdir",
     "session_user",
@@ -131,6 +133,8 @@ const ATTRS: [&str; 36] = [
     "target_tempdir",
     "lock_reap_stale",
     "lock_stale_age",
+    "pool_reap_stale",
+    "pool_stale_age",
     "lock_pi_autolock",
     "lock_wait",
     "lock_wait_poll",
@@ -188,11 +192,13 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "ssl_verify" => config.ssl_verify = SslVerify::parse(raw),
         "chdir_to_template_dir" => config.chdir_to_template_dir = parse_bool(raw)?,
         "lock_reap_stale" => config.lock_reap_stale = parse_bool(raw)?,
+        "pool_reap_stale" => config.pool_reap_stale = parse_bool(raw)?,
         "lock_pi_autolock" => config.lock_pi_autolock = parse_bool(raw)?,
         "connection_timeout" => config.connection_timeout = parse_positive_u64(raw)?,
         "max_parallel" => config.max_parallel = parse_positive_u64(raw)?,
         "refhosts_https_expiration" => config.refhosts_https_expiration = parse_positive_u64(raw)?,
         "lock_stale_age" => config.lock_stale_age = parse_u64(raw)?,
+        "pool_stale_age" => config.pool_stale_age = parse_u64(raw)?,
         "lock_wait" => config.lock_wait = parse_u64(raw)?,
         "lock_wait_poll" => config.lock_wait_poll = parse_positive_u64(raw)?,
         other => return Err(format!("unknown or read-only attribute: {other}")),
@@ -556,6 +562,47 @@ mod tests {
         assert_eq!(
             attr_value(&session.config, "refhosts_https_expiration").as_deref(),
             Some("3600")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_pool_reap_keys_roundtrip() {
+        // The pool-claim reap knobs are settable: a boolean toggle and a u64 age
+        // (0 allowed, matching the loader's `unwrap_or`).
+        let (mut session, _buf) = empty_session();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "pool_reap_stale", "false"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            attr_value(&session.config, "pool_reap_stale").as_deref(),
+            Some("false")
+        );
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "pool_stale_age", "3600"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            attr_value(&session.config, "pool_stale_age").as_deref(),
+            Some("3600")
+        );
+        // 0 disables reaping and must be accepted (loader takes it via unwrap_or).
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "pool_stale_age", "0"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            attr_value(&session.config, "pool_stale_age").as_deref(),
+            Some("0")
         );
     }
 

@@ -300,6 +300,12 @@ pub(crate) fn default_lock_reap_stale() -> bool {
 pub(crate) fn default_lock_stale_age() -> u64 {
     86400
 }
+pub(crate) fn default_pool_reap_stale() -> bool {
+    true
+}
+pub(crate) fn default_pool_stale_age() -> u64 {
+    86400
+}
 pub(crate) fn default_lock_pi_autolock() -> bool {
     true
 }
@@ -464,6 +470,8 @@ pub(crate) struct SlackSection {
 pub(crate) struct LockSection {
     pub reap_stale: Option<bool>,
     pub stale_age: Option<u64>,
+    pub pool_reap_stale: Option<bool>,
+    pub pool_stale_age: Option<u64>,
     pub pi_autolock: Option<bool>,
     pub wait: Option<u64>,
     pub wait_poll: Option<u64>,
@@ -586,6 +594,8 @@ impl RawConfig {
         take!(slack, watch_timeout);
         take!(lock, reap_stale);
         take!(lock, stale_age);
+        take!(lock, pool_reap_stale);
+        take!(lock, pool_stale_age);
         take!(lock, pi_autolock);
         take!(lock, wait);
         take!(lock, wait_poll);
@@ -723,6 +733,16 @@ pub struct Config {
     /// Age (seconds) beyond which a remote lock is considered stale and reapable.
     /// A non-positive value disables reaping.
     pub lock_stale_age: u64,
+    /// On a pool claim attempt, force-remove a pre-existing pool-claim lock older
+    /// than [`pool_stale_age`](Self::pool_stale_age) seconds regardless of owner.
+    /// The pool-claim analogue of [`lock_reap_stale`](Self::lock_reap_stale) — the
+    /// only automatic recovery for a pool claim orphaned by an uncatchable exit
+    /// (SIGKILL / panic / power loss), which the RRID-based pool lock otherwise
+    /// leaves held until a manual `unlock -f -p`.
+    pub pool_reap_stale: bool,
+    /// Age (seconds) beyond which a pool-claim lock is considered stale and
+    /// reapable. A value of `0` disables pool-claim reaping.
+    pub pool_stale_age: u64,
     /// When testing a Product Increment (PI), auto-lock all reference hosts on
     /// `assign` and unlock them at end of testing.
     pub lock_pi_autolock: bool,
@@ -844,6 +864,8 @@ impl Default for Config {
             target_tempdir: default_target_tempdir(),
             lock_reap_stale: default_lock_reap_stale(),
             lock_stale_age: default_lock_stale_age(),
+            pool_reap_stale: default_pool_reap_stale(),
+            pool_stale_age: default_pool_stale_age(),
             lock_pi_autolock: default_lock_pi_autolock(),
             lock_wait: default_lock_wait(),
             lock_wait_poll: default_lock_wait_poll(),
@@ -1008,6 +1030,8 @@ impl Config {
                 .map_or(d.target_tempdir, |p| expanduser(&p)),
             lock_reap_stale: raw.lock.reap_stale.unwrap_or(d.lock_reap_stale),
             lock_stale_age: raw.lock.stale_age.unwrap_or(d.lock_stale_age),
+            pool_reap_stale: raw.lock.pool_reap_stale.unwrap_or(d.pool_reap_stale),
+            pool_stale_age: raw.lock.pool_stale_age.unwrap_or(d.pool_stale_age),
             lock_pi_autolock: raw.lock.pi_autolock.unwrap_or(d.lock_pi_autolock),
             lock_wait: raw.lock.wait.unwrap_or(d.lock_wait),
             lock_wait_poll: validated_positive!(
@@ -1085,6 +1109,9 @@ mod tests {
         // [lock] defaults mirror upstream config.py exactly.
         assert!(c.lock_reap_stale);
         assert_eq!(c.lock_stale_age, 86400);
+        // Pool-claim reaping defaults match the operation lock's.
+        assert!(c.pool_reap_stale);
+        assert_eq!(c.pool_stale_age, 86400);
         assert!(c.lock_pi_autolock);
         assert_eq!(c.lock_wait, 0);
         assert_eq!(c.lock_wait_poll, 15);
@@ -1270,12 +1297,14 @@ mod tests {
     #[test]
     fn lock_section_parses_and_overrides() {
         let raw: RawConfig = toml::from_str(
-            "[lock]\nreap_stale = false\nstale_age = 3600\npi_autolock = false\nwait = 30\nwait_poll = 5\n",
+            "[lock]\nreap_stale = false\nstale_age = 3600\npool_reap_stale = false\npool_stale_age = 7200\npi_autolock = false\nwait = 30\nwait_poll = 5\n",
         )
         .unwrap();
         let c = Config::from_raw(raw);
         assert!(!c.lock_reap_stale);
         assert_eq!(c.lock_stale_age, 3600);
+        assert!(!c.pool_reap_stale);
+        assert_eq!(c.pool_stale_age, 7200);
         assert!(!c.lock_pi_autolock);
         assert_eq!(c.lock_wait, 30);
         assert_eq!(c.lock_wait_poll, 5);
@@ -1289,6 +1318,8 @@ mod tests {
         assert_eq!(c.lock_wait, 45);
         assert!(c.lock_reap_stale);
         assert_eq!(c.lock_stale_age, 86400);
+        assert!(c.pool_reap_stale);
+        assert_eq!(c.pool_stale_age, 86400);
         assert_eq!(c.lock_wait_poll, 15);
     }
 

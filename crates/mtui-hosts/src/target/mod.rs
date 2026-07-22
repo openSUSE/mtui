@@ -2629,7 +2629,15 @@ mod tests {
 
     #[tokio::test]
     async fn pool_claim_false_on_foreign_claim() {
-        let foreign = b"1700000000:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec();
+        // A *fresh* foreign claim (not stale) must be refused. Timestamped ~now
+        // so the default pool-claim reaping does not treat it as abandoned (the
+        // stale-reap path is covered by `pool_claim_reaps_stale_foreign_claim`).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let foreign =
+            format!("{now}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes();
         let conn = MockConnection::new("h1").with_file(crate::POOL_LOCK_PATH, foreign);
         let mut t = enabled_with(conn);
         t.set_rrid("SUSE:Maintenance:1:2");
@@ -2638,8 +2646,31 @@ mod tests {
             !t.pool_claim("mtui pool SUSE:Maintenance:1:2 [SUSE:Maintenance:1:2]")
                 .await
                 .unwrap(),
-            "a host claimed by another process must not be claimable"
+            "a fresh foreign claim must not be claimable"
         );
+    }
+
+    #[tokio::test]
+    async fn pool_claim_reaps_stale_foreign_claim() {
+        // A stale foreign pool claim (orphaned by an uncatchable exit) is reaped
+        // on the next claim attempt and the host becomes claimable — the recovery
+        // path arbitration relies on, reached transparently via `pool_claim`.
+        let stale = 1_700_000_000u64.saturating_sub(200_000); // >> pool_stale_age
+        let foreign =
+            format!("{stale}:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]").into_bytes();
+        let conn = MockConnection::new("h1").with_file(crate::POOL_LOCK_PATH, foreign);
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.set_rrid("SUSE:Maintenance:1:2");
+        assert!(
+            t.pool_claim("mtui pool SUSE:Maintenance:1:2 [SUSE:Maintenance:1:2]")
+                .await
+                .unwrap(),
+            "a host holding a stale foreign claim must become claimable"
+        );
+        let contents =
+            String::from_utf8(handle.file_contents(crate::POOL_LOCK_PATH).unwrap()).unwrap();
+        assert!(contents.contains("SUSE:Maintenance:1:2"));
     }
 
     // --- add_history -------------------------------------------------------
