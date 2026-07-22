@@ -238,7 +238,7 @@ fn make_fixture(root: &Path, target: &str) -> (std::path::PathBuf, std::path::Pa
 fn package_stem_is_versioned_and_targeted() {
     assert_eq!(
         package_stem("v1.2.0", "x86_64-unknown-linux-musl"),
-        "mtui-rs-v1.2.0-x86_64-unknown-linux-musl"
+        "mtui-v1.2.0-x86_64-unknown-linux-musl"
     );
 }
 
@@ -261,10 +261,7 @@ fn stage_package_lays_out_documented_tree() {
     };
     let staging = stage_package(&inputs).expect("stage");
 
-    assert_eq!(
-        staging,
-        out.join("mtui-rs-v9.9.9-x86_64-unknown-linux-musl")
-    );
+    assert_eq!(staging, out.join("mtui-v9.9.9-x86_64-unknown-linux-musl"));
     for bin in BINARIES {
         assert!(staging.join(bin).is_file(), "{bin} missing from staging");
     }
@@ -372,15 +369,15 @@ fn package_target_produces_tarball_and_checksum() {
     let tarball = package_target(&inputs).expect("package");
     assert_eq!(
         tarball.file_name().unwrap(),
-        "mtui-rs-v2.3.4-x86_64-unknown-linux-musl.tar.gz"
+        "mtui-v2.3.4-x86_64-unknown-linux-musl.tar.gz"
     );
     assert!(tarball.is_file(), "tarball not created");
 
-    let sum = out.join("mtui-rs-v2.3.4-x86_64-unknown-linux-musl.tar.gz.sha256");
+    let sum = out.join("mtui-v2.3.4-x86_64-unknown-linux-musl.tar.gz.sha256");
     assert!(sum.is_file(), "checksum not created");
     let sum_body = std::fs::read_to_string(&sum).unwrap();
     assert!(
-        sum_body.contains("mtui-rs-v2.3.4-x86_64-unknown-linux-musl.tar.gz"),
+        sum_body.contains("mtui-v2.3.4-x86_64-unknown-linux-musl.tar.gz"),
         "checksum names the tarball"
     );
 

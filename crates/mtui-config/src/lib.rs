@@ -1,4 +1,4 @@
-//! `mtui-config` — TOML config parsing and XDG path resolution for mtui-rs.
+//! `mtui-config` — TOML config parsing and XDG path resolution for mtui.
 //!
 //! ## What this crate does
 //!
@@ -11,7 +11,7 @@
 //! ## Intentional deviation from upstream
 //!
 //! Upstream mtui reads **INI** (`configparser`) from `/etc/mtui.cfg` and
-//! `~/.mtuirc`. mtui-rs deliberately adopts **TOML** with XDG paths — a cleaner,
+//! `~/.mtuirc`. mtui deliberately adopts **TOML** with XDG paths — a cleaner,
 //! typed, modern format — as this is a redesign, not a 1:1 port. The
 //! *behavioural* contract is preserved: sectioned options, upstream default
 //! values, and **lenient loading** (a bad or missing file is logged and skipped,

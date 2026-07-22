@@ -1,4 +1,4 @@
-//! `mtui-types` — domain types and the error hierarchy for mtui-rs.
+//! `mtui-types` — domain types and the error hierarchy for mtui.
 //!
 //! Foundation crate: no I/O, no async. Real types land in Phase 1.
 

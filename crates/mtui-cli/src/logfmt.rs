@@ -4,7 +4,7 @@
 //! `ColorFormatter("%(levelname)s: %(message)s")`
 //! (`python-mtui/mtui/cli/colors/formatter.py`): a **lowercased**, colorized
 //! level token (green `info` / yellow `warning` / red `error`), then `": "`, then
-//! the message — no timestamp, no module path. mtui-rs already renders *command
+//! the message — no timestamp, no module path. mtui already renders *command
 //! errors* that way through the session display (see `repl::render_error`); this
 //! layer brings `tracing::info!`/`warn!` (and any other event at the default
 //! verbosity) to the same look so the two channels are consistent

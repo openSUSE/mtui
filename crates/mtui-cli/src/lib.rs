@@ -71,7 +71,7 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 
 /// Initialises the `tracing` subscriber.
 ///
-/// Honours `RUST_LOG` (mtui-rs logging contract); `-d/--debug` raises the
+/// Honours `RUST_LOG` (mtui logging contract); `-d/--debug` raises the
 /// default level to `DEBUG` when `RUST_LOG` is unset, mirroring upstream's
 /// `if args.debug: logger.setLevel(DEBUG)`.
 ///

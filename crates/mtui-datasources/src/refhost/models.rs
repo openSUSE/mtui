@@ -8,7 +8,7 @@
 //! string into one [`Attributes`] per architecture.
 //!
 //! # Divergence from upstream
-//! Upstream keeps `Attributes` alongside `Host` in `models.py`. In mtui-rs the
+//! Upstream keeps `Attributes` alongside `Host` in `models.py`. In mtui the
 //! `mtui-types` crate is deliberately the pure wire-schema and carries no
 //! query/parsing concerns (and no `regex` dependency), so the query model and
 //! its grammar parser live here in `mtui-datasources` next to the search engine

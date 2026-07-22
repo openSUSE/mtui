@@ -1,6 +1,6 @@
 //! Secure atomic local file writes.
 //!
-//! The single implementation of mtui-rs's temp-file + rename write. It is the
+//! The single implementation of mtui's temp-file + rename write. It is the
 //! shared home for a pattern that previously existed in three drifted copies
 //! (the known-hosts persist path in `mtui-hosts`, the testreport exporter in
 //! `mtui-testreport`, and the refhosts cache writer in `mtui-datasources`).

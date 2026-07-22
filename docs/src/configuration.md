@@ -1,8 +1,8 @@
 # Configuration
 
-mtui-rs is configured with a **sectioned TOML** file. (This is an intentional
+mtui is configured with a **sectioned TOML** file. (This is an intentional
 deviation from upstream mtui's INI; every option's default matches upstream
-exactly.) All configuration is optional: with no file present, mtui-rs runs on
+exactly.) All configuration is optional: with no file present, mtui runs on
 built-in defaults.
 
 ## File resolution
@@ -66,7 +66,7 @@ Defaults below are the built-in (upstream-matching) values.
 | `max_oqa_parallel` | int (>0) | `8` | Max concurrent openQA/QAM HTTP requests in the overview search (kept low to be polite to shared hosts). |
 | `ssh_strict_host_key_checking` | string | `auto_add` | SSH host-key checking policy (`auto_add`, `strict`, `warn`, …). |
 
-> **SSH is pubkey-only by design.** mtui-rs authenticates from the SSH agent or
+> **SSH is pubkey-only by design.** mtui authenticates from the SSH agent or
 > `~/.ssh/id_*`; there is no password auth.
 
 ### `[refhosts]`
@@ -224,7 +224,7 @@ oscrc.
 - The **`gitea_token`** is masked as `<set>` by both `config show` and
   `config set`, and is never written to logs or display output.
 - Configured datasource URLs may embed credentials
-  (`scheme://user:pass@host`). mtui-rs sanitises the userinfo to `***` before any
+  (`scheme://user:pass@host`). mtui sanitises the userinfo to `***` before any
   URL reaches a log or an error message, keeping the host visible for diagnosis.
 
 ## Example

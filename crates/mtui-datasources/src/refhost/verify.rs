@@ -25,7 +25,7 @@
 //!
 //! # Divergence from upstream
 //!
-//! Upstream `Version` collapses `int | str` into one field; the mtui-rs
+//! Upstream `Version` collapses `int | str` into one field; the mtui
 //! [`Version`] preserves the numeric-vs-textual distinction via
 //! [`VersionField`]. [`normalize_version`] therefore yields
 //! [`VersionField::Text`] for a service-pack minor (`"SP4"`) and

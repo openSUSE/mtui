@@ -12,7 +12,7 @@
 //!    (`%20` → `+`, `~` → `%7E`), emitting `X-API-Microtime` and `X-API-Hash`.
 //!
 //! This module rebuilds that contract with `reqwest` (via [`HttpClient`]) so
-//! mtui-rs needs no python runtime and no third-party client. GET requests do
+//! mtui needs no python runtime and no third-party client. GET requests do
 //! not strictly require signing (openQA allows unauthenticated GETs), but the
 //! signature is always attached when a secret is configured, matching upstream.
 

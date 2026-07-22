@@ -1,4 +1,4 @@
-# Realistic minimal mtui-rs config fixture used by the integration tests to
+# Realistic minimal mtui config fixture used by the integration tests to
 # exercise the TOML parser end-to-end (multiple sections, multiple value types).
 #
 # This is the TOML translation of upstream `tests/fixtures/mtuirc`, restricted

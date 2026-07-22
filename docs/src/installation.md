@@ -1,6 +1,6 @@
 # Installation
 
-mtui-rs ships as two static binaries — `mtui` (the REPL) and `mtui-mcp` (the MCP
+mtui ships as two static binaries — `mtui` (the REPL) and `mtui-mcp` (the MCP
 server) — with no runtime interpreter or virtualenv. On openSUSE install the
 package from the openSUSE Build Service (OBS); everywhere else, build from source.
 
@@ -92,7 +92,7 @@ placeholders shown as errors so you don't forget to fill them in). Filetype
 detection triggers on any file named `log` whose first line starts with
 `SUMMARY:` (i.e. an exported testreport).
 
-On openSUSE it is packaged as the `mtui-rs-vim-plugin` subpackage, installed into
+On openSUSE it is packaged as the `mtui-vim-plugin` subpackage, installed into
 the system Vim runtime addon dir. To install manually:
 
 ```sh
@@ -106,7 +106,7 @@ directory instead (`~/.vim/{ftdetect,syntax}/testreport.vim`, or
 
 ## Runtime dependencies
 
-Some backends shell out to external tools. They are optional — mtui-rs degrades
+Some backends shell out to external tools. They are optional — mtui degrades
 gracefully when they are absent:
 
 - **`svn`** — testreport checkout/commit (the SVN backend).
@@ -120,7 +120,7 @@ your `oscrc`, located exactly like `osc` itself: `$OSC_CONFIG`, then
 
 ## Packaged install (openSUSE)
 
-On openSUSE, prefer the `mtui-rs.spec` package build, which installs the binaries,
+On openSUSE, prefer the `mtui.spec` package build, which installs the binaries,
 completions, man pages, and `term.*.sh` scripts into the standard system paths
 and declares the optional runtime tools as recommends.
 
@@ -128,7 +128,7 @@ and declares the optional runtime tools as recommends.
 
 Releases are built and published from the Build Service, **not from CI**
 (gitlab.suse.de shared runners can't run `cross`/dind). The package sources at the
-repo root — `_service` and `mtui-rs.spec` — build the RPM fully **offline from
+repo root — `_service` and `mtui.spec` — build the RPM fully **offline from
 vendored crates** via the OBS source services, so nothing is fetched during the
 network-isolated build.
 
@@ -158,9 +158,9 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
 2. **Check out the IBS package and drop in the sources:**
 
    ```sh
-   osc -A ibs checkout QA:Maintenance:Test mtui-rs
-   cd QA:Maintenance:Test/mtui-rs
-   cp /path/to/mtui-rs/_service /path/to/mtui-rs/mtui-rs.spec .
+   osc -A ibs checkout QA:Maintenance:Test mtui
+   cd QA:Maintenance:Test/mtui
+   cp /path/to/mtui/_service /path/to/mtui/mtui.spec .
    ```
 
 3. **Run all source services.** This fetches the tagged source, compresses it,
@@ -168,7 +168,7 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
 
    ```sh
    osc service ra
-   # emits: mtui-rs-<ver>.tar.zst, vendor.tar.zst (with .cargo/config +
+   # emits: mtui-<ver>.tar.zst, vendor.tar.zst (with .cargo/config +
    #        Cargo.lock + vendor/), cargo_config, _servicedata
    ```
 
@@ -176,7 +176,7 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
 
    ```sh
    osc add _service _servicedata cargo_config \
-     mtui-rs-<ver>.tar.zst mtui-rs.spec vendor.tar.zst
+     mtui-<ver>.tar.zst mtui.spec vendor.tar.zst
    osc ci
    osc build          # local build against the service-generated tarballs
    osc results        # watch the OBS build
@@ -192,12 +192,12 @@ escape hatch, not a default. `update=false` in `_service` pins the checked-in
 To build a plain binary tarball locally (e.g. to test the install layout) without
 OBS, use the `xtask package` helper — it assembles the documented tree (both
 binaries, completions, man pages, `term.*.sh`, `LICENSE`, `README`) into a
-`mtui-rs-<version>-<target>.tar.gz` plus a `.sha256`:
+`mtui-<version>-<target>.tar.gz` plus a `.sha256`:
 
 ```sh
 cargo build --release -p mtui-cli -p mtui-mcp --features mtui-mcp/mcp
 cargo xtask package --version v1.2.0 --target "$(rustc -vV | sed -n 's/host: //p')"
-# → dist/release/mtui-rs-v1.2.0-<target>.tar.gz (+ .sha256)
+# → dist/release/mtui-v1.2.0-<target>.tar.gz (+ .sha256)
 ```
 
 This tarball is a local convenience only; the OBS build uses the git-tag source

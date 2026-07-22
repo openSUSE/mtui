@@ -15,7 +15,7 @@
 //!
 //! ## Async, not threads
 //!
-//! Upstream uses a `threading.Lock` because its workers are OS threads. mtui-rs
+//! Upstream uses a `threading.Lock` because its workers are OS threads. mtui
 //! fans out with `tokio` tasks, so the lock is a [`tokio::sync::Mutex`] and
 //! [`ask`](Prompter::ask) is async — held across the reader's `.await` soundly
 //! (unlike a `std::sync::Mutex`, which clippy's `await_holding_lock` rightly

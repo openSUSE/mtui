@@ -7,7 +7,7 @@ version = "26.1.0"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-2.0-only"       # match upstream mtui
-repository = "https://gitlab.suse.de/osukup/mtui-rs"
+repository = "https://github.com/openSUSE/mtui"
 
 [workspace.dependencies]
 # runtime

@@ -1,7 +1,7 @@
 //! RPM version comparison, ported from `mtui/types/rpmver.py::RPMVersion`.
 //!
 //! Upstream delegates the actual comparison to the C `rpm` library's
-//! `rpm.labelCompare(("1", ver, rel), …)`. To preserve the mtui-rs
+//! `rpm.labelCompare(("1", ver, rel), …)`. To preserve the mtui
 //! single-static-binary / no-runtime-deps contract, this port uses the
 //! pure-Rust [`sandogasa_rpmvercmp`] crate, which reimplements the canonical
 //! `rpmvercmp` algorithm (segment/tilde/caret handling). It is verified against

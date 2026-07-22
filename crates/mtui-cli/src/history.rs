@@ -15,13 +15,13 @@
 //!
 //! ## Location (deliberate deviation from upstream)
 //!
-//! Upstream persists to `~/.mtui_history`. mtui-rs is XDG-first, so the file
+//! Upstream persists to `~/.mtui_history`. mtui is XDG-first, so the file
 //! lives at `$XDG_DATA_HOME/mtui/history` ([`mtui_config::data_dir`]). This keeps
 //! durable per-user state out of the config and cache trees.
 //!
 //! ## Degradation contract
 //!
-//! History is best-effort, matching mtui-rs's lenient config philosophy: if the
+//! History is best-effort, matching mtui's lenient config philosophy: if the
 //! data directory cannot be resolved, or the file cannot be created/opened, the
 //! REPL falls back to an **in-memory** history (a WARN is logged via `tracing`)
 //! rather than failing to start. The line editor is always usable.
