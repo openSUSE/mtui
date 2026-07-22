@@ -83,12 +83,35 @@
 # `config show`/`config set`, never logged). Empty by default; the Gitea
 # connector refuses to build without it.
 # token = ""
+# Trusted Gitea origin the `token` may be sent to.
+# url = "https://src.suse.de"
+
+[slack]
+# Whether the Slack `request_review` integration is available at all. Off by
+# default; `enabled = true` plus `token` and `channel` are all required to opt in.
+# enabled = false
+# Slack bot token (secret: masked as <set> by `config show`/`config set`, never
+# logged). Required scopes: chat:write, reactions:read, channels:history.
+# token = ""
+# Channel review requests are posted to: an ID (C0123456789) or a #name.
+# channel = ""
+# Slack API base the `token` may be sent to.
+# api_url = "https://slack.com/api"
+# How often `request_review --watch` polls for reactions, in seconds.
+# poll_interval = 120
+# How long `request_review --watch` runs before giving up, in seconds.
+# watch_timeout = 3600
 
 [lock]
 # On connect, force-remove a pre-existing lock older than `stale_age`, regardless of owner.
 # reap_stale = true
 # Age (seconds) beyond which a lock is stale and reapable. 0 disables reaping.
 # stale_age = 86400
+# On a pool claim attempt, force-remove a pre-existing pool claim older than
+# `pool_stale_age`, regardless of owner.
+# pool_reap_stale = true
+# Age (seconds) beyond which a pool claim is stale and reapable. 0 disables pool-claim reaping.
+# pool_stale_age = 86400
 # When testing a Product Increment (PI), auto-lock all refhosts on `assign` and unlock at end of testing.
 # pi_autolock = true
 # Pool-claim queueing budget, in seconds. 0 fails fast on a busy host.
@@ -99,6 +122,9 @@
 [mcp]
 # Upper bound (bytes) on a single mtui-mcp tool result. 0 disables the cap.
 # max_output_bytes = 100000
+# Upper bound (bytes) on an inbound HTTP request body under --transport http.
+# 0 disables mtui's limit entirely, dropping even axum's implicit 2 MB floor.
+# max_request_bytes = 10000000
 # Ceiling on concurrent background jobs per session. 0 disables.
 # max_active_jobs = 16
 # Ceiling on retained terminal (done/failed/cancelled) job records per session. 0 disables.

@@ -5,7 +5,7 @@
 [openSUSE/mtui](https://github.com/openSUSE/mtui)** (Maintenance Test Update
 Installer) — the SUSE QE tool for validating maintenance updates: load a request
 by RRID, install/test it on reference hosts over SSH, then approve/reject. It
-drives `osc`/`svn`/Gitea and openQA/QEM under the hood.
+drives OBS/IBS and Gitea review workflows, `svn`, and openQA/QEM under the hood.
 
 This is a **rewrite/redesign, not a 1:1 transpile.** Use MTUI as the behavioral
 reference and the source of domain truth, but build something better: memory-safe,
@@ -173,8 +173,9 @@ and treat them as golden.
   (`serial_test`), and tests must not assume per-binary isolation (e.g. no
   asserting on heap-address identity — a freed `Arc` address can be reused).
 - **Mock, don't hit the network/hosts:** HTTP via `wiremock`; SSH via a
-  `MockConnection` implementing the `Connection` trait; `svn`/`osc` via a
-  command-runner trait or a stub on `PATH`.
+  `MockConnection` implementing the `Connection` trait; `svn` via the
+  `SvnRunner` command-runner trait/stub; OBS/IBS and every other HTTP
+  datasource via `wiremock`.
 - **Snapshot text contracts** (`insta`): testreport/export rendering, metadata
   parsing, MCP schemas, lock-file format, display output. `insta` prefixes each
   `.snap` file with the **test-binary** name, which is now `it` for every crate —
