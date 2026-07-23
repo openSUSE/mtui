@@ -113,14 +113,18 @@ pub trait Connection: Send + Sync {
 
     /// Re-establishes the transport if it has dropped.
     ///
-    /// Mirrors upstream `Connection.reconnect`: bounded retries, quiet while
-    /// the host is (e.g.) rebooting, then a single surfaced failure.
+    /// Mirrors upstream `Connection.reconnect(retry, timeout, backoff)`:
+    /// `retry` is the number of probe attempts beyond the first, and
+    /// `backoff` selects between a flat per-probe sleep and one that grows
+    /// (`2*(base + 5*count)`) across attempts. Callers recovering from a
+    /// reboot pass a generous `retry` with `backoff = true`; every other
+    /// caller (a dead link mid-command) passes `(0, false)` to fail fast.
     ///
     /// # Errors
     ///
     /// Returns [`HostError::ReconnectFailed`](crate::HostError::ReconnectFailed)
     /// if the retry budget is exhausted while the link is still down.
-    async fn reconnect(&mut self) -> Result<()>;
+    async fn reconnect(&mut self, retry: usize, backoff: bool) -> Result<()>;
 
     /// Dispatches a command without waiting for it to complete, then closes the
     /// local connection.

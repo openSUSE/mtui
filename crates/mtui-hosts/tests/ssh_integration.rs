@@ -923,7 +923,7 @@ async fn reconnect_reestablishes_after_close() {
     let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
     conn.close().await.expect("close");
     assert!(!conn.is_active());
-    conn.reconnect().await.expect("reconnect");
+    conn.reconnect(0, false).await.expect("reconnect");
     assert!(conn.is_active());
     // Still usable after reconnect.
     let log = conn.run("echo hello").await.expect("run after reconnect");
