@@ -206,6 +206,8 @@ mod tests {
             template_dir: None,
             sut: Vec::new(),
             connection_timeout: None,
+            reboot_timeout: None,
+            reboot_retries: None,
             debug: false,
             config: None,
             color: crate::args::ColorArg::Never,

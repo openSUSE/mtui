@@ -23,6 +23,8 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "chdir_to_template_dir" => config.chdir_to_template_dir.to_string(),
         "ssl_verify" => ssl_verify_to_string(&config.ssl_verify),
         "connection_timeout" => config.connection_timeout.to_string(),
+        "reboot_timeout" => config.reboot_timeout.to_string(),
+        "reboot_retries" => config.reboot_retries.to_string(),
         "max_parallel" => config.max_parallel.to_string(),
         "ssh_strict_host_key_checking" => config.ssh_strict_host_key_checking.clone(),
         "refhosts_resolvers" => config.refhosts_resolvers.clone(),
@@ -99,7 +101,7 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 38] = [
+const ATTRS: [&str; 40] = [
     "template_dir",
     "local_tempdir",
     "session_user",
@@ -107,6 +109,8 @@ const ATTRS: [&str; 38] = [
     "chdir_to_template_dir",
     "ssl_verify",
     "connection_timeout",
+    "reboot_timeout",
+    "reboot_retries",
     "max_parallel",
     "ssh_strict_host_key_checking",
     "refhosts_resolvers",
@@ -195,6 +199,8 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "pool_reap_stale" => config.pool_reap_stale = parse_bool(raw)?,
         "lock_pi_autolock" => config.lock_pi_autolock = parse_bool(raw)?,
         "connection_timeout" => config.connection_timeout = parse_positive_u64(raw)?,
+        "reboot_timeout" => config.reboot_timeout = parse_positive_u64(raw)?,
+        "reboot_retries" => config.reboot_retries = parse_positive_u64(raw)?,
         "max_parallel" => config.max_parallel = parse_positive_u64(raw)?,
         "refhosts_https_expiration" => config.refhosts_https_expiration = parse_positive_u64(raw)?,
         "lock_stale_age" => config.lock_stale_age = parse_u64(raw)?,
@@ -479,6 +485,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_and_show_reboot_backoff_roundtrips() {
+        let (mut session, _buf) = empty_session();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "reboot_timeout", "20"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.config.reboot_timeout, 20);
+        assert_eq!(
+            attr_value(&session.config, "reboot_timeout").as_deref(),
+            Some("20")
+        );
+
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "reboot_retries", "5"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.config.reboot_retries, 5);
+        assert_eq!(
+            attr_value(&session.config, "reboot_retries").as_deref(),
+            Some("5")
+        );
+    }
+
+    #[tokio::test]
     async fn set_bool_parses_config_spellings() {
         let (mut session, _buf) = empty_session();
         let args = matches(&ConfigCmd, &["set", "chdir_to_template_dir", "yes"]);
@@ -511,6 +547,8 @@ mod tests {
         // value the file would refuse, breaking the command's own contract.
         for attr in [
             "connection_timeout",
+            "reboot_timeout",
+            "reboot_retries",
             "max_parallel",
             "refhosts_https_expiration",
             "slack_poll_interval",

@@ -62,12 +62,18 @@ Defaults below are the built-in (upstream-matching) values.
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `connection_timeout` | seconds (>0) | `300` | SSH connect + command timeout. |
+| `reboot_timeout` | seconds (>0) | `10` | Backoff base for reconnecting after a reboot (`prepare`/`reboot`/`update`). Sleeps grow as `2*(reboot_timeout + 5*count)` across attempts. |
+| `reboot_retries` | int (>0) | `10` | Number of post-reboot reconnect attempts beyond the first. With the defaults this gives a rebooting host up to ~12.7 minutes to come back. |
 | `max_parallel` | int (>0) | `50` | Max hosts to fan out to concurrently (SSH/SFTP/lock/connect batches). |
 | `max_oqa_parallel` | int (>0) | `8` | Max concurrent openQA/QAM HTTP requests in the overview search (kept low to be polite to shared hosts). |
 | `ssh_strict_host_key_checking` | string | `auto_add` | SSH host-key checking policy (`auto_add`, `strict`, `warn`, …). |
 
 > **SSH is pubkey-only by design.** mtui-rs authenticates from the SSH agent or
 > `~/.ssh/id_*`; there is no password auth.
+
+> `reboot_timeout`/`reboot_retries` only apply to the post-reboot reconnect
+> budget. A dead SSH link mid-`run`/`shell`, or the `sftp` pre-op check, still
+> fails on the first probe — those are not recovering from a reboot.
 
 ### `[refhosts]`
 
@@ -232,6 +238,8 @@ oscrc.
 ```toml
 [connection]
 connection_timeout = 300
+reboot_timeout = 10
+reboot_retries = 10
 max_parallel = 8
 
 [refhosts]

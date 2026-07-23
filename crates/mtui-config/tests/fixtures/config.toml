@@ -13,6 +13,7 @@ ssl_verify = "warn.example/ca.pem"
 
 [connection]
 connection_timeout = 450          # integer value
+reboot_timeout = 25               # integer value
 max_parallel = 8                  # integer value
 max_oqa_parallel = 4              # integer value
 ssh_strict_host_key_checking = "warn"

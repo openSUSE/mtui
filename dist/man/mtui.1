@@ -4,7 +4,7 @@
 .SH NAME
 mtui \- Maintenance Test Update Installer
 .SH SYNOPSIS
-\fBmtui\fR [\fB\-t\fR|\fB\-\-template\-dir\fR] [\fB\-s\fR|\fB\-\-sut\fR] [\fB\-w\fR|\fB\-\-connection\-timeout\fR] [\fB\-d\fR|\fB\-\-debug\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-color\fR] [\fB\-g\fR|\fB\-\-gitea\-token\fR] [\fB\-\-ssl\-verify\fR] [\fB\-a\fR|\fB\-\-auto\-review\-id\fR] [\fB\-k\fR|\fB\-\-kernel\-review\-id\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+\fBmtui\fR [\fB\-t\fR|\fB\-\-template\-dir\fR] [\fB\-s\fR|\fB\-\-sut\fR] [\fB\-w\fR|\fB\-\-connection\-timeout\fR] [\fB\-\-reboot\-timeout\fR] [\fB\-\-reboot\-retries\fR] [\fB\-d\fR|\fB\-\-debug\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-color\fR] [\fB\-g\fR|\fB\-\-gitea\-token\fR] [\fB\-\-ssl\-verify\fR] [\fB\-a\fR|\fB\-\-auto\-review\-id\fR] [\fB\-k\fR|\fB\-\-kernel\-review\-id\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
 .SH DESCRIPTION
 Maintenance Test Update Installer
 .SH OPTIONS
@@ -17,6 +17,12 @@ Cumulatively override the default hosts from the template (format: `hostname,hos
 .TP
 \fB\-w\fR, \fB\-\-connection\-timeout\fR \fI<SECONDS>\fR
 Override config `mtui.connection_timeout` (seconds)
+.TP
+\fB\-\-reboot\-timeout\fR \fI<SECONDS>\fR
+Override config `connection.reboot_timeout`: the backoff base (seconds) for post\-reboot reconnect retries
+.TP
+\fB\-\-reboot\-retries\fR \fI<COUNT>\fR
+Override config `connection.reboot_retries`: the number of post\-reboot reconnect attempts beyond the first probe
 .TP
 \fB\-d\fR, \fB\-\-debug\fR
 Enable debugging output

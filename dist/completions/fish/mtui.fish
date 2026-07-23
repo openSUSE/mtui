@@ -1,6 +1,8 @@
 complete -c mtui -s t -l template-dir -d 'Override config `mtui.template_dir`' -r -F
 complete -c mtui -s s -l sut -d 'Cumulatively override the default hosts from the template (format: `hostname,hostname2`). May be given more than once' -r
 complete -c mtui -s w -l connection-timeout -d 'Override config `mtui.connection_timeout` (seconds)' -r
+complete -c mtui -l reboot-timeout -d 'Override config `connection.reboot_timeout`: the backoff base (seconds) for post-reboot reconnect retries' -r
+complete -c mtui -l reboot-retries -d 'Override config `connection.reboot_retries`: the number of post-reboot reconnect attempts beyond the first probe' -r
 complete -c mtui -s c -l config -d 'Override the default config path' -r -F
 complete -c mtui -l color -d 'Control coloured output' -r -f -a "auto\t'Colour iff stderr is a TTY and `NO_COLOR` is unset. The default'
 always\t'Always emit colour escapes'
