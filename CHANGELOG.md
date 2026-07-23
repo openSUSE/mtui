@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.0.3] - 2026-07-23
+
 ### Added
 
 - New `[connection]` config keys `reboot_timeout` (default `10` seconds) and
