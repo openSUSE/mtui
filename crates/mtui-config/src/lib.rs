@@ -129,6 +129,24 @@ mod tests {
     }
 
     #[test]
+    fn reboot_backoff_options_default_to_upstream() {
+        let d = Config::default();
+        assert_eq!(d.reboot_timeout, 10);
+        assert_eq!(d.reboot_retries, 10);
+    }
+
+    #[test]
+    fn load_reads_reboot_backoff_options() {
+        let path = write_tmp(
+            "reboot.toml",
+            "[connection]\nreboot_timeout = 20\nreboot_retries = 5\n",
+        );
+        let cfg = Config::load(Some(path));
+        assert_eq!(cfg.reboot_timeout, 20);
+        assert_eq!(cfg.reboot_retries, 5);
+    }
+
+    #[test]
     fn mcp_max_output_bytes_defaults_to_100k() {
         assert_eq!(Config::default().mcp_max_output_bytes, 100_000);
     }

@@ -80,6 +80,28 @@ pub struct Args {
     )]
     pub connection_timeout: Option<u64>,
 
+    /// Override config `connection.reboot_timeout`: the backoff base
+    /// (seconds) for post-reboot reconnect retries.
+    // Rejected at parse time if 0, matching `validated_positive!` in the
+    // config-file loader.
+    #[arg(
+        long = "reboot-timeout",
+        value_name = "SECONDS",
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
+    pub reboot_timeout: Option<u64>,
+
+    /// Override config `connection.reboot_retries`: the number of post-reboot
+    /// reconnect attempts beyond the first probe.
+    // Rejected at parse time if 0, matching `validated_positive!` in the
+    // config-file loader.
+    #[arg(
+        long = "reboot-retries",
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
+    pub reboot_retries: Option<u64>,
+
     /// Enable debugging output.
     #[arg(short = 'd', long = "debug")]
     pub debug: bool,
@@ -166,6 +188,12 @@ impl Args {
         }
         if let Some(timeout) = self.connection_timeout {
             config.connection_timeout = timeout;
+        }
+        if let Some(timeout) = self.reboot_timeout {
+            config.reboot_timeout = timeout;
+        }
+        if let Some(retries) = self.reboot_retries {
+            config.reboot_retries = retries;
         }
         if let Some(token) = &self.gitea_token {
             config.gitea_token = token.clone();
@@ -301,11 +329,22 @@ mod tests {
     }
 
     #[test]
+    fn reboot_backoff_zero_is_rejected_at_parse() {
+        assert!(parse(&["--reboot-timeout", "0"]).is_err());
+        assert!(parse(&["--reboot-retries", "0"]).is_err());
+        let a = parse(&["--reboot-timeout", "20", "--reboot-retries", "5"]).unwrap();
+        assert_eq!(a.reboot_timeout, Some(20));
+        assert_eq!(a.reboot_retries, Some(5));
+    }
+
+    #[test]
     fn no_args_leaves_everything_default() {
         let a = parse(&[]).unwrap();
         assert!(a.template_dir.is_none());
         assert!(a.sut.is_empty());
         assert!(a.connection_timeout.is_none());
+        assert!(a.reboot_timeout.is_none());
+        assert!(a.reboot_retries.is_none());
         assert!(!a.debug);
         assert!(a.config.is_none());
         assert_eq!(a.color, ColorArg::Auto);
@@ -471,6 +510,10 @@ mod tests {
         parse(&[
             "--connection-timeout",
             "42",
+            "--reboot-timeout",
+            "20",
+            "--reboot-retries",
+            "5",
             "--gitea-token",
             "tok",
             "--ssl-verify",
@@ -481,6 +524,8 @@ mod tests {
         .unwrap()
         .apply_to(&mut cfg);
         assert_eq!(cfg.connection_timeout, 42);
+        assert_eq!(cfg.reboot_timeout, 20);
+        assert_eq!(cfg.reboot_retries, 5);
         assert_eq!(cfg.gitea_token, "tok");
         assert_eq!(cfg.ssl_verify, SslVerify::Disabled);
         assert_eq!(cfg.template_dir, std::path::PathBuf::from("/tmp/tpl"));

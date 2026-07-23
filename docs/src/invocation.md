@@ -23,6 +23,12 @@ Options:
   -w, --connection-timeout <SECONDS>
           Override config `mtui.connection_timeout` (seconds)
 
+      --reboot-timeout <SECONDS>
+          Override config `connection.reboot_timeout`: the backoff base (seconds) for post-reboot reconnect retries
+
+      --reboot-retries <COUNT>
+          Override config `connection.reboot_retries`: the number of post-reboot reconnect attempts beyond the first probe
+
   -d, --debug
           Enable debugging output
 

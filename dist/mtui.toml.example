@@ -29,6 +29,12 @@
 [connection]
 # SSH connect + command timeout, in seconds.
 # connection_timeout = 300
+# Backoff base (seconds) for reconnecting after a reboot (prepare/reboot/update).
+# Sleeps grow as 2*(reboot_timeout + 5*count) across attempts.
+# reboot_timeout = 10
+# Number of post-reboot reconnect attempts beyond the first. With the
+# defaults this gives a rebooting host up to ~12.7 minutes to come back.
+# reboot_retries = 10
 # Max hosts to fan out to concurrently (SSH/SFTP/lock/connect batches).
 # max_parallel = 50
 # Max concurrent openQA/QAM HTTP requests in the overview search.

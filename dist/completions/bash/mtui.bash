@@ -23,7 +23,7 @@ _mtui() {
 
     case "${cmd}" in
         mtui)
-            opts="-t -s -w -d -c -g -a -k -h -V --template-dir --sut --connection-timeout --debug --config --color --gitea-token --ssl-verify --auto-review-id --kernel-review-id --help --version"
+            opts="-t -s -w -d -c -g -a -k -h -V --template-dir --sut --connection-timeout --reboot-timeout --reboot-retries --debug --config --color --gitea-token --ssl-verify --auto-review-id --kernel-review-id --help --version"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -50,6 +50,14 @@ _mtui() {
                     return 0
                     ;;
                 -w)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reboot-timeout)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --reboot-retries)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

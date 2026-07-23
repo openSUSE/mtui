@@ -21,6 +21,8 @@ _mtui() {
 '*--sut=[Cumulatively override the default hosts from the template (format\: \`hostname,hostname2\`). May be given more than once]:HOSTS:_default' \
 '-w+[Override config \`mtui.connection_timeout\` (seconds)]:SECONDS:_default' \
 '--connection-timeout=[Override config \`mtui.connection_timeout\` (seconds)]:SECONDS:_default' \
+'--reboot-timeout=[Override config \`connection.reboot_timeout\`\: the backoff base (seconds) for post-reboot reconnect retries]:SECONDS:_default' \
+'--reboot-retries=[Override config \`connection.reboot_retries\`\: the number of post-reboot reconnect attempts beyond the first probe]:COUNT:_default' \
 '-c+[Override the default config path]:FILE:_files' \
 '--config=[Override the default config path]:FILE:_files' \
 '--color=[Control coloured output]:COLOR:((auto\:"Colour iff stderr is a TTY and \`NO_COLOR\` is unset. The default"
