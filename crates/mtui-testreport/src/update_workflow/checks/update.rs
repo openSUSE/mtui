@@ -22,7 +22,7 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed}
 /// (exit `106`, "Additional rpm output", "not supported by its vendor") do not
 /// fail the check; the two output sections are returned as [`Diagnostic`]s for
 /// the caller to render.
-pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     let mut diagnostics = Vec::new();
     if args.stdin.contains("zypper") && args.exitcode == 104 {
         log_failed(args);
@@ -103,7 +103,7 @@ fn extract_between<'a>(s: &'a str, marker: &str, end: &str) -> Option<&'a str> {
 /// The update check for `(release, transactional)`, or `None` for an unknown
 /// key (upstream `update_checks.get(...)`).
 #[must_use]
-pub fn update_check(release: &str, transactional: bool) -> Option<CheckFn> {
+pub(crate) fn update_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
         _ => None,

@@ -73,7 +73,10 @@ fn is_ident_continue(c: char) -> bool {
 /// Returns [`TemplateError::MissingKey`] when a referenced placeholder is
 /// absent from `mapping`, or [`TemplateError::Invalid`] when the template has a
 /// malformed `$` construct.
-pub fn substitute(template: &str, mapping: &HashMap<&str, &str>) -> Result<String, TemplateError> {
+pub(crate) fn substitute(
+    template: &str,
+    mapping: &HashMap<&str, &str>,
+) -> Result<String, TemplateError> {
     render(template, mapping, false)
 }
 
@@ -85,7 +88,7 @@ pub fn substitute(template: &str, mapping: &HashMap<&str, &str>) -> Result<Strin
 /// shell/awk `$`-tokens (`$2` awk fields, an unresolved `$package` at the list
 /// stage) survive substitution unharmed.
 #[must_use]
-pub fn safe_substitute(template: &str, mapping: &HashMap<&str, &str>) -> String {
+pub(crate) fn safe_substitute(template: &str, mapping: &HashMap<&str, &str>) -> String {
     // In lenient mode `render` never returns `Err`.
     render(template, mapping, true).unwrap_or_else(|_| template.to_owned())
 }

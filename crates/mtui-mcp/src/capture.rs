@@ -48,7 +48,7 @@ pub struct SharedBuf(Arc<Mutex<Inner>>);
 impl SharedBuf {
     /// Builds a sink bounded to `limit` bytes (`0` = unbounded).
     #[must_use]
-    pub fn with_limit(limit: usize) -> Self {
+    pub(crate) fn with_limit(limit: usize) -> Self {
         Self(Arc::new(Mutex::new(Inner {
             bytes: Vec::new(),
             limit,
@@ -74,7 +74,7 @@ impl SharedBuf {
     /// accounting), independent of the small extra bytes a codepoint-boundary
     /// trim may shed.
     #[must_use]
-    pub fn take_with_dropped(&self) -> (String, usize) {
+    pub(crate) fn take_with_dropped(&self) -> (String, usize) {
         let mut guard = self.0.lock().expect("capture buffer poisoned");
         let bytes = std::mem::take(&mut guard.bytes);
         let dropped = std::mem::replace(&mut guard.dropped, 0);
@@ -113,7 +113,7 @@ impl Write for SharedBuf {
 /// `is_repl` is `false`: this is a non-interactive (MCP) session. Color is
 /// disabled so captured text is plain (an LLM client renders the raw string).
 #[must_use]
-pub fn session(config: Config) -> (Session, SharedBuf) {
+pub(crate) fn session(config: Config) -> (Session, SharedBuf) {
     let buf = SharedBuf::with_limit(config.mcp_max_output_bytes);
     let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
     (Session::with_display(config, false, display), buf)

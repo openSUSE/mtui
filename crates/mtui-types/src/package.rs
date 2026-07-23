@@ -106,15 +106,6 @@ impl Package {
         Ok(())
     }
 
-    /// Sets the [`current`](Package::current) version from an optional string.
-    ///
-    /// # Errors
-    /// See [`set_before`](Package::set_before).
-    pub fn set_current(&mut self, ver: Option<&str>) -> crate::error::Result<()> {
-        self.current = parse_opt(ver)?;
-        Ok(())
-    }
-
     /// Sets the [`before`](Package::before) version directly.
     pub fn set_before_version(&mut self, ver: Option<RPMVersion>) {
         self.before = ver;
@@ -123,11 +114,6 @@ impl Package {
     /// Sets the [`after`](Package::after) version directly.
     pub fn set_after_version(&mut self, ver: Option<RPMVersion>) {
         self.after = ver;
-    }
-
-    /// Sets the [`required`](Package::required) version directly.
-    pub fn set_required_version(&mut self, ver: Option<RPMVersion>) {
-        self.required = ver;
     }
 
     /// Sets the [`current`](Package::current) version directly.
@@ -188,11 +174,9 @@ mod tests {
         p.set_before(Some("1.0-1")).unwrap();
         p.set_after(Some("2.0-1")).unwrap();
         p.set_required(Some("2.0-1")).unwrap();
-        p.set_current(Some("1.5-1")).unwrap();
         assert_eq!(p.before().unwrap(), &RPMVersion::parse("1.0-1").unwrap());
         assert_eq!(p.after().unwrap(), &RPMVersion::parse("2.0-1").unwrap());
         assert_eq!(p.required().unwrap(), &RPMVersion::parse("2.0-1").unwrap());
-        assert_eq!(p.current().unwrap(), &RPMVersion::parse("1.5-1").unwrap());
     }
 
     #[test]

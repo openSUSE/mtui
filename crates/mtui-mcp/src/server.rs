@@ -314,13 +314,6 @@ fn render(result: Result<String, crate::session::McpCommandError>) -> CallToolRe
     }
 }
 
-/// Backwards-compatible alias for the P7.1 spike name.
-///
-/// The spike round-trip test and early consumers referred to `SpikeServer`; the
-/// production handler is [`McpServer`]. Kept as a thin alias so the existing test
-/// keeps compiling while callers migrate.
-pub type SpikeServer = McpServer;
-
 #[cfg(test)]
 mod tests {
     use super::*;

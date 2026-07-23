@@ -100,18 +100,6 @@ impl Registry {
     pub fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.by_key.keys().copied()
     }
-
-    /// The number of distinct commands registered (aliases not counted).
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.canonical.len()
-    }
-
-    /// `true` if no commands are registered.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.canonical.is_empty()
-    }
 }
 
 /// Commands that must not be synthesised into MCP tools.
@@ -257,8 +245,7 @@ mod tests {
     #[test]
     fn empty_registry_has_no_commands() {
         let r = Registry::new();
-        assert!(r.is_empty());
-        assert_eq!(r.len(), 0);
+        assert_eq!(r.names().count(), 0);
         assert!(r.get("run").is_none());
     }
 
@@ -366,7 +353,7 @@ mod tests {
         // openQA-holder follow-ups (reload_openqa, set_workflow:
         // mtui-rs-zs4/plt) + 3 Phase 6 (help: mtui-rs-lhz.9; edit:
         // mtui-rs-lhz.10; terms: mtui-rs-lhz.11) = 61 canonical commands.
-        assert_eq!(register_all().len(), 61);
+        assert_eq!(register_all().names().count(), 61);
     }
 
     #[test]
@@ -448,7 +435,7 @@ mod tests {
         assert!(r.contains("r"));
         assert!(r.contains("exec"));
         // aliases don't inflate the canonical count.
-        assert_eq!(r.len(), 1);
+        assert_eq!(r.names().count(), 1);
         let by_name = r.get("run").unwrap();
         let by_alias = r.get("r").unwrap();
         assert!(Arc::ptr_eq(by_name, by_alias));

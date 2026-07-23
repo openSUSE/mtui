@@ -41,7 +41,7 @@ use crate::http::{
 
 /// The default review group a [`Gitea`] client operates on behalf of, matching
 /// upstream `Gitea.__init__(..., group="qam-sle")`.
-pub const DEFAULT_GROUP: &str = "qam-sle";
+const DEFAULT_GROUP: &str = "qam-sle";
 
 /// Template for an assignment marker comment (`user`, `group`).
 const ASSIGN_TEMPLATE: &str = "<MTUI: PR - UV assigned to user: {user} - group: {group} >";
@@ -58,55 +58,10 @@ pub fn assign_marker(user: &str, group: &str) -> String {
 
 /// Format an unassignment marker comment body for `user`/`group`.
 #[must_use]
-pub fn unassign_marker(user: &str, group: &str) -> String {
+fn unassign_marker(user: &str, group: &str) -> String {
     UNASSIGN_TEMPLATE
         .replace("{user}", user)
         .replace("{group}", group)
-}
-
-/// Convert a Gitea PR *web* URL to its REST *API* URL.
-///
-/// `https://<host>/<owner>/<repo>/pulls/<n>` becomes
-/// `https://<host>/api/v1/repos/<owner>/<repo>/pulls/<n>` — the form the
-/// [`Gitea`] constructor expects. The SLFO update feed only carries the web
-/// form (an update's `external_url`), so callers that build a client straight
-/// from the feed need this conversion.
-///
-/// # Errors
-///
-/// Returns [`GiteaError::InvalidPrUrl`] if `web_url` is not a recognisable
-/// Gitea PR URL (mirroring upstream's `ValueError`).
-pub fn pr_api_url(web_url: &str) -> Result<String, GiteaError> {
-    let invalid = || GiteaError::InvalidPrUrl(web_url.to_string());
-    // Split `scheme://authority/path...`. A bare non-URL (no `://`) is invalid.
-    let (scheme, rest) = web_url.split_once("://").ok_or_else(invalid)?;
-    if scheme.is_empty() {
-        return Err(invalid());
-    }
-    let (authority, path) = match rest.split_once('/') {
-        Some((a, p)) => (a, p),
-        None => (rest, ""),
-    };
-    if authority.is_empty() {
-        return Err(invalid());
-    }
-    // Drop any query/fragment, then take the non-empty path segments.
-    let path = path.split(['?', '#']).next().unwrap_or("");
-    let parts: Vec<&str> = path
-        .trim_matches('/')
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
-    // Need owner/repo/pulls/number, and the second-to-last segment must be
-    // "pulls" — the exact guard upstream applies.
-    if parts.len() < 4 || parts[parts.len() - 2] != "pulls" {
-        return Err(invalid());
-    }
-    let tail = &parts[parts.len() - 4..];
-    let (owner, repo, number) = (tail[0], tail[1], tail[3]);
-    Ok(format!(
-        "{scheme}://{authority}/api/v1/repos/{owner}/{repo}/pulls/{number}"
-    ))
 }
 
 /// Extract the host (authority without any port) from an `scheme://host[:port]/…`
@@ -234,15 +189,13 @@ fn decision_present(comments: &[Comment], group: &str) -> bool {
 /// Mirrors upstream `Comment`: ordering and equality are **by date** (upstream
 /// used `@total_ordering` with a date-based `__eq__`), so [`sort`](slice::sort)
 /// over a comment slice reproduces the chronological replay order the state
-/// machine depends on. The `serial` (comment id) is retained for diagnostics.
+/// machine depends on.
 #[derive(Debug, Clone)]
 pub struct Comment {
-    /// The Gitea comment id.
-    pub serial: i64,
     /// The comment body.
-    pub body: String,
+    body: String,
     /// The comment's `updated_at` timestamp.
-    pub date: DateTime<FixedOffset>,
+    date: DateTime<FixedOffset>,
 }
 
 impl Comment {
@@ -253,11 +206,11 @@ impl Comment {
     /// Returns [`GiteaError::FailedCall`] if `updated_at` is not a parseable
     /// RFC3339 timestamp (folded into the fetch failure surface, matching
     /// upstream where a malformed comment payload aborts the API call).
-    pub fn parse(serial: i64, body: String, updated_at: &str) -> Result<Self, GiteaError> {
+    fn parse(body: String, updated_at: &str) -> Result<Self, GiteaError> {
         let date = DateTime::parse_from_rfc3339(updated_at).map_err(|e| {
             GiteaError::FailedCall(format!("unparseable comment timestamp {updated_at:?}: {e}"))
         })?;
-        Ok(Self { serial, body, date })
+        Ok(Self { body, date })
     }
 }
 
@@ -281,7 +234,6 @@ impl Ord for Comment {
 /// The raw JSON shape of a Gitea issue comment (the fields we consume).
 #[derive(serde::Deserialize)]
 struct RawComment {
-    id: i64,
     body: String,
     updated_at: String,
 }
@@ -389,24 +341,6 @@ impl Gitea {
         })
     }
 
-    /// The PR API URL this client targets.
-    #[must_use]
-    pub fn pr_url(&self) -> &str {
-        &self.pr
-    }
-
-    /// The review group this client operates on behalf of.
-    #[must_use]
-    pub fn group(&self) -> &str {
-        &self.group
-    }
-
-    /// The session user this client acts as by default.
-    #[must_use]
-    pub fn user(&self) -> &str {
-        &self.user
-    }
-
     /// A private wrapper for a request to the Gitea API, returning the decoded
     /// JSON body (or [`serde_json::Value::Null`] for `204 No Content`).
     ///
@@ -499,7 +433,7 @@ impl Gitea {
         let raw: Vec<RawComment> = serde_json::from_value(value)
             .map_err(|e| GiteaError::FailedCall(format!("decoding comments: {e}")))?;
         raw.into_iter()
-            .map(|c| Comment::parse(c.id, c.body, &c.updated_at))
+            .map(|c| Comment::parse(c.body, &c.updated_at))
             .collect()
     }
 
@@ -510,7 +444,7 @@ impl Gitea {
     /// marker for another group is ignored. Public + static so the state
     /// machine can be tested without any HTTP.
     #[must_use]
-    pub fn assignee_from_comments(&self, comments: &[Comment], group: &str) -> Option<String> {
+    fn assignee_from_comments(&self, comments: &[Comment], group: &str) -> Option<String> {
         let mut assignee: Option<String> = None;
         for c in comments {
             if let Some(m) = self.assign_re.captures(&c.body) {
@@ -773,79 +707,40 @@ mod tests {
         .unwrap()
     }
 
-    fn comment(serial: i64, body: &str, date: &str) -> Comment {
-        Comment::parse(serial, body.to_string(), date).unwrap()
-    }
-
-    // --- pr_api_url ---
-
-    #[test]
-    fn pr_api_url_converts_web_to_api() {
-        assert_eq!(
-            pr_api_url("https://src.example.de/products/SLFO/pulls/4919").unwrap(),
-            "https://src.example.de/api/v1/repos/products/SLFO/pulls/4919"
-        );
-    }
-
-    #[test]
-    fn pr_api_url_trailing_slash_ok() {
-        assert_eq!(
-            pr_api_url("https://h.example/owner/repo/pulls/1/").unwrap(),
-            "https://h.example/api/v1/repos/owner/repo/pulls/1"
-        );
-    }
-
-    #[test]
-    fn pr_api_url_preserves_port() {
-        assert_eq!(
-            pr_api_url("https://h.example:3000/owner/repo/pulls/7").unwrap(),
-            "https://h.example:3000/api/v1/repos/owner/repo/pulls/7"
-        );
-    }
-
-    #[test]
-    fn pr_api_url_rejects_non_pr_urls() {
-        for bad in [
-            "https://h.example/owner/repo/issues/1", // not a pulls URL
-            "https://h.example/owner/repo",          // too short
-            "not a url",
-        ] {
-            let err = pr_api_url(bad).unwrap_err();
-            assert!(matches!(err, GiteaError::InvalidPrUrl(_)), "{bad}");
-            assert!(err.to_string().contains("not a Gitea PR URL"));
-        }
+    fn comment(body: &str, date: &str) -> Comment {
+        Comment::parse(body.to_string(), date).unwrap()
     }
 
     // --- Comment ordering / equality ---
 
     #[test]
     fn comment_orders_and_equals_by_date() {
-        let c1 = comment(1, "first", "2024-01-01T00:00:00+00:00");
-        let c2 = comment(2, "second", "2024-01-02T00:00:00+00:00");
+        let c1 = comment("first", "2024-01-01T00:00:00+00:00");
+        let c2 = comment("second", "2024-01-02T00:00:00+00:00");
         assert!(c1 < c2);
         assert!(c2 > c1);
-        // Equal dates -> equal comments even with different serials/bodies.
-        let a = comment(1, "a", "2024-01-01T00:00:00+00:00");
-        let b = comment(2, "b", "2024-01-01T00:00:00+00:00");
+        // Equal dates -> equal comments even with different bodies.
+        let a = comment("a", "2024-01-01T00:00:00+00:00");
+        let b = comment("b", "2024-01-01T00:00:00+00:00");
         assert_eq!(a, b);
     }
 
     #[test]
     fn comments_sort_chronologically() {
         let mut cs = [
-            comment(1, "first", "2024-01-03T00:00:00+00:00"),
-            comment(2, "second", "2024-01-01T00:00:00+00:00"),
-            comment(3, "third", "2024-01-02T00:00:00+00:00"),
+            comment("first", "2024-01-03T00:00:00+00:00"),
+            comment("second", "2024-01-01T00:00:00+00:00"),
+            comment("third", "2024-01-02T00:00:00+00:00"),
         ];
         cs.sort();
-        assert_eq!(cs[0].serial, 2);
-        assert_eq!(cs[1].serial, 3);
-        assert_eq!(cs[2].serial, 1);
+        assert_eq!(cs[0].body, "second");
+        assert_eq!(cs[1].body, "third");
+        assert_eq!(cs[2].body, "first");
     }
 
     #[test]
     fn comment_parse_rejects_bad_timestamp() {
-        let err = Comment::parse(1, "b".to_string(), "not-a-date").unwrap_err();
+        let err = Comment::parse("b".to_string(), "not-a-date").unwrap_err();
         assert!(matches!(err, GiteaError::FailedCall(_)));
     }
 
@@ -856,12 +751,10 @@ mod tests {
         let g = dummy();
         let comments = [
             comment(
-                1,
                 &assign_marker("alice", "qam-sle"),
                 "2024-01-01T00:00:00+00:00",
             ),
             comment(
-                2,
                 &assign_marker("bob", "qam-sle"),
                 "2024-01-02T00:00:00+00:00",
             ),
@@ -877,12 +770,10 @@ mod tests {
         let g = dummy();
         let comments = [
             comment(
-                1,
                 &assign_marker("alice", "qam-sle"),
                 "2024-01-01T00:00:00+00:00",
             ),
             comment(
-                2,
                 &unassign_marker("alice", "qam-sle"),
                 "2024-01-02T00:00:00+00:00",
             ),
@@ -894,7 +785,6 @@ mod tests {
     fn parser_is_group_scoped() {
         let g = dummy();
         let comments = [comment(
-            1,
             &assign_marker("bob", "qam-openqa"),
             "2024-01-01T00:00:00+00:00",
         )];
@@ -916,7 +806,7 @@ mod tests {
             "@qam-sle-review: decline",
             "@qam-sle-review: declined",
         ] {
-            let comments = [comment(1, body, "2024-01-01T00:00:00+00:00")];
+            let comments = [comment(body, "2024-01-01T00:00:00+00:00")];
             assert!(decision_present(&comments, "qam-sle"), "{body}");
         }
     }
@@ -926,10 +816,9 @@ mod tests {
         // No comments, a non-decision comment, and a chat mention that is not a
         // start-anchored decision all read as "no decision".
         assert!(!decision_present(&[], "qam-sle"));
-        let plain = [comment(1, "just a comment", "2024-01-01T00:00:00+00:00")];
+        let plain = [comment("just a comment", "2024-01-01T00:00:00+00:00")];
         assert!(!decision_present(&plain, "qam-sle"));
         let midline = [comment(
-            1,
             "ping @qam-sle-review: LGTM",
             "2024-01-01T00:00:00+00:00",
         )];
@@ -939,7 +828,6 @@ mod tests {
     #[test]
     fn decision_present_is_group_scoped() {
         let comments = [comment(
-            1,
             "@qam-openqa-review: LGTM",
             "2024-01-01T00:00:00+00:00",
         )];
@@ -951,7 +839,6 @@ mod tests {
     fn assign_state_classifies_from_snapshot() {
         let g = dummy();
         let assigned = [comment(
-            1,
             &assign_marker("testuser", "qam-sle"),
             "2024-01-01T00:00:00+00:00",
         )];
@@ -969,10 +856,10 @@ mod tests {
     #[test]
     fn default_group_and_url_derivation() {
         let g = dummy();
-        assert_eq!(g.group(), DEFAULT_GROUP);
-        assert_eq!(g.user(), "testuser");
+        assert_eq!(g.group, DEFAULT_GROUP);
+        assert_eq!(g.user, "testuser");
         assert_eq!(
-            g.pr_url(),
+            g.pr,
             "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1"
         );
         assert_eq!(
@@ -1015,7 +902,7 @@ mod tests {
         cfg.gitea_token = "tok".to_string();
         assert_eq!(cfg.gitea_url, "https://src.suse.de");
         let g = Gitea::new(&cfg, "https://src.suse.de/api/v1/repos/o/r/pulls/1", None).unwrap();
-        assert!(g.pr_url().starts_with("https://src.suse.de/"));
+        assert!(g.pr.starts_with("https://src.suse.de/"));
     }
 
     // --- origin parsing / trust predicate ---

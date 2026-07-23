@@ -18,7 +18,7 @@
 
 use std::io;
 use std::ops::{Deref, DerefMut};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::fileops::atomic_write_file;
 
@@ -69,12 +69,6 @@ impl FileList {
         })
     }
 
-    /// The path this list is bound to.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.file
-    }
-
     /// The lines as a slice.
     #[must_use]
     pub fn lines(&self) -> &[String] {
@@ -83,21 +77,14 @@ impl FileList {
 
     /// The current content as a single string (upstream `"".join(self.data)`).
     #[must_use]
-    pub fn content(&self) -> String {
+    fn content(&self) -> String {
         self.lines.concat()
-    }
-
-    /// Whether the buffer differs from the content observed at load time.
-    #[must_use]
-    pub fn is_dirty(&self) -> bool {
-        self.content() != self.loaded
     }
 
     /// Atomically writes the current content to the bound path (always).
     ///
     /// Mirrors the eager upstream `FileList.write`. After a successful write the
-    /// load snapshot is refreshed so a subsequent [`is_dirty`](Self::is_dirty)
-    /// reflects changes made *after* this write.
+    /// load snapshot is refreshed.
     ///
     /// # Errors
     ///
@@ -107,22 +94,6 @@ impl FileList {
         atomic_write_file(content.as_bytes(), &self.file)?;
         self.loaded = content;
         Ok(())
-    }
-
-    /// Writes only when the buffer changed since load (upstream `__exit__`).
-    ///
-    /// Returns `true` when a write happened.
-    ///
-    /// # Errors
-    ///
-    /// Returns any I/O error from the atomic write.
-    pub fn write_if_dirty(&mut self) -> io::Result<bool> {
-        if self.is_dirty() {
-            self.write()?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
     }
 }
 
@@ -179,27 +150,6 @@ mod tests {
         std::fs::write(&path, "one\ntwo\n").unwrap();
         let fl = FileList::load(&path).unwrap();
         assert_eq!(fl.lines(), &["one\n".to_string(), "two\n".to_string()]);
-        assert!(!fl.is_dirty());
-    }
-
-    #[test]
-    fn mutation_marks_dirty_and_conditional_write() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("tpl.txt");
-        std::fs::write(&path, "one\n").unwrap();
-        let mut fl = FileList::load(&path).unwrap();
-
-        // Unchanged: no write.
-        assert!(!fl.write_if_dirty().unwrap());
-
-        fl.push("two\n".to_string());
-        assert!(fl.is_dirty());
-        assert!(fl.write_if_dirty().unwrap());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo\n");
-
-        // Snapshot refreshed after write.
-        assert!(!fl.is_dirty());
-        assert!(!fl.write_if_dirty().unwrap());
     }
 
     #[test]

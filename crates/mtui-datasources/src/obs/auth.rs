@@ -326,7 +326,7 @@ impl<A: AgentKeys + Sync> ObsAuth for ObsSignatureAuth<A> {
 /// yields an empty map. Scheme names are lowercased. Upstream
 /// `_challenge_params`.
 #[must_use]
-pub fn challenge_params(
+pub(crate) fn challenge_params(
     headers: &reqwest::header::HeaderMap,
 ) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> {
     use reqwest::header::WWW_AUTHENTICATE;

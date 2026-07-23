@@ -88,7 +88,7 @@ pub struct Reply {
     /// The message body.
     pub text: String,
     /// The reply's own timestamp, used to track which replies were seen.
-    pub ts: String,
+    ts: String,
 }
 
 /// Strip a trailing `::skin-tone-N` modifier from a Slack reaction name.
@@ -98,7 +98,7 @@ pub struct Reply {
 /// default skin tone. Normalising at the transport edge means every consumer
 /// compares against the base name and cannot forget this.
 #[must_use]
-pub fn normalize_reaction(name: &str) -> &str {
+fn normalize_reaction(name: &str) -> &str {
     match name.split_once("::skin-tone-") {
         Some((base, _)) => base,
         None => name,
@@ -231,12 +231,6 @@ impl Slack {
             return Err(SlackError::UntrustedOrigin(sanitize_url(&base)));
         }
         Ok(Self { http, token, base })
-    }
-
-    /// The configured API base.
-    #[must_use]
-    pub fn base(&self) -> &str {
-        &self.base
     }
 
     /// Issue a Slack Web API call and return its decoded envelope.
@@ -594,7 +588,7 @@ mod tests {
     #[test]
     fn with_client_trims_trailing_slash() {
         let c = client("https://slack.com/api/").expect("builds");
-        assert_eq!(c.base(), "https://slack.com/api");
+        assert_eq!(c.base, "https://slack.com/api");
     }
 
     #[test]

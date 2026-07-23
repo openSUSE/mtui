@@ -184,7 +184,7 @@ pub struct SuspendAsync {
 
 /// Pauses spinner painting and erases any visible frame until the returned guard
 /// drops — the `Send`, await-safe counterpart to [`suspend`].
-pub fn suspend_async() -> SuspendAsync {
+pub(crate) fn suspend_async() -> SuspendAsync {
     // Erase under the paint lock, then flip the paused flag (still under the
     // lock) so no in-flight paint can repaint between the erase and the flag.
     let guard = coord()
@@ -311,7 +311,7 @@ impl TtySpinner {
     /// decision is [`spinner_enabled`], which tolerates launchers (`cargo run`,
     /// tmux, IDE terminals) that leave one stream looking non-TTY.
     #[must_use]
-    pub fn new(desc: impl Into<String>) -> Self {
+    pub(crate) fn new(desc: impl Into<String>) -> Self {
         if let Some(sink) = TEST_SINK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -434,7 +434,7 @@ impl TtySpinner {
 
     /// True once [`stop`](TtySpinner::stop) has been called (set even off a TTY).
     #[must_use]
-    pub fn is_stopped(&self) -> bool {
+    fn is_stopped(&self) -> bool {
         self.stop.load(Ordering::SeqCst)
     }
 
@@ -442,7 +442,7 @@ impl TtySpinner {
     /// (or forced enabled). A diagnostic seam: `enabled=false` is the usual
     /// reason a spinner is invisible on an otherwise interactive session.
     #[must_use]
-    pub fn is_enabled(&self) -> bool {
+    pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
 }

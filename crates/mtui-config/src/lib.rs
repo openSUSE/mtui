@@ -31,11 +31,10 @@ pub mod paths;
 
 use std::path::{Path, PathBuf};
 
-pub use error::ConfigError;
+pub(crate) use error::ConfigError;
 pub use options::{Config, SslVerify};
-pub use paths::{
-    cache_dir, config_search_paths, data_dir, home_config_file, terms_path, xdg_config_file,
-};
+pub(crate) use paths::config_search_paths;
+pub use paths::{data_dir, terms_path};
 
 use options::RawConfig;
 

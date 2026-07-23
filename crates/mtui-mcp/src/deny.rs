@@ -36,7 +36,7 @@ pub use mtui_core::MCP_DENYLIST;
 
 /// Whether `name` must not become an MCP tool.
 #[must_use]
-pub fn is_denied(name: &str) -> bool {
+pub(crate) fn is_denied(name: &str) -> bool {
     MCP_DENYLIST.contains(&name)
 }
 

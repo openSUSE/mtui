@@ -175,8 +175,7 @@ pub enum GiteaError {
         user: String,
     },
 
-    /// A URL passed to [`pr_api_url`](crate::gitea::pr_api_url) is not a
-    /// recognisable Gitea PR URL.
+    /// A URL passed for PR-API conversion is not a recognisable Gitea PR URL.
     #[error("not a Gitea PR URL: {0}")]
     InvalidPrUrl(String),
 

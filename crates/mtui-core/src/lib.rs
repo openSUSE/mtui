@@ -17,8 +17,7 @@
 //! upstream `mtui.cli.args`, distinct from the per-command parsers the engine
 //! synthesises. P5.3 rounds out the [`display`] surface: the full `list_*`
 //! family, [`show_log`](CommandPromptDisplay::show_log), the three-way
-//! [`ColorMode`], and the [`page`](display::page) pager. The wiring composition
-//! root (P5.5) builds on top of these.
+//! [`ColorMode`], and the [`page`](display::page) pager.
 //!
 //! P5.10 adds [`entrypoint`] — the single-command driver ([`run_once`]) that
 //! runs one Layer-2 REPL command to completion and yields a process
@@ -39,15 +38,12 @@ pub mod error;
 pub mod registry;
 pub mod session;
 pub mod template_registry;
-pub mod wiring;
 
 pub use args::{Args, ColorArg, Sut, Update};
 pub use command::{Command, Scope, resolve_command_rrids};
-pub use display::{ColorMode, CommandPromptDisplay, page, page_interactive};
+pub use display::{ColorMode, CommandPromptDisplay};
 pub use engine::{EngineError, command_parser, dispatch_argv, dispatch_command, dispatch_line};
-pub use entrypoint::{ExitStatus, run_once};
 pub use error::{CommandError, CommandResult};
 pub use registry::{MCP_DENYLIST, Registry, register_all};
 pub use session::{LogLevel, LogLevelSink, NotifySink, Session};
 pub use template_registry::TemplateRegistry;
-pub use wiring::{WorkflowPlanProvider, build_plan_provider, inject_plan_provider};

@@ -76,7 +76,7 @@ impl QemIncident {
     ///
     /// [`RequestReviewID`]: mtui_types::RequestReviewID
     #[must_use]
-    pub fn incident_number(rrid: &RequestReviewID) -> String {
+    fn incident_number(rrid: &RequestReviewID) -> String {
         if rrid.kind == RequestKind::Slfo && rrid.maintenance_id == "1.2" {
             rrid.review_id.to_string()
         } else {

@@ -109,8 +109,8 @@ pub struct Session {
     /// Per-slot candidate shuffle (upstream `random.shuffle`), so pool selection
     /// spreads load across interchangeable refhosts instead of always taking the
     /// first in `refhosts.yml` order. Defaults to a real random shuffle; tests
-    /// override it with the identity ([`set_shuffle`](Self::set_shuffle)) for
-    /// deterministic assertions.
+    /// override it with the identity ([`ShuffleFn`]) for deterministic
+    /// assertions.
     shuffle: ShuffleFn,
     /// Lazily-built, session-scoped outbound [`HttpClient`], cached with the
     /// [`VerifyPolicy`] it was built under.
@@ -165,7 +165,7 @@ pub enum LogLevel {
 impl LogLevel {
     /// Parses the upstream level name, or `None` if unrecognised.
     #[must_use]
-    pub fn parse(name: &str) -> Option<Self> {
+    pub(crate) fn parse(name: &str) -> Option<Self> {
         match name {
             "error" => Some(Self::Error),
             "warning" => Some(Self::Warning),
@@ -286,12 +286,6 @@ impl Session {
         }
     }
 
-    /// Overrides the per-slot candidate shuffle (test seam). Passing
-    /// `|_| {}` (identity) makes pool selection deterministic.
-    pub fn set_shuffle(&mut self, shuffle: ShuffleFn) {
-        self.shuffle = shuffle;
-    }
-
     /// The session-scoped outbound [`HttpClient`], built lazily and reused.
     ///
     /// The effective [`VerifyPolicy`] is resolved from `config.ssl_verify` (the
@@ -309,7 +303,7 @@ impl Session {
     /// Propagates [`HttpError`] when the client cannot be built (e.g. a
     /// configured CA bundle cannot be read); callers map it onto their own error
     /// type exactly as the previous inline `HttpClient::new` did.
-    pub fn http_client(&self) -> Result<HttpClient, HttpError> {
+    pub(crate) fn http_client(&self) -> Result<HttpClient, HttpError> {
         let policy = resolve_verify(
             VerifyPolicy::Default(true),
             Some(VerifyPolicy::from_config(&self.config.ssl_verify)),
@@ -386,7 +380,7 @@ impl Session {
     /// through [`activate`](Self::activate) — it drops any stale guard and locks
     /// the (possibly new) active entry, falling back to the null object when
     /// nothing is loaded.
-    pub fn refresh_active_guard(&mut self) {
+    pub(crate) fn refresh_active_guard(&mut self) {
         self.active_guard = None;
         self.active_guard = self
             .templates
@@ -414,7 +408,7 @@ impl Session {
     /// guard rather than a (failing) `try_lock`. Other entries are locked
     /// directly.
     #[must_use]
-    pub fn is_hostless(&self, rrid: &str) -> bool {
+    pub(crate) fn is_hostless(&self, rrid: &str) -> bool {
         if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
             self.metadata().base().targets.is_empty()
         } else {
@@ -428,7 +422,7 @@ impl Session {
     /// Guard-aware, like [`is_hostless`](Self::is_hostless): the active template's
     /// entry is read through the session guard, others are locked directly.
     #[must_use]
-    pub fn template_row(&self, rrid: &str) -> Option<(usize, &'static str)> {
+    pub(crate) fn template_row(&self, rrid: &str) -> Option<(usize, &'static str)> {
         if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
             let base = self.metadata().base();
             Some((base.targets.len(), base.workflow.as_str()))
@@ -453,7 +447,7 @@ impl Session {
     /// `reload_openqa` / `set_workflow` commands populate the report's openQA
     /// holder ([`TestReport::openqa_mut`]) through it; never `None` (falls back to
     /// the null object when nothing is loaded).
-    pub fn metadata_mut(&mut self) -> &mut (dyn TestReport + Send + Sync) {
+    pub(crate) fn metadata_mut(&mut self) -> &mut (dyn TestReport + Send + Sync) {
         match &mut self.active_guard {
             Some(g) => (**g).as_mut(),
             None => self.null.as_mut(),
@@ -468,7 +462,7 @@ impl Session {
     /// manual. Upstream additionally calls `prompt.set_prompt()` to refresh the
     /// REPL prompt string; that prompt refresh is a Phase-6 REPL concern, so the
     /// command only mutates the report here.
-    pub fn set_workflow(&mut self, workflow: Workflow) {
+    pub(crate) fn set_workflow(&mut self, workflow: Workflow) {
         self.metadata_mut().base_mut().workflow = workflow;
     }
 
@@ -501,7 +495,7 @@ impl Session {
     /// Mirrors upstream, where a command reads `self.metadata` and `self.targets`
     /// as two views of the same active report.
     #[must_use]
-    pub fn take_targets(&mut self) -> HostsGroup {
+    fn take_targets(&mut self) -> HostsGroup {
         let is_repl = self.is_repl;
         std::mem::replace(
             &mut self.metadata_mut().base_mut().targets,
@@ -510,7 +504,7 @@ impl Session {
     }
 
     /// Restores the active report's targets, undoing [`take_targets`](Self::take_targets).
-    pub fn restore_targets(&mut self, targets: HostsGroup) {
+    fn restore_targets(&mut self, targets: HostsGroup) {
         self.metadata_mut().base_mut().targets = targets;
     }
 
@@ -540,7 +534,7 @@ impl Session {
     /// On error the group is left empty in the report (the taken group is
     /// consumed by the failed split); callers surface the error immediately, so
     /// no host is observable in that window.
-    pub fn split_targets(
+    pub(crate) fn split_targets(
         &mut self,
         hosts: Option<&[String]>,
     ) -> mtui_hosts::Result<(HostsGroup, HostsGroup)> {
@@ -552,7 +546,11 @@ impl Session {
     ///
     /// The counterpart to [`split_targets`](Self::split_targets): recombining the
     /// two halves preserves the hosts a `-t` subset operation did not touch.
-    pub fn restore_split_targets(&mut self, mut selected: HostsGroup, remainder: HostsGroup) {
+    pub(crate) fn restore_split_targets(
+        &mut self,
+        mut selected: HostsGroup,
+        remainder: HostsGroup,
+    ) {
         selected.merge(remainder);
         self.restore_targets(selected);
     }
@@ -603,7 +601,7 @@ impl Session {
     /// report (svn checkout / gitea / hash / read failure). Lets `load_template`
     /// surface the real cause to the operator (and, via MCP, the LLM) instead of
     /// a bare "could not load".
-    pub async fn load_update_reported(
+    pub(crate) async fn load_update_reported(
         &mut self,
         update: &UpdateID,
         autoconnect: bool,
@@ -1140,7 +1138,7 @@ impl Session {
     /// metadata.testplatforms: refhosts_from_tp(tp)` then `connect_targets()`):
     /// each testplatform contributes one candidate host per matching slot,
     /// deduplicated against the hosts already in the group, then connected.
-    pub async fn add_testplatform_hosts(&mut self) {
+    pub(crate) async fn add_testplatform_hosts(&mut self) {
         let config = self.config.clone();
         let shuffle = self.shuffle;
         let (already, testplatforms, arbiter, owner) = {
@@ -1177,7 +1175,7 @@ impl Session {
     /// matching the silent dedup the no-`-t` path already does in
     /// [`add_testplatform_hosts`](Self::add_testplatform_hosts). The membership
     /// snapshot is taken before any `.await` so the connect future stays `Send`.
-    pub async fn add_named_hosts(&mut self, hosts: Vec<String>) {
+    pub(crate) async fn add_named_hosts(&mut self, hosts: Vec<String>) {
         let already = self.metadata().base().targets.names();
         let mut wanted = Vec::with_capacity(hosts.len());
         for host in hosts {
@@ -1275,8 +1273,8 @@ impl Session {
     /// For each testplatform: [`search_pool_by_query`](Refhosts::search_pool_by_query)
     /// groups candidates by their *requested* slot (product+version+arch+requested
     /// addons), so hosts interchangeable for the update collapse to one slot. Each
-    /// slot's candidates are shuffled (via the [`shuffle`](Self::set_shuffle)
-    /// seam, upstream `random.shuffle`) and recorded so a failed connect can fall
+    /// slot's candidates are shuffled (via the [`ShuffleFn`] seam, upstream
+    /// `random.shuffle`) and recorded so a failed connect can fall
     /// back to a sibling; a slot this owner already holds a host for (across
     /// testplatforms) is skipped; otherwise one free host is claimed through the
     /// arbiter (waiting up to `[lock] wait` seconds when all candidates are busy).
@@ -1432,7 +1430,7 @@ impl Session {
     ///
     /// Returns `true` when a sink was present and invoked; `false` when none is
     /// installed (headless/tests), so the caller can still log the change.
-    pub fn apply_log_level(&mut self, level: LogLevel) -> bool {
+    pub(crate) fn apply_log_level(&mut self, level: LogLevel) -> bool {
         if let Some(sink) = self.log_level_sink.as_mut() {
             sink(level);
             true
@@ -1457,7 +1455,7 @@ impl Session {
     /// `error` selects the error-class toast (upstream's `stock_dialog-error`).
     /// Returns `true` when a sink was present and invoked; `false` when none is
     /// installed (headless/tests).
-    pub fn notify_user(&mut self, msg: &str, error: bool) -> bool {
+    pub(crate) fn notify_user(&mut self, msg: &str, error: bool) -> bool {
         if let Some(sink) = self.notify_sink.as_mut() {
             sink(msg, error);
             true

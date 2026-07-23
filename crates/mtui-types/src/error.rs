@@ -178,7 +178,7 @@ pub enum RpmVersionParseError {
 #[error("unknown request kind: {raw:?}")]
 pub struct RequestKindParseError {
     /// The raw token that failed to parse.
-    pub raw: String,
+    pub(crate) raw: String,
 }
 
 /// Errors produced while parsing an OBS Request Review ID (RRID).

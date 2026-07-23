@@ -51,7 +51,7 @@ use crate::error::{HostError, Result};
 use mtui_types::system::System;
 
 use super::actions::{self, Command, RunCommand};
-use super::operation::{HostCommandMap, HostPlan, LastOutput, OperationGroup, PlanProvider};
+use super::operation::{HostCommandMap, HostPlan, OperationGroup, PlanProvider};
 use super::repo_manager::{RepoOp, SetRepo};
 use super::{LockRow, Target};
 
@@ -108,8 +108,8 @@ pub struct HostsGroup {
     /// under headless callers (`mtui-mcp`).
     ///
     /// Pushed down from the composition root (`mtui-core::Session`) via
-    /// [`set_prompter`](Self::set_prompter), which mirrors
-    /// [`set_rrid`](Self::set_rrid): it stores the prompter on the group (for the
+    /// [`set_prompter`](Self::set_prompter): it stores the prompter on the group
+    /// (for the
     /// serial-barrier Enter prompt in [`RunCommand`]) **and** installs the
     /// derived command-timeout prompt on every member [`Target`] via
     /// [`Target::set_timeout_prompt`]. `None` keeps the serial barrier
@@ -163,11 +163,6 @@ impl HostsGroup {
     pub fn with_plan_provider(mut self, provider: Arc<dyn PlanProvider>) -> Self {
         self.plan_provider = Some(provider);
         self
-    }
-
-    /// Sets (or replaces) the injected [`PlanProvider`] in place.
-    pub fn set_plan_provider(&mut self, provider: Arc<dyn PlanProvider>) {
-        self.plan_provider = Some(provider);
     }
 
     /// Whether the surrounding session is the interactive REPL (spinner / prompt
@@ -414,12 +409,6 @@ impl HostsGroup {
     pub async fn sftp_get(&mut self, remote: &str, local: &Path) {
         let max_parallel = self.max_parallel;
         actions::sftp_get_all(&mut self.data, remote, local, self.is_repl, max_parallel).await;
-    }
-
-    /// Deletes `path` on every host in parallel.
-    pub async fn sftp_remove(&mut self, path: &Path) {
-        let max_parallel = self.max_parallel;
-        actions::sftp_remove_all(&mut self.data, path, self.is_repl, max_parallel).await;
     }
 
     /// Locks every host in the group for `comment`, best-effort.
@@ -683,25 +672,11 @@ impl HostsGroup {
         }
     }
 
-    /// Stamps the owning template's RRID onto every host in the group.
-    ///
-    /// The single push-down point for pool-claim ownership identity: the report
-    /// layer calls this after attaching its targets so each [`Target`]'s
-    /// [`PoolLock`](crate::PoolLock) adopts the RRID (upstream builds each
-    /// `Target` with `_rrid` directly; here the group is built before the owning
-    /// report's RRID is known, so it is pushed down).
-    pub fn set_rrid(&mut self, rrid: impl Into<String>) {
-        let rrid = rrid.into();
-        for target in self.data.values_mut() {
-            target.set_rrid(rrid.clone());
-        }
-    }
-
     /// Installs the session-level serialised [`Prompter`](crate::Prompter) on the
     /// group and every member host.
     ///
-    /// The single push-down point for interactive prompting, mirroring
-    /// [`set_rrid`](Self::set_rrid): it stores the prompter on the group (used by
+    /// The single push-down point for interactive prompting: it stores the
+    /// prompter on the group (used by
     /// the serial-barrier Enter prompt in [`RunCommand`]) and installs the
     /// derived command-timeout prompt on each member [`Target`] via
     /// [`Target::set_timeout_prompt`], so a target connected *after* this call
@@ -984,7 +959,7 @@ impl HostsGroup {
         Ok(())
     }
 
-    /// Reboots every host in the group and reconnects, verifying the reboot.
+    /// Reboots only the named hosts and reconnects each, verifying the reboot.
     ///
     /// Ports upstream `HostsGroup.reboot`:
     ///
@@ -1006,18 +981,7 @@ impl HostsGroup {
     /// or could not be confirmed) and reconnected; `Err(HostError)` when the
     /// reconnect failed or the boot id was **unchanged** (the host did not
     /// actually reboot). A reconnect failure takes precedence over a later
-    /// boot-id verdict for the same host. Existing callers that ignore the
-    /// return value keep compiling. An empty group returns an empty map.
-    pub async fn reboot(
-        &mut self,
-        command: &str,
-        relock_comment: &str,
-    ) -> BTreeMap<String, Result<()>> {
-        self.reboot_where(command, relock_comment, |_t| true).await
-    }
-
-    /// Reboots only the named hosts and reconnects each, otherwise identical to
-    /// [`reboot`](Self::reboot).
+    /// boot-id verdict for the same host.
     ///
     /// The boot-id snapshot, reboot, reconnect, and verify phases all restrict to
     /// hosts in `names`; the post-reboot relock re-applies only to that subset.
@@ -1035,9 +999,9 @@ impl HostsGroup {
             .await
     }
 
-    /// Shared implementation for [`reboot`](Self::reboot) /
-    /// [`reboot_selected`](Self::reboot_selected): the only difference is the
-    /// `select` predicate handed to each [`run_fanout`](super::actions::run_fanout)
+    /// Shared implementation behind [`reboot_selected`](Self::reboot_selected):
+    /// the `select` predicate is handed to each
+    /// [`run_fanout`](super::actions::run_fanout)
     /// phase (and to the relock).
     async fn reboot_where<S>(
         &mut self,
@@ -1359,18 +1323,6 @@ impl OperationGroup for HostsGroup {
 
     async fn unlock(&mut self) {
         let _ = HostsGroup::unlock(self).await;
-    }
-
-    fn last_output(&self, hostname: &str) -> LastOutput {
-        match self.data.get(hostname) {
-            Some(t) => LastOutput {
-                lastout: t.lastout().to_owned(),
-                lastin: t.lastin().to_owned(),
-                lasterr: t.lasterr().to_owned(),
-                lastexit: t.lastexit(),
-            },
-            None => LastOutput::default(),
-        }
     }
 }
 
@@ -1794,12 +1746,10 @@ mod tests {
 
         g.sftp_put(Path::new("/l"), Path::new("/r")).await;
         g.sftp_get("/r", Path::new("/l")).await;
-        g.sftp_remove(Path::new("/r")).await;
 
         let ops = h1.sftp_ops();
         assert!(matches!(ops[0], MockSftpOp::Put { .. }));
         assert!(matches!(ops[1], MockSftpOp::Get { .. }));
-        assert!(matches!(ops[2], MockSftpOp::Remove(_)));
     }
 
     // --- reboot lifecycle (P2.9) -------------------------------------------
@@ -1848,7 +1798,9 @@ mod tests {
             false,
         );
 
-        let outcomes = g.reboot("systemctl reboot", "").await;
+        let all: std::collections::BTreeSet<String> =
+            ["h1".to_owned(), "h2".to_owned()].into_iter().collect();
+        let outcomes = g.reboot_selected("systemctl reboot", "", &all).await;
 
         // Each host was sent the reboot fire-and-forget and reconnected once.
         assert_eq!(h1.fired_commands(), vec!["systemctl reboot".to_owned()]);
@@ -1918,7 +1870,9 @@ mod tests {
             false,
         );
 
-        g.reboot("systemctl reboot", "PI testing").await;
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        g.reboot_selected("systemctl reboot", "PI testing", &all)
+            .await;
 
         // The relock wrote a lock file: the host now reports locked.
         assert!(g.get_mut("h1").unwrap().is_locked().await.unwrap());
@@ -1929,7 +1883,12 @@ mod tests {
     async fn reboot_empty_group_is_noop() {
         let mut g = HostsGroup::new(vec![], false);
         // Must not panic; nothing to reboot, no per-host outcomes.
-        assert!(g.reboot("systemctl reboot", "relock").await.is_empty());
+        let none: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        assert!(
+            g.reboot_selected("systemctl reboot", "relock", &none)
+                .await
+                .is_empty()
+        );
         assert!(g.is_empty());
     }
 
@@ -1949,7 +1908,8 @@ mod tests {
             )],
             false,
         );
-        let outcomes = g.reboot("systemctl reboot", "").await;
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let outcomes = g.reboot_selected("systemctl reboot", "", &all).await;
         assert_eq!(h1.reconnect_count(), 1);
         // Reconnect succeeded but the boot id was unchanged -> recorded failure.
         assert!(
@@ -1976,7 +1936,8 @@ mod tests {
             )],
             false,
         );
-        let outcomes = g.reboot("systemctl reboot", "").await;
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let outcomes = g.reboot_selected("systemctl reboot", "", &all).await;
         assert_eq!(h1.reconnect_count(), 1);
         assert_eq!(h1.fired_commands(), vec!["systemctl reboot".to_owned()]);
         // An empty (unreadable) boot id could not confirm the reboot either way,
@@ -2003,7 +1964,8 @@ mod tests {
             )],
             false,
         );
-        let outcomes = g.reboot("systemctl reboot", "").await;
+        let all: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let outcomes = g.reboot_selected("systemctl reboot", "", &all).await;
         assert_eq!(h1.reconnect_count(), 1);
         // A reconnect failure is recorded as the host's failure.
         assert!(
@@ -2289,7 +2251,9 @@ mod tests {
             false,
         );
         // Stamp the group's RRID so both claims are recognised as ours.
-        g.set_rrid("SUSE:Maintenance:1:2");
+        for t in g.data.values_mut() {
+            t.set_rrid("SUSE:Maintenance:1:2");
+        }
         g.pool_unlock(false).await;
         assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
         assert!(h2.file_contents(POOL_LOCK_PATH).is_none());
@@ -2323,7 +2287,9 @@ mod tests {
             ],
             false,
         );
-        g.set_rrid("SUSE:Maintenance:1:2");
+        for t in g.data.values_mut() {
+            t.set_rrid("SUSE:Maintenance:1:2");
+        }
         g.pool_unlock(false).await;
         assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
         // h2's foreign claim is left in place (the failure was suppressed).

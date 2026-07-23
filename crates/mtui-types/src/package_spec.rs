@@ -79,12 +79,6 @@ impl PackageSpec {
 
         Ok(Self(raw.to_owned()))
     }
-
-    /// The validated specifier as a string slice.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl fmt::Display for PackageSpec {
@@ -118,7 +112,7 @@ mod tests {
             "branding-upstream",
         ] {
             assert!(PackageSpec::parse(ok).is_ok(), "expected {ok:?} to parse");
-            assert_eq!(PackageSpec::parse(ok).unwrap().as_str(), ok);
+            assert_eq!(PackageSpec::parse(ok).unwrap().to_string(), ok);
         }
     }
 

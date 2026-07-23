@@ -21,7 +21,7 @@ use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy};
 /// Every other status (`passed`, `softfailed`, …) is collapsed into a per-group
 /// summary count to keep the report short and reviewable. Ported verbatim from
 /// upstream `FAILED_RESULTS`.
-pub const FAILED_RESULTS: [&str; 3] = ["failed", "incomplete", "timeout_exceeded"];
+pub(crate) const FAILED_RESULTS: [&str; 3] = ["failed", "incomplete", "timeout_exceeded"];
 
 /// Wall-clock cap per future in the parallel fan-out.
 ///
@@ -29,7 +29,7 @@ pub const FAILED_RESULTS: [&str; 3] = ["failed", "incomplete", "timeout_exceeded
 /// worker will not block the whole batch. Ported from upstream
 /// `_FUTURE_TIMEOUT` (60s); consumed by
 /// [`DashboardAutoOpenQA`](super::DashboardAutoOpenQA).
-pub const FUTURE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const FUTURE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A small read-only client for the QEM Dashboard API.
 ///
@@ -67,12 +67,6 @@ impl QemDashboardClient {
             apiurl: apiurl.into().trim_end_matches('/').to_string(),
             http,
         }
-    }
-
-    /// The resolved base API URL (trailing slash stripped).
-    #[must_use]
-    pub fn apiurl(&self) -> &str {
-        &self.apiurl
     }
 
     /// GET `path` and parse the body as JSON, folding any failure into `None`.
@@ -145,31 +139,18 @@ impl QemDashboardClient {
     /// Fetch the incident record for `incident_number`.
     ///
     /// Returns `None` on any failure, mirroring upstream `incident`.
-    pub async fn incident(&self, incident_number: &str) -> Option<Value> {
+    pub(crate) async fn incident(&self, incident_number: &str) -> Option<Value> {
         self.get(&format!("incidents/{incident_number}")).await
     }
 
-    /// Fetch the incident settings list for `incident_number` (empty on failure).
-    pub async fn incident_settings(&self, incident_number: &str) -> Vec<Value> {
-        self.get_list(&format!("incident_settings/{incident_number}"))
-            .await
-    }
-
-    /// Fetch the update (aggregate) settings list for `incident_number`
-    /// (empty on failure).
-    pub async fn update_settings(&self, incident_number: &str) -> Vec<Value> {
-        self.get_list(&format!("update_settings/{incident_number}"))
-            .await
-    }
-
     /// Fetch the openQA jobs for an incident settings id (empty on failure).
-    pub async fn incident_jobs(&self, incident_settings_id: i64) -> Vec<Value> {
+    pub(crate) async fn incident_jobs(&self, incident_settings_id: i64) -> Vec<Value> {
         self.get_list(&format!("jobs/incident/{incident_settings_id}"))
             .await
     }
 
     /// Fetch the openQA jobs for an update settings id (empty on failure).
-    pub async fn update_jobs(&self, update_settings_id: i64) -> Vec<Value> {
+    pub(crate) async fn update_jobs(&self, update_settings_id: i64) -> Vec<Value> {
         self.get_list(&format!("jobs/update/{update_settings_id}"))
             .await
     }
@@ -181,7 +162,7 @@ impl QemDashboardClient {
     ///
     /// [`QemDashboardError::Fetch`] on a transport error, non-2xx status, or
     /// malformed JSON body.
-    pub async fn try_incident_settings(
+    pub(crate) async fn try_incident_settings(
         &self,
         incident_number: &str,
     ) -> Result<Vec<Value>, QemDashboardError> {
@@ -196,7 +177,7 @@ impl QemDashboardClient {
     ///
     /// [`QemDashboardError::Fetch`] on a transport error, non-2xx status, or
     /// malformed JSON body.
-    pub async fn try_update_settings(
+    pub(crate) async fn try_update_settings(
         &self,
         incident_number: &str,
     ) -> Result<Vec<Value>, QemDashboardError> {
@@ -220,7 +201,7 @@ mod tests {
     fn new_strips_trailing_slash() {
         let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
         let client = QemDashboardClient::with_client(http, "https://d/api/");
-        assert_eq!(client.apiurl(), "https://d/api");
+        assert_eq!(client.apiurl, "https://d/api");
     }
 
     #[tokio::test]
@@ -271,8 +252,6 @@ mod tests {
         let server = MockServer::start().await;
         // No mounts: every request 404s, so each list endpoint returns [].
         let client = client_for(&server);
-        assert!(client.incident_settings("1").await.is_empty());
-        assert!(client.update_settings("1").await.is_empty());
         assert!(client.incident_jobs(7).await.is_empty());
         assert!(client.update_jobs(23).await.is_empty());
     }
@@ -289,7 +268,7 @@ mod tests {
             .await;
 
         let client = client_for(&server);
-        let settings = client.incident_settings("12358").await;
+        let settings = client.get_list("incident_settings/12358").await;
         assert_eq!(settings.len(), 2);
         assert_eq!(settings[0]["id"], 7);
     }
@@ -304,7 +283,7 @@ mod tests {
             .await;
 
         let client = client_for(&server);
-        assert!(client.incident_settings("1").await.is_empty());
+        assert!(client.get_list("incident_settings/1").await.is_empty());
     }
 
     #[tokio::test]

@@ -15,7 +15,7 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed}
 /// locked", "RPM Error", "Dependency Error", or "Unknown Error" per upstream's
 /// branch logic. Exit codes `0, 100, 101, 102, 103, 106` are success. This
 /// check surfaces no [`Diagnostic`]s (only `update` does).
-pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if matches!(args.exitcode, 0 | 100 | 101 | 102 | 103 | 106) {
         return Ok(Vec::new());
     }
@@ -50,7 +50,7 @@ pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// The install check for `(release, transactional)`, or `None` for an unknown
 /// key (upstream `install_checks.get(...)`).
 #[must_use]
-pub fn install_check(release: &str, transactional: bool) -> Option<CheckFn> {
+pub(crate) fn install_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
         _ => None,

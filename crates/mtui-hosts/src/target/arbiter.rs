@@ -78,7 +78,7 @@ impl HostArbiter<SystemClock> {
 impl<C: Clock> HostArbiter<C> {
     /// Create an empty arbiter with an injected [`Clock`] (used by tests).
     #[must_use]
-    pub fn with_clock(clock: C) -> Self {
+    fn with_clock(clock: C) -> Self {
         Self {
             owners: Mutex::new(HashMap::new()),
             notify: Notify::new(),

@@ -90,12 +90,6 @@ impl RepoUrl {
 
         Ok(Self(raw.to_owned()))
     }
-
-    /// The validated URL as a string slice.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl fmt::Display for RepoUrl {
@@ -134,7 +128,7 @@ mod tests {
             "cd:///",
         ] {
             assert!(RepoUrl::parse(ok).is_ok(), "expected {ok:?} to parse");
-            assert_eq!(RepoUrl::parse(ok).unwrap().as_str(), ok);
+            assert_eq!(RepoUrl::parse(ok).unwrap().to_string(), ok);
         }
     }
 

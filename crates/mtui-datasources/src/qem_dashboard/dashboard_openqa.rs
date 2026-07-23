@@ -256,13 +256,11 @@ impl Counts {
 #[derive(Debug, Clone)]
 pub struct DashboardAutoOpenQA {
     /// The openQA host (base URL) used in rendered URLs.
-    pub host: String,
-    /// The request/review id.
-    pub rrid: RequestReviewID,
+    host: String,
     /// The dashboard client (shared with the incident).
-    pub client: QemDashboardClient,
+    client: QemDashboardClient,
     /// The resolved dashboard incident number.
-    pub incident_number: String,
+    incident_number: String,
     /// The rendered `Results from openQA jobs` block (empty until [`run`]).
     pub pp: Vec<String>,
     /// The install-log URLs, or `None` when the install jobs did not all pass.
@@ -275,7 +273,7 @@ pub struct DashboardAutoOpenQA {
 
 impl DashboardAutoOpenQA {
     /// The connector kind tag, mirroring upstream `kind = "auto"`.
-    pub const KIND: &'static str = "auto";
+    const KIND: &'static str = "auto";
 
     /// Build the provider for an incident on a given openQA `host`.
     ///
@@ -285,12 +283,11 @@ impl DashboardAutoOpenQA {
     pub fn new(
         host: impl Into<String>,
         incident: &QemIncident,
-        rrid: RequestReviewID,
+        _rrid: RequestReviewID,
         max_parallel: usize,
     ) -> Self {
         Self {
             host: host.into(),
-            rrid,
             client: incident.client.clone(),
             incident_number: incident.incident_number.clone(),
             pp: Vec::new(),
@@ -317,7 +314,7 @@ impl DashboardAutoOpenQA {
     /// Test seam: run with a shortened per-fetch timeout so the timeout
     /// warn-and-skip paths can be exercised without a 60s wait.
     #[cfg(test)]
-    pub(crate) async fn run_with_timeout(
+    async fn run_with_timeout(
         &mut self,
         per_fetch: std::time::Duration,
     ) -> Result<&mut Self, QemDashboardError> {
@@ -343,7 +340,7 @@ impl DashboardAutoOpenQA {
     /// integration tests can assert ordering / timeout-skip behaviour without
     /// reaching into the private `jobs` field.
     #[cfg(test)]
-    pub(crate) fn job_test_names(&self) -> Vec<String> {
+    fn job_test_names(&self) -> Vec<String> {
         self.jobs.iter().map(|j| j.test.clone()).collect()
     }
 
@@ -1236,7 +1233,6 @@ mod tests {
         let client = QemDashboardClient::with_client(http, "https://d/api");
         DashboardAutoOpenQA {
             host: OPENQA_HOST.to_string(),
-            rrid: "SUSE:Maintenance:12358:199773".parse().unwrap(),
             client,
             incident_number: "12358".to_string(),
             pp: Vec::new(),
@@ -1395,7 +1391,6 @@ mod tests {
         let client = QemDashboardClient::with_client(http, format!("{}/api", server.uri()));
         DashboardAutoOpenQA {
             host: OPENQA_HOST.to_string(),
-            rrid: "SUSE:Maintenance:12358:199773".parse().unwrap(),
             client,
             incident_number: "12358".to_string(),
             pp: Vec::new(),

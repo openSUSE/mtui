@@ -20,9 +20,9 @@ pub struct AutoExport {
     /// Shared export state and helpers.
     pub ctx: ExportContext,
     /// The QEM-dashboard "auto" openQA connector, `None` when unpopulated.
-    pub auto: Option<DashboardAutoOpenQA>,
+    auto: Option<DashboardAutoOpenQA>,
     /// The openqa_overview payload, if the overview command ran.
-    pub overview: Option<OpenQAOverviewResult>,
+    overview: Option<OpenQAOverviewResult>,
 }
 
 impl AutoExport {
@@ -166,7 +166,7 @@ impl AutoExport {
     /// (upstream `get_logs` + `_openqa_installog_to_template`).
     ///
     /// Returns the written `<distri>_<version>_<arch>.log` filenames.
-    pub async fn get_logs(
+    async fn get_logs(
         &self,
         fetcher: &dyn BytesFetcher,
         prompt: &dyn OverwritePrompt,

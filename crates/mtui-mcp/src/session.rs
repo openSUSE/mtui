@@ -114,7 +114,7 @@ pub(crate) const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 /// Not a config key (upstream has none): it is the default the tool layer passes
 /// to [`McpSession::run_command_with_progress`], overridable per call so tests
 /// can drive a sub-second interval.
-pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 
 /// A [`JoinHandle`] wrapper that aborts its task when dropped.
 ///
@@ -215,7 +215,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpCommandError {
     /// Captured stdout up to the point of failure (already output-capped).
-    pub stdout: String,
+    pub(crate) stdout: String,
     /// Captured stderr (parse/usage text, command-error message).
     pub stderr: String,
     /// Non-zero exit code: `2` for parse/usage errors, `1` otherwise.
@@ -305,7 +305,7 @@ pub struct JobView {
     /// The lifecycle state.
     pub state: JobState,
     /// Elapsed wall-clock seconds, rounded to 0.1s (frozen once terminal).
-    pub elapsed_s: f64,
+    pub(crate) elapsed_s: f64,
 }
 
 /// Process-global monotonic source of [`McpSession::id`] values. Each session
@@ -469,7 +469,7 @@ impl McpSession {
     /// which cap their file-content payloads with the same
     /// [`cap_output`](crate::slim::cap_output) budget `run_command` applies.
     #[must_use]
-    pub fn max_output_bytes(&self) -> usize {
+    pub(crate) fn max_output_bytes(&self) -> usize {
         self.max_output_bytes
     }
 
@@ -480,26 +480,26 @@ impl McpSession {
     /// consumed (appending a truncation notice) so a huge or slow file cannot
     /// exhaust memory.
     #[must_use]
-    pub fn max_input_bytes(&self) -> usize {
+    pub(crate) fn max_input_bytes(&self) -> usize {
         self.max_input_bytes
     }
 
     /// The configured tool-surface profile (`full` / `core`), consumed by
     /// [`McpServer::new`](crate::server::McpServer::new).
     #[must_use]
-    pub fn profile(&self) -> &str {
+    pub(crate) fn profile(&self) -> &str {
         &self.profile
     }
 
     /// Extra tool names to keep on top of the profile.
     #[must_use]
-    pub fn tools_allow(&self) -> &[String] {
+    pub(crate) fn tools_allow(&self) -> &[String] {
         &self.tools_allow
     }
 
     /// Tool names to remove regardless of profile/allow.
     #[must_use]
-    pub fn tools_deny(&self) -> &[String] {
+    pub(crate) fn tools_deny(&self) -> &[String] {
         &self.tools_deny
     }
 
@@ -641,7 +641,7 @@ impl McpSession {
     /// The timeout seam upstream exposes as `_disconnect_targets(timeout=...)`,
     /// kept `pub(crate)` so the wedged-close unit test can bound the wait to a
     /// fraction of a second instead of 45s.
-    pub(crate) async fn close_with_timeout(&self, timeout: Duration) {
+    async fn close_with_timeout(&self, timeout: Duration) {
         // Snapshot every loaded entry's lockable handle under the session lock,
         // then drop the session guard *before* the teardown awaits: holding the
         // `MutexGuard<Session>` across the per-entry `.await` would force the
@@ -851,7 +851,7 @@ impl McpSession {
     ///
     /// Propagates [`McpCommandError`] from [`run_command`](Self::run_command)
     /// unchanged; the heartbeat path never alters the command's result.
-    pub async fn run_command_with_progress(
+    pub(crate) async fn run_command_with_progress(
         &self,
         registry: &Registry,
         name: &str,

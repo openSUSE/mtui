@@ -58,12 +58,10 @@ use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_title
 /// summary impl can be added when a concrete need arises.
 pub struct TestReportBase {
     /// The application configuration.
-    pub config: Config,
+    pub(crate) config: Config,
     /// Per-report workflow mode (upstream replaced the global `config.auto` /
     /// `config.kernel` with this). Defaults to [`Workflow::Manual`].
     pub workflow: Workflow,
-    /// Working directory for the report; defaults to `config.template_dir`.
-    pub directory: PathBuf,
     /// Path to the loaded testreport file, or `None` when nothing is loaded.
     pub path: Option<PathBuf>,
     /// `hostname -> system` mapping.
@@ -159,7 +157,7 @@ pub struct TestReportBase {
 impl TestReportBase {
     /// Builds the shared state with upstream `TestReport.__init__` defaults.
     ///
-    /// `directory` mirrors upstream by defaulting to `config.template_dir`. The
+    /// The
     /// targets [`HostsGroup`] starts headless (`is_repl = false`); the load site
     /// ([`make_testreport`](crate::make_testreport)) reconciles it to the
     /// session mode once, via [`set_is_repl`](Self::set_is_repl), before the
@@ -167,11 +165,9 @@ impl TestReportBase {
     /// truth and the flag is never mutated afterwards.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        let directory = config.template_dir.clone();
         Self {
             config,
             workflow: Workflow::Manual,
-            directory,
             path: None,
             systems: HashMap::new(),
             targets: HostsGroup::new(Vec::new(), false),
@@ -231,35 +227,24 @@ impl TestReportBase {
         std::fs::create_dir_all(dir)?;
         Ok(dir.to_path_buf())
     }
-
-    /// Resolves the [`Package`] list to seed onto a host whose base product
-    /// version is `base_version`, each carrying its metadata-`required` version.
-    ///
-    /// Ports upstream `Target._parse_packages` (`mtui/hosts/target/target.py`),
-    /// which selects the right product sub-map of
-    /// [`packages`](Self::packages) (`product -> { name -> version }`):
-    ///
-    /// * if the map holds exactly the single key `"standard"`, use it (a report
-    ///   that ships one product-agnostic set — e.g. SLFO metadata);
-    /// * otherwise use the sub-map keyed by the host's `base_version` (the
-    ///   `parse_product` string, e.g. `"15-SP6"`, which equals the metadata
-    ///   product key);
-    /// * additionally, when `base_version` starts with `"12"`, merge in the
-    ///   `"12"` sub-map (upstream's SLE-12 special case).
-    ///
-    /// Each resolved `name -> version` becomes a [`Package`] with its
-    /// [`required`](Package::required) set. An unparseable version is skipped
-    /// (best-effort, mirroring upstream's tolerant setters), leaving that
-    /// package unseeded rather than aborting the whole host. Returns an empty
-    /// vec when no sub-map matches (upstream returns `{}`).
-    #[must_use]
-    pub fn packages_for(&self, base_version: &str) -> Vec<Package> {
-        packages_for_map(&self.packages, base_version)
-    }
 }
 
-/// The free-standing body of [`TestReportBase::packages_for`], operating on a
-/// borrowed `product -> { name -> version }` map.
+/// Resolves seed packages from a `product -> { name -> version }` map for a
+/// host's `base_version`, operating on a borrowed map.
+///
+/// Selection rule:
+///
+/// * if the map holds exactly the single key `"standard"`, use it (a report
+///   that ships one product-agnostic set — e.g. SLFO metadata);
+/// * otherwise use the sub-map keyed by the host's `base_version`;
+/// * additionally, when `base_version` starts with `"12"`, merge in the
+///   `"12"` sub-map (upstream's SLE-12 special case).
+///
+/// Each resolved `name -> version` becomes a [`Package`] with its
+/// [`required`](Package::required) set. An unparseable version is skipped
+/// (best-effort, mirroring upstream's tolerant setters), leaving that
+/// package unseeded rather than aborting the whole host. Returns an empty
+/// vec when no sub-map matches (upstream returns `{}`).
 ///
 /// Factored out so the composition root (`mtui-core::session`) can resolve seed
 /// packages from a *snapshot* of the metadata map (cloned before a
@@ -970,7 +955,7 @@ pub struct SlackReviewMarker {
 impl SlackReviewMarker {
     /// Render the marker as it appears in the template.
     #[must_use]
-    pub fn to_line(&self) -> String {
+    fn to_line(&self) -> String {
         format!("Slack Review: {} {}", self.channel, self.ts)
     }
 
@@ -980,7 +965,7 @@ impl SlackReviewMarker {
     /// hand-edited or truncated marker is treated as absent rather than
     /// producing a marker that points at no real message.
     #[must_use]
-    pub fn parse_line(line: &str) -> Option<Self> {
+    pub(crate) fn parse_line(line: &str) -> Option<Self> {
         let rest = line.strip_prefix("Slack Review:")?;
         let mut parts = rest.split_whitespace();
         let channel = parts.next()?;
@@ -1091,11 +1076,9 @@ mod tests {
     #[test]
     fn base_defaults_match_upstream_init() {
         let cfg = config();
-        let template_dir = cfg.template_dir.clone();
         let base = TestReportBase::new(cfg);
 
         assert_eq!(base.workflow, Workflow::Manual);
-        assert_eq!(base.directory, template_dir);
         assert!(base.path.is_none());
         assert!(base.systems.is_empty());
         assert!(base.update_repos.is_empty());
@@ -1170,7 +1153,7 @@ mod tests {
                 "15.5.20260709-150500.3.35.1",
             ),
         ]);
-        let pkgs = base.packages_for("15-SP6");
+        let pkgs = packages_for_map(&base.packages, "15-SP6");
         let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["hplip", "hplip-devel"]);
         for p in &pkgs {
@@ -1188,7 +1171,7 @@ mod tests {
         // SLFO metadata ships a single "standard" product set; it applies to any
         // host base version.
         let base = base_with_packages(&[("standard", "patch", "2.7.6-999999_stage.1.1")]);
-        let pkgs = base.packages_for("16.0");
+        let pkgs = packages_for_map(&base.packages, "16.0");
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "patch");
         assert_eq!(
@@ -1202,7 +1185,7 @@ mod tests {
         // Upstream merges the "12" sub-map for any 12.x host on top of the
         // base-version sub-map.
         let base = base_with_packages(&[("12-SP5", "bash", "5.0-1"), ("12", "glibc", "2.31-1")]);
-        let pkgs = base.packages_for("12-SP5");
+        let pkgs = packages_for_map(&base.packages, "12-SP5");
         let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["bash", "glibc"]);
     }
@@ -1210,14 +1193,14 @@ mod tests {
     #[test]
     fn packages_for_returns_empty_when_no_submap_matches() {
         let base = base_with_packages(&[("15-SP6", "hplip", "3.26.4-1")]);
-        assert!(base.packages_for("15-SP5").is_empty());
+        assert!(packages_for_map(&base.packages, "15-SP5").is_empty());
     }
 
     #[test]
     fn packages_for_skips_unparseable_version() {
         // A garbage version leaves the package unseeded rather than aborting.
         let base = base_with_packages(&[("15-SP6", "goodpkg", "1.0-1"), ("15-SP6", "badpkg", "")]);
-        let pkgs = base.packages_for("15-SP6");
+        let pkgs = packages_for_map(&base.packages, "15-SP6");
         // Empty string clears required (parse_opt treats "" as None), so badpkg
         // is present but with no required version; goodpkg has one.
         let good = pkgs.iter().find(|p| p.name == "goodpkg").unwrap();

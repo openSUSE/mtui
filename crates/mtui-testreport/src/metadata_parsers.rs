@@ -108,49 +108,49 @@ impl ReducedMetadataParser {
 pub struct MetadataEnvelope {
     /// Jira issue ids.
     #[serde(default)]
-    pub jira: Option<Vec<String>>,
+    jira: Option<Vec<String>>,
     /// Bugzilla bug ids.
     #[serde(default)]
-    pub bugs: Option<Vec<String>>,
+    bugs: Option<Vec<String>>,
     /// Request Review ID string (e.g. `SUSE:Maintenance:1:1`).
     #[serde(default)]
-    pub rrid: Option<String>,
+    rrid: Option<String>,
     /// Packager.
     #[serde(default)]
-    pub packager: Option<String>,
+    packager: Option<String>,
     /// Update rating.
     #[serde(default)]
-    pub rating: Option<String>,
+    rating: Option<String>,
     /// Update repository string.
     #[serde(default)]
-    pub repository: Option<String>,
+    repository: Option<String>,
     /// Update category.
     #[serde(default)]
-    pub category: Option<String>,
+    category: Option<String>,
     /// Test platform strings (envelope key `testplatform`).
     #[serde(default, rename = "testplatform")]
-    pub testplatforms: Option<Vec<String>>,
+    testplatforms: Option<Vec<String>>,
     /// Product strings.
     #[serde(default)]
-    pub products: Option<Vec<String>>,
+    products: Option<Vec<String>>,
     /// Raw request id (envelope key `id`).
     #[serde(default, rename = "id")]
-    pub realid: Option<String>,
+    realid: Option<String>,
     /// Gitea pull-request reference.
     #[serde(default)]
-    pub gitea_pr: Option<String>,
+    gitea_pr: Option<String>,
     /// Gitea pull-request API URL.
     #[serde(default)]
-    pub gitea_pr_api: Option<String>,
+    gitea_pr_api: Option<String>,
     /// Gitea commit hash.
     #[serde(default)]
-    pub gitea_commit_hash: Option<String>,
+    gitea_commit_hash: Option<String>,
     /// Nested package map: `product -> ["pkg _ version", ...]`.
     #[serde(default)]
-    pub packages: Option<HashMap<String, Vec<String>>>,
+    packages: Option<HashMap<String, Vec<String>>>,
     /// Update repository URLs.
     #[serde(default)]
-    pub repositories: Option<Vec<String>>,
+    repositories: Option<Vec<String>>,
 }
 
 /// A parser for the JSON metadata envelope.
@@ -187,7 +187,7 @@ impl JSONParser {
     /// * scalar fields map straight through;
     /// * each package entry `"pkg _ version"` is split on whitespace, taking the
     ///   first token as the package name and the third as the version.
-    pub fn parse(results: &mut TestReportBase, data: &MetadataEnvelope) {
+    fn parse(results: &mut TestReportBase, data: &MetadataEnvelope) {
         for id in data.jira.iter().flatten() {
             results.jira.insert(id.clone(), NO_DESCRIPTION.to_owned());
         }

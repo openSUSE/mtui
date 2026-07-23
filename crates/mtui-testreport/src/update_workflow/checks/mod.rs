@@ -18,10 +18,10 @@
 //! command layer (`mtui-core::commands::perform`) drains and renders them
 //! through `session.display`, where the color mode lives.
 
-pub mod downgrade;
-pub mod install;
-pub mod prepare;
-pub mod update;
+pub(crate) mod downgrade;
+pub(crate) mod install;
+pub(crate) mod prepare;
+pub(crate) mod update;
 
 use crate::update_workflow::UpdateError;
 
@@ -69,15 +69,15 @@ impl Diagnostic {
 #[derive(Debug, Clone, Copy)]
 pub struct CheckArgs<'a> {
     /// The host the command ran on.
-    pub hostname: &'a str,
+    pub(crate) hostname: &'a str,
     /// The command's stdout.
-    pub stdout: &'a str,
+    pub(crate) stdout: &'a str,
     /// The command that was run (upstream `stdin`).
-    pub stdin: &'a str,
+    pub(crate) stdin: &'a str,
     /// The command's stderr.
-    pub stderr: &'a str,
+    pub(crate) stderr: &'a str,
     /// The command's exit code.
-    pub exitcode: i32,
+    pub(crate) exitcode: i32,
 }
 
 /// A boxed post-run check.

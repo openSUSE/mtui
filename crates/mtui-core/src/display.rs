@@ -29,14 +29,14 @@ use owo_colors::OwoColorize;
 
 /// One host and its resolved [`System`], as passed to
 /// [`list_versions`](CommandPromptDisplay::list_versions).
-pub type HostSystem = (String, System);
+pub(crate) type HostSystem = (String, System);
 
 /// A package name paired with its observed versions (newest-first is applied by
 /// the display), as passed to [`list_versions`](CommandPromptDisplay::list_versions).
-pub type PackageVersions = (String, Vec<RPMVersion>);
+pub(crate) type PackageVersions = (String, Vec<RPMVersion>);
 
 /// A version-history group: the hosts it covers and their package versions.
-pub type VersionGroup = (Vec<HostSystem>, Vec<PackageVersions>);
+pub(crate) type VersionGroup = (Vec<HostSystem>, Vec<PackageVersions>);
 
 /// Already-resolved lock state for a host, as displayed by
 /// [`list_locks`](CommandPromptDisplay::list_locks).
@@ -47,15 +47,15 @@ pub type VersionGroup = (Vec<HostSystem>, Vec<PackageVersions>);
 #[derive(Debug, Clone, Default)]
 pub struct LockStatus {
     /// Whether the host is currently locked.
-    pub is_locked: bool,
+    pub(crate) is_locked: bool,
     /// Whether the lock belongs to the current user (renders as "me").
-    pub is_mine: bool,
+    pub(crate) is_mine: bool,
     /// The lock owner (ignored when `is_mine`).
-    pub locked_by: String,
+    pub(crate) locked_by: String,
     /// Human-readable lock timestamp.
-    pub time: String,
+    pub(crate) time: String,
     /// Optional lock comment.
-    pub comment: String,
+    pub(crate) comment: String,
 }
 
 /// Whether ANSI color escapes are emitted.
@@ -135,7 +135,7 @@ impl CommandPromptDisplay {
     /// [`ColorMode`] per the `--color` flag via [`set_color`](Self::set_color)
     /// right after building the session (`mtui-cli::main`).
     #[must_use]
-    pub fn stdout() -> Self {
+    pub(crate) fn stdout() -> Self {
         Self {
             output: Box::new(std::io::stdout()),
             color: ColorMode::Never,
@@ -172,7 +172,7 @@ impl CommandPromptDisplay {
     /// Writes `msg` followed by an explicit end-of-line string.
     ///
     /// Suspends any live spinner for the write, like [`println`](Self::println).
-    pub fn print_eol(&mut self, msg: &str, eol: &str) {
+    pub(crate) fn print_eol(&mut self, msg: &str, eol: &str) {
         let _quiet = mtui_hosts::suspend();
         let _ = write!(self.output, "{msg}{eol}");
     }
@@ -182,13 +182,13 @@ impl CommandPromptDisplay {
     /// Printed before each template's output block when a command fans out
     /// across more than one loaded template, so the user can tell which template
     /// produced which result. Upstream renders exactly `=== {rrid} ===`.
-    pub fn template_banner(&mut self, rrid: &str) {
+    pub(crate) fn template_banner(&mut self, rrid: &str) {
         self.println(&format!("=== {rrid} ==="));
     }
 
     /// Wraps `text` in green when color resolves on, else returns it unchanged.
     #[must_use]
-    pub fn green(&self, text: &str) -> String {
+    pub(crate) fn green(&self, text: &str) -> String {
         if self.color.resolve() {
             OwoColorize::green(&text).to_string()
         } else {
@@ -208,7 +208,7 @@ impl CommandPromptDisplay {
 
     /// Wraps `text` in yellow when color resolves on, else returns it unchanged.
     #[must_use]
-    pub fn yellow(&self, text: &str) -> String {
+    pub(crate) fn yellow(&self, text: &str) -> String {
         if self.color.resolve() {
             OwoColorize::yellow(&text).to_string()
         } else {
@@ -218,7 +218,7 @@ impl CommandPromptDisplay {
 
     /// Wraps `text` in blue when color resolves on, else returns it unchanged.
     #[must_use]
-    pub fn blue(&self, text: &str) -> String {
+    pub(crate) fn blue(&self, text: &str) -> String {
         if self.color.resolve() {
             OwoColorize::blue(&text).to_string()
         } else {
@@ -231,7 +231,7 @@ impl CommandPromptDisplay {
     /// Mirrors upstream `list_bugs`: sorted ids, the `[""]` empty-sentinel
     /// ("No bugs…"/"No Jira issues…"), the `Buglist:` query URL, and per-item
     /// `Bug #{id}: {summary}` / `Jira #{id}: {summary}` blocks with tracker URLs.
-    pub fn list_bugs(
+    pub(crate) fn list_bugs(
         &mut self,
         bugs: &std::collections::BTreeMap<String, String>,
         jira: &std::collections::BTreeMap<String, String>,
@@ -274,7 +274,7 @@ impl CommandPromptDisplay {
     /// first two colons (`when:who:event`, colons preserved in `event`), skips
     /// malformed lines, and formats `when` (epoch seconds) as
     /// `%A, %d.%m.%Y %H:%M`. See the module doc for the UTC deviation.
-    pub fn list_history(&mut self, hostname: &str, system: &System, lines: &[String]) {
+    pub(crate) fn list_history(&mut self, hostname: &str, system: &System, lines: &[String]) {
         self.println(&format!("history from {hostname} ({system}):"));
         for line in lines.iter().rev() {
             let mut parts = line.splitn(3, ':');
@@ -303,7 +303,7 @@ impl CommandPromptDisplay {
     ///
     /// Mirrors upstream `list_host`: colored `state` label (green/red),
     /// `transactional`/`standard` label, and the fixed-width layout line.
-    pub fn list_host(
+    pub(crate) fn list_host(
         &mut self,
         hostname: &str,
         system: &System,
@@ -332,7 +332,7 @@ impl CommandPromptDisplay {
     /// (the upstream lock accessors are async `&mut self` in `mtui-hosts`;
     /// callers do the I/O and pass the resolved values in). When
     /// [`LockStatus::is_mine`] is set, "me" is shown in place of `locked_by`.
-    pub fn list_locks(&mut self, hostname: &str, system: &System, lock: &LockStatus) {
+    pub(crate) fn list_locks(&mut self, hostname: &str, system: &System, lock: &LockStatus) {
         let sys = system.to_string();
         if lock.is_locked {
             let by = if lock.is_mine { "me" } else { &lock.locked_by };
@@ -352,7 +352,7 @@ impl CommandPromptDisplay {
     /// Displays the active sessions on a host.
     ///
     /// Mirrors upstream `list_sessions`.
-    pub fn list_sessions(&mut self, hostname: &str, system: &System, stdout: &str) {
+    pub(crate) fn list_sessions(&mut self, hostname: &str, system: &System, stdout: &str) {
         self.println(&format!("sessions on {hostname} ({system}):"));
         self.println(stdout);
     }
@@ -360,7 +360,7 @@ impl CommandPromptDisplay {
     /// Displays the command timeout for a host.
     ///
     /// Mirrors upstream `list_timeout`.
-    pub fn list_timeout(&mut self, hostname: &str, system: &System, timeout: u64) {
+    pub(crate) fn list_timeout(&mut self, hostname: &str, system: &System, timeout: u64) {
         let sys = format!("({system})");
         self.println(&format!("{hostname:20} {sys:20}: {timeout}s"));
     }
@@ -371,7 +371,7 @@ impl CommandPromptDisplay {
     /// (with their systems) to `(package, versions)` pairs; when more than one
     /// group is present, each is prefixed with a "version history from:" header.
     /// Versions are shown newest-first as an indented ladder.
-    pub fn list_versions(&mut self, hosts_pvs: &[VersionGroup]) {
+    pub(crate) fn list_versions(&mut self, hosts_pvs: &[VersionGroup]) {
         let multi = hosts_pvs.len() > 1;
         for (hosts, pvs) in hosts_pvs {
             if multi {
@@ -397,7 +397,7 @@ impl CommandPromptDisplay {
     ///
     /// Mirrors upstream `list_products`. Note: upstream literally prints
     /// "Referenece host" (sic) — preserved for byte-parity with existing tools.
-    pub fn list_products(&mut self, hostname: &str, system: &System) {
+    pub(crate) fn list_products(&mut self, hostname: &str, system: &System) {
         // sic: upstream typo "Referenece", kept for output parity.
         let label = Self::green(self, "Referenece host");
         let host = Self::yellow(self, hostname);
@@ -412,7 +412,7 @@ impl CommandPromptDisplay {
     ///
     /// Mirrors upstream `list_update_repos`. `repos` pairs a product with its
     /// repo URL/path string.
-    pub fn list_update_repos(&mut self, repos: &[(SystemProduct, String)]) {
+    pub(crate) fn list_update_repos(&mut self, repos: &[(SystemProduct, String)]) {
         for (p, r) in repos {
             let product = Self::green(self, "Product");
             let pname = Self::yellow(self, &p.name);
@@ -432,7 +432,7 @@ impl CommandPromptDisplay {
     /// Mirrors upstream `show_log` (a `@staticmethod`). Each log entry is
     /// `(cmdline, stdout, stderr, exitcode)`; the sink is called once per output
     /// line (it appends its own newline, matching the upstream `Callable`).
-    pub fn show_log(
+    pub(crate) fn show_log(
         hostname: &str,
         hostlog: &[(String, String, String, i32)],
         sink: &mut dyn FnMut(&str),
@@ -472,7 +472,7 @@ impl Default for CommandPromptDisplay {
 /// passes `interactive == true` with a `writer`, this forwards every line
 /// unpaged (never blocks on a read it cannot perform); with no `writer` it is a
 /// no-op.
-pub fn page(text: &[String], interactive: bool, writer: Option<&mut dyn FnMut(&str)>) {
+pub(crate) fn page(text: &[String], interactive: bool, writer: Option<&mut dyn FnMut(&str)>) {
     let _ = interactive;
     if let Some(w) = writer {
         for line in text {
@@ -621,7 +621,7 @@ fn page_screen(
 /// concurrent host prompts stay serialised); typing `q` stops early. When no
 /// prompter is available (should not happen in the REPL, but keeps the function
 /// total) it prints everything without prompting.
-pub async fn page_interactive(
+pub(crate) async fn page_interactive(
     text: &[String],
     display: &mut CommandPromptDisplay,
     prompter: Option<&mtui_hosts::Prompter>,

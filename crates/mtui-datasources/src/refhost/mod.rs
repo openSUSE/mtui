@@ -24,4 +24,4 @@ pub mod verify;
 pub use models::Attributes;
 pub use resolvers::{HttpsResolver, PathResolver, RefhostsFactory, ResolveConfig, Resolver};
 pub use store::{Refhosts, Slot};
-pub use verify::{ProductDiff, compare, normalize_version};
+pub use verify::{ProductDiff, compare};

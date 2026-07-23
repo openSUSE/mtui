@@ -293,18 +293,18 @@ pub(crate) mod testkit {
 
     /// A shared byte buffer used as the display sink.
     #[derive(Clone)]
-    pub struct Buffer(Arc<Mutex<Vec<u8>>>);
+    pub(crate) struct Buffer(Arc<Mutex<Vec<u8>>>);
 
     impl Buffer {
         /// A fresh, empty capture buffer (for tests building a custom session).
         #[must_use]
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self(Arc::new(Mutex::new(Vec::new())))
         }
 
         /// The captured output as a `String`.
         #[must_use]
-        pub fn contents(&self) -> String {
+        pub(crate) fn contents(&self) -> String {
             String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
         }
     }
@@ -335,7 +335,11 @@ pub(crate) mod testkit {
     /// each mock echoing `stdout`, plus a captured display. Returns the session
     /// and the buffer handle.
     #[must_use]
-    pub fn session_with_hosts(rrid: &str, hosts: &[&str], stdout: &str) -> (Session, Buffer) {
+    pub(crate) fn session_with_hosts(
+        rrid: &str,
+        hosts: &[&str],
+        stdout: &str,
+    ) -> (Session, Buffer) {
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, stdout)).collect();
         session_with_targets(rrid, targets)
     }
@@ -345,7 +349,10 @@ pub(crate) mod testkit {
     /// `sftp_put` fails, so the `put` command's per-host upload aggregation can
     /// be exercised. The failure reason echoes the host name for assertion.
     #[must_use]
-    pub fn session_with_upload_outcomes(rrid: &str, hosts: &[(&str, bool)]) -> (Session, Buffer) {
+    pub(crate) fn session_with_upload_outcomes(
+        rrid: &str,
+        hosts: &[(&str, bool)],
+    ) -> (Session, Buffer) {
         let targets: Vec<Target> = hosts
             .iter()
             .map(|&(name, ok)| {
@@ -372,7 +379,10 @@ pub(crate) mod testkit {
     /// false` scripts a *fixed* boot id, modelling a host that never rebooted (an
     /// unchanged id ⇒ recorded failure).
     #[must_use]
-    pub fn session_with_reboot_outcomes(rrid: &str, hosts: &[(&str, bool)]) -> (Session, Buffer) {
+    pub(crate) fn session_with_reboot_outcomes(
+        rrid: &str,
+        hosts: &[(&str, bool)],
+    ) -> (Session, Buffer) {
         let targets: Vec<Target> = hosts
             .iter()
             .map(|&(name, ok)| {
@@ -413,7 +423,7 @@ pub(crate) mod testkit {
     /// failure path can be exercised. The report carries a real checkout path so
     /// `report_wd` resolves.
     #[must_use]
-    pub fn session_with_download_outcomes(
+    pub(crate) fn session_with_download_outcomes(
         rrid: &str,
         hosts: &[(&str, bool)],
         report_wd: &std::path::Path,
@@ -461,7 +471,7 @@ pub(crate) mod testkit {
     /// on a [`Target::with_connection`] host scripted with a system-parse
     /// fixture before adding it to the group.
     #[must_use]
-    pub fn session_with_targets(rrid: &str, targets: Vec<Target>) -> (Session, Buffer) {
+    pub(crate) fn session_with_targets(rrid: &str, targets: Vec<Target>) -> (Session, Buffer) {
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
         let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
         let mut session = Session::with_display(Config::default(), false, display);
@@ -486,7 +496,7 @@ pub(crate) mod testkit {
     /// `update` command's failure path (error toast, non-`Ok` result) can be
     /// exercised end-to-end.
     #[must_use]
-    pub fn session_with_failing_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+    pub(crate) fn session_with_failing_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
         let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
         let mut session = Session::with_display(Config::default(), false, display);
@@ -513,7 +523,10 @@ pub(crate) mod testkit {
     /// [`LockOutcome::Failed`] path can be exercised. `ok == true` locks/unlocks
     /// cleanly.
     #[must_use]
-    pub fn session_with_lock_outcomes(rrid: &str, hosts: &[(&str, bool)]) -> (Session, Buffer) {
+    pub(crate) fn session_with_lock_outcomes(
+        rrid: &str,
+        hosts: &[(&str, bool)],
+    ) -> (Session, Buffer) {
         let targets: Vec<Target> = hosts
             .iter()
             .map(|&(name, ok)| {
@@ -539,7 +552,10 @@ pub(crate) mod testkit {
     /// exit so `last_repo` records a failure; `ok == true` leaves the default
     /// exit-0 mock so the run records success.
     #[must_use]
-    pub fn session_with_setrepo_outcomes(rrid: &str, hosts: &[(&str, bool)]) -> (Session, Buffer) {
+    pub(crate) fn session_with_setrepo_outcomes(
+        rrid: &str,
+        hosts: &[(&str, bool)],
+    ) -> (Session, Buffer) {
         let targets: Vec<Target> = hosts
             .iter()
             .map(|&(name, ok)| {
@@ -578,7 +594,7 @@ pub(crate) mod testkit {
     /// `downgrade` flows return `Err` (naming host `h1`), so `perform::drive`'s
     /// failure path (per-host summary + non-`Ok` result) can be exercised.
     #[must_use]
-    pub fn session_with_failing_perform(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+    pub(crate) fn session_with_failing_perform(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
         let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
         let mut session = Session::with_display(Config::default(), false, display);
@@ -604,7 +620,7 @@ pub(crate) mod testkit {
     /// The building block behind [`session_with_hosts`]; command tests that need
     /// more than one loaded template call this to `add` extra reports.
     #[must_use]
-    pub fn fake_report(
+    pub(crate) fn fake_report(
         rrid: &str,
         hosts: &[&str],
         stdout: &str,
@@ -630,7 +646,7 @@ pub(crate) mod testkit {
     /// target whose mock `close` fails or wedges, to exercise the removal
     /// teardown paths.
     #[must_use]
-    pub fn fake_report_from_base(base: TestReportBase) -> Box<dyn TestReport + Send + Sync> {
+    pub(crate) fn fake_report_from_base(base: TestReportBase) -> Box<dyn TestReport + Send + Sync> {
         let rrid = base
             .rrid
             .as_ref()
@@ -648,7 +664,7 @@ pub(crate) mod testkit {
     /// A session whose single host scripts `command` to a log that echoes the
     /// command back (as a real host does), so `lastin()` reflects what ran.
     #[must_use]
-    pub fn session_scripting(
+    pub(crate) fn session_scripting(
         rrid: &str,
         host: &str,
         command: &str,
@@ -682,7 +698,7 @@ pub(crate) mod testkit {
 
     /// An empty (no templates loaded) session with a captured display.
     #[must_use]
-    pub fn empty_session() -> (Session, Buffer) {
+    pub(crate) fn empty_session() -> (Session, Buffer) {
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
         let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
         (
@@ -698,7 +714,7 @@ pub(crate) mod testkit {
     /// exercised in the no-metadata state a real REPL reaches before any
     /// template is checked out.
     #[must_use]
-    pub fn session_host_no_template(hosts: &[&str], stdout: &str) -> (Session, Buffer) {
+    pub(crate) fn session_host_no_template(hosts: &[&str], stdout: &str) -> (Session, Buffer) {
         let (mut session, buf) = empty_session();
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, stdout)).collect();
         session.metadata_mut().base_mut().targets = HostsGroup::new(targets, false);
@@ -708,7 +724,7 @@ pub(crate) mod testkit {
     /// Parses `argv` into `ArgMatches` for `command`, mirroring the engine's
     /// per-command parser (base template flags + the command's own args).
     #[must_use]
-    pub fn matches(command: &dyn crate::Command, argv: &[&str]) -> clap::ArgMatches {
+    pub(crate) fn matches(command: &dyn crate::Command, argv: &[&str]) -> clap::ArgMatches {
         let base = clap::Command::new(command.name()).no_binary_name(true);
         command
             .configure(base)

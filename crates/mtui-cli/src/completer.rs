@@ -37,7 +37,7 @@ pub struct MtuiCompleter {
 impl MtuiCompleter {
     /// Builds a completer sharing `registry` and `session` with the REPL loop.
     #[must_use]
-    pub fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
+    pub(crate) fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
         Self { registry, session }
     }
 }

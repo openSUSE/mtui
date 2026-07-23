@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// part is dropped. Used to build a unique filename suffix for exports the user
 /// chose not to overwrite.
 #[must_use]
-pub fn timestamp() -> String {
+pub(crate) fn timestamp() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

@@ -62,7 +62,7 @@ impl SslVerify {
 
     /// Map a native boolean to the enabled/disabled variants.
     #[must_use]
-    pub fn from_bool(verify: bool) -> Self {
+    fn from_bool(verify: bool) -> Self {
         if verify {
             Self::Enabled
         } else {
@@ -118,7 +118,7 @@ impl<'de> Deserialize<'de> for SslVerify {
 /// present — a numeric one. This is deliberately lenient (matching Python's
 /// `urlsplit`, not full RFC 3986): a bad value like `https://openqa.suse.de:44e3`
 /// is rejected, but exotic-yet-usable forms are accepted.
-pub(crate) fn validate_base_url(raw: &str) -> bool {
+fn validate_base_url(raw: &str) -> bool {
     let token = raw.trim();
     let Some((scheme, rest)) = token.split_once("://") else {
         return false;
@@ -165,7 +165,7 @@ fn is_numeric_port(port: &str) -> bool {
 /// The value is joined per update as `template_dir / <rrid> / install_logs`;
 /// an empty, absolute, separator-containing, or `.`/`..` value would crash or
 /// silently escape the base path, so it is rejected here.
-pub(crate) fn is_relative_dir_name(raw: &str) -> bool {
+fn is_relative_dir_name(raw: &str) -> bool {
     let token = raw.trim();
     !token.is_empty()
         && !token.contains('/')
@@ -176,43 +176,43 @@ pub(crate) fn is_relative_dir_name(raw: &str) -> bool {
 
 // -- Upstream default helpers (used both by serde and by `Config::default`). --
 
-pub(crate) fn default_connection_timeout() -> u64 {
+fn default_connection_timeout() -> u64 {
     300
 }
-pub(crate) fn default_reboot_timeout() -> u64 {
+fn default_reboot_timeout() -> u64 {
     10
 }
-pub(crate) fn default_reboot_retries() -> u64 {
+fn default_reboot_retries() -> u64 {
     10
 }
-pub(crate) fn default_max_parallel() -> u64 {
+fn default_max_parallel() -> u64 {
     50
 }
-pub(crate) fn default_max_oqa_parallel() -> u64 {
+fn default_max_oqa_parallel() -> u64 {
     8
 }
-pub(crate) fn default_svn_path() -> String {
+fn default_svn_path() -> String {
     "svn+ssh://svn@qam.suse.de/testreports".to_owned()
 }
-pub(crate) fn default_bugzilla_url() -> String {
+fn default_bugzilla_url() -> String {
     "https://bugzilla.suse.com".to_owned()
 }
-pub(crate) fn default_reports_url() -> String {
+fn default_reports_url() -> String {
     "https://qam.suse.de/testreports".to_owned()
 }
-pub(crate) fn default_fancy_reports_url() -> String {
+fn default_fancy_reports_url() -> String {
     "https://qam.suse.de/reports".to_owned()
 }
-pub(crate) fn default_qem_dashboard_api() -> String {
+fn default_qem_dashboard_api() -> String {
     "http://dashboard.qam.suse.de/api".to_owned()
 }
-pub(crate) fn default_teregen_api() -> String {
+fn default_teregen_api() -> String {
     "https://qam.suse.de/api/v1".to_owned()
 }
-pub(crate) fn default_openqa_instance() -> String {
+fn default_openqa_instance() -> String {
     "https://openqa.suse.de".to_owned()
 }
-pub(crate) fn default_openqa_instance_baremetal() -> String {
+fn default_openqa_instance_baremetal() -> String {
     "http://openqa.qam.suse.cz".to_owned()
 }
 /// Default trusted Gitea origin the PR-review token may be sent to.
@@ -223,10 +223,10 @@ pub(crate) fn default_openqa_instance_baremetal() -> String {
 /// defaults to the internal SUSE Gitea (`src.suse.de`) that serves SLFO so the
 /// standard workflow keeps working out-of-the-box; point it elsewhere (e.g.
 /// `https://src.opensuse.org`) for other instances.
-pub(crate) fn default_gitea_url() -> String {
+fn default_gitea_url() -> String {
     "https://src.suse.de".to_owned()
 }
-pub(crate) fn default_openqa_install_distri() -> String {
+fn default_openqa_install_distri() -> String {
     "sle".to_owned()
 }
 /// The Slack integration is **opt-in**: off unless a site turns it on.
@@ -236,7 +236,7 @@ pub(crate) fn default_openqa_install_distri() -> String {
 /// integration at all, and for them the feature staying dark — and saying why
 /// when invoked — is the correct behaviour. Turning it on is one explicit
 /// `enabled = true` alongside the token and channel it needs anyway.
-pub(crate) fn default_slack_enabled() -> bool {
+fn default_slack_enabled() -> bool {
     false
 }
 /// Trusted Slack API origin the [`slack_token`](Config::slack_token) may be
@@ -244,117 +244,117 @@ pub(crate) fn default_slack_enabled() -> bool {
 /// attached to requests against this base, so pointing it elsewhere is an
 /// explicit, auditable act rather than something a checked-out template can
 /// influence. Overridable mainly so tests can aim at a local mock server.
-pub(crate) fn default_slack_api_url() -> String {
+fn default_slack_api_url() -> String {
     "https://slack.com/api".to_owned()
 }
 /// Seconds between reaction polls while watching a review request. Slack's
 /// Web API tier-3 methods allow ~50 requests/minute; two minutes per poll keeps
 /// a multi-template watch far inside that even before jitter.
-pub(crate) fn default_slack_poll_interval() -> u64 {
+fn default_slack_poll_interval() -> u64 {
     120
 }
 /// Seconds a `request_review` watch runs before giving up, defaulting to one
 /// hour: long enough for a reviewer to notice, short enough that a forgotten
 /// foreground watch does not pin a terminal indefinitely.
-pub(crate) fn default_slack_watch_timeout() -> u64 {
+fn default_slack_watch_timeout() -> u64 {
     3600
 }
-pub(crate) fn default_refhosts_resolvers() -> String {
+fn default_refhosts_resolvers() -> String {
     "https,path".to_owned()
 }
-pub(crate) fn default_refhosts_https_uri() -> String {
+fn default_refhosts_https_uri() -> String {
     "https://qam.suse.de/refhosts/refhosts.yml".to_owned()
 }
-pub(crate) fn default_refhosts_https_expiration() -> u64 {
+fn default_refhosts_https_expiration() -> u64 {
     3600 * 12
 }
-pub(crate) fn default_refhosts_path() -> PathBuf {
+fn default_refhosts_path() -> PathBuf {
     // Deliberate deviation from upstream (which hardcodes
     // /usr/share/qam-metadata/refhosts.yml): mtui defaults to a per-user path.
     expanduser(&PathBuf::from("~/.local/share/refdb/refhosts.yml"))
 }
-pub(crate) fn default_install_logs() -> PathBuf {
+fn default_install_logs() -> PathBuf {
     PathBuf::from("install_logs")
 }
-pub(crate) fn default_target_tempdir() -> PathBuf {
+fn default_target_tempdir() -> PathBuf {
     PathBuf::from("/tmp")
 }
-pub(crate) fn default_ssh_strict_host_key_checking() -> String {
+fn default_ssh_strict_host_key_checking() -> String {
     "auto_add".to_owned()
 }
-pub(crate) fn default_template_dir() -> PathBuf {
+fn default_template_dir() -> PathBuf {
     // Upstream: Path(getenv("TEMPLATE_DIR", ".")).
     std::env::var_os("TEMPLATE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
-pub(crate) fn default_local_tempdir() -> PathBuf {
+fn default_local_tempdir() -> PathBuf {
     // Upstream: Path(getenv("TMPDIR", "/tmp")).
     std::env::var_os("TMPDIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
-pub(crate) fn default_session_user() -> String {
+fn default_session_user() -> String {
     // Upstream: getpass.getuser(). Fall back to $USER / "unknown".
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "unknown".to_owned())
 }
-pub(crate) fn default_lock_reap_stale() -> bool {
+fn default_lock_reap_stale() -> bool {
     true
 }
-pub(crate) fn default_lock_stale_age() -> u64 {
+fn default_lock_stale_age() -> u64 {
     86400
 }
-pub(crate) fn default_pool_reap_stale() -> bool {
+fn default_pool_reap_stale() -> bool {
     true
 }
-pub(crate) fn default_pool_stale_age() -> u64 {
+fn default_pool_stale_age() -> u64 {
     86400
 }
-pub(crate) fn default_lock_pi_autolock() -> bool {
+fn default_lock_pi_autolock() -> bool {
     true
 }
-pub(crate) fn default_lock_wait() -> u64 {
+fn default_lock_wait() -> u64 {
     0
 }
-pub(crate) fn default_lock_wait_poll() -> u64 {
+fn default_lock_wait_poll() -> u64 {
     15
 }
-pub(crate) fn default_mcp_max_output_bytes() -> usize {
+fn default_mcp_max_output_bytes() -> usize {
     100_000
 }
-pub(crate) fn default_mcp_max_input_bytes() -> usize {
+fn default_mcp_max_input_bytes() -> usize {
     10_000_000
 }
-pub(crate) fn default_mcp_max_request_bytes() -> usize {
+fn default_mcp_max_request_bytes() -> usize {
     10_000_000
 }
-pub(crate) fn default_mcp_session_cap() -> usize {
+fn default_mcp_session_cap() -> usize {
     32
 }
-pub(crate) fn default_mcp_session_idle_timeout() -> u64 {
+fn default_mcp_session_idle_timeout() -> u64 {
     // 4 hours. Deliberately higher than upstream's 1800s: this value also pins
     // the rmcp streamable-HTTP session keep-alive (`serve_http`), whose own
     // default (300s) tore down idle http sessions mid-conversation.
     14_400
 }
-pub(crate) fn default_mcp_sweep_parallel() -> usize {
+fn default_mcp_sweep_parallel() -> usize {
     4
 }
-pub(crate) fn default_mcp_max_active_jobs() -> usize {
+fn default_mcp_max_active_jobs() -> usize {
     16
 }
-pub(crate) fn default_mcp_max_completed_jobs() -> usize {
+fn default_mcp_max_completed_jobs() -> usize {
     128
 }
-pub(crate) fn default_mcp_profile() -> String {
+fn default_mcp_profile() -> String {
     "full".to_owned()
 }
-pub(crate) fn default_obs_api_url() -> String {
+fn default_obs_api_url() -> String {
     "https://api.suse.de".to_owned()
 }
-pub(crate) fn default_obs_request_timeout() -> u64 {
+fn default_obs_request_timeout() -> u64 {
     180
 }
 

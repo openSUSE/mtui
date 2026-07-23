@@ -23,7 +23,7 @@ pub mod manual;
 pub mod overview_inject;
 
 pub use auto::AutoExport;
-pub use base::{DenyOverwrite, ExportContext, Exporter, OverwritePrompt};
+pub use base::{DenyOverwrite, ExportContext, OverwritePrompt};
 pub use downloader::{BytesFetcher, DownloadError, ErrorMode, ResultsMissingError, download_logs};
 pub use kernel::KernelExport;
 pub use manual::{ManualExport, ManualHost};

@@ -146,13 +146,13 @@ pub struct LockRow {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LockSnapshot {
     /// The parsed on-disk lock (empty [`user`](RemoteLock::user) ⇒ unlocked).
-    pub lock: RemoteLock,
+    pub(crate) lock: RemoteLock,
     /// Whether the lock belongs to the current owner. `false` when unlocked
     /// (the accessor's "not locked" error is not propagated here).
-    pub is_mine: bool,
+    pub(crate) is_mine: bool,
     /// The owning template's RRID, for a [`PoolLock`] claim only; empty for an
     /// operation-lock snapshot or a non-pool comment.
-    pub rrid: String,
+    pub(crate) rrid: String,
 }
 
 impl RemoteLock {
@@ -213,7 +213,7 @@ impl RemoteLock {
     /// is missing/malformed. Shared by [`TargetLock::time`] and the one-read
     /// snapshot path so both render identically.
     #[must_use]
-    pub fn display_time(&self) -> String {
+    pub(crate) fn display_time(&self) -> String {
         match self.timestamp.parse::<i64>() {
             Ok(ts) => format_utc(ts),
             Err(_) => "unknown".to_owned(),
@@ -222,7 +222,7 @@ impl RemoteLock {
 
     /// Human-readable "locked by <user> (<comment>)." string.
     #[must_use]
-    pub fn describe(&self) -> String {
+    fn describe(&self) -> String {
         if self.comment.is_empty() {
             format!("locked by {}.", self.user)
         } else {
@@ -265,7 +265,7 @@ pub struct TargetLock<C: Clock = SystemClock> {
 pub const TARGET_LOCK_PATH: &str = "/var/lock/mtui.lock";
 
 /// The default pool-claim-lock path, `/var/lock/mtui-pool.lock`.
-pub const POOL_LOCK_PATH: &str = "/var/lock/mtui-pool.lock";
+pub(crate) const POOL_LOCK_PATH: &str = "/var/lock/mtui-pool.lock";
 
 impl TargetLock<SystemClock> {
     /// Builds a `TargetLock` over `connection` using config-derived identity and
@@ -279,7 +279,7 @@ impl TargetLock<SystemClock> {
 impl<C: Clock> TargetLock<C> {
     /// Builds a `TargetLock` with an explicit [`Clock`] (for tests).
     #[must_use]
-    pub fn with_clock(connection: Box<dyn Connection>, config: &Config, clock: C) -> Self {
+    fn with_clock(connection: Box<dyn Connection>, config: &Config, clock: C) -> Self {
         Self::with_clock_and_path(connection, config, clock, PathBuf::from(TARGET_LOCK_PATH))
     }
 
@@ -288,7 +288,7 @@ impl<C: Clock> TargetLock<C> {
     /// The path seam lets [`PoolLock`] reuse the whole lock/unlock/load
     /// machinery over [`POOL_LOCK_PATH`] instead of the operation-lock path.
     #[must_use]
-    pub fn with_clock_and_path(
+    fn with_clock_and_path(
         connection: Box<dyn Connection>,
         config: &Config,
         clock: C,
@@ -361,7 +361,7 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).
-    pub async fn age_seconds(&mut self) -> Result<Option<u64>> {
+    async fn age_seconds(&mut self) -> Result<Option<u64>> {
         self.load().await?;
         if self.lock.user.is_empty() || self.lock.timestamp.is_empty() {
             return Ok(None);
@@ -381,7 +381,7 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from the load/unlock path.
-    pub async fn reap_if_stale(&mut self) -> Result<bool> {
+    pub(crate) async fn reap_if_stale(&mut self) -> Result<bool> {
         if !self.lock_reap_stale || self.lock_stale_age == 0 {
             return Ok(false);
         }
@@ -529,7 +529,7 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).
-    pub async fn locked_by_msg(&mut self) -> Result<String> {
+    pub(crate) async fn locked_by_msg(&mut self) -> Result<String> {
         self.load().await?;
         Ok(format!("{} is {}", self.hostname(), self.lock))
     }
@@ -538,7 +538,7 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).
-    pub async fn locked_by(&mut self) -> Result<String> {
+    pub(crate) async fn locked_by(&mut self) -> Result<String> {
         self.load().await?;
         Ok(self.lock.user.clone())
     }
@@ -547,7 +547,7 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).
-    pub async fn comment(&mut self) -> Result<String> {
+    pub(crate) async fn comment(&mut self) -> Result<String> {
         self.load().await?;
         Ok(self.lock.comment.clone())
     }
@@ -558,7 +558,7 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).
-    pub async fn time(&mut self) -> Result<String> {
+    pub(crate) async fn time(&mut self) -> Result<String> {
         self.load().await?;
         Ok(self.lock.display_time())
     }
@@ -610,7 +610,7 @@ impl<C: Clock> TargetLock<C> {
     /// # Errors
     /// Returns [`HostError::TargetLocked`] with a "not locked" reason when no
     /// lock is loaded (mirrors upstream's `RuntimeError("not locked")`).
-    pub fn is_mine(&self) -> Result<bool> {
+    pub(crate) fn is_mine(&self) -> Result<bool> {
         if self.lock.user.is_empty() {
             return Err(HostError::TargetLocked("not locked".to_owned()));
         }
@@ -622,7 +622,7 @@ impl<C: Clock> TargetLock<C> {
 
     /// Read-only view of the currently-loaded lock (for tests / callers).
     #[must_use]
-    pub fn current(&self) -> &RemoteLock {
+    fn current(&self) -> &RemoteLock {
         &self.lock
     }
 
@@ -636,7 +636,7 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from [`load`](Self::load).
-    pub async fn snapshot(&mut self) -> Result<LockSnapshot> {
+    pub(crate) async fn snapshot(&mut self) -> Result<LockSnapshot> {
         self.load().await?;
         let is_mine = self.is_mine().unwrap_or(false);
         Ok(LockSnapshot {
@@ -645,86 +645,6 @@ impl<C: Clock> TargetLock<C> {
             rrid: String::new(),
         })
     }
-}
-
-/// Something that can be locked and unlocked for the duration of a scope.
-///
-/// Implemented by [`TargetLock`] and (later) `Target`, so [`with_locked`] can
-/// lock a whole group before a critical section and always unlock it after.
-#[async_trait::async_trait]
-pub trait Lockable: Send {
-    /// Acquire the lock (with an optional comment).
-    ///
-    /// # Errors
-    /// Returns [`HostError::TargetLocked`] when held by another owner.
-    async fn acquire(&mut self, comment: &str) -> Result<()>;
-
-    /// Release the lock. Best-effort: implementations should not fail the whole
-    /// unlock walk on one host's error.
-    ///
-    /// # Errors
-    /// Returns an error only for an unexpected, non-ignorable failure.
-    async fn release(&mut self) -> Result<()>;
-}
-
-#[async_trait::async_trait]
-impl<C: Clock> Lockable for TargetLock<C> {
-    async fn acquire(&mut self, comment: &str) -> Result<()> {
-        self.lock(comment).await
-    }
-    async fn release(&mut self) -> Result<()> {
-        self.unlock(false).await
-    }
-}
-
-/// Locks every target, runs `body`, then unlocks every target — even if `body`
-/// returns an error or a lock/unlock fails partway.
-///
-/// This is the async, error-safe equivalent of upstream's `LockedTargets`
-/// context manager (`with LockedTargets(targets): ...`). Rust `Drop` cannot be
-/// async, so scope semantics are expressed as a passed-in future instead of an
-/// RAII guard: acquisition is all-or-nothing (a failure rolls back the locks
-/// already taken), and release always runs. The `body` future takes no
-/// arguments — the targets are locked *in place* for its duration, exactly like
-/// the `with` block, and the caller keeps whatever handles it needs.
-///
-/// # Errors
-///
-/// Returns the first error encountered while acquiring, or the error from
-/// `body`. Unlock failures during teardown are logged, not propagated (the
-/// body's result is what the caller cares about), matching upstream's
-/// best-effort `__exit__`.
-pub async fn with_locked<T, Fut, R>(targets: &mut [T], comment: &str, body: Fut) -> Result<R>
-where
-    T: Lockable,
-    Fut: std::future::Future<Output = Result<R>>,
-{
-    // Acquire in order; on failure, roll back what we already took.
-    let mut acquire_err = None;
-    let mut acquired = 0usize;
-    for (i, t) in targets.iter_mut().enumerate() {
-        if let Err(e) = t.acquire(comment).await {
-            acquire_err = Some(e);
-            acquired = i;
-            break;
-        }
-        acquired = i + 1;
-    }
-    if let Some(e) = acquire_err {
-        for taken in targets[..acquired].iter_mut() {
-            let _ = taken.release().await;
-        }
-        return Err(e);
-    }
-
-    // Run the body, then always release, regardless of the body's outcome.
-    let result = body.await;
-    for t in targets.iter_mut() {
-        if let Err(e) = t.release().await {
-            tracing::debug!(error = %e, "ignoring unlock error during LockedTargets teardown");
-        }
-    }
-    result
 }
 
 /// The pool-claim lock (`/var/lock/mtui-pool.lock`), separate from the
@@ -751,7 +671,11 @@ pub struct PoolLock<C: Clock = SystemClock> {
 impl PoolLock<SystemClock> {
     /// Builds a `PoolLock` with the real [`SystemClock`].
     #[must_use]
-    pub fn new(connection: Box<dyn Connection>, config: &Config, rrid: impl Into<String>) -> Self {
+    pub(crate) fn new(
+        connection: Box<dyn Connection>,
+        config: &Config,
+        rrid: impl Into<String>,
+    ) -> Self {
         Self::with_clock(connection, config, rrid, SystemClock)
     }
 }
@@ -759,7 +683,7 @@ impl PoolLock<SystemClock> {
 impl<C: Clock> PoolLock<C> {
     /// Builds a `PoolLock` with an explicit [`Clock`] (for tests).
     #[must_use]
-    pub fn with_clock(
+    fn with_clock(
         connection: Box<dyn Connection>,
         config: &Config,
         rrid: impl Into<String>,
@@ -781,7 +705,7 @@ impl<C: Clock> PoolLock<C> {
     /// Extracts the RRID from a `mtui pool <RRID> [<owner>]` comment, or `""`
     /// when the comment is not a pool comment.
     #[must_use]
-    pub fn rrid_of(comment: &str) -> String {
+    fn rrid_of(comment: &str) -> String {
         let parts: Vec<&str> = comment.split_whitespace().collect();
         if parts.len() >= 3 && parts[0] == "mtui" && parts[1] == "pool" {
             parts[2].to_owned()
@@ -798,7 +722,7 @@ impl<C: Clock> PoolLock<C> {
     /// # Errors
     /// Returns [`HostError::TargetLocked`] with a "not locked" reason when no
     /// lock is loaded.
-    pub fn is_mine(&self) -> Result<bool> {
+    fn is_mine(&self) -> Result<bool> {
         let lock = self.inner.current();
         if lock.user.is_empty() {
             return Err(HostError::TargetLocked("not locked".to_owned()));
@@ -814,35 +738,8 @@ impl<C: Clock> PoolLock<C> {
 
     /// The pool lockfile path.
     #[must_use]
-    pub fn filename(&self) -> PathBuf {
+    fn filename(&self) -> PathBuf {
         PathBuf::from(POOL_LOCK_PATH)
-    }
-
-    /// The user who currently holds the pool claim (empty when unclaimed).
-    ///
-    /// Delegates to the inner [`TargetLock::locked_by`]; used by `list_locks
-    /// --pool` to report a foreign claimant.
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from the load path.
-    pub async fn locked_by(&mut self) -> Result<String> {
-        self.inner.locked_by().await
-    }
-
-    /// The RRID of the owning template for the current pool claim (empty when
-    /// unclaimed or the comment is not a `mtui pool <RRID> [<owner>]` stamp).
-    ///
-    /// A pool claim's meaningful identity is the RRID, not the raw comment
-    /// string; this loads the claim and parses it out via
-    /// [`rrid_of`](Self::rrid_of). (The base [`TargetLock`] exposes `comment`
-    /// for the free-form operation-lock comment; a pool claim exposes `rrid`
-    /// instead.)
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from the load path.
-    pub async fn rrid(&mut self) -> Result<String> {
-        let comment = self.inner.comment().await?;
-        Ok(Self::rrid_of(&comment))
     }
 
     /// Resolves the pool claim's on-disk state, RRID-based ownership, and owning
@@ -855,7 +752,7 @@ impl<C: Clock> PoolLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from the load path.
-    pub async fn snapshot(&mut self) -> Result<LockSnapshot> {
+    pub(crate) async fn snapshot(&mut self) -> Result<LockSnapshot> {
         self.inner.load().await?;
         let is_mine = self.is_mine().unwrap_or(false);
         let lock = self.inner.current().clone();
@@ -867,20 +764,9 @@ impl<C: Clock> PoolLock<C> {
         })
     }
 
-    /// A formatted pool-claim creation time, or `"unknown"` when the stored
-    /// timestamp is missing/malformed.
-    ///
-    /// Delegates to the inner [`TargetLock::time`].
-    ///
-    /// # Errors
-    /// Propagates an SFTP error from the load path.
-    pub async fn time(&mut self) -> Result<String> {
-        self.inner.time().await
-    }
-
     /// Sets the ownership RRID (the report layer pushes this down after the
     /// claim is built; see [`Target::set_rrid`](crate::Target::set_rrid)).
-    pub fn set_rrid(&mut self, rrid: impl Into<String>) {
+    pub(crate) fn set_rrid(&mut self, rrid: impl Into<String>) {
         self.i_am_rrid = rrid.into();
     }
 
@@ -890,7 +776,7 @@ impl<C: Clock> PoolLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from the load path.
-    pub async fn is_locked(&mut self) -> Result<bool> {
+    async fn is_locked(&mut self) -> Result<bool> {
         self.inner.is_locked().await
     }
 
@@ -903,7 +789,7 @@ impl<C: Clock> PoolLock<C> {
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the host is claimed by another
     /// owner, or an SFTP error from the write path.
-    pub async fn lock(&mut self, comment: &str) -> Result<()> {
+    async fn lock(&mut self, comment: &str) -> Result<()> {
         self.inner.lock(comment).await
     }
 
@@ -920,7 +806,7 @@ impl<C: Clock> PoolLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from the load/unlock path.
-    pub async fn reap_if_stale(&mut self) -> Result<bool> {
+    async fn reap_if_stale(&mut self) -> Result<bool> {
         if !self.pool_reap_stale || self.pool_stale_age == 0 {
             return Ok(false);
         }
@@ -951,7 +837,7 @@ impl<C: Clock> PoolLock<C> {
     ///
     /// # Errors
     /// Propagates an SFTP error from the underlying calls.
-    pub async fn try_claim(&mut self, comment: &str) -> Result<bool> {
+    pub(crate) async fn try_claim(&mut self, comment: &str) -> Result<bool> {
         if self.is_locked().await? && !self.is_mine()? && !self.reap_if_stale().await? {
             return Ok(false);
         }
@@ -972,7 +858,7 @@ impl<C: Clock> PoolLock<C> {
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the claim is foreign and not
     /// forced, or an SFTP error from the remove path.
-    pub async fn unlock(&mut self, force: bool) -> Result<()> {
+    pub(crate) async fn unlock(&mut self, force: bool) -> Result<()> {
         if !self.is_locked().await? {
             return Ok(());
         }
@@ -1945,117 +1831,6 @@ mod tests {
         };
         assert!(p.is_mine().unwrap());
     }
-    #[tokio::test]
-    async fn pool_accessors_report_foreign_claim() {
-        // `list_locks --pool` reads locked_by/rrid/time off a foreign claim.
-        let foreign = b"1700000000:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec();
-        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
-        let mut p = pool(conn, "SUSE:Maintenance:1:2");
-        assert!(p.is_locked().await.unwrap());
-        assert_eq!(p.locked_by().await.unwrap(), "otheruser");
-        // A pool claim surfaces the parsed RRID, not the raw comment.
-        assert_eq!(p.rrid().await.unwrap(), "SUSE:Maintenance:9:9");
-        // 1700000000 → a real formatted UTC time (not "unknown").
-        assert!(p.time().await.unwrap().ends_with("UTC"));
-    }
-
-    #[tokio::test]
-    async fn pool_accessors_empty_on_unclaimed_host() {
-        let mut p = pool(MockConnection::new("h1"), "SUSE:Maintenance:1:2");
-        assert!(!p.is_locked().await.unwrap());
-        assert_eq!(p.locked_by().await.unwrap(), "");
-        assert_eq!(p.rrid().await.unwrap(), "");
-    }
-
-    #[tokio::test]
-    async fn pool_rrid_empty_for_non_pool_comment() {
-        // A claim whose comment is not a `mtui pool …` stamp parses to no RRID.
-        let weird = b"1700000000:otheruser:99:some other comment".to_vec();
-        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, weird);
-        let mut p = pool(conn, "SUSE:Maintenance:1:2");
-        assert!(p.is_locked().await.unwrap());
-        assert_eq!(p.rrid().await.unwrap(), "");
-    }
-
-    // --- with_locked (LockedTargets) ---------------------------------------
-
-    #[derive(Default)]
-    struct SpyLock {
-        locked: Arc<AtomicU64>,
-        unlocked: Arc<AtomicU64>,
-        fail_acquire: bool,
-    }
-
-    #[async_trait::async_trait]
-    impl Lockable for SpyLock {
-        async fn acquire(&mut self, _comment: &str) -> Result<()> {
-            if self.fail_acquire {
-                return Err(HostError::TargetLocked("busy".into()));
-            }
-            self.locked.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-        async fn release(&mut self) -> Result<()> {
-            self.unlocked.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    fn spy(counters: &(Arc<AtomicU64>, Arc<AtomicU64>)) -> SpyLock {
-        SpyLock {
-            locked: counters.0.clone(),
-            unlocked: counters.1.clone(),
-            fail_acquire: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn with_locked_locks_and_unlocks_all() {
-        let c = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
-        let mut targets = vec![spy(&c), spy(&c)];
-        let out = with_locked(&mut targets, "", async { Ok(99u32) })
-            .await
-            .unwrap();
-        assert_eq!(out, 99);
-        assert_eq!(c.0.load(Ordering::SeqCst), 2, "both locked");
-        assert_eq!(c.1.load(Ordering::SeqCst), 2, "both unlocked");
-    }
-
-    #[tokio::test]
-    async fn with_locked_unlocks_even_when_body_errors() {
-        let c = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
-        let mut targets = vec![spy(&c), spy(&c)];
-        let res: Result<()> = with_locked(&mut targets, "", async {
-            Err(HostError::TargetLocked("boom".into()))
-        })
-        .await;
-        assert!(res.is_err());
-        assert_eq!(c.0.load(Ordering::SeqCst), 2, "both locked");
-        assert_eq!(
-            c.1.load(Ordering::SeqCst),
-            2,
-            "both unlocked despite body error"
-        );
-    }
-
-    #[tokio::test]
-    async fn with_locked_rolls_back_on_acquire_failure() {
-        let c = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
-        let first = spy(&c);
-        let failing = SpyLock {
-            locked: c.0.clone(),
-            unlocked: c.1.clone(),
-            fail_acquire: true,
-        };
-        let mut targets = vec![first, failing];
-        let res: Result<()> = with_locked(&mut targets, "", async { Ok(()) }).await;
-        assert!(res.is_err());
-        // The first target was locked (1) then rolled back (unlocked 1); the
-        // failing second never locked. Body never ran.
-        assert_eq!(c.0.load(Ordering::SeqCst), 1);
-        assert_eq!(c.1.load(Ordering::SeqCst), 1);
-    }
-
     // --- civil date ---------------------------------------------------------
 
     #[test]

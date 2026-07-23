@@ -7,9 +7,9 @@
 //! the loop's [`step`](repl::step) seam without a TTY.
 
 pub mod completer;
-pub mod edit;
+pub(crate) mod edit;
 pub mod highlighter;
-pub mod history;
+pub(crate) mod history;
 pub mod logfmt;
 pub mod notification;
 pub mod prompt;
@@ -17,14 +17,9 @@ pub mod repl;
 pub mod shell;
 pub mod startup;
 
-pub use completer::MtuiCompleter;
-pub use edit::{is_edit_line, run_edit};
-pub use highlighter::MtuiHighlighter;
-pub use history::file_backed_history;
-pub use notification::{display, notify_user};
+pub use notification::notify_user;
 pub use prompt::MtuiPrompt;
-pub use repl::{Repl, step};
-pub use shell::{is_shell_line, run_shell};
+pub use repl::Repl;
 pub use startup::seed_session;
 
 use std::io::Write;

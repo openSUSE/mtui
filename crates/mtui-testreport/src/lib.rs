@@ -22,23 +22,19 @@ pub use checkout::{
     testreport_svn_checkout,
 };
 pub use export::{
-    AutoExport, BytesFetcher, DenyOverwrite, DownloadError, ErrorMode, ExportContext, Exporter,
-    KernelExport, ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs,
-    inject_overview,
+    AutoExport, BytesFetcher, DenyOverwrite, DownloadError, ErrorMode, ExportContext, KernelExport,
+    ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs, inject_overview,
 };
 pub use lifecycle::{UpdateKind, make_testreport};
-pub use metadata_parsers::{JSONParser, MetadataEnvelope, ReducedMetadataParser, patchinfo_titles};
+pub use metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_titles};
 pub use products::{normalize, normalize_16};
 pub use reports::repoparse::{
     ProductParseError, gitrepoparse, obsrepoparse, parse_product, reporepoparse, slrepoparse,
 };
 pub use reports::{NullReport, ObsReport, PiReport, SlReport};
-pub use support::{FileList, atomic_write_file, detect_system, system_info, timestamp};
+pub use support::{FileList, atomic_write_file, detect_system, system_info};
 pub use testreport::{
     HashCheck, ReadError, ReportOpenQA, ReviewerError, SlackReviewError, SlackReviewMarker,
     TestReport, TestReportBase,
 };
-pub use update_workflow::{
-    CheckProvider, Diagnostic, DoerProvider, Role, TemplateError, UpdateError, WorkflowKey,
-    WorkflowRegistry, safe_substitute, substitute,
-};
+pub use update_workflow::{Diagnostic, UpdateError};

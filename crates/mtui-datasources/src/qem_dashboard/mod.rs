@@ -35,6 +35,6 @@ pub mod client;
 pub mod dashboard_openqa;
 pub mod incident;
 
-pub use client::{FAILED_RESULTS, FUTURE_TIMEOUT, QemDashboardClient};
+pub use client::QemDashboardClient;
 pub use dashboard_openqa::DashboardAutoOpenQA;
 pub use incident::QemIncident;

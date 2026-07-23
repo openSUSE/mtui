@@ -75,7 +75,7 @@ fn yum() -> ActionCommands {
 /// The downgrade command for `(release, transactional)`, or `None` for an
 /// unknown key (provider maps `None` to `MissingDowngraderError`).
 #[must_use]
-pub fn downgrader(release: &str, transactional: bool) -> Option<ActionCommands> {
+pub(crate) fn downgrader(release: &str, transactional: bool) -> Option<ActionCommands> {
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),
         ("YUM", false) => Some(yum()),

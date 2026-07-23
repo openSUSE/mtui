@@ -26,16 +26,17 @@ pub mod target;
 #[cfg(feature = "shell")]
 pub use connection::ShellChannel;
 pub use connection::{
-    CommandTimeout, Connection, HostKeyPolicy, MAX_STREAM_BYTES, MAX_TOTAL_BYTES, MockConnection,
-    MockSftpOp, SshConnection, TimeoutPrompt,
+    CommandTimeout, Connection, HostKeyPolicy, MAX_STREAM_BYTES, MockConnection, MockSftpOp,
+    SshConnection, TimeoutPrompt,
 };
 pub use error::{HostError, Result};
 pub use prompter::{Prompter, Reader};
+#[cfg(test)]
+pub(crate) use target::POOL_LOCK_PATH;
 pub use target::{
     Check, CheckArgs, Clock, Command, Doer, HostArbiter, HostPlan, HostsGroup, InstallOperation,
-    LastOutput, LockOutcome, Lockable, Operation, OperationGroup, Owner, POOL_LOCK_PATH,
-    PackageQuerier, PlanProvider, PoolLock, RemoteLock, RepoManager, RepoOp, RunCommand, SetRepo,
-    Sink, SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH, Target, TargetLock, TtySpinner,
-    UninstallOperation, get_arbiter, parse_os_release, parse_product, parse_system, run_parallel,
-    set_test_sink, sftp_get_all, sftp_put_all, sftp_remove_all, spinner, suspend, with_locked,
+    LockOutcome, Operation, OperationGroup, Owner, PackageQuerier, PlanProvider, PoolLock,
+    RemoteLock, RepoManager, RepoOp, SetRepo, Sink, SpinnerGuard, Suspend, SystemClock,
+    TARGET_LOCK_PATH, Target, TargetLock, TtySpinner, UninstallOperation, get_arbiter,
+    parse_system, set_test_sink, spinner, suspend,
 };

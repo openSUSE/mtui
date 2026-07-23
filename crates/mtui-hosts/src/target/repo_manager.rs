@@ -66,7 +66,7 @@ pub enum RepoOp {
 impl RepoOp {
     /// The upstream string token for this operation (`"add"` / `"remove"`).
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Add => "add",
             Self::Remove => "remove",
@@ -115,7 +115,7 @@ impl<'a> RepoManager<'a> {
     /// as `Target.set_repo`): logs at debug and forwards to
     /// [`SetRepo::set_repo`], the report-side hook implemented in
     /// `mtui-testreport`.
-    pub async fn set(&mut self, operation: RepoOp, report: &dyn SetRepo) {
+    pub(crate) async fn set(&mut self, operation: RepoOp, report: &dyn SetRepo) {
         debug!(host = %self.target.hostname(), op = operation.as_str(), "changing repos");
         report.set_repo(self.target, operation).await;
     }

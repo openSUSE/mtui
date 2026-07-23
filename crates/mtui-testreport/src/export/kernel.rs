@@ -17,9 +17,9 @@ pub struct KernelExport {
     /// Shared export state and helpers.
     pub ctx: ExportContext,
     /// The kernel openQA connector results (regular + baremetal instances).
-    pub kernel: Vec<KernelOpenQA>,
+    kernel: Vec<KernelOpenQA>,
     /// The openqa_overview payload, if the overview command ran.
-    pub overview: Option<OpenQAOverviewResult>,
+    overview: Option<OpenQAOverviewResult>,
 }
 
 impl KernelExport {
@@ -39,7 +39,7 @@ impl KernelExport {
 
     /// Downloads the kernel logs and returns the `*.log` filenames now present
     /// in the install-logs directory (upstream `get_logs`).
-    pub async fn get_logs(&self, fetcher: &dyn BytesFetcher) -> Vec<String> {
+    async fn get_logs(&self, fetcher: &dyn BytesFetcher) -> Vec<String> {
         let in_path = self.ctx.install_logs_dir();
         let res_path = self
             .ctx
@@ -98,7 +98,7 @@ impl KernelExport {
     /// if present); otherwise the block replaces any existing content between the
     /// kernel-default link (or the `regression tests:` header) and
     /// `build log review:`.
-    pub fn kernel_results(&mut self, now: &str) {
+    fn kernel_results(&mut self, now: &str) {
         let template = &mut self.ctx.template;
         let Some(regression) = template.iter().position(|l| l == "regression tests:\n") else {
             return;

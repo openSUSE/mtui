@@ -65,7 +65,7 @@ impl SystemProduct {
 #[error("unknown system: {name}")]
 pub struct UnknownSystemError {
     /// The unrecognised base product name.
-    pub name: String,
+    name: String,
 }
 
 /// The system information of a target host: a base product plus addons.

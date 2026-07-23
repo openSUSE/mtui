@@ -73,10 +73,10 @@ fn remove_close_timeout() -> Duration {
 pub struct RemoveReport {
     /// Hosts that failed to disconnect, as `(hostname, error)` pairs (upstream
     /// `failed to disconnect from <host>: <err>`).
-    pub failed: Vec<(String, String)>,
+    pub(crate) failed: Vec<(String, String)>,
     /// Hosts still disconnecting when the close budget expired (upstream
     /// `still disconnecting from <host> after <secs> seconds`).
-    pub stragglers: Vec<String>,
+    pub(crate) stragglers: Vec<String>,
 }
 
 /// Holds the loaded templates and tracks the active one.
@@ -153,7 +153,7 @@ impl TemplateRegistry {
     /// the old report (empty for a new insert); the caller may log them
     /// best-effort. The empty-RRID null sentinel is ignored exactly as by
     /// [`add`](Self::add).
-    pub async fn add_or_replace(
+    pub(crate) async fn add_or_replace(
         &mut self,
         report: Box<dyn TestReport + Send + Sync>,
     ) -> RemoveReport {
@@ -251,7 +251,7 @@ impl TemplateRegistry {
     /// prior `get(rrid).map(..).unwrap_or(true)` fan-out skip check. Locks the
     /// entry (uncontended under the outer session mutex).
     #[must_use]
-    pub fn is_hostless(&self, rrid: &str) -> bool {
+    pub(crate) fn is_hostless(&self, rrid: &str) -> bool {
         match self.entries.get(rrid) {
             Some(entry) => entry
                 .try_lock()
@@ -263,7 +263,7 @@ impl TemplateRegistry {
     /// Reads the connected-host count and workflow label for `rrid`, or `None`
     /// if absent (for `list_templates`). Locks the entry (uncontended).
     #[must_use]
-    pub fn template_row(&self, rrid: &str) -> Option<(usize, &'static str)> {
+    pub(crate) fn template_row(&self, rrid: &str) -> Option<(usize, &'static str)> {
         let entry = self.entries.get(rrid)?;
         let report = entry.try_lock().ok()?;
         Some((report.base().targets.len(), report.base().workflow.as_str()))
@@ -287,7 +287,7 @@ impl TemplateRegistry {
     }
 
     /// Clears the active pointer (the empty-session state).
-    pub fn set_active_none(&mut self) {
+    pub(crate) fn set_active_none(&mut self) {
         self.active = None;
     }
 
@@ -330,7 +330,7 @@ impl TemplateRegistry {
     /// The stable [`id`](Self::id) is preserved so a snapshot keeps the same
     /// host-arbitration owner-key seed as the canonical registry.
     #[must_use]
-    pub fn snapshot(&self) -> Self {
+    pub(crate) fn snapshot(&self) -> Self {
         Self {
             entries: self
                 .entries

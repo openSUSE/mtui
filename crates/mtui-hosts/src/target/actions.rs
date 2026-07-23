@@ -15,8 +15,8 @@
 //! * [`RunCommand`] partitions the group into parallel and serial hosts by
 //!   [`ExecutionMode`] and dispatches a command (one string for all hosts, or a
 //!   per-host map) to each.
-//! * [`sftp_put_all`] / [`sftp_get_all`] / [`sftp_remove_all`] are the async
-//!   equivalents of upstream's `FileUpload` / `FileDownload` / `FileDelete`.
+//! * [`sftp_put_all`] / [`sftp_get_all`] are the async equivalents of
+//!   upstream's `FileUpload` / `FileDownload`.
 //!
 //! ### Why no output lock
 //!
@@ -82,7 +82,7 @@ const SHARED_UPLOAD_CAP: u64 = 8 * 1024 * 1024;
 /// Target` borrows), so a bounded, out-of-order scheduler
 /// (`buffer_unordered`) is observably equivalent to the previous unbounded
 /// `join_all`.
-pub async fn run_parallel<I, F>(futures: I, desc: Option<&str>, max_parallel: usize)
+async fn run_parallel<I, F>(futures: I, desc: Option<&str>, max_parallel: usize)
 where
     I: IntoIterator<Item = F>,
     F: std::future::Future<Output = ()>,
@@ -133,7 +133,8 @@ where
 /// carries its own `'a` lifetime, so callers just wrap their async block in
 /// [`Box::pin`]. The per-call allocation is negligible next to the SSH round
 /// trip each op performs.
-pub type BoxTargetFut<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+pub(crate) type BoxTargetFut<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 
 /// Drives a per-target async `op` across a group, honouring [`ExecutionMode`].
 ///
@@ -155,7 +156,7 @@ pub type BoxTargetFut<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = (
 /// `should_run` lets a caller skip a target entirely (e.g. a
 /// [`Command::PerHost`] map that does not cover it); return `false` to omit it
 /// from both batches.
-pub async fn run_fanout<'t, S, F>(
+pub(crate) async fn run_fanout<'t, S, F>(
     targets: &'t mut BTreeMap<String, Target>,
     is_repl: bool,
     prompter: Option<&Prompter>,
@@ -274,7 +275,7 @@ impl From<BTreeMap<String, String>> for Command {
 /// that prompt before each serial host; headless callers (`mtui-mcp`) pass
 /// `None` and serial hosts run back-to-back. No stdin/TTY code lives in this
 /// crate — the reader is injected via the [`Prompter`].
-pub struct RunCommand<'a> {
+pub(crate) struct RunCommand<'a> {
     targets: &'a mut BTreeMap<String, Target>,
     command: Command,
     is_repl: bool,
@@ -291,7 +292,7 @@ impl<'a> RunCommand<'a> {
     /// unconfigured (`0` → [`DEFAULT_MAX_PARALLEL`]); set it with
     /// [`with_max_parallel`](Self::with_max_parallel).
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         targets: &'a mut BTreeMap<String, Target>,
         command: impl Into<Command>,
         is_repl: bool,
@@ -309,7 +310,7 @@ impl<'a> RunCommand<'a> {
     /// Sets the parallel-batch concurrency bound (builder-style). `0` falls back
     /// to [`DEFAULT_MAX_PARALLEL`].
     #[must_use]
-    pub fn with_max_parallel(mut self, max_parallel: usize) -> Self {
+    pub(crate) fn with_max_parallel(mut self, max_parallel: usize) -> Self {
         self.max_parallel = max_parallel;
         self
     }
@@ -321,7 +322,7 @@ impl<'a> RunCommand<'a> {
     /// [`run_fanout`] primitive; the only command-specific logic here is
     /// resolving the per-host command string and skipping hosts a
     /// [`PerHost`](Command::PerHost) map does not cover.
-    pub async fn run(self) {
+    pub(crate) async fn run(self) {
         let Self {
             targets,
             command,
@@ -356,7 +357,7 @@ impl<'a> RunCommand<'a> {
 ///
 /// Async equivalent of upstream `FileUpload`. Errors are swallowed and logged by
 /// [`Target::sftp_put`]; this helper never fails.
-pub async fn sftp_put_all(
+pub(crate) async fn sftp_put_all(
     targets: &mut BTreeMap<String, Target>,
     local: &Path,
     remote: &Path,
@@ -405,7 +406,7 @@ pub async fn sftp_put_all(
 ///
 /// Async equivalent of upstream `FileDownload`. Errors are swallowed and logged
 /// by [`Target::sftp_get`]; this helper never fails.
-pub async fn sftp_get_all(
+pub(crate) async fn sftp_get_all(
     targets: &mut BTreeMap<String, Target>,
     remote: &str,
     local: &Path,
@@ -418,25 +419,6 @@ pub async fn sftp_get_all(
     let futs = targets.values_mut().map(|t| {
         let (remote, local) = (remote.clone(), local.clone());
         async move { t.sftp_get(&remote, &local).await }
-    });
-    run_parallel(futs, desc, max_parallel).await;
-}
-
-/// Deletes `path` on every target in parallel.
-///
-/// Async equivalent of upstream `FileDelete`. Errors are swallowed and logged by
-/// [`Target::sftp_remove`]; this helper never fails.
-pub async fn sftp_remove_all(
-    targets: &mut BTreeMap<String, Target>,
-    path: &Path,
-    is_repl: bool,
-    max_parallel: usize,
-) {
-    let desc = if is_repl { Some("FileDelete") } else { None };
-    let path = path.to_path_buf();
-    let futs = targets.values_mut().map(|t| {
-        let path = path.clone();
-        async move { t.sftp_remove(&path).await }
     });
     run_parallel(futs, desc, max_parallel).await;
 }
@@ -852,24 +834,5 @@ mod tests {
             [MockSftpOp::Get { remote, local }]
                 if remote == Path::new("/remote/f") && local == Path::new("/local/f.h1")
         ));
-    }
-
-    #[tokio::test]
-    async fn sftp_remove_all_removes_on_every_host() {
-        let (m1, m2) = (echo("h1", ""), echo("h2", ""));
-        let (h1, h2) = (m1.clone(), m2.clone());
-        let mut g = group(vec![
-            target("h1", ExecutionMode::Parallel, m1),
-            target("h2", ExecutionMode::Parallel, m2),
-        ]);
-
-        sftp_remove_all(&mut g, Path::new("/remote/f"), false, 0).await;
-
-        for h in [&h1, &h2] {
-            assert!(matches!(
-                h.sftp_ops().as_slice(),
-                [MockSftpOp::Remove(p)] if p == Path::new("/remote/f")
-            ));
-        }
     }
 }

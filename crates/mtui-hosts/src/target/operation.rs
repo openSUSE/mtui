@@ -84,77 +84,31 @@ impl Doer {
     ///
     /// Mirrors upstream `doer["command"].substitute(packages=" ".join(packages))`.
     #[must_use]
-    pub fn command(&self, packages: &str) -> String {
+    fn command(&self, packages: &str) -> String {
         self.command_template.replace("$packages", packages)
-    }
-
-    /// Substitutes both `$repa` and `$packages` in the command template.
-    ///
-    /// Mirrors upstream `doer["command"].safe_substitute(repa=..., packages=...)`
-    /// used by `perform_update` for the `updater` role. `$repa` is replaced
-    /// first so a `packages` value that happens to contain the literal `$repa`
-    /// is not re-substituted (upstream's `string.Template` is single-pass);
-    /// other `$`-tokens the update templates embed for the remote shell (e.g.
-    /// `$$r`, `awk … $2`) are left untouched, matching `safe_substitute`.
-    #[must_use]
-    pub fn command_with_repa(&self, repa: &str, packages: &str) -> String {
-        self.command_template
-            .replace("$repa", repa)
-            .replace("$packages", packages)
     }
 
     /// The reboot command for a transactional host.
     ///
     /// Mirrors upstream `doer["reboot"].substitute()` (no variables).
     #[must_use]
-    pub fn reboot(&self) -> String {
+    fn reboot(&self) -> String {
         self.reboot_template.clone()
     }
 }
 
 /// The post-run *check* callable for one target.
 ///
-/// Invoked once per target as `check(hostname, lastout, lastin, lasterr,
-/// lastexit)`, mirroring upstream's
-/// `check(t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit())`.
-/// Boxed so it is object-safe and can be produced per target by the doer/check
-/// registry seam.
+/// Invoked once per target as `check(hostname)`, mirroring upstream's
+/// per-target check hook. Boxed so it is object-safe and can be produced per
+/// target by the doer/check registry seam.
 pub type Check = Box<dyn FnMut(CheckArgs<'_>) + Send>;
 
-/// The argument tuple passed to a [`Check`], keeping the call site readable and
-/// matching upstream's positional `(hostname, lastout, lastin, lasterr,
-/// lastexit)`.
+/// The argument tuple passed to a [`Check`], keeping the call site readable.
 #[derive(Debug, Clone, Copy)]
 pub struct CheckArgs<'a> {
     /// The host the command ran on.
     pub hostname: &'a str,
-    /// The command's stdout ([`Target::lastout`](super::Target::lastout)).
-    pub lastout: &'a str,
-    /// The command that was run ([`Target::lastin`](super::Target::lastin)).
-    pub lastin: &'a str,
-    /// The command's stderr ([`Target::lasterr`](super::Target::lasterr)).
-    pub lasterr: &'a str,
-    /// The command's exit code ([`Target::lastexit`](super::Target::lastexit)),
-    /// or `None` when nothing has run yet.
-    pub lastexit: Option<i16>,
-}
-
-/// A snapshot of one host's `last*` values, read from the group after a run.
-///
-/// The template reads these through [`OperationGroup::last_output`] rather than
-/// borrowing individual `Target`s, keeping the seam object-safe. The field set
-/// matches upstream's `(lastout, lastin, lasterr, lastexit)` check arguments.
-#[derive(Debug, Default, Clone)]
-pub struct LastOutput {
-    /// stdout of the last command ([`Target::lastout`](super::Target::lastout)).
-    pub lastout: String,
-    /// the last command string ([`Target::lastin`](super::Target::lastin)).
-    pub lastin: String,
-    /// stderr of the last command ([`Target::lasterr`](super::Target::lasterr)).
-    pub lasterr: String,
-    /// exit code of the last command
-    /// ([`Target::lastexit`](super::Target::lastexit)), or `None` if nothing ran.
-    pub lastexit: Option<i16>,
 }
 
 /// One host's contribution to an [`Operation`], resolved during
@@ -166,14 +120,14 @@ pub struct LastOutput {
 /// the paired check callable.
 pub struct HostPlan {
     /// The host this plan applies to.
-    pub hostname: String,
+    pub(crate) hostname: String,
     /// Whether the host is transactional (read-only-root); only transactional
     /// hosts contribute to the reboot map.
-    pub transactional: bool,
+    pub(crate) transactional: bool,
     /// The resolved doer for this host.
-    pub doer: Doer,
+    pub(crate) doer: Doer,
     /// The paired check callable for this host.
-    pub check: Check,
+    pub(crate) check: Check,
 }
 
 /// The subset of [`HostsGroup`](super::HostsGroup) behaviour the [`Operation`]
@@ -219,13 +173,6 @@ pub trait OperationGroup: Send {
 
     /// Releases the shared operation lock (`HostsGroup.unlock`).
     async fn unlock(&mut self);
-
-    /// Snapshots one host's `last*` values *at call time*.
-    ///
-    /// Read after [`run`](OperationGroup::run) so each check sees the values the
-    /// command produced, mirroring upstream's per-target `t.lastout()` /
-    /// `t.lastin()` / `t.lasterr()` / `t.lastexit()` reads.
-    fn last_output(&self, hostname: &str) -> LastOutput;
 }
 
 /// The install/uninstall template method.
@@ -310,13 +257,8 @@ pub trait Operation: Send + Sync {
         // grows fallible steps.
         group.run(commands).await;
         for plan in &mut plans {
-            let last = group.last_output(&plan.hostname);
             (plan.check)(CheckArgs {
                 hostname: &plan.hostname,
-                lastout: &last.lastout,
-                lastin: &last.lastin,
-                lasterr: &last.lasterr,
-                lastexit: last.lastexit,
             });
         }
         group.reboot(reboot).await;
@@ -457,13 +399,7 @@ mod plan_provider_tests {
         assert_eq!(doer.command("pkg"), "zypper -n in pkg");
         // The no-op check does not panic and returns unit.
         let mut check = p.check("installer", "15", false);
-        check(CheckArgs {
-            hostname: "h1",
-            lastout: "",
-            lastin: "",
-            lasterr: "",
-            lastexit: Some(0),
-        });
+        check(CheckArgs { hostname: "h1" });
     }
 
     #[test]
@@ -479,9 +415,8 @@ mod tests {
     //! Ported from upstream `tests/test_operation.py`. Upstream drives the
     //! template against a `MagicMock` group and `MagicMock` targets; the Rust
     //! analogue is [`MockGroup`], an [`OperationGroup`] that records the ordered
-    //! sequence of calls and serves scripted plans / `last*` values.
+    //! sequence of calls and serves scripted plans.
 
-    use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -493,9 +428,8 @@ mod tests {
         Run(Vec<(String, String)>),
         Reboot(Vec<(String, String)>),
         Unlock,
-        /// A per-host check invocation: `(hostname, lastout, lastin, lasterr,
-        /// lastexit)`.
-        Check(String, String, String, String, Option<i16>),
+        /// A per-host check invocation, carrying the host it ran on.
+        Check(String),
     }
 
     /// A scriptable [`OperationGroup`] test double.
@@ -504,8 +438,6 @@ mod tests {
         plans: Option<Result<Vec<HostPlan>, HostError>>,
         /// Roles `plans` was called with, for role-assertion tests.
         roles_seen: Arc<Mutex<Vec<String>>>,
-        /// Per-host `last*` snapshots served by `last_output`.
-        last: BTreeMap<String, LastOutput>,
         /// The ordered event log.
         events: Arc<Mutex<Vec<Event>>>,
         /// When `true`, `update_lock` records its event then returns
@@ -514,11 +446,8 @@ mod tests {
     }
 
     impl MockGroup {
-        fn new(
-            plans: Result<Vec<HostPlan>, HostError>,
-            last: BTreeMap<String, LastOutput>,
-        ) -> Self {
-            Self::with_event_log(plans, last, Arc::new(Mutex::new(Vec::new())))
+        fn new(plans: Result<Vec<HostPlan>, HostError>) -> Self {
+            Self::with_event_log(plans, Arc::new(Mutex::new(Vec::new())))
         }
 
         /// Like [`new`](Self::new) but reuses a caller-owned event log, so
@@ -526,13 +455,11 @@ mod tests {
         /// lock/run/reboot/unlock for strict ordering assertions.
         fn with_event_log(
             plans: Result<Vec<HostPlan>, HostError>,
-            last: BTreeMap<String, LastOutput>,
             events: Arc<Mutex<Vec<Event>>>,
         ) -> Self {
             Self {
                 plans: Some(plans),
                 roles_seen: Arc::new(Mutex::new(Vec::new())),
-                last,
                 events,
                 fail_update_lock: false,
             }
@@ -581,10 +508,6 @@ mod tests {
         async fn unlock(&mut self) {
             self.events.lock().unwrap().push(Event::Unlock);
         }
-
-        fn last_output(&self, hostname: &str) -> LastOutput {
-            self.last.get(hostname).cloned().unwrap_or_default()
-        }
     }
 
     /// Builds a [`HostPlan`] whose check records a [`Event::Check`] into `sink`.
@@ -595,13 +518,9 @@ mod tests {
         sink: Arc<Mutex<Vec<Event>>>,
     ) -> HostPlan {
         let check: Check = Box::new(move |a: CheckArgs<'_>| {
-            sink.lock().unwrap().push(Event::Check(
-                a.hostname.to_owned(),
-                a.lastout.to_owned(),
-                a.lastin.to_owned(),
-                a.lasterr.to_owned(),
-                a.lastexit,
-            ));
+            sink.lock()
+                .unwrap()
+                .push(Event::Check(a.hostname.to_owned()));
         });
         HostPlan {
             hostname: hostname.to_owned(),
@@ -622,23 +541,6 @@ mod tests {
         let doer = Doer::new("zypper -n in $packages", "systemctl reboot");
         assert_eq!(doer.command("pkg-a pkg-b"), "zypper -n in pkg-a pkg-b");
         assert_eq!(doer.reboot(), "systemctl reboot");
-    }
-
-    #[test]
-    fn doer_command_with_repa_substitutes_both_and_leaves_shell_tokens() {
-        // Mirrors the updater template shape: interpolates $repa + $packages but
-        // must leave the remote-shell `$$r` and `awk … $2` tokens untouched.
-        let doer = Doer::new(
-            "zypper -n patches | grep $repa\nzypper -n in $packages\n\
-             zypper -n lr | awk '/$repa/ {{ print $2; }}' | while read r; do rr $$r; done",
-            "systemctl reboot",
-        );
-        let out = doer.command_with_repa(":p=1:2", "pkg-a pkg-b");
-        assert_eq!(
-            out,
-            "zypper -n patches | grep :p=1:2\nzypper -n in pkg-a pkg-b\n\
-             zypper -n lr | awk '/:p=1:2/ {{ print $2; }}' | while read r; do rr $$r; done"
-        );
     }
 
     // --- collect(): commands per host; reboot only for transactional --------
@@ -725,12 +627,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_returns_early_without_touching_lock_when_plans_errors() {
-        let mut group = MockGroup::new(
-            Err(HostError::MissingInstaller {
-                release: "opensuse-15.4".to_owned(),
-            }),
-            BTreeMap::new(),
-        );
+        let mut group = MockGroup::new(Err(HostError::MissingInstaller {
+            release: "opensuse-15.4".to_owned(),
+        }));
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
         op.run(&mut group).await;
@@ -757,9 +656,7 @@ mod tests {
             Doer::new("in $packages", "r"),
             sink,
         )];
-        let mut last = BTreeMap::new();
-        last.insert("h1".to_owned(), LastOutput::default());
-        let mut group = MockGroup::new(Ok(plans), last);
+        let mut group = MockGroup::new(Ok(plans));
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
         op.run(&mut group).await;
@@ -789,9 +686,7 @@ mod tests {
             Doer::new("in $packages", "r"),
             sink,
         )];
-        let mut last = BTreeMap::new();
-        last.insert("h1".to_owned(), LastOutput::default());
-        let mut group = MockGroup::new(Ok(plans), last).failing_update_lock();
+        let mut group = MockGroup::new(Ok(plans)).failing_update_lock();
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
         op.run(&mut group).await;
@@ -801,36 +696,16 @@ mod tests {
         assert_eq!(group.events(), vec![Event::UpdateLock]);
     }
 
-    // --- run(): check invoked per target with (hostname, last*) -------------
-    // Upstream: test_operation_check_called_per_target_with_lastN_args.
+    // --- run(): check invoked once per target -------------------------------
 
     #[tokio::test]
-    async fn check_is_called_per_target_with_lastn_args() {
+    async fn check_is_called_per_target() {
         let sink = Arc::new(Mutex::new(Vec::new()));
         let plans = vec![
             plan_with_recording_check("h1", false, Doer::new("in $packages", "r"), sink.clone()),
             plan_with_recording_check("h2", false, Doer::new("in $packages", "r"), sink.clone()),
         ];
-        let mut last = BTreeMap::new();
-        last.insert(
-            "h1".to_owned(),
-            LastOutput {
-                lastout: "OUT-1".to_owned(),
-                lastin: "IN-1".to_owned(),
-                lasterr: "ERR-1".to_owned(),
-                lastexit: Some(0),
-            },
-        );
-        last.insert(
-            "h2".to_owned(),
-            LastOutput {
-                lastout: "OUT-2".to_owned(),
-                lastin: "IN-2".to_owned(),
-                lasterr: "ERR-2".to_owned(),
-                lastexit: Some(1),
-            },
-        );
-        let mut group = MockGroup::new(Ok(plans), last);
+        let mut group = MockGroup::new(Ok(plans));
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
         op.run(&mut group).await;
@@ -838,22 +713,7 @@ mod tests {
         let checks: Vec<Event> = sink.lock().unwrap().clone();
         assert_eq!(
             checks,
-            vec![
-                Event::Check(
-                    "h1".to_owned(),
-                    "OUT-1".to_owned(),
-                    "IN-1".to_owned(),
-                    "ERR-1".to_owned(),
-                    Some(0),
-                ),
-                Event::Check(
-                    "h2".to_owned(),
-                    "OUT-2".to_owned(),
-                    "IN-2".to_owned(),
-                    "ERR-2".to_owned(),
-                    Some(1),
-                ),
-            ]
+            vec![Event::Check("h1".to_owned()), Event::Check("h2".to_owned())]
         );
         // Reboot still runs (with an empty map, since neither host is transactional).
         assert!(
@@ -874,9 +734,7 @@ mod tests {
             Doer::new("in $packages", "systemctl reboot"),
             log.clone(),
         )];
-        let mut last = BTreeMap::new();
-        last.insert("h1".to_owned(), LastOutput::default());
-        let mut group = MockGroup::with_event_log(Ok(plans), last, log);
+        let mut group = MockGroup::with_event_log(Ok(plans), log);
 
         InstallOperation::new(strs(&["pkg-a"]))
             .run(&mut group)
@@ -935,9 +793,7 @@ mod tests {
             Doer::new("in $packages", "r"),
             sink,
         )];
-        let mut last = BTreeMap::new();
-        last.insert("h1".to_owned(), LastOutput::default());
-        let mut group = MockGroup::new(Ok(plans), last);
+        let mut group = MockGroup::new(Ok(plans));
 
         UninstallOperation::new(strs(&["pkg"]))
             .run(&mut group)

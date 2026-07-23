@@ -182,7 +182,7 @@ impl Args {
     /// `--config`, `--debug`, `--color`, `--sut`, and `-a`/`-k` are *not* config
     /// keys — they steer path resolution, logging, host seeding, and workflow
     /// selection respectively — so they are intentionally not merged here.
-    pub fn apply_to(&self, config: &mut Config) {
+    fn apply_to(&self, config: &mut Config) {
         if let Some(dir) = &self.template_dir {
             config.template_dir = dir.clone();
         }

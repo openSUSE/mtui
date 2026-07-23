@@ -18,11 +18,11 @@
 //!
 //! [`template`]: crate::update_workflow::template
 
-pub mod downgrade;
-pub mod install;
-pub mod prepare;
-pub mod uninstall;
-pub mod update;
+pub(crate) mod downgrade;
+pub(crate) mod install;
+pub(crate) mod prepare;
+pub(crate) mod uninstall;
+pub(crate) mod update;
 
 use std::collections::HashMap;
 
@@ -63,18 +63,18 @@ impl SubstMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionCommands {
     /// The primary command template (upstream `"command"`), always present.
-    pub command: String,
+    command: String,
     /// The transactional reboot template (upstream `"reboot"`); present only for
     /// transactional (`slmicro`) entries.
-    pub reboot: Option<String>,
+    reboot: Option<String>,
     /// The "only if already installed" variant (upstream `"installed_only"`);
     /// present only for `prepare` actions.
-    pub installed_only: Option<String>,
+    installed_only: Option<String>,
     /// The package-listing helper (upstream `"list_command"`); present only for
     /// `downgrade` actions.
-    pub list_command: Option<String>,
+    list_command: Option<String>,
     /// The substitution mode for this action's templates.
-    pub mode: SubstMode,
+    mode: SubstMode,
 }
 
 impl ActionCommands {
@@ -117,7 +117,10 @@ impl ActionCommands {
     ///
     /// In [`Strict`](SubstMode::Strict) mode, propagates [`TemplateError`] from
     /// the underlying substitution (missing key or malformed placeholder).
-    pub fn render_command(&self, vars: &HashMap<&str, &str>) -> Result<String, TemplateError> {
+    pub(crate) fn render_command(
+        &self,
+        vars: &HashMap<&str, &str>,
+    ) -> Result<String, TemplateError> {
         self.mode.render(&self.command, vars)
     }
 
@@ -129,7 +132,7 @@ impl ActionCommands {
     ///
     /// Propagates [`TemplateError`] (never expected — the reboot template has no
     /// placeholders).
-    pub fn render_reboot(&self) -> Result<Option<String>, TemplateError> {
+    pub(crate) fn render_reboot(&self) -> Result<Option<String>, TemplateError> {
         match &self.reboot {
             Some(t) => Ok(Some(substitute(t, &HashMap::new())?)),
             None => Ok(None),
@@ -143,7 +146,7 @@ impl ActionCommands {
     ///
     /// In strict mode, propagates [`TemplateError`] from the underlying
     /// substitution.
-    pub fn render_installed_only(
+    pub(crate) fn render_installed_only(
         &self,
         vars: &HashMap<&str, &str>,
     ) -> Result<Option<String>, TemplateError> {
@@ -160,7 +163,7 @@ impl ActionCommands {
     ///
     /// In strict mode, propagates [`TemplateError`] from the underlying
     /// substitution.
-    pub fn render_list_command(
+    pub(crate) fn render_list_command(
         &self,
         vars: &HashMap<&str, &str>,
     ) -> Result<Option<String>, TemplateError> {

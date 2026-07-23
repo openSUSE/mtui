@@ -49,9 +49,9 @@ pub enum ErrorMode {
 #[error("Test: {test} on arch: {arch} missing results.json file. Please restart it.")]
 pub struct ResultsMissingError {
     /// The test name.
-    pub test: String,
+    test: String,
     /// The architecture.
-    pub arch: String,
+    arch: String,
 }
 
 /// A download failure surfaced under [`ErrorMode::Full`].

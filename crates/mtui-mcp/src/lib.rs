@@ -12,7 +12,7 @@
 // `McpArgs::command()` without dragging the MCP server graph into that build.
 pub mod args;
 #[cfg(feature = "mcp")]
-pub mod argv;
+pub(crate) mod argv;
 #[cfg(feature = "mcp")]
 pub mod capture;
 #[cfg(feature = "mcp")]
@@ -24,7 +24,7 @@ pub mod profiles;
 #[cfg(feature = "mcp")]
 pub mod provider;
 #[cfg(feature = "mcp")]
-pub mod schema;
+pub(crate) mod schema;
 #[cfg(feature = "mcp")]
 pub mod server;
 #[cfg(feature = "mcp")]
@@ -38,22 +38,19 @@ pub mod tools;
 
 pub use args::{McpArgs, Transport};
 #[cfg(feature = "mcp")]
-pub use profiles::{CORE, apply_profile, resolve_keep_set};
+pub use profiles::{CORE, resolve_keep_set};
 #[cfg(feature = "mcp")]
 pub use provider::{SessionProvider, SessionRegistry, StdioProvider};
 #[cfg(feature = "mcp")]
-pub use server::{McpServer, SpikeServer};
+pub use server::McpServer;
 #[cfg(feature = "mcp")]
 pub use session::{JobState, JobView, McpCommandError, McpSession};
 #[cfg(feature = "mcp")]
-pub use slim::{cap_output, slim_input_schema, slim_tool_schema};
+pub use slim::slim_input_schema;
 #[cfg(feature = "mcp")]
 pub use testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 #[cfg(feature = "mcp")]
-pub use tools::{
-    ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_tool_descriptors,
-    tool_routes,
-};
+pub use tools::{ToolDescriptor, ToolRoute, build_tools, job_tool_descriptors};
 
 #[cfg(feature = "mcp")]
 mod runner;
