@@ -34,7 +34,7 @@ template). Host-action commands need a loaded template with connected hosts.
 ## Does mtui support SSH password authentication?
 
 No — and it never will. mtui is **pubkey-only by design**: it authenticates from
-your SSH agent or `~/.ssh/id_*`. This is preserved from upstream MTUI.
+your SSH agent or `~/.ssh/id_*`. This is preserved from MTUI.
 
 ## Can a Rust mtui and a Python mtui share the same reference hosts?
 

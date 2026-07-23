@@ -41,7 +41,7 @@ deny-list that keeps REPL-only commands off the wire.
 
 Commands operate on an explicit `Session` (config, the `HostsGroup` targets, the
 loaded templates/metadata, the display) passed into each call — there are no
-hidden globals. This is the Rust replacement for upstream MTUI's `CommandPrompt`
+hidden globals. This is the Rust replacement for MTUI's `CommandPrompt`
 god-object.
 
 ## Composition root and the no-cycles rule
