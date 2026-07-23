@@ -11,35 +11,37 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 /// Job-group templates containing this identifier are SLE-Micro and dropped.
-pub const MICRO_TEMPLATE_IDENTIFIER: &str = "sle-micro";
+pub(crate) const MICRO_TEMPLATE_IDENTIFIER: &str = "sle-micro";
 
 /// Job-group name terms that exclude a group from either bucket.
-pub const EXCLUDED_GROUPS: &[&str] = &["DEV", "Leap", "Development", "Micro", "Kernel", "Wicked"];
+pub(crate) const EXCLUDED_GROUPS: &[&str] =
+    &["DEV", "Leap", "Development", "Micro", "Kernel", "Wicked"];
 
 /// Job-group name terms that mark a Single-Incidents / Core group.
-pub const SINGLE_INCIDENTS_TERMS: &[&str] = &["Core Incidents", "Core Staging"];
+pub(crate) const SINGLE_INCIDENTS_TERMS: &[&str] = &["Core Incidents", "Core Staging"];
 
 /// Job-group name terms that mark an Aggregated-Updates group.
-pub const AGGREGATED_GROUPS_TERMS: &[&str] = &["Maintenance Updates"];
+pub(crate) const AGGREGATED_GROUPS_TERMS: &[&str] = &["Maintenance Updates"];
 
 /// Aggregated-group name → short-name mapping (label, key).
-pub const AGGREGATED_NAME_MAP: &[(&str, &str)] = &[("Public Cloud", "cloud"), ("SAP/HA", "sap")];
+pub(crate) const AGGREGATED_NAME_MAP: &[(&str, &str)] =
+    &[("Public Cloud", "cloud"), ("SAP/HA", "sap")];
 
 /// Versions excluded from aggregated-update scanning.
-pub const AGGREGATED_EXCLUDED_VERSIONS: &[&str] = &["TERADATA", "16.0"];
+pub(crate) const AGGREGATED_EXCLUDED_VERSIONS: &[&str] = &["TERADATA", "16.0"];
 
 /// The openQA job-state query-string suffix for `failed`.
-pub const OQA_QUERY_FAILED: &str = "&result=failed&result=incomplete&result=timeout_exceeded";
+const OQA_QUERY_FAILED: &str = "&result=failed&result=incomplete&result=timeout_exceeded";
 /// The openQA job-state query-string suffix for `running`.
-pub const OQA_QUERY_RUNNING: &str = "&state=scheduled&state=running";
+const OQA_QUERY_RUNNING: &str = "&state=scheduled&state=running";
 /// The openQA job-state query-string suffix for `all`.
-pub const OQA_QUERY_ALL: &str = "";
+const OQA_QUERY_ALL: &str = "";
 
 /// Resolve an openQA job-state name to its query-string suffix.
 ///
 /// Returns `None` for an unknown state (upstream raised `ValueError`).
 #[must_use]
-pub fn oqa_query_string(state: &str) -> Option<&'static str> {
+pub(crate) fn oqa_query_string(state: &str) -> Option<&'static str> {
     match state {
         "failed" => Some(OQA_QUERY_FAILED),
         "running" => Some(OQA_QUERY_RUNNING),
@@ -50,13 +52,13 @@ pub fn oqa_query_string(state: &str) -> Option<&'static str> {
 
 /// A number surrounded by whitespace / parens / line ends, gating the
 /// build-check line extractor (upstream `TESTSUITE_NUMBERS_PATTERN`).
-pub static TESTSUITE_NUMBERS_PATTERN: LazyLock<Regex> =
+pub(crate) static TESTSUITE_NUMBERS_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:^|\s|\()\d+(?:$|\s|\))").expect("valid regex"));
 
 /// Substrings that disqualify a build-check line (upstream
 /// `TESTSUITE_WORDS_BLOCKLIST`). Matched case-insensitively against the
 /// lower-cased line.
-pub const TESTSUITE_WORDS_BLOCKLIST: &[&str] = &[
+pub(crate) const TESTSUITE_WORDS_BLOCKLIST: &[&str] = &[
     "syntax", "--", "meson", "gcc", "clang", "make", "cmake", "/usr/bin", ".tap", ".sh", "t/",
     "todo", " - ", "duration", " + ", "group", "value", "doc", "stack", "errno", "tests in",
     "limit", "size", "test for", "creating", "task", "no tests", "thread", "server", "method",
@@ -66,11 +68,11 @@ pub const TESTSUITE_WORDS_BLOCKLIST: &[&str] = &[
 /// Visual separators that qualify a build-check line (upstream
 /// `TESTSUITE_VISUAL_SEPARATORS`). Matched against the *cleaned* (not
 /// lower-cased) line.
-pub const TESTSUITE_VISUAL_SEPARATORS: &[&str] = &["===", "---"];
+pub(crate) const TESTSUITE_VISUAL_SEPARATORS: &[&str] = &["===", "---"];
 
 /// Summary keywords that qualify a build-check line (upstream
 /// `TESTSUITE_SUMMARY_KEYWORDS`). Matched against the lower-cased line.
-pub const TESTSUITE_SUMMARY_KEYWORDS: &[&str] = &[
+pub(crate) const TESTSUITE_SUMMARY_KEYWORDS: &[&str] = &[
     "result:",
     "summary",
     "out of",
@@ -80,7 +82,7 @@ pub const TESTSUITE_SUMMARY_KEYWORDS: &[&str] = &[
 
 /// Canned summary patterns that qualify a build-check line (upstream
 /// `TESTSUITE_SUMMARY_PATTERNS`). Matched against the lower-cased line.
-pub static TESTSUITE_SUMMARY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+pub(crate) static TESTSUITE_SUMMARY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
         r"\bok\s*\(",
         r"\d+%\s+tests?\s+passed",
@@ -95,7 +97,7 @@ pub static TESTSUITE_SUMMARY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 /// Normalises a flavored Python binary package name (`pythonNNN-foo`) to its
 /// source form (`python-foo`), upstream `PYTHON_FLAVOR_RE` + `python-` sub.
-pub static PYTHON_FLAVOR_RE: LazyLock<Regex> =
+pub(crate) static PYTHON_FLAVOR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^python\d+-").expect("valid regex"));
 
 #[cfg(test)]

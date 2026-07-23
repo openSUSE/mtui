@@ -33,7 +33,7 @@ fn redact(e: &impl std::fmt::Display) -> String {
 /// Upstream sources this from `[openqa] openqa_install_distri`. That option is
 /// effectively obsolete (unchanged in practice), so it is pinned here rather
 /// than adding an `[openqa]` config surface.
-pub const OPENQA_INSTALL_DISTRI: &str = "sle";
+pub(crate) const OPENQA_INSTALL_DISTRI: &str = "sle";
 
 /// Provides the incident name used to build the openQA job-query `build`
 /// parameter.
@@ -61,16 +61,16 @@ pub struct Job {
     pub test: String,
     /// The overall job result (e.g. `passed`, `failed`).
     #[serde(default)]
-    pub result: String,
+    pub(crate) result: String,
     /// The id of the job this job was cloned as, if any.
     #[serde(default)]
-    pub clone_id: Option<i64>,
+    pub(crate) clone_id: Option<i64>,
     /// The job settings (FLAVOR, ARCH, VERSION, HDD_1, ...).
     #[serde(default)]
-    pub settings: std::collections::BTreeMap<String, String>,
+    pub(crate) settings: std::collections::BTreeMap<String, String>,
     /// The per-module results.
     #[serde(default)]
-    pub modules: Vec<JobModule>,
+    pub(crate) modules: Vec<JobModule>,
 }
 
 /// One module within an openQA job.
@@ -78,20 +78,20 @@ pub struct Job {
 pub struct JobModule {
     /// The module name.
     #[serde(default)]
-    pub name: String,
+    pub(crate) name: String,
     /// The module category.
     #[serde(default)]
-    pub category: String,
+    pub(crate) category: String,
     /// The module result (e.g. `passed`, `failed`).
     #[serde(default)]
-    pub result: String,
+    pub(crate) result: String,
 }
 
 impl Job {
     /// A settings value, or `""` if absent (mirrors upstream dict access on
     /// keys the connectors always expect to be present).
     #[must_use]
-    pub fn setting(&self, key: &str) -> &str {
+    pub(crate) fn setting(&self, key: &str) -> &str {
         self.settings.get(key).map_or("", String::as_str)
     }
 }
@@ -153,14 +153,8 @@ impl OpenQABase {
 
     /// The openQA instance host (base URL), used in pretty-printed output.
     #[must_use]
-    pub fn host(&self) -> &str {
+    pub(crate) fn host(&self) -> &str {
         &self.host
-    }
-
-    /// The resolved job-query parameters.
-    #[must_use]
-    pub fn params(&self) -> &[(String, String)] {
-        &self.params
     }
 
     /// Fetch jobs from the openQA instance (best-effort).
@@ -238,12 +232,6 @@ impl OpenQABase {
                 OpenQAError::Fetch(redact(&e))
             })
     }
-
-    /// Borrow the API client (used by connectors that need it directly).
-    #[must_use]
-    pub fn client(&self) -> &OpenQAClient {
-        &self.client
-    }
 }
 
 #[cfg(test)]
@@ -253,11 +241,11 @@ pub(crate) mod tests {
     /// A mock incident provider, mirroring the `mock_incident` pytest fixture
     /// whose `get_incident_name` returns `"bash"`.
     pub(crate) struct MockIncident {
-        pub name: String,
+        name: String,
     }
 
     impl MockIncident {
-        pub fn new(name: &str) -> Self {
+        pub(crate) fn new(name: &str) -> Self {
             Self { name: name.into() }
         }
     }
@@ -280,7 +268,7 @@ pub(crate) mod tests {
             &MockIncident::new("bash"),
         );
         let build = base
-            .params()
+            .params
             .iter()
             .find(|(k, _)| k == "build")
             .map(|(_, v)| v.as_str())
@@ -294,7 +282,7 @@ pub(crate) mod tests {
         let rrid = RequestReviewID::parse("SUSE:SLFO:1.1:1").unwrap();
         let base = OpenQABase::new(dummy_client(), &rrid, &MockIncident::new("bash"));
         let build = base
-            .params()
+            .params
             .iter()
             .find(|(k, _)| k == "build")
             .map(|(_, v)| v.as_str())
@@ -337,7 +325,7 @@ pub(crate) mod tests {
             &MockIncident::new("bash"),
         );
         let get = |k: &str| {
-            base.params()
+            base.params
                 .iter()
                 .find(|(pk, _)| pk == k)
                 .map(|(_, v)| v.clone())

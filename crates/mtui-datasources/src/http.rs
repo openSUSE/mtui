@@ -52,7 +52,8 @@ use crate::error::{HttpError, Result};
 /// Shared `(connect, read)` timeout for every outbound HTTP call, mirroring
 /// upstream `HTTP_TIMEOUT = (5.0, 30.0)`. Bounds a stuck socket so a broken
 /// network can't hang mtui indefinitely.
-pub const HTTP_TIMEOUT: (Duration, Duration) = (Duration::from_secs(5), Duration::from_secs(30));
+pub(crate) const HTTP_TIMEOUT: (Duration, Duration) =
+    (Duration::from_secs(5), Duration::from_secs(30));
 
 /// The connect-phase component of [`HTTP_TIMEOUT`].
 const CONNECT_TIMEOUT: Duration = HTTP_TIMEOUT.0;
@@ -70,7 +71,7 @@ pub const MAX_API_BODY: usize = 16 * 1024 * 1024;
 /// openQA install/result log fetched via [`HttpClient::get_bytes`]. Generous
 /// (256 MiB) because these can legitimately be large, but still a hard ceiling
 /// so a runaway body cannot exhaust memory.
-pub const MAX_DOWNLOAD_BODY: usize = 256 * 1024 * 1024;
+const MAX_DOWNLOAD_BODY: usize = 256 * 1024 * 1024;
 
 /// Fallback locations of the distribution-managed CA bundle, probed only when
 /// the interpreter/OpenSSL default (via `SSL_CERT_FILE`) names no existing file.
@@ -91,7 +92,7 @@ static INSECURE_WARNED: AtomicBool = AtomicBool::new(false);
 /// (`min(32, cpu + 4)`) so concurrent fan-out at a single host reuses
 /// connections instead of churning the pool.
 #[must_use]
-pub fn default_pool_size() -> usize {
+fn default_pool_size() -> usize {
     let cpus = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
         .unwrap_or(1);
@@ -111,16 +112,6 @@ pub enum VerifyPolicy {
 }
 
 impl VerifyPolicy {
-    /// Whether this policy actually verifies certificates.
-    ///
-    /// `Default(false)` is the only non-verifying posture; a CA-bundle path is
-    /// still "verifying", matching upstream where a truthy `verify` string
-    /// keeps the insecure-request warning active.
-    #[must_use]
-    pub fn verifies(&self) -> bool {
-        !matches!(self, Self::Default(false))
-    }
-
     /// Bridge a typed [`mtui_config::SslVerify`] into this layer's posture.
     ///
     /// - [`SslVerify::Enabled`] → verify, preferring the system CA bundle
@@ -166,7 +157,7 @@ pub fn resolve_verify(default: VerifyPolicy, override_: Option<VerifyPolicy>) ->
 /// Mirrors upstream `disable_insecure_warnings`: the first call warns
 /// process-wide and later calls are cheap no-ops. Called only when
 /// verification is deliberately disabled, so REPL output stays readable.
-pub fn disable_insecure_warnings() {
+fn disable_insecure_warnings() {
     if !INSECURE_WARNED.swap(true, Ordering::SeqCst) {
         tracing::warn!(
             "TLS certificate verification is disabled (ssl_verify = false); \
@@ -227,7 +218,7 @@ impl HttpClient {
     /// Borrow the underlying `reqwest::Client` for callers that need the full
     /// request surface (JSON, headers, POST) rather than a bare GET.
     #[must_use]
-    pub fn inner(&self) -> &reqwest::Client {
+    pub(crate) fn inner(&self) -> &reqwest::Client {
         &self.inner
     }
 
@@ -316,7 +307,7 @@ fn load_ca_bundle(path: &Path) -> Result<Vec<reqwest::Certificate>> {
 /// to matching `CERTIFICATE_VERIFY_FAILED` / a certificate-verify phrase in the
 /// stringified error for transports that only surface it in the message.
 #[must_use]
-pub fn is_ssl_verification_error(err: &(dyn std::error::Error + 'static)) -> bool {
+pub(crate) fn is_ssl_verification_error(err: &(dyn std::error::Error + 'static)) -> bool {
     let mut seen = 0usize;
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(e) = current {
@@ -345,7 +336,7 @@ pub fn is_ssl_verification_error(err: &(dyn std::error::Error + 'static)) -> boo
 /// generic on purpose — naming the system bundle would suggest a no-op, since it
 /// is usually already the verify source that just failed.
 #[must_use]
-pub fn ssl_verification_hint(host: Option<&str>) -> String {
+pub(crate) fn ssl_verification_hint(host: Option<&str>) -> String {
     let where_ = host.map(|h| format!(" to {h}")).unwrap_or_default();
     format!(
         "TLS certificate verification failed{where_}. The server's certificate \
@@ -369,7 +360,7 @@ pub fn ssl_verification_hint(host: Option<&str>) -> String {
 /// unexpected shape it fails closed by stripping an entire `…@` authority prefix
 /// rather than risk echoing a credential.
 #[must_use]
-pub fn sanitize_url(url: &str) -> String {
+pub(crate) fn sanitize_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         // No scheme separator: if there is an `@`, drop everything up to and
         // including it (fail closed); otherwise the input carries no userinfo.
@@ -399,7 +390,7 @@ fn rest_after_at(s: &str) -> Option<&str> {
 /// version), then the well-known distribution paths in [`SYSTEM_CA_BUNDLES`].
 /// Returns the first candidate that is an existing file.
 #[must_use]
-pub fn system_ca_bundle() -> Option<PathBuf> {
+fn system_ca_bundle() -> Option<PathBuf> {
     let env_cafile = std::env::var_os("SSL_CERT_FILE").map(PathBuf::from);
     resolve_ca_bundle(env_cafile, SYSTEM_CA_BUNDLES)
 }
@@ -452,13 +443,6 @@ mod tests {
         assert_eq!(resolve_verify(f(), Some(t())), t()); // override wins
         assert_eq!(resolve_verify(t(), Some(f())), f());
         assert_eq!(resolve_verify(f(), Some(ca())), ca()); // CA bundle path
-    }
-
-    #[test]
-    fn verify_policy_verifies_flag() {
-        assert!(VerifyPolicy::Default(true).verifies());
-        assert!(!VerifyPolicy::Default(false).verifies());
-        assert!(VerifyPolicy::CaBundle(PathBuf::from("/x")).verifies());
     }
 
     #[test]

@@ -48,7 +48,7 @@ pub use mock::{MockConnection, MockSftpOp};
 pub use sftp_session::SftpSession;
 #[cfg(feature = "shell")]
 pub use shell::ShellChannel;
-pub use ssh::{MAX_STREAM_BYTES, MAX_TOTAL_BYTES, SshConnection, TimeoutPrompt};
+pub use ssh::{MAX_STREAM_BYTES, SshConnection, TimeoutPrompt};
 pub use timeout::{CommandTimeout, HostKeyPolicy};
 
 use async_trait::async_trait;

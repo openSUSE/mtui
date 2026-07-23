@@ -15,8 +15,7 @@
 //!   it builds the [`QemIncident`], runs [`DashboardAutoOpenQA`], and — when the
 //!   auto result has no install jobs (or they failed) — **downgrades the workflow
 //!   to [`Workflow::Manual`]** and defers the reference-host connect (upstream
-//!   only autoconnects on that manual-downgrade path). See
-//!   [`UpdateKind::autoconnect_default`].
+//!   only autoconnects on that manual-downgrade path).
 
 use mtui_config::options::Config;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
@@ -51,26 +50,11 @@ pub enum UpdateKind {
 impl UpdateKind {
     /// The workflow this update kind starts in (upstream `tr.workflow = …`).
     #[must_use]
-    pub fn workflow(self) -> Workflow {
+    fn workflow(self) -> Workflow {
         match self {
             Self::Auto => Workflow::Auto,
             Self::Kernel => Workflow::Kernel,
         }
-    }
-
-    /// Whether the `autoconnect` argument to [`make_testreport`] is *eligible*
-    /// to defer a reference-host connect for this kind.
-    ///
-    /// Mirrors the upstream `make_testreport` signatures: `AutoOBSUpdateID`
-    /// defaults `autoconnect=True`, `KernelOBSUpdateID` defaults
-    /// `autoconnect=False`. Note that even for the auto kind the connect is only
-    /// actually deferred when the load **downgrades to `MANUAL`** (no install
-    /// jobs) — upstream `AutoOBSUpdateID.make_testreport` sets
-    /// `_autoconnect_pending` only on that path. The auto *happy* path (install
-    /// jobs present, workflow stays `AUTO`) does not autoconnect.
-    #[must_use]
-    pub fn autoconnect_default(self) -> bool {
-        matches!(self, Self::Auto)
     }
 }
 

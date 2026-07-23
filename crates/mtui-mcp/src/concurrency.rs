@@ -59,7 +59,7 @@ pub struct RwGate {
 impl RwGate {
     /// Builds a fresh, unheld gate.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -67,7 +67,7 @@ impl RwGate {
     /// pending exclusive holder (writer preference).
     ///
     /// The returned [`SharedGuard`] releases the hold on drop.
-    pub async fn shared(&self) -> SharedGuard {
+    pub(crate) async fn shared(&self) -> SharedGuard {
         loop {
             // Register for a wakeup *before* checking so we cannot miss a release
             // that happens between the check and the await. `enable()` arms the
@@ -106,7 +106,7 @@ impl RwGate {
     /// pending guard is disarmed and the count is handed to the [`ExclusiveGuard`],
     /// which decrements it on its own drop — so success-path accounting is
     /// unchanged.
-    pub async fn exclusive(&self) -> ExclusiveGuard {
+    pub(crate) async fn exclusive(&self) -> ExclusiveGuard {
         let mut pending = PendingWriter::new(Arc::clone(&self.inner), Arc::clone(&self.notify));
         loop {
             let notified = self.notify.notified();

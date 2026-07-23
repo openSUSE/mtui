@@ -34,7 +34,7 @@ pub enum TargetState {
 impl TargetState {
     /// Returns the upstream wire string for this state.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Enabled => "enabled",
             Self::Disabled => "disabled",
@@ -80,7 +80,7 @@ pub enum ExecutionMode {
 impl ExecutionMode {
     /// Returns the upstream wire string for this mode.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Parallel => "parallel",
             Self::Serial => "serial",
@@ -197,7 +197,7 @@ impl RequestKind {
     ///
     /// Returns [`RequestKindParseError`] if `raw` is not a recognised kind,
     /// mirroring upstream `ValueError("unknown request kind: …")`.
-    pub fn from_token(raw: &str) -> Result<Self, RequestKindParseError> {
+    pub(crate) fn from_token(raw: &str) -> Result<Self, RequestKindParseError> {
         match raw {
             "S" | "SLFO" => Ok(Self::Slfo),
             "M" | "Maintenance" => Ok(Self::Maintenance),

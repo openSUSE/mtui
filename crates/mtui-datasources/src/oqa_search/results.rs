@@ -54,7 +54,7 @@ pub struct BuildCheckResult {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct JobResult {
     /// The openQA job id.
-    pub job_id: i64,
+    pub(crate) job_id: i64,
     /// The test/scenario name.
     pub test: String,
     /// The job architecture.
@@ -66,7 +66,7 @@ pub struct JobResult {
     /// means the job has not finished and its `result` is not yet meaningful.
     pub state: String,
     /// The job group name (may be empty).
-    pub group: String,
+    pub(crate) group: String,
     /// The browser-facing job URL (`.../t<id>`).
     pub url: String,
 }

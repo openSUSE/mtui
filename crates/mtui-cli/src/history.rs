@@ -40,7 +40,7 @@ const HISTORY_FILE: &str = "history";
 /// boxed trait object so [`crate::repl`] stays decoupled from the concrete
 /// backend.
 #[must_use]
-pub fn file_backed_history() -> Box<dyn History> {
+pub(crate) fn file_backed_history() -> Box<dyn History> {
     history_from_path(mtui_config::data_dir().map(|d| d.join(HISTORY_FILE)))
 }
 
@@ -53,7 +53,7 @@ pub fn file_backed_history() -> Box<dyn History> {
 /// both yield the in-memory [`FileBackedHistory::default`], with a WARN logged
 /// on the error path.
 #[must_use]
-pub fn history_from_path(path: Option<PathBuf>) -> Box<dyn History> {
+fn history_from_path(path: Option<PathBuf>) -> Box<dyn History> {
     let Some(path) = path else {
         tracing::warn!("no data directory resolved; REPL history will not persist");
         return Box::new(FileBackedHistory::default());

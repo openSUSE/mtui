@@ -144,7 +144,7 @@ pub fn resolve_keep_set(
 ///
 /// The registered set is taken from `descriptors` themselves, so the result is
 /// always a subset of what was synthesised.
-pub fn apply_profile(
+pub(crate) fn apply_profile(
     descriptors: &mut Vec<ToolDescriptor>,
     profile: &str,
     allow: &[String],

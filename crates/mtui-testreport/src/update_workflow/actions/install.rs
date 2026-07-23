@@ -28,7 +28,7 @@ fn slmicro() -> ActionCommands {
 /// key (upstream's `DictWithInjections` raises `MissingInstallerError`; the
 /// provider maps `None` to that error).
 #[must_use]
-pub fn installer(release: &str, transactional: bool) -> Option<ActionCommands> {
+pub(crate) fn installer(release: &str, transactional: bool) -> Option<ActionCommands> {
     let key: WorkflowKey = (release.to_owned(), transactional);
     match (key.0.as_str(), key.1) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),

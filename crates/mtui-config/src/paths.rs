@@ -4,7 +4,7 @@
 //!
 //! * **Config search paths** ([`config_search_paths`]) — the ordered list of
 //!   candidate config files, later entries overriding earlier ones when merged.
-//! * **User cache path** ([`cache_dir`]) — the XDG cache directory where mtui
+//! * **User data path** ([`data_dir`]) — the XDG data directory where mtui
 //!   persists per-user state (upstream `save_cache_path`).
 //!
 //! ## Deviation from upstream (intentional)
@@ -49,7 +49,7 @@ const CONFIG_FILE: &str = "mtui.toml";
 /// mtui config (`~` / `~/...`). A bare `~user` form is left untouched — mtui has
 /// never relied on it.
 #[must_use]
-pub fn expanduser(path: &Path) -> PathBuf {
+pub(crate) fn expanduser(path: &Path) -> PathBuf {
     let Some(s) = path.to_str() else {
         return path.to_path_buf();
     };
@@ -78,7 +78,7 @@ fn home_dir() -> Option<PathBuf> {
 /// `$XDG_CONFIG_HOME/mtui` (falling back to `~/.config/mtui` per the XDG spec),
 /// and the file is `mtui.toml` within it.
 #[must_use]
-pub fn xdg_config_file() -> Option<PathBuf> {
+fn xdg_config_file() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.config_dir().join(CONFIG_FILE))
 }
 
@@ -89,22 +89,14 @@ pub fn xdg_config_file() -> Option<PathBuf> {
 /// for operators who prefer it to the XDG config directory. Sits between `/etc`
 /// and the XDG file in precedence (see [`config_search_paths`]).
 #[must_use]
-pub fn home_config_file() -> Option<PathBuf> {
+fn home_config_file() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".mtui.toml"))
-}
-
-/// The user cache directory for mtui (`$XDG_CACHE_HOME/mtui`), if resolvable.
-///
-/// Upstream equivalent: `mtui.support.paths.save_cache_path("mtui")`.
-#[must_use]
-pub fn cache_dir() -> Option<PathBuf> {
-    ProjectDirs::from("", "", "mtui").map(|p| p.cache_dir().to_path_buf())
 }
 
 /// The user data directory for mtui (`$XDG_DATA_HOME/mtui`), if resolvable.
 ///
 /// Where mtui persists durable per-user state such as the REPL history file.
-/// Distinct from [`cache_dir`] (disposable) and the config dir (user-authored):
+/// Distinct from the disposable cache dir and the config dir (user-authored):
 /// history is data the user grows and expects to survive a cache wipe.
 ///
 /// Deliberate deviation from upstream, which keeps history at `~/.mtui_history`;
@@ -161,7 +153,7 @@ fn resolve_terms_path(env_terms: Option<PathBuf>, data: Option<PathBuf>) -> Opti
 ///   (`$XDG_CONFIG_HOME/mtui/mtui.toml`). [`crate::Config::load`] merges them in
 ///   order so a later file wins on shared keys.
 #[must_use]
-pub fn config_search_paths(explicit: Option<PathBuf>) -> Vec<PathBuf> {
+pub(crate) fn config_search_paths(explicit: Option<PathBuf>) -> Vec<PathBuf> {
     let env = std::env::var_os(ENV_CONFIG).map(PathBuf::from);
     resolve_search_paths(explicit, env, home_config_file(), xdg_config_file())
 }

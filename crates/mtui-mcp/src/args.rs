@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
+#[cfg(any(feature = "mcp", test))]
 use mtui_config::{Config, SslVerify};
 use mtui_core::ColorArg;
 
@@ -36,7 +37,7 @@ use mtui_core::ColorArg;
 pub struct McpArgs {
     /// Override config `mtui.template_dir`.
     #[arg(short = 't', long = "template-dir", value_name = "DIR")]
-    pub template_dir: Option<PathBuf>,
+    template_dir: Option<PathBuf>,
 
     /// Override config `mtui.connection_timeout` (seconds).
     // Rejected at parse time if 0 via the value_parser range: the config-file
@@ -48,44 +49,44 @@ pub struct McpArgs {
         value_name = "SECONDS",
         value_parser = clap::value_parser!(u64).range(1..),
     )]
-    pub connection_timeout: Option<u64>,
+    connection_timeout: Option<u64>,
 
     /// Enable debugging output.
     #[arg(short = 'd', long = "debug")]
-    pub debug: bool,
+    pub(crate) debug: bool,
 
     /// Override the default config path.
     #[arg(short = 'c', long = "config", value_name = "FILE")]
-    pub config: Option<PathBuf>,
+    config: Option<PathBuf>,
 
     /// Control coloured (log) output. Logs go to stderr; stdout is the transport.
     #[arg(long = "color", value_enum, default_value_t = ColorArg::Auto)]
-    pub color: ColorArg,
+    pub(crate) color: ColorArg,
 
     /// Gitea access token.
     #[arg(short = 'g', long = "gitea-token", value_name = "TOKEN")]
-    pub gitea_token: Option<String>,
+    gitea_token: Option<String>,
 
     /// Override config `mtui.ssl_verify`: TLS certificate verification for all
     /// outbound HTTP. Accepts `true`/`false` (and the spellings `yes`/`no`/
     /// `on`/`off`/`1`/`0`), or a path to a custom CA bundle/certificate.
     #[arg(long = "ssl-verify", value_name = "BOOL|PATH")]
-    pub ssl_verify: Option<String>,
+    ssl_verify: Option<String>,
 
     /// MCP transport to serve on: `stdio` (default, one client) or `http`
     /// (streamable HTTP, per-client session isolation).
     #[arg(long = "transport", value_enum, default_value_t = Transport::Stdio)]
-    pub transport: Transport,
+    pub(crate) transport: Transport,
 
     /// Bind address for `--transport http` (default: 127.0.0.1). Ignored under
     /// stdio. Loopback only — rmcp's DNS-rebinding guard rejects non-loopback
     /// hosts.
     #[arg(long = "host", value_name = "ADDR", default_value = "127.0.0.1")]
-    pub host: String,
+    pub(crate) host: String,
 
     /// Bind port for `--transport http` (default: 8000). Ignored under stdio.
     #[arg(long = "port", value_name = "PORT", default_value_t = 8000)]
-    pub port: u16,
+    pub(crate) port: u16,
 }
 
 impl McpArgs {
@@ -96,8 +97,9 @@ impl McpArgs {
     /// file layers first ([`Config::load`]), then the CLI layer on top so a flag
     /// wins over every config file. `--config`, `--debug`, `--color`, and the
     /// transport flags are not config keys and are intentionally not merged.
+    #[cfg(any(feature = "mcp", test))]
     #[must_use]
-    pub fn resolve_config(&self) -> Config {
+    pub(crate) fn resolve_config(&self) -> Config {
         let mut config = Config::load(self.config.clone());
         if let Some(dir) = &self.template_dir {
             config.template_dir = dir.clone();

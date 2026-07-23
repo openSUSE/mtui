@@ -42,7 +42,7 @@ use serde_json::{Map, Value, json};
 /// result is the `inputSchema` for the tool `rmcp` synthesises from this command
 /// (P7.6). `required` is omitted entirely when empty.
 #[must_use]
-pub fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
+pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
     let mut properties = Map::new();
     let mut required: Vec<Value> = Vec::new();
 

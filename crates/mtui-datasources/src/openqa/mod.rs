@@ -10,18 +10,16 @@
 //! * [`client`] — the REST client reproducing the `openqa_client` auth contract
 //!   (INI `client.conf`, `X-API-Key`, HMAC-SHA1 `X-API-Hash`) over this crate's
 //!   shared [`HttpClient`](crate::http::HttpClient).
-//! * [`standard`] — the "auto" workflow ([`AutoOpenQA`]): install-log URLs.
 //! * [`kernel`] — the "kernel" workflow ([`KernelOpenQA`]): the LTP test matrix.
 //! * [`install`] — the install-job → log-filename map ([`install_logfile_for`]).
 
 pub mod base;
 pub mod client;
-pub mod install;
+pub(crate) mod install;
 pub mod kernel;
-pub mod standard;
 
-pub use base::{IncidentName, Job, JobModule, OPENQA_INSTALL_DISTRI, OpenQABase};
-pub use client::{ApiCredentials, ClientConf, OpenQAClient, compute_api_hash};
-pub use install::{DEFAULT_INSTALL_LOGFILE, install_logfile_for};
+pub(crate) use base::OPENQA_INSTALL_DISTRI;
+pub use base::{IncidentName, Job, JobModule, OpenQABase};
+pub use client::{ApiCredentials, ClientConf, OpenQAClient};
+pub(crate) use install::install_logfile_for;
 pub use kernel::KernelOpenQA;
-pub use standard::AutoOpenQA;

@@ -111,20 +111,6 @@ where
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Whether any result is present and truthy.
-    ///
-    /// The port of upstream `__bool__`: `true` when `auto` has results, any
-    /// `kernel` entry has results, or the `overview` has content.
-    #[must_use]
-    pub fn has_results(&self) -> bool {
-        self.auto.as_ref().is_some_and(OpenQAResult::has_results)
-            || self.kernel.iter().any(OpenQAResult::has_results)
-            || self
-                .overview
-                .as_ref()
-                .is_some_and(OverviewResult::has_overview)
-    }
 }
 
 #[cfg(test)]
@@ -144,13 +130,6 @@ mod tests {
             Self {
                 kind: "auto".to_string(),
                 truthy: true,
-            }
-        }
-
-        fn falsy() -> Self {
-            Self {
-                kind: "auto".to_string(),
-                truthy: false,
             }
         }
     }
@@ -196,83 +175,6 @@ mod tests {
         let b = Results::new();
         a.kernel.push(StubResult::truthy());
         assert!(b.kernel.is_empty());
-    }
-
-    // TestOpenQAResultsBool
-
-    #[test]
-    fn empty_is_falsy() {
-        assert!(!Results::new().has_results());
-    }
-
-    #[test]
-    fn truthy_auto_makes_truthy() {
-        let r = Results {
-            auto: Some(StubResult::truthy()),
-            kernel: Vec::new(),
-            overview: None,
-        };
-        assert!(r.has_results());
-    }
-
-    #[test]
-    fn falsy_auto_alone_is_falsy() {
-        let r = Results {
-            auto: Some(StubResult::falsy()),
-            kernel: Vec::new(),
-            overview: None,
-        };
-        assert!(!r.has_results());
-    }
-
-    #[test]
-    fn truthy_kernel_makes_truthy() {
-        let r = Results {
-            auto: None,
-            kernel: vec![StubResult::truthy()],
-            overview: None,
-        };
-        assert!(r.has_results());
-    }
-
-    #[test]
-    fn kernel_with_only_falsy_is_falsy() {
-        let r = Results {
-            auto: None,
-            kernel: vec![StubResult::falsy(), StubResult::falsy()],
-            overview: None,
-        };
-        assert!(!r.has_results());
-    }
-
-    #[test]
-    fn truthy_kernel_among_falsy_makes_truthy() {
-        let r = Results {
-            auto: None,
-            kernel: vec![StubResult::falsy(), StubResult::truthy()],
-            overview: None,
-        };
-        assert!(r.has_results());
-    }
-
-    #[test]
-    fn truthy_overview_alone_makes_truthy() {
-        let r = Results {
-            auto: None,
-            kernel: Vec::new(),
-            overview: Some(StubOverview { truthy: true }),
-        };
-        assert!(r.has_results());
-    }
-
-    #[test]
-    fn falsy_overview_alone_is_falsy() {
-        let r = Results {
-            auto: None,
-            kernel: Vec::new(),
-            overview: Some(StubOverview { truthy: false }),
-        };
-        assert!(!r.has_results());
     }
 
     // TestOpenQAResultsMutation

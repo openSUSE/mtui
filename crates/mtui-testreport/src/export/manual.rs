@@ -68,15 +68,15 @@ pub struct ManualExport {
     /// Shared export state and helpers.
     pub ctx: ExportContext,
     /// The connected-host views (upstream `self.results`).
-    pub results: Vec<ManualHost>,
+    results: Vec<ManualHost>,
     /// The "auto" openQA connector (for `inject_openqa`), if present.
     ///
     /// Upstream's manual export reads `metadata.openqa.auto`, a
     /// [`DashboardAutoOpenQA`]; only its rendered [`pp`](DashboardAutoOpenQA::pp)
     /// block is consumed here.
-    pub auto: Option<DashboardAutoOpenQA>,
+    auto: Option<DashboardAutoOpenQA>,
     /// The openqa_overview payload, if the overview command ran.
-    pub overview: Option<OpenQAOverviewResult>,
+    overview: Option<OpenQAOverviewResult>,
 }
 
 impl ManualExport {
@@ -119,7 +119,7 @@ impl ManualExport {
 
     /// Writes each host's install log and returns the filenames
     /// (upstream `get_logs`).
-    pub fn get_logs(&self, hosts: &[String], prompt: &dyn OverwritePrompt) -> Vec<String> {
+    fn get_logs(&self, hosts: &[String], prompt: &dyn OverwritePrompt) -> Vec<String> {
         let dir = self.ctx.install_logs_dir();
         let mut filenames = Vec::new();
         for host in hosts {

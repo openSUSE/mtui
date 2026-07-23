@@ -37,22 +37,14 @@ static NAMED_VERSION_RE: LazyLock<Regex> =
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Attributes {
     /// The target architecture (empty string means "any").
-    pub arch: String,
+    pub(crate) arch: String,
     /// The queried base product (`None` means "any").
-    pub product: Option<Product>,
+    pub(crate) product: Option<Product>,
     /// The queried addons (all must be present on a candidate).
-    pub addons: Vec<Addon>,
+    pub(crate) addons: Vec<Addon>,
 }
 
 impl Attributes {
-    /// Returns `true` when **no** constraint is set (upstream `__bool__`
-    /// inverted). A search with an empty query matches nothing meaningful, so
-    /// callers use this to short-circuit.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.arch.is_empty() && self.product.is_none() && self.addons.is_empty()
-    }
-
     /// Parse a SMELT `testplatform` string into one [`Attributes`] per arch.
     ///
     /// Grammar (segments separated by `;`):
@@ -221,12 +213,11 @@ mod tests {
         }
     }
 
-    // --- Attributes Display / is_empty (test_refhost.py::TestAttributes) ---
+    // --- Attributes Display (test_refhost.py::TestAttributes) ---
 
     #[test]
-    fn empty_attributes_is_empty_and_blank() {
+    fn empty_attributes_is_blank() {
         let attr = Attributes::default();
-        assert!(attr.is_empty());
         assert_eq!(attr.to_string(), "");
     }
 

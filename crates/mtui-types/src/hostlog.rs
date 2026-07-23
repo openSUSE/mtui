@@ -8,8 +8,8 @@
 //! Upstream's `HostLog` subclasses `list` and overrides `append`/`insert` with
 //! runtime `*args` unpacking, length checks (`"it need 5 args"`), and
 //! `str | bytes` coercion via `to_string`. In Rust the type system makes all of
-//! that unnecessary: [`push`](HostLog::push) and [`insert`](HostLog::insert)
-//! take a fully-typed [`CommandLog`], so the arity and type errors upstream
+//! that unnecessary: [`push`](HostLog::push) takes a fully-typed
+//! [`CommandLog`], so the arity and type errors upstream
 //! guards against at runtime simply cannot occur. Read access is provided via
 //! [`Deref`] to a `[CommandLog]` slice, giving iteration, indexing, `len`, etc.
 //! for free.
@@ -111,14 +111,6 @@ impl HostLog {
     pub fn push(&mut self, entry: CommandLog) {
         self.entries.push(entry);
     }
-
-    /// Inserts a command-log entry at `pos`.
-    ///
-    /// # Panics
-    /// Panics if `pos > len`, matching `Vec::insert`.
-    pub fn insert(&mut self, pos: usize, entry: CommandLog) {
-        self.entries.insert(pos, entry);
-    }
 }
 
 impl Deref for HostLog {
@@ -199,16 +191,6 @@ mod tests {
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].command, "a");
         assert_eq!(log[1].exitcode, 1);
-    }
-
-    #[test]
-    fn insert_at_position() {
-        let mut log = HostLog::new();
-        log.push(entry("a", 0));
-        log.push(entry("c", 0));
-        log.insert(1, entry("b", 0));
-        let cmds: Vec<&str> = log.iter().map(|e| e.command.as_str()).collect();
-        assert_eq!(cmds, ["a", "b", "c"]);
     }
 
     #[test]

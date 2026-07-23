@@ -15,19 +15,12 @@ pub mod facade;
 pub mod inference;
 pub mod models;
 pub mod oscrc;
-pub mod preconditions;
+pub(crate) mod preconditions;
 pub mod qam;
 pub mod sshsig;
 
-pub use auth::{AgentKeys, ObsSignatureAuth, challenge_params};
-pub use client::{NoAuth, ObsAuth, ObsClient, error_summary};
+pub use auth::{AgentKeys, ObsSignatureAuth};
+pub use client::{NoAuth, ObsAuth, ObsClient};
 pub use errors::ObsError;
 pub use facade::Osc;
-pub use inference::{Assignment, assignments_for_user, infer};
-pub use models::{
-    HistoryEvent, REJECT_REASON_NAME, REJECT_REASON_NAMESPACE, Request, Review,
-    build_reject_reason_body, is_qam_group, parse_group_directory, parse_reject_reason_values,
-    parse_request, parse_request_collection,
-};
 pub use oscrc::{ObsCredentials, read_credentials};
-pub use preconditions::fetch_testreport_log;

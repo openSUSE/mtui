@@ -37,7 +37,7 @@ use serde_json::{Map, Value};
 /// is `total − limit` (the budget overrun), independent of the small extra bytes
 /// a codepoint-boundary trim may shed.
 #[must_use]
-pub fn cap_output(text: String, limit: usize) -> String {
+pub(crate) fn cap_output(text: String, limit: usize) -> String {
     if limit == 0 {
         return text;
     }
@@ -66,7 +66,7 @@ pub fn cap_output(text: String, limit: usize) -> String {
 /// emit byte-identical text. `dropped` is the budget overrun (bytes discarded),
 /// `limit` the `[mcp] max_output_bytes` budget.
 #[must_use]
-pub fn truncation_notice(dropped: usize, limit: usize) -> String {
+pub(crate) fn truncation_notice(dropped: usize, limit: usize) -> String {
     format!(
         "\n…[truncated {dropped} bytes; output exceeded the \
          [mcp] max_output_bytes={limit} budget — use a narrower command, or \
@@ -115,7 +115,7 @@ const NAME_MAPS: &[&str] = &["properties", "patternProperties", "$defs", "defini
 /// transforms are suspended for that one level. Mirrors upstream
 /// `_slim.slim_tool_schema`.
 #[must_use]
-pub fn slim_tool_schema(schema: &Value) -> Value {
+fn slim_tool_schema(schema: &Value) -> Value {
     slim(schema, false)
 }
 

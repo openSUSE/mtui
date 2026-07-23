@@ -9,5 +9,5 @@ pub mod fileops;
 pub mod sysinfo;
 
 pub use filelist::FileList;
-pub use fileops::{atomic_write_file, timestamp};
-pub use sysinfo::{EXPORT_PREFIX, detect_system, system_info};
+pub use fileops::atomic_write_file;
+pub use sysinfo::{detect_system, system_info};

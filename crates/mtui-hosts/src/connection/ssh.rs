@@ -448,7 +448,7 @@ impl SshConnection {
     /// immediately. Builder-style so the composition root can wire it after
     /// `connect` without widening the object-safe [`Connection`] trait.
     #[must_use]
-    pub fn with_timeout_prompt(mut self, prompt: TimeoutPrompt) -> Self {
+    pub(crate) fn with_timeout_prompt(mut self, prompt: TimeoutPrompt) -> Self {
         self.is_repl = true;
         self.timeout_prompt = Some(prompt);
         self
@@ -473,7 +473,7 @@ impl SshConnection {
     /// Mirrors config `[connection] reboot_timeout`; unset callers keep the
     /// 10s default set in [`connect`](Self::connect).
     #[must_use]
-    pub fn with_reboot_budget(mut self, base: Duration) -> Self {
+    pub(crate) fn with_reboot_budget(mut self, base: Duration) -> Self {
         self.reconnect_backoff_base = base;
         self
     }

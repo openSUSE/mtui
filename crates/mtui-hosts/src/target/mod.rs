@@ -49,28 +49,23 @@ pub mod operation;
 pub mod package_querier;
 pub mod parsers;
 pub mod repo_manager;
-pub mod reporter;
 pub mod spinner;
 
-pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
+pub use actions::Command;
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::{HostsGroup, LockOutcome};
-pub use locks::{
-    Clock, LockRow, LockSnapshot, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock,
-    TARGET_LOCK_PATH, TargetLock, with_locked,
-};
+#[cfg(test)]
+pub(crate) use locks::POOL_LOCK_PATH;
+pub use locks::{Clock, LockRow, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock};
 pub use operation::{
-    Check, CheckArgs, Doer, HostPlan, InstallOperation, LastOutput, Operation, OperationGroup,
-    PlanProvider, UninstallOperation,
+    Check, CheckArgs, Doer, HostPlan, InstallOperation, Operation, OperationGroup, PlanProvider,
+    UninstallOperation,
 };
 pub use package_querier::PackageQuerier;
-pub use parsers::{parse_os_release, parse_product, parse_system};
+pub use parsers::parse_system;
 pub use repo_manager::{RepoManager, RepoOp, SetRepo};
-pub use reporter::Reporter;
-pub use spinner::{
-    Sink, SpinnerGuard, Suspend, SuspendAsync, TtySpinner, set_test_sink, spinner, suspend,
-    suspend_async,
-};
+pub(crate) use spinner::suspend_async;
+pub use spinner::{Sink, SpinnerGuard, Suspend, TtySpinner, set_test_sink, spinner, suspend};
 
 use std::path::{Path, PathBuf};
 
@@ -184,11 +179,6 @@ pub struct Target {
     /// `Some(Err(reason))` on failure, `None` when skipped (disabled) or not yet
     /// attempted.
     last_download: Option<std::result::Result<(), String>>,
-    /// Outcome of the last SFTP removal attempted via
-    /// [`sftp_remove`](Target::sftp_remove), exposed through
-    /// [`last_remove`](Target::last_remove). Same encoding as
-    /// [`last_upload`](Self::last_upload).
-    last_remove: Option<std::result::Result<(), String>>,
     /// Outcome of the last repo change fanned out via
     /// [`RepoManager::run_zypper`], exposed through
     /// [`last_repo`](Target::last_repo). `run_zypper` runs several `zypper`
@@ -248,7 +238,6 @@ impl Target {
             timeout_prompt: None,
             last_upload: None,
             last_download: None,
-            last_remove: None,
             last_repo: None,
         }
     }
@@ -303,7 +292,6 @@ impl Target {
             timeout_prompt: None,
             last_upload: None,
             last_download: None,
-            last_remove: None,
             last_repo: None,
         }
     }
@@ -312,18 +300,6 @@ impl Target {
     #[must_use]
     pub fn hostname(&self) -> &str {
         &self.hostname
-    }
-
-    /// The host part (before the first `:`).
-    #[must_use]
-    pub fn host(&self) -> &str {
-        &self.host
-    }
-
-    /// The port part (after the first `:`), or `""` when none was given.
-    #[must_use]
-    pub fn port(&self) -> &str {
-        &self.port
     }
 
     /// The current per-host execution state.
@@ -353,14 +329,6 @@ impl Target {
         self.mode = mode;
     }
 
-    /// Whether a live connection is currently attached.
-    #[must_use]
-    pub fn is_connected(&self) -> bool {
-        self.connection
-            .as_ref()
-            .is_some_and(|c| c.as_ref().is_active())
-    }
-
     /// Read-only access to the command log.
     #[must_use]
     pub fn out(&self) -> &HostLog {
@@ -386,8 +354,7 @@ impl Target {
     ///
     /// Upstream stores the timeout on the connection (`connection.timeout`);
     /// the Rust `Target` owns it directly (defaulted from
-    /// [`Config::connection_timeout`](mtui_config::Config)). Exposed for the
-    /// [`Reporter::timeout`](reporter::Reporter::timeout) sink.
+    /// [`Config::connection_timeout`](mtui_config::Config)).
     #[must_use]
     pub const fn timeout_secs(&self) -> u64 {
         self.timeout.as_secs()
@@ -405,18 +372,9 @@ impl Target {
         self.timeout = CommandTimeout::from_secs(secs);
     }
 
-    /// Returns a [`Reporter`] bound to this target for status-sink dispatch.
-    ///
-    /// The reporter borrows `self`, so each dispatch reads live field values —
-    /// the Rust analogue of upstream's per-access `Target.reporter` property.
-    #[must_use]
-    pub fn reporter(&self) -> Reporter<'_> {
-        Reporter::new(self)
-    }
-
     /// Returns a [`RepoManager`] bound to this target for zypper-repo lifecycle.
     ///
-    /// Unlike [`reporter`](Self::reporter), the repo manager borrows `self`
+    /// The repo manager borrows `self`
     /// *mutably* — it issues commands and, on the unknown-cmd safeguard, force-
     /// unlocks the target. Like upstream's per-access `Target.repo_manager`
     /// property it hands out a fresh binding over the live target each call.
@@ -453,7 +411,7 @@ impl Target {
     ///
     /// Propagates [`HostError::TargetLocked`] for a foreign-owned lock and any
     /// transport error from the underlying [`TargetLock::unlock`].
-    pub(crate) async fn unlock_reporting(&mut self, force: bool) -> Result<()> {
+    async fn unlock_reporting(&mut self, force: bool) -> Result<()> {
         let Some(lock) = self.lock.as_mut() else {
             tracing::debug!(host = %self.hostname, "unlock: no lock (not connected)");
             return Ok(());
@@ -483,12 +441,6 @@ impl Target {
         if let Some(pool) = self.pool_lock.as_mut() {
             pool.set_rrid(self.rrid.clone());
         }
-    }
-
-    /// The owning template's RRID (empty when unset).
-    #[must_use]
-    pub fn rrid(&self) -> &str {
-        &self.rrid
     }
 
     /// Releases this target's pool claim, best-effort.
@@ -576,7 +528,7 @@ impl Target {
     /// [`locked_by`](TargetLock::locked_by) / [`comment`](TargetLock::comment)
     /// after establishing the host is locked; exposing the built lock mirrors
     /// upstream reaching into `t._lock`. `None` when not connected.
-    pub(crate) fn lock_mut(&mut self) -> Option<&mut TargetLock> {
+    fn lock_mut(&mut self) -> Option<&mut TargetLock> {
         self.lock.as_mut()
     }
 
@@ -644,7 +596,7 @@ impl Target {
     /// returns the trimmed stdout, or `""` if the value cannot be read (no
     /// connection, command failure, or empty output). Used by the group reboot
     /// lifecycle to confirm a host actually rebooted.
-    pub async fn boot_id(&mut self) -> String {
+    async fn boot_id(&mut self) -> String {
         let Some(conn) = self.connection.as_mut() else {
             tracing::debug!(host = %self.hostname, "boot_id: not connected");
             return String::new();
@@ -665,7 +617,7 @@ impl Target {
     /// connection, so callers follow up with [`reconnect`](Self::reconnect). A
     /// no-op (logged) when the target is not connected; a dispatch error is
     /// logged, not propagated, since a link dropped by the reboot is expected.
-    pub async fn reboot(&mut self, command: &str) {
+    async fn reboot(&mut self, command: &str) {
         let Some(conn) = self.connection.as_mut() else {
             tracing::error!(host = %self.hostname, "reboot on unconnected target");
             return;
@@ -679,7 +631,7 @@ impl Target {
     /// reboot_retries`) this target was built with, for callers driving the
     /// reboot lifecycle (`HostsGroup::reboot`/`reboot_transactional`).
     #[must_use]
-    pub fn reboot_retries(&self) -> usize {
+    fn reboot_retries(&self) -> usize {
         self.config.reboot_retries as usize
     }
 
@@ -694,7 +646,7 @@ impl Target {
     ///
     /// Propagates [`HostError::ReconnectFailed`] when the retry budget is
     /// exhausted while the host is still down.
-    pub async fn reconnect(&mut self, retry: usize, backoff: bool) -> Result<()> {
+    async fn reconnect(&mut self, retry: usize, backoff: bool) -> Result<()> {
         match self.connection.as_mut() {
             Some(conn) => conn.reconnect(retry, backoff).await,
             None => {
@@ -831,7 +783,7 @@ impl Target {
     /// [`Session`] push-down).
     #[cfg(test)]
     #[must_use]
-    pub(crate) fn has_timeout_prompt(&self) -> bool {
+    fn has_timeout_prompt(&self) -> bool {
         self.timeout_prompt.is_some()
     }
 
@@ -1076,7 +1028,7 @@ impl Target {
     ///   catch-all so one bad host never aborts a group fan-out.
     /// * [`Disabled`](TargetState::Disabled): records an empty entry and does
     ///   nothing else.
-    pub async fn run(&mut self, command: &str) {
+    async fn run(&mut self, command: &str) {
         match self.state {
             TargetState::Enabled => {
                 tracing::debug!(host = %self.hostname, %command, "running");
@@ -1161,15 +1113,6 @@ impl Target {
         self.last_download.as_ref()
     }
 
-    /// The outcome of the last SFTP removal, or `None` when none was attempted.
-    ///
-    /// Same encoding as [`last_upload`](Self::last_upload). The `remove` command
-    /// aggregates these across the group.
-    #[must_use]
-    pub fn last_remove(&self) -> Option<&std::result::Result<(), String>> {
-        self.last_remove.as_ref()
-    }
-
     /// The outcome of the last repo change fanned out via
     /// [`RepoManager::run_zypper`], or `None` when none was attempted.
     ///
@@ -1189,7 +1132,7 @@ impl Target {
     /// Called by [`RepoManager::run_zypper`] once per host after its multi-command
     /// zypper run, so [`last_repo`](Self::last_repo) reflects the whole run rather
     /// than only the trailing `ref`.
-    pub(crate) fn set_last_repo(&mut self, outcome: std::result::Result<(), String>) {
+    fn set_last_repo(&mut self, outcome: std::result::Result<(), String>) {
         self.last_repo = Some(outcome);
     }
 
@@ -1198,7 +1141,7 @@ impl Target {
     /// [`Enabled`](TargetState::Enabled) delegates to
     /// [`Connection::sftp_put`]; a transfer error is logged, not propagated
     /// (upstream behaviour). [`Disabled`](TargetState::Disabled) does nothing.
-    pub async fn sftp_put(&mut self, local: &Path, remote: &Path) {
+    async fn sftp_put(&mut self, local: &Path, remote: &Path) {
         match self.state {
             TargetState::Enabled => {
                 let Some(conn) = self.connection.as_mut() else {
@@ -1229,7 +1172,7 @@ impl Target {
     /// The read-once counterpart of [`sftp_put`](Self::sftp_put): a fan-out
     /// reads the local payload a single time and dispatches the shared bytes to
     /// every host. Same failure semantics (logged, not propagated).
-    pub async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) {
+    async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) {
         match self.state {
             TargetState::Enabled => {
                 let Some(conn) = self.connection.as_mut() else {
@@ -1296,46 +1239,6 @@ impl Target {
                 };
             }
             // Left as `None` (not attempted) so the `get` aggregation treats a
-            // disabled host as skipped rather than a success or failure.
-            TargetState::Disabled => {}
-        }
-    }
-
-    /// Deletes a file (or directory) on the host over SFTP, gated by
-    /// [`TargetState`].
-    ///
-    /// Mirrors upstream `Target.sftp_remove`: a plain file remove is attempted
-    /// first via [`Connection::sftp_remove`]; if that fails the path may be a
-    /// directory, so [`Connection::sftp_rmdir`] is tried as a fallback. A
-    /// missing path or a failed fallback is logged, never propagated (upstream
-    /// behaviour). [`Disabled`](TargetState::Disabled) does nothing.
-    pub async fn sftp_remove(&mut self, path: &Path) {
-        match self.state {
-            TargetState::Enabled => {
-                let Some(conn) = self.connection.as_mut() else {
-                    tracing::error!(host = %self.hostname, "sftp_remove on unconnected target");
-                    self.last_remove = Some(Err("not connected".into()));
-                    return;
-                };
-                self.last_remove = if conn.sftp_remove(path).await.is_ok() {
-                    Some(Ok(()))
-                } else {
-                    // The path may be a directory rather than a file; fall back
-                    // to rmdir before giving up, matching upstream's OSError
-                    // recovery branch.
-                    match conn.sftp_rmdir(path).await {
-                        Ok(()) => Some(Ok(())),
-                        Err(e) => {
-                            tracing::warn!(
-                                host = %self.hostname, path = %path.display(), error = %e,
-                                "unable to remove"
-                            );
-                            Some(Err(e.to_string()))
-                        }
-                    }
-                };
-            }
-            // Left as `None` (not attempted) so the `remove` aggregation treats a
             // disabled host as skipped rather than a success or failure.
             TargetState::Disabled => {}
         }
@@ -1418,11 +1321,11 @@ mod tests {
             ExecutionMode::Parallel,
         );
         assert_eq!(t.hostname(), "test-host.example.com");
-        assert_eq!(t.host(), "test-host.example.com");
-        assert_eq!(t.port(), "");
+        assert_eq!(t.host, "test-host.example.com");
+        assert_eq!(t.port, "");
         assert_eq!(t.state(), TargetState::Enabled);
         assert_eq!(t.mode(), ExecutionMode::Parallel);
-        assert!(!t.is_connected());
+        assert!(t.connection.is_none());
         assert!(t.out().is_empty());
     }
 
@@ -1434,8 +1337,8 @@ mod tests {
             TargetState::Enabled,
             ExecutionMode::Parallel,
         );
-        assert_eq!(t.host(), "test-host.example.com");
-        assert_eq!(t.port(), "2222");
+        assert_eq!(t.host, "test-host.example.com");
+        assert_eq!(t.port, "2222");
         assert_eq!(t.hostname(), "test-host.example.com:2222");
     }
 
@@ -1791,98 +1694,6 @@ mod tests {
         assert_eq!(t.last_download(), None);
     }
 
-    // --- sftp_remove --------------------------------------------------------
-
-    #[tokio::test]
-    async fn sftp_remove_enabled_removes_file() {
-        let conn = MockConnection::new("h1");
-        let handle = conn.clone();
-        let mut t = enabled_with(conn);
-
-        t.sftp_remove(Path::new("/remote/file")).await;
-
-        assert_eq!(
-            handle.sftp_ops(),
-            vec![MockSftpOp::Remove(PathBuf::from("/remote/file"))]
-        );
-        assert_eq!(t.last_remove(), Some(&Ok(())));
-    }
-
-    #[tokio::test]
-    async fn sftp_remove_records_success_via_rmdir_fallback() {
-        // A failed file remove that succeeds via the rmdir fallback is a success.
-        let conn = MockConnection::new("h1").failing_sftp_remove();
-        let mut t = enabled_with(conn);
-
-        t.sftp_remove(Path::new("/remote/dir")).await;
-
-        assert_eq!(t.last_remove(), Some(&Ok(())));
-    }
-
-    #[tokio::test]
-    async fn sftp_remove_records_failure_when_both_paths_fail() {
-        // Both the file remove and the rmdir fallback fail: a real failure.
-        let conn = MockConnection::new("h1")
-            .failing_sftp_remove()
-            .failing_sftp_rmdir();
-        let mut t = enabled_with(conn);
-
-        t.sftp_remove(Path::new("/remote/dir")).await;
-
-        let Some(Err(reason)) = t.last_remove() else {
-            panic!("expected recorded failure, got {:?}", t.last_remove());
-        };
-        assert!(reason.contains("sftp_rmdir"), "reason was {reason:?}");
-    }
-
-    #[tokio::test]
-    async fn sftp_remove_unconnected_records_failure() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
-
-        t.sftp_remove(Path::new("/remote/file")).await;
-
-        let Some(Err(reason)) = t.last_remove() else {
-            panic!("expected recorded failure, got {:?}", t.last_remove());
-        };
-        assert!(reason.contains("not connected"), "reason was {reason:?}");
-    }
-
-    #[tokio::test]
-    async fn sftp_remove_falls_back_to_rmdir_when_remove_fails() {
-        // A failed file remove (e.g. the path is a directory) falls back to
-        // rmdir, matching upstream's OSError recovery branch.
-        let conn = MockConnection::new("h1").failing_sftp_remove();
-        let handle = conn.clone();
-        let mut t = enabled_with(conn);
-
-        t.sftp_remove(Path::new("/remote/dir")).await;
-
-        assert_eq!(
-            handle.sftp_ops(),
-            vec![
-                MockSftpOp::Remove(PathBuf::from("/remote/dir")),
-                MockSftpOp::Rmdir(PathBuf::from("/remote/dir")),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn sftp_remove_disabled_does_nothing() {
-        let conn = MockConnection::new("h1");
-        let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Disabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
-
-        t.sftp_remove(Path::new("/remote/file")).await;
-
-        assert!(handle.sftp_ops().is_empty());
-        assert_eq!(t.last_remove(), None);
-    }
-
     // --- connect() ----------------------------------------------------------
 
     #[tokio::test]
@@ -1897,9 +1708,9 @@ mod tests {
         // sentinel (see `connect_parse_failure_leaves_sentinel` for the
         // matching malformed-XML case).
         let mut t = enabled_with(MockConnection::new("test-host.example.com"));
-        assert!(t.is_connected());
+        assert!(t.connection.is_some());
         t.connect().await.expect("noop re-dial");
-        assert!(t.is_connected());
+        assert!(t.connection.is_some());
         assert_eq!(t.system().get_base().name, "unknown");
     }
 
@@ -2469,7 +2280,7 @@ mod tests {
     fn set_rrid_records_ownership_identity() {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
         t.set_rrid("SUSE:Maintenance:1:2");
-        assert_eq!(t.rrid(), "SUSE:Maintenance:1:2");
+        assert_eq!(t.rrid, "SUSE:Maintenance:1:2");
     }
 
     #[tokio::test]

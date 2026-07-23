@@ -44,7 +44,7 @@ pub struct ApiCredentials {
 impl ApiCredentials {
     /// Whether a secret is present (and thus requests can be signed).
     #[must_use]
-    pub fn can_sign(&self) -> bool {
+    fn can_sign(&self) -> bool {
         !self.secret.is_empty()
     }
 
@@ -77,7 +77,7 @@ impl ClientConf {
     /// Matches upstream `("/etc/openqa", "~/.config/openqa")`; later files
     /// override earlier ones for the same section/key.
     #[must_use]
-    pub fn default_paths() -> Vec<PathBuf> {
+    fn default_paths() -> Vec<PathBuf> {
         let mut paths = vec![PathBuf::from("/etc/openqa/client.conf")];
         if let Some(home) = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf()) {
             paths.push(home.join(".config/openqa/client.conf"));
@@ -97,7 +97,7 @@ impl ClientConf {
 
     /// Read and merge the given paths (lowest precedence first).
     #[must_use]
-    pub fn load_from(paths: &[PathBuf]) -> Self {
+    fn load_from(paths: &[PathBuf]) -> Self {
         let mut conf = Self::default();
         for path in paths {
             match std::fs::read_to_string(path) {
@@ -113,7 +113,7 @@ impl ClientConf {
 
     /// Parse INI text into sections. Never fails: unparseable lines are skipped.
     #[must_use]
-    pub fn parse(text: &str) -> Self {
+    fn parse(text: &str) -> Self {
         let mut sections: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         let mut current: Option<String> = None;
         for raw in text.lines() {
@@ -174,7 +174,7 @@ fn encode_path_for_signing(path: &str) -> String {
 /// `apisecret` keys an HMAC-SHA1 over the concatenation `"{path}{microtime}"`,
 /// hex-encoded — the exact scheme in `openqa_client._add_auth_headers`.
 #[must_use]
-pub fn compute_api_hash(secret: &str, path: &str, microtime: &str) -> String {
+fn compute_api_hash(secret: &str, path: &str, microtime: &str) -> String {
     let mut mac =
         HmacSha1::new_from_slice(secret.as_bytes()).expect("HMAC accepts a key of any length");
     mac.update(encode_path_for_signing(path).as_bytes());
@@ -216,14 +216,8 @@ impl OpenQAClient {
 
     /// The base URL this client targets.
     #[must_use]
-    pub fn base_url(&self) -> &str {
+    pub(crate) fn base_url(&self) -> &str {
         &self.base_url
-    }
-
-    /// The resolved credentials.
-    #[must_use]
-    pub fn credentials(&self) -> &ApiCredentials {
-        &self.credentials
     }
 
     /// Build a signed GET request to `/api/v1/{path}` with `params`.
@@ -236,7 +230,7 @@ impl OpenQAClient {
     ///
     /// Returns [`OpenQAError::Clock`] if the system clock predates the Unix
     /// epoch.
-    pub fn build_get(
+    pub(crate) fn build_get(
         &self,
         path: &str,
         params: &[(&str, String)],

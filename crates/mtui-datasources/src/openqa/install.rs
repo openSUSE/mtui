@@ -25,7 +25,7 @@ const INSTALL_LOGFILES: &[(&str, &str)] = &[("-SLFO", "SLFO_update_install-zyppe
 /// That option is effectively obsolete (its value has not meaningfully changed
 /// in practice), so it is pinned here as a constant rather than adding an
 /// `[openqa]` config surface.
-pub const DEFAULT_INSTALL_LOGFILE: &str = "update_install-zypper.log";
+const DEFAULT_INSTALL_LOGFILE: &str = "update_install-zypper.log";
 
 /// Return the install-log filename for an openQA install-test job.
 ///
@@ -35,7 +35,7 @@ pub const DEFAULT_INSTALL_LOGFILE: &str = "update_install-zypper.log";
 /// Mirrors upstream `install_logfile_for(test_name, default)`, with the
 /// `default` pinned to [`DEFAULT_INSTALL_LOGFILE`] (see the constant docs).
 #[must_use]
-pub fn install_logfile_for(test_name: &str) -> &'static str {
+pub(crate) fn install_logfile_for(test_name: &str) -> &'static str {
     for (marker, logfile) in INSTALL_LOGFILES {
         if test_name.contains(marker) {
             return logfile;

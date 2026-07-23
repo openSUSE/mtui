@@ -77,7 +77,7 @@ impl ObsAuth for NoAuth {
 /// distinct events rather than inlining their replacement text), so even a
 /// DTD-free body with an entity reference never expands.
 #[must_use]
-pub fn error_summary(body: &str) -> String {
+fn error_summary(body: &str) -> String {
     if body.contains("<!DOCTYPE") || body.contains("<!ENTITY") {
         return String::new();
     }

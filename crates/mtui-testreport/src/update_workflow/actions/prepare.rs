@@ -76,7 +76,7 @@ fn slmicro(force: bool, _testing: bool) -> ActionCommands {
 /// `testing` flags, or `None` for an unknown key (provider maps `None` to
 /// `MissingPreparerError`).
 #[must_use]
-pub fn preparer(
+pub(crate) fn preparer(
     release: &str,
     transactional: bool,
     force: bool,

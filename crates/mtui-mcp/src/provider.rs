@@ -108,13 +108,6 @@ impl StdioProvider {
             session: McpSession::new(config),
         }
     }
-
-    /// The single session this provider owns (also the direct handle callers can
-    /// use without going through [`SessionProvider::get_or_create`]).
-    #[must_use]
-    pub fn session(&self) -> Arc<McpSession> {
-        Arc::clone(&self.session)
-    }
 }
 
 impl SessionProvider for StdioProvider {
@@ -359,12 +352,6 @@ impl SessionRegistry {
         }))
     }
 
-    /// The configured sweep fan-out bound (`[mcp] sweep_parallel`, always `>= 1`).
-    #[must_use]
-    pub fn sweep_parallel(&self) -> usize {
-        self.sweep_parallel
-    }
-
     /// Tear down **every** live session, for graceful process shutdown.
     ///
     /// The HTTP transport's counterpart to the stdio serve loop's
@@ -379,7 +366,7 @@ impl SessionRegistry {
     /// single overall deadline (`DISCONNECT_TIMEOUT + 1s`) so one wedged host
     /// close cannot hang process exit. Best-effort and idempotent: a second call
     /// finds an empty set.
-    pub async fn close_all(&self) {
+    pub(crate) async fn close_all(&self) {
         let sessions: Vec<Arc<McpSession>> = {
             let mut set = match self.live.lock() {
                 Ok(s) => s,
@@ -508,15 +495,10 @@ mod tests {
 
         let a = provider.get_or_create("client-a").await;
         let b = provider.get_or_create("client-b").await;
-        let direct = provider.session();
 
         assert!(
             Arc::ptr_eq(&a, &b),
             "stdio provider must return the same session for different keys"
-        );
-        assert!(
-            Arc::ptr_eq(&a, &direct),
-            "get_or_create must return the provider's single session"
         );
     }
 
@@ -542,7 +524,7 @@ mod tests {
         let reg = SessionRegistry::new(Arc::new(mtui_core::register_all()), config);
         assert_eq!(reg.cap(), 4);
         assert_eq!(reg.idle_timeout(), Duration::from_secs(120));
-        assert_eq!(reg.sweep_parallel(), 3);
+        assert_eq!(reg.sweep_parallel, 3);
         assert_eq!(reg.live_count(), 0);
     }
 

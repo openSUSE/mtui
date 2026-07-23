@@ -26,7 +26,7 @@ use crate::error::{HostError, Result};
 /// # Errors
 /// Returns [`HostError::Sftp`] with a parse reason when the bytes are not valid
 /// XML.
-pub fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
+pub(crate) fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
     let fields = collect_fields(bytes)?;
 
     let text = |k: &str| fields.get(k).cloned().unwrap_or_default();
@@ -63,7 +63,7 @@ pub fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
 /// Returns [`HostError::Sftp`] when the required `ID` or `VERSION_ID` keys are
 /// absent (upstream raised `KeyError`, which the caller treats as a failed
 /// parse).
-pub fn parse_os_release(bytes: &[u8]) -> Result<(String, String, String)> {
+pub(crate) fn parse_os_release(bytes: &[u8]) -> Result<(String, String, String)> {
     let text = String::from_utf8_lossy(bytes);
     let mut info: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 

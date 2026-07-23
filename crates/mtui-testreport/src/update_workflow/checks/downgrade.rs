@@ -12,7 +12,7 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed}
 /// "Unspecified Error" per upstream's branch logic. Exit code `106` is a warning
 /// (not an error); any other unrecognised result passes. This check surfaces no
 /// [`Diagnostic`]s (only `update` does).
-pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     // Exit -1 is what a timed-out (SSH no-output window exceeded) or unrunnable
     // command records. Continuing past it turns an interrupted rollback into a
     // silent half-rollback: the remaining packages stay at the update version
@@ -74,7 +74,7 @@ pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 ///
 /// Returns [`UpdateError`] with a reason of "downgrade command timed out or
 /// failed to run" when the command recorded exit `-1`.
-pub fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if args.exitcode == -1 {
         log_failed(args);
         return Err(UpdateError::new(
@@ -88,7 +88,7 @@ pub fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, Upda
 /// The downgrade check for `(release, transactional)`, or `None` for an unknown
 /// key (upstream `downgrade_checks.get(...)`).
 #[must_use]
-pub fn downgrade_check(release: &str, transactional: bool) -> Option<CheckFn> {
+pub(crate) fn downgrade_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
         ("slmicro", true) => Some(Box::new(transactional_update)),

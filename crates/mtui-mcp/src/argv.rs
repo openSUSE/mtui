@@ -40,7 +40,7 @@ use serde_json::{Map, Value};
 /// from `kwargs` or whose value is JSON `null` are skipped. Flags come first,
 /// then the positional tail (see the module docs for why).
 #[must_use]
-pub fn kwargs_to_argv(
+pub(crate) fn kwargs_to_argv(
     cmd: &clap::Command,
     kwargs: &Map<String, Value>,
     argv_prefix: &[String],

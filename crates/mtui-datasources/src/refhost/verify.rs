@@ -73,7 +73,7 @@ fn int_or_str(value: &str) -> VersionField {
 /// (e.g. an odd non-numeric major) is kept as [`VersionField::Text`], mirroring
 /// upstream `_int_or_str`.
 #[must_use]
-pub fn normalize_version(version: &str) -> Option<Version> {
+fn normalize_version(version: &str) -> Option<Version> {
     let version = version.trim();
     if version.is_empty() {
         return None;
@@ -151,15 +151,15 @@ fn named(name: &str, version: Option<&Version>) -> String {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProductDiff {
     /// `/etc/products.d/baseproduct` is a dangling symlink.
-    pub dangling_base: bool,
+    dangling_base: bool,
     /// Human-readable base product mismatch, or `None` when the base matches.
-    pub base_mismatch: Option<String>,
+    base_mismatch: Option<String>,
     /// Addons in `refhosts.yml` but not installed (`"name x.y"`).
-    pub missing_addons: Vec<String>,
+    missing_addons: Vec<String>,
     /// Addons installed but not in `refhosts.yml` (`"name x.y"`).
-    pub extra_addons: Vec<String>,
+    extra_addons: Vec<String>,
     /// Addons present on both sides with a differing version.
-    pub mismatched_addons: Vec<String>,
+    mismatched_addons: Vec<String>,
 }
 
 impl ProductDiff {

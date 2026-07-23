@@ -36,7 +36,7 @@ pub struct CommandTimeout(Duration);
 impl CommandTimeout {
     /// The upstream default timeout, matching `mtui-config`'s
     /// `default_connection_timeout` (300 seconds).
-    pub const DEFAULT_SECS: u64 = 300;
+    const DEFAULT_SECS: u64 = 300;
 
     /// Builds a timeout from a whole number of seconds.
     ///
@@ -56,14 +56,14 @@ impl CommandTimeout {
     /// Returns the timeout as a [`Duration`], ready to hand to tokio timers or
     /// the russh transport.
     #[must_use]
-    pub const fn as_duration(self) -> Duration {
+    pub(crate) const fn as_duration(self) -> Duration {
         self.0
     }
 
     /// Returns the timeout as a whole number of seconds (truncating any
     /// sub-second remainder).
     #[must_use]
-    pub const fn as_secs(self) -> u64 {
+    pub(crate) const fn as_secs(self) -> u64 {
         self.0.as_secs()
     }
 }
@@ -122,7 +122,7 @@ pub enum HostKeyPolicy {
 impl HostKeyPolicy {
     /// Returns the config wire token for this policy.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::AutoAdd => "auto_add",
             Self::Warn => "warn",
@@ -139,7 +139,7 @@ impl HostKeyPolicy {
     /// (a bad value never hard-fails), this lenient mapping is the right seam
     /// for turning the stored string into a typed policy.
     #[must_use]
-    pub fn from_config(name: &str) -> Self {
+    pub(crate) fn from_config(name: &str) -> Self {
         name.parse().unwrap_or_else(|_| {
             tracing::warn!(
                 value = name,

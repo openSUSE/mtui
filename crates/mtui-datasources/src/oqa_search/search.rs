@@ -601,7 +601,7 @@ pub fn summarize_test_results(lines: &[String]) -> String {
 /// Return `true` if `log` belongs to any package in `packages`, mirroring
 /// upstream `log_matches_package` (with the flavored-Python normalisation).
 #[must_use]
-pub fn log_matches_package(log: &str, packages: &[String]) -> bool {
+fn log_matches_package(log: &str, packages: &[String]) -> bool {
     for pkg in packages {
         if log.contains(pkg.as_str()) {
             return true;

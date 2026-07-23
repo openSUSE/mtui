@@ -46,9 +46,9 @@ use crate::products::{normalize, normalize_16};
 #[error("malformed product string {product:?}: {reason}")]
 pub struct ProductParseError {
     /// The offending product string.
-    pub product: String,
+    product: String,
     /// Why it failed to parse.
-    pub reason: &'static str,
+    reason: &'static str,
 }
 
 /// Validates a derived repository URL before it becomes part of an

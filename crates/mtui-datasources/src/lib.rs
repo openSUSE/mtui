@@ -21,16 +21,11 @@ pub use error::{
     GiteaError, HttpError, OpenQAError, OqaSearchError, QemDashboardError, RefhostError, Result,
     SlackError, TeReGenError,
 };
-pub use gitea::{Comment, DEFAULT_GROUP, Gitea, assign_marker, pr_api_url, unassign_marker};
-pub use http::{
-    HTTP_TIMEOUT, HttpClient, MAX_API_BODY, MAX_DOWNLOAD_BODY, VerifyPolicy, default_pool_size,
-    disable_insecure_warnings, is_ssl_verification_error, resolve_verify, sanitize_url,
-    ssl_verification_hint, system_ca_bundle,
-};
-pub use obs::{NoAuth, ObsAuth, ObsClient, ObsError, Osc, error_summary};
+pub use gitea::{Gitea, assign_marker};
+pub use http::{HttpClient, MAX_API_BODY, VerifyPolicy, resolve_verify};
+pub use obs::{NoAuth, ObsAuth, ObsClient, ObsError, Osc};
 pub use openqa::{
-    ApiCredentials, AutoOpenQA, ClientConf, IncidentName, Job, KernelOpenQA, OpenQABase,
-    OpenQAClient, install_logfile_for,
+    ApiCredentials, ClientConf, IncidentName, Job, KernelOpenQA, OpenQABase, OpenQAClient,
 };
 pub use oqa_search::{
     BuildCheckResult, GroupResult, JobResult, OVERVIEW_BEGIN_MARKER, OVERVIEW_END_MARKER,
@@ -41,6 +36,5 @@ pub use qem_dashboard::{DashboardAutoOpenQA, QemDashboardClient, QemIncident};
 pub use refhost::{Attributes, ProductDiff, Refhosts};
 pub use slack::{
     Message, PostedMessage, Reaction, Reply, Slack, is_ack_reaction, is_nack_reaction,
-    normalize_reaction,
 };
 pub use teregen::{RegenOutcome, TeReGen, UpdatesQuery};

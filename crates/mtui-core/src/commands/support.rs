@@ -10,22 +10,12 @@ use mtui_datasources::openqa::client::{ApiCredentials, ClientConf, OpenQAClient}
 use mtui_datasources::openqa::kernel::KernelOpenQA;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_datasources::qem_dashboard::incident::QemIncident;
-use mtui_datasources::{HttpClient, QemDashboardClient, VerifyPolicy, resolve_verify};
+use mtui_datasources::{HttpClient, QemDashboardClient};
 use mtui_hosts::HostsGroup;
 use mtui_types::RequestReviewID;
 
 use crate::error::CommandError;
 use crate::session::Session;
-
-/// Resolves the TLS-verify policy from the session config (the openQA / QEM
-/// connectors' shared verify seam).
-#[must_use]
-pub fn config_verify_policy(session: &Session) -> VerifyPolicy {
-    resolve_verify(
-        VerifyPolicy::Default(true),
-        Some(VerifyPolicy::from_config(&session.config.ssl_verify)),
-    )
-}
 
 /// Builds the report's [`QemIncident`] (the shared handle both openQA connectors
 /// build on).
@@ -38,7 +28,7 @@ pub fn config_verify_policy(session: &Session) -> VerifyPolicy {
 /// fresh client (perf bead `mtui-rs-0mop.13`), and plain values rather than
 /// `&Session` so callers never hold a (non-`Sync`) `Session` borrow across the
 /// `.await`.
-pub async fn build_incident(
+pub(crate) async fn build_incident(
     rrid: RequestReviewID,
     dashboard_api: String,
     http: HttpClient,
@@ -53,7 +43,7 @@ pub async fn build_incident(
 /// connector's concurrent per-setting job fetches. Call
 /// [`DashboardAutoOpenQA::run`] to populate it.
 #[must_use]
-pub fn build_auto_openqa(
+pub(crate) fn build_auto_openqa(
     host: String,
     incident: &QemIncident,
     rrid: RequestReviewID,
@@ -73,7 +63,11 @@ pub fn build_auto_openqa(
 /// per-host loop reuses one connection pool instead of building a fresh client
 /// per instance (perf bead `mtui-rs-0mop.13`).
 #[must_use]
-pub fn build_kernel_openqa(incident: &QemIncident, host: &str, http: HttpClient) -> KernelOpenQA {
+pub(crate) fn build_kernel_openqa(
+    incident: &QemIncident,
+    host: &str,
+    http: HttpClient,
+) -> KernelOpenQA {
     let server = host
         .rsplit("://")
         .next()
@@ -96,7 +90,9 @@ pub fn build_kernel_openqa(incident: &QemIncident, host: &str, http: HttpClient)
 /// # Errors
 ///
 /// [`CommandError::Other`] when the active report is the null object.
-pub fn require_update(session: &Session) -> Result<mtui_types::RequestReviewID, CommandError> {
+pub(crate) fn require_update(
+    session: &Session,
+) -> Result<mtui_types::RequestReviewID, CommandError> {
     let meta = session.metadata();
     if !meta.is_loaded() {
         return Err(CommandError::Other(
@@ -115,7 +111,7 @@ pub fn require_update(session: &Session) -> Result<mtui_types::RequestReviewID, 
 /// with any flag candidates. Mirrors upstream, which lets `-T/--template` be
 /// completed with the loaded RRIDs.
 #[must_use]
-pub fn template_completion(session: &Session, text: &str) -> Vec<String> {
+pub(crate) fn template_completion(session: &Session, text: &str) -> Vec<String> {
     session
         .templates
         .rrids()
@@ -144,7 +140,7 @@ pub fn template_completion(session: &Session, text: &str) -> Vec<String> {
 /// unstable order — this preserves the input order (flags first in the order
 /// given, then `extra`), which keeps the menu deterministic and testable.
 #[must_use]
-pub fn complete_choices(
+pub(crate) fn complete_choices(
     synonyms: &[&[&str]],
     extra: Vec<String>,
     line: &str,
@@ -214,7 +210,7 @@ pub fn complete_choices(
 ///
 /// `extra` carries any command-specific free-form candidates.
 #[must_use]
-pub fn complete_with_templates(
+pub(crate) fn complete_with_templates(
     session: &Session,
     own_flags: &[&[&str]],
     extra: Vec<String>,
@@ -237,7 +233,7 @@ pub fn complete_with_templates(
 /// `reboot`, `prepare`, `update`, `downgrade`, `install`, `uninstall`, `set_repo`,
 /// and `add_host`.
 #[must_use]
-pub fn complete_fanout(
+pub(crate) fn complete_fanout(
     session: &Session,
     extra_flags: &[&[&str]],
     extra: Vec<String>,
@@ -265,7 +261,7 @@ pub fn complete_fanout(
 /// an unreadable directory yields no file candidates (a transient typo must not
 /// tear down completion).
 #[must_use]
-pub fn complete_choices_filelist(
+pub(crate) fn complete_choices_filelist(
     synonyms: &[&[&str]],
     extra: Vec<String>,
     line: &str,
@@ -333,7 +329,7 @@ fn resolve_user_home(_user: &str) -> Option<String> {
 /// directory. A bare prefix completes against the current directory.
 /// Best-effort: an unreadable directory yields no candidates.
 #[must_use]
-pub fn complete_path(text: &str) -> Vec<String> {
+pub(crate) fn complete_path(text: &str) -> Vec<String> {
     use std::path::Path;
 
     // `~` / `~/…` / `~user` / `~user/…` → expand (upstream `expanduser`).
@@ -395,7 +391,7 @@ pub fn add_hosts_arg(cmd: clap::Command) -> clap::Command {
 /// an `Append` arg) — callers use the `None` case to mean "all enabled hosts",
 /// matching upstream's `if self.args.hosts:` branch.
 #[must_use]
-pub fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
+pub(crate) fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
     args.try_get_many::<String>("hosts")
         .ok()
         .flatten()
@@ -408,7 +404,7 @@ pub fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
 /// no explicit `-t` may be skipped on a template with no connected host, but a
 /// typo'd `-t` must fail loudly.
 #[must_use]
-pub fn named_hosts(args: &ArgMatches) -> bool {
+pub(crate) fn named_hosts(args: &ArgMatches) -> bool {
     hosts_arg(args).is_some_and(|v| !v.is_empty())
 }
 
@@ -472,7 +468,7 @@ pub fn select_names(
 /// Builds a [`Command::PerHost`](mtui_hosts::Command) map that runs `command` on
 /// exactly `hosts`, leaving every other host in the group untouched.
 #[must_use]
-pub fn per_host(command: &str, hosts: &[String]) -> mtui_hosts::Command {
+pub(crate) fn per_host(command: &str, hosts: &[String]) -> mtui_hosts::Command {
     mtui_hosts::Command::PerHost(
         hosts
             .iter()
@@ -491,7 +487,7 @@ pub fn per_host(command: &str, hosts: &[String]) -> mtui_hosts::Command {
 /// non-interactive [`page`](crate::display::page) path, which forwards every
 /// line unpaged — keeping that output byte-identical. The prompter is cloned
 /// before the mutable `display` borrow to sidestep the split borrow.
-pub async fn page_output(session: &mut Session, output: &[String]) {
+pub(crate) async fn page_output(session: &mut Session, output: &[String]) {
     if session.is_repl {
         let prompter = session.prompter().cloned();
         crate::display::page_interactive(output, &mut session.display, prompter.as_ref()).await;

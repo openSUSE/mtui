@@ -27,7 +27,7 @@ fn slmicro() -> ActionCommands {
 /// The uninstall command for `(release, transactional)`, or `None` for an
 /// unknown key (provider maps `None` to `MissingUninstallerError`).
 #[must_use]
-pub fn uninstaller(release: &str, transactional: bool) -> Option<ActionCommands> {
+pub(crate) fn uninstaller(release: &str, transactional: bool) -> Option<ActionCommands> {
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),
         ("YUM", false) => Some(yum()),

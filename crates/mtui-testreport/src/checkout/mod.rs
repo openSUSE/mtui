@@ -81,13 +81,13 @@ pub enum CheckoutError {
 #[error("{message}")]
 pub struct TemplateIoError {
     /// The OS error number, when known.
-    pub errno: Option<i32>,
+    errno: Option<i32>,
     /// Whether the underlying error was a "not found" condition. Captured
     /// separately because a synthetic [`io::Error`] built from an
     /// [`io::ErrorKind`] carries no `raw_os_error`.
     not_found: bool,
     /// The human-readable message.
-    pub message: String,
+    message: String,
 }
 
 impl TemplateIoError {

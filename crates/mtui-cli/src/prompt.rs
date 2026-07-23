@@ -37,7 +37,7 @@ pub struct MtuiPrompt {
 impl MtuiPrompt {
     /// Builds a prompt sharing `session` with the REPL loop and completer.
     #[must_use]
-    pub fn new(session: Arc<Mutex<Session>>) -> Self {
+    pub(crate) fn new(session: Arc<Mutex<Session>>) -> Self {
         Self { session }
     }
 }

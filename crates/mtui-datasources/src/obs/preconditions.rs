@@ -45,7 +45,7 @@ fn log_url(reports_url: &str, rrid: &RequestReviewID) -> String {
 /// operation. Uses a status-preserving GET (`HttpClient::inner`) rather than
 /// [`HttpClient::get_bytes`](crate::http::HttpClient::get_bytes), which raises on
 /// non-2xx and so cannot tell a 404 apart from a 200.
-pub async fn fetch_testreport_log(
+pub(crate) async fn fetch_testreport_log(
     reports_url: &str,
     ssl_verify: &SslVerify,
     rrid: &RequestReviewID,
@@ -90,7 +90,7 @@ pub async fn fetch_testreport_log(
 /// so "PASSED with notes" becomes `PASSED WITH NOTES` (i.e. not exactly
 /// `PASSED`).
 #[must_use]
-pub fn summary(log: &str) -> String {
+pub(crate) fn summary(log: &str) -> String {
     SUMMARY_RE
         .captures(log)
         .and_then(|c| c.get(1))
@@ -101,7 +101,7 @@ pub fn summary(log: &str) -> String {
 ///
 /// Mirrors upstream `comment`.
 #[must_use]
-pub fn comment(log: &str) -> String {
+pub(crate) fn comment(log: &str) -> String {
     COMMENT_RE
         .captures(log)
         .and_then(|c| c.get(1))

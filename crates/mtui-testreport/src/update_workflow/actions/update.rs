@@ -54,7 +54,7 @@ fn slmicro() -> ActionCommands {
 /// The update command for `(release, transactional)`, or `None` for an unknown
 /// key (provider maps `None` to `MissingUpdaterError`).
 #[must_use]
-pub fn updater(release: &str, transactional: bool) -> Option<ActionCommands> {
+pub(crate) fn updater(release: &str, transactional: bool) -> Option<ActionCommands> {
     match (release, transactional) {
         ("YUM", false) => Some(yum()),
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(zypper()),

@@ -30,9 +30,9 @@ const REOPENED: &str = "Review got reopened";
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Assignment {
     /// The reviewing user.
-    pub user: String,
+    user: String,
     /// The qam group the user reviews for.
-    pub group: String,
+    pub(crate) group: String,
 }
 
 impl Assignment {
@@ -93,7 +93,7 @@ fn infer_group(review: &Review, group: &str) -> HashSet<Assignment> {
 
 /// Resolve the full set of active user->group assignments for a request.
 #[must_use]
-pub fn infer(request: &Request) -> HashSet<Assignment> {
+fn infer(request: &Request) -> HashSet<Assignment> {
     let mut assignments: HashSet<Assignment> = HashSet::new();
     for review in &request.reviews {
         if let Some(group) = review.by_group.as_deref()
@@ -119,7 +119,7 @@ pub fn infer(request: &Request) -> HashSet<Assignment> {
 
 /// The subset of [`infer`] assignments belonging to `user`.
 #[must_use]
-pub fn assignments_for_user(request: &Request, user: &str) -> HashSet<Assignment> {
+pub(crate) fn assignments_for_user(request: &Request, user: &str) -> HashSet<Assignment> {
     infer(request)
         .into_iter()
         .filter(|a| a.user == user)

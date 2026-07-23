@@ -26,6 +26,7 @@ enum Outcome {
     /// Return this command log.
     Ok(CommandLog),
     /// Fail the run with a timeout for the command.
+    #[cfg(test)]
     Timeout,
 }
 
@@ -169,11 +170,6 @@ pub struct MockConnection {
     /// [`HostError::SftpNotFound`] (the file is already gone), so the unlock
     /// "ignore only already-missing" path can be exercised.
     sftp_remove_not_found: bool,
-    /// When `true`, [`sftp_rmdir`](Connection::sftp_rmdir) fails with a generic
-    /// [`HostError::Sftp`], so a caller's directory-removal fallback can be shown
-    /// to *fail* (both the file remove and the rmdir fallback error), exercising
-    /// the per-host removal-failure outcome on [`Target::sftp_remove`].
-    sftp_rmdir_fails: bool,
     /// When `true`, [`sftp_get`](Connection::sftp_get) /
     /// [`sftp_get_folder`](Connection::sftp_get_folder) fail with a generic
     /// [`HostError::Sftp`], so a caller's per-host download outcome tracking can
@@ -262,7 +258,6 @@ impl MockConnection {
             links: HashMap::new(),
             sftp_remove_fails: false,
             sftp_remove_not_found: false,
-            sftp_rmdir_fails: false,
             sftp_get_fails: false,
             boot_id_counter: None,
             exclusive_write_errors: HashSet::new(),
@@ -286,8 +281,9 @@ impl MockConnection {
     /// [`HostError::Sftp`] so a caller's directory-removal fallback path, or the
     /// fail-closed unlock path (a non-gone removal error must propagate), can be
     /// exercised.
+    #[cfg(test)]
     #[must_use]
-    pub fn failing_sftp_remove(mut self) -> Self {
+    pub(crate) fn failing_sftp_remove(mut self) -> Self {
         self.sftp_remove_fails = true;
         self
     }
@@ -295,21 +291,10 @@ impl MockConnection {
     /// Makes [`sftp_remove`](Connection::sftp_remove) fail with
     /// [`HostError::SftpNotFound`] (the file is already gone), so the unlock
     /// "ignore only already-missing" path can be exercised.
+    #[cfg(test)]
     #[must_use]
-    pub fn not_found_sftp_remove(mut self) -> Self {
+    pub(crate) fn not_found_sftp_remove(mut self) -> Self {
         self.sftp_remove_not_found = true;
-        self
-    }
-
-    /// Makes [`sftp_rmdir`](Connection::sftp_rmdir) fail with a generic
-    /// [`HostError::Sftp`], so a caller's directory-removal fallback fails too —
-    /// combined with [`failing_sftp_remove`](Self::failing_sftp_remove) this
-    /// exercises the per-host *removal-failure* outcome on
-    /// [`Target::sftp_remove`], where both the file remove and the rmdir fallback
-    /// error.
-    #[must_use]
-    pub fn failing_sftp_rmdir(mut self) -> Self {
-        self.sftp_rmdir_fails = true;
         self
     }
 
@@ -369,8 +354,13 @@ impl MockConnection {
     /// calls to raise a transient [`HostError::Sftp`] before succeeding, so a
     /// caller's bounded retry (e.g. `Target::connect`'s system-parse retry) can
     /// be exercised against a flaky session.
+    #[cfg(test)]
     #[must_use]
-    pub fn with_transient_listdir_failures(self, path: impl Into<PathBuf>, count: u32) -> Self {
+    pub(crate) fn with_transient_listdir_failures(
+        self,
+        path: impl Into<PathBuf>,
+        count: u32,
+    ) -> Self {
         self.listdir_transient_failures
             .lock()
             .expect("mock transient-failures lock")
@@ -386,8 +376,9 @@ impl MockConnection {
     }
 
     /// Scripts `command` to time out (surfaced as [`HostError::Timeout`]).
+    #[cfg(test)]
     #[must_use]
-    pub fn with_timeout(mut self, command: impl Into<String>) -> Self {
+    pub(crate) fn with_timeout(mut self, command: impl Into<String>) -> Self {
         self.responses.insert(command.into(), Outcome::Timeout);
         self
     }
@@ -420,8 +411,9 @@ impl MockConnection {
     }
 
     /// Marks the transport as inactive (e.g. to test `is_active` handling).
+    #[cfg(test)]
     #[must_use]
-    pub fn inactive(mut self) -> Self {
+    pub(crate) fn inactive(mut self) -> Self {
         self.active = false;
         self
     }
@@ -458,8 +450,9 @@ impl MockConnection {
 
     /// Scripts [`reconnect`](Connection::reconnect) to fail with
     /// [`HostError::ReconnectFailed`].
+    #[cfg(test)]
     #[must_use]
-    pub fn failing_reconnect(mut self) -> Self {
+    pub(crate) fn failing_reconnect(mut self) -> Self {
         self.reconnect_fails = true;
         self
     }
@@ -560,7 +553,8 @@ impl MockConnection {
 
     /// The `(retry, backoff)` args of the most recent
     /// [`reconnect`](Connection::reconnect) call, or `None` if never called.
-    pub fn last_reconnect_args(&self) -> Option<(usize, bool)> {
+    #[cfg(test)]
+    pub(crate) fn last_reconnect_args(&self) -> Option<(usize, bool)> {
         *self
             .last_reconnect_args
             .lock()
@@ -586,8 +580,9 @@ impl MockConnection {
     /// The `mtui-rs-0mop.3` handshake-count oracle: a multi-read probe
     /// (`parse_system`) that batches correctly opens exactly **one** session
     /// regardless of how many files it reads.
+    #[cfg(test)]
     #[must_use]
-    pub fn sftp_session_count(&self) -> usize {
+    pub(crate) fn sftp_session_count(&self) -> usize {
         *self.sftp_sessions.lock().expect("mock sftp sessions lock")
     }
 
@@ -643,9 +638,9 @@ impl MockConnection {
     /// Returns the bytes written to spawned shells via
     /// [`ShellChannel::write`](crate::connection::ShellChannel::write),
     /// concatenated in order.
-    #[cfg(feature = "shell")]
+    #[cfg(all(feature = "shell", test))]
     #[must_use]
-    pub fn shell_input(&self) -> Vec<u8> {
+    pub(crate) fn shell_input(&self) -> Vec<u8> {
         self.shell_input
             .lock()
             .expect("mock shell input lock")
@@ -655,9 +650,9 @@ impl MockConnection {
     /// Returns the resize requests observed via
     /// [`ShellChannel::resize`](crate::connection::ShellChannel::resize), in
     /// order (`(cols, rows)`).
-    #[cfg(feature = "shell")]
+    #[cfg(all(feature = "shell", test))]
     #[must_use]
-    pub fn shell_resizes(&self) -> Vec<(u32, u32)> {
+    pub(crate) fn shell_resizes(&self) -> Vec<(u32, u32)> {
         self.shell_resizes
             .lock()
             .expect("mock shell resizes lock")
@@ -799,6 +794,7 @@ impl Connection for MockConnection {
         let outcome = self.responses.get(command).unwrap_or(&self.default);
         match outcome {
             Outcome::Ok(log) => Ok(log.clone()),
+            #[cfg(test)]
             Outcome::Timeout => Err(HostError::Timeout {
                 command: command.to_owned(),
             }),
@@ -1045,12 +1041,6 @@ impl Connection for MockConnection {
 
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Rmdir(path.to_path_buf()));
-        if self.sftp_rmdir_fails {
-            return Err(HostError::Sftp {
-                host: self.hostname.clone(),
-                reason: "scripted sftp_rmdir failure".to_owned(),
-            });
-        }
         Ok(())
     }
 

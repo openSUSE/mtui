@@ -10,7 +10,7 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed}
 /// Returns [`UpdateError`] with a reason of "update stack locked",
 /// "Dependency Error", or "RPM Error" per upstream's branch logic. This check
 /// surfaces no [`Diagnostic`]s (only `update` does).
-pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if args
         .stderr
         .contains("A ZYpp transaction is already in progress.")
@@ -40,7 +40,7 @@ pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// The prepare check for `(release, transactional)`, or `None` for an unknown
 /// key (upstream `prepare_checks.get(...)`).
 #[must_use]
-pub fn prepare_check(release: &str, transactional: bool) -> Option<CheckFn> {
+pub(crate) fn prepare_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
         _ => None,

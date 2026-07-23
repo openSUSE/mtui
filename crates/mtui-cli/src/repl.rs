@@ -230,7 +230,7 @@ impl Repl {
 ///
 /// An empty/whitespace line is a no-op ([`ControlFlow::Continue`]) — the engine
 /// already treats it as such.
-pub async fn step(registry: &Registry, session: &mut Session, line: &str) -> ControlFlow<()> {
+async fn step(registry: &Registry, session: &mut Session, line: &str) -> ControlFlow<()> {
     if let Err(err) = dispatch_line(registry, session, line).await {
         render_error(&err);
     }

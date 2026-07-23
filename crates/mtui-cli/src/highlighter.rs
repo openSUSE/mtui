@@ -67,7 +67,7 @@ pub struct MtuiHighlighter {
 impl MtuiHighlighter {
     /// Builds a highlighter sharing `registry` and `session` with the REPL loop.
     #[must_use]
-    pub fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
+    pub(crate) fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
         Self { registry, session }
     }
 

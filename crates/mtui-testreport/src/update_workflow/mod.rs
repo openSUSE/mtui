@@ -33,7 +33,6 @@ use mtui_hosts::HostError;
 use thiserror::Error;
 
 pub use checks::Diagnostic;
-pub use template::{TemplateError, safe_substitute, substitute};
 
 /// The lookup key shared by every action and check table.
 ///
@@ -42,7 +41,7 @@ pub use template::{TemplateError, safe_substitute, substitute};
 /// `"YUM"`, or `"slmicro"` — paired with a *transactional* flag (read-only-root
 /// hosts, e.g. SL Micro). The `Vec`-free `(String, bool)` here keeps ownership
 /// simple; lookups accept `(&str, bool)`.
-pub type WorkflowKey = (String, bool);
+pub(crate) type WorkflowKey = (String, bool);
 
 /// A failure recognised by a post-run [`checks`] function.
 ///
@@ -55,9 +54,9 @@ pub type WorkflowKey = (String, bool);
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub struct UpdateError {
     /// The failure reason (a stable, upstream-matching short string).
-    pub reason: String,
+    pub(crate) reason: String,
     /// The host the command ran on, if known.
-    pub host: Option<String>,
+    pub(crate) host: Option<String>,
 }
 
 impl UpdateError {
@@ -72,7 +71,7 @@ impl UpdateError {
 
     /// Builds a host-less [`UpdateError`] (upstream `UpdateError(reason)`).
     #[must_use]
-    pub fn reason_only(reason: impl Into<String>) -> Self {
+    pub(crate) fn reason_only(reason: impl Into<String>) -> Self {
         Self {
             reason: reason.into(),
             host: None,
@@ -112,7 +111,7 @@ impl Role {
     /// Mirrors the per-module `key_error=Missing*Error` on upstream's
     /// `DictWithInjections`.
     #[must_use]
-    pub fn missing_error(self, release: &str) -> HostError {
+    fn missing_error(self, release: &str) -> HostError {
         let release = release.to_owned();
         match self {
             Role::Install => HostError::MissingInstaller { release },
@@ -167,15 +166,15 @@ pub trait CheckProvider: Send + Sync {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WorkflowRegistry {
     /// The `--force-resolution` flag threaded into `prepare` doers.
-    pub force: bool,
+    force: bool,
     /// The `testing`-repos flag threaded into `prepare` doers.
-    pub testing: bool,
+    testing: bool,
 }
 
 impl WorkflowRegistry {
     /// Builds a registry with the given prepare flags.
     #[must_use]
-    pub fn new(force: bool, testing: bool) -> Self {
+    pub(crate) fn new(force: bool, testing: bool) -> Self {
         Self { force, testing }
     }
 }

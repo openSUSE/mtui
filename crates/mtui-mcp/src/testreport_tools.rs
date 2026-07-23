@@ -381,7 +381,7 @@ fn stream_read(
 /// # Errors
 /// Refuses on bad `offset`/`limit`, no loaded report, ambiguous/unknown
 /// template, path traversal, or a missing `relpath` file.
-pub async fn testreport_read(
+async fn testreport_read(
     session: &McpSession,
     relpath: Option<&str>,
     offset: usize,
@@ -457,7 +457,7 @@ pub async fn testreport_read(
 ///
 /// # Errors
 /// Refuses when no report is loaded or the template is ambiguous/unknown.
-pub async fn testreport_logs(
+async fn testreport_logs(
     session: &McpSession,
     template: Option<&str>,
 ) -> Result<Value, McpCommandError> {
@@ -500,7 +500,7 @@ pub async fn testreport_logs(
 /// # Errors
 /// Refuses on an out-of-bounds range, no loaded report, or ambiguous/unknown
 /// template.
-pub async fn testreport_patch(
+async fn testreport_patch(
     session: &McpSession,
     start_line: i64,
     end_line: i64,
@@ -559,7 +559,7 @@ pub async fn testreport_patch(
 ///
 /// # Errors
 /// Refuses when no report is loaded or the template is ambiguous/unknown.
-pub async fn testreport_write(
+async fn testreport_write(
     session: &McpSession,
     content: &str,
     template: Option<&str>,
@@ -588,7 +588,7 @@ pub async fn testreport_write(
 /// # Errors
 /// Refuses on an invalid value, nothing-to-fill, no loaded report, or an
 /// ambiguous/unknown template.
-pub async fn testreport_fill(
+async fn testreport_fill(
     session: &McpSession,
     reproducer: Option<&str>,
     status: Option<&str>,

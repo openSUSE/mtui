@@ -186,7 +186,7 @@ impl HttpFetcher {
     /// # Errors
     /// Returns [`RefhostError`] wrapping any client-build failure (e.g. an
     /// unreadable CA bundle).
-    pub fn new(verify: VerifyPolicy) -> Result<Self, RefhostError> {
+    fn new(verify: VerifyPolicy) -> Result<Self, RefhostError> {
         let client = HttpClient::new(verify).map_err(|e| RefhostError::Io {
             path: "<http client>".to_string(),
             source: std::io::Error::other(e.to_string()),
@@ -259,16 +259,10 @@ pub struct PathResolver {
 impl PathResolver {
     /// A resolver using the production [`PathRefhostsBuilder`].
     #[must_use]
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             builder: Box::new(PathRefhostsBuilder),
         }
-    }
-
-    /// A resolver with an injected [`RefhostsBuilder`] (for tests).
-    #[must_use]
-    pub fn with_builder(builder: Box<dyn RefhostsBuilder>) -> Self {
-        Self { builder }
     }
 }
 
@@ -338,7 +332,7 @@ pub struct HttpsResolver {
 impl HttpsResolver {
     /// Build an HTTPS resolver from injected seams.
     #[must_use]
-    pub fn new(
+    fn new(
         clock: Box<dyn Clock>,
         stat: Box<dyn FileStat>,
         fetcher: Box<dyn Fetcher>,
@@ -521,7 +515,7 @@ impl RefhostsFactory {
     /// The list preserves insertion order, but the *try* order is always the one
     /// named by `config.refhosts_resolvers` at resolve time.
     #[must_use]
-    pub fn new(resolvers: Vec<(String, Box<dyn Resolver>)>) -> Self {
+    fn new(resolvers: Vec<(String, Box<dyn Resolver>)>) -> Self {
         Self { resolvers }
     }
 
@@ -595,7 +589,8 @@ mod tests {
 
     use super::*;
 
-    /// Recorded `(uri, verify.verifies())` fetch calls.
+    /// Recorded `(uri, verifying)` fetch calls, where `verifying` is `false`
+    /// only for the `Default(false)` skip-verification posture.
     type FetchLog = Arc<Mutex<Vec<(String, bool)>>>;
     /// Recorded `(bytes, path)` writes.
     type WriteLog = Arc<Mutex<Vec<(Vec<u8>, PathBuf)>>>;
@@ -655,7 +650,7 @@ default:
         }
     }
 
-    /// A fetcher recording `(uri, verify.verifies())` and serving fixed bytes.
+    /// A fetcher recording `(uri, verifying)` and serving fixed bytes.
     #[derive(Clone)]
     struct RecordingFetcher {
         calls: FetchLog,
@@ -672,10 +667,10 @@ default:
     #[async_trait]
     impl Fetcher for RecordingFetcher {
         async fn fetch(&self, uri: &str, verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((uri.to_string(), verify.verifies()));
+            self.calls.lock().unwrap().push((
+                uri.to_string(),
+                !matches!(verify, VerifyPolicy::Default(false)),
+            ));
             Ok(self.payload.clone())
         }
     }
@@ -766,7 +761,9 @@ default:
     async fn path_resolver_uses_configured_path() {
         let builder = RecordingBuilder::new();
         let built = builder.built.clone();
-        let resolver = PathResolver::with_builder(Box::new(builder));
+        let resolver = PathResolver {
+            builder: Box::new(builder),
+        };
         let path = PathBuf::from("/etc/refhosts.yml");
         let ssl = SslVerify::Enabled;
         resolver

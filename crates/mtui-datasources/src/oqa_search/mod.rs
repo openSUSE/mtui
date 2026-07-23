@@ -28,7 +28,7 @@
 //!   `OVERVIEW_*` block markers shared by the command layer and the export
 //!   injector.
 
-pub mod heuristics;
+pub(crate) mod heuristics;
 pub mod render;
 pub mod results;
 pub mod search;
@@ -37,5 +37,5 @@ pub use render::{OVERVIEW_BEGIN_MARKER, OVERVIEW_END_MARKER, render_overview};
 pub use results::{BuildCheckResult, GroupResult, JobResult, OpenQAOverviewResult, VersionResult};
 pub use search::{
     aggregated_updates, build_checks, extract_test_results, get_incident_info, incident_jobs,
-    log_matches_package, single_incidents, summarize_test_results,
+    single_incidents, summarize_test_results,
 };

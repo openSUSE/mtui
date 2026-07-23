@@ -48,7 +48,7 @@ pub enum InputEvent {
 /// `#[async_trait]` (not a native `async fn` in trait) keeps it dyn-compatible so
 /// the [`bridge`] pump can take `&mut dyn BridgeIo`.
 #[async_trait::async_trait]
-pub trait BridgeIo: Send {
+trait BridgeIo: Send {
     /// Awaits the next local input event, or `None` on local EOF / stream end
     /// (upstream `sys.stdin.read(1) == "" → break`).
     async fn next_input(&mut self) -> Option<InputEvent>;
@@ -81,7 +81,7 @@ pub trait BridgeIo: Send {
 /// Propagates a [`ShellChannel::write`] failure (a keystroke could not be sent).
 /// A read error is treated as a clean stop, not an error, matching upstream's
 /// `except TimeoutError: pass` / EOF handling.
-pub async fn bridge(channel: &mut dyn ShellChannel, io: &mut dyn BridgeIo) -> anyhow::Result<()> {
+async fn bridge(channel: &mut dyn ShellChannel, io: &mut dyn BridgeIo) -> anyhow::Result<()> {
     let mut buf = [0u8; 4096];
     loop {
         tokio::select! {
@@ -255,7 +255,7 @@ async fn run_bridge_on(target: &mut Target) -> anyhow::Result<()> {
 /// instead of the headless engine (kept off the reedline boundary so it is
 /// unit-testable, mirroring the P6.2 `step` extraction).
 #[must_use]
-pub fn is_shell_line(line: &str) -> Option<Vec<String>> {
+pub(crate) fn is_shell_line(line: &str) -> Option<Vec<String>> {
     let tokens = shlex_split(line)?;
     let (name, argv) = tokens.split_first()?;
     (name == "shell").then(|| argv.to_vec())
@@ -281,7 +281,7 @@ fn shlex_split(line: &str) -> Option<Vec<String>> {
 /// unbalanced-quote split — the same class of error the engine would render.
 /// Per-host attach failures are rendered to the session display and do not abort
 /// the command.
-pub async fn run_shell(session: &mut Session, argv: &[String]) -> anyhow::Result<()> {
+pub(crate) async fn run_shell(session: &mut Session, argv: &[String]) -> anyhow::Result<()> {
     // Reuse mtui-core's exact `-t/--target` grammar so REPL `shell` and the
     // (headless-stub) engine `shell` stay in lock-step.
     let parser = add_hosts_arg(clap::Command::new("shell").no_binary_name(true));

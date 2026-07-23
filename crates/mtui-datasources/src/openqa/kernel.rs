@@ -39,7 +39,7 @@ pub struct KernelOpenQA {
 
 impl KernelOpenQA {
     /// The workflow discriminator.
-    pub const KIND: &'static str = "kernel";
+    const KIND: &'static str = "kernel";
 
     /// Wrap shared connector state as a kernel connector (unpopulated).
     #[must_use]

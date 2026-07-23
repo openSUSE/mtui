@@ -86,7 +86,7 @@ impl Refhosts {
     /// # Errors
     /// Returns [`RefhostError::Parse`] if `text` is not a valid `refhosts.yml`
     /// document.
-    pub fn from_text(text: &str) -> Result<Self, RefhostError> {
+    fn from_text(text: &str) -> Result<Self, RefhostError> {
         let data = load_refhosts(text)?;
         Ok(Self::from_hosts(data))
     }
@@ -99,7 +99,7 @@ impl Refhosts {
     /// # Errors
     /// Returns [`RefhostError::Parse`] if the (lossily-decoded) contents are
     /// not a valid `refhosts.yml` document.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, RefhostError> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, RefhostError> {
         Self::from_text(&String::from_utf8_lossy(bytes))
     }
 
@@ -131,7 +131,7 @@ impl Refhosts {
     /// Unset fields (empty `arch`, `product == None`, empty `addons`) impose no
     /// constraint, so an empty [`Attributes`] matches every host.
     #[must_use]
-    pub fn is_candidate_match(candidate: &Host, attribute: &Attributes) -> bool {
+    fn is_candidate_match(candidate: &Host, attribute: &Attributes) -> bool {
         if !attribute.arch.is_empty() && attribute.arch != candidate.arch {
             return false;
         }
@@ -300,7 +300,7 @@ impl Refhosts {
     /// interchangeable for that update and collapse to one slot, so the arbiter
     /// draws a single host per `(product, version, arch, requested addons)`.
     #[must_use]
-    pub fn slot_for_query(attribute: &Attributes, host: &Host) -> Slot {
+    fn slot_for_query(attribute: &Attributes, host: &Host) -> Slot {
         let (name, ver_str) = match &attribute.product {
             None => (String::new(), String::new()),
             Some(product) => (

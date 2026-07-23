@@ -17,7 +17,7 @@
 const MTUI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The default export footer prefix (upstream default).
-pub const EXPORT_PREFIX: &str = "## export";
+pub(crate) const EXPORT_PREFIX: &str = "## export";
 
 /// Detects `(distro, version_id, kernel)` of the current machine.
 ///

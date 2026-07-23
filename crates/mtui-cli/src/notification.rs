@@ -22,7 +22,7 @@ use std::io::IsTerminal;
 /// Reports whether a desktop notification can plausibly be shown in the current
 /// process environment (real `stdin` TTY + platform display checks).
 #[must_use]
-pub fn desktop_available() -> bool {
+fn desktop_available() -> bool {
     desktop_available_with(std::io::stdin().is_terminal(), std::env::consts::OS, |k| {
         std::env::var_os(k).is_some()
     })
@@ -54,7 +54,7 @@ fn desktop_available_with(stdin_is_tty: bool, os: &str, has_env: impl Fn(&str) -
 ///
 /// `summary` is the title, `text` the body, `icon` an optional freedesktop icon
 /// name (e.g. `"dialog-error"`).
-pub fn display(summary: Option<&str>, text: Option<&str>, icon: Option<&str>) {
+fn display(summary: Option<&str>, text: Option<&str>, icon: Option<&str>) {
     if !desktop_available() {
         return;
     }

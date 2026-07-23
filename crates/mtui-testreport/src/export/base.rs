@@ -3,8 +3,7 @@
 //! Ports upstream `mtui.update_workflow.export.base.BaseExport`. Rust has no
 //! class inheritance, so the shared state and common methods live in
 //! [`ExportContext`], which each concrete exporter (`auto`, `manual`, `kernel`)
-//! embeds; the two `@abstractmethod`s (`get_logs`, `run`) become the
-//! [`Exporter`] trait.
+//! embeds.
 //!
 //! ## Interactive overwrite prompt
 //!
@@ -61,13 +60,13 @@ impl OverwritePrompt for DenyOverwrite {
 /// differ), so unlike upstream they are not a field here.
 pub struct ExportContext {
     /// The application configuration.
-    pub config: Config,
+    pub(crate) config: Config,
     /// The working template (a copy the exporter mutates).
     pub template: Vec<String>,
     /// Whether to overwrite existing files without prompting.
-    pub force: bool,
+    pub(crate) force: bool,
     /// The RRID of the current update.
-    pub rrid: RequestReviewID,
+    pub(crate) rrid: RequestReviewID,
 }
 
 impl ExportContext {
@@ -90,7 +89,7 @@ impl ExportContext {
     /// otherwise the write is redirected to a `.{timestamp}` sibling.
     ///
     /// I/O failures are logged and swallowed (upstream logs and returns).
-    pub fn writer(&self, fn_path: &Path, lines: &[String], prompt: &dyn OverwritePrompt) {
+    pub(crate) fn writer(&self, fn_path: &Path, lines: &[String], prompt: &dyn OverwritePrompt) {
         let to_write = lines.join("\n");
         let mut target = fn_path.to_path_buf();
 
@@ -232,7 +231,7 @@ impl ExportContext {
     }
 
     /// Collapses consecutive duplicate non-blank lines (upstream `dedup_lines`).
-    pub fn dedup_lines(&mut self) {
+    pub(crate) fn dedup_lines(&mut self) {
         let mut lines: Vec<String> = Vec::with_capacity(self.template.len());
         let mut prev: Option<&String> = None;
         for cur in &self.template {
@@ -247,7 +246,7 @@ impl ExportContext {
 
     /// Appends the system-information footer, unless the last line already is it
     /// (upstream `add_sysinfo`).
-    pub fn add_sysinfo(&mut self) {
+    pub(crate) fn add_sysinfo(&mut self) {
         let (distro, verid, kernel) = detect_system();
         let info = system_info(
             &distro,
@@ -271,7 +270,10 @@ impl ExportContext {
     ///
     /// Idempotent via begin/end markers — a prior block is replaced in place.
     /// Returns `true` when the template was modified.
-    pub fn inject_overview(&mut self, overview: &mtui_datasources::OpenQAOverviewResult) -> bool {
+    pub(crate) fn inject_overview(
+        &mut self,
+        overview: &mtui_datasources::OpenQAOverviewResult,
+    ) -> bool {
         if !mtui_types::OverviewResult::has_overview(overview) {
             return false;
         }
@@ -300,7 +302,7 @@ impl ExportContext {
     /// The block is inserted just before the anchor (upstream's Python
     /// `insert(-1)`). When the anchor is the very first line, the position is
     /// clamped to 0 rather than underflowing the `usize` index.
-    pub fn inject_openqa(&mut self, pp: &[String]) {
+    pub(crate) fn inject_openqa(&mut self, pp: &[String]) {
         if pp.is_empty() {
             return;
         }
@@ -404,32 +406,12 @@ impl ExportContext {
     /// Path of the per-RRID install-logs directory
     /// (`template_dir/<rrid>/install_logs`).
     #[must_use]
-    pub fn install_logs_dir(&self) -> PathBuf {
+    pub(crate) fn install_logs_dir(&self) -> PathBuf {
         self.config
             .template_dir
             .join(self.rrid.to_string())
             .join(&self.config.install_logs)
     }
-}
-
-/// The abstract exporter surface (upstream `BaseExport`'s `@abstractmethod`s).
-///
-/// Each concrete exporter embeds an [`ExportContext`] and implements the
-/// workflow-specific log collection and run sequence.
-#[async_trait::async_trait]
-pub trait Exporter {
-    /// Borrows the shared export context.
-    fn ctx(&self) -> &ExportContext;
-
-    /// Mutably borrows the shared export context.
-    fn ctx_mut(&mut self) -> &mut ExportContext;
-
-    /// Collects log files and returns their filenames (upstream `get_logs`).
-    async fn get_logs(&mut self) -> Vec<String>;
-
-    /// Runs the exporter, returning the finished template
-    /// (upstream `run` — returns the mutated `FileList`/line list).
-    async fn run(&mut self, prompt: &dyn OverwritePrompt) -> Vec<String>;
 }
 
 #[cfg(test)]

@@ -91,11 +91,11 @@ pub struct ToolDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRoute {
     /// The registry command name to dispatch (`config` for `config_show`).
-    pub command: &'static str,
+    command: &'static str,
     /// Tokens prepended to the reconstructed argv (`["show"]` for `config_show`).
-    pub argv_prefix: Vec<String>,
+    argv_prefix: Vec<String>,
     /// Whether this tool accepts the `background` flag (a slow host command).
-    pub slow: bool,
+    slow: bool,
 }
 
 /// `true` iff a command is known to be side-effect-free.
@@ -279,7 +279,7 @@ pub fn build_tools(registry: &Registry) -> Vec<ToolDescriptor> {
 /// Build the tool-name → [`ToolRoute`] map for dispatching calls back to the
 /// engine. Keys match [`build_tools`] descriptor names exactly.
 #[must_use]
-pub fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
+pub(crate) fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
     synthesise(registry).1
 }
 
@@ -298,7 +298,7 @@ pub fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
 /// Returns [`McpCommandError`] when the command is not registered, or when the
 /// synchronous parse/run fails (propagated from
 /// [`McpSession::run_command_with_progress`]).
-pub async fn dispatch_tool(
+pub(crate) async fn dispatch_tool(
     registry: &Arc<Registry>,
     session: &Arc<McpSession>,
     route: &ToolRoute,
@@ -450,7 +450,7 @@ pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
 /// Returns [`McpCommandError`] when a `job_id` is missing/unknown, when
 /// `job_result` is polled on a still-running / failed / cancelled job, or when
 /// the tool name is unrecognised.
-pub async fn dispatch_job_tool(
+pub(crate) async fn dispatch_job_tool(
     session: &McpSession,
     name: &str,
     kwargs: &Map<String, Value>,

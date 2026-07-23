@@ -26,13 +26,13 @@ use crate::obs::errors::ObsError;
 const IGNORED_QAM_GROUPS: [&str; 2] = ["qam-auto", "qam-openqa"];
 
 /// The `MAINT:RejectReason` attribute namespace.
-pub const REJECT_REASON_NAMESPACE: &str = "MAINT";
+pub(crate) const REJECT_REASON_NAMESPACE: &str = "MAINT";
 /// The `MAINT:RejectReason` attribute name.
-pub const REJECT_REASON_NAME: &str = "RejectReason";
+pub(crate) const REJECT_REASON_NAME: &str = "RejectReason";
 
 /// IBS QAM-group test: starts with `qam`, minus the automation groups.
 #[must_use]
-pub fn is_qam_group(name: &str) -> bool {
+pub(crate) fn is_qam_group(name: &str) -> bool {
     name.starts_with("qam") && !IGNORED_QAM_GROUPS.contains(&name)
 }
 
@@ -40,37 +40,37 @@ pub fn is_qam_group(name: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryEvent {
     /// The actor of the event (`who` attribute).
-    pub who: String,
+    pub(crate) who: String,
     /// The timestamp of the event (`when` attribute).
-    pub when: String,
+    pub(crate) when: String,
     /// The `<description>` text, trimmed.
-    pub description: String,
+    pub(crate) description: String,
 }
 
 /// One `<review>` of a request (a group or user review + its history).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
     /// The review `state` (e.g. `new`, `accepted`).
-    pub state: String,
+    pub(crate) state: String,
     /// The reviewing group (`by_group`), when the review targets a group.
-    pub by_group: Option<String>,
+    pub(crate) by_group: Option<String>,
     /// The reviewing user (`by_user`), when the review targets a user.
-    pub by_user: Option<String>,
+    pub(crate) by_user: Option<String>,
     /// The nested `<history>` events (`withfullhistory=1`).
-    pub history: Vec<HistoryEvent>,
+    pub(crate) history: Vec<HistoryEvent>,
 }
 
 /// The parts of a request the QAM ops need.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     /// The request id (`id` attribute).
-    pub reqid: String,
+    pub(crate) reqid: String,
     /// The overall request `state/@name`.
-    pub state: String,
+    pub(crate) state: String,
     /// The `action/source/@project`, when present.
-    pub src_project: Option<String>,
+    pub(crate) src_project: Option<String>,
     /// The request's reviews.
-    pub reviews: Vec<Review>,
+    pub(crate) reviews: Vec<Review>,
 }
 
 /// Refuse an OBS document carrying a DTD, before any parsing.
@@ -256,7 +256,7 @@ fn parse_request_element(
 /// # Errors
 ///
 /// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
-pub fn parse_request(xml: &str) -> Result<Request, ObsError> {
+pub(crate) fn parse_request(xml: &str) -> Result<Request, ObsError> {
     let mut reader = reader(xml)?;
     let mut buf = Vec::new();
     loop {
@@ -287,7 +287,7 @@ pub fn parse_request(xml: &str) -> Result<Request, ObsError> {
 /// # Errors
 ///
 /// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
-pub fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
+pub(crate) fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
     let mut reader = reader(xml)?;
     let mut buf = Vec::new();
     let mut requests = Vec::new();
@@ -320,7 +320,7 @@ pub fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
 /// # Errors
 ///
 /// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
-pub fn parse_group_directory(xml: &str) -> Result<Vec<String>, ObsError> {
+pub(crate) fn parse_group_directory(xml: &str) -> Result<Vec<String>, ObsError> {
     let mut reader = reader(xml)?;
     let mut buf = Vec::new();
     let mut names = Vec::new();
@@ -350,7 +350,7 @@ pub fn parse_group_directory(xml: &str) -> Result<Vec<String>, ObsError> {
 /// # Errors
 ///
 /// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
-pub fn parse_reject_reason_values(xml: &str) -> Result<Vec<String>, ObsError> {
+pub(crate) fn parse_reject_reason_values(xml: &str) -> Result<Vec<String>, ObsError> {
     let mut reader = reader(xml)?;
     let mut buf = Vec::new();
     let mut values = Vec::new();
@@ -388,7 +388,7 @@ pub fn parse_reject_reason_values(xml: &str) -> Result<Vec<String>, ObsError> {
 ///
 /// Mirrors upstream `models.build_reject_reason_body`'s serialised element.
 #[must_use]
-pub fn build_reject_reason_body(values: &[String]) -> String {
+pub(crate) fn build_reject_reason_body(values: &[String]) -> String {
     let mut body = format!(
         "<attributes><attribute name=\"{REJECT_REASON_NAME}\" namespace=\"{REJECT_REASON_NAMESPACE}\">"
     );

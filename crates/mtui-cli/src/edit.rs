@@ -27,7 +27,7 @@ use mtui_core::Session;
 /// instead of the headless engine (kept off the reedline boundary so it is
 /// unit-testable, mirroring [`crate::shell::is_shell_line`]).
 #[must_use]
-pub fn is_edit_line(line: &str) -> Option<Vec<String>> {
+pub(crate) fn is_edit_line(line: &str) -> Option<Vec<String>> {
     let tokens = shlex::split(line)?;
     let (name, argv) = tokens.split_first()?;
     (name == "edit").then(|| argv.to_vec())
@@ -66,7 +66,7 @@ fn resolve_path(session: &Session, filename: Option<&String>) -> anyhow::Result<
 /// Returns an error on an argument-parse failure (clap usage), an unresolved
 /// default path (no template loaded), a spawn failure (`$EDITOR` not found), or
 /// a non-zero editor exit. The REPL renders it; nothing is swallowed.
-pub fn run_edit(session: &mut Session, argv: &[String]) -> anyhow::Result<()> {
+pub(crate) fn run_edit(session: &mut Session, argv: &[String]) -> anyhow::Result<()> {
     let parser = clap::Command::new("edit").no_binary_name(true).arg(
         Arg::new("filename")
             .num_args(0..=1)

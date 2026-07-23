@@ -8,8 +8,7 @@
 //!   `/etc/products.d`, resolves the base product, collects addons, applies the
 //!   SLES_SAP repo workarounds, and detects transactional hosts.
 
-pub mod product;
+pub(crate) mod product;
 pub mod system;
 
-pub use product::{parse_os_release, parse_product};
 pub use system::parse_system;

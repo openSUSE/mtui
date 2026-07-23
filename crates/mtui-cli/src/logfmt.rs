@@ -50,7 +50,7 @@ pub struct CompactLevelFormat {
 impl CompactLevelFormat {
     /// Builds the format with the ANSI decision already resolved.
     #[must_use]
-    pub const fn new(ansi: bool) -> Self {
+    pub(crate) const fn new(ansi: bool) -> Self {
         Self { ansi }
     }
 
