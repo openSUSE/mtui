@@ -680,6 +680,14 @@ impl Target {
         }
     }
 
+    /// The post-reboot reconnect attempt budget (`[connection]
+    /// reboot_retries`) this target was built with, for callers driving the
+    /// reboot lifecycle (`HostsGroup::reboot`/`reboot_transactional`).
+    #[must_use]
+    pub fn reboot_retries(&self) -> usize {
+        self.config.reboot_retries as usize
+    }
+
     /// Re-establishes the transport after a reboot dropped it.
     ///
     /// Ports upstream `Target.reconnect(retry, backoff)`: delegates to
@@ -691,9 +699,9 @@ impl Target {
     ///
     /// Propagates [`HostError::ReconnectFailed`] when the retry budget is
     /// exhausted while the host is still down.
-    pub async fn reconnect(&mut self) -> Result<()> {
+    pub async fn reconnect(&mut self, retry: usize, backoff: bool) -> Result<()> {
         match self.connection.as_mut() {
-            Some(conn) => conn.reconnect().await,
+            Some(conn) => conn.reconnect(retry, backoff).await,
             None => {
                 tracing::debug!(host = %self.hostname, "reconnect: not connected");
                 Ok(())
@@ -984,6 +992,8 @@ impl Target {
                 Some(prompt) => conn.with_timeout_prompt(prompt.clone()),
                 None => conn,
             };
+            let conn =
+                conn.with_reboot_budget(std::time::Duration::from_secs(self.config.reboot_timeout));
             let conn: Box<dyn Connection> = Box::new(conn);
             // Build the operation lock over a clone of the live connection,
             // mirroring upstream `self._lock = TargetLock(self.connection,
@@ -2295,21 +2305,30 @@ mod tests {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
         let mut t = enabled_with(conn);
-        t.reconnect().await.expect("reconnect ok");
+        t.reconnect(10, true).await.expect("reconnect ok");
         assert_eq!(handle.reconnect_count(), 1);
+        assert_eq!(handle.last_reconnect_args(), Some((10, true)));
+    }
+
+    #[tokio::test]
+    async fn reboot_retries_reads_from_config() {
+        let mut cfg = Config::default();
+        cfg.reboot_retries = 3;
+        let t = Target::new(&cfg, "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        assert_eq!(t.reboot_retries(), 3);
     }
 
     #[tokio::test]
     async fn reconnect_surfaces_failure() {
         let conn = MockConnection::new("h1").failing_reconnect();
         let mut t = enabled_with(conn);
-        assert!(t.reconnect().await.is_err());
+        assert!(t.reconnect(0, false).await.is_err());
     }
 
     #[tokio::test]
     async fn reconnect_unconnected_is_ok_noop() {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
-        t.reconnect().await.expect("noop reconnect ok");
+        t.reconnect(0, false).await.expect("noop reconnect ok");
     }
 
     // --- lock / is_locked delegators ----------------------------------------

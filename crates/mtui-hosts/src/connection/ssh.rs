@@ -381,6 +381,12 @@ pub struct SshConnection {
     /// the initial [`connect`](Self::connect) used (tests point it at a temp
     /// file to stay out of the developer's real store).
     known_hosts: Option<PathBuf>,
+    /// Backoff base for [`reconnect`](Connection::reconnect)'s post-reboot
+    /// budget (config `reboot_timeout`, default 10s). Only consulted when the
+    /// caller passes `backoff = true`; set via [`with_reboot_budget`].
+    ///
+    /// [`with_reboot_budget`]: Self::with_reboot_budget
+    reconnect_backoff_base: Duration,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -430,6 +436,7 @@ impl SshConnection {
             is_repl: false,
             timeout_prompt: None,
             known_hosts,
+            reconnect_backoff_base: Duration::from_secs(10),
         })
     }
 
@@ -461,6 +468,16 @@ impl SshConnection {
         self
     }
 
+    /// Sets the backoff base [`reconnect`](Connection::reconnect) uses when a
+    /// caller passes `backoff = true` (the post-reboot recovery path).
+    /// Mirrors config `[connection] reboot_timeout`; unset callers keep the
+    /// 10s default set in [`connect`](Self::connect).
+    #[must_use]
+    pub fn with_reboot_budget(mut self, base: Duration) -> Self {
+        self.reconnect_backoff_base = base;
+        self
+    }
+
     /// Returns the live handle or a [`HostError::Transport`] "not connected".
     fn handle(&self) -> Result<&Handle<ClientHandler>> {
         self.handle.as_ref().ok_or_else(|| HostError::Transport {
@@ -473,7 +490,7 @@ impl SshConnection {
     /// link has dropped. Mirrors upstream `_sftp` (open per operation).
     async fn sftp(&mut self) -> Result<RusshSftpSession> {
         if !self.is_active() {
-            self.reconnect().await?;
+            self.reconnect(0, false).await?;
         }
         let channel = self
             .handle()?
@@ -726,6 +743,12 @@ fn persist_host_key_inner(
     mtui_config::atomic::write(&contents, path)
 }
 
+/// The next `reconnect` backoff sleep after `count` attempts, mirroring
+/// upstream `2 * (timeout + 5 * count)`.
+fn reconnect_delay(count: usize, base: Duration) -> Duration {
+    (base + Duration::from_secs(5 * count as u64)) * 2
+}
+
 /// Establishes the transport and authenticates. Shared by `connect` and
 /// `reconnect`.
 async fn establish(
@@ -952,6 +975,7 @@ impl Connection for SshConnection {
             is_repl: self.is_repl,
             timeout_prompt: self.timeout_prompt.clone(),
             known_hosts: self.known_hosts.clone(),
+            reconnect_backoff_base: self.reconnect_backoff_base,
         })
     }
 
@@ -963,7 +987,7 @@ impl Connection for SshConnection {
         let mut attempt = 0;
         let mut channel = loop {
             if !self.is_active() {
-                self.reconnect().await?;
+                self.reconnect(0, false).await?;
             }
             match self.handle()?.channel_open_session().await {
                 Ok(ch) => break ch,
@@ -975,7 +999,7 @@ impl Connection for SshConnection {
                         });
                     }
                     tracing::debug!(host = %self.hostname, "channel open failed ({e}); retrying");
-                    self.reconnect().await?;
+                    self.reconnect(0, false).await?;
                 }
             }
         };
@@ -1117,12 +1141,25 @@ impl Connection for SshConnection {
         Ok(())
     }
 
-    async fn reconnect(&mut self) -> Result<()> {
+    async fn reconnect(&mut self, retry: usize, backoff: bool) -> Result<()> {
         if self.is_active() {
             return Ok(());
         }
+        let mut count = 0usize;
+        let mut rtimeout = self.reconnect_backoff_base;
         let mut last_err = None;
-        for attempt in 0..=RETRIES {
+        while !self.is_active() && count <= retry {
+            count += 1;
+            // Ported from upstream `Connection.reconnect`: sleep before each
+            // probe, growing the wait when `backoff`. Unlike upstream, the
+            // pre-sleep itself is gated on `backoff` — non-reboot callers pass
+            // `(0, false)` and must fail fast (no multi-second pause) on a
+            // genuinely dead link mid-command; only the reboot-recovery budget
+            // (`backoff = true`) pays the wait.
+            if backoff {
+                tokio::time::sleep(rtimeout).await;
+                rtimeout = reconnect_delay(count, self.reconnect_backoff_base);
+            }
             match establish(
                 &self.hostname,
                 &self.resolved,
@@ -1134,15 +1171,15 @@ impl Connection for SshConnection {
             {
                 Ok(handle) => {
                     self.handle = Some(handle);
-                    return Ok(());
                 }
                 Err(e) => {
-                    tracing::debug!(host = %self.hostname, attempt, "reconnect attempt failed: {e}");
+                    tracing::debug!(host = %self.hostname, attempt = count, "reconnect attempt failed: {e}");
                     last_err = Some(e);
-                    // brief backoff between attempts
-                    tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             }
+        }
+        if self.is_active() {
+            return Ok(());
         }
         tracing::debug!(host = %self.hostname, "reconnect gave up: {last_err:?}");
         Err(HostError::ReconnectFailed {
@@ -1456,7 +1493,7 @@ impl Connection for SshConnection {
         let mut attempt = 0;
         let channel = loop {
             if !self.is_active() {
-                self.reconnect().await?;
+                self.reconnect(0, false).await?;
             }
             match self.handle()?.channel_open_session().await {
                 Ok(ch) => break ch,
@@ -1468,7 +1505,7 @@ impl Connection for SshConnection {
                         });
                     }
                     tracing::debug!(host = %self.hostname, "shell channel open failed ({e}); retrying");
-                    self.reconnect().await?;
+                    self.reconnect(0, false).await?;
                 }
             }
         };
@@ -1838,6 +1875,7 @@ mod tests {
             is_repl: false,
             timeout_prompt: None,
             known_hosts: None,
+            reconnect_backoff_base: Duration::from_secs(10),
         };
         let s = format!("{conn:?}");
         assert!(s.contains("example.host"), "{s}");
@@ -1847,6 +1885,88 @@ mod tests {
         // A disconnected connection reports inactive and errors on handle().
         assert!(!conn.is_active());
         assert!(conn.handle().is_err());
+    }
+
+    // --- reconnect budget (fix-reboot-reconnect-window) ---
+
+    /// A disconnected `SshConnection` pointed at a port nothing listens on
+    /// (127.0.0.1:1 refuses immediately), so `establish()` fails fast with no
+    /// timer involved — isolating the reconnect loop's own sleeps from real
+    /// network latency.
+    fn dead_port_connection(base: Duration) -> SshConnection {
+        SshConnection {
+            hostname: "127.0.0.1".to_owned(),
+            resolved: Resolved {
+                connect_host: "127.0.0.1".to_owned(),
+                port: 1,
+                user: "root".to_owned(),
+                identity_files: Vec::new(),
+            },
+            policy: HostKeyPolicy::AutoAdd,
+            timeout: CommandTimeout::new(Duration::from_millis(200)),
+            handle: None,
+            is_repl: false,
+            timeout_prompt: None,
+            known_hosts: None,
+            reconnect_backoff_base: base,
+        }
+    }
+
+    #[test]
+    fn reconnect_delay_matches_upstream_formula() {
+        // Upstream `2 * (timeout + 5 * count)`.
+        let base = Duration::from_secs(10);
+        assert_eq!(reconnect_delay(1, base), Duration::from_secs(2 * (10 + 5)));
+        assert_eq!(reconnect_delay(2, base), Duration::from_secs(2 * (10 + 10)));
+        assert_eq!(reconnect_delay(3, base), Duration::from_secs(2 * (10 + 15)));
+        assert_eq!(
+            reconnect_delay(10, base),
+            Duration::from_secs(2 * (10 + 50))
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnect_fast_path_probes_once_and_fails_fast() {
+        // retry=0, backoff=false: the non-reboot (run/shell/sftp) call shape.
+        // Must not pay the backoff base's pre-sleep — a single immediate probe.
+        let mut conn = dead_port_connection(Duration::from_secs(10));
+        let started = std::time::Instant::now();
+        let err = conn.reconnect(0, false).await.expect_err("dead port fails");
+        assert!(matches!(err, HostError::ReconnectFailed { host } if host == "127.0.0.1"));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "fast path must not sleep by the reboot backoff base: took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconnect_backoff_makes_retry_plus_one_attempts_then_gives_up() {
+        // retry=3, backoff=true: the reboot-recovery call shape. Every attempt
+        // is preceded by a sleep (base, then the grown `reconnect_delay`); with
+        // a paused clock the sleeps resolve instantly while still advancing
+        // tokio's virtual clock by the exact scheduled amount, so the elapsed
+        // virtual time proves both the attempt count and the backoff formula
+        // without the test taking minutes of wall-clock time.
+        let base = Duration::from_secs(10);
+        let mut conn = dead_port_connection(base);
+        let started = tokio::time::Instant::now();
+        let err = conn
+            .reconnect(3, true)
+            .await
+            .expect_err("dead port fails after exhausting the budget");
+        assert!(matches!(err, HostError::ReconnectFailed { host } if host == "127.0.0.1"));
+        let expected =
+            base + reconnect_delay(1, base) + reconnect_delay(2, base) + reconnect_delay(3, base);
+        // Paused virtual time still accrues the dead-port connect attempts'
+        // small real wall-clock latency alongside the auto-advanced sleeps, so
+        // allow a little slack rather than requiring byte-exact equality.
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed.abs_diff(expected) < Duration::from_secs(5),
+            "expected ~4 attempts (retry+1) with sleeps base, then reconnect_delay(1..=3): \
+             elapsed={elapsed:?}, expected={expected:?}"
+        );
     }
 
     // --- host-key verification (th4o.4) ---
