@@ -225,7 +225,7 @@ fn encode_key(key: KeyEvent) -> Option<Vec<u8>> {
 /// under raw mode.
 ///
 /// Reads the current terminal size, spawns via [`Target::shell`] (state-gated:
-/// a disabled/dryrun/failed target returns `None`), then bridges until the
+/// a disabled/failed target returns `None`), then bridges until the
 /// session ends, restoring cooked mode via [`RawModeGuard`] on the way out.
 ///
 /// # Errors
@@ -271,7 +271,7 @@ fn shlex_split(line: &str) -> Option<Vec<String>> {
 /// then attach a shell on each selected host **sequentially** (upstream
 /// `for target in targets: targets[target].shell()`).
 ///
-/// A host with no attachable PTY (disabled / dryrun / spawn failure →
+/// A host with no attachable PTY (disabled / spawn failure →
 /// [`Target::shell`] `None`) is reported and skipped; the loop continues to the
 /// next host. An empty selection is reported and nothing is spawned.
 ///

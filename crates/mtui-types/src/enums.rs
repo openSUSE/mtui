@@ -21,14 +21,12 @@ use crate::error::RequestKindParseError;
 /// Per-host execution state.
 ///
 /// Mirrors upstream `TargetState` (a `StrEnum`). Wire values are the exact
-/// lowercase tokens `enabled` / `dryrun` / `disabled`.
+/// lowercase tokens `enabled` / `disabled`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TargetState {
     /// The host runs commands normally.
     Enabled,
-    /// The host echoes commands without executing them.
-    Dryrun,
     /// The host is skipped entirely.
     Disabled,
 }
@@ -39,7 +37,6 @@ impl TargetState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Enabled => "enabled",
-            Self::Dryrun => "dryrun",
             Self::Disabled => "disabled",
         }
     }
@@ -57,7 +54,6 @@ impl FromStr for TargetState {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "enabled" => Ok(Self::Enabled),
-            "dryrun" => Ok(Self::Dryrun),
             "disabled" => Ok(Self::Disabled),
             other => Err(ParseEnumError {
                 kind: "TargetState",
@@ -256,27 +252,23 @@ mod tests {
     #[test]
     fn target_state_carries_legacy_string_values() {
         assert_eq!(TargetState::Enabled.as_str(), "enabled");
-        assert_eq!(TargetState::Dryrun.as_str(), "dryrun");
         assert_eq!(TargetState::Disabled.as_str(), "disabled");
     }
 
     #[test]
     fn target_state_round_trips_through_str() {
-        for state in [
-            TargetState::Enabled,
-            TargetState::Dryrun,
-            TargetState::Disabled,
-        ] {
+        for state in [TargetState::Enabled, TargetState::Disabled] {
             assert_eq!(state.to_string().parse::<TargetState>().unwrap(), state);
         }
     }
 
     #[test]
     fn target_state_serde_uses_wire_strings() {
-        let json = serde_json::to_string(&TargetState::Dryrun).unwrap();
-        assert_eq!(json, "\"dryrun\"");
+        let json = serde_json::to_string(&TargetState::Enabled).unwrap();
+        assert_eq!(json, "\"enabled\"");
         let back: TargetState = serde_json::from_str("\"disabled\"").unwrap();
         assert_eq!(back, TargetState::Disabled);
+        assert!(serde_json::from_str::<TargetState>("\"dryrun\"").is_err());
     }
 
     #[test]

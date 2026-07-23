@@ -4,7 +4,7 @@
 //! [`Connection`] abstraction, the russh-backed [`SshConnection`] (connect /
 //! run-with-timeout / SFTP transfers), the scriptable [`MockConnection`] test
 //! double, the [`HostError`] hierarchy, the [`Target`] state machine
-//! (enabled/dryrun/disabled command gating + connection-only `connect`), and the
+//! (enabled/disabled command gating + connection-only `connect`), and the
 //! [`HostsGroup`] composite with its parallel/serial command + SFTP fan-out,
 //! the remote-lock protocol ([`TargetLock`] / [`PoolLock`] / [`RemoteLock`],
 //! P2.6), the in-process [`HostArbiter`] (P2.7), and the host-output parsers —

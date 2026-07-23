@@ -301,7 +301,7 @@ impl CommandPromptDisplay {
 
     /// Displays the status of a host.
     ///
-    /// Mirrors upstream `list_host`: colored `state` label (green/yellow/red),
+    /// Mirrors upstream `list_host`: colored `state` label (green/red),
     /// `transactional`/`standard` label, and the fixed-width layout line.
     pub fn list_host(
         &mut self,
@@ -313,7 +313,6 @@ impl CommandPromptDisplay {
     ) {
         let state_label = match state {
             TargetState::Enabled => Self::green(self, "Enabled"),
-            TargetState::Dryrun => Self::yellow(self, "Dryrun"),
             TargetState::Disabled => Self::red(self, "Disabled"),
         };
         let trn = if transactional {

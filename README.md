@@ -43,8 +43,8 @@ authenticated boundary trusted to operate the remaining maintenance tools.
 ## Features
 
 - Parallel SSH command execution across reference hosts (`run`, `update`,
-  `install`, `prepare`, `downgrade`, …) with per-host `enabled`/`disabled`/
-  `dryrun` states and `parallel`/`serial` modes. **Pubkey auth only.**
+  `install`, `prepare`, `downgrade`, …) with per-host `enabled`/`disabled`
+  states and `parallel`/`serial` modes. **Pubkey auth only.**
 - OBS/IBS and Gitea maintenance-request workflow (`assign`, `approve`, `reject`,
   `comment`, …) via the native OBS/IBS API (no `osc` subprocess).
 - Optional Slack review-request integration (`request_review`, off by default):
