@@ -28,9 +28,15 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: on-failure
-          # No `deny-licenses` here, deliberately. mtui was GPL-2.0-only while
-          # russh, rmcp and ring are Apache-2.0-*only*, which read as
-          # GPLv2-incompatible. mtui has since relicensed to GPL-3.0-or-later,
-          # which can incorporate Apache-2.0-licensed code per FSF guidance, so
-          # that incompatibility no longer applies. `deny-licenses` stays unset
-          # because there's no known incompatibility left to gate on.
+          # Gate on licenses incompatible with mtui's GPL-3.0-or-later. mtui was
+          # previously GPL-2.0-only, under which Apache-2.0-only deps (russh,
+          # rmcp, ring) read as incompatible, so we could not enable license
+          # review at all. GPL-3.0-or-later can incorporate Apache-2.0 code per
+          # FSF guidance, so we now deny only licenses that remain genuinely
+          # GPLv3-incompatible.
+          deny-licenses: >-
+            GPL-2.0-only,
+            LGPL-2.0-only,
+            OpenSSL,
+            BSD-4-Clause,
+            CC-BY-NC-4.0
