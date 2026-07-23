@@ -45,7 +45,7 @@ russh-config = "0.58"
 quick-xml.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 tempfile = "3"
 # Used only in tests to assert command lines re-split to a single literal token.
 shlex.workspace = true

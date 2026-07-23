@@ -128,6 +128,11 @@ pub struct MockConnection {
     reconnects: Arc<Mutex<usize>>,
     /// When `true`, [`reconnect`](Connection::reconnect) fails.
     reconnect_fails: bool,
+    /// The `(retry, backoff)` args of the most recent
+    /// [`reconnect`](Connection::reconnect) call, so a test can assert the
+    /// caller passed the expected budget (e.g. the reboot lifecycle's
+    /// `(config.reboot_retries, true)` vs. a fast-path `(0, false)`).
+    last_reconnect_args: Arc<Mutex<Option<(usize, bool)>>>,
     /// Commands dispatched via [`fire_and_forget`](Connection::fire_and_forget).
     fired: Arc<Mutex<Vec<String>>>,
     /// SFTP operations observed, in order.
@@ -247,6 +252,7 @@ impl MockConnection {
             close_fails: false,
             reconnects: Arc::new(Mutex::new(0)),
             reconnect_fails: false,
+            last_reconnect_args: Arc::new(Mutex::new(None)),
             fired: Arc::new(Mutex::new(Vec::new())),
             sftp_ops: Arc::new(Mutex::new(Vec::new())),
             sftp_sessions: Arc::new(Mutex::new(0)),
@@ -552,6 +558,15 @@ impl MockConnection {
         *self.reconnects.lock().expect("mock reconnects lock")
     }
 
+    /// The `(retry, backoff)` args of the most recent
+    /// [`reconnect`](Connection::reconnect) call, or `None` if never called.
+    pub fn last_reconnect_args(&self) -> Option<(usize, bool)> {
+        *self
+            .last_reconnect_args
+            .lock()
+            .expect("mock last reconnect args lock")
+    }
+
     /// Returns the commands dispatched via
     /// [`fire_and_forget`](Connection::fire_and_forget), in order.
     #[must_use]
@@ -815,8 +830,12 @@ impl Connection for MockConnection {
         Ok(())
     }
 
-    async fn reconnect(&mut self) -> Result<()> {
+    async fn reconnect(&mut self, retry: usize, backoff: bool) -> Result<()> {
         *self.reconnects.lock().expect("mock reconnects lock") += 1;
+        *self
+            .last_reconnect_args
+            .lock()
+            .expect("mock last reconnect args lock") = Some((retry, backoff));
         if self.reconnect_fails {
             return Err(HostError::ReconnectFailed {
                 host: self.hostname.clone(),
@@ -1056,7 +1075,7 @@ impl Connection for MockConnection {
         // entry if inactive, mirroring the ssh impl (and `parse_system`'s
         // reconnect-then-retry expectations under `Target::connect`).
         if !self.active {
-            self.reconnect().await?;
+            self.reconnect(0, false).await?;
         }
         if !self.sftp_session_delay.is_zero() {
             tokio::time::sleep(self.sftp_session_delay).await;
@@ -1171,7 +1190,7 @@ mod tests {
     async fn reconnect_counts_and_reactivates() {
         let mut conn = MockConnection::new("h1").inactive();
         assert!(!conn.is_active());
-        conn.reconnect().await.expect("reconnect ok");
+        conn.reconnect(0, false).await.expect("reconnect ok");
         assert!(conn.is_active());
         assert_eq!(conn.reconnect_count(), 1);
     }
@@ -1179,7 +1198,7 @@ mod tests {
     #[tokio::test]
     async fn failing_reconnect_surfaces_error() {
         let mut conn = MockConnection::new("h1").failing_reconnect();
-        let err = conn.reconnect().await.expect_err("should fail");
+        let err = conn.reconnect(0, false).await.expect_err("should fail");
         assert!(matches!(err, HostError::ReconnectFailed { host } if host == "h1"));
         assert_eq!(conn.reconnect_count(), 1);
     }

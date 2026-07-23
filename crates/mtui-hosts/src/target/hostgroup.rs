@@ -1125,7 +1125,8 @@ impl HostsGroup {
                 let outcomes = &outcomes;
                 Box::pin(async move {
                     let hostname = t.hostname().to_owned();
-                    let outcome = match t.reconnect().await {
+                    let retry = t.reboot_retries();
+                    let outcome = match t.reconnect(retry, true).await {
                         Ok(()) => {
                             tracing::info!(host = %hostname, "is back up");
                             Ok(())
@@ -1228,7 +1229,8 @@ impl HostsGroup {
             |t| reboot.contains_key(t.hostname()),
             |t| {
                 Box::pin(async move {
-                    if let Err(e) = t.reconnect().await {
+                    let retry = t.reboot_retries();
+                    if let Err(e) = t.reconnect(retry, true).await {
                         tracing::error!(host = %t.hostname(), error = %e, "reconnect after reboot failed");
                     } else {
                         tracing::info!(host = %t.hostname(), "is back up");
@@ -1857,6 +1859,11 @@ mod tests {
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes["h1"].is_ok());
         assert!(outcomes["h2"].is_ok());
+        // The reboot lifecycle grants the boot-aware backoff budget (the
+        // target's config default is `reboot_retries = 10`), not the fast-path
+        // `(0, false)` used by run/shell/sftp.
+        assert_eq!(h1.last_reconnect_args(), Some((10, true)));
+        assert_eq!(h2.last_reconnect_args(), Some((10, true)));
     }
 
     #[tokio::test]
@@ -2039,6 +2046,8 @@ mod tests {
             vec!["transactional-update reboot".to_owned()]
         );
         assert_eq!(h1.reconnect_count(), 1);
+        // The transactional reboot path also grants the boot-aware budget.
+        assert_eq!(h1.last_reconnect_args(), Some((10, true)));
         // h2 was not in the map: untouched.
         assert!(h2.fired_commands().is_empty());
         assert_eq!(h2.reconnect_count(), 0);
