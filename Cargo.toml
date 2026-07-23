@@ -16,12 +16,12 @@ futures = "0.3"
 # cli
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
-# Man-page generation for both binaries (P8.3). Used only by the `xtask` dev
+# Man-page generation for both binaries. Used only by the `xtask` dev
 # tool, not by any shipped binary, so it never enters a release build.
 clap_mangen = { version = "0.3", features = ["env"] }
 reedline = "0.49"
 # raw-mode terminal + async input/resize stream for the interactive `shell`
-# TTY bridge (P6, mtui-rs-jww). Pinned to reedline 0.49's `crossterm` major so
+# TTY bridge (mtui-rs-jww). Pinned to reedline 0.49's `crossterm` major so
 # the two share one copy; `event-stream` enables the async `EventStream` the
 # bridge selects over (keystrokes + `Event::Resize` → SIGWINCH forwarding).
 crossterm = { version = "0.29", features = ["event-stream"] }
@@ -34,7 +34,7 @@ shlex = "2"
 # ser/de + config
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9" # or serde_yml; decide in Phase 1
+serde_yaml = "0.9"
 toml = "1"
 # INI parsing for the native oscrc credential reader (obs backend, G1b).
 # osc writes genuine INI (`[https://api.suse.de]` headers, bare `key = value`),
@@ -70,12 +70,12 @@ scraper = "0.27"
 # offset), matching upstream `datetime.fromisoformat`. std only, no clock/oldtime
 # baggage; keeps the single-static-binary contract clean.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-# ssh (Phase 2)
+# ssh
 russh = "0.62"
 russh-sftp = "2"
 async-trait = "0.1"
-# mcp (Phase 7). `server` for the ServerHandler surface + model types;
-# `transport-io` for the stdio runner (P7.7); `transport-async-rw` for the
+# mcp. `server` for the ServerHandler surface + model types;
+# `transport-io` for the stdio runner; `transport-async-rw` for the
 # in-memory duplex round-trip test. No `macros` — tools are synthesised from the
 # runtime command registry, so we hand-build schemas/handlers, not `#[tool]`.
 rmcp = { version = "2", default-features = false, features = [
@@ -83,7 +83,7 @@ rmcp = { version = "2", default-features = false, features = [
     "client",
     "transport-io",
     "transport-async-rw",
-    # `--transport http` (P7.10): the runtime-keyed streamable-HTTP server whose
+    # `--transport http`: the runtime-keyed streamable-HTTP server whose
     # per-session `service_factory` is our per-client `McpSession` isolation hook.
     "transport-streamable-http-server",
 ] }
@@ -102,7 +102,7 @@ thiserror = "2"
 anyhow = "1"
 # terminal color (CommandPromptDisplay) — supports_color-gated ANSI wrapping
 owo-colors = "4"
-# optional desktop notifications (feature `notify`, Phase 6). Pure-Rust
+# optional desktop notifications (feature `notify`). Pure-Rust
 # freedesktop/DBus (Linux) + NSUserNotification (macOS) toast backend, keeping
 # the single-static-binary / no-Python-runtime contract. Best-effort + headless
 # no-op, so a build without the feature never pulls it.

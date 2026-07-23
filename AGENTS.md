@@ -1,35 +1,30 @@
 # Agent Notes — mtui
 
 ## Mission
-`mtui` is an **improved, idiomatic Rust successor to
-[openSUSE/mtui](https://github.com/openSUSE/mtui)** (Maintenance Test Update
-Installer) — the SUSE QE tool for validating maintenance updates: load a request
-by RRID, install/test it on reference hosts over SSH, then approve/reject. It
-drives OBS/IBS and Gitea review workflows, `svn`, and openQA/QEM under the hood.
+`mtui` (Maintenance Test Update Installer) is the SUSE QE tool for validating
+maintenance updates: load a request by RRID, install/test it on reference hosts
+over SSH, then approve/reject. It drives OBS/IBS and Gitea review workflows,
+`svn`, and openQA/QEM under the hood. It is a memory-safe, async-native Rust
+workspace that ships as two single static binaries (`mtui`, `mtui-mcp`), with no
+runtime interpreter.
 
-This is a **rewrite/redesign, not a 1:1 transpile.** Use MTUI as the behavioral
-reference and the source of domain truth, but build something better: memory-safe,
-fast, async-native, single static binary, with a cleaner architecture. Break
-compatibility only where it clearly improves the tool — and always preserve the
-**data-format and workflow contracts** that let mtui interoperate with the SUSE
-maintenance ecosystem (see "Contracts" below).
+Preserve the **data-format and workflow contracts** that let mtui interoperate
+with the SUSE maintenance ecosystem (see "Contracts" below); break compatibility
+only when the task explicitly calls for it.
 
-### What "improved successor" means here
-- **Safety & robustness:** no interpreter, strong types, exhaustive error enums
-  (`thiserror`), no silent `None`-swallowing where a typed `Result` is clearer.
-- **Performance:** async I/O (`tokio`), true parallel host fan-out without the
-  GIL/threadpool overhead; fast startup; single binary.
-- **Distribution:** one static `mtui` + one `mtui-mcp`, no Python runtime, no
-  virtualenv, shell completions and man pages generated.
+### Design invariants (do not regress)
+- **Safety & robustness:** strong types, exhaustive error enums (`thiserror`);
+  prefer a typed `Result` over silent `None`-swallowing.
+- **Performance:** async I/O (`tokio`), true parallel host fan-out; fast startup;
+  single binary.
+- **Distribution:** one static `mtui` + one `mtui-mcp`, no runtime deps beyond a
+  couple of subprocesses; shell completions and man pages are generated.
 - **Maintainability:** a Cargo workspace with clear crate boundaries and a single
   composition root, so hosts/datasources/testreport stay decoupled.
-- **Parity where it matters, better where it helps:** keep the commands, RRID
-  grammar, refhosts/testreport formats, and MCP tool surface; modernize the
-  internals, the CLI ergonomics, and the packaging.
 
 ## Two driving surfaces (keep both working)
-Like upstream, there are **two entrypoints**, and command/entrypoint changes must
-keep both green:
+There are **two entrypoints**, and command/entrypoint changes must keep both
+green:
 - `mtui` — the interactive REPL (`reedline`).
 - `mtui-mcp` — the MCP server, which **synthesises its tools from the command
   registry**. Adding/renaming/removing a command affects MCP tools automatically.
@@ -41,7 +36,7 @@ Cargo workspace; each crate has one job. Lower crates never depend on higher one
 ```
 crates/
   mtui-types/        domain types + error hierarchy (no I/O)
-  mtui-config/       INI config + XDG paths
+  mtui-config/       TOML config + XDG paths
   mtui-hosts/        SSH/SFTP (russh), Target/HostsGroup, locks, arbiter   [async]
   mtui-datasources/  shared HTTP, refhosts resolve/search/verify, openQA/QEM/Gitea/native-OBS-QAM/oqa-search  [async]
   mtui-testreport/   TestReport lifecycle, metadata parsers, SVN/Gitea checkout, update workflow (actions/checks/export)
@@ -67,8 +62,8 @@ next actionable task before working on a subsystem.
 - Feature matrix (catches feature-gate rot) — **compile-only, and ~doubles build
   time** (the `mcp` feature pulls in `axum` + `rmcp` streamable-http):
   `cargo build --workspace --no-default-features` and `--all-features`. Do **not**
-  routinely *test* `--all-features`; CI only compiles it (`.gitlab-ci.yml`
-  feature-matrix job).
+  routinely *test* `--all-features`; CI only compiles it
+  (`.github/workflows/ci.yml` feature-matrix job).
 
 ### Fast local iteration
 - **Keep the cache warm and scope tight.** During dev, run
@@ -84,8 +79,10 @@ next actionable task before working on a subsystem.
 - Run the **full gate on the whole workspace** before claiming done, mirroring
   CI: `cargo fmt --all --check` **and**
   `cargo clippy --workspace --all-targets -- -D warnings` **and**
-  `cargo test --workspace` (default features) **and** the compile-only feature
-  matrix `cargo build --workspace --no-default-features` +
+  `cargo test --workspace` (default features) **and** `cargo test -p mtui-mcp -F
+  mcp` (the mcp server/transport tests are `-F mcp`-gated, so the default
+  workspace run never exercises them) **and** the compile-only feature matrix
+  `cargo build --workspace --no-default-features` +
   `cargo build --workspace --all-features`. Tests run against default features
   only — do **not** run `--all-features` *tests*. The long pole is cold
   compilation, not the test run itself, so give the first `cargo test --workspace`
@@ -105,30 +102,27 @@ next actionable task before working on a subsystem.
   Internal refactors, perf/implementation-only fixes, and chore/CI-only
   changes do not need one (`CONTRIBUTING.md` § Changelog is authoritative).
 
-## Architecture (non-obvious bits — mirror these from MTUI)
+## Architecture (non-obvious bits)
 - **Command registry.** Every command implements the `Command` trait and is
-  registered into a central registry (explicit `register_all()`, not Python's
-  `__init_subclass__` magic). The REPL dispatch, tab-completion, and the MCP tool
-  synthesiser all iterate this one registry — it is the single source of the
-  command surface.
+  registered into a central registry (explicit `register_all()`). The REPL
+  dispatch, tab-completion, and the MCP tool synthesiser all iterate this one
+  registry — it is the single source of the command surface.
 - **Session state.** Commands operate on a `Session` (config, `HostsGroup`
-  targets, loaded `TestReport`/metadata, display) passed explicitly — the Rust
-  replacement for MTUI's `CommandPrompt` god-object. No hidden globals.
+  targets, loaded `TestReport`/metadata, display) passed explicitly. No hidden
+  globals.
 - **Composition root.** `mtui-core::wiring` injects the update-workflow
   Doer/Check registries (in `mtui-testreport`) into the host `Target` dispatch
   (in `mtui-hosts`) via traits, so `mtui-hosts` never depends on
   `mtui-testreport`. Do not create crate cycles — add a trait and inject.
-- **Config.** **TOML** (intentional deviation from upstream INI — this is a
-  redesign, not a 1:1 port), resolved from `--config` → `$MTUI_CONF` →
-  `$XDG_CONFIG_HOME/mtui/config.toml` → `/etc/mtui.toml`. When the default pair
-  is used, files are merged **lowest-precedence first** so the per-user XDG file
-  overrides `/etc` on shared keys. Sectioned tables (`[mtui]`, `[connection]`,
-  `[refhosts]`, `[url]`, ...) map to typed options whose defaults match upstream
-  mtui exactly. Loading is **lenient**: a missing/malformed file (or a bad value)
-  is logged at ERROR and skipped, falling back to defaults; it never hard-fails.
-  CLI-arg merging (mirroring upstream `Config.merge_args`) is implemented via
-  `Args::apply_to` (`crates/mtui-core/src/args.rs`), the highest-precedence
-  config layer, applied after `Config::load`.
+- **Config.** **TOML** file `mtui.toml`, resolved highest-precedence first from
+  `--config` → `$MTUI_CONF` → `$XDG_CONFIG_HOME/mtui/mtui.toml` → `~/.mtui.toml`
+  → `/etc/mtui.toml`; the default set is merged **lowest-precedence first** so
+  per-user files override `/etc` on shared keys. Sectioned tables (`[mtui]`,
+  `[connection]`, `[refhosts]`, `[url]`, ...) map to typed options. Loading is
+  **lenient**: a missing/malformed file (or a bad value) is logged at ERROR and
+  skipped, falling back to defaults; it never hard-fails. CLI-arg merging is
+  implemented via `Args::apply_to` (`crates/mtui-core/src/args.rs`), the
+  highest-precedence config layer, applied after `Config::load`.
 - **MCP is a thin adapter.** `mtui-mcp` builds one tool per non-denied command by
   converting the command's `clap` arg spec to a JSON schema, reconstructing argv
   from tool kwargs, and dispatching through the **same engine** as the REPL.
@@ -142,7 +136,7 @@ next actionable task before working on a subsystem.
 - **refhosts.yml schema** — the file is still location-grouped *on disk*, but
   location is a legacy grouping, not a live query dimension: rows are
   merged/flattened and de-duplicated at load (`version.minor` may be numeric or
-  `spN`). Parse identically to upstream fixtures.
+  `spN`).
 - **Testreport / export text format**, incl. the `overview_inject` BEGIN/END
   idempotent block under `regression tests:`.
 - **Remote lock wire format** — one line `timestamp:user:pid[:comment]` (parsed
@@ -150,13 +144,12 @@ next actionable task before working on a subsystem.
   layout: the operation lock `/var/lock/mtui.lock` (PID-based ownership, guards
   serialized zypper transactions) and the pool-claim lock
   `/var/lock/mtui-pool.lock` (RRID-based ownership; the comment carries
-  `mtui pool <RRID> [<owner>]`). A Rust mtui and a Python mtui may share a host
-  fleet; snapshot-test this (`crates/mtui-hosts/tests/lock_format.rs`).
+  `mtui pool <RRID> [<owner>]`). Other tools on the fleet parse the same layout;
+  snapshot-test it (`crates/mtui-hosts/tests/lock_format.rs`).
 - **MCP tool names/schemas** — downstream LLM configs depend on them; snapshot the
   synthesised + slimmed schemas.
 
-Upstream `tests/` fixtures are the authority for these formats. Port the fixtures
-and treat them as golden.
+The `tests/` fixtures are the authority for these formats; treat them as golden.
 
 ## Testing conventions
 - Unit tests colocated (`#[cfg(test)]`); integration tests in `crates/*/tests/`.
@@ -183,15 +176,13 @@ and treat them as golden.
   lands with that prefix automatically; don't hand-name it otherwise.
 - **Gate real hosts/containers** behind `#[ignore]` + a CI env flag (sshd
   integration fixture); unit tests must run offline and fast.
-- Port the corresponding upstream `tests/test_*.py` when porting a module; it
-  encodes the exact expected behavior.
 
 ## Style & error handling
 - Edition 2024, MSRV 1.96. `rustfmt` defaults; `clippy` clean with
   `-D warnings`.
 - Errors: `thiserror` enums in library crates, `anyhow` only at binary
-  boundaries. Prefer a typed `Result` over MTUI's `log + return None`; where you
-  intentionally mirror best-effort degradation, make it explicit and test it.
+  boundaries. Prefer a typed `Result` over a `log + return None`; where you
+  intentionally rely on best-effort degradation, make it explicit and test it.
 - Logging: `tracing` (not `log`); levels configurable via CLI + `RUST_LOG`.
 - Async everywhere I/O happens (`tokio`); keep pure logic (`mtui-types`) sync and
   I/O-free.
@@ -227,7 +218,4 @@ the native OBS backend and `[obs]` config), reading credentials from `oscrc`.
 - `docs/src/architecture.md` — architecture map (crate layout, composition root,
   contracts) and the rest of the mdBook under `docs/src/` (installation,
   configuration, developer, invocation, mcp).
-- The former Python implementation and its `Documentation/*.rst` (architecture,
-  interactive command reference) remain the deepest behavioral references while
-  porting; they are preserved on the `archive/python-main` tag and the
-  `16.0.x`..`19.0.x` maintenance branches.
+- `CONTRIBUTING.md` — changelog policy; `docs/src/developer.md` — dev workflow.
