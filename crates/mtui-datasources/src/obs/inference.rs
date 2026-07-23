@@ -3,8 +3,8 @@
 //! Ported from upstream `mtui/data_sources/obs/inference.py`, which itself was
 //! ported verbatim from openSUSE/osc-plugin-qam
 //! (`oscqam/models/assignment.py` `Assignment.infer`/`infer_group`),
-//! **GPL-2.0-only**, the same licence as mtui. The GPL-2.0 provenance is
-//! preserved per that attribution requirement.
+//! **GPL-2.0-only**. That GPL-2.0 provenance is preserved here per its
+//! attribution requirement, independent of mtui's own license.
 //!
 //! This single source of truth backs BOTH `unassign`'s "the user holds >=1
 //! assignment" guard and `approve`'s "the user is assigned" role check, so a

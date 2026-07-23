@@ -6,7 +6,7 @@ members = ["crates/*", "xtask"]
 version = "26.1.0"
 edition = "2024"
 rust-version = "1.96"
-license = "GPL-2.0-only"       # match upstream mtui
+license = "GPL-3.0-or-later"   # intentional deviation from upstream mtui (GPL-2.0-only); see LICENSE
 repository = "https://github.com/openSUSE/mtui"
 
 [workspace.dependencies]

@@ -19,6 +19,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   visible in `config show`, settable with `config set`, and overridable with
   the new `--reboot-timeout`/`--reboot-retries` CLI flags.
 
+### Changed
+
+- mtui is now licensed GPL-3.0-or-later (previously GPL-2.0-only, matching
+  upstream); see `LICENSE`.
+
 ### Removed
 
 - The `dryrun` per-host state has been dropped from `set_host_state` (and the

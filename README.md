@@ -108,4 +108,4 @@ configured via the `[obs]` table (`api_url`, `request_timeout`).
 
 ## License
 
-GPL-2.0-only, matching upstream MTUI. See `LICENSE`.
+GPL-3.0-or-later (MTUI is GPL-2.0-only; this is an intentional relicense). See `LICENSE`.

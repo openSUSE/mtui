@@ -24,7 +24,7 @@ Name:           mtui
 Version:        0
 Release:        0
 Summary:        Rust successor to the Maintenance Test Update Installer
-License:        GPL-2.0-only
+License:        GPL-3.0-or-later
 URL:            https://github.com/openSUSE/mtui
 Source0:        %{name}-%{version}.tar.zst
 Source1:        vendor.tar.zst
