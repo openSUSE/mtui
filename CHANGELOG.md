@@ -8,10 +8,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-## [26.0.2] - 2026-07-22
+### Added
+
+- New `[connection]` config keys `reboot_timeout` (default `10` seconds) and
+  `reboot_retries` (default `10`) control the reconnect budget `prepare`,
+  `reboot`, and `update` use after rebooting a host: `reboot_timeout` is the
+  backoff base and `reboot_retries` the number of attempts beyond the first,
+  giving a slow/high-latency host (e.g. aarch64, cross-site refhosts) up to
+  ~12.7 minutes by default to come back before it is marked failed. Both are
+  visible in `config show`, settable with `config set`, and overridable with
+  the new `--reboot-timeout`/`--reboot-retries` CLI flags.
 
 ### Fixed
 
+- `prepare`/`reboot`/`update` no longer falsely mark a slow-to-reboot host as
+  "reconnect after reboot failed" when it is still mid-boot: reconnect after a
+  reboot now retries with a growing backoff (`reboot_timeout`/`reboot_retries`,
+  ~12.7 minutes by default) instead of a fixed ~1.2s burst of 6 attempts.
+  Because fan-out aggregates per-host failures, one slow host previously failed
+  the whole batch. Non-reboot paths (a dead SSH link mid-`run`/`shell`, or the
+  `sftp` pre-op check) are unaffected: they still fail fast on the first probe.
 - The `https` refhosts resolver no longer aborts when it cannot write its
   on-disk mirror to a read-only `refhosts.path` (e.g. a package-managed
   `/usr/share/qam-metadata/refhosts.yml`): the freshly downloaded database is
