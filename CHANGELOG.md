@@ -19,6 +19,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   visible in `config show`, settable with `config set`, and overridable with
   the new `--reboot-timeout`/`--reboot-retries` CLI flags.
 
+### Removed
+
+- The `dryrun` per-host state has been dropped from `set_host_state` (and the
+  MCP tool it synthesises). This is an intentional deviation from upstream
+  mtui: hosts now support only `enabled`/`disabled`. A `dryrun` value is
+  rejected as an invalid state, not silently remapped.
+
 ### Fixed
 
 - `prepare`/`reboot`/`update` no longer falsely mark a slow-to-reboot host as

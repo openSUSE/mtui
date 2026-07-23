@@ -88,7 +88,6 @@ Each connected host has a state and an execution mode, set with
 
 - **`enabled`** — runs all issued commands (the default).
 - **`disabled`** — runs nothing and prints nothing.
-- **`dryrun`** — runs nothing but prints the command it *would* run.
 - **`parallel`** (default) / **`serial`** — whether commands designed to run in
   parallel (like [`run`](cli.md#run)) fan out concurrently or one host at a time.
 

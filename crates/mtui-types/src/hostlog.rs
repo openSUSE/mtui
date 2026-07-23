@@ -39,7 +39,7 @@ pub struct CommandLog {
     /// Whether the captured `stdout`/`stderr` was truncated because the command
     /// exceeded the connection layer's output byte caps.
     ///
-    /// `false` for every non-SSH producer (mocks, dry-runs, synthesised logs);
+    /// `false` for every non-SSH producer (mocks, synthesised logs);
     /// only [`mtui-hosts`](../../mtui_hosts)' bounded capture sets it. When
     /// `true`, `stdout`/`stderr` hold the capped prefix and the overflow was
     /// discarded rather than buffered.
@@ -55,7 +55,7 @@ impl CommandLog {
     /// Creates a new [`CommandLog`] with the truncation/timeout flags cleared.
     ///
     /// This is the primary constructor used by every producer that cannot
-    /// truncate or deadline output (mocks, dry-runs, synthesised logs). The SSH
+    /// truncate or deadline output (mocks, synthesised logs). The SSH
     /// connection layer, which *can*, uses [`with_flags`](Self::with_flags) to
     /// record those conditions.
     #[must_use]

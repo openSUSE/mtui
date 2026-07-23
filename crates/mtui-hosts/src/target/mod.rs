@@ -10,7 +10,7 @@
 //! dispatch. This module deliberately ports only the **state machine over
 //! `Connection`** (P2.4):
 //!
-//! * the per-host execution [`TargetState`] gate (enabled / dryrun / disabled),
+//! * the per-host execution [`TargetState`] gate (enabled / disabled),
 //! * command execution via [`Target::run`] with the upstream `-1` exit-code
 //!   sentinel and never-propagate error handling,
 //! * the `last*` output accessors,
@@ -85,10 +85,6 @@ use crate::connection::ShellChannel;
 use crate::connection::{CommandTimeout, Connection, HostKeyPolicy, SshConnection};
 use crate::error::{HostError, Result};
 
-/// The dryrun stdout marker appended for every command echoed in
-/// [`TargetState::Dryrun`], byte-identical to upstream's `"dryrun\n"`.
-const DRYRUN_MARKER: &str = "dryrun\n";
-
 /// A single reference host and its execution state.
 ///
 /// The `Target` owns at most one [`Connection`] (a `Box<dyn Connection>` so the
@@ -97,7 +93,6 @@ const DRYRUN_MARKER: &str = "dryrun\n";
 /// Commands are gated by [`TargetState`]:
 ///
 /// * [`Enabled`](TargetState::Enabled) — run for real and record the outcome.
-/// * [`Dryrun`](TargetState::Dryrun) — echo the command, record `"dryrun\n"`.
 /// * [`Disabled`](TargetState::Disabled) — record an empty entry, touch nothing.
 ///
 /// [`MockConnection`]: crate::MockConnection
@@ -353,7 +348,7 @@ impl Target {
     ///
     /// The mode counterpart to [`set_state`](Self::set_state): upstream
     /// `HostState` sets `target.mode` for the `serial`/`parallel` choices and
-    /// `target.state` for the enabled/disabled/dryrun choices.
+    /// `target.state` for the enabled/disabled choices.
     pub fn set_mode(&mut self, mode: ExecutionMode) {
         self.mode = mode;
     }
@@ -1079,8 +1074,6 @@ impl Target {
     ///   exit-code sentinel; **any** other connection error is logged and
     ///   likewise recorded as `-1` — never propagated, mirroring upstream's
     ///   catch-all so one bad host never aborts a group fan-out.
-    /// * [`Dryrun`](TargetState::Dryrun): records `command` with `"dryrun\n"`
-    ///   stdout and exit `0`, without touching the connection.
     /// * [`Disabled`](TargetState::Disabled): records an empty entry and does
     ///   nothing else.
     pub async fn run(&mut self, command: &str) {
@@ -1111,11 +1104,6 @@ impl Target {
                     }
                 };
                 self.out.push(log);
-            }
-            TargetState::Dryrun => {
-                tracing::info!(host = %self.hostname, %command, "dryrun");
-                self.out
-                    .push(CommandLog::new(command, DRYRUN_MARKER, "", 0, 0));
             }
             TargetState::Disabled => {
                 self.out.push(CommandLog::new("", "", "", 0, 0));
@@ -1153,7 +1141,7 @@ impl Target {
 
     /// The outcome of the last SFTP upload, or `None` when none was attempted.
     ///
-    /// `Some(Ok(()))` is a successful (or dry-run) transfer; `Some(Err(reason))`
+    /// `Some(Ok(()))` is a successful transfer; `Some(Err(reason))`
     /// carries the per-host failure message. `None` means the host was skipped
     /// ([`Disabled`](TargetState::Disabled)) or nothing has been uploaded yet.
     /// The `put` command aggregates these across the group.
@@ -1165,7 +1153,7 @@ impl Target {
     /// The outcome of the last SFTP download, or `None` when none was attempted.
     ///
     /// Same encoding as [`last_upload`](Self::last_upload): `Some(Ok(()))` is a
-    /// successful (or dry-run) transfer, `Some(Err(reason))` a per-host failure,
+    /// successful transfer, `Some(Err(reason))` a per-host failure,
     /// `None` a skipped ([`Disabled`](TargetState::Disabled)) or not-yet-attempted
     /// host. The `get` command aggregates these across the group.
     #[must_use]
@@ -1209,8 +1197,7 @@ impl Target {
     ///
     /// [`Enabled`](TargetState::Enabled) delegates to
     /// [`Connection::sftp_put`]; a transfer error is logged, not propagated
-    /// (upstream behaviour). [`Dryrun`](TargetState::Dryrun) logs the intended
-    /// transfer; [`Disabled`](TargetState::Disabled) does nothing.
+    /// (upstream behaviour). [`Disabled`](TargetState::Disabled) does nothing.
     pub async fn sftp_put(&mut self, local: &Path, remote: &Path) {
         match self.state {
             TargetState::Enabled => {
@@ -1229,16 +1216,6 @@ impl Target {
                         Some(Err(e.to_string()))
                     }
                 };
-            }
-            TargetState::Dryrun => {
-                tracing::info!(
-                    host = %self.hostname,
-                    "dryrun: put {} {}:{}",
-                    local.display(), self.hostname, remote.display()
-                );
-                // Record the intended transfer as a success so the fan-out
-                // reports a dry-run host as "would upload", not as skipped.
-                self.last_upload = Some(Ok(()));
             }
             // Left as `None` (not attempted) so the `put` aggregation treats a
             // disabled host as skipped rather than a success or failure.
@@ -1270,16 +1247,6 @@ impl Target {
                         Some(Err(e.to_string()))
                     }
                 };
-            }
-            TargetState::Dryrun => {
-                tracing::info!(
-                    host = %self.hostname,
-                    "dryrun: put <{} bytes> {}:{}",
-                    data.len(), self.hostname, remote.display()
-                );
-                // Record the intended transfer as a success so the fan-out
-                // reports a dry-run host as "would upload", not as skipped.
-                self.last_upload = Some(Ok(()));
             }
             // Left as `None` (not attempted) so the `put` aggregation treats a
             // disabled host as skipped rather than a success or failure.
@@ -1328,16 +1295,6 @@ impl Target {
                     }
                 };
             }
-            TargetState::Dryrun => {
-                tracing::info!(
-                    host = %self.hostname,
-                    "dryrun: get {}:{} {}",
-                    self.hostname, remote, local_target.display()
-                );
-                // Record the intended transfer as a success so the fan-out
-                // reports a dry-run host as "would download", not as skipped.
-                self.last_download = Some(Ok(()));
-            }
             // Left as `None` (not attempted) so the `get` aggregation treats a
             // disabled host as skipped rather than a success or failure.
             TargetState::Disabled => {}
@@ -1351,8 +1308,7 @@ impl Target {
     /// first via [`Connection::sftp_remove`]; if that fails the path may be a
     /// directory, so [`Connection::sftp_rmdir`] is tried as a fallback. A
     /// missing path or a failed fallback is logged, never propagated (upstream
-    /// behaviour). [`Dryrun`](TargetState::Dryrun) logs the intended removal;
-    /// [`Disabled`](TargetState::Disabled) does nothing.
+    /// behaviour). [`Disabled`](TargetState::Disabled) does nothing.
     pub async fn sftp_remove(&mut self, path: &Path) {
         match self.state {
             TargetState::Enabled => {
@@ -1379,16 +1335,6 @@ impl Target {
                     }
                 };
             }
-            TargetState::Dryrun => {
-                tracing::info!(
-                    host = %self.hostname,
-                    "dryrun: remove {}:{}",
-                    self.hostname, path.display()
-                );
-                // Record the intended removal as a success so the fan-out reports
-                // a dry-run host as "would remove", not as skipped.
-                self.last_remove = Some(Ok(()));
-            }
             // Left as `None` (not attempted) so the `remove` aggregation treats a
             // disabled host as skipped rather than a success or failure.
             TargetState::Disabled => {}
@@ -1401,9 +1347,8 @@ impl Target {
     /// target it delegates to [`Connection::shell`] and returns the
     /// [`ShellChannel`]; a spawn failure is logged and swallowed as `None`
     /// (upstream's `except Exception: log "failed to spawn shell"`), so one bad
-    /// host never aborts a sequential fan-out. [`Dryrun`](TargetState::Dryrun)
-    /// and [`Disabled`](TargetState::Disabled) do nothing and return `None`
-    /// (there is no PTY to spawn under a dry run).
+    /// host never aborts a sequential fan-out. [`Disabled`](TargetState::Disabled)
+    /// does nothing and returns `None`.
     ///
     /// The returned handle is a transport duplex only; the raw-`termios` local
     /// terminal bridge that consumes it is a CLI concern (Phase 6).
@@ -1428,10 +1373,6 @@ impl Target {
                         None
                     }
                 }
-            }
-            TargetState::Dryrun => {
-                tracing::info!(host = %self.hostname, "dryrun: shell");
-                None
             }
             TargetState::Disabled => None,
         }
@@ -1601,28 +1542,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_dryrun_does_not_execute() {
-        let conn = MockConnection::new("h1");
-        let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Dryrun,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
-
-        t.run("rm -rf /").await;
-
-        assert!(
-            handle.commands().is_empty(),
-            "dryrun must not issue commands"
-        );
-        assert_eq!(t.lastin(), "rm -rf /");
-        assert_eq!(t.lastout(), DRYRUN_MARKER);
-        assert_eq!(t.lastexit(), Some(0));
-    }
-
-    #[tokio::test]
     async fn run_disabled_does_not_execute() {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
@@ -1760,24 +1679,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sftp_put_dryrun_does_nothing() {
-        let conn = MockConnection::new("h1");
-        let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Dryrun,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
-
-        t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
-
-        assert!(handle.sftp_ops().is_empty());
-        // Dry-run records the intended transfer as a success, not skipped.
-        assert_eq!(t.last_upload(), Some(&Ok(())));
-    }
-
-    #[tokio::test]
     async fn sftp_put_disabled_leaves_upload_unattempted() {
         let conn = MockConnection::new("h1");
         let mut t = Target::with_connection(
@@ -1825,24 +1726,6 @@ mod tests {
                 local: PathBuf::from("/local/"),
             }]
         );
-    }
-
-    #[tokio::test]
-    async fn sftp_get_dryrun_does_nothing() {
-        let conn = MockConnection::new("h1");
-        let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Dryrun,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
-
-        t.sftp_get("/remote/file", Path::new("/local")).await;
-
-        assert!(handle.sftp_ops().is_empty());
-        // Dry-run records the intended transfer as a success, not skipped.
-        assert_eq!(t.last_download(), Some(&Ok(())));
     }
 
     #[tokio::test]
@@ -1981,24 +1864,6 @@ mod tests {
                 MockSftpOp::Rmdir(PathBuf::from("/remote/dir")),
             ]
         );
-    }
-
-    #[tokio::test]
-    async fn sftp_remove_dryrun_does_nothing() {
-        let conn = MockConnection::new("h1");
-        let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Dryrun,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
-
-        t.sftp_remove(Path::new("/remote/file")).await;
-
-        assert!(handle.sftp_ops().is_empty());
-        // Dry-run records the intended removal as a success, not skipped.
-        assert_eq!(t.last_remove(), Some(&Ok(())));
     }
 
     #[tokio::test]
@@ -2502,22 +2367,6 @@ mod tests {
         ch.close().await.expect("close");
         assert_eq!(handle.shell_input(), b"ls\n");
         assert_eq!(handle.shell_resizes(), vec![(80, 24)]);
-    }
-
-    #[cfg(feature = "shell")]
-    #[tokio::test]
-    async fn shell_dryrun_does_not_spawn() {
-        let conn = MockConnection::new("h1");
-        let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Dryrun,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
-
-        assert!(t.shell(80, 24).await.is_none(), "dryrun must not spawn");
-        assert!(handle.shell_spawns().is_empty());
     }
 
     #[cfg(feature = "shell")]

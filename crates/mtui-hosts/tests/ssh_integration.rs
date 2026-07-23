@@ -1082,12 +1082,11 @@ async fn hostsgroup_run_serial_reaches_every_member() {
 
 #[tokio::test]
 async fn hostsgroup_run_honours_per_host_state_end_to_end() {
-    // A mixed-state group over real SSH: enabled runs for real, dryrun echoes
-    // the marker without touching the transport, disabled records nothing.
+    // A mixed-state group over real SSH: enabled runs for real, disabled
+    // records nothing.
     let port = start_server(SharedFs::default()).await;
     let targets = vec![
         connect_target("on", port, TargetState::Enabled, ExecutionMode::Parallel).await,
-        connect_target("dry", port, TargetState::Dryrun, ExecutionMode::Parallel).await,
         connect_target("off", port, TargetState::Disabled, ExecutionMode::Parallel).await,
     ];
     let mut group = HostsGroup::new(targets, false);
@@ -1098,12 +1097,6 @@ async fn hostsgroup_run_honours_per_host_state_end_to_end() {
     let on = group.get("on").expect("on present");
     assert_eq!(on.lastout(), ran("gated"));
     assert_eq!(on.lastexit(), Some(0));
-
-    // Dryrun: the "dryrun\n" marker, exit 0, no remote round-trip.
-    let dry = group.get("dry").expect("dry present");
-    assert_eq!(dry.lastin(), "gated");
-    assert_eq!(dry.lastout(), "dryrun\n");
-    assert_eq!(dry.lastexit(), Some(0));
 
     // Disabled: an empty entry — nothing ran.
     let off = group.get("off").expect("off present");

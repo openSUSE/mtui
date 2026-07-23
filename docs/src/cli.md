@@ -211,9 +211,9 @@ Usage: set_host_state [OPTIONS] <state>
 
 Arguments:
   <state>
-          enabled | disabled | dryrun | parallel | serial
+          enabled | disabled | parallel | serial
           
-          [possible values: parallel, serial, dryrun, disabled, enabled]
+          [possible values: parallel, serial, disabled, enabled]
 
 Options:
   -t, --target <HOST>

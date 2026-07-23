@@ -213,7 +213,7 @@ mod tests {
         let t = Target::new(
             &mtui_config::Config::default(),
             "test-host.example.com",
-            TargetState::Dryrun,
+            TargetState::Disabled,
             ExecutionMode::Serial,
         );
         let out = RefCell::new(None);
@@ -226,7 +226,7 @@ mod tests {
             Some((
                 "test-host.example.com".to_owned(),
                 false,
-                TargetState::Dryrun,
+                TargetState::Disabled,
                 ExecutionMode::Serial,
             ))
         );

@@ -114,9 +114,8 @@ run zypper lr            # runs only on the still-enabled hosts
 set_host_state enabled   # re-enable all
 ```
 
-`disabled` hosts run nothing (and print nothing); `dryrun` hosts print the command
-they *would* run without executing it. You can also switch a host between
-`parallel` and `serial` execution the same way.
+`disabled` hosts run nothing (and print nothing). You can also switch a host
+between `parallel` and `serial` execution the same way.
 
 ## Can I export the update log from a specific refhost?
 

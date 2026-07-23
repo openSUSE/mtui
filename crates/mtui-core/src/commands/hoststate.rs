@@ -9,15 +9,14 @@ use crate::command::Command;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// The five `state` choices upstream accepts.
-const STATES: [&str; 5] = ["parallel", "serial", "dryrun", "disabled", "enabled"];
+/// The four `state` choices upstream accepts.
+const STATES: [&str; 4] = ["parallel", "serial", "disabled", "enabled"];
 
 /// Sets the state and execution mode of a host.
 ///
 /// Ports upstream `mtui.commands.hoststate.HostState`. A host can be:
 /// * `enabled` — runs all issued commands,
 /// * `disabled` — runs nothing,
-/// * `dryrun` — runs nothing but prints the commands,
 ///
 /// and its execution mode either `parallel` (default) or `serial`. The
 /// `serial`/`parallel` choices set the mode; the others set the state. Selection
@@ -40,7 +39,7 @@ impl Command for HostState {
             Arg::new("state")
                 .required(true)
                 .value_parser(clap::builder::PossibleValuesParser::new(STATES))
-                .help("enabled | disabled | dryrun | parallel | serial"),
+                .help("enabled | disabled | parallel | serial"),
         )
     }
 
@@ -74,7 +73,6 @@ impl Command for HostState {
                 "parallel" => t.set_mode(ExecutionMode::Parallel),
                 "enabled" => t.set_state(TargetState::Enabled),
                 "disabled" => t.set_state(TargetState::Disabled),
-                "dryrun" => t.set_state(TargetState::Dryrun),
                 other => return Err(CommandError::Other(format!("unknown state: {other}"))),
             }
         }
@@ -109,17 +107,6 @@ mod tests {
             buf.contents().contains("set disabled on h1"),
             "{:?}",
             buf.contents()
-        );
-    }
-
-    #[tokio::test]
-    async fn dryrun_sets_state() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        let args = matches(&HostState, &["dryrun"]);
-        HostState.call(&mut session, &args).await.unwrap();
-        assert_eq!(
-            session.targets().get("h1").unwrap().state(),
-            TargetState::Dryrun
         );
     }
 
@@ -163,6 +150,13 @@ mod tests {
     fn invalid_state_rejected_by_parser() {
         let base = clap::Command::new(HostState.name()).no_binary_name(true);
         let parsed = HostState.configure(base).try_get_matches_from(["bogus"]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn dryrun_rejected_by_parser() {
+        let base = clap::Command::new(HostState.name()).no_binary_name(true);
+        let parsed = HostState.configure(base).try_get_matches_from(["dryrun"]);
         assert!(parsed.is_err());
     }
 }

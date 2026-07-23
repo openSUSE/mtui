@@ -1298,11 +1298,10 @@ expression: pretty
           "type": "array"
         },
         "state": {
-          "description": "enabled | disabled | dryrun | parallel | serial",
+          "description": "enabled | disabled | parallel | serial",
           "enum": [
             "parallel",
             "serial",
-            "dryrun",
             "disabled",
             "enabled"
           ],
