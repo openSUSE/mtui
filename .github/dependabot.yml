@@ -22,6 +22,11 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # dtolnay/rust-toolchain is pinned to a master-branch commit SHA and the
+    # toolchain is selected via its `toolchain:` input; the action has no
+    # semver releases for Dependabot to bump to.
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       actions-minor-and-patch:
         update-types:

@@ -19,7 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     name: MTUI format
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install rustfmt
         run: rustup component add rustfmt
       - name: Check formatting
@@ -28,7 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     name: MTUI lint
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install clippy
         run: rustup component add clippy
       - name: Clippy (warnings as errors)
@@ -37,7 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     name: MTUI feature matrix (compile-only)
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build with no default features
         run: cargo build --workspace --no-default-features
       - name: Build with all features
@@ -46,7 +52,9 @@ jobs:
     runs-on: ubuntu-latest
     name: MTUI tests
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       # The SSH integration suite authenticates the client from an identity file;
       # the in-process fixture accepts any key but the runner ships none. Generate
       # a throwaway ed25519 key so the pubkey path is exercised.
@@ -74,7 +82,9 @@ jobs:
     # binaries. No fmt leg — formatting is platform-independent and covered by
     # the ubuntu `fmt` job.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install clippy
         run: rustup component add clippy
       # The SSH integration suite authenticates from an identity file; the
@@ -91,12 +101,36 @@ jobs:
         run: cargo test --workspace
       - name: Run mtui-mcp tests
         run: cargo test -p mtui-mcp -F mcp
-
+  beta:
+    # Early warning on the upcoming compiler: never blocks, but surfaces
+    # new-lint and regression noise before beta becomes stable. No fmt leg
+    # (beta rustfmt formatting may legitimately drift).
+    runs-on: ubuntu-latest
+    name: MTUI beta toolchain (early warning)
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install beta toolchain
+        run: rustup toolchain install beta --component clippy
+      - name: Clippy (beta)
+        run: cargo +beta clippy --workspace --all-targets -- -D warnings
+      # Same fixture as the test job: the SSH integration suite authenticates
+      # the client from an identity file and fails without one.
+      - name: SSH fixture
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+      - name: Test (beta)
+        run: cargo +beta test --workspace
   coverage:
     runs-on: ubuntu-latest
     name: MTUI coverage
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: SSH fixture
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
