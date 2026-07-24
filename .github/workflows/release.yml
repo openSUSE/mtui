@@ -16,23 +16,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    permissions:
-      # required for `gh release create`
-      contents: write
-    env:
-      TARGET: x86_64-unknown-linux-musl
+    strategy:
+      # Build every platform even if one fails, so a single broken target
+      # surfaces on its own. The release job needs all legs to succeed, so a
+      # failure still blocks publishing a partial set of artifacts.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: macos-latest  # Apple Silicon
+            target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The release is published with `gh release create` using
-          # ${{ github.token }}; no git push happens, so the checkout does not
-          # need a credential left behind in .git/config.
+          # ${{ github.token }} in a separate job; no git push happens here, so
+          # the checkout does not need a credential left behind in .git/config.
           persist-credentials: false
 
       - name: Verify tag matches workspace version
+        shell: bash
         run: |
           pkg="$(sed -n 's/^version = "\(.*\)".*/\1/p' Cargo.toml | head -1)"
           if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
@@ -40,10 +48,12 @@ jobs:
             exit 1
           fi
 
-      - name: Add musl target
-        run: rustup target add "$TARGET"
+      - name: Add Rust target
+        run: rustup target add "${{ matrix.target }}"
 
+      # musl is Linux-only; the macOS leg builds natively for aarch64-apple-darwin.
       - name: Install musl tools
+        if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       # `--locked` so a release is built from the dependency versions committed
@@ -51,17 +61,44 @@ jobs:
       # transitive crate could differ from anything CI ever tested.
       - name: Build release binaries
         run: |
-          cargo build --release --locked --target "$TARGET" -p mtui-cli
-          cargo build --release --locked --target "$TARGET" -p mtui-mcp --features mcp
+          cargo build --release --locked --target "${{ matrix.target }}" -p mtui-cli
+          cargo build --release --locked --target "${{ matrix.target }}" -p mtui-mcp --features mcp
 
+      # xtask stages the two binaries with completions/man/terms/vim-plugin from
+      # dist/ and writes a `sha256sum -c`-compatible checksum (sha256sum on Linux,
+      # shasum -a 256 on macOS) into dist/release/.
       - name: Package release tarball
-        run: cargo xtask package --version "$GITHUB_REF_NAME" --target "$TARGET"
+        run: cargo xtask package --version "$GITHUB_REF_NAME" --target "${{ matrix.target }}"
 
+      - name: Upload build artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.target }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    # Publish only after every platform built successfully, so a release never
+    # ships a partial artifact set.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # required for `gh release create`
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: dist
+          merge-multiple: true
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout in this job, so tell gh which repo to act on.
+          GH_REPO: ${{ github.repository }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
           --title "$GITHUB_REF_NAME"
           --generate-notes
-          dist/release/*
+          dist/*
