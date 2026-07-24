@@ -378,9 +378,9 @@ pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
 /// Assemble + archive one target: stage the tree, `tar czf` it, and write a
 /// `<tarball>.sha256`. Returns the tarball path.
 ///
-/// `tar`/`sha256sum` are shelled out (both are present on every CI runner and
-/// openSUSE); only the archive/checksum step touches a subprocess — the staging
-/// layout it archives is the offline-tested [`stage_package`].
+/// `tar` and a SHA-256 CLI (`sha256sum`, or `shasum -a 256` on macOS) are
+/// shelled out; only the archive/checksum step touches a subprocess — the
+/// staging layout it archives is the offline-tested [`stage_package`].
 pub fn package_target(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
     // Materialise the staging tree on disk; `tar` archives it by name below.
     let staging = stage_package(inputs)?;
@@ -408,8 +408,9 @@ pub fn package_target(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
     Ok(tarball)
 }
 
-/// Write `<file>.sha256` next to `file` containing `sha256sum`'s output for it
-/// (the `<hash>  <basename>` line, so `sha256sum -c` works from the artifact dir).
+/// Write `<file>.sha256` next to `file` containing the checksum tool's output
+/// for it (the `<hash>  <basename>` line, so `sha256sum -c` works from the
+/// artifact dir).
 fn write_sha256(file: &Path) -> Result<()> {
     let dir = file.parent().context("artifact has no parent dir")?;
     let name = file
@@ -417,19 +418,45 @@ fn write_sha256(file: &Path) -> Result<()> {
         .context("artifact has no file name")?
         .to_str()
         .context("artifact name is not UTF-8")?;
-    let out = Command::new("sha256sum")
-        .arg(name)
-        .current_dir(dir)
-        .output()
-        .context("running sha256sum")?;
-    if !out.status.success() {
-        bail!("sha256sum failed for {}", file.display());
-    }
+    let stdout = sha256_stdout(dir, name)?;
     // Append `.sha256` to the full name (`with_extension` would clobber `.gz`).
     let sum_path = file.with_file_name(format!("{name}.sha256"));
-    std::fs::write(&sum_path, &out.stdout)
+    std::fs::write(&sum_path, &stdout)
         .with_context(|| format!("writing {}", sum_path.display()))?;
     Ok(())
+}
+
+/// Checksum `name` (relative to `dir`) with a portable SHA-256 CLI, returning
+/// the `<hash>  <name>` stdout. Prefers `sha256sum` (Linux/openSUSE runners);
+/// falls back to `shasum -a 256`, which is what macOS ships instead. Both emit
+/// the same format, so the written file stays `sha256sum -c`-compatible.
+fn sha256_stdout(dir: &Path, name: &str) -> Result<Vec<u8>> {
+    let candidates: [(&str, &[&str]); 2] =
+        [("sha256sum", &[name]), ("shasum", &["-a", "256", name])];
+    for (prog, args) in candidates {
+        if let Some(stdout) = try_sha256_tool(prog, args, dir)? {
+            return Ok(stdout);
+        }
+    }
+    bail!("no SHA-256 tool found (tried sha256sum and shasum -a 256)")
+}
+
+/// Run a single checksum tool in `dir`. Returns `Ok(Some(stdout))` on success,
+/// `Ok(None)` when the tool is not installed (so the caller falls through to the
+/// next candidate), and `Err` when it ran but failed on the input or could not
+/// be spawned for any other reason.
+fn try_sha256_tool(prog: &str, args: &[&str], dir: &Path) -> Result<Option<Vec<u8>>> {
+    match Command::new(prog).args(args).current_dir(dir).output() {
+        Ok(out) if out.status.success() => Ok(Some(out.stdout)),
+        // Present but failed on this input: surface it rather than masking.
+        Ok(out) => bail!(
+            "{prog} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        // Not installed: signal the caller to try the next tool.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("running {prog}")),
+    }
 }
 
 /// Recursively copy `src` into `dst`, creating `dst` (and parents) as needed.
@@ -479,4 +506,57 @@ fn run(cmd: &mut Command) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Happy path: whichever tool is on PATH emits `<64-hex>  <name>`. Skips
+    /// cleanly if neither `sha256sum` nor `shasum` is installed.
+    #[test]
+    fn sha256_stdout_emits_hash_and_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), b"hello\n").unwrap();
+        let out = match sha256_stdout(dir.path(), "f.txt") {
+            Ok(o) => o,
+            Err(_) => return, // no checksum tool available
+        };
+        let line = String::from_utf8(out).unwrap();
+        assert!(line.contains("f.txt"), "{line:?}");
+        assert_eq!(
+            line.split_whitespace().next().unwrap().len(),
+            64,
+            "{line:?}"
+        );
+    }
+
+    /// A missing tool maps to `Ok(None)` so the caller tries the next candidate.
+    #[test]
+    fn try_sha256_tool_missing_tool_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let got = try_sha256_tool("mtui-no-such-sha-tool", &["x"], dir.path()).unwrap();
+        assert!(got.is_none());
+    }
+
+    /// A tool that runs but fails on its input surfaces an error rather than
+    /// being masked. Skips if neither tool is installed.
+    #[test]
+    fn try_sha256_tool_errors_on_bad_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let candidates: [(&str, &[&str]); 2] = [
+            ("sha256sum", &["nope.txt"]),
+            ("shasum", &["-a", "256", "nope.txt"]),
+        ];
+        for (prog, args) in candidates {
+            // Only assert against a tool that is actually present.
+            if Command::new(prog).arg("--version").output().is_ok() {
+                assert!(
+                    try_sha256_tool(prog, args, dir.path()).is_err(),
+                    "{prog} should error on a missing file"
+                );
+                return;
+            }
+        }
+    }
 }
