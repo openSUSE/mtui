@@ -1,20 +1,19 @@
-//! Parallel / serial fan-out primitives over a group of [`Target`]s.
+//! Parallel fan-out primitives over a group of [`Target`]s.
 //!
 //! ## Reference
 //!
 //! Ported from upstream `mtui/hosts/target/actions.py`. Upstream models each
 //! fan-out action as a `ThreadedTargetGroup` subclass that builds
 //! `(callable, args)` pairs and submits them to a thread pool via
-//! `run_parallel`, plus a `RunCommand` class that splits hosts into a parallel
-//! pool and a serial (one-at-a-time) barrier.
+//! `run_parallel`, plus a `RunCommand` class that dispatches a command to
+//! every host.
 //!
 //! This port keeps the same behavioural surface but is async and idiomatic:
 //!
 //! * [`run_parallel`] drives a set of caller-supplied futures to completion
 //!   concurrently (the async replacement for the thread pool).
-//! * [`RunCommand`] partitions the group into parallel and serial hosts by
-//!   [`ExecutionMode`] and dispatches a command (one string for all hosts, or a
-//!   per-host map) to each.
+//! * [`RunCommand`] dispatches a command (one string for all hosts, or a
+//!   per-host map) to every host in parallel.
 //! * [`sftp_put_all`] / [`sftp_get_all`] are the async equivalents of
 //!   upstream's `FileUpload` / `FileDownload`.
 //!
@@ -41,10 +40,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
-use mtui_types::enums::ExecutionMode;
 
 use super::Target;
-use crate::prompter::Prompter;
 
 /// Fallback fan-out width when a caller passes `0` (unconfigured). Mirrors the
 /// `[connection] max_parallel` default in `mtui-config`; kept as a local
@@ -136,30 +133,21 @@ where
 pub(crate) type BoxTargetFut<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 
-/// Drives a per-target async `op` across a group, honouring [`ExecutionMode`].
+/// Drives a per-target async `op` across a group in parallel.
 ///
 /// This is the single fan-out primitive every per-host I/O method on
-/// [`HostsGroup`](super::HostsGroup) routes through, so the parallel-batch +
-/// serial-barrier contract lives in exactly one place. Targets whose
-/// [`ExecutionMode`] is [`Parallel`](ExecutionMode::Parallel) are driven
-/// concurrently via [`run_parallel`]; targets marked
-/// [`Serial`](ExecutionMode::Serial) run *after* the parallel batch, one at a
-/// time in sorted hostname order.
+/// [`HostsGroup`](super::HostsGroup) routes through. Every (non-skipped)
+/// target is driven concurrently via [`run_parallel`].
 ///
-/// When `interactive` is set and a serialised [`Prompter`] is supplied, the
-/// user is asked to press Enter before each serial host (upstream's serial
-/// barrier); headless callers pass `None` and serial hosts run back-to-back.
-/// `desc` labels the optional TTY spinner for the parallel batch (a no-op off a
-/// TTY). `op` is invoked once per (non-skipped) target with `&mut Target`; the
-/// disjoint mutable borrows make the parallel batch sound without a shared lock.
+/// `desc` labels the optional TTY spinner (a no-op off a TTY). `op` is invoked
+/// once per (non-skipped) target with `&mut Target`; the disjoint mutable
+/// borrows make the parallel batch sound without a shared lock.
 ///
 /// `should_run` lets a caller skip a target entirely (e.g. a
-/// [`Command::PerHost`] map that does not cover it); return `false` to omit it
-/// from both batches.
+/// [`Command::PerHost`] map that does not cover it); return `false` to omit it.
 pub(crate) async fn run_fanout<'t, S, F>(
     targets: &'t mut BTreeMap<String, Target>,
     is_repl: bool,
-    prompter: Option<&Prompter>,
     max_parallel: usize,
     desc: Option<&str>,
     mut should_run: S,
@@ -168,18 +156,10 @@ pub(crate) async fn run_fanout<'t, S, F>(
     S: FnMut(&Target) -> bool,
     F: Fn(&'t mut Target) -> BoxTargetFut<'t>,
 {
-    let mut parallel: Vec<&'t mut Target> = Vec::new();
-    let mut serial: Vec<&'t mut Target> = Vec::new();
-    for target in targets.values_mut() {
-        if !should_run(target) {
-            continue;
-        }
-        if target.mode() == ExecutionMode::Serial {
-            serial.push(target);
-        } else {
-            parallel.push(target);
-        }
-    }
+    let parallel: Vec<&'t mut Target> = targets
+        .values_mut()
+        .filter(|target| should_run(target))
+        .collect();
 
     // Diagnostic (`mtui -d`): report the resolved fan-out shape so a missing
     // spinner is explainable. `is_repl=false` or `parallel=0` both suppress the
@@ -188,12 +168,11 @@ pub(crate) async fn run_fanout<'t, S, F>(
         is_repl,
         desc = desc.unwrap_or("<none>"),
         parallel = parallel.len(),
-        serial = serial.len(),
         "fan-out dispatch"
     );
 
-    // Parallel batch: each future borrows a distinct target mutably, so the
-    // borrows are disjoint and need no shared lock.
+    // Each future borrows a distinct target mutably, so the borrows are
+    // disjoint and need no shared lock.
     let parallel_futs: Vec<_> = parallel.into_iter().map(&op).collect();
     run_parallel(
         parallel_futs,
@@ -201,18 +180,6 @@ pub(crate) async fn run_fanout<'t, S, F>(
         max_parallel,
     )
     .await;
-
-    // Serial barrier: one host at a time. Under an interactive session with a
-    // serialised prompter, ask the user to press Enter before each serial host
-    // (upstream `prompt_user("press Enter key to proceed with …")`); headless
-    // callers run them back-to-back. Any input (incl. empty) proceeds.
-    for t in serial {
-        if is_repl && let Some(prompter) = prompter {
-            let text = format!("press Enter key to proceed with {} ", t.hostname());
-            let _ = prompter.ask(&text).await;
-        }
-        op(t).await;
-    }
 }
 
 /// A command to run across a group: one string for every host, or a per-host
@@ -260,49 +227,33 @@ impl From<BTreeMap<String, String>> for Command {
     }
 }
 
-/// Runs a [`Command`] across a group of targets: parallel hosts concurrently,
-/// then serial hosts one at a time.
+/// Runs a [`Command`] across a group of targets in parallel.
 ///
-/// Ported from upstream `RunCommand`. Hosts whose [`ExecutionMode`] is
-/// [`Serial`](ExecutionMode::Serial) run *after* the parallel batch, sequentially
-/// and in (sorted) hostname order, mirroring upstream's serial barrier. When a
-/// [`PerHost`](Command::PerHost) map is given, hosts it does not cover are
-/// skipped entirely.
-///
-/// The upstream serial barrier prompts the user (`press Enter key to proceed
-/// with <host>`) before each serial host. When a serialised [`Prompter`] is
-/// supplied and `interactive` is set (the REPL), [`run`](RunCommand::run) asks
-/// that prompt before each serial host; headless callers (`mtui-mcp`) pass
-/// `None` and serial hosts run back-to-back. No stdin/TTY code lives in this
-/// crate — the reader is injected via the [`Prompter`].
+/// Ported from upstream `RunCommand`. When a [`PerHost`](Command::PerHost) map
+/// is given, hosts it does not cover are skipped entirely.
 pub(crate) struct RunCommand<'a> {
     targets: &'a mut BTreeMap<String, Target>,
     command: Command,
     is_repl: bool,
-    prompter: Option<Prompter>,
     max_parallel: usize,
 }
 
 impl<'a> RunCommand<'a> {
     /// Builds a run over `targets` with `command`.
     ///
-    /// `prompter` is the session-level serialised [`Prompter`] (or `None` when
-    /// headless); when present and `interactive` is set, the serial barrier
-    /// prompts before each serial host. The parallel-batch width defaults to
-    /// unconfigured (`0` → [`DEFAULT_MAX_PARALLEL`]); set it with
+    /// The parallel-batch width defaults to unconfigured (`0` →
+    /// [`DEFAULT_MAX_PARALLEL`]); set it with
     /// [`with_max_parallel`](Self::with_max_parallel).
     #[must_use]
     pub(crate) fn new(
         targets: &'a mut BTreeMap<String, Target>,
         command: impl Into<Command>,
         is_repl: bool,
-        prompter: Option<Prompter>,
     ) -> Self {
         Self {
             targets,
             command: command.into(),
             is_repl,
-            prompter,
             max_parallel: 0,
         }
     }
@@ -315,26 +266,22 @@ impl<'a> RunCommand<'a> {
         self
     }
 
-    /// Executes the command: parallel hosts concurrently, then serial hosts
-    /// sequentially.
+    /// Executes the command across every (non-skipped) host in parallel.
     ///
-    /// Delegates the parallel-batch + serial-barrier split to the shared
-    /// [`run_fanout`] primitive; the only command-specific logic here is
-    /// resolving the per-host command string and skipping hosts a
-    /// [`PerHost`](Command::PerHost) map does not cover.
+    /// Delegates to the shared [`run_fanout`] primitive; the only
+    /// command-specific logic here is resolving the per-host command string
+    /// and skipping hosts a [`PerHost`](Command::PerHost) map does not cover.
     pub(crate) async fn run(self) {
         let Self {
             targets,
             command,
             is_repl,
-            prompter,
             max_parallel,
         } = self;
 
         run_fanout(
             targets,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("run"),
             // `for_host` returning None means "skip" (upstream dict subset).
@@ -434,9 +381,9 @@ mod tests {
     use super::*;
     use crate::connection::{MockConnection, MockSftpOp};
 
-    /// Builds an enabled parallel target wired to `conn`.
-    fn target(hostname: &str, mode: ExecutionMode, conn: MockConnection) -> Target {
-        Target::with_connection(hostname, TargetState::Enabled, mode, Box::new(conn))
+    /// Builds an enabled target wired to `conn`.
+    fn target(hostname: &str, conn: MockConnection) -> Target {
+        Target::with_connection(hostname, TargetState::Enabled, Box::new(conn))
     }
 
     /// A mock that echoes `stdout` for any command.
@@ -582,12 +529,9 @@ mod tests {
     async fn run_command_string_dispatches_to_all_hosts() {
         let (m1, m2) = (echo("h1", "a"), echo("h2", "b"));
         let (h1, h2) = (m1.clone(), m2.clone());
-        let mut g = group(vec![
-            target("h1", ExecutionMode::Parallel, m1),
-            target("h2", ExecutionMode::Parallel, m2),
-        ]);
+        let mut g = group(vec![target("h1", m1), target("h2", m2)]);
 
-        RunCommand::new(&mut g, "uptime", false, None).run().await;
+        RunCommand::new(&mut g, "uptime", false).run().await;
 
         assert_eq!(h1.commands(), vec!["uptime".to_owned()]);
         assert_eq!(h2.commands(), vec!["uptime".to_owned()]);
@@ -598,105 +542,14 @@ mod tests {
         // A subset command must not KeyError/panic on the uncovered host.
         let (m1, m2) = (echo("h1", "a"), echo("h2", "b"));
         let (h1, h2) = (m1.clone(), m2.clone());
-        let mut g = group(vec![
-            target("h1", ExecutionMode::Parallel, m1),
-            target("h2", ExecutionMode::Parallel, m2),
-        ]);
+        let mut g = group(vec![target("h1", m1), target("h2", m2)]);
 
         let mut map = BTreeMap::new();
         map.insert("h1".to_owned(), "only-h1".to_owned());
-        RunCommand::new(&mut g, map, false, None).run().await;
+        RunCommand::new(&mut g, map, false).run().await;
 
         assert_eq!(h1.commands(), vec!["only-h1".to_owned()]);
         assert!(h2.commands().is_empty(), "uncovered host must be skipped");
-    }
-
-    #[tokio::test]
-    async fn run_command_runs_parallel_and_serial_hosts() {
-        // Both a parallel and a serial host receive the command; the serial
-        // barrier runs after the parallel batch (no prompter here, so no prompt).
-        let (mp, ms) = (echo("par", "p"), echo("ser", "s"));
-        let (hp, hs) = (mp.clone(), ms.clone());
-        let mut g = group(vec![
-            target("par", ExecutionMode::Parallel, mp),
-            target("ser", ExecutionMode::Serial, ms),
-        ]);
-
-        RunCommand::new(&mut g, "cmd", true, None).run().await;
-
-        assert_eq!(hp.commands(), vec!["cmd".to_owned()]);
-        assert_eq!(hs.commands(), vec!["cmd".to_owned()]);
-    }
-
-    /// A recording [`Prompter`] that appends every prompt text to a shared vec
-    /// and returns an empty answer (Enter). Used to assert the serial-barrier
-    /// prompt is reached (interactive) or skipped (headless).
-    fn recording_prompter(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Prompter {
-        Prompter::new(std::sync::Arc::new(move |text: String| {
-            let seen = std::sync::Arc::clone(&seen);
-            Box::pin(async move {
-                seen.lock().unwrap().push(text);
-                Ok(String::new())
-            })
-                as std::pin::Pin<
-                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
-                >
-        }))
-    }
-
-    #[tokio::test]
-    async fn serial_barrier_prompts_before_each_serial_host_when_interactive() {
-        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
-        let (ma, mb) = (echo("s-a", "a"), echo("s-b", "b"));
-        let (ha, hb) = (ma.clone(), mb.clone());
-        let mut g = group(vec![
-            target("s-a", ExecutionMode::Serial, ma),
-            target("s-b", ExecutionMode::Serial, mb),
-        ]);
-
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let prompter = recording_prompter(std::sync::Arc::clone(&seen));
-
-        RunCommand::new(&mut g, "cmd", true, Some(prompter))
-            .run()
-            .await;
-
-        // Both serial hosts ran, prompted in sorted hostname order.
-        assert_eq!(ha.commands(), vec!["cmd".to_owned()]);
-        assert_eq!(hb.commands(), vec!["cmd".to_owned()]);
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec![
-                "press Enter key to proceed with s-a ".to_owned(),
-                "press Enter key to proceed with s-b ".to_owned(),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn serial_barrier_does_not_prompt_when_headless() {
-        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
-        let (ma, mb) = (echo("s-a", "a"), echo("s-b", "b"));
-        let (ha, hb) = (ma.clone(), mb.clone());
-        let mut g = group(vec![
-            target("s-a", ExecutionMode::Serial, ma),
-            target("s-b", ExecutionMode::Serial, mb),
-        ]);
-
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let prompter = recording_prompter(std::sync::Arc::clone(&seen));
-
-        // Headless: interactive == false → no prompt even with a prompter set.
-        RunCommand::new(&mut g, "cmd", false, Some(prompter))
-            .run()
-            .await;
-
-        assert_eq!(ha.commands(), vec!["cmd".to_owned()]);
-        assert_eq!(hb.commands(), vec!["cmd".to_owned()]);
-        assert!(
-            seen.lock().unwrap().is_empty(),
-            "headless run must not prompt"
-        );
     }
 
     // --- SFTP fan-out -------------------------------------------------------
@@ -705,10 +558,7 @@ mod tests {
     async fn sftp_put_all_uploads_to_every_host() {
         let (m1, m2) = (echo("h1", ""), echo("h2", ""));
         let (h1, h2) = (m1.clone(), m2.clone());
-        let mut g = group(vec![
-            target("h1", ExecutionMode::Parallel, m1),
-            target("h2", ExecutionMode::Parallel, m2),
-        ]);
+        let mut g = group(vec![target("h1", m1), target("h2", m2)]);
 
         sftp_put_all(
             &mut g,
@@ -739,11 +589,7 @@ mod tests {
 
         let (m1, m2, m3) = (echo("h1", ""), echo("h2", ""), echo("h3", ""));
         let (h1, h2, h3) = (m1.clone(), m2.clone(), m3.clone());
-        let mut g = group(vec![
-            target("h1", ExecutionMode::Parallel, m1),
-            target("h2", ExecutionMode::Parallel, m2),
-            target("h3", ExecutionMode::Parallel, m3),
-        ]);
+        let mut g = group(vec![target("h1", m1), target("h2", m2), target("h3", m3)]);
 
         sftp_put_all(&mut g, &local, Path::new("/remote/f"), false, 0).await;
 
@@ -771,10 +617,7 @@ mod tests {
 
         let (m1, m2) = (echo("h1", ""), echo("h2", ""));
         let (h1, h2) = (m1.clone(), m2.clone());
-        let mut g = group(vec![
-            target("h1", ExecutionMode::Parallel, m1),
-            target("h2", ExecutionMode::Parallel, m2),
-        ]);
+        let mut g = group(vec![target("h1", m1), target("h2", m2)]);
 
         sftp_put_all(&mut g, &local, Path::new("/remote/f"), false, 0).await;
 
@@ -793,10 +636,7 @@ mod tests {
         // the fan-out aborts before any host op. (Read-once error handling.)
         let (m1, m2) = (echo("h1", ""), echo("h2", ""));
         let (h1, h2) = (m1.clone(), m2.clone());
-        let mut g = group(vec![
-            target("h1", ExecutionMode::Parallel, m1),
-            target("h2", ExecutionMode::Parallel, m2),
-        ]);
+        let mut g = group(vec![target("h1", m1), target("h2", m2)]);
 
         // Nonexistent path: metadata() → None branch → streaming `sftp_put`,
         // whose per-host read fails and is swallowed. No PutBytes is dispatched.
@@ -824,7 +664,7 @@ mod tests {
     async fn sftp_get_all_downloads_with_per_host_suffix() {
         let m1 = echo("h1", "");
         let h1 = m1.clone();
-        let mut g = group(vec![target("h1", ExecutionMode::Parallel, m1)]);
+        let mut g = group(vec![target("h1", m1)]);
 
         sftp_get_all(&mut g, "/remote/f", Path::new("/local/f"), false, 0).await;
 

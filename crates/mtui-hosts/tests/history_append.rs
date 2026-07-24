@@ -14,17 +14,12 @@
 
 use mtui_hosts::connection::Connection;
 use mtui_hosts::{HostsGroup, MockConnection, MockSftpOp, Target};
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 
 const LOG: &str = "/var/log/mtui.log";
 
 fn enabled(conn: MockConnection) -> Target {
-    Target::with_connection(
-        "h1",
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(conn),
-    )
+    Target::with_connection("h1", TargetState::Enabled, Box::new(conn))
 }
 
 /// Recording N entries issues exactly N appends and never a read/overwrite —
@@ -142,12 +137,7 @@ async fn hostsgroup_add_history_appends_once_per_host() {
     let c2 = MockConnection::new("h2");
     let (m1, m2) = (c1.clone(), c2.clone());
     let t1 = enabled(c1);
-    let t2 = Target::with_connection(
-        "h2",
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(c2),
-    );
+    let t2 = Target::with_connection("h2", TargetState::Enabled, Box::new(c2));
     let mut group = HostsGroup::new(vec![t1, t2], false);
 
     group

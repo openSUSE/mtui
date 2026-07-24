@@ -78,7 +78,7 @@ mod tests {
     use super::*;
     use crate::commands::testkit::{matches, session_with_hosts};
     use mtui_hosts::{MockConnection, Target};
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
 
     #[test]
     fn name_and_active_scope() {
@@ -96,12 +96,7 @@ mod tests {
             .with_listing("/etc/products.d", ["SLES.prod"])
             .with_link("/etc/products.d/baseproduct", "SLES.prod")
             .with_file("/etc/products.d/SLES.prod", prod.to_vec());
-        let target = Target::with_connection(
-            "h1",
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        );
+        let target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
         session.targets_mut().add(target);
         assert_eq!(

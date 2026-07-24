@@ -35,7 +35,7 @@ use std::time::Duration;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mtui_hosts::connection::Connection;
 use mtui_hosts::{HostsGroup, MockConnection, Target, parse_system};
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
 
 /// Fleet sizes swept across every fan-out group.
@@ -55,12 +55,7 @@ fn build_group(n: usize, delay: Duration) -> HostsGroup {
             let conn = MockConnection::new(&host)
                 .with_default(CommandLog::new("", "ok", "", 0, 1))
                 .with_run_delay(delay);
-            Target::with_connection(
-                host,
-                TargetState::Enabled,
-                ExecutionMode::Parallel,
-                Box::new(conn),
-            )
+            Target::with_connection(host, TargetState::Enabled, Box::new(conn))
         })
         .collect();
     HostsGroup::new(targets, false)
@@ -342,12 +337,7 @@ fn bench_history_append(c: &mut Criterion) {
                         }
                         let conn =
                             MockConnection::new("host-0000").with_file("/var/log/mtui.log", prior);
-                        Target::with_connection(
-                            "host-0000",
-                            TargetState::Enabled,
-                            ExecutionMode::Parallel,
-                            Box::new(conn),
-                        )
+                        Target::with_connection("host-0000", TargetState::Enabled, Box::new(conn))
                     },
                     |mut target| async move {
                         target

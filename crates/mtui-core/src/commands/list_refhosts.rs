@@ -25,7 +25,7 @@ use mtui_datasources::http::VerifyPolicy;
 use mtui_datasources::refhost::{Attributes, RefhostsFactory, ResolveConfig};
 use mtui_hosts::Target;
 use mtui_types::Host;
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use serde_json::{Value, json};
 use tokio::task::JoinSet;
 
@@ -397,12 +397,7 @@ async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
             // Held for the task's lifetime; the semaphore has as many permits as
             // the bound, so at most `bound` probes run concurrently.
             let _permit = sem.acquire_owned().await.expect("semaphore is not closed");
-            let mut target = Target::new(
-                &config,
-                name.clone(),
-                TargetState::Enabled,
-                ExecutionMode::Serial,
-            );
+            let mut target = Target::new(&config, name.clone(), TargetState::Enabled);
             let state = match target.connect().await {
                 Ok(()) => match target.is_locked().await {
                     Ok(true) => "locked",

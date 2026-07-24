@@ -335,7 +335,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
-    use mtui_types::enums::{ExecutionMode, RequestKind, TargetState};
+    use mtui_types::enums::{RequestKind, TargetState};
     use mtui_types::rrid::RequestReviewID;
     use mtui_types::system::{System, SystemProduct};
 
@@ -366,12 +366,8 @@ mod tests {
     fn target_with(system: System, transactional: bool) -> (Target, MockConnection) {
         let conn = MockConnection::new("host1.example.com");
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "host1.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
         t.set_system(system, transactional);
         (t, handle)
     }
@@ -550,12 +546,8 @@ mod tests {
             b"1700000000:someone-else:99999:held".to_vec(),
         );
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "host1.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
         t.set_system(system_of(sles.clone(), &[]), false);
         let mut repos = BTreeMap::new();
         repos.insert(sles, "https://example/repo".to_owned());
@@ -629,12 +621,8 @@ mod tests {
             CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
         );
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "host1.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
         t.set_system(system_of(sles.clone(), &[]), false);
         let mut repos = BTreeMap::new();
         repos.insert(sles, "https://example/repo".to_owned());
@@ -677,12 +665,8 @@ mod tests {
             ar_cmd,
             CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
         );
-        let mut t = Target::with_connection(
-            "host1.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
         t.set_system(system_of(sles.clone(), &[]), false);
         let mut repos = BTreeMap::new();
         repos.insert(sles, "https://example/repo".to_owned());

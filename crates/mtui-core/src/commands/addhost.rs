@@ -150,7 +150,7 @@ impl Command for AddHost {
 mod tests {
     use super::*;
     use mtui_hosts::{MockConnection, Target};
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
     use crate::commands::testkit::{matches, session_with_hosts};
@@ -177,12 +177,7 @@ mod tests {
     /// group, so a subsequent `add_host -t host` sees `connect` short-circuit.
     fn add_mock_host(session: &mut Session, host: &str) {
         let conn = MockConnection::new(host).with_default(CommandLog::new("", "ok", "", 0, 0));
-        let target = Target::with_connection(
-            host,
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        );
+        let target = Target::with_connection(host, TargetState::Enabled, Box::new(conn));
         session.targets_mut().add(target);
     }
 

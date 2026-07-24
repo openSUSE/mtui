@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mtui_hosts::{HostsGroup, MockConnection, Sink, Target, set_test_sink};
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use serial_test::serial;
 
 /// A shared in-memory sink so the test can read the painted frames.
@@ -52,12 +52,7 @@ async fn interactive_fanout_run_paints_a_spinner() {
     // A connected, enabled, PARALLEL host whose command takes ~500ms — the model
     // of a real `zypper` update where the fan-out awaits long enough to paint.
     let conn = MockConnection::new("h1").with_run_delay(Duration::from_millis(500));
-    let target = Target::with_connection(
-        "h1",
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(conn),
-    );
+    let target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
 
     // interactive = true — exactly what the REPL builds; this is the flag that
     // gates whether `run_parallel` receives a `desc` and starts the spinner.

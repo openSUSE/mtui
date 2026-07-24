@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mtui_hosts::{HostsGroup, MockConnection, Sink, Target, set_test_sink};
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use serial_test::serial;
 
 fn shared_sink() -> (Sink, Arc<Mutex<Vec<u8>>>) {
@@ -48,12 +48,7 @@ fn production_runtime_block_on_paints_spinner_during_slow_command() {
 
     runtime.block_on(async {
         let conn = MockConnection::new("h1").with_run_delay(Duration::from_millis(800));
-        let target = Target::with_connection(
-            "h1",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         let mut group = HostsGroup::new(vec![target], true);
         group.run("zypper up").await;
     });

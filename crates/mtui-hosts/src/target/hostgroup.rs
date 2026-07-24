@@ -108,13 +108,10 @@ pub struct HostsGroup {
     /// under headless callers (`mtui-mcp`).
     ///
     /// Pushed down from the composition root (`mtui-core::Session`) via
-    /// [`set_prompter`](Self::set_prompter): it stores the prompter on the group
-    /// (for the
-    /// serial-barrier Enter prompt in [`RunCommand`]) **and** installs the
-    /// derived command-timeout prompt on every member [`Target`] via
-    /// [`Target::set_timeout_prompt`]. `None` keeps the serial barrier
-    /// back-to-back and a command timeout an immediate abort (upstream
-    /// `prompter=None`).
+    /// [`set_prompter`](Self::set_prompter): it installs the derived
+    /// command-timeout prompt on every member [`Target`] via
+    /// [`Target::set_timeout_prompt`]. `None` keeps a command timeout an
+    /// immediate abort (upstream `prompter=None`).
     prompter: Option<crate::Prompter>,
     /// Maximum hosts to fan out to concurrently in the parallel batch. Pushed
     /// down from the composition root (`mtui-core::Session`) via
@@ -384,15 +381,14 @@ impl HostsGroup {
         self.data.remove(hostname)
     }
 
-    /// Runs a command across the group: parallel hosts concurrently, serial
-    /// hosts one at a time.
+    /// Runs a command across the group in parallel.
     ///
     /// `cmd` accepts a single string (run on every host) or a per-host
     /// [`Command::PerHost`] map (hosts absent from the map are skipped). See
     /// [`RunCommand`].
     pub async fn run(&mut self, cmd: impl Into<Command>) {
         let max_parallel = self.max_parallel;
-        RunCommand::new(&mut self.data, cmd, self.is_repl, self.prompter.clone())
+        RunCommand::new(&mut self.data, cmd, self.is_repl)
             .with_max_parallel(max_parallel)
             .run()
             .await;
@@ -454,13 +450,11 @@ impl HostsGroup {
     {
         use std::sync::Mutex;
 
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         let collected: Mutex<BTreeMap<String, LockOutcome>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("lock"),
             select,
@@ -523,13 +517,11 @@ impl HostsGroup {
     {
         use std::sync::Mutex;
 
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         let collected: Mutex<BTreeMap<String, LockOutcome>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("unlock"),
             select,
@@ -559,12 +551,10 @@ impl HostsGroup {
     /// a claim owned by another template), so one contended host never aborts
     /// the fan-out. `force` removes claims owned by other templates too.
     pub async fn pool_unlock(&mut self, force: bool) {
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("pool_unlock"),
             |_t| true,
@@ -581,10 +571,10 @@ impl HostsGroup {
     /// (`Some("poweroff")` → shell `halt`), or simply closes (`None`). Used on
     /// session exit; unlike [`reboot`](Self::reboot) it never reconnects.
     ///
-    /// Fans out concurrently across the group (parallel hosts together, serial
-    /// hosts one at a time) via [`run_fanout`](super::actions::run_fanout),
-    /// mirroring upstream's concurrent close. The overall wait budget is applied
-    /// by the caller. A no-op when the group is empty.
+    /// Fans out concurrently across the group via
+    /// [`run_fanout`](super::actions::run_fanout), mirroring upstream's
+    /// concurrent close. The overall wait budget is applied by the caller. A
+    /// no-op when the group is empty.
     ///
     /// Returns each host's teardown outcome keyed by hostname so `quit` can name
     /// a host that failed to disconnect (upstream `quit` logs
@@ -595,14 +585,12 @@ impl HostsGroup {
     pub async fn close(&mut self, action: Option<&str>) -> BTreeMap<String, Result<()>> {
         use std::sync::Mutex;
 
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         let action = action.map(str::to_owned);
         let collected: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("close"),
             |_t| true,
@@ -638,17 +626,15 @@ impl HostsGroup {
     {
         use std::sync::Mutex;
 
-        // Phase 1 (I/O): resolve every host's lock row concurrently (serial
-        // hosts one at a time) via the shared fan-out. Each host's
-        // `(system, row)` is collected keyed by hostname, so the drain below is
-        // deterministically sorted regardless of completion order.
+        // Phase 1 (I/O): resolve every host's lock row concurrently via the
+        // shared fan-out. Each host's `(system, row)` is collected keyed by
+        // hostname, so the drain below is deterministically sorted regardless
+        // of completion order.
         let collected: Mutex<BTreeMap<String, (System, LockRow)>> = Mutex::new(BTreeMap::new());
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("report_locks"),
             |_t| true,
@@ -676,14 +662,13 @@ impl HostsGroup {
     /// group and every member host.
     ///
     /// The single push-down point for interactive prompting: it stores the
-    /// prompter on the group (used by
-    /// the serial-barrier Enter prompt in [`RunCommand`]) and installs the
-    /// derived command-timeout prompt on each member [`Target`] via
-    /// [`Target::set_timeout_prompt`], so a target connected *after* this call
-    /// (and one already connected via the builder) both surface the timeout
-    /// prompt. The composition root (`mtui-core::Session`) calls this when a
-    /// prompter is present; headless callers (`mtui-mcp`) never do, leaving the
-    /// serial barrier back-to-back and command timeouts an immediate abort.
+    /// prompter on the group and installs the derived command-timeout prompt on
+    /// each member [`Target`] via [`Target::set_timeout_prompt`], so a target
+    /// connected *after* this call (and one already connected via the builder)
+    /// both surface the timeout prompt. The composition root
+    /// (`mtui-core::Session`) calls this when a prompter is present; headless
+    /// callers (`mtui-mcp`) never do, leaving a command timeout an immediate
+    /// abort.
     pub fn set_prompter(&mut self, prompter: crate::Prompter) {
         let timeout_prompt = prompter.as_timeout_prompt();
         for target in self.data.values_mut() {
@@ -701,19 +686,15 @@ impl HostsGroup {
     /// group never depends on the report crate.
     ///
     /// Fans out concurrently via [`run_fanout`](super::actions::run_fanout)
-    /// (upstream's `run_parallel`): parallel hosts run their repo change
-    /// together, serial hosts one at a time behind the Enter barrier — so a host
-    /// the operator marked [`Serial`](mtui_types::enums::ExecutionMode::Serial)
-    /// never has its `zypper` repo change run concurrently with another host's.
-    /// The per-host `last*` state is left in place so a caller can inspect
-    /// `lasterr()` after the fan-out (upstream's prepare abort-on-`lasterr`).
+    /// (upstream's `run_parallel`): every host runs its repo change in
+    /// parallel. The per-host `last*` state is left in place so a caller can
+    /// inspect `lasterr()` after the fan-out (upstream's prepare
+    /// abort-on-`lasterr`).
     pub async fn fanout_set_repo(&mut self, operation: RepoOp, report: &dyn SetRepo) {
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("set_repo"),
             |_t| true,
@@ -753,12 +734,10 @@ impl HostsGroup {
     /// Ports upstream `HostsGroup.add_history`: fans [`Target::add_history`] out
     /// across the group (enabled hosts only, best-effort per host).
     pub async fn add_history(&mut self, fields: &[String]) {
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("add_history"),
             |_t| true,
@@ -774,16 +753,13 @@ impl HostsGroup {
     ///
     /// The I/O phase shared by [`package_check`](Self::package_check) and the
     /// downgrade verdict: fans [`Target::query_versions`] out through the shared
-    /// [`run_fanout`](super::actions::run_fanout) primitive (parallel hosts
-    /// together, serial hosts one at a time behind the Enter barrier), so the
-    /// pure per-package bookkeeping that follows never blocks on serial I/O.
+    /// [`run_fanout`](super::actions::run_fanout) primitive in parallel, so the
+    /// pure per-package bookkeeping that follows never blocks on I/O.
     pub async fn query_versions(&mut self) {
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("query_versions"),
             |_t| true,
@@ -793,8 +769,8 @@ impl HostsGroup {
     }
 
     pub async fn package_check(&mut self, post: bool) {
-        // Phase 1 (I/O): query every host's installed versions concurrently
-        // (serial hosts one at a time), through the shared fan-out primitive.
+        // Phase 1 (I/O): query every host's installed versions concurrently,
+        // through the shared fan-out primitive.
         self.query_versions().await;
 
         // Phase 2 (pure): fold each host's queried versions into its packages'
@@ -880,18 +856,16 @@ impl HostsGroup {
     pub async fn update_lock(&mut self) -> Result<()> {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        // Probe-and-acquire concurrently across the group (serial hosts one at a
-        // time) via the shared fan-out. Each host's probe+acquire is
-        // self-contained and order-independent; a foreign-locked host flips the
-        // shared `skipped` flag. The per-host lock wire semantics are unchanged
-        // — only the fan-out is now concurrent (Contract preserved).
+        // Probe-and-acquire concurrently across the group via the shared
+        // fan-out. Each host's probe+acquire is self-contained and
+        // order-independent; a foreign-locked host flips the shared `skipped`
+        // flag. The per-host lock wire semantics are unchanged — only the
+        // fan-out is now concurrent (Contract preserved).
         let skipped = AtomicBool::new(false);
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("update_lock"),
             |_t| true,
@@ -1029,8 +1003,7 @@ impl HostsGroup {
             return BTreeMap::new();
         }
         tracing::info!(hosts = %names.join(", "), "Rebooting");
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
 
         // Phase 1: record boot ids before rebooting (concurrently), so we can
         // confirm a fresh boot afterwards.
@@ -1038,7 +1011,6 @@ impl HostsGroup {
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("boot_id"),
             &select,
@@ -1060,7 +1032,6 @@ impl HostsGroup {
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("reboot"),
             &select,
@@ -1081,7 +1052,6 @@ impl HostsGroup {
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("reconnect"),
             &select,
@@ -1112,7 +1082,6 @@ impl HostsGroup {
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("verify_reboot"),
             &select,
@@ -1164,17 +1133,15 @@ impl HostsGroup {
             hosts = %names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
             "Rebooting transactional hosts"
         );
-        let (is_repl, prompter, max_parallel) =
-            (self.is_repl, self.prompter.clone(), self.max_parallel);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
 
         // Fire the reboot on every named host first (it drops the connection),
         // then reconnect each once it is back up — both phases fan out
-        // concurrently (serial hosts one at a time) via the shared primitive.
-        // `should_run` restricts the fan-out to the named (transactional) hosts.
+        // concurrently via the shared primitive. `should_run` restricts the
+        // fan-out to the named (transactional) hosts.
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("reboot"),
             |t| reboot.contains_key(t.hostname()),
@@ -1187,7 +1154,6 @@ impl HostsGroup {
         actions::run_fanout(
             &mut self.data,
             is_repl,
-            prompter.as_ref(),
             max_parallel,
             Some("reconnect"),
             |t| reboot.contains_key(t.hostname()),
@@ -1328,7 +1294,7 @@ impl OperationGroup for HostsGroup {
 
 #[cfg(test)]
 mod tests {
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
     use super::*;
@@ -1339,12 +1305,12 @@ mod tests {
         MockConnection::new(hostname).with_default(CommandLog::new("", "ok", "", 0, 0))
     }
 
-    fn tgt(hostname: &str, state: TargetState, mode: ExecutionMode) -> Target {
-        Target::with_connection(hostname, state, mode, Box::new(echo(hostname)))
+    fn tgt(hostname: &str, state: TargetState) -> Target {
+        Target::with_connection(hostname, state, Box::new(echo(hostname)))
     }
 
     fn enabled(hostname: &str) -> Target {
-        tgt(hostname, TargetState::Enabled, ExecutionMode::Parallel)
+        tgt(hostname, TargetState::Enabled)
     }
 
     // --- construction / accessors ------------------------------------------
@@ -1393,12 +1359,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, m)| {
-                Target::with_connection(
-                    format!("h{i:02}"),
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m),
-                )
+                Target::with_connection(format!("h{i:02}"), TargetState::Enabled, Box::new(m))
             })
             .collect();
         let mut g = HostsGroup::new(targets, false);
@@ -1467,7 +1428,7 @@ mod tests {
     fn add_same_hostname_replaces_last_writer_wins() {
         let mut g = HostsGroup::new(vec![enabled("h1")], true);
         // A second target with the same hostname but disabled replaces the first.
-        g.add(tgt("h1", TargetState::Disabled, ExecutionMode::Parallel));
+        g.add(tgt("h1", TargetState::Disabled));
         assert_eq!(g.len(), 1);
         assert_eq!(g.get("h1").unwrap().state(), TargetState::Disabled);
     }
@@ -1501,13 +1462,7 @@ mod tests {
 
     #[test]
     fn select_none_enabled_drops_disabled() {
-        let g = HostsGroup::new(
-            vec![
-                enabled("h1"),
-                tgt("h2", TargetState::Disabled, ExecutionMode::Parallel),
-            ],
-            true,
-        );
+        let g = HostsGroup::new(vec![enabled("h1"), tgt("h2", TargetState::Disabled)], true);
         let sel = g.select(None, true).unwrap();
         assert_eq!(sel.names(), vec!["h1".to_owned()]);
     }
@@ -1523,13 +1478,7 @@ mod tests {
 
     #[test]
     fn select_by_name_with_enabled_filters_disabled() {
-        let g = HostsGroup::new(
-            vec![
-                enabled("h1"),
-                tgt("h2", TargetState::Disabled, ExecutionMode::Parallel),
-            ],
-            true,
-        );
+        let g = HostsGroup::new(vec![enabled("h1"), tgt("h2", TargetState::Disabled)], true);
         let sel = g
             .select(Some(&["h1".to_owned(), "h2".to_owned()]), true)
             .unwrap();
@@ -1575,13 +1524,7 @@ mod tests {
     fn select_split_named_disabled_lands_in_remainder() {
         // A named host filtered out by `enabled` is preserved in the remainder,
         // not dropped — this is the whole point of the split.
-        let g = HostsGroup::new(
-            vec![
-                enabled("h1"),
-                tgt("h2", TargetState::Disabled, ExecutionMode::Parallel),
-            ],
-            true,
-        );
+        let g = HostsGroup::new(vec![enabled("h1"), tgt("h2", TargetState::Disabled)], true);
         let (sel, rem) = g
             .select_split(Some(&["h1".to_owned(), "h2".to_owned()]), true)
             .unwrap();
@@ -1613,10 +1556,7 @@ mod tests {
     fn merge_collision_is_last_writer_wins() {
         let mut g = HostsGroup::new(vec![enabled("h1")], true);
         // `other`'s h1 is disabled and must replace `self`'s enabled h1.
-        let other = HostsGroup::new(
-            vec![tgt("h1", TargetState::Disabled, ExecutionMode::Parallel)],
-            true,
-        );
+        let other = HostsGroup::new(vec![tgt("h1", TargetState::Disabled)], true);
         g.merge(other);
         assert_eq!(g.len(), 1);
         assert_eq!(g.get("h1").unwrap().state(), TargetState::Disabled);
@@ -1630,18 +1570,8 @@ mod tests {
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h1",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m1),
-                ),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(m2),
-                ),
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
             ],
             false,
         );
@@ -1658,18 +1588,8 @@ mod tests {
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h1",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m1),
-                ),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(m2),
-                ),
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
             ],
             false,
         );
@@ -1696,18 +1616,8 @@ mod tests {
         let bad = echo("h2").with_failing_close();
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h1",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(ok),
-                ),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(bad),
-                ),
+                Target::with_connection("h1", TargetState::Enabled, Box::new(ok)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(bad)),
             ],
             false,
         );
@@ -1738,7 +1648,6 @@ mod tests {
             vec![Target::with_connection(
                 "h1",
                 TargetState::Enabled,
-                ExecutionMode::Parallel,
                 Box::new(m1),
             )],
             false,
@@ -1782,18 +1691,8 @@ mod tests {
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h1",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m1),
-                ),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m2),
-                ),
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
             ],
             false,
         );
@@ -1827,18 +1726,8 @@ mod tests {
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h1",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m1),
-                ),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m2),
-                ),
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
             ],
             false,
         );
@@ -1864,7 +1753,6 @@ mod tests {
             vec![Target::with_connection(
                 "h1",
                 TargetState::Enabled,
-                ExecutionMode::Parallel,
                 Box::new(m1),
             )],
             false,
@@ -1903,7 +1791,6 @@ mod tests {
             vec![Target::with_connection(
                 "h1",
                 TargetState::Enabled,
-                ExecutionMode::Parallel,
                 Box::new(m1),
             )],
             false,
@@ -1931,7 +1818,6 @@ mod tests {
             vec![Target::with_connection(
                 "h1",
                 TargetState::Enabled,
-                ExecutionMode::Parallel,
                 Box::new(m1),
             )],
             false,
@@ -1959,7 +1845,6 @@ mod tests {
             vec![Target::with_connection(
                 "h1",
                 TargetState::Enabled,
-                ExecutionMode::Parallel,
                 Box::new(m1),
             )],
             false,
@@ -1983,18 +1868,8 @@ mod tests {
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h1",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m1),
-                ),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(m2),
-                ),
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
             ],
             false,
         );
@@ -2023,7 +1898,6 @@ mod tests {
             vec![Target::with_connection(
                 "h1",
                 TargetState::Enabled,
-                ExecutionMode::Parallel,
                 Box::new(m1),
             )],
             false,
@@ -2054,12 +1928,7 @@ mod tests {
         let mut g = HostsGroup::new(
             vec![
                 enabled("h1"),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(foreign),
-                ),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(foreign)),
             ],
             false,
         );
@@ -2081,12 +1950,7 @@ mod tests {
         let mut g = HostsGroup::new(
             vec![
                 enabled("h1"),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(failing),
-                ),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(failing)),
             ],
             false,
         );
@@ -2129,18 +1993,8 @@ mod tests {
         let mut g = HostsGroup::new(
             vec![
                 enabled("h1"),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(foreign),
-                ),
-                Target::with_connection(
-                    "h3",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(failing),
-                ),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(foreign)),
+                Target::with_connection("h3", TargetState::Enabled, Box::new(failing)),
             ],
             false,
         );
@@ -2165,12 +2019,7 @@ mod tests {
         let mut g = HostsGroup::new(
             vec![
                 enabled("h1"),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(foreign),
-                ),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(foreign)),
                 enabled("h3"),
             ],
             false,
@@ -2206,12 +2055,7 @@ mod tests {
         let mut g = HostsGroup::new(
             vec![
                 enabled("h1"),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(foreign),
-                ),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(foreign)),
             ],
             false,
         );
@@ -2235,18 +2079,8 @@ mod tests {
         let (h1, h2) = (c1.clone(), c2.clone());
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h1",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(c1),
-                ),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(c2),
-                ),
+                Target::with_connection("h1", TargetState::Enabled, Box::new(c1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(c2)),
             ],
             false,
         );
@@ -2272,18 +2106,8 @@ mod tests {
         let (h1, h2) = (c1.clone(), c2.clone());
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h1",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(c1),
-                ),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(c2),
-                ),
+                Target::with_connection("h1", TargetState::Enabled, Box::new(c1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(c2)),
             ],
             false,
         );
@@ -2304,12 +2128,7 @@ mod tests {
         let c2 = echo("h2").with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
         let mut g = HostsGroup::new(
             vec![
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(c2),
-                ),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(c2)),
                 enabled("h1"),
             ],
             false,
@@ -2342,7 +2161,6 @@ mod tests {
             vec![Target::with_connection(
                 "h1",
                 TargetState::Enabled,
-                ExecutionMode::Parallel,
                 Box::new(c1),
             )],
             false,
@@ -2378,12 +2196,7 @@ mod tests {
         let mut g = HostsGroup::new(
             vec![
                 enabled("h1"),
-                Target::with_connection(
-                    "h2",
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                    Box::new(foreign),
-                ),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(foreign)),
             ],
             false,
         );
@@ -2432,12 +2245,7 @@ mod tests {
     fn host_with_rpm_output(hostname: &str, stdout: &str) -> Target {
         let conn =
             MockConnection::new(hostname).with_default(CommandLog::new("", stdout, "", 0, 0));
-        Target::with_connection(
-            hostname,
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        )
+        Target::with_connection(hostname, TargetState::Enabled, Box::new(conn))
     }
 
     #[tokio::test]
@@ -2477,94 +2285,5 @@ mod tests {
 
         g.package_check(false).await;
         assert!(g.get("h1").unwrap().packages()[0].before().is_none());
-    }
-
-    // --- ExecutionMode::Serial is honoured by every fan-out op -------------
-
-    /// A recording [`Prompter`] appending every serial-barrier prompt text to a
-    /// shared vec (returns Enter). Reaching the barrier proves an op routed a
-    /// serial host through the shared [`run_fanout`] serial path.
-    fn recording_prompter(seen: Arc<std::sync::Mutex<Vec<String>>>) -> crate::Prompter {
-        crate::Prompter::new(Arc::new(move |text: String| {
-            let seen = Arc::clone(&seen);
-            Box::pin(async move {
-                seen.lock().unwrap().push(text);
-                Ok(String::new())
-            })
-                as std::pin::Pin<
-                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
-                >
-        }))
-    }
-
-    /// Builds an interactive group with one parallel + one serial host, wiring a
-    /// recording prompter so the serial barrier is observable.
-    fn serial_barrier_group(seen: Arc<std::sync::Mutex<Vec<String>>>) -> HostsGroup {
-        let mut g = HostsGroup::new(
-            vec![
-                enabled("par"),
-                tgt("ser", TargetState::Enabled, ExecutionMode::Serial),
-            ],
-            true,
-        );
-        g.set_prompter(recording_prompter(seen));
-        g
-    }
-
-    #[tokio::test]
-    async fn fanout_set_repo_honours_serial_barrier() {
-        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut g = serial_barrier_group(Arc::clone(&seen));
-        let report = RecordingSetRepo::default();
-
-        g.fanout_set_repo(RepoOp::Add, &report).await;
-
-        // The serial host is prompted before its repo change; the parallel host
-        // is not. Both are still visited.
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec!["press Enter key to proceed with ser ".to_owned()]
-        );
-        let hosts: Vec<String> = report
-            .seen
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(h, _)| h.clone())
-            .collect();
-        assert!(hosts.contains(&"par".to_owned()));
-        assert!(hosts.contains(&"ser".to_owned()));
-    }
-
-    #[tokio::test]
-    async fn lock_honours_serial_barrier() {
-        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut g = serial_barrier_group(Arc::clone(&seen));
-
-        g.lock("session").await;
-
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec!["press Enter key to proceed with ser ".to_owned()]
-        );
-        assert!(g.get_mut("par").unwrap().is_locked().await.unwrap());
-        assert!(g.get_mut("ser").unwrap().is_locked().await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn close_honours_serial_barrier() {
-        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut g = serial_barrier_group(Arc::clone(&seen));
-
-        let outcomes = g.close(None).await;
-        assert!(outcomes.values().all(std::result::Result::is_ok));
-
-        assert_eq!(
-            *seen.lock().unwrap(),
-            vec!["press Enter key to proceed with ser ".to_owned()]
-        );
     }
 }

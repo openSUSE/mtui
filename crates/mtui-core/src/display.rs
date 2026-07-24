@@ -24,7 +24,7 @@
 use std::io::{IsTerminal, Write};
 
 use chrono::DateTime;
-use mtui_types::{ExecutionMode, RPMVersion, System, SystemProduct, TargetState};
+use mtui_types::{RPMVersion, System, SystemProduct, TargetState};
 use owo_colors::OwoColorize;
 
 /// One host and its resolved [`System`], as passed to
@@ -309,7 +309,6 @@ impl CommandPromptDisplay {
         system: &System,
         transactional: bool,
         state: TargetState,
-        mode: ExecutionMode,
     ) {
         let state_label = match state {
             TargetState::Enabled => Self::green(self, "Enabled"),
@@ -322,7 +321,7 @@ impl CommandPromptDisplay {
         };
         let sys = system.to_string();
         self.println(&format!(
-            "{hostname:<20} ({sys:<28}): {state_label:<8} - {trn:<15} - ({mode})"
+            "{hostname:<20} ({sys:<28}): {state_label:<8} - {trn:<15}"
         ));
     }
 
@@ -666,7 +665,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::{Arc, Mutex};
 
-    use mtui_types::{ExecutionMode, RPMVersion, System, SystemProduct, TargetState};
+    use mtui_types::{RPMVersion, System, SystemProduct, TargetState};
 
     use super::*;
 
@@ -824,34 +823,20 @@ mod tests {
     #[test]
     fn list_host_shows_state_label() {
         let (mut d, buf) = buffered(ColorMode::Never);
-        d.list_host(
-            "test_host",
-            &system("SLES"),
-            false,
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
+        d.list_host("test_host", &system("SLES"), false, TargetState::Enabled);
         let out = rendered(&buf);
         assert!(out.contains("test_host"));
         assert!(out.contains("Enabled"));
         assert!(out.contains("standard"));
-        assert!(out.contains("(parallel)"));
     }
 
     #[test]
     fn list_host_transactional_and_disabled() {
         let (mut d, buf) = buffered(ColorMode::Never);
-        d.list_host(
-            "h",
-            &system("SLES"),
-            true,
-            TargetState::Disabled,
-            ExecutionMode::Serial,
-        );
+        d.list_host("h", &system("SLES"), true, TargetState::Disabled);
         let out = rendered(&buf);
         assert!(out.contains("Disabled"));
         assert!(out.contains("transactional"));
-        assert!(out.contains("(serial)"));
     }
 
     #[test]

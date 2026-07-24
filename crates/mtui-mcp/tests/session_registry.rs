@@ -30,7 +30,7 @@ use mtui_hosts::{HostsGroup, MockConnection, Target};
 use mtui_mcp::{McpSession, SessionRegistry};
 use mtui_testreport::{ObsReport, TestReport};
 use mtui_types::RequestReviewID;
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use tokio_util::sync::CancellationToken;
 
 const RRID_A: &str = "SUSE:Maintenance:1:1";
@@ -51,12 +51,8 @@ fn registry(cap: usize, idle_secs: u64) -> SessionRegistry {
 /// a shared handle to the mock so the test can observe `is_closed()` after a sweep.
 async fn seed_host(session: &Arc<McpSession>) -> MockConnection {
     let mock = MockConnection::new("swept-host");
-    let target = Target::with_connection(
-        "swept-host",
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(mock.clone()),
-    );
+    let target =
+        Target::with_connection("swept-host", TargetState::Enabled, Box::new(mock.clone()));
     let mut guard = session.session().lock().await;
     let mut report = ObsReport::new(guard.config.clone());
     report.base_mut().rrid = Some(RequestReviewID::parse(RRID_A).unwrap());

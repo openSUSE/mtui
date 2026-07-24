@@ -30,6 +30,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   MCP tool it synthesises). This is an intentional deviation from upstream
   mtui: hosts now support only `enabled`/`disabled`. A `dryrun` value is
   rejected as an invalid state, not silently remapped.
+- The `serial`/`parallel` execution modes have been dropped from
+  `set_host_state` (and the MCP tool it synthesises). This is an intentional
+  deviation from upstream mtui: every host now runs in the parallel batch, and
+  the serial-barrier "press Enter key to proceed with `<host>`" prompt no
+  longer occurs. `list_hosts` no longer prints a `(parallel)`/`(serial)`
+  suffix. A `serial` or `parallel` value is rejected as an invalid state, not
+  silently remapped.
 
 ### Fixed
 

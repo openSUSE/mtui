@@ -2,26 +2,24 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 
 use super::support::{add_hosts_arg, select_names};
 use crate::command::Command;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// The four `state` choices upstream accepts.
-const STATES: [&str; 4] = ["parallel", "serial", "disabled", "enabled"];
+/// The two `state` choices this command accepts.
+const STATES: [&str; 2] = ["disabled", "enabled"];
 
-/// Sets the state and execution mode of a host.
+/// Sets the state of a host.
 ///
 /// Ports upstream `mtui.commands.hoststate.HostState`. A host can be:
 /// * `enabled` — runs all issued commands,
-/// * `disabled` — runs nothing,
+/// * `disabled` — runs nothing.
 ///
-/// and its execution mode either `parallel` (default) or `serial`. The
-/// `serial`/`parallel` choices set the mode; the others set the state. Selection
-/// acts on named hosts (or all, disabled included) exactly like upstream's
-/// `parse_hosts(enabled=False)`.
+/// Selection acts on named hosts (or all, disabled included) exactly like
+/// upstream's `parse_hosts(enabled=False)`.
 pub struct HostState;
 
 #[async_trait]
@@ -31,7 +29,7 @@ impl Command for HostState {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Sets the state and execution mode of a host.")
+        Some("Sets the state of a host.")
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -39,7 +37,7 @@ impl Command for HostState {
             Arg::new("state")
                 .required(true)
                 .value_parser(clap::builder::PossibleValuesParser::new(STATES))
-                .help("enabled | disabled | parallel | serial"),
+                .help("enabled | disabled"),
         )
     }
 
@@ -69,8 +67,6 @@ impl Command for HostState {
                 continue;
             };
             match state.as_str() {
-                "serial" => t.set_mode(ExecutionMode::Serial),
-                "parallel" => t.set_mode(ExecutionMode::Parallel),
                 "enabled" => t.set_state(TargetState::Enabled),
                 "disabled" => t.set_state(TargetState::Disabled),
                 other => return Err(CommandError::Other(format!("unknown state: {other}"))),
@@ -111,17 +107,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serial_sets_mode_not_state() {
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        let args = matches(&HostState, &["serial"]);
-        HostState.call(&mut session, &args).await.unwrap();
-        let t = session.targets().get("h1").unwrap();
-        assert_eq!(t.mode(), ExecutionMode::Serial);
-        // State untouched.
-        assert_eq!(t.state(), TargetState::Enabled);
-    }
-
-    #[tokio::test]
     async fn applies_even_to_disabled_hosts() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         // Disable, then re-enable via the command — proves enabled=false.
@@ -158,5 +143,14 @@ mod tests {
         let base = clap::Command::new(HostState.name()).no_binary_name(true);
         let parsed = HostState.configure(base).try_get_matches_from(["dryrun"]);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn serial_and_parallel_rejected_by_parser() {
+        for choice in ["serial", "parallel"] {
+            let base = clap::Command::new(HostState.name()).no_binary_name(true);
+            let parsed = HostState.configure(base).try_get_matches_from([choice]);
+            assert!(parsed.is_err(), "{choice} should be rejected");
+        }
     }
 }

@@ -11,7 +11,7 @@
 //! nested separator.
 
 use mtui_hosts::{MockConnection, Target};
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 
 const HOST: &str = "refhost1";
 const REMOTE_DIR: &str = "/var/log/updates";
@@ -33,12 +33,7 @@ async fn run_folder_download(entries: &[&str]) -> MockConnection {
     }
     let handle = conn.clone();
 
-    let mut target = Target::with_connection(
-        HOST,
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(conn),
-    );
+    let mut target = Target::with_connection(HOST, TargetState::Enabled, Box::new(conn));
     // Trailing `/` selects the folder branch; `Target::sftp_get` appends `/` to
     // `local` before calling `sftp_get_folder`.
     target

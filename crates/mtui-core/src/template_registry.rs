@@ -348,7 +348,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use mtui_hosts::{MockConnection, Owner, Target};
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
     use super::*;
@@ -375,12 +375,7 @@ mod tests {
     /// Builds a target whose mock connection is scripted with `build`.
     fn target_with(host: &str, build: impl FnOnce(MockConnection) -> MockConnection) -> Target {
         let conn = build(MockConnection::new(host));
-        Target::with_connection(
-            host,
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        )
+        Target::with_connection(host, TargetState::Enabled, Box::new(conn))
     }
 
     fn healthy(host: &str) -> Target {

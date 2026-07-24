@@ -70,7 +70,7 @@ pub use spinner::{Sink, SpinnerGuard, Suspend, TtySpinner, set_test_sink, spinne
 use std::path::{Path, PathBuf};
 
 use mtui_config::Config;
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use mtui_types::hostlog::{CommandLog, HostLog};
 use mtui_types::package::Package;
 use mtui_types::system::{System, SystemProduct};
@@ -102,9 +102,6 @@ pub struct Target {
     port: String,
     /// Per-host execution state.
     state: TargetState,
-    /// Whether this host runs in parallel with its group or under a serial
-    /// barrier (consumed by the P2.5 fan-out).
-    mode: ExecutionMode,
     /// Connect/command timeout, defaulted from
     /// [`Config::connection_timeout`](mtui_config::Config).
     timeout: CommandTimeout,
@@ -210,12 +207,7 @@ impl Target {
     /// and host-key policy are taken from `config`. Call
     /// [`connect`](Target::connect) to establish the transport.
     #[must_use]
-    pub fn new(
-        config: &Config,
-        hostname: impl Into<String>,
-        state: TargetState,
-        mode: ExecutionMode,
-    ) -> Self {
+    pub fn new(config: &Config, hostname: impl Into<String>, state: TargetState) -> Self {
         let hostname = hostname.into();
         let (host, port) = split_host_port(&hostname);
         Self {
@@ -223,7 +215,6 @@ impl Target {
             host,
             port,
             state,
-            mode,
             timeout: CommandTimeout::from_secs(config.connection_timeout),
             policy: HostKeyPolicy::from_config(&config.ssh_strict_host_key_checking),
             out: HostLog::new(),
@@ -252,7 +243,6 @@ impl Target {
     pub fn with_connection(
         hostname: impl Into<String>,
         state: TargetState,
-        mode: ExecutionMode,
         connection: Box<dyn Connection>,
     ) -> Self {
         let hostname = hostname.into();
@@ -277,7 +267,6 @@ impl Target {
             host,
             port,
             state,
-            mode,
             timeout: CommandTimeout::default(),
             policy: HostKeyPolicy::default(),
             out: HostLog::new(),
@@ -311,22 +300,6 @@ impl Target {
     /// Sets the per-host execution state (the REPL `hoststate` command).
     pub fn set_state(&mut self, state: TargetState) {
         self.state = state;
-    }
-
-    /// The execution mode (parallel vs serial barrier) for group fan-out.
-    #[must_use]
-    pub const fn mode(&self) -> ExecutionMode {
-        self.mode
-    }
-
-    /// Sets the per-host execution mode (the REPL `set_host_state`
-    /// `serial`/`parallel` variants).
-    ///
-    /// The mode counterpart to [`set_state`](Self::set_state): upstream
-    /// `HostState` sets `target.mode` for the `serial`/`parallel` choices and
-    /// `target.state` for the enabled/disabled choices.
-    pub fn set_mode(&mut self, mode: ExecutionMode) {
-        self.mode = mode;
     }
 
     /// Read-only access to the command log.
@@ -1305,7 +1278,6 @@ mod tests {
         Target::with_connection(
             "test-host.example.com",
             TargetState::Enabled,
-            ExecutionMode::Parallel,
             Box::new(conn),
         )
     }
@@ -1314,29 +1286,18 @@ mod tests {
 
     #[test]
     fn new_uses_upstream_defaults() {
-        let t = Target::new(
-            &cfg(),
-            "test-host.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
+        let t = Target::new(&cfg(), "test-host.example.com", TargetState::Enabled);
         assert_eq!(t.hostname(), "test-host.example.com");
         assert_eq!(t.host, "test-host.example.com");
         assert_eq!(t.port, "");
         assert_eq!(t.state(), TargetState::Enabled);
-        assert_eq!(t.mode(), ExecutionMode::Parallel);
         assert!(t.connection.is_none());
         assert!(t.out().is_empty());
     }
 
     #[test]
     fn new_splits_host_and_port() {
-        let t = Target::new(
-            &cfg(),
-            "test-host.example.com:2222",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
+        let t = Target::new(&cfg(), "test-host.example.com:2222", TargetState::Enabled);
         assert_eq!(t.host, "test-host.example.com");
         assert_eq!(t.port, "2222");
         assert_eq!(t.hostname(), "test-host.example.com:2222");
@@ -1346,23 +1307,13 @@ mod tests {
     fn timeout_defaults_from_config() {
         let mut c = cfg();
         c.connection_timeout = 600;
-        let t = Target::new(
-            &c,
-            "h.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
+        let t = Target::new(&c, "h.example.com", TargetState::Enabled);
         assert_eq!(t.timeout, CommandTimeout::from_secs(600));
     }
 
     #[test]
     fn set_timeout_updates_reported_seconds() {
-        let mut t = Target::new(
-            &cfg(),
-            "h.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
+        let mut t = Target::new(&cfg(), "h.example.com", TargetState::Enabled);
         t.set_timeout(120);
         assert_eq!(t.timeout_secs(), 120);
         // `0` disables the timeout (upstream semantics): zero duration.
@@ -1372,28 +1323,9 @@ mod tests {
 
     #[test]
     fn set_state_switches_gate() {
-        let mut t = Target::new(
-            &cfg(),
-            "h.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
+        let mut t = Target::new(&cfg(), "h.example.com", TargetState::Enabled);
         t.set_state(TargetState::Disabled);
         assert_eq!(t.state(), TargetState::Disabled);
-    }
-
-    #[test]
-    fn set_mode_switches_execution_mode() {
-        let mut t = Target::new(
-            &cfg(),
-            "h.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
-        t.set_mode(ExecutionMode::Serial);
-        assert_eq!(t.mode(), ExecutionMode::Serial);
-        t.set_mode(ExecutionMode::Parallel);
-        assert_eq!(t.mode(), ExecutionMode::Parallel);
     }
 
     #[tokio::test]
@@ -1416,12 +1348,7 @@ mod tests {
 
     #[tokio::test]
     async fn reload_system_on_unconnected_is_noop() {
-        let mut t = Target::new(
-            &cfg(),
-            "h.example.com",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
+        let mut t = Target::new(&cfg(), "h.example.com", TargetState::Enabled);
         t.reload_system().await;
         // No connection -> system untouched (still the unknown placeholder).
         assert_eq!(t.system().get_base().name, "unknown");
@@ -1448,12 +1375,7 @@ mod tests {
     async fn run_disabled_does_not_execute() {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Disabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
 
         t.run("some command").await;
 
@@ -1479,7 +1401,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_on_unconnected_target_records_minus_one() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
 
         t.run("echo hi").await;
 
@@ -1490,7 +1412,7 @@ mod tests {
 
     #[test]
     fn last_methods_empty_log() {
-        let t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let t = Target::new(&cfg(), "h1", TargetState::Enabled);
         assert_eq!(t.lastin(), "");
         assert_eq!(t.lastout(), "");
         assert_eq!(t.lasterr(), "");
@@ -1571,7 +1493,7 @@ mod tests {
 
     #[tokio::test]
     async fn sftp_put_unconnected_records_failure() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
 
         t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
 
@@ -1584,12 +1506,7 @@ mod tests {
     #[tokio::test]
     async fn sftp_put_disabled_leaves_upload_unattempted() {
         let conn = MockConnection::new("h1");
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Disabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
 
         t.sftp_put(Path::new("/local"), Path::new("/remote")).await;
 
@@ -1669,7 +1586,7 @@ mod tests {
 
     #[tokio::test]
     async fn sftp_get_unconnected_records_failure() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
 
         t.sftp_get("/remote/file", Path::new("/local/file")).await;
 
@@ -1682,12 +1599,7 @@ mod tests {
     #[tokio::test]
     async fn sftp_get_disabled_leaves_download_unattempted() {
         let conn = MockConnection::new("h1");
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Disabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
 
         t.sftp_get("/remote/file", Path::new("/local")).await;
 
@@ -1886,7 +1798,7 @@ mod tests {
     #[tokio::test]
     async fn check_stale_lock_is_noop_when_unconnected() {
         // No connection ⇒ no lock object built ⇒ the check returns early.
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         t.check_stale_lock().await;
     }
 
@@ -1918,7 +1830,7 @@ mod tests {
 
     #[tokio::test]
     async fn boot_id_empty_when_unconnected() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         assert_eq!(t.boot_id().await, "");
     }
 
@@ -1933,7 +1845,7 @@ mod tests {
 
     #[tokio::test]
     async fn reboot_on_unconnected_is_noop() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         // Must not panic; nothing to assert beyond the no-op completing.
         t.reboot("systemctl reboot").await;
     }
@@ -1971,7 +1883,7 @@ mod tests {
 
     #[tokio::test]
     async fn close_on_unconnected_is_noop() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         // Must not panic; no live connection to close, no action dispatched.
         t.close(Some("reboot")).await.expect("close ok");
     }
@@ -1990,7 +1902,7 @@ mod tests {
     async fn reboot_retries_reads_from_config() {
         let mut cfg = Config::default();
         cfg.reboot_retries = 3;
-        let t = Target::new(&cfg, "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let t = Target::new(&cfg, "h1", TargetState::Enabled);
         assert_eq!(t.reboot_retries(), 3);
     }
 
@@ -2003,7 +1915,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconnect_unconnected_is_ok_noop() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         t.reconnect(0, false).await.expect("noop reconnect ok");
     }
 
@@ -2026,7 +1938,7 @@ mod tests {
 
     #[tokio::test]
     async fn is_locked_false_when_unconnected() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         assert!(!t.is_locked().await.expect("is_locked ok"));
     }
 
@@ -2041,7 +1953,7 @@ mod tests {
 
     #[tokio::test]
     async fn lock_unconnected_is_ok_noop() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         t.lock("comment").await.expect("noop lock ok");
     }
 
@@ -2087,7 +1999,7 @@ mod tests {
 
     #[tokio::test]
     async fn lock_status_unconnected_is_unlocked() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         assert!(!t.lock_status(false).await.is_locked);
         assert!(!t.lock_status(true).await.is_locked);
     }
@@ -2151,12 +2063,7 @@ mod tests {
             .with_shell_output(b"welcome\n".to_vec())
             .with_shell_output(b"$ ".to_vec());
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
 
         let mut ch = t.shell(120, 40).await.expect("enabled spawns a shell");
 
@@ -2185,12 +2092,7 @@ mod tests {
     async fn shell_disabled_does_not_spawn() {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Disabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
 
         assert!(t.shell(80, 24).await.is_none(), "disabled must not spawn");
         assert!(handle.shell_spawns().is_empty());
@@ -2199,7 +2101,7 @@ mod tests {
     #[cfg(feature = "shell")]
     #[tokio::test]
     async fn shell_on_unconnected_target_returns_none() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         assert!(
             t.shell(80, 24).await.is_none(),
             "no connection -> no shell, logged not panicked"
@@ -2246,7 +2148,7 @@ mod tests {
 
     #[tokio::test]
     async fn pool_unlock_noop_when_not_connected() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         // No pool lock built yet (unconnected): must not panic or fail.
         t.pool_unlock(false).await;
     }
@@ -2278,14 +2180,14 @@ mod tests {
 
     #[test]
     fn set_rrid_records_ownership_identity() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         t.set_rrid("SUSE:Maintenance:1:2");
         assert_eq!(t.rrid, "SUSE:Maintenance:1:2");
     }
 
     #[tokio::test]
     async fn pool_claim_noop_false_when_not_connected() {
-        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         // No pool lock built yet (unconnected): claim returns false, no panic.
         assert!(!t.pool_claim("mtui pool RRID [RRID]").await.unwrap());
     }
@@ -2417,12 +2319,7 @@ mod tests {
     async fn add_history_skips_disabled_hosts() {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Disabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
 
         t.add_history(&["downgrade".to_owned(), "x".to_owned()])
             .await;

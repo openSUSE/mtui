@@ -1,5 +1,6 @@
 ---
 source: crates/mtui-mcp/tests/slim_profile.rs
+assertion_line: 40
 expression: pretty
 ---
 [
@@ -1298,10 +1299,8 @@ expression: pretty
           "type": "array"
         },
         "state": {
-          "description": "enabled | disabled | parallel | serial",
+          "description": "enabled | disabled",
           "enum": [
-            "parallel",
-            "serial",
             "disabled",
             "enabled"
           ],

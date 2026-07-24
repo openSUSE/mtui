@@ -11,7 +11,7 @@ use mtui_config::Config;
 use mtui_hosts::{HostsGroup, MockConnection, Target};
 use mtui_testreport::{HashCheck, TestReport, TestReportBase};
 use mtui_types::SystemProduct;
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
 
 /// A minimal [`TestReport`] double with a settable RRID and host group.
@@ -40,12 +40,7 @@ impl FakeReport {
         let targets: Vec<Target> = hosts
             .iter()
             .map(|h| {
-                Target::with_connection(
-                    *h,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(MockConnection::new(*h)),
-                )
+                Target::with_connection(*h, TargetState::Enabled, Box::new(MockConnection::new(*h)))
             })
             .collect();
         base.targets = HostsGroup::new(targets, false);
@@ -66,12 +61,7 @@ impl FakeReport {
             .map(|h| {
                 let conn = MockConnection::new(*h)
                     .with_response(command, CommandLog::new(command, stdout, "", 0, 0));
-                Target::with_connection(
-                    *h,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(conn),
-                )
+                Target::with_connection(*h, TargetState::Enabled, Box::new(conn))
             })
             .collect();
         base.targets = HostsGroup::new(targets, false);

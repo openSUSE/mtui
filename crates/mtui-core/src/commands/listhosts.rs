@@ -2,25 +2,25 @@
 
 use async_trait::async_trait;
 use clap::ArgMatches;
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use mtui_types::system::System;
 
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
 use crate::session::Session;
 
-/// Lists all connected hosts with their system, state, and execution mode.
+/// Lists all connected hosts with their system and state.
 ///
 /// Ports upstream `mtui.commands.simplelists.ListHosts`, which calls
 /// `targets.report_self(display.list_host)`. Each host's status tuple
-/// (`hostname, system, transactional, state, mode` — the
+/// (`hostname, system, transactional, state` — the
 /// [`Reporter::self_`](mtui_hosts) fields) is snapshotted first so the report
 /// borrow does not overlap the display's mutable borrow, then rendered through
 /// the display's `list_host` sink.
 pub struct ListHosts;
 
 /// One host's full status tuple, snapshotted for rendering.
-type HostStatus = (String, System, bool, TargetState, ExecutionMode);
+type HostStatus = (String, System, bool, TargetState);
 
 #[async_trait]
 impl Command for ListHosts {
@@ -29,7 +29,7 @@ impl Command for ListHosts {
     }
 
     fn about(&self) -> Option<&'static str> {
-        Some("Lists all connected hosts with their system, state, and execution mode.")
+        Some("Lists all connected hosts with their system and state.")
     }
 
     fn scope(&self) -> Scope {
@@ -46,7 +46,6 @@ impl Command for ListHosts {
                     t.system().clone(),
                     t.transactional(),
                     t.state(),
-                    t.mode(),
                 )
             })
             .collect();
@@ -54,10 +53,10 @@ impl Command for ListHosts {
             session.display.println("No hosts connected.");
             return Ok(());
         }
-        for (name, system, transactional, state, mode) in rows {
+        for (name, system, transactional, state) in rows {
             session
                 .display
-                .list_host(&name, &system, transactional, state, mode);
+                .list_host(&name, &system, transactional, state);
         }
         Ok(())
     }
@@ -111,12 +110,8 @@ mod tests {
             .with_listing("/etc/products.d", ["SLES.prod"])
             .with_link("/etc/products.d/baseproduct", "SLES.prod")
             .with_file("/etc/products.d/SLES.prod", prod.to_vec());
-        let mut target = Target::with_connection(
-            "dove.qam.suse.cz",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut target =
+            Target::with_connection("dove.qam.suse.cz", TargetState::Enabled, Box::new(conn));
         target.connect().await.expect("connect parses the system");
 
         let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![target]);

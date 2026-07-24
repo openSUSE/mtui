@@ -154,7 +154,7 @@ pub(crate) mod testkit {
     use mtui_hosts::{HostsGroup, MockConnection, RepoOp, SetRepo, Target};
     use mtui_testreport::{HashCheck, TestReport, TestReportBase};
     use mtui_types::SystemProduct;
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
     use crate::display::{ColorMode, CommandPromptDisplay};
@@ -320,15 +320,10 @@ pub(crate) mod testkit {
     }
 
     /// Builds a `Target` backed by a mock whose every command returns `stdout`
-    /// with exit code 0 (serial mode keeps output deterministic).
+    /// with exit code 0.
     fn scripted_target(host: &str, stdout: &str) -> Target {
         let conn = MockConnection::new(host).with_default(CommandLog::new("", stdout, "", 0, 0));
-        Target::with_connection(
-            host,
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        )
+        Target::with_connection(host, TargetState::Enabled, Box::new(conn))
     }
 
     /// A session (interactive `false`) whose active report has the named hosts,
@@ -361,12 +356,7 @@ pub(crate) mod testkit {
                 if !ok {
                     conn = conn.with_sftp_put_failure(format!("{name} disk full"));
                 }
-                Target::with_connection(
-                    name,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(conn),
-                )
+                Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
         session_with_targets(rrid, targets)
@@ -406,12 +396,7 @@ pub(crate) mod testkit {
                         ),
                     );
                 }
-                Target::with_connection(
-                    name,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(conn),
-                )
+                Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
         session_with_targets(rrid, targets)
@@ -436,12 +421,7 @@ pub(crate) mod testkit {
                 if !ok {
                     conn = conn.failing_sftp_get();
                 }
-                Target::with_connection(
-                    name,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(conn),
-                )
+                Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
@@ -535,12 +515,7 @@ pub(crate) mod testkit {
                 if !ok {
                     conn = conn.with_exclusive_write_error("/var/lock/mtui.lock");
                 }
-                Target::with_connection(
-                    name,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(conn),
-                )
+                Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
         session_with_targets(rrid, targets)
@@ -564,12 +539,7 @@ pub(crate) mod testkit {
                 } else {
                     CommandLog::new("zypper -n ref", "", "refresh failed", 1, 0)
                 });
-                Target::with_connection(
-                    name,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(conn),
-                )
+                Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
@@ -676,12 +646,7 @@ pub(crate) mod testkit {
 
         let conn = MockConnection::new(host)
             .with_response(command, CommandLog::new(command, stdout, "", 0, 0));
-        let target = Target::with_connection(
-            host,
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        );
+        let target = Target::with_connection(host, TargetState::Enabled, Box::new(conn));
         let mut base = TestReportBase::new(Config::default());
         base.targets = HostsGroup::new(vec![target], false);
         base.rrid = rrid.parse().ok();

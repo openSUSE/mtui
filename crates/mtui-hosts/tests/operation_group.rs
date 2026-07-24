@@ -16,7 +16,7 @@ use mtui_hosts::{
     Check, CheckArgs, Doer, HostError, HostsGroup, InstallOperation, Operation, OperationGroup,
     PlanProvider, Target, UninstallOperation,
 };
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
 use mtui_types::system::{System, SystemProduct};
 
@@ -80,12 +80,7 @@ fn target(
     let conn = mtui_hosts::MockConnection::new(hostname)
         .with_default(CommandLog::new("", "done", "", 0, 1));
     let handle = conn.clone();
-    let mut t = Target::with_connection(
-        hostname,
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(conn),
-    );
+    let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
     let system = System::new(
         SystemProduct::new(base_name, version, "x86_64"),
         BTreeSet::new(),

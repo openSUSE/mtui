@@ -28,7 +28,7 @@ use mtui_hosts::{HostsGroup, MockConnection, Target};
 use mtui_mcp::McpSession;
 use mtui_testreport::{ObsReport, TestReport};
 use mtui_types::RequestReviewID;
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 
 const RRID_A: &str = "SUSE:Maintenance:1:1";
 const RRID_B: &str = "SUSE:Maintenance:2:1";
@@ -49,12 +49,7 @@ fn session() -> Arc<McpSession> {
 /// observe `is_closed()` after the target is moved into a host group.
 fn host_with_mock(name: &str) -> (Target, MockConnection) {
     let mock = MockConnection::new(name);
-    let target = Target::with_connection(
-        name,
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(mock.clone()),
-    );
+    let target = Target::with_connection(name, TargetState::Enabled, Box::new(mock.clone()));
     (target, mock)
 }
 
