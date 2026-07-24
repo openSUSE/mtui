@@ -156,6 +156,14 @@ async fn gitea_approve_fixture(server: &MockServer) -> Gitea {
         )
         .mount(server)
         .await;
+    // The token-owner lookup is resolved once and cached, so it does not add a
+    // round trip to the steady-state `approve` measured below; mount it so the
+    // resolution takes the real (not fallback) path.
+    Mock::given(method("GET"))
+        .and(path("/api/v1/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": "benchuser" })))
+        .mount(server)
+        .await;
     let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
     let pr_api = format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri());
     Gitea::with_client(

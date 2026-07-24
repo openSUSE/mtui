@@ -32,6 +32,7 @@ use mtui_types::Assignment;
 use regex::Regex;
 use reqwest::Method;
 use serde_json::json;
+use tokio::sync::OnceCell;
 
 use crate::error::GiteaError;
 use crate::http::{
@@ -247,8 +248,17 @@ struct RawComment {
 pub struct Gitea {
     http: HttpClient,
     token: String,
-    /// The session user this client acts as by default.
-    user: String,
+    /// The local session user, used as a *fallback* identity when the token
+    /// owner's login cannot be resolved (see [`Gitea::acting_user`]).
+    session_user: String,
+    /// The Gitea API root (`.../api/v1`) for endpoints not tied to the PR,
+    /// such as the authenticated-user lookup (`.../api/v1/user`).
+    api_base: String,
+    /// The login of the Gitea account that owns the [`token`](Self::token),
+    /// resolved lazily once via `GET /api/v1/user` and cached. Comments are
+    /// attributed by Gitea to this account, so assign/approve markers must
+    /// record *its* login rather than the local session user.
+    resolved_user: OnceCell<String>,
     /// The review group this client operates on behalf of.
     group: String,
     /// The PR API URL (`.../pulls/<n>`).
@@ -322,10 +332,18 @@ impl Gitea {
         // `.../pulls/<n>` -> `.../issues/<n>/comments`, matching upstream's
         // `giteaprapi.replace("pulls", "issues") + "/comments"`.
         let prissues = format!("{}/comments", giteaprapi.replace("pulls", "issues"));
+        // The API root for endpoints not tied to the PR, matching upstream's
+        // `giteaprapi.split("/api/v1/", 1)[0] + "/api/v1"`.
+        let api_root = giteaprapi
+            .split_once("/api/v1/")
+            .map_or(giteaprapi, |(root, _)| root);
+        let api_base = format!("{api_root}/api/v1");
         Ok(Self {
             http,
             token,
-            user,
+            session_user: user,
+            api_base,
+            resolved_user: OnceCell::new(),
             group: group.unwrap_or(DEFAULT_GROUP).to_string(),
             pr: giteaprapi.to_string(),
             prissues,
@@ -425,6 +443,44 @@ impl Gitea {
             })?;
         serde_json::from_slice::<serde_json::Value>(&bytes)
             .map_err(|e| GiteaError::FailedCall(format!("{method} - {}: {e}", sanitize_url(url))))
+    }
+
+    /// Resolve the acting user for a write operation.
+    ///
+    /// Returns `other` verbatim when supplied. Otherwise returns the login of
+    /// the Gitea account that owns the token, resolved once via
+    /// `GET /api/v1/user` and cached in [`resolved_user`](Self::resolved_user):
+    /// comments are attributed by Gitea to that account, so an assign/approve
+    /// marker must record *its* login rather than the local session user, which
+    /// need not match. If the lookup fails (or the payload has no `login`), it
+    /// falls back to [`session_user`](Self::session_user) so review actions
+    /// still work — with the historical, possibly mismatched, name — and the
+    /// fallback is cached too (a short-lived CLI/MCP action does not retry).
+    async fn acting_user(&self, other: Option<&str>) -> String {
+        if let Some(user) = other {
+            return user.to_string();
+        }
+        self.resolved_user
+            .get_or_init(|| async {
+                let url = format!("{}/user", self.api_base);
+                match self.request(Method::GET, &url, None).await {
+                    Ok(data) => data
+                        .get("login")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map_or_else(|| self.session_user.clone(), str::to_string),
+                    Err(_) => {
+                        tracing::warn!(
+                            "Could not resolve the Gitea user from the token; \
+                             falling back to session user {:?}",
+                            self.session_user
+                        );
+                        self.session_user.clone()
+                    }
+                }
+            })
+            .await
+            .clone()
     }
 
     /// Fetch and deserialise all comments on the pull request.
@@ -537,9 +593,9 @@ impl Gitea {
     /// [`GiteaError::AssignInvalid`] if the PR is not assigned to the acting
     /// user; [`GiteaError::NoReview`] if it was already approved/rejected.
     pub async fn approve(&self, other: Option<&str>) -> Result<(), GiteaError> {
-        let a_user = other.unwrap_or(&self.user);
+        let a_user = self.acting_user(other).await;
         let comments = self.load_sorted_comments().await?;
-        let state = self.assign_state(&comments, a_user);
+        let state = self.assign_state(&comments, &a_user);
         if state != Assignment::AssignedUser {
             return Err(GiteaError::AssignInvalid {
                 state,
@@ -572,9 +628,9 @@ impl Gitea {
         other: Option<&str>,
         message: &str,
     ) -> Result<(), GiteaError> {
-        let a_user = other.unwrap_or(&self.user);
+        let a_user = self.acting_user(other).await;
         let comments = self.load_sorted_comments().await?;
-        let state = self.assign_state(&comments, a_user);
+        let state = self.assign_state(&comments, &a_user);
         if state != Assignment::AssignedUser {
             return Err(GiteaError::AssignInvalid {
                 state,
@@ -611,7 +667,7 @@ impl Gitea {
     /// the PR was already decided; [`GiteaError::AssignInvalid`] if the PR is
     /// not unassigned (and not `force`).
     pub async fn assign(&self, other: Option<&str>, force: bool) -> Result<(), GiteaError> {
-        let a_user = other.unwrap_or(&self.user);
+        let a_user = self.acting_user(other).await;
         if !force && !self.has_review().await? {
             return Err(GiteaError::NoReview(format!(
                 "There is no review for {}-review",
@@ -625,7 +681,7 @@ impl Gitea {
             ));
         }
         if !force {
-            let state = self.assign_state(&comments, a_user);
+            let state = self.assign_state(&comments, &a_user);
             if state != Assignment::Unassigned {
                 return Err(GiteaError::AssignInvalid {
                     state,
@@ -634,7 +690,7 @@ impl Gitea {
             }
         }
         tracing::info!("Assigning PR to {a_user} for group {}", self.group);
-        let msg = assign_marker(a_user, &self.group);
+        let msg = assign_marker(&a_user, &self.group);
         self.request(Method::POST, &self.prissues, Some(json!({ "body": msg })))
             .await?;
         Ok(())
@@ -646,9 +702,9 @@ impl Gitea {
     ///
     /// [`GiteaError::AssignInvalid`] if the PR is not assigned to the user.
     pub async fn unassign(&self, other: Option<&str>) -> Result<(), GiteaError> {
-        let a_user = other.unwrap_or(&self.user);
+        let a_user = self.acting_user(other).await;
         let comments = self.load_sorted_comments().await?;
-        let state = self.assign_state(&comments, a_user);
+        let state = self.assign_state(&comments, &a_user);
         if state != Assignment::AssignedUser {
             return Err(GiteaError::AssignInvalid {
                 state,
@@ -656,7 +712,7 @@ impl Gitea {
             });
         }
         tracing::info!("Unassigning user {a_user} for group {}", self.group);
-        let msg = unassign_marker(a_user, &self.group);
+        let msg = unassign_marker(&a_user, &self.group);
         self.request(Method::POST, &self.prissues, Some(json!({ "body": msg })))
             .await?;
         Ok(())
@@ -857,7 +913,7 @@ mod tests {
     fn default_group_and_url_derivation() {
         let g = dummy();
         assert_eq!(g.group, DEFAULT_GROUP);
-        assert_eq!(g.user, "testuser");
+        assert_eq!(g.session_user, "testuser");
         assert_eq!(
             g.pr,
             "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1"
@@ -866,6 +922,7 @@ mod tests {
             g.prissues,
             "https://gitea.example.com/api/v1/repos/owner/repo/issues/1/comments"
         );
+        assert_eq!(g.api_base, "https://gitea.example.com/api/v1");
     }
 
     #[test]
