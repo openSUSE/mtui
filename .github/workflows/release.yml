@@ -39,6 +39,16 @@ jobs:
           # the checkout does not need a credential left behind in .git/config.
           persist-credentials: false
 
+      - name: Install Rust toolchain
+        # Pin a commit from the action's master branch (commits of the
+        # toolchain branches are garbage-collected upstream) and select the
+        # toolchain via the input instead of the ref.
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: stable
+      # No cargo cache here: releases are built hermetically so restored
+      # build state can never influence published artifacts.
+
       - name: Verify tag matches workspace version
         shell: bash
         run: |
