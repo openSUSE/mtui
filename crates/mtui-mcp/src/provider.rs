@@ -646,15 +646,10 @@ mod tests {
         use mtui_hosts::{HostsGroup, MockConnection, Target};
         use mtui_testreport::{ObsReport, TestReport};
         use mtui_types::RequestReviewID;
-        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::enums::TargetState;
 
         let conn = MockConnection::new("slow-host").with_blocking_close(gate);
-        let target = Target::with_connection(
-            "slow-host",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let target = Target::with_connection("slow-host", TargetState::Enabled, Box::new(conn));
         let sess = McpSession::new(Config::default());
         {
             let mut guard = sess.session().lock().await;
@@ -673,15 +668,10 @@ mod tests {
         use mtui_hosts::{HostsGroup, MockConnection, Target};
         use mtui_testreport::{ObsReport, TestReport};
         use mtui_types::RequestReviewID;
-        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::enums::TargetState;
 
         let conn = MockConnection::new("slow-host").with_close_delay(delay);
-        let target = Target::with_connection(
-            "slow-host",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let target = Target::with_connection("slow-host", TargetState::Enabled, Box::new(conn));
         let sess = McpSession::new(Config::default());
         {
             let mut guard = sess.session().lock().await;
@@ -773,17 +763,12 @@ mod tests {
         use mtui_hosts::{HostsGroup, MockConnection, Target};
         use mtui_testreport::{ObsReport, TestReport};
         use mtui_types::RequestReviewID;
-        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::enums::TargetState;
 
         let reg = reg_with_idle(Duration::from_secs(3600));
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
-        let target = Target::with_connection(
-            "h1",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         let session = reg.make_session();
         {
             let mut guard = session.session().lock().await;

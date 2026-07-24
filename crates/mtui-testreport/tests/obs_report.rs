@@ -99,19 +99,14 @@ fn list_update_commands_is_a_noop_stub() {
 use std::collections::BTreeSet;
 
 use mtui_hosts::{MockConnection, RepoOp, SetRepo, Target};
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use mtui_types::system::System;
 
 /// An enabled single target whose product matches the seeded repo.
 fn sles_target() -> (Target, MockConnection) {
     let conn = MockConnection::new("h1");
     let handle = conn.clone();
-    let mut t = Target::with_connection(
-        "h1",
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(conn),
-    );
+    let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
     t.set_system(
         System::new(
             SystemProduct::new("SLES", "15.5", "x86_64"),

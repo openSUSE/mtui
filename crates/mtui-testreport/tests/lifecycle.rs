@@ -362,8 +362,8 @@ async fn make_testreport_auto_respects_explicit_no_autoconnect() {
 /// Regression (spinner invisible during `update`): `make_testreport` reconciles
 /// the loaded report's targets group to the session mode at **load time**, so a
 /// REPL load (`is_repl = true`) yields an interactive group — the fan-out
-/// spinner / serial-barrier prompt seam — while a headless load stays quiet.
-/// The report group is default-built headless; this is the single set-once site.
+/// spinner seam — while a headless load stays quiet. The report group is
+/// default-built headless; this is the single set-once site.
 #[tokio::test]
 async fn make_testreport_sets_targets_is_repl_from_session_mode() {
     let update = UpdateID::parse(RRID).unwrap();

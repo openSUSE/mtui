@@ -21,7 +21,7 @@ use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveCo
 use mtui_hosts::{HostArbiter, HostError, HostsGroup, Owner, Prompter, Target};
 use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
-use mtui_types::enums::{ExecutionMode, TargetState, Workflow};
+use mtui_types::enums::{TargetState, Workflow};
 use tokio::sync::OwnedMutexGuard;
 use tracing::{info, warn};
 
@@ -94,10 +94,8 @@ pub struct Session {
     /// for the REPL; `mtui-mcp` leaves it unset (upstream `prompter=None`). It is
     /// pushed down two ways: the command-timeout prompt onto each freshly-built
     /// [`Target`] in [`connect_and_add_hosts`](Self::connect_and_add_hosts), and
-    /// onto the active report's [`HostsGroup`] via
-    /// [`HostsGroup::set_prompter`] (for the serial-barrier Enter prompt). When
-    /// `None`, a command timeout aborts immediately and serial hosts run
-    /// back-to-back.
+    /// onto the active report's [`HostsGroup`] via [`HostsGroup::set_prompter`].
+    /// When `None`, a command timeout aborts immediately.
     prompter: Option<Prompter>,
     /// Test-only count of how many times [`http_client`](Self::http_client)
     /// actually *built* a client (vs. handing back a cached clone). The
@@ -821,7 +819,7 @@ impl Session {
         let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
         let targets = self.targets_mut();
         // Ensure the (possibly freshly-loaded) active group carries the prompter
-        // so its serial-barrier Enter prompt fires; a group built by a later
+        // so its command-timeout prompt fires; a group built by a later
         // `load_update` would otherwise start without it.
         if let Some(prompter) = prompter {
             targets.set_prompter(prompter);
@@ -865,12 +863,7 @@ impl Session {
         store: Option<&Refhosts>,
         is_pool_claim: bool,
     ) -> Option<(Target, (String, Option<Vec<String>>))> {
-        let mut target = Target::new(
-            config,
-            host.clone(),
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-        );
+        let mut target = Target::new(config, host.clone(), TargetState::Enabled);
         target.set_rrid(rrid.to_owned());
         // Wire the interactive command-timeout prompt before connecting
         // so `Target::connect` applies it to the transport (REPL only).
@@ -1469,13 +1462,12 @@ impl Session {
     /// The composition root (`mtui-cli`'s `main.rs`) wires a
     /// [`Prompter::stdin`](mtui_hosts::Prompter::stdin)-backed prompter here for
     /// the REPL; `mtui-mcp` leaves it unset. Also pushes the prompter onto the
-    /// active report's [`HostsGroup`] so any already-connected hosts (and the
-    /// serial-barrier Enter prompt) pick it up immediately; freshly-connected
-    /// hosts inherit the derived command-timeout prompt via
-    /// [`connect_and_add_hosts`](Self::connect_and_add_hosts).
+    /// active report's [`HostsGroup`] so any already-connected hosts pick up the
+    /// derived command-timeout prompt immediately; freshly-connected hosts
+    /// inherit it via [`connect_and_add_hosts`](Self::connect_and_add_hosts).
     pub fn set_prompter(&mut self, prompter: Prompter) {
-        // Push onto the active report's group first (already-connected hosts +
-        // the serial-barrier prompt), then retain a clone for future connects.
+        // Push onto the active report's group first (already-connected hosts),
+        // then retain a clone for future connects.
         self.targets_mut().set_prompter(prompter.clone());
         self.prompter = Some(prompter);
     }
@@ -1890,7 +1882,6 @@ mod tests {
         Target::with_connection(
             host,
             TargetState::Enabled,
-            ExecutionMode::Serial,
             Box::new(MockConnection::new(host)),
         )
     }
@@ -1931,12 +1922,8 @@ mod tests {
             "/var/lock/mtui.lock",
             format!("{}:someone-else:2147483647", i64::MAX),
         );
-        let mut t = Target::with_connection(
-            "refhost.example",
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        );
+        let mut t =
+            Target::with_connection("refhost.example", TargetState::Enabled, Box::new(conn));
         // Must not panic / propagate: the foreign lock is suppressed.
         Session::autolock_target(&mut t, "mtui pool SUSE:Maintenance:1:1 alice").await;
     }

@@ -13,10 +13,10 @@ use crate::session::Session;
 
 /// Runs a command on a specified host or on all enabled targets.
 ///
-/// Ports upstream `mtui.commands.run.Run`. The command is dispatched in parallel
-/// across every selected target (serially for hosts set to serial mode); after
-/// it returns, each host's input line, exit code, stdout, and any stderr are
-/// collected and paged to the display.
+/// Ports upstream `mtui.commands.run.Run`. The command is dispatched in
+/// parallel across every selected target; after it returns, each host's input
+/// line, exit code, stdout, and any stderr are collected and paged to the
+/// display.
 ///
 /// The positional command tokens are quoted back together with `shlex::join`
 /// before being sent, so a single token containing shell metacharacters (e.g.
@@ -257,7 +257,7 @@ mod tests {
     async fn nonzero_exit_appends_failed_summary_but_returns_ok() {
         use crate::commands::testkit::session_with_targets;
         use mtui_hosts::{MockConnection, Target};
-        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::enums::TargetState;
         use mtui_types::hostlog::CommandLog;
 
         // h1 exits 0, h2 exits 1, h3 exits 127 — the summary lists only the
@@ -267,12 +267,7 @@ mod tests {
             .map(|(name, code)| {
                 let conn =
                     MockConnection::new(name).with_default(CommandLog::new("", "out", "", code, 0));
-                Target::with_connection(
-                    name,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(conn),
-                )
+                Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
         let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", targets);
@@ -304,7 +299,7 @@ mod tests {
     async fn interactive_pages_output_and_keeps_failed_summary() {
         use crate::commands::testkit::session_with_targets;
         use mtui_hosts::{MockConnection, Prompter, Target};
-        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::enums::TargetState;
         use mtui_types::hostlog::CommandLog;
 
         // Tiny screen so the aggregated output actually needs paging, and a
@@ -320,12 +315,7 @@ mod tests {
             .map(|(name, code)| {
                 let conn =
                     MockConnection::new(name).with_default(CommandLog::new("", "out", "", code, 0));
-                Target::with_connection(
-                    name,
-                    TargetState::Enabled,
-                    ExecutionMode::Serial,
-                    Box::new(conn),
-                )
+                Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
         let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", targets);
@@ -373,18 +363,13 @@ mod tests {
 
     use crate::commands::testkit::session_with_targets;
     use mtui_hosts::{MockConnection, Target};
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
     /// A free, enabled host that locks cleanly (Acquired) and echoes its run.
     fn free_host(name: &str) -> Target {
         let conn = MockConnection::new(name).with_default(CommandLog::new("", "ok", "", 0, 0));
-        Target::with_connection(
-            name,
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        )
+        Target::with_connection(name, TargetState::Enabled, Box::new(conn))
     }
 
     /// An enabled host carrying a foreign operation lock → `Contended`.
@@ -392,12 +377,7 @@ mod tests {
         let conn = MockConnection::new(name)
             .with_default(CommandLog::new("", "ok", "", 0, 0))
             .with_file(LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
-        Target::with_connection(
-            name,
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        )
+        Target::with_connection(name, TargetState::Enabled, Box::new(conn))
     }
 
     /// An enabled host whose lock-file write hard-fails → `Failed`.
@@ -405,12 +385,7 @@ mod tests {
         let conn = MockConnection::new(name)
             .with_default(CommandLog::new("", "ok", "", 0, 0))
             .with_exclusive_write_error(LOCK_PATH);
-        Target::with_connection(
-            name,
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        )
+        Target::with_connection(name, TargetState::Enabled, Box::new(conn))
     }
 
     #[tokio::test]

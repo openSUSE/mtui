@@ -29,7 +29,7 @@ use mtui_hosts::{
     CommandTimeout, Connection, HostKeyPolicy, HostsGroup, MAX_STREAM_BYTES, SshConnection,
     TARGET_LOCK_PATH, Target, TargetLock,
 };
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 
 /// Bytes the `flood-stdout` scripted command emits: comfortably past the
 /// per-stream capture cap so `run` must truncate.
@@ -533,15 +533,15 @@ async fn connect(port: u16, timeout: CommandTimeout) -> SshConnection {
 }
 
 /// Builds a [`Target`] whose live connection is a real [`SshConnection`] to the
-/// in-process fixture on `port`, labelled `name` and gated by `state`/`mode`.
+/// in-process fixture on `port`, labelled `name` and gated by `state`.
 ///
 /// This is the multi-target seam the P2.5 fan-out / P2.6 lock integration tests
 /// need: several `Target`s can point at one shared server (one `SharedFs`), so
 /// `HostsGroup::run` and the remote-lock protocol are exercised over real SSH
 /// rather than a `MockConnection`.
-async fn connect_target(name: &str, port: u16, state: TargetState, mode: ExecutionMode) -> Target {
+async fn connect_target(name: &str, port: u16, state: TargetState) -> Target {
     let conn = connect(port, CommandTimeout::from_secs(5)).await;
-    Target::with_connection(name, state, mode, Box::new(conn))
+    Target::with_connection(name, state, Box::new(conn))
 }
 
 // ----------------------------------------------------------------------------
@@ -1027,10 +1027,9 @@ async fn shell_spawns_pty_and_bridges_bytes() {
 //
 // The colocated `hostgroup.rs` unit tests drive fan-out over `MockConnection`.
 // These prove the same fan-out end-to-end over the in-process russh server:
-// `run` reaches every enabled member across ≥2 real SSH sessions, in both
-// parallel and serial modes, and per-host `TargetState` gating is honoured
-// against a live transport — the epic's "run across ≥2 hosts against a local
-// sshd fixture" line.
+// `run` reaches every enabled member across ≥2 real SSH sessions, and per-host
+// `TargetState` gating is honoured against a live transport — the epic's "run
+// across ≥2 hosts against a local sshd fixture" line.
 // ----------------------------------------------------------------------------
 
 /// The scripted stdout the fixture returns for an otherwise-unknown command
@@ -1042,11 +1041,11 @@ fn ran(cmd: &str) -> String {
 
 #[tokio::test]
 async fn hostsgroup_run_parallel_reaches_every_member() {
-    // Two enabled targets in Parallel mode share one fixture server.
+    // Two enabled targets share one fixture server.
     let port = start_server(SharedFs::default()).await;
     let targets = vec![
-        connect_target("h1", port, TargetState::Enabled, ExecutionMode::Parallel).await,
-        connect_target("h2", port, TargetState::Enabled, ExecutionMode::Parallel).await,
+        connect_target("h1", port, TargetState::Enabled).await,
+        connect_target("h2", port, TargetState::Enabled).await,
     ];
     let mut group = HostsGroup::new(targets, false);
 
@@ -1061,33 +1060,13 @@ async fn hostsgroup_run_parallel_reaches_every_member() {
 }
 
 #[tokio::test]
-async fn hostsgroup_run_serial_reaches_every_member() {
-    // Same as above but Serial mode: the fan-out runs hosts one at a time; the
-    // observable outcome (every host ran, results recorded) is identical.
-    let port = start_server(SharedFs::default()).await;
-    let targets = vec![
-        connect_target("s1", port, TargetState::Enabled, ExecutionMode::Serial).await,
-        connect_target("s2", port, TargetState::Enabled, ExecutionMode::Serial).await,
-    ];
-    let mut group = HostsGroup::new(targets, false);
-
-    group.run("serial-probe").await;
-
-    for name in ["s1", "s2"] {
-        let t = group.get(name).expect("member present");
-        assert_eq!(t.lastout(), ran("serial-probe"), "{name} ran the command");
-        assert_eq!(t.lastexit(), Some(0), "{name} recorded exit 0");
-    }
-}
-
-#[tokio::test]
 async fn hostsgroup_run_honours_per_host_state_end_to_end() {
     // A mixed-state group over real SSH: enabled runs for real, disabled
     // records nothing.
     let port = start_server(SharedFs::default()).await;
     let targets = vec![
-        connect_target("on", port, TargetState::Enabled, ExecutionMode::Parallel).await,
-        connect_target("off", port, TargetState::Disabled, ExecutionMode::Parallel).await,
+        connect_target("on", port, TargetState::Enabled).await,
+        connect_target("off", port, TargetState::Disabled).await,
     ];
     let mut group = HostsGroup::new(targets, false);
 

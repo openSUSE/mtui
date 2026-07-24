@@ -305,7 +305,7 @@ pub async fn make_testreport(
     // time (the group was default-built headless). The session is the single
     // source of truth for REPL-vs-headless; this is the only place it is set, and
     // it is never toggled afterwards. Empty group here, so this only sets the flag
-    // that every later `add` / fan-out (spinner + serial-barrier prompt) reads.
+    // that every later `add` / fan-out (spinner prompt) reads.
     report.base_mut().targets.set_is_repl(is_repl);
     // Push the configured fan-out bound (`[connection] max_parallel`) onto the
     // group alongside the session mode, so every later fan-out is bounded.

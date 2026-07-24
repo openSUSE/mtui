@@ -1253,23 +1253,15 @@ mod tests {
         use mtui_hosts::{HostsGroup, MockConnection, Target};
         use mtui_testreport::{ObsReport, TestReport};
         use mtui_types::RequestReviewID;
-        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::enums::TargetState;
 
         let gate = Arc::new(tokio::sync::Notify::new());
         let wedged = MockConnection::new("wedged-host").with_blocking_close(Arc::clone(&gate));
         let good = MockConnection::new("good-host");
-        let wedged_target = Target::with_connection(
-            "wedged-host",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(wedged),
-        );
-        let good_target = Target::with_connection(
-            "good-host",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(good.clone()),
-        );
+        let wedged_target =
+            Target::with_connection("wedged-host", TargetState::Enabled, Box::new(wedged));
+        let good_target =
+            Target::with_connection("good-host", TargetState::Enabled, Box::new(good.clone()));
 
         let sess = McpSession::new(Config::default());
         {

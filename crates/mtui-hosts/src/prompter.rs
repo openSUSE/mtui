@@ -140,10 +140,10 @@ impl Prompter {
     /// [`ask`](Prompter::ask).
     ///
     /// The single place the boxed-closure shape lives, so the composition root
-    /// (`Session` → [`Target::set_timeout_prompt`]) and the serial-barrier path
-    /// both wire the same serialised prompt (spinner-suspend + cross-task lock)
-    /// instead of a bare closure. Upstream `Target.connect` passes
-    /// `self._prompter.ask`; this is the Rust analogue.
+    /// (`Session` → [`Target::set_timeout_prompt`]) wires the same serialised
+    /// prompt (spinner-suspend + cross-task lock) instead of a bare closure.
+    /// Upstream `Target.connect` passes `self._prompter.ask`; this is the Rust
+    /// analogue.
     ///
     /// [`Target::set_timeout_prompt`]: crate::Target::set_timeout_prompt
     #[must_use]

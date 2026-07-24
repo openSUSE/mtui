@@ -318,16 +318,11 @@ mod tests {
         use mtui_hosts::{HostsGroup, MockConnection, Target};
         use mtui_testreport::{ObsReport, TestReport};
         use mtui_types::RequestReviewID;
-        use mtui_types::enums::{ExecutionMode, TargetState};
+        use mtui_types::enums::TargetState;
 
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
-        let target = Target::with_connection(
-            "h1",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let target = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         let session = McpSession::new(Config::default());
         {
             let mut guard = session.session().lock().await;

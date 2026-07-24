@@ -170,7 +170,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use mtui_hosts::{Check, CheckArgs, Doer, HostError, MockConnection, PlanProvider, Target};
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
 use mtui_types::system::{System, SystemProduct};
 
@@ -193,12 +193,7 @@ impl PlanProvider for FixedProvider {
 fn sles_group() -> (HostsGroup, MockConnection) {
     let conn = MockConnection::new("h1").with_default(CommandLog::new("", "done", "", 0, 1));
     let handle = conn.clone();
-    let mut t = Target::with_connection(
-        "h1",
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(conn),
-    );
+    let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
     t.set_system(
         System::new(
             SystemProduct::new("SLES", "15.5", "x86_64"),
@@ -247,12 +242,7 @@ use mtui_hosts::{RepoOp, SetRepo};
 fn sles_target() -> (Target, MockConnection) {
     let conn = MockConnection::new("h1");
     let handle = conn.clone();
-    let mut t = Target::with_connection(
-        "h1",
-        TargetState::Enabled,
-        ExecutionMode::Parallel,
-        Box::new(conn),
-    );
+    let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
     t.set_system(
         System::new(
             SystemProduct::new("SLES", "15.5", "x86_64"),

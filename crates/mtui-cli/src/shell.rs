@@ -314,7 +314,7 @@ pub(crate) async fn run_shell(session: &mut Session, argv: &[String]) -> anyhow:
 mod tests {
     use super::*;
     use mtui_hosts::{HostsGroup, MockConnection, Target};
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
@@ -411,12 +411,7 @@ mod tests {
             conn = conn.with_shell_output(c.to_vec());
         }
         let handle = conn.clone();
-        let target = Target::with_connection(
-            host,
-            TargetState::Enabled,
-            ExecutionMode::Serial,
-            Box::new(conn),
-        );
+        let target = Target::with_connection(host, TargetState::Enabled, Box::new(conn));
         (target, handle)
     }
 
@@ -551,12 +546,7 @@ mod tests {
         let targets = hosts
             .iter()
             .map(|(h, state)| {
-                Target::with_connection(
-                    *h,
-                    *state,
-                    ExecutionMode::Serial,
-                    Box::new(MockConnection::new(*h)),
-                )
+                Target::with_connection(*h, *state, Box::new(MockConnection::new(*h)))
             })
             .collect();
         HostsGroup::new(targets, true)

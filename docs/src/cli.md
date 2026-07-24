@@ -204,16 +204,16 @@ Options:
 
 ## `set_host_state`
 
-Sets the state and execution mode of a host.
+Sets the state of a host.
 
 ```text
 Usage: set_host_state [OPTIONS] <state>
 
 Arguments:
   <state>
-          enabled | disabled | parallel | serial
+          enabled | disabled
           
-          [possible values: parallel, serial, disabled, enabled]
+          [possible values: disabled, enabled]
 
 Options:
   -t, --target <HOST>
@@ -477,7 +477,7 @@ Options:
 
 ## `list_hosts`
 
-Lists all connected hosts with their system, state, and execution mode.
+Lists all connected hosts with their system and state.
 
 ```text
 Usage: list_hosts

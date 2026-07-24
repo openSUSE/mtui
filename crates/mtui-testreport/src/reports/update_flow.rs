@@ -731,8 +731,8 @@ async fn downgrade_body(
 /// completed rollback. Iterated in sorted hostname order (the group's own
 /// ordering) so the log is deterministic.
 async fn downgrade_verdict(targets: &mut HostsGroup) -> BTreeMap<String, Vec<String>> {
-    // Query every host's versions concurrently (serial hosts one at a time)
-    // via the shared fan-out, then run the pure verdict scan below.
+    // Query every host's versions concurrently via the shared fan-out, then
+    // run the pure verdict scan below.
     targets.query_versions().await;
 
     let mut not_downgraded: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -990,7 +990,7 @@ mod tests {
 
     use mtui_config::options::Config;
     use mtui_hosts::{HostsGroup, MockConnection, Target};
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
     use mtui_types::system::{System, SystemProduct};
 
@@ -1013,12 +1013,7 @@ mod tests {
         let conn =
             MockConnection::new(hostname).with_default(CommandLog::new("", stdout, "", 0, 0));
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            hostname,
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
         t.set_system(
             System::new(
                 SystemProduct::new("SLES", "15.5", "x86_64"),
@@ -1136,12 +1131,7 @@ mod tests {
     /// its missing-doer early-return.
     fn missing_doer_target(hostname: &str) -> Target {
         let conn = MockConnection::new(hostname).with_default(CommandLog::new("", "", "", 0, 0));
-        let mut t = Target::with_connection(
-            hostname,
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
         t.set_system(
             System::new(
                 SystemProduct::new("sle-studioonsite", "11", "x86_64"),
@@ -1300,12 +1290,7 @@ mod tests {
         // flow added is removed on the abort path.
         let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         t.set_system(
             System::new(
                 SystemProduct::new("gentoo", "1", "x86_64"),
@@ -1514,12 +1499,7 @@ mod tests {
         let conn =
             MockConnection::new(hostname).with_default(CommandLog::new("", stdout, "", exit, 0));
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            hostname,
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
         t.set_system(
             System::new(
                 SystemProduct::new("SL-Micro", "6.0", "x86_64"),
@@ -1664,12 +1644,7 @@ mod tests {
                 CommandLog::new("zypper", "pkg-a = 1.0-1\n", "", 0, 0),
             );
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            "h1",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         t.set_system(
             System::new(
                 SystemProduct::new("SLES", "15.5", "x86_64"),
@@ -1786,12 +1761,7 @@ mod tests {
         let conn = MockConnection::new(hostname)
             .with_default(CommandLog::new("zypper", stdout, "", exit, 0));
         let handle = conn.clone();
-        let mut t = Target::with_connection(
-            hostname,
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(conn),
-        );
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
         t.set_system(
             System::new(
                 SystemProduct::new("SLES", "15.5", "x86_64"),

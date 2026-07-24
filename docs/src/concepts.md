@@ -81,15 +81,16 @@ addons, or a dangling `baseproduct` symlink — is logged as a **WARNING** and t
 host is **kept** (the check never aborts a connect). The `qa` product is ignored,
 and hosts not listed in `refhosts.yml` are skipped silently.
 
-## Host state and execution mode
+## Host state
 
-Each connected host has a state and an execution mode, set with
+Each connected host has a state, set with
 [`set_host_state`](cli.md#set_host_state):
 
 - **`enabled`** — runs all issued commands (the default).
 - **`disabled`** — runs nothing and prints nothing.
-- **`parallel`** (default) / **`serial`** — whether commands designed to run in
-  parallel (like [`run`](cli.md#run)) fan out concurrently or one host at a time.
+
+Commands designed to run in parallel (like [`run`](cli.md#run)) always fan out
+concurrently across enabled hosts.
 
 ## Locking
 

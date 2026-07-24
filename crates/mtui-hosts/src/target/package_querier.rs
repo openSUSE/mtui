@@ -91,7 +91,7 @@ impl<'a> PackageQuerier<'a> {
 
 #[cfg(test)]
 mod tests {
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
     use super::*;
@@ -108,12 +108,7 @@ mod tests {
     /// target).
     fn target_and_mock(stdout: &str) -> (Target, MockConnection) {
         let mock = MockConnection::new("h1").with_default(CommandLog::new("", stdout, "", 0, 0));
-        let target = Target::with_connection(
-            "h1",
-            TargetState::Enabled,
-            ExecutionMode::Parallel,
-            Box::new(mock.clone()),
-        );
+        let target = Target::with_connection("h1", TargetState::Enabled, Box::new(mock.clone()));
         (target, mock)
     }
 

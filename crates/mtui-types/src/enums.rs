@@ -63,52 +63,6 @@ impl FromStr for TargetState {
     }
 }
 
-/// Whether a host runs commands in parallel with its group or under a serial
-/// barrier.
-///
-/// Mirrors upstream `ExecutionMode` (a plain `Enum`). Wire values are
-/// `parallel` / `serial`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ExecutionMode {
-    /// The host runs concurrently with the rest of its group.
-    Parallel,
-    /// The host holds the group in a serial barrier.
-    Serial,
-}
-
-impl ExecutionMode {
-    /// Returns the upstream wire string for this mode.
-    #[must_use]
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Parallel => "parallel",
-            Self::Serial => "serial",
-        }
-    }
-}
-
-impl fmt::Display for ExecutionMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for ExecutionMode {
-    type Err = ParseEnumError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "parallel" => Ok(Self::Parallel),
-            "serial" => Ok(Self::Serial),
-            other => Err(ParseEnumError {
-                kind: "ExecutionMode",
-                got: other.to_owned(),
-            }),
-        }
-    }
-}
-
 /// Per-report update workflow mode.
 ///
 /// Mirrors upstream `Workflow` (a `StrEnum`). Wire values match the
@@ -276,27 +230,6 @@ mod tests {
         let err = "bogus".parse::<TargetState>().unwrap_err();
         assert_eq!(err.kind, "TargetState");
         assert_eq!(err.got, "bogus");
-    }
-
-    // --- ExecutionMode. ---
-
-    #[test]
-    fn execution_mode_string_values_and_parse() {
-        assert_eq!(ExecutionMode::Parallel.as_str(), "parallel");
-        assert_eq!(ExecutionMode::Serial.as_str(), "serial");
-        assert_eq!(
-            "parallel".parse::<ExecutionMode>().unwrap(),
-            ExecutionMode::Parallel
-        );
-        assert_eq!(
-            "serial".parse::<ExecutionMode>().unwrap(),
-            ExecutionMode::Serial
-        );
-    }
-
-    #[test]
-    fn execution_mode_rejects_unknown() {
-        assert!("nope".parse::<ExecutionMode>().is_err());
     }
 
     // --- Workflow. ---

@@ -501,7 +501,7 @@ pub(crate) async fn page_output(session: &mut Session, output: &[String]) {
 mod tests {
     use super::*;
     use mtui_hosts::{HostsGroup, MockConnection, Target};
-    use mtui_types::enums::{ExecutionMode, TargetState};
+    use mtui_types::enums::TargetState;
 
     fn cmd() -> clap::Command {
         add_hosts_arg(clap::Command::new("t").no_binary_name(true))
@@ -662,12 +662,7 @@ mod tests {
         let targets = hosts
             .iter()
             .map(|(h, state)| {
-                Target::with_connection(
-                    *h,
-                    *state,
-                    ExecutionMode::Serial,
-                    Box::new(MockConnection::new(*h)),
-                )
+                Target::with_connection(*h, *state, Box::new(MockConnection::new(*h)))
             })
             .collect();
         HostsGroup::new(targets, false)
