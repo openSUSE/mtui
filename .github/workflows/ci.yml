@@ -66,6 +66,32 @@ jobs:
       # default workspace test run never exercises them.
       - name: Run mtui-mcp tests
         run: cargo test -p mtui-mcp -F mcp
+  macos:
+    runs-on: macos-latest
+    name: MTUI macOS (Apple Silicon)
+    # Portability early-warning on aarch64-apple-darwin: clippy + the test
+    # suite (incl. the mcp-gated tests) so macOS stays viable for release
+    # binaries. No fmt leg — formatting is platform-independent and covered by
+    # the ubuntu `fmt` job.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - name: Install clippy
+        run: rustup component add clippy
+      # The SSH integration suite authenticates from an identity file; the
+      # in-process fixture accepts any key but the runner ships none. Generate a
+      # throwaway ed25519 key so the pubkey path is exercised. (svn is omitted:
+      # the file:// repo tests skip cleanly when it is absent.)
+      - name: SSH fixture
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run tests (default features)
+        run: cargo test --workspace
+      - name: Run mtui-mcp tests
+        run: cargo test -p mtui-mcp -F mcp
+
   coverage:
     runs-on: ubuntu-latest
     name: MTUI coverage
