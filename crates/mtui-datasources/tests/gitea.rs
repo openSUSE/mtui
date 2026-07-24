@@ -41,6 +41,8 @@ fn gitea_for(server: &MockServer) -> Gitea {
 
 const PR_PATH: &str = "/api/v1/repos/owner/repo/pulls/1";
 const COMMENTS_PATH: &str = "/api/v1/repos/owner/repo/issues/1/comments";
+/// The authenticated-user lookup used to resolve the token owner's login.
+const USER_PATH: &str = "/api/v1/user";
 
 fn ts(day: u32) -> String {
     format!("2024-01-{day:02}T00:00:00+00:00")
@@ -79,16 +81,30 @@ async fn mount_post_comment(server: &MockServer) {
         .await;
 }
 
+/// Mount the authenticated-user lookup so the token owner resolves to `login`.
+///
+/// A write op with no explicit user resolves its acting identity via
+/// `GET /api/v1/user`; mounting this makes the default (`None`) path record the
+/// token owner's login rather than falling back to the session user.
+async fn mount_user(server: &MockServer, login: &str) {
+    Mock::given(method("GET"))
+        .and(path(USER_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": login })))
+        .mount(server)
+        .await;
+}
+
 #[tokio::test]
 async fn assign_success_when_review_requested_and_unassigned() {
     let server = MockServer::start().await;
     mount_comments(&server, json!([])).await; // no markers -> unassigned, not done
     mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
     mount_post_comment(&server).await;
+    mount_user(&server, USER).await; // token owner resolves to USER
 
     gitea_for(&server).assign(None, false).await.unwrap();
 
-    // The POST carries an assignment marker for the session user.
+    // The POST carries an assignment marker for the resolved token owner.
     let posts: Vec<_> = server
         .received_requests()
         .await
@@ -111,6 +127,7 @@ async fn assign_force_posts_even_when_assigned_to_other() {
     )
     .await;
     mount_post_comment(&server).await;
+    mount_user(&server, USER).await;
 
     gitea_for(&server).assign(None, true).await.unwrap();
 
@@ -135,6 +152,7 @@ async fn assign_without_force_refuses_when_assigned_to_other() {
     )
     .await;
     mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
+    mount_user(&server, USER).await;
 
     let err = gitea_for(&server).assign(None, false).await.unwrap_err();
     assert!(matches!(
@@ -156,7 +174,7 @@ async fn assign_no_review_raises() {
 #[tokio::test]
 async fn approve_uses_last_assignee() {
     let server = MockServer::start().await;
-    // alice then the session user assigned -> last assignee is us.
+    // alice then the token owner assigned -> last assignee is us.
     mount_comments(
         &server,
         json!([
@@ -166,6 +184,7 @@ async fn approve_uses_last_assignee() {
     )
     .await;
     mount_post_comment(&server).await;
+    mount_user(&server, USER).await;
 
     gitea_for(&server).approve(None).await.unwrap();
 
@@ -197,6 +216,7 @@ async fn approve_request_count() {
     )
     .await;
     mount_post_comment(&server).await;
+    mount_user(&server, USER).await;
 
     gitea_for(&server).approve(None).await.unwrap();
 
@@ -209,14 +229,19 @@ async fn approve_request_count() {
         .iter()
         .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == PR_PATH)
         .count();
+    let user_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == USER_PATH)
+        .count();
     let posts = reqs
         .iter()
         .filter(|r| r.method == wiremock::http::Method::POST)
         .count();
     // Deduplicated: comments fetched once per approve; no PR GET (no decision);
-    // one POST.
+    // one user lookup to resolve the token owner; one POST.
     assert_eq!(comment_gets, 1, "approve fetches comments once; see 0mop.8");
     assert_eq!(pr_gets, 0, "no decision comment -> no has_review PR GET");
+    assert_eq!(user_gets, 1, "token owner resolved once");
     assert_eq!(posts, 1);
 }
 
@@ -235,6 +260,7 @@ async fn approve_after_rebuild_rerequest_posts_comment() {
     .await;
     mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
     mount_post_comment(&server).await;
+    mount_user(&server, USER).await;
 
     gitea_for(&server).approve(None).await.unwrap();
 
@@ -262,6 +288,7 @@ async fn approve_when_already_decided_raises() {
     )
     .await;
     mount_pr_reviewers(&server, json!([])).await;
+    mount_user(&server, USER).await;
 
     let err = gitea_for(&server).approve(None).await.unwrap_err();
     assert!(matches!(err, mtui_datasources::GiteaError::NoReview(_)));
@@ -288,6 +315,7 @@ async fn reject_posts_decline_with_reason() {
     )
     .await;
     mount_post_comment(&server).await;
+    mount_user(&server, USER).await;
 
     gitea_for(&server)
         .reject("broke boot", None, "see logs")
@@ -319,6 +347,7 @@ async fn reject_request_count() {
     )
     .await;
     mount_post_comment(&server).await;
+    mount_user(&server, USER).await;
 
     gitea_for(&server).reject("", None, "").await.unwrap();
 
@@ -331,12 +360,17 @@ async fn reject_request_count() {
         .iter()
         .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == PR_PATH)
         .count();
+    let user_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == USER_PATH)
+        .count();
     let posts = reqs
         .iter()
         .filter(|r| r.method == wiremock::http::Method::POST)
         .count();
     assert_eq!(comment_gets, 1, "reject fetches comments once");
     assert_eq!(pr_gets, 0, "no decision comment -> no has_review PR GET");
+    assert_eq!(user_gets, 1, "token owner resolved once");
     assert_eq!(posts, 1);
 }
 
@@ -351,6 +385,7 @@ async fn assign_request_count() {
     mount_comments(&server, json!([])).await; // unassigned, no decision
     mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
     mount_post_comment(&server).await;
+    mount_user(&server, USER).await;
 
     gitea_for(&server).assign(None, false).await.unwrap();
 
@@ -363,6 +398,10 @@ async fn assign_request_count() {
         .iter()
         .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == PR_PATH)
         .count();
+    let user_gets = reqs
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::GET && r.url.path() == USER_PATH)
+        .count();
     let posts = reqs
         .iter()
         .filter(|r| r.method == wiremock::http::Method::POST)
@@ -372,6 +411,7 @@ async fn assign_request_count() {
         pr_gets, 1,
         "one has_review PR GET (the review-requested guard)"
     );
+    assert_eq!(user_gets, 1, "token owner resolved once");
     assert_eq!(posts, 1);
 }
 
@@ -460,6 +500,131 @@ async fn assignee_returns_current_user() {
         gitea_for(&server).assignee().await.unwrap(),
         Some("alice".to_string())
     );
+}
+
+// --- token-owner login resolution (ported from test_gitea.py TestUser) -------
+
+/// With no explicit user, the assignment marker records the *token owner's*
+/// Gitea login (from `GET /api/v1/user`), not the local session user.
+#[tokio::test]
+async fn assign_records_resolved_token_owner_not_session_user() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
+    mount_post_comment(&server).await;
+    // Token owner is "gitea_bot", which differs from the session user (USER).
+    mount_user(&server, "gitea_bot").await;
+
+    gitea_for(&server).assign(None, false).await.unwrap();
+
+    let posts: Vec<_> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .collect();
+    assert_eq!(posts.len(), 1);
+    let body = String::from_utf8_lossy(&posts[0].body);
+    assert!(body.contains("assigned to user: gitea_bot"), "{body}");
+    assert!(
+        !body.contains(&format!("assigned to user: {USER}")),
+        "{body}"
+    );
+}
+
+/// When the user lookup fails (non-2xx), the acting identity falls back to the
+/// session user so the review action still completes.
+#[tokio::test]
+async fn assign_falls_back_to_session_user_when_lookup_fails() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
+    mount_post_comment(&server).await;
+    // The user endpoint errors -> fall back to the session user.
+    Mock::given(method("GET"))
+        .and(path(USER_PATH))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    gitea_for(&server).assign(None, false).await.unwrap();
+
+    let posts: Vec<_> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .collect();
+    assert_eq!(posts.len(), 1);
+    let body = String::from_utf8_lossy(&posts[0].body);
+    assert!(
+        body.contains(&format!("assigned to user: {USER}")),
+        "{body}"
+    );
+}
+
+/// A payload missing a (non-empty) `login` also falls back to the session user.
+#[tokio::test]
+async fn assign_falls_back_when_login_absent() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
+    mount_post_comment(&server).await;
+    Mock::given(method("GET"))
+        .and(path(USER_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": "" })))
+        .mount(&server)
+        .await;
+
+    gitea_for(&server).assign(None, false).await.unwrap();
+
+    let posts: Vec<_> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .collect();
+    assert_eq!(posts.len(), 1);
+    let body = String::from_utf8_lossy(&posts[0].body);
+    assert!(
+        body.contains(&format!("assigned to user: {USER}")),
+        "{body}"
+    );
+}
+
+/// An explicit `other` user bypasses the token-owner lookup entirely.
+#[tokio::test]
+async fn explicit_user_skips_token_owner_lookup() {
+    let server = MockServer::start().await;
+    mount_comments(&server, json!([])).await;
+    mount_pr_reviewers(&server, json!([{ "login": "qam-sle-review" }])).await;
+    mount_post_comment(&server).await;
+    // Any hit here would mean an unnecessary lookup was made.
+    Mock::given(method("GET"))
+        .and(path(USER_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "login": "gitea_bot" })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    gitea_for(&server)
+        .assign(Some("carol"), false)
+        .await
+        .unwrap();
+
+    let posts: Vec<_> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .collect();
+    assert_eq!(posts.len(), 1);
+    let body = String::from_utf8_lossy(&posts[0].body);
+    assert!(body.contains("assigned to user: carol"), "{body}");
 }
 
 /// Capture the `message` field of every tracing event emitted by `f`.

@@ -33,6 +33,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Gitea assign/unassign/approve/reject markers now record the login of the
+  Gitea account that owns the configured token (resolved once via
+  `GET /api/v1/user`) instead of the local session user. When the two names
+  differed, the marker disagreed with the account Gitea attributes the comment
+  to. If the lookup fails, it falls back to the session user so the action still
+  completes. Passing an explicit user still overrides both.
 - `prepare`/`reboot`/`update` no longer falsely mark a slow-to-reboot host as
   "reconnect after reboot failed" when it is still mid-boot: reconnect after a
   reboot now retries with a growing backoff (`reboot_timeout`/`reboot_retries`,
