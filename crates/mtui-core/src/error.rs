@@ -53,10 +53,16 @@ pub enum CommandError {
     /// Raised by [`Session::check_cancelled`](crate::Session::check_cancelled)
     /// at a cancellation checkpoint — the pre-dispatch check and the
     /// between-templates check in the [`Command::run`](crate::Command::run)
-    /// fan-out driver, plus any command body that opts in. No Python
-    /// counterpart: upstream had no in-band cancellation.
-    #[error("cancelled")]
-    Cancelled,
+    /// fan-out driver — and by a flow that stopped at one of its own
+    /// checkpoints. The payload carries what the flow managed to do before
+    /// stopping (which packages were applied, how many templates ran), so a
+    /// cancel is never a verdict the operator cannot act on. It is empty only
+    /// for the pre-dispatch checkpoint, where nothing had run yet. A genuine
+    /// failure always outranks a cancellation — a broken host is never buried
+    /// behind "cancelled". No Python counterpart: upstream had no in-band
+    /// cancellation.
+    #[error("cancelled{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
+    Cancelled(String),
 
     /// A command-specific failure whose message the command supplies directly.
     ///
@@ -74,7 +80,15 @@ mod tests {
     #[test]
     fn cancelled_display_is_pinned() {
         // The MCP error envelope surfaces this string as stderr; keep it stable.
-        assert_eq!(CommandError::Cancelled.to_string(), "cancelled");
+        assert_eq!(
+            CommandError::Cancelled(String::new()).to_string(),
+            "cancelled"
+        );
+        // A flow-level cancel keeps its detail so the operator can act on it.
+        assert_eq!(
+            CommandError::Cancelled("prepare cancelled after 3/10 packages".to_owned()).to_string(),
+            "cancelled: prepare cancelled after 3/10 packages"
+        );
     }
 
     #[test]

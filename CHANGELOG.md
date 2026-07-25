@@ -28,6 +28,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Cooperative cancellation now reaches the long-running work itself. The
+  serial per-package `prepare --installed-only` and `downgrade` loops stop at
+  the next package, and `update` stops at a step boundary — but never once the
+  patch command has been dispatched, and the post-failure rollback runs with
+  cancellation suspended, so a cancel cannot strand a half-applied update. A
+  parallel host fan-out is deliberately never interrupted
+  part-way: a host silently dropped mid-batch would be indistinguishable from
+  one that ran and succeeded. A cancelled `update` no longer triggers the
+  rollback downgrade (the update never ran, and the rollback is itself
+  multi-minute work the caller asked to stop); anything an earlier `prepare`
+  step installed is deliberately left in place. A cancelled flow is reported
+  as cancelled rather than as a generic failure, and carries what it managed
+  to do — a cancelled package loop names which packages were applied and which
+  were not attempted. A genuine host failure always outranks the cancellation,
+  so a broken host is never buried behind a bare "cancelled".
+
 - MCP `job_cancel` is now truthful and two-stage. Cancelling a running job
   first signals the new cooperative cancellation seam — today the dispatch
   driver observes it at its pre-dispatch and between-template checkpoints
@@ -43,6 +59,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Internal only, no behaviour change: the OBS/QAM precondition guard is now
   named `skips_maintenance_testreport` rather than `is_slfo`, which claimed
   less than it does — it is true for PI requests as well as SLFO ones.
+
+### Fixed
+
+- A `-t <host>` subset operation no longer silently resets the `[connection]
+  max_parallel` fan-out bound to its built-in default: splitting the host group
+  for a subset op carried only the workflow provider, dropping the configured
+  bound (and, before this, any session state pushed down beside it).
 
 ### Removed
 

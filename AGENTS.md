@@ -138,12 +138,32 @@ next actionable task before working on a subsystem.
   `lrun` was removed by design; do not reintroduce it.
 - **Cancellation is cooperative-first.** `Session` carries a
   `CancellationToken` (the seam); the `Command::run` driver checks it before
-  dispatch and between fan-out templates, and a long-running body may poll
-  `session.cancel_requested()` (or `select!` on `session.cancel_token()`) at
-  its own host/step boundaries. MCP `job_cancel` cancels the job's token,
-  waits a short grace for a cooperative stop, then hard-aborts the worker —
-  its reply distinguishes the two and never claims to cancel a job that had
-  already finished. New long-running command bodies should observe the seam.
+  dispatch and between fan-out templates. `Session::activate` pushes the token
+  down onto the active report's `HostsGroup` so the flows can consult it.
+  **Never gate a parallel fan-out on it**: `run_parallel` returns `()`, so a
+  host skipped mid-batch is indistinguishable from one that ran — its stale
+  `last*` snapshot sails through the post-run checks and the update reports
+  success on a host it never touched (and every teardown is a fan-out too, so
+  gating strands remote locks exactly when a cancel needs them released).
+  Long serial flows poll `targets.cancel_requested()` at
+  their own boundaries (the per-package `prepare`/`downgrade` loops, the
+  `update` step sequence) — but **never past a point of no return**: `update`
+  makes its last check before dispatching the patch command, and the
+  post-failure rollback runs under `HostsGroup::suspend_cancellation` (its own
+  per-package checkpoint would otherwise abort the recovery at package 0 and
+  strand the half-applied update it exists to undo). `UpdateFailure::Cancelled`
+  skips the rollback because the update never ran. A checkpoint must `break`
+  into its function's normal fall-through, never early-`return` past cleanup —
+  and a real failure collected before the cancel always outranks it. MCP `job_cancel` cancels the job's token, waits a short grace for a
+  cooperative stop, then hard-aborts the worker — its reply distinguishes the
+  two and never claims to cancel a job that had already finished. A flow that
+  stops on a cancel must surface as `CommandError::Cancelled`, not a generic
+  failure — and that verdict must come from the flow's own `cancelled` flag,
+  never from sniffing the session token, which would mask a real host failure
+  that merely coincided with a cancel (see
+  `commands/perform.rs::map_flow_error`). New long-running command bodies
+  should observe the seam at their own step boundaries, and report what they
+  completed before stopping.
 
 ## Contracts (do not break without intent — these enable ecosystem interop)
 - **RRID grammar** `project:kind:maintenance_id:review_id` and its parse errors.

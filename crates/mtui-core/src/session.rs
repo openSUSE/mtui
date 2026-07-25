@@ -329,7 +329,7 @@ impl Session {
     /// been cancelled.
     pub fn check_cancelled(&self) -> Result<(), CommandError> {
         if self.cancel.is_cancelled() {
-            return Err(CommandError::Cancelled);
+            return Err(CommandError::Cancelled(String::new()));
         }
         Ok(())
     }
@@ -429,6 +429,17 @@ impl Session {
             .templates
             .active_handle()
             .and_then(|h| h.try_lock_owned().ok());
+        // Push the dispatch's cancellation token down onto the report's host
+        // group, mirroring how the composition root pushes `prompter` and
+        // `max_parallel`. Doing it here — the one place every dispatch passes
+        // through to reach a report — means every command inherits the
+        // host-boundary seam without opting in, and each activation refreshes
+        // the token so a group can never carry a stale cancelled one from an
+        // earlier job.
+        let cancel = self.cancel.clone();
+        if let Some(guard) = self.active_guard.as_mut() {
+            guard.base_mut().targets.set_cancel_token(cancel);
+        }
         self.active_guard.is_some()
     }
 
@@ -2287,7 +2298,10 @@ mod tests {
 
         s.cancel_token().cancel();
         assert!(s.cancel_requested());
-        assert!(matches!(s.check_cancelled(), Err(CommandError::Cancelled)));
+        assert!(matches!(
+            s.check_cancelled(),
+            Err(CommandError::Cancelled(_))
+        ));
 
         // Installing a fresh token replaces the cancelled one (the MCP
         // self-healing install path relies on this).

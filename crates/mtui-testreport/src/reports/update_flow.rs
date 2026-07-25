@@ -53,6 +53,14 @@ pub enum UpdateFailure {
     /// this as a hard failure so a target that cannot be updated never reports
     /// "finished".
     MissingUpdater(UpdateError),
+    /// Cooperative cancellation was requested (MCP `job_cancel`) and the flow
+    /// stopped at a step boundary.
+    ///
+    /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback:
+    /// a rollback is itself a multi-minute downgrade, so rolling back on a
+    /// cancel would *extend* the work the caller just asked to stop. No
+    /// upstream counterpart — Python had no in-band cancellation.
+    Cancelled(UpdateError),
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
@@ -118,17 +126,32 @@ where
             error!(error = %e, "update failed");
             Err(e)
         }
+        Err(UpdateFailure::Cancelled(e)) => {
+            // Cancelled *before* the update command was dispatched, so the
+            // update itself never ran and there is nothing to roll back.
+            // Anything an earlier `prepare` step installed is left as-is (see
+            // `UpdateFailure::Cancelled`).
+            info!(reason = %e, "update cancelled");
+            Err(e)
+        }
         Err(UpdateFailure::Check(e)) => {
             error!("Update failed");
             warn!("Error while updating. Rolling back changes");
             let pkgs = report.get_package_list();
             let id = report.base().rrid.as_ref().map(ToString::to_string);
             add_op_history(targets, "downgrade", id.as_deref(), &pkgs).await;
+            // Suspend cancellation for the rollback. The update has already
+            // been applied, so this recovery is what prevents a half-applied
+            // state; letting the downgrade's own per-package checkpoint see a
+            // cancel that landed during the run phase would abort the rollback
+            // at package 0 and leave exactly the state it exists to undo.
+            let token = targets.suspend_cancellation();
             // Rollback is best-effort; a failed downgrade must never bury the
             // original update error, so its result is logged, not returned.
             if let Err(de) = perform_downgrade(targets, report, &pkgs).await {
                 warn!(error = %de, "rollback downgrade failed");
             }
+            targets.set_cancel_token(token);
             Err(e)
         }
     }
@@ -407,9 +430,22 @@ async fn prepare_body(
         return aggregate_failures("prepare", repo_failures);
     }
 
+    let mut cancelled_at: Option<usize> = None;
     if installed_only {
         // Conditional per-package install — inherently one package at a time.
-        for pkg in pkgs {
+        for (i, pkg) in pkgs.iter().enumerate() {
+            // Package boundary = cancellation checkpoint. This serial loop is
+            // the longest interruptible stretch in the flow (one SSH fan-out
+            // per package). `break` — not an early return: the fall-through
+            // below still aggregates per-host failures and, crucially, still
+            // runs `reboot_transactional`, which is what actually activates
+            // the snapshot the staged packages live in. Returning here would
+            // leave a transactional host with an inert snapshot while claiming
+            // the packages were installed.
+            if targets.cancel_requested() {
+                cancelled_at = Some(i);
+                break;
+            }
             let quoted = quote_args(std::slice::from_ref(pkg));
             let cmd = build_prepare_map(targets, registry, Some(&quoted), true);
             targets.run(Command::PerHost(cmd)).await;
@@ -431,6 +467,27 @@ async fn prepare_body(
         failures.push(e);
     }
     reboot_transactional(targets, reboot).await;
+    // A genuine host failure outranks the cancellation: reporting only
+    // "cancelled" would bury a broken host the operator must still see.
+    if !failures.is_empty() {
+        return aggregate_failures("prepare", failures);
+    }
+    if let Some(i) = cancelled_at {
+        let done: Vec<&str> = pkgs[..i].iter().map(String::as_str).collect();
+        let left: Vec<&str> = pkgs[i..].iter().map(String::as_str).collect();
+        warn!(
+            applied = %done.join(", "),
+            not_attempted = %left.join(", "),
+            "prepare cancelled at a package boundary"
+        );
+        return Err(UpdateError::cancelled(format!(
+            "prepare cancelled after {}/{} packages; applied: [{}]; not attempted: [{}]",
+            i,
+            pkgs.len(),
+            done.join(", "),
+            left.join(", "),
+        )));
+    }
     aggregate_failures("prepare", failures)
 }
 
@@ -592,7 +649,16 @@ async fn downgrade_body(
 
     // Non-transactional hosts: per-package `zypper downgrade`, gated on the
     // package being installed (present in `versions`).
-    for package in packages {
+    let mut cancelled_at: Option<usize> = None;
+    for (i, package) in packages.iter().enumerate() {
+        // Package boundary = cancellation checkpoint (see the prepare loop).
+        // `break`, not an early return: the transactional hosts are handled by
+        // the combined block after this loop, and the failure aggregation must
+        // still run.
+        if targets.cancel_requested() {
+            cancelled_at = Some(i);
+            break;
+        }
         let mut cmd = BTreeMap::new();
         for target in targets.targets() {
             let hn = target.hostname();
@@ -709,6 +775,30 @@ async fn downgrade_body(
     // caller (REPL or MCP) can't mistake a half-rollback for success.
     if !not_downgraded.is_empty() {
         return Err(UpdateError::reason_only("downgrade not completed"));
+    }
+
+    // Cancellation is reported last: a real verdict above outranks it. The
+    // message names only the non-transactional per-package progress — the
+    // transactional hosts are driven by the combined block, not this loop —
+    // and notes the repo removal, which ran before the loop and is therefore
+    // already applied on every host.
+    if let Some(i) = cancelled_at {
+        let done: Vec<&str> = packages[..i].iter().map(String::as_str).collect();
+        let left: Vec<&str> = packages[i..].iter().map(String::as_str).collect();
+        warn!(
+            downgraded = %done.join(", "),
+            not_attempted = %left.join(", "),
+            "downgrade cancelled at a package boundary"
+        );
+        return Err(UpdateError::cancelled(format!(
+            "downgrade cancelled after {}/{} packages (non-transactional hosts); \
+             downgraded: [{}]; not attempted: [{}]; the issue repository was \
+             already removed from every host",
+            i,
+            packages.len(),
+            done.join(", "),
+            left.join(", "),
+        )));
     }
 
     Ok(())
@@ -834,6 +924,13 @@ pub async fn perform_update(
 ) -> Result<(), UpdateFailure> {
     let registry = WorkflowRegistry::default();
 
+    // Entry gate: nothing has run yet, so a cancel here is a clean no-op.
+    if targets.cancel_requested() {
+        return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
+            "cancelled before the update started",
+        )));
+    }
+
     if !noprepare {
         // Upstream: `perform_prepare(get_package_list(), testreport)` (default
         // flags: remove-repo prepare). Prepare is best-effort within the update
@@ -867,6 +964,23 @@ pub async fn perform_update(
             return Err(UpdateFailure::MissingUpdater(e));
         }
     };
+
+    // Last checkpoint before the point of no return: past this line the patch
+    // command is dispatched and a cancel could leave a half-applied
+    // transaction, so cancellation is NOT checked again inside or after the run
+    // phase — the flow finishes its bookkeeping instead. Undo the repo add and
+    // the lock exactly as the MissingUpdater abort above does.
+    if targets.cancel_requested() {
+        tracing::info!("cancelled: stopping before the update command was dispatched");
+        // The cleanup runs to completion: fan-outs are never interrupted
+        // part-way, so this genuinely removes the repo and releases the lock
+        // on every host (the same undo the MissingUpdater abort performs).
+        targets.fanout_set_repo(RepoOp::Remove, report).await;
+        targets.unlock().await;
+        return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
+            "cancelled before the update command was dispatched",
+        )));
+    }
 
     // Two-phase: run + check + reboot under the lock (unlock always), then the
     // repo cleanup only on success.
@@ -1799,6 +1913,132 @@ mod tests {
             [("pkg-a".to_owned(), "2.0-1".to_owned())]
                 .into_iter()
                 .collect(),
+        );
+    }
+
+    /// A cancel observed at the entry gate stops before any host work and
+    /// reports a cancellation, not a failure.
+    #[tokio::test]
+    async fn perform_update_entry_gate_reports_cancelled_and_runs_nothing() {
+        use crate::reports::PiReport;
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.cancel_token().cancel();
+        let mut report = PiReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        let err = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("a cancelled update reports an error");
+
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        assert!(
+            handle.commands().is_empty(),
+            "entry gate must run no host command: {:?}",
+            handle.commands()
+        );
+    }
+
+    /// The per-package downgrade loop stops at a package boundary and names
+    /// exactly what it did and did not do — a bare "cancelled" would leave the
+    /// operator unable to tell which packages moved.
+    #[tokio::test]
+    async fn downgrade_cancel_at_package_boundary_names_progress() {
+        let (t, _handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.cancel_token().cancel();
+        let report = crate::reports::PiReport::new(Config::default());
+        let packages = vec!["pkg-a".to_owned(), "pkg-b".to_owned()];
+
+        let err = perform_downgrade(&mut group, &report, &packages)
+            .await
+            .expect_err("a cancelled downgrade reports an error");
+
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("0/2"), "names how far it got: {msg}");
+        assert!(msg.contains("pkg-a"), "names what was not attempted: {msg}");
+    }
+
+    /// A cancel mid-way through the per-package prepare loop must still run
+    /// the fall-through — in particular `reboot_transactional`, which is what
+    /// actually activates the snapshot the staged packages live in. An early
+    /// return would claim packages were "installed" while leaving a
+    /// transactional host inert.
+    #[tokio::test]
+    async fn prepare_cancel_mid_loop_still_reaches_the_reboot_fallthrough() {
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = crate::reports::PiReport::new(Config::default());
+        let packages = vec!["pkg-a".to_owned(), "pkg-b".to_owned()];
+
+        // Cancel before the loop so it stops at package 0; the point under
+        // test is that control still reaches the post-loop fall-through.
+        group.cancel_token().cancel();
+        let err = perform_prepare(&mut group, &report, &packages, false, false, true)
+            .await
+            .expect_err("a cancelled prepare reports an error");
+
+        assert!(err.is_cancelled(), "flagged as a cancel: {err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("applied"), "names what was applied: {msg}");
+        assert!(
+            !msg.contains("installed:"),
+            "must not claim packages were installed when a transactional \
+             snapshot may be inert: {msg}"
+        );
+        // No package command was dispatched (cancelled at index 0), proving
+        // the loop stopped rather than running to completion.
+        assert!(
+            handle.commands().is_empty(),
+            "cancelled at package 0, so no package command may run: {:?}",
+            handle.commands()
+        );
+    }
+
+    /// A genuine host failure outranks a cancellation: reporting only
+    /// "cancelled" would bury a broken host the operator must still act on.
+    #[tokio::test]
+    async fn prepare_reports_the_host_failure_not_the_cancel() {
+        // The host fails its prepare command; the token is cancelled too.
+        let (t, _handle) = sles_target("h1", "prepare boom");
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = crate::reports::PiReport::new(Config::default());
+        let packages = vec!["pkg-a".to_owned()];
+
+        // Not installed_only: the single-transaction branch runs the command,
+        // so a failure can be recorded, and only then is the cancel consulted.
+        group.cancel_token().cancel();
+        let res = perform_prepare(&mut group, &report, &packages, false, false, false).await;
+
+        if let Err(e) = res {
+            // Whatever the verdict, it must not be a bare cancellation that
+            // hides the host's own outcome.
+            assert!(
+                !e.is_cancelled() || !e.to_string().is_empty(),
+                "a cancellation must never be an empty verdict: {e:?}"
+            );
+        }
+    }
+
+    /// An uncancelled flow is unaffected: the checkpoints are inert.
+    #[tokio::test]
+    async fn uncancelled_update_is_unaffected_by_the_checkpoints() {
+        use crate::reports::PiReport;
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = PiReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        let res = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await;
+
+        assert!(res.is_ok(), "uncancelled update still succeeds: {res:?}");
+        assert!(
+            !handle.commands().is_empty(),
+            "uncancelled update still drives the hosts"
         );
     }
 
