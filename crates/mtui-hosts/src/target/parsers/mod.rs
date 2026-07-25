@@ -8,7 +8,9 @@
 //!   `/etc/products.d`, resolves the base product, collects addons, applies the
 //!   SLES_SAP repo workarounds, and detects transactional hosts.
 
-pub(crate) mod product;
+// `pub` (not `pub(crate)`) solely so the detached cargo-fuzz harness in
+// `fuzz/` can drive the pure parsers with arbitrary bytes.
+pub mod product;
 pub mod system;
 
 pub use system::parse_system;

@@ -43,6 +43,12 @@ crates/
   mtui-core/         Command trait + registry + Session + engine + wiring (composition root)
   mtui-cli/          reedline REPL + `mtui` binary
   mtui-mcp/          rmcp server + `mtui-mcp` binary
+fuzz/                cargo-fuzz harness over the untrusted-input parsers.
+                     Detached from the workspace (own empty [workspace] table):
+                     fuzzing needs nightly and must not affect the MSRV,
+                     Cargo.lock, or stable CI. Run: cargo +nightly fuzz run
+                     <target>. CI runs it via ClusterFuzzLite
+                     (.clusterfuzzlite/ + .github/workflows/cflite_fuzz.yml).
 ```
 Task breakdown is tracked in the project's issue tracker; check it for the
 next actionable task before working on a subsystem.

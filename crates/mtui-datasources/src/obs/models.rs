@@ -15,6 +15,10 @@
 //! entities anyway (it surfaces them as distinct events), so a DTD-free body
 //! with an entity reference never expands either. This mirrors the guard in
 //! [`crate::obs::client::error_summary`].
+//!
+//! The four `parse_*` entry points are `pub` (not `pub(crate)`) solely so the
+//! detached cargo-fuzz harness in `fuzz/` can drive them with arbitrary bytes;
+//! nothing outside this crate and the harness should call them directly.
 
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
@@ -256,7 +260,7 @@ fn parse_request_element(
 /// # Errors
 ///
 /// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
-pub(crate) fn parse_request(xml: &str) -> Result<Request, ObsError> {
+pub fn parse_request(xml: &str) -> Result<Request, ObsError> {
     let mut reader = reader(xml)?;
     let mut buf = Vec::new();
     loop {
@@ -287,7 +291,7 @@ pub(crate) fn parse_request(xml: &str) -> Result<Request, ObsError> {
 /// # Errors
 ///
 /// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
-pub(crate) fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
+pub fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
     let mut reader = reader(xml)?;
     let mut buf = Vec::new();
     let mut requests = Vec::new();
@@ -320,7 +324,7 @@ pub(crate) fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsErr
 /// # Errors
 ///
 /// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
-pub(crate) fn parse_group_directory(xml: &str) -> Result<Vec<String>, ObsError> {
+pub fn parse_group_directory(xml: &str) -> Result<Vec<String>, ObsError> {
     let mut reader = reader(xml)?;
     let mut buf = Vec::new();
     let mut names = Vec::new();
@@ -350,7 +354,7 @@ pub(crate) fn parse_group_directory(xml: &str) -> Result<Vec<String>, ObsError> 
 /// # Errors
 ///
 /// Returns [`ObsError::Parse`] if the body carries a DTD or is malformed.
-pub(crate) fn parse_reject_reason_values(xml: &str) -> Result<Vec<String>, ObsError> {
+pub fn parse_reject_reason_values(xml: &str) -> Result<Vec<String>, ObsError> {
     let mut reader = reader(xml)?;
     let mut buf = Vec::new();
     let mut values = Vec::new();
