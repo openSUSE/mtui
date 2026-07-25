@@ -321,7 +321,13 @@ async fn cancel_one_template_job_leaves_others() {
     // Wait until the blocking body is running, then cancel it and release.
     started.notified().await;
     let msg = sess.job_cancel(&first).await.expect("cancel succeeds");
-    assert_eq!(msg, format!("cancelled job {first}"));
+    // The blocker never observes the cancellation token, so the two-stage
+    // cancel burns its cooperative grace and reports the forced abort.
+    assert!(
+        msg.starts_with(&format!("cancelled job {first}")),
+        "got: {msg}"
+    );
+    assert!(msg.contains("forced abort"), "got: {msg}");
     release.notify_waiters();
 
     assert_eq!(

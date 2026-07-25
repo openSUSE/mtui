@@ -20,6 +20,8 @@ clap.workspace = true
 shlex.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+# CancellationToken for the Session cancellation seam (MCP `job_cancel`).
+tokio-util.workspace = true
 futures.workspace = true
 tracing.workspace = true
 owo-colors.workspace = true

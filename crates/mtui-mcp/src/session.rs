@@ -94,6 +94,7 @@ use mtui_core::{
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::capture::{self, SharedBuf};
 use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
@@ -115,6 +116,17 @@ pub(crate) const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 /// to [`McpSession::run_command_with_progress`], overridable per call so tests
 /// can drive a sub-second interval.
 pub(crate) const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Cooperative grace [`job_cancel`](McpSession::job_cancel) gives a worker
+/// between cancelling its token and force-aborting its task.
+///
+/// A dispatch parked at a seam checkpoint (the `Command::run` driver's
+/// pre-flight / between-templates checks, or a body watching
+/// [`mtui_core::Session::cancel_requested`]) settles well inside this; a body
+/// blocked mid host-op never observes the token and burns the full grace
+/// before the hard abort. Kept short so `job_cancel` stays responsive; not a
+/// config key (no upstream counterpart — Python cancellation was thread-kill).
+pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(1);
 
 /// A [`JoinHandle`] wrapper that aborts its task when dropped.
 ///
@@ -288,8 +300,14 @@ struct Job {
     error: Option<String>,
     /// The failure exit code when `state == Failed`.
     exit_code: Option<i32>,
-    /// The worker task handle, aborted by [`McpSession::job_cancel`].
+    /// The worker task handle, aborted by [`McpSession::job_cancel`] when the
+    /// cooperative grace elapses.
     handle: Option<JoinHandle<()>>,
+    /// This job's cancellation token, installed on the session its dispatch
+    /// runs on. [`McpSession::job_cancel`] cancels it *first* so a body
+    /// observing the seam ([`mtui_core::Session::cancel_requested`]) can stop
+    /// cooperatively before the hard abort.
+    cancel: CancellationToken,
 }
 
 /// A public, poll-facing snapshot of a [`Job`] (no task handle).
@@ -715,6 +733,26 @@ impl McpSession {
         name: &str,
         argv: &[String],
     ) -> Result<String, McpCommandError> {
+        self.run_command_cancellable(registry, name, argv, None)
+            .await
+    }
+
+    /// [`run_command`](Self::run_command) with an optional per-job cancellation
+    /// token installed on the session the dispatch runs on.
+    ///
+    /// The background-job worker passes its job's token so
+    /// [`job_cancel`](Self::job_cancel) can cancel exactly that dispatch;
+    /// foreground tool calls pass `None` and keep the session's own (never
+    /// cancelled) token. On the forked (scoped) path the token is set on the
+    /// per-call fork; on the exclusive path it is swapped onto the canonical
+    /// session for the duration of the dispatch and restored after.
+    async fn run_command_cancellable(
+        &self,
+        registry: &Registry,
+        name: &str,
+        argv: &[String],
+        cancel: Option<CancellationToken>,
+    ) -> Result<String, McpCommandError> {
         // Acquire the per-template / registry-gate hold for this invocation
         // *before* touching the session, so same-RRID and unscoped calls
         // serialise and mutators drain in-flight per-RRID work. Held for the
@@ -761,6 +799,17 @@ impl McpSession {
                     let session = self.session.lock().await;
                     session.fork_for_call(call_display)
                 };
+                // Wire the per-job token into the fork so the dispatched body
+                // (and the `Command::run` driver's checkpoints) observe a
+                // `job_cancel` cooperatively. Foreground calls get a fresh
+                // (never-cancelled) token rather than the fork's inherited one:
+                // a hard-aborted exclusive dispatch can leave a cancelled job
+                // token behind on the canonical session (its restore is skipped
+                // when the worker future is dropped), and the fork must not
+                // inherit that staleness — installing unconditionally makes
+                // every dispatch self-healing.
+                call_session
+                    .set_cancel_token(cancel.clone().unwrap_or_else(CancellationToken::new));
                 let argv_owned = argv.to_vec();
                 // Abort-on-drop: if this `run_command` future is cancelled (e.g.
                 // an aborted background-job worker), abort the dispatch task too,
@@ -792,7 +841,18 @@ impl McpSession {
             CommandLock::Exclusive(_) => {
                 let mut session = self.session.lock().await;
                 let prev_display = std::mem::replace(&mut session.display, call_display);
+                // Install this dispatch's token on the canonical session: the
+                // per-job token for a background worker, a fresh
+                // (never-cancelled) one for a foreground call. Installing
+                // unconditionally — instead of swap-and-restore — makes the
+                // token state self-healing: if a hard-aborted worker skips the
+                // restore below, the *next* dispatch's install wipes the stale
+                // cancelled token before its pre-flight check.
+                session.set_cancel_token(cancel.clone().unwrap_or_else(CancellationToken::new));
                 let result = dispatch_argv(registry, &mut session, name, argv).await;
+                // Best-effort tidy-up (skipped when the worker future is
+                // dropped mid-dispatch; see the install note above).
+                session.set_cancel_token(CancellationToken::new());
                 session.display = prev_display;
                 session.release_active_guard();
                 result
@@ -946,6 +1006,7 @@ impl McpSession {
         argv: Vec<String>,
         job_id: String,
     ) -> String {
+        let cancel = CancellationToken::new();
         let job = Arc::new(StdMutex::new(Job {
             id: job_id.clone(),
             command: name.to_owned(),
@@ -956,6 +1017,7 @@ impl McpSession {
             error: None,
             exit_code: None,
             handle: None,
+            cancel: cancel.clone(),
         }));
         jobs_guard.insert(job_id.clone(), Arc::clone(&job));
 
@@ -963,7 +1025,9 @@ impl McpSession {
         let name = name.to_owned();
         let worker_job = Arc::clone(&job);
         let handle = tokio::spawn(async move {
-            let outcome = session.run_command(&registry, &name, &argv).await;
+            let outcome = session
+                .run_command_cancellable(&registry, &name, &argv, Some(cancel))
+                .await;
             {
                 let mut j = worker_job.lock().expect("job record poisoned");
                 // A cancel may have already marked the record terminal; if so, do
@@ -1173,36 +1237,73 @@ impl McpSession {
 
     /// Cancel a running job; error if the id is unknown (upstream `job_cancel`).
     ///
-    /// Aborts the worker task and marks the record `Cancelled`. NOTE: if the job
-    /// is mid host-op (an SSH/subprocess body), aborting detaches the awaiter but
-    /// the underlying host operation may keep running to completion — the same
-    /// caveat as interrupting a foreground `run`. A finished job is a no-op.
+    /// Truthful, two-stage cancel:
+    ///
+    /// 1. **Cooperative:** the job's [`CancellationToken`] is cancelled first,
+    ///    so a dispatch parked at a seam checkpoint (the `Command::run` driver's
+    ///    pre-flight / between-templates checks, or a body observing
+    ///    [`mtui_core::Session::cancel_requested`]) unwinds cleanly. The worker
+    ///    gets [`CANCEL_GRACE`] to settle.
+    /// 2. **Forced:** if the grace elapses (the body never checks the seam —
+    ///    e.g. it is blocked mid host-op), the worker task is aborted. The
+    ///    underlying SSH/subprocess operation may still run to completion on
+    ///    the host — the same caveat as interrupting a foreground `run` — and
+    ///    the reply says the abort was forced.
+    ///
+    /// A job already in a terminal state is **not** re-cancelled: the reply
+    /// names its actual state instead of claiming a cancellation that never
+    /// happened.
     ///
     /// # Errors
     ///
     /// [`McpCommandError`] (exit 1) with `"no such job: <id>"` when unknown.
     pub async fn job_cancel(&self, job_id: &str) -> Result<String, McpCommandError> {
         let job = self.job(job_id)?;
-        let handle = {
+        let (handle, token) = {
             let mut j = job.lock().expect("job record poisoned");
-            if j.state == JobState::Running {
-                j.state = JobState::Cancelled;
-                j.finished = Some(Instant::now());
-                j.handle.take()
-            } else {
-                None
+            match j.state {
+                JobState::Running => {
+                    // Claim the cancel atomically: marking the record terminal
+                    // here means the worker's terminal-write branch (which
+                    // checks `Running`) can no longer overwrite it.
+                    j.state = JobState::Cancelled;
+                    j.finished = Some(Instant::now());
+                    (j.handle.take(), j.cancel.clone())
+                }
+                state => {
+                    // Truthful no-op: nothing was cancelled.
+                    return Ok(format!("job {job_id} already {state}; nothing to cancel"));
+                }
             }
         };
-        if let Some(handle) = handle {
-            handle.abort();
-            // Await the aborted task so cancellation has fully unwound before we
-            // return; a `JoinError::Cancelled` is expected and ignored.
-            let _ = handle.await;
-            // The aborted worker's terminal-write branch (which normally evicts)
-            // was skipped, so reap history here now this record is terminal.
+        // Cooperative stage: signal the seam before touching the task.
+        token.cancel();
+        let mut forced = false;
+        if let Some(mut handle) = handle {
+            if tokio::time::timeout(CANCEL_GRACE, &mut handle)
+                .await
+                .is_err()
+            {
+                // Forced stage: the body never reached a checkpoint.
+                forced = true;
+                handle.abort();
+                // Await the aborted task so cancellation has fully unwound
+                // before we return; a `JoinError::Cancelled` is expected.
+                let _ = handle.await;
+            }
+            // The worker's terminal-write branch skipped its eviction (state
+            // was already `Cancelled`), so reap history here.
             self.evict_completed();
         }
-        Ok(format!("cancelled job {job_id}"))
+        if forced {
+            Ok(format!(
+                "cancelled job {job_id} (forced abort after {}s grace; a host \
+                 operation already in flight may still finish on the host)",
+                CANCEL_GRACE.as_secs()
+            ))
+        } else {
+            Ok(format!("cancelled job {job_id}"))
+        }
     }
 
     /// Look up a job record by id, or the `"no such job"` envelope.
@@ -1506,6 +1607,7 @@ mod tests {
                 error: None,
                 exit_code: None,
                 handle: None,
+                cancel: CancellationToken::new(),
             }))
         };
         {
@@ -1560,6 +1662,7 @@ mod tests {
                         error: None,
                         exit_code: None,
                         handle: None,
+                        cancel: CancellationToken::new(),
                     })),
                 );
             }
@@ -1680,9 +1783,161 @@ mod tests {
         assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Done);
 
         let msg = sess.job_cancel(&job_id).await.expect("cancel is a no-op");
-        assert_eq!(msg, format!("cancelled job {job_id}"));
+        // Truthful no-op: the reply names the actual terminal state instead of
+        // claiming a cancellation that never happened.
+        assert_eq!(msg, format!("job {job_id} already done; nothing to cancel"));
         // State is unchanged: a finished job is not rewritten to Cancelled.
         assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Done);
+        // The result is preserved and still retrievable.
+        assert!(
+            sess.job_result(&job_id).is_ok(),
+            "result survives the no-op"
+        );
+    }
+
+    /// A body watching the cancellation seam settles inside the grace window:
+    /// `job_cancel` reports a plain (cooperative) cancel, not a forced abort.
+    #[tokio::test]
+    async fn job_cancel_cooperative_body_settles_within_grace() {
+        use clap::ArgMatches;
+        use mtui_core::{Command, CommandResult, Scope};
+
+        // Signals the test once the body is parked on the seam, so the cancel
+        // is issued only after the dispatch is genuinely mid-flight.
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+
+        struct Cooperative(StdMutex<Option<tokio::sync::oneshot::Sender<()>>>);
+        #[async_trait::async_trait]
+        impl Command for Cooperative {
+            fn name(&self) -> &'static str {
+                "cooperative_probe"
+            }
+            fn scope(&self) -> Scope {
+                Scope::Fanout
+            }
+            async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
+                if let Some(tx) = self.0.lock().expect("probe channel poisoned").take() {
+                    let _ = tx.send(());
+                }
+                // Park on the seam: unwind the moment job_cancel fires the
+                // token, well inside CANCEL_GRACE.
+                session.cancel_token().cancelled().await;
+                Err(CommandError::Cancelled)
+            }
+        }
+
+        let sess = session(Config::default());
+        let mut registry = register_all();
+        registry.register(Arc::new(Cooperative(StdMutex::new(Some(started_tx)))));
+
+        let job_id = sess
+            .start_job(Arc::new(registry), "cooperative_probe", Vec::new())
+            .expect("start_job succeeds");
+        started_rx.await.expect("probe body started");
+
+        let before = Instant::now();
+        let msg = sess.job_cancel(&job_id).await.expect("cancel succeeds");
+        // Cooperative: the body observed the token, so no forced abort — and
+        // the whole cancel settles well inside the grace window.
+        assert_eq!(msg, format!("cancelled job {job_id}"));
+        assert!(
+            before.elapsed() < CANCEL_GRACE,
+            "cooperative cancel must not burn the grace: {:?}",
+            before.elapsed()
+        );
+        assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Cancelled);
+    }
+
+    /// A body that never checks the seam burns the full grace and is then
+    /// force-aborted; the reply says so instead of claiming a clean cancel.
+    #[tokio::test]
+    async fn job_cancel_unobservant_body_is_force_aborted_after_grace() {
+        use clap::ArgMatches;
+        use mtui_core::{Command, CommandResult, Scope};
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+
+        struct Stubborn(StdMutex<Option<tokio::sync::oneshot::Sender<()>>>);
+        #[async_trait::async_trait]
+        impl Command for Stubborn {
+            fn name(&self) -> &'static str {
+                "stubborn_probe"
+            }
+            fn scope(&self) -> Scope {
+                Scope::Fanout
+            }
+            async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+                if let Some(tx) = self.0.lock().expect("probe channel poisoned").take() {
+                    let _ = tx.send(());
+                }
+                // Simulates a body blocked mid host-op: never observes the
+                // token, only the hard abort can stop it.
+                tokio::time::sleep(Duration::from_secs(600)).await;
+                Ok(())
+            }
+        }
+
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let sess = session(config);
+        let mut registry = register_all();
+        registry.register(Arc::new(Stubborn(StdMutex::new(Some(started_tx)))));
+        let registry = Arc::new(registry);
+
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "stubborn_probe", Vec::new())
+            .expect("start_job succeeds");
+        started_rx.await.expect("probe body started");
+
+        let msg = sess.job_cancel(&job_id).await.expect("cancel succeeds");
+        assert!(
+            msg.contains("forced abort"),
+            "unobservant body must report the forced abort: {msg}"
+        );
+        assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Cancelled);
+        // The cancelled record still reports the standard envelope on read.
+        let err = sess.job_result(&job_id).expect_err("cancelled job raises");
+        assert!(err.stderr.contains("was cancelled"), "got: {err:?}");
+
+        // Self-healing end-to-end: the hard abort skipped the exclusive path's
+        // token restore, leaving the cancelled job token on the canonical
+        // session — the next dispatch must install a fresh token before its
+        // pre-flight check and therefore succeed, not report "cancelled".
+        let out = sess
+            .run_command(&registry, "whoami", &[])
+            .await
+            .expect("dispatch after a forced abort must not see a stale cancelled token");
+        assert!(out.contains("testuser"), "got: {out}");
+    }
+
+    /// The truthful no-op replies for the two other terminal states: a failed
+    /// and an already-cancelled job each name their actual state.
+    #[tokio::test]
+    async fn job_cancel_failed_and_cancelled_jobs_reply_truthfully() {
+        let sess = session(Config::default());
+        for (id, state) in [
+            ("probe-failed-1", JobState::Failed),
+            ("probe-cancelled-1", JobState::Cancelled),
+        ] {
+            let job = Arc::new(StdMutex::new(Job {
+                id: id.to_owned(),
+                command: "probe".to_owned(),
+                state,
+                started: Instant::now(),
+                finished: Some(Instant::now()),
+                result: None,
+                error: None,
+                exit_code: None,
+                handle: None,
+                cancel: CancellationToken::new(),
+            }));
+            sess.jobs.lock().unwrap().insert(id.to_owned(), job);
+
+            let msg = sess.job_cancel(id).await.expect("terminal cancel is Ok");
+            assert_eq!(msg, format!("job {id} already {state}; nothing to cancel"));
+            // The record's state is not rewritten.
+            assert_eq!(sess.job_status(id).unwrap().state, state);
+        }
     }
 
     /// `job_result` on a cancelled job surfaces the "was cancelled" envelope.
@@ -1700,6 +1955,7 @@ mod tests {
             error: None,
             exit_code: None,
             handle: None,
+            cancel: CancellationToken::new(),
         }));
         sess.jobs.lock().unwrap().insert("whoami-1".to_owned(), job);
 

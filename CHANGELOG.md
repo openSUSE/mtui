@@ -21,6 +21,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- MCP `job_cancel` is now truthful and two-stage. Cancelling a running job
+  first signals the new cooperative cancellation seam — today the dispatch
+  driver observes it at its pre-dispatch and between-template checkpoints
+  (so a multi-template job stops at the next template boundary), and command
+  bodies can opt in to stop at their own host/step boundaries — then
+  force-aborts the worker after a 1-second grace. The reply says which
+  happened, and a forced abort warns that a host operation already in flight
+  may still finish on the host. Cancelling an already-finished job now
+  replies `job <id> already done/failed/cancelled; nothing to cancel`
+  instead of falsely claiming `cancelled job <id>`.
 - mtui is now licensed GPL-3.0-or-later (previously GPL-2.0-only, matching
   upstream); see `LICENSE`.
 

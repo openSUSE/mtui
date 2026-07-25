@@ -130,6 +130,14 @@ next actionable task before working on a subsystem.
   `switch`) are deny-listed; the deny-list ∩ registry is consistency-tested and
   drift is warned about at boot. Local process execution has no command at all —
   `lrun` was removed by design; do not reintroduce it.
+- **Cancellation is cooperative-first.** `Session` carries a
+  `CancellationToken` (the seam); the `Command::run` driver checks it before
+  dispatch and between fan-out templates, and a long-running body may poll
+  `session.cancel_requested()` (or `select!` on `session.cancel_token()`) at
+  its own host/step boundaries. MCP `job_cancel` cancels the job's token,
+  waits a short grace for a cooperative stop, then hard-aborts the worker —
+  its reply distinguishes the two and never claims to cancel a job that had
+  already finished. New long-running command bodies should observe the seam.
 
 ## Contracts (do not break without intent — these enable ecosystem interop)
 - **RRID grammar** `project:kind:maintenance_id:review_id` and its parse errors.

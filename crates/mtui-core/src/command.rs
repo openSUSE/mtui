@@ -141,7 +141,16 @@ pub trait Command: Send + Sync {
     /// connected host is skipped up front (when the invocation named no `-t`
     /// hosts); if every template was skipped the command ran nowhere and
     /// [`CommandError::NoRefhostsDefined`] is returned.
+    ///
+    /// Cancellation (MCP `job_cancel`): the driver is the seam's chokepoint. It
+    /// bails with [`CommandError::Cancelled`] before dispatching at all, and —
+    /// on the fan-out path — re-checks between templates, so a cancelled
+    /// multi-template job stops at the next template boundary instead of
+    /// grinding through the rest. A cancel arriving *mid*-`call` is only
+    /// observed if the body opts in ([`Session::cancel_requested`]); otherwise
+    /// the MCP job layer hard-aborts after its grace period.
     async fn run(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        session.check_cancelled()?;
         let resolved = resolve_templates(self.scope(), session, args)?;
 
         if resolved.len() <= 1 {
@@ -183,7 +192,14 @@ pub trait Command: Send + Sync {
         let mut failures: Vec<(String, CommandError)> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
 
+        let mut cancelled = false;
         for rrid in &resolved {
+            // Template boundary = cancellation checkpoint: a job_cancel that
+            // lands while template N runs stops the fan-out before N+1.
+            if session.cancel_requested() {
+                cancelled = true;
+                break;
+            }
             let is_empty = session.is_hostless(rrid);
             if skippable && is_empty {
                 tracing::warn!(command = self.name(), rrid = %rrid, "skipped: no connected hosts");
@@ -199,6 +215,13 @@ pub trait Command: Send + Sync {
         }
 
         restore_active(session, restore);
+        if cancelled {
+            // Cancellation outranks the partial-failure aggregate: the caller
+            // asked the job to stop, so report that, not a FanOut over the
+            // templates that happened to finish first.
+            tracing::info!(command = self.name(), "fan-out cancelled");
+            return Err(CommandError::Cancelled);
+        }
 
         let done: std::collections::HashSet<&str> = failures
             .iter()
