@@ -57,6 +57,13 @@ pub struct UpdateError {
     pub(crate) reason: String,
     /// The host the command ran on, if known.
     pub(crate) host: Option<String>,
+    /// `true` when the flow stopped at a cancellation checkpoint rather than
+    /// failing.
+    ///
+    /// Lets the command layer report a cancelled flow as cancelled *without*
+    /// inferring it from the session token — inferring would misreport a
+    /// genuine host failure that merely coincided with a cancel.
+    pub(crate) cancelled: bool,
 }
 
 impl UpdateError {
@@ -66,13 +73,31 @@ impl UpdateError {
         Self {
             reason: reason.into(),
             host: Some(host.into()),
+            cancelled: false,
         }
+    }
+
+    /// Builds a host-less [`UpdateError`] marking a cooperative cancellation.
+    #[must_use]
+    pub fn cancelled(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            host: None,
+            cancelled: true,
+        }
+    }
+
+    /// `true` when this error records a cancellation, not a failure.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 
     /// Builds a host-less [`UpdateError`] (upstream `UpdateError(reason)`).
     #[must_use]
     pub(crate) fn reason_only(reason: impl Into<String>) -> Self {
         Self {
+            cancelled: false,
             reason: reason.into(),
             host: None,
         }

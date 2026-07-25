@@ -1129,7 +1129,7 @@ mod cancellation_seam {
             .run(&mut session, &args)
             .await
             .expect_err("cancel mid-fan-out reports Cancelled");
-        assert!(matches!(err, CommandError::Cancelled), "got: {err}");
+        assert!(matches!(err, CommandError::Cancelled(_)), "got: {err}");
         assert_eq!(
             *ran.lock().expect("probe log poisoned"),
             vec![RRID_A.to_owned()],
@@ -1154,7 +1154,7 @@ mod cancellation_seam {
             .run(&mut session, &args)
             .await
             .expect_err("pre-cancelled dispatch reports Cancelled");
-        assert!(matches!(err, CommandError::Cancelled), "got: {err}");
+        assert!(matches!(err, CommandError::Cancelled(_)), "got: {err}");
         assert!(
             ran.lock().expect("probe log poisoned").is_empty(),
             "no template body may run after a pre-dispatch cancel"

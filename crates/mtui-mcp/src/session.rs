@@ -1046,6 +1046,19 @@ impl McpSession {
                         }
                     }
                     j.finished = Some(Instant::now());
+                } else if j.state == JobState::Cancelled && j.error.is_none() {
+                    // The cancel won the race and claimed the record, but a
+                    // cooperative stop still produced a verdict naming what the
+                    // flow managed to do (which packages were applied, how many
+                    // templates ran). Record it so `job_result` can hand that
+                    // back instead of a bare "was cancelled" — without
+                    // rewriting the state the cancel already settled.
+                    if let Err(err) = outcome {
+                        j.error = Some(err.stderr);
+                        if !err.stdout.is_empty() {
+                            j.result = Some(err.stdout);
+                        }
+                    }
                 }
             }
             // Bound retained history: evict oldest-finished terminal records.
@@ -1226,9 +1239,15 @@ impl McpSession {
                 stderr: job.error.clone().unwrap_or_else(|| "job failed".to_owned()),
                 exit_code: job.exit_code.unwrap_or(1),
             }),
+            // Surface the cooperative stop's own verdict when the flow
+            // produced one (which packages were applied, how far the fan-out
+            // got); a forced abort has none, and keeps the bare form.
             JobState::Cancelled => Err(McpCommandError {
-                stdout: String::new(),
-                stderr: format!("job {job_id} was cancelled"),
+                stdout: job.result.clone().unwrap_or_default(),
+                stderr: job.error.as_ref().map_or_else(
+                    || format!("job {job_id} was cancelled"),
+                    |detail| format!("job {job_id} was cancelled: {detail}"),
+                ),
                 exit_code: 1,
             }),
             JobState::Done => Ok(job.result.clone().unwrap_or_default()),
@@ -1822,7 +1841,7 @@ mod tests {
                 // Park on the seam: unwind the moment job_cancel fires the
                 // token, well inside CANCEL_GRACE.
                 session.cancel_token().cancelled().await;
-                Err(CommandError::Cancelled)
+                Err(CommandError::Cancelled(String::new()))
             }
         }
 

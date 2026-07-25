@@ -79,6 +79,14 @@ const SHARED_UPLOAD_CAP: u64 = 8 * 1024 * 1024;
 /// Target` borrows), so a bounded, out-of-order scheduler
 /// (`buffer_unordered`) is observably equivalent to the previous unbounded
 /// `join_all`.
+///
+/// **A fan-out is never cancelled part-way.** Cancellation is checked at
+/// explicit call-site boundaries (see `HostsGroup::cancel_requested`), never
+/// inside this primitive: a host silently skipped mid-batch is
+/// indistinguishable downstream from a host that ran and succeeded — its stale
+/// `last*` snapshot would sail through the post-run checks and report the
+/// update as applied. Whole-batch granularity keeps "ran" and "did not run"
+/// distinguishable.
 async fn run_parallel<I, F>(futures: I, desc: Option<&str>, max_parallel: usize)
 where
     I: IntoIterator<Item = F>,

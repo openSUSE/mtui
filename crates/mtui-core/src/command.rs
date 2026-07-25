@@ -215,12 +215,17 @@ pub trait Command: Send + Sync {
         }
 
         restore_active(session, restore);
-        if cancelled {
-            // Cancellation outranks the partial-failure aggregate: the caller
-            // asked the job to stop, so report that, not a FanOut over the
-            // templates that happened to finish first.
+        if cancelled && failures.is_empty() {
+            // Report the stop — but only when nothing actually failed. A real
+            // per-template failure outranks it and falls through to the
+            // `FanOut` aggregate below: burying a broken template behind a
+            // bare "cancelled" is the one thing the caller must not be told.
             tracing::info!(command = self.name(), "fan-out cancelled");
-            return Err(CommandError::Cancelled);
+            let done = resolved.len() - skipped.len() - failures.len();
+            return Err(CommandError::Cancelled(format!(
+                "stopped after {done} of {} templates",
+                resolved.len()
+            )));
         }
 
         let done: std::collections::HashSet<&str> = failures

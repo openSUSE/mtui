@@ -46,6 +46,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::error::{HostError, Result};
 
 use mtui_types::system::System;
@@ -119,6 +121,16 @@ pub struct HostsGroup {
     /// max_parallel`. `0` (the default before wiring) means "unconfigured" and
     /// the fan-out primitive applies its own conservative default.
     max_parallel: usize,
+    /// Cooperative cancellation seam for the host fan-out.
+    ///
+    /// Pushed down from the composition root (`mtui-core::Session`) via
+    /// [`set_cancel_token`](Self::set_cancel_token), mirroring
+    /// [`set_prompter`](Self::set_prompter) / [`set_max_parallel`](Self::set_max_parallel).
+    /// Only the explicit call-site checkpoints consult it (the serial
+    /// per-package flows and the `update` step gates); a parallel fan-out is
+    /// never interrupted part-way. The default is a fresh, never-cancelled
+    /// token, so an unwired group behaves exactly as before.
+    cancel: CancellationToken,
 }
 
 impl HostsGroup {
@@ -138,12 +150,54 @@ impl HostsGroup {
             plan_provider: None,
             prompter: None,
             max_parallel: 0,
+            cancel: CancellationToken::new(),
         }
     }
 
-    /// Sets the parallel-batch fan-out bound from `[connection] max_parallel`.
+    /// Installs the cooperative cancellation token for this group.
     ///
-    /// Pushed down by the composition root (`mtui-core::Session`), mirroring
+    /// Pushed down from `mtui-core::Session` on every activation, mirroring
+    /// [`set_prompter`](Self::set_prompter). Only the explicit call-site
+    /// checkpoints consult it (see [`cancel_requested`](Self::cancel_requested));
+    /// the parallel fan-out itself is never interrupted part-way.
+    pub fn set_cancel_token(&mut self, cancel: CancellationToken) {
+        self.cancel = cancel;
+    }
+
+    /// `true` once cooperative cancellation has been requested for this group.
+    ///
+    /// The long serial flows in `mtui-testreport` (the per-package prepare and
+    /// downgrade loops, and the `perform_update` step sequence) poll this at
+    /// their own boundaries. The parallel fan-out deliberately does **not**
+    /// consult it: a host dropped mid-batch would be indistinguishable from
+    /// one that ran and succeeded.
+    #[must_use]
+    pub fn cancel_requested(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    /// Swaps in a fresh (never-cancelled) token and returns the previous one.
+    ///
+    /// For recovery work that must run *because* the flow is stopping — the
+    /// post-failure rollback downgrade being the case in point. Its own
+    /// per-package checkpoint would otherwise abort the rollback at package 0
+    /// and leave the half-applied update it exists to undo. Callers suspend
+    /// cancellation around the recovery and restore the token afterwards.
+    #[must_use = "restore the returned token once the recovery is done"]
+    pub fn suspend_cancellation(&mut self) -> CancellationToken {
+        std::mem::replace(&mut self.cancel, CancellationToken::new())
+    }
+
+    /// A clone of the group's cancellation token (clones share state).
+    #[must_use]
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
+    /// Sets the parallel-batch fan-out bound from the `[connection]`
+    /// `max_parallel` config key.
+    ///
+    /// Pushed down by the report lifecycle, mirroring
     /// [`set_prompter`](Self::set_prompter). `0` leaves the fan-out primitive's
     /// own conservative default in effect.
     pub fn set_max_parallel(&mut self, max_parallel: usize) {
@@ -244,6 +298,12 @@ impl HostsGroup {
     pub fn select(self, hosts: Option<&[String]>, enabled: bool) -> Result<HostsGroup> {
         let is_repl = self.is_repl;
         let provider = self.plan_provider.clone();
+        // Carry the pushed-down session state across the split. Before this,
+        // only `plan_provider` was copied, so a `-t` subset operation silently
+        // reverted `max_parallel` to the fan-out default and would likewise
+        // have dropped the cancellation token.
+        let max_parallel = self.max_parallel;
+        let cancel = self.cancel.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
         let selected: Vec<Target> = match hosts {
@@ -268,6 +328,8 @@ impl HostsGroup {
 
         let mut group = HostsGroup::new(selected, is_repl);
         group.plan_provider = provider;
+        group.max_parallel = max_parallel;
+        group.cancel = cancel;
         Ok(group)
     }
 
@@ -293,8 +355,9 @@ impl HostsGroup {
     ///   remainder.
     ///
     /// An unknown hostname is a [`HostError::NotConnected`], as in
-    /// [`select`](Self::select). Both returned groups inherit `interactive` and
-    /// the injected [`PlanProvider`].
+    /// [`select`](Self::select). Both returned groups inherit `interactive`, the
+    /// injected [`PlanProvider`], the `max_parallel` bound, and the
+    /// cancellation token.
     ///
     /// # Errors
     ///
@@ -306,6 +369,9 @@ impl HostsGroup {
     ) -> Result<(HostsGroup, HostsGroup)> {
         let is_repl = self.is_repl;
         let provider = self.plan_provider.clone();
+        // Carry the pushed-down session state across the split (see `select`).
+        let max_parallel = self.max_parallel;
+        let cancel = self.cancel.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
         if let Some(names) = hosts {
@@ -329,8 +395,12 @@ impl HostsGroup {
 
         let mut selected = HostsGroup::new(selected, is_repl);
         selected.plan_provider = provider.clone();
+        selected.max_parallel = max_parallel;
+        selected.cancel = cancel.clone();
         let mut remainder = HostsGroup::new(remainder, is_repl);
         remainder.plan_provider = provider;
+        remainder.max_parallel = max_parallel;
+        remainder.cancel = cancel;
         Ok((selected, remainder))
     }
 
@@ -1530,6 +1600,41 @@ mod tests {
             .unwrap();
         assert_eq!(sel.names(), vec!["h1".to_owned()]);
         assert_eq!(rem.names(), vec!["h2".to_owned()]);
+    }
+
+    #[test]
+    fn select_split_carries_max_parallel_and_cancel_to_both_halves() {
+        // Regression: `select_split` used to copy only `plan_provider`, so a
+        // `-t` subset silently reverted `max_parallel` to the fan-out default
+        // and would have dropped the cancellation token with it.
+        let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
+        g.set_max_parallel(7);
+        let token = g.cancel_token();
+
+        let (sel, rem) = g
+            .select_split(Some(&["h1".to_owned()]), true)
+            .expect("split succeeds");
+
+        assert_eq!(sel.max_parallel, 7, "selected half keeps the bound");
+        assert_eq!(rem.max_parallel, 7, "remainder keeps the bound");
+        // Both halves share the ORIGINAL token, so a cancel reaches them.
+        assert!(!sel.cancel_requested());
+        token.cancel();
+        assert!(sel.cancel_requested(), "selected half observes the cancel");
+        assert!(rem.cancel_requested(), "remainder observes the cancel");
+    }
+
+    #[test]
+    fn select_carries_max_parallel_and_cancel() {
+        let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
+        g.set_max_parallel(3);
+        let token = g.cancel_token();
+
+        let sel = g.select(Some(&["h1".to_owned()]), true).expect("select");
+
+        assert_eq!(sel.max_parallel, 3);
+        token.cancel();
+        assert!(sel.cancel_requested());
     }
 
     #[test]

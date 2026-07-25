@@ -38,6 +38,8 @@ async-trait.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true }
+# CancellationToken for the cooperative host-boundary cancellation seam.
+tokio-util.workspace = true
 futures.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true

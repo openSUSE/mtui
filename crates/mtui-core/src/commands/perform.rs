@@ -18,6 +18,8 @@ use clap::ArgMatches;
 use mtui_hosts::HostsGroup;
 use mtui_testreport::Diagnostic;
 
+use mtui_testreport::UpdateError;
+
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -57,6 +59,23 @@ pub(super) enum PerformOp {
     Downgrade(Vec<String>),
     /// `perform_update(noprepare, newpackage)`.
     Update { noprepare: bool, newpackage: bool },
+}
+
+/// Maps a flow error onto a [`CommandError`].
+///
+/// A flow that stopped at one of its own cancellation checkpoints marks its
+/// error `cancelled`; that — **not** the session token — is the authority.
+/// Sniffing the token here instead would misreport a genuine host failure that
+/// merely coincided with a cancel, hiding (say) a broken connection behind a
+/// bare "cancelled".
+///
+/// The cancellation message carries the detail (which packages were applied,
+/// which were not), so it is preserved rather than flattened.
+fn map_flow_error(e: &UpdateError) -> CommandError {
+    if e.is_cancelled() {
+        return CommandError::Cancelled(e.to_string());
+    }
+    CommandError::Other(e.to_string())
 }
 
 /// Resolves the `-t` selection and drives `op` over it, restoring the group.
@@ -115,14 +134,14 @@ pub(super) async fn drive(
             report
                 .perform_install(&mut selected, pkgs)
                 .await
-                .map_err(|e| CommandError::Other(e.to_string())),
+                .map_err(|e| map_flow_error(&e)),
         ),
         PerformOp::Uninstall(pkgs) => (
             "uninstall",
             report
                 .perform_uninstall(&mut selected, pkgs)
                 .await
-                .map_err(|e| CommandError::Other(e.to_string())),
+                .map_err(|e| map_flow_error(&e)),
         ),
         PerformOp::Prepare {
             packages,
@@ -134,14 +153,14 @@ pub(super) async fn drive(
             report
                 .perform_prepare(&mut selected, packages, *force, *testing, *installed_only)
                 .await
-                .map_err(|e| CommandError::Other(e.to_string())),
+                .map_err(|e| map_flow_error(&e)),
         ),
         PerformOp::Downgrade(pkgs) => (
             "downgrade",
             report
                 .perform_downgrade(&mut selected, pkgs)
                 .await
-                .map_err(|e| CommandError::Other(e.to_string())),
+                .map_err(|e| map_flow_error(&e)),
         ),
         PerformOp::Update {
             noprepare,
@@ -164,7 +183,10 @@ pub(super) async fn drive(
                 .await;
             session.restore_split_targets(selected, remainder);
             render_diagnostics(session, &diagnostics);
-            return update_result.map_err(|e| CommandError::Other(e.to_string()));
+            // A flow that stopped at a cancellation checkpoint surfaces as an
+            // ordinary `UpdateError`; re-check the token so the caller (and the
+            // MCP job record) sees `Cancelled` rather than a generic failure.
+            return update_result.map_err(|e| map_flow_error(&e));
         }
     };
 
