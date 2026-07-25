@@ -1064,3 +1064,100 @@ mod mcp_nonempty_success_guard {
         );
     }
 }
+
+/// Driver-level tests for the cancellation seam (`Session::cancel` +
+/// [`Command::run`](crate::Command::run) checkpoints). They live here — not in
+/// `command.rs` — for the same reason as the guard above: the [`testkit`]
+/// multi-template session builders are `#[cfg(test)]` `pub(crate)` in this
+/// module.
+#[cfg(test)]
+mod cancellation_seam {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use clap::ArgMatches;
+
+    use super::testkit::{fake_report, matches, session_with_hosts};
+    use crate::command::{Command, Scope};
+    use crate::error::{CommandError, CommandResult};
+    use crate::session::Session;
+
+    const RRID_A: &str = "SUSE:Maintenance:1:1";
+    const RRID_B: &str = "SUSE:Maintenance:2:2";
+
+    /// A fan-out probe that records each template it runs on and cancels the
+    /// session's token from inside its first `call`.
+    struct CancelAfterFirst {
+        ran: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Command for CancelAfterFirst {
+        fn name(&self) -> &'static str {
+            "cancel_probe"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Fanout
+        }
+        async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            self.ran
+                .lock()
+                .expect("probe log poisoned")
+                .push(session.templates.active_rrid().unwrap_or("").to_owned());
+            // A job_cancel landing mid-call: the driver must stop at the next
+            // template boundary.
+            session.cancel_token().cancel();
+            Ok(())
+        }
+    }
+
+    /// Two loaded templates, cancel fired during the first `call`: the driver
+    /// stops at the boundary — the second template never runs — and reports
+    /// [`CommandError::Cancelled`], not a `FanOut` aggregate.
+    #[tokio::test]
+    async fn fanout_driver_stops_at_template_boundary_on_cancel() {
+        let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
+        session.templates.add(fake_report(RRID_B, &["h2"], "ok"));
+
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let cmd = CancelAfterFirst {
+            ran: Arc::clone(&ran),
+        };
+        let args = matches(&cmd, &[]);
+
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("cancel mid-fan-out reports Cancelled");
+        assert!(matches!(err, CommandError::Cancelled), "got: {err}");
+        assert_eq!(
+            *ran.lock().expect("probe log poisoned"),
+            vec![RRID_A.to_owned()],
+            "the second template must never run after the cancel"
+        );
+    }
+
+    /// A token cancelled *before* dispatch: the pre-flight check bails without
+    /// running any template at all.
+    #[tokio::test]
+    async fn driver_preflight_bails_before_dispatch_when_cancelled() {
+        let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
+        session.cancel_token().cancel();
+
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let cmd = CancelAfterFirst {
+            ran: Arc::clone(&ran),
+        };
+        let args = matches(&cmd, &[]);
+
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("pre-cancelled dispatch reports Cancelled");
+        assert!(matches!(err, CommandError::Cancelled), "got: {err}");
+        assert!(
+            ran.lock().expect("probe log poisoned").is_empty(),
+            "no template body may run after a pre-dispatch cancel"
+        );
+    }
+}

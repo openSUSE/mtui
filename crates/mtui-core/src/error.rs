@@ -48,6 +48,16 @@ pub enum CommandError {
     #[error("fan-out failed on {} ({})", .0.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join(", "), .0.iter().map(|(r, e)| format!("{r}: {e}")).collect::<Vec<_>>().join("; "))]
     FanOut(Vec<(String, CommandError)>),
 
+    /// The dispatch was cancelled mid-flight (MCP `job_cancel`).
+    ///
+    /// Raised by [`Session::check_cancelled`](crate::Session::check_cancelled)
+    /// at a cancellation checkpoint — the pre-dispatch check and the
+    /// between-templates check in the [`Command::run`](crate::Command::run)
+    /// fan-out driver, plus any command body that opts in. No Python
+    /// counterpart: upstream had no in-band cancellation.
+    #[error("cancelled")]
+    Cancelled,
+
     /// A command-specific failure whose message the command supplies directly.
     ///
     /// Catch-all for the many concrete upstream `ErrorMessage` subclasses not
@@ -60,6 +70,12 @@ pub enum CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_display_is_pinned() {
+        // The MCP error envelope surfaces this string as stderr; keep it stable.
+        assert_eq!(CommandError::Cancelled.to_string(), "cancelled");
+    }
 
     #[test]
     fn no_refhosts_matches_upstream() {

@@ -23,9 +23,11 @@ use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{TargetState, Workflow};
 use tokio::sync::OwnedMutexGuard;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::display::CommandPromptDisplay;
+use crate::error::CommandError;
 use crate::template_registry::TemplateRegistry;
 
 /// The explicitly-passed state every command operates on.
@@ -110,6 +112,21 @@ pub struct Session {
     /// override it with the identity ([`ShuffleFn`]) for deterministic
     /// assertions.
     shuffle: ShuffleFn,
+    /// The cancellation seam: cooperative cancel signal for the dispatch this
+    /// session is driving (MCP `job_cancel`).
+    ///
+    /// Freshly minted (never cancelled) for a REPL/canonical session;
+    /// [`fork_for_call`](Self::fork_for_call) *clones* it so a fork shares the
+    /// parent's cancellation state, and `mtui-mcp` installs a per-job token via
+    /// [`set_cancel_token`](Self::set_cancel_token) before dispatching a
+    /// background job. Checked by the [`Command::run`](crate::Command::run)
+    /// driver before dispatch and between fan-out templates
+    /// ([`check_cancelled`](Self::check_cancelled)); a long-running command body
+    /// can additionally observe it ([`cancel_requested`](Self::cancel_requested)
+    /// / [`cancel_token`](Self::cancel_token)) to stop early. Purely
+    /// cooperative: a body that never checks still gets hard-aborted by the MCP
+    /// job layer after its grace period.
+    cancel: CancellationToken,
     /// Lazily-built, session-scoped outbound [`HttpClient`], cached with the
     /// [`VerifyPolicy`] it was built under.
     ///
@@ -213,6 +230,7 @@ impl Session {
             notify_sink: None,
             prompter: None,
             shuffle: random_shuffle,
+            cancel: CancellationToken::new(),
             http_client: Mutex::new(None),
             #[cfg(test)]
             http_builds: std::sync::atomic::AtomicUsize::new(0),
@@ -236,6 +254,7 @@ impl Session {
             notify_sink: None,
             prompter: None,
             shuffle: random_shuffle,
+            cancel: CancellationToken::new(),
             http_client: Mutex::new(None),
             #[cfg(test)]
             http_builds: std::sync::atomic::AtomicUsize::new(0),
@@ -278,10 +297,62 @@ impl Session {
             notify_sink: None,
             prompter: None,
             shuffle: self.shuffle,
+            // Share the parent's cancellation state: cancelling the canonical
+            // session (or the per-job token the MCP layer installs on this
+            // fork) must be observable on both sides of the fork.
+            cancel: self.cancel.clone(),
             http_client: Mutex::new(None),
             #[cfg(test)]
             http_builds: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// `true` once cancellation has been requested for this dispatch.
+    ///
+    /// The cheap poll form of the seam: a command body loops on host/step
+    /// boundaries and bails when this flips. See
+    /// [`check_cancelled`](Self::check_cancelled) for the `?`-friendly form and
+    /// [`cancel_token`](Self::cancel_token) for the awaitable form.
+    #[must_use]
+    pub fn cancel_requested(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    /// Bail with [`CommandError::Cancelled`] if cancellation has been requested.
+    ///
+    /// The `?`-friendly checkpoint the [`Command::run`](crate::Command::run)
+    /// driver calls before dispatch and between fan-out templates.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::Cancelled`] when the session's cancellation token has
+    /// been cancelled.
+    pub fn check_cancelled(&self) -> Result<(), CommandError> {
+        if self.cancel.is_cancelled() {
+            return Err(CommandError::Cancelled);
+        }
+        Ok(())
+    }
+
+    /// A clone of the session's cancellation token (clones share state).
+    ///
+    /// For `select!`-style bodies that want `token.cancelled().await` as a
+    /// branch alongside their I/O future.
+    #[must_use]
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
+    /// Install `token` as this session's cancellation token.
+    ///
+    /// The MCP job layer calls this to wire one freshly minted token per
+    /// background job into the session the job dispatches on, so
+    /// `job_cancel` cancels exactly that job's dispatch. Installing a token
+    /// *replaces* the previous one (it does not chain); the caller restores the
+    /// prior token afterwards when the session outlives the call (the exclusive
+    /// dispatch path).
+    pub fn set_cancel_token(&mut self, token: CancellationToken) {
+        self.cancel = token;
     }
 
     /// The session-scoped outbound [`HttpClient`], built lazily and reused.
@@ -2203,6 +2274,44 @@ mod tests {
             "chosen hosts must follow first-seen slot order"
         );
         assert_eq!(slot_candidates.len(), 2, "two distinct arch slots");
+    }
+
+    /// A fresh session's token is never cancelled; `check_cancelled` is `Ok`
+    /// until the token fires, then reports [`CommandError::Cancelled`] — and
+    /// [`Session::set_cancel_token`] *replaces* (never chains) the token.
+    #[test]
+    fn cancel_seam_check_and_replace() {
+        let mut s = Session::new(Config::default(), false);
+        assert!(!s.cancel_requested());
+        assert!(s.check_cancelled().is_ok());
+
+        s.cancel_token().cancel();
+        assert!(s.cancel_requested());
+        assert!(matches!(s.check_cancelled(), Err(CommandError::Cancelled)));
+
+        // Installing a fresh token replaces the cancelled one (the MCP
+        // self-healing install path relies on this).
+        s.set_cancel_token(tokio_util::sync::CancellationToken::new());
+        assert!(!s.cancel_requested());
+        assert!(s.check_cancelled().is_ok());
+    }
+
+    /// `fork_for_call` clones the token — cancellation state is shared across
+    /// the fork in both directions (the MCP job layer installs the per-job
+    /// token on the fork and cancels it from `job_cancel`).
+    #[test]
+    fn fork_for_call_shares_cancellation_state() {
+        use crate::display::{ColorMode, CommandPromptDisplay};
+
+        let s = Session::new(Config::default(), false);
+        let display = CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Never);
+        let fork = s.fork_for_call(display);
+
+        assert!(!fork.cancel_requested());
+        // Cancel via the parent: the fork observes it (clones share state).
+        s.cancel_token().cancel();
+        assert!(fork.cancel_requested(), "fork shares the parent's token");
+        assert!(s.cancel_requested());
     }
 
     /// `fork_for_call` shares the canonical session's loaded reports (same entry
