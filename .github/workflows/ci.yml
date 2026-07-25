@@ -140,7 +140,12 @@ jobs:
       - name: Install llvm-tools
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        # SHA-pinned like every other action (Scorecard Pinned-Dependencies);
+        # the tool is selected via the input, not the mutable `@cargo-llvm-cov`
+        # tag alias.
+        uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094  # v2.85.1
+        with:
+          tool: cargo-llvm-cov
       - name: Generate coverage
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - name: Upload coverage to CodeCov
