@@ -10,6 +10,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Fuzzing: a `cargo-fuzz` harness (`fuzz/`, detached from the workspace) over
+  the untrusted-input parsers — OBS API XML responses, host-fetched
+  `*.prod`/`os-release` bytes, remote lockfile lines, the RRID/UpdateID/RPM
+  version/package-spec/repo-URL grammars, and template repository metadata.
+  CI runs the targets under the address sanitizer on every PR and main push
+  via ClusterFuzzLite; a crash fails the job.
+
 - New `[connection]` config keys `reboot_timeout` (default `10` seconds) and
   `reboot_retries` (default `10`) control the reconnect budget `prepare`,
   `reboot`, and `update` use after rebooting a host: `reboot_timeout` is the

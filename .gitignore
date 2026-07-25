@@ -16,3 +16,11 @@ SUSE:*/
 
 # Release artifacts produced by `cargo xtask package` (built in CI, not committed)
 /dist/release/
+
+# cargo-fuzz build state (fuzz/ is a detached crate; its lockfile, corpus and
+# crash artifacts are machine-local)
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+/fuzz/Cargo.lock

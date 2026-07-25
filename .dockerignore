@@ -1,0 +1,18 @@
+*
+# ClusterFuzzLite fuzz build context (.clusterfuzzlite/Dockerfile). The fuzz
+# crate's path deps point into crates/, and loading any member of the parent
+# workspace requires every member manifest to be present — so the whole
+# crates/ tree plus xtask/ is whitelisted, but nothing else (no target/,
+# .git/, docs, or local work dirs).
+!/.clusterfuzzlite/
+!/.clusterfuzzlite/Dockerfile
+!/.clusterfuzzlite/build.sh
+!/.clusterfuzzlite/project.yaml
+!/Cargo.toml
+!/Cargo.lock
+!/crates/
+!/xtask/
+!/fuzz/
+!/fuzz/Cargo.toml
+!/fuzz/fuzz_targets/
+!/fuzz/fuzz_targets/*.rs

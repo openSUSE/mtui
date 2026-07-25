@@ -4,6 +4,10 @@
 //! they take the already-read file bytes (upstream took file-like SFTP handles;
 //! the Rust [`Connection::sftp_open`](crate::Connection::sftp_open) returns the
 //! bytes directly) and return a flat `(name, version, arch)` tuple.
+//!
+//! Both are `pub` (not `pub(crate)`) solely so the detached cargo-fuzz harness
+//! in `fuzz/` can drive them with arbitrary bytes — the content is
+//! host-controlled, so it is exactly the input a fuzzer should own.
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -26,7 +30,7 @@ use crate::error::{HostError, Result};
 /// # Errors
 /// Returns [`HostError::Sftp`] with a parse reason when the bytes are not valid
 /// XML.
-pub(crate) fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
+pub fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
     let fields = collect_fields(bytes)?;
 
     let text = |k: &str| fields.get(k).cloned().unwrap_or_default();
@@ -63,7 +67,7 @@ pub(crate) fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
 /// Returns [`HostError::Sftp`] when the required `ID` or `VERSION_ID` keys are
 /// absent (upstream raised `KeyError`, which the caller treats as a failed
 /// parse).
-pub(crate) fn parse_os_release(bytes: &[u8]) -> Result<(String, String, String)> {
+pub fn parse_os_release(bytes: &[u8]) -> Result<(String, String, String)> {
     let text = String::from_utf8_lossy(bytes);
     let mut info: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
