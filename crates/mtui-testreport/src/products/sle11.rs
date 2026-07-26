@@ -1,8 +1,8 @@
 //! Normalizer for the SLE 11 product family.
 //!
-//! Ported from `mtui/test_reports/products/sle11.py`. The upstream if-chain is
-//! order-sensitive and contains a deliberate non-returning fallthrough on the
-//! `CORE` branch; both are preserved exactly.
+//! Ported from `mtui/test_reports/products/sle11.py`. The if-chain is
+//! order-sensitive, and the `CORE` branch does not return — see the comment on
+//! that branch for why it is left that way.
 
 use mtui_types::SystemProduct;
 
@@ -24,8 +24,15 @@ pub fn normalize_sle11(mut x: SystemProduct) -> SystemProduct {
         x.version = x.version.replace("-LTSS", "").replace("-CLIENT-TOOLS", "");
         return x;
     }
-    // Upstream intentionally does NOT return here — the `CORE` rewrite falls
-    // through to the subsequent suffix checks. Preserved verbatim.
+    // No `return` here, deliberately kept. The fall-through is inert for every
+    // known product string: after the rewrite the name is
+    // `SUSE_SLES_LTSS-EXTREME-CORE`, so the trailing SLE-SMT/SLE-HAE *name*
+    // checks cannot match, and the post-strip version ends in none of
+    // TERADATA/SECURITY/PUBCLOUD — so all three of those checks are no-ops too.
+    // Only a doubly-suffixed version (`…-TERADATA-LTSS-EXTREME-CORE`) would
+    // reach one, and no such string has been observed. Left as-is rather than
+    // "fixed", because there is no evidence which answer it would want, and
+    // this key selects the update repository a host gets.
     if x.version.ends_with("CORE") {
         x.name = "SUSE_SLES_LTSS-EXTREME-CORE".to_string();
         x.version = x.version.replace("-LTSS-EXTREME-CORE", "");
