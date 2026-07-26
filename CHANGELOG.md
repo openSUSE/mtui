@@ -72,6 +72,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   max_parallel` fan-out bound to its built-in default: splitting the host group
   for a subset op carried only the workflow provider, dropping the configured
   bound (and, before this, any session state pushed down beside it).
+- `analyze_diff` now reports plain `Version:` bumps in a spec file. A misplaced
+  word boundary meant the pattern demanded a word character straight after
+  `Version:`, so the conventional form (`Version:` then whitespace, then the
+  value) was skipped while the unusual `Version:1.2.3` was matched — whether a
+  bump appeared in the report depended on the packager's whitespace style. Both
+  added and removed `Version:` lines are now listed under "Version / macro
+  changes:"; `%define`/`%global …ver…` macro bumps match exactly as before.
 
 ### Removed
 

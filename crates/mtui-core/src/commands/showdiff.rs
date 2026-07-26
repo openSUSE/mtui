@@ -37,13 +37,13 @@ static ARCHIVE: LazyLock<Regex> =
 // Reviewer-relevant references from changelog text.
 static REFERENCE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(?:CVE-\d{4}-\d+|b(?:sc|oo|nc)#\d+|jsc#\w+-\d+)\b").unwrap());
-// Version / global macro bumps worth surfacing. Ported verbatim from upstream
-// `_VERSION_BUMP`, including its quirk: the trailing `\b` sits after `Version:`
-// (a non-word `:` followed by whitespace is not a word boundary), so plain
-// `+Version:` lines never actually match — only the `%define`/`%global …ver…`
-// macro branch does. Preserved for behavioural parity rather than "fixed".
+// Version / global macro bumps worth surfacing: `Version:` spec tags and
+// `%define`/`%global …ver…` macros, on added or removed lines. The `\b` belongs
+// to the macro alternative only — after `Version:` it would demand a word
+// character next, so the conventional `Version:` + whitespace + value form would
+// not match while `Version:1.2.3` would.
 static VERSION_BUMP: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^[+-]\s*(?:Version:|%(?:define|global)\s+\S*ver\w*)\b").unwrap()
+    Regex::new(r"(?i)^[+-]\s*(?:Version:|%(?:define|global)\s+\S*ver\w*\b)").unwrap()
 });
 
 /// A parsed `(header, body_lines)` section of a `source.diff`.
@@ -411,6 +411,33 @@ mod tests {
         assert_eq!(archives(&slices), vec!["foo-1.2.tar.gz".to_owned()]);
     }
 
+    #[test]
+    fn version_bump_matches_plain_version_tag_lines() {
+        // RPM spec convention: `Version:` then whitespace, then the value.
+        assert!(VERSION_BUMP.is_match("+Version:        1.2.3"));
+        assert!(VERSION_BUMP.is_match("-Version:        1.2.2"));
+        assert!(VERSION_BUMP.is_match("+Version:\t1.2.3"));
+        assert!(VERSION_BUMP.is_match("+Version: 1.2.3"));
+        // Value glued to the colon — the one plain form that matched before.
+        assert!(VERSION_BUMP.is_match("+Version:1.2.3"));
+        assert!(VERSION_BUMP.is_match("+version:        1.2.3"));
+        assert!(VERSION_BUMP.is_match("+ Version:   1.2.3"));
+    }
+
+    #[test]
+    fn version_bump_keeps_macro_branch_and_ignores_other_lines() {
+        assert!(VERSION_BUMP.is_match("+%global libver 1.1"));
+        assert!(VERSION_BUMP.is_match("-%define srcver 2.0"));
+        assert!(VERSION_BUMP.is_match("+%define ver 1.0"));
+        assert!(!VERSION_BUMP.is_match("+%global nothing here"));
+        assert!(!VERSION_BUMP.is_match("+Release:        1"));
+        assert!(!VERSION_BUMP.is_match("+BuildRequires:  pkgconfig"));
+        assert!(!VERSION_BUMP.is_match("+Requires:       foo = %{version}"));
+        assert!(!VERSION_BUMP.is_match("+#Version:       1.0"));
+        // Unchanged context lines carry no +/- marker and are not bumps.
+        assert!(!VERSION_BUMP.is_match(" Version:        1.2.3"));
+    }
+
     #[tokio::test]
     async fn show_diff_no_report_errors() {
         let (mut session, _buf) = empty_session();
@@ -528,6 +555,27 @@ changes files:
         assert!(out.contains("bsc#1200000"), "{out}");
     }
 
+    /// A spec bumping only the `Version:` tag — no `%define`/`%global` — must
+    /// still produce the "Version / macro changes:" block.
+    #[tokio::test]
+    async fn analyze_diff_surfaces_plain_version_tag_bump() {
+        let diff = "\
+spec files:
+-----
+-Version:        1.2.2
++Version:        1.2.3
++Patch1:  fix.patch
++%autosetup -p1
+";
+        let (mut session, buf, _dir) = session_with_diff(diff);
+        let args = matches(&AnalyzeDiff, &[]);
+        AnalyzeDiff.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Version / macro changes:"), "{out}");
+        assert!(out.contains("+Version:        1.2.3"), "{out}");
+        assert!(out.contains("-Version:        1.2.2"), "{out}");
+    }
+
     #[tokio::test]
     async fn analyze_diff_removed_and_automacro_and_unmentioned() {
         let diff = "\
@@ -546,5 +594,8 @@ spec files:
         assert!(out.contains("%autosetup/%autopatch"), "{out}");
         // new.patch is not in any changelog section.
         assert!(out.contains("(not in changelog)"), "{out}");
+        // Over-match guard: this diff has no `Version:` tag and no `%define`/
+        // `%global …ver…`, so the block must be absent entirely.
+        assert!(!out.contains("Version / macro changes:"), "{out}");
     }
 }
