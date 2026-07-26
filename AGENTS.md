@@ -12,6 +12,49 @@ Preserve the **data-format and workflow contracts** that let mtui interoperate
 with the SUSE maintenance ecosystem (see "Contracts" below); break compatibility
 only when the task explicitly calls for it.
 
+### The Python implementation is no longer a reference
+mtui was originally ported from a Python implementation, removed in `ec80791c`
+(the old tree is readable at `git show ec80791c^:mtui/...`, and on the
+`archive/python-main` tag and the `16.0.x`–`19.0.x` branches). **Do not treat it
+as an authority.** Matching its behaviour is not a goal and "upstream does X" is
+not a justification. Use the archive to understand *why* a shape exists — then
+record what you learn as a statement about the constraint, not as a citation.
+
+- **Never** preserve a bug, a typo, or an awkward shape for parity with it.
+  Fixing one is welcome — **in its own commit**, with a CHANGELOG entry if a user
+  or MCP client would notice. Retiring a *rationale* is prose; changing the
+  *bytes* is not, and the two must not ride in the same commit.
+- **Check first that the shape is not a contract in disguise.** If it is written
+  to a host (`/var/lock/mtui*.lock`, `/var/log/mtui.log`, a zypper repo alias —
+  `repo_manager.rs::issue_alias`), signed or transmitted to a live service (the
+  openQA HMAC path encoding, `openqa/client.rs::encode_path_for_signing`), or is
+  user-facing text an LLM client consumes, it is load-bearing **even when the
+  only comment about it says "upstream did X"**. Replace the stale rationale;
+  do not delete the constraint.
+- A note recording a **deliberate departure** is a guard-rail, not a citation —
+  it stays. Reframe it as a positive statement of the choice ("mtui is XDG-first:
+  history lives at `$XDG_DATA_HOME/mtui/history`") rather than a comparison.
+  Keep the constraint, drop the comparison. Likewise for a bare `Ports upstream
+  mtui.commands.foo`: keep the behavioural description, drop the citation, and if
+  the line was *only* a citation, drop the line.
+- **Never strip a licence or provenance citation**, even when it routes through
+  the old tree — `obs/inference.rs`'s GPL-2.0-only attribution chain to
+  openSUSE/osc-plugin-qam is a legal requirement, not archaeology, and
+  `Cargo.toml`'s relicensing note explains a deliberate difference.
+- `upstream` is **not always** the old implementation, and the distinction is by
+  *referent, not by path* — the same file mixes both. Where the sentence cites a
+  `.py` file or a Python identifier it means the removed tree; where it names a
+  live external it stays: `openSUSE/osc-plugin-qam`, `mjdonis/oqa-search`, the
+  `osc` tool's own `oscrc` lookup (`obs/oscrc.rs`), the openQA server's signing
+  rules (`openqa/client.rs`), and Rust crates such as `russh`/`rsa`. Read each
+  site; do not sweep the term.
+- "Python" is also a **domain word** here. Never rename or delete it in SUSE
+  package flavours (`pythonNNN-foo` → `python-foo`,
+  `oqa_search/heuristics.rs::PYTHON_FLAVOR_RE` — live openQA build-check
+  matching), product names in fixtures (`sle-module-python2-*`), or `typos.toml`
+  entries that keep the append-only CHANGELOG spell-checkable. Note `typos` is a
+  CI-only job the local gate does not run.
+
 ### Design invariants (do not regress)
 - **Safety & robustness:** strong types, exhaustive error enums (`thiserror`);
   prefer a typed `Result` over silent `None`-swallowing.
@@ -178,8 +221,14 @@ next actionable task before working on a subsystem.
   layout: the operation lock `/var/lock/mtui.lock` (PID-based ownership, guards
   serialized zypper transactions) and the pool-claim lock
   `/var/lock/mtui-pool.lock` (RRID-based ownership; the comment carries
-  `mtui pool <RRID> [<owner>]`). Other tools on the fleet parse the same layout;
-  snapshot-test it (`crates/mtui-hosts/tests/lock_format.rs`).
+  `mtui pool <RRID> [<owner>]`). Every mtui sharing the fleet parses this layout,
+  including older releases — snapshot-test it
+  (`crates/mtui-hosts/tests/lock_format.rs`).
+- **Remote history format** — one `timestamp:user:field1[:field2…]` line appended
+  to `/var/log/mtui.log` on each enabled host, written with `sftp_append`
+  (`O_APPEND|O_CREAT`, never read-modify-write) so concurrent testers on one host
+  do not clobber one another, and read back by `list_history`. The append-only
+  primitive exists *for* this contract — do not collapse it into `sftp_write`.
 - **MCP tool names/schemas** — downstream LLM configs depend on them; snapshot the
   synthesised + slimmed schemas.
 
