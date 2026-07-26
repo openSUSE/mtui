@@ -1,10 +1,13 @@
 //! OBS Request Review ID (RRID), ported from `mtui/types/rrid.py`.
 //!
 //! An RRID is the `project:kind:maintenance_id:review_id` identifier that names
-//! a maintenance request across the SUSE ecosystem. Its grammar and parse
-//! errors are an interop **Contract** (see `AGENTS.md`): a Rust mtui and a
-//! Python mtui must agree byte-for-byte on what parses and what fails, so this
-//! module mirrors upstream's `RequestReviewID.__init__` component-by-component.
+//! a maintenance request across the SUSE ecosystem. Its grammar and parse errors
+//! are an interop **Contract** (see `AGENTS.md`): RRIDs are minted by OBS/IBS,
+//! and the rendered form becomes the on-disk testreport directory name, so what
+//! parses and what fails is not ours to choose. Loosening the grammar admits
+//! identifiers the rest of the ecosystem will reject; tightening it strands
+//! checkouts already on disk. Either way it is a breaking change, not a local
+//! refactor.
 //!
 //! ## Grammar (upstream `rrid.py`)
 //!

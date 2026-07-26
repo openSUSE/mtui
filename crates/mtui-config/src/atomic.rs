@@ -14,9 +14,10 @@
 //!   destination's own directory with [`create_new`](std::fs::OpenOptions::create_new)
 //!   and a **unique** name, so an attacker cannot pre-create it as a symlink to
 //!   redirect the write outside the intended directory.
-//! * **No cross-writer collision.** The temp name embeds the PID and a
-//!   nanosecond timestamp, so two concurrent writers (even a Rust and a Python
-//!   mtui sharing a directory) never race on the same temp path.
+//! * **No cross-writer collision.** The temp name embeds the PID, a nanosecond
+//!   timestamp and a process-lifetime counter, so neither two mtui processes
+//!   sharing a directory nor two threads racing within the same nanosecond ever
+//!   collide on a temp path.
 //! * **Restrictive permissions.** On unix the temp is opened `0o600`.
 //! * **Durability.** The temp is `fsync`ed before the rename, so a crash never
 //!   leaves a torn or empty destination.

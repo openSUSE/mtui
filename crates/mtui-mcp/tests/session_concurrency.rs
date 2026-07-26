@@ -3,21 +3,20 @@
 //!
 //! Four behaviours, matching upstream 1:1:
 //!
-//! * `test_run_command_unscoped_serialises_via_exclusive_gate` — unscoped calls
-//!   (no real template) take the exclusive registry gate and never overlap.
-//! * `test_run_command_same_rrid_serialises` — two calls scoped to the *same*
-//!   template do not overlap.
-//! * `test_run_command_different_rrids_run_concurrently` — two calls scoped to
-//!   *different* templates overlap in time.
-//! * `test_concurrent_runs_do_not_clobber_each_others_stdout` — overlapping
-//!   different-RRID runs each capture only their own output.
+//! * `unscoped_serialises_via_exclusive_gate` — unscoped calls (no real
+//!   template) take the exclusive registry gate and never overlap.
+//! * `same_rrid_serialises` — two calls scoped to the *same* template do not
+//!   overlap.
+//! * `different_rrids_run_concurrently` — two calls scoped to *different*
+//!   templates overlap in time.
+//! * `do_not_clobber_each_others_stdout` — overlapping different-RRID runs each
+//!   capture only their own output.
 //!
-//! The first two assert the **lock discipline** landed by `mtui-rs-76e.11` and
-//! pass now. The last two assert **genuine wall-clock concurrency / per-call
-//! output isolation**, which additionally needs the `mtui-core` change that stops
-//! dispatch taking `&mut Session` for the whole monolithic session (and isolates
-//! per-call output) — tracked as `mtui-rs-f36r`. They are `#[ignore]`d here so
-//! the parity target is captured, not dropped; un-ignore them in `mtui-rs-f36r`.
+//! The first two assert the **lock discipline**: unscoped and same-RRID calls
+//! serialise. The last two assert **genuine wall-clock concurrency / per-call
+//! output isolation** — `run_command` dispatches a single-real-RRID call on a
+//! forked session rather than holding one session-wide mutex, so different-RRID
+//! calls overlap and each captures only its own output.
 
 #![cfg(feature = "mcp")]
 

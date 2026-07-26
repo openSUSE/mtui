@@ -22,8 +22,8 @@
 //!
 //! Both locks serialize one line, `timestamp:user:pid[:comment]`, into their
 //! respective `/var/lock/*.lock` file (see [`RemoteLock::to_lockfile`]). This
-//! is a **cross-implementation contract**: a Python `mtui` and this Rust `mtui`
-//! may share a host fleet, so the byte layout must match upstream exactly. The
+//! is a **cross-process contract**: other tools on the fleet parse the same
+//! layout, including older `mtui` releases, so the bytes must not change. The
 //! `comment` field keeps any embedded colons (parsed with a 3-way split); a
 //! `PoolLock` stores `mtui pool <RRID> [<owner>]` there.
 //!
@@ -260,8 +260,8 @@ pub struct TargetLock<C: Clock = SystemClock> {
     path: PathBuf,
 }
 
-/// The default operation-lock path, `/var/lock/mtui.lock` — a cross-mtui
-/// contract (a Python and a Rust mtui may share a host fleet).
+/// The default operation-lock path, `/var/lock/mtui.lock` — a cross-process
+/// contract (other tools on the fleet parse the same layout).
 pub const TARGET_LOCK_PATH: &str = "/var/lock/mtui.lock";
 
 /// The default pool-claim-lock path, `/var/lock/mtui-pool.lock`.

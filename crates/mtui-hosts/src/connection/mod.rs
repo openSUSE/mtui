@@ -1,9 +1,9 @@
 //! The [`Connection`] abstraction: one SSH/SFTP link to a single host.
 //!
-//! This module defines the **trait** and a scriptable [`MockConnection`] test
-//! double. The concrete russh-backed implementation lands in a later Phase 2
-//! task (P2.3); the [`Target`](crate) state machine (P2.4) drives one
-//! `Box<dyn Connection>` per host and swaps in the mock under test.
+//! This module defines the **trait**, the concrete russh-backed
+//! [`SshConnection`], and a scriptable [`MockConnection`] test double. The
+//! [`Target`](crate) state machine drives one `Box<dyn Connection>` per host and
+//! swaps in the mock under test.
 //!
 //! ## Reference
 //!
@@ -15,22 +15,21 @@
 //!
 //! ## Scope
 //!
-//! This trait defines the **minimal core** needed to make the layer testable
-//! and to unblock [`Target`](crate) (P2.4): [`run`](Connection::run),
-//! [`is_active`](Connection::is_active), [`close`](Connection::close), and the
-//! cheap [`hostname`](Connection::hostname) accessor. Later tasks extend it
+//! The **core** that makes the layer testable and drives [`Target`](crate) is
+//! [`run`](Connection::run), [`is_active`](Connection::is_active),
+//! [`close`](Connection::close), and the cheap
+//! [`hostname`](Connection::hostname) accessor. The trait extends that core
 //! deliberately:
 //!
-//! * **P2.3** (landed) — `reconnect`, `fire_and_forget`, and the `sftp_*`
-//!   transfer family (`put` / `get` / `get_folder` / `listdir` / `open` /
-//!   `remove` / `rmdir` / `readlink`), plus the russh-backed
-//!   [`SshConnection`].
-//! * **P2.6** (landed) — `sftp_write` (atomic exclusive create / truncating
-//!   overwrite), the write primitive the remote-lock protocol is built on.
-//! * **P2.10** (landed, feature `shell`) — the interactive PTY `shell`,
-//!   returning an object-safe `ShellChannel` duplex. Only the transport
-//!   primitive lives here; the raw-`termios` local TTY bridge and `shell` REPL
-//!   command that consume it are a CLI concern (Phase 6).
+//! * `reconnect`, `fire_and_forget`, and the `sftp_*` transfer family
+//!   (`put` / `get` / `get_folder` / `listdir` / `open` / `remove` / `rmdir` /
+//!   `readlink`), plus the russh-backed [`SshConnection`].
+//! * `sftp_write` (atomic exclusive create / truncating overwrite), the write
+//!   primitive the remote-lock protocol is built on.
+//! * The interactive PTY `shell` (feature `shell`), returning an object-safe
+//!   `ShellChannel` duplex. Only the transport primitive lives here; the
+//!   raw-`termios` local TTY bridge and `shell` REPL command that consume it are
+//!   a CLI concern (`mtui-cli`).
 //!
 //! The trait is object-safe so callers hold `Box<dyn Connection>` and swap the
 //! russh impl for [`MockConnection`] freely.
@@ -62,8 +61,8 @@ pub(crate) const DEFAULT_USER: &str = "root";
 
 /// One SSH/SFTP connection to a single remote host.
 ///
-/// Object-safe (`Box<dyn Connection>`); see the module docs for the planned
-/// method-surface growth in later Phase 2 tasks.
+/// Object-safe (`Box<dyn Connection>`); see the module docs for the full method
+/// surface.
 #[async_trait]
 pub trait Connection: Send + Sync {
     /// The hostname this connection targets.
@@ -242,13 +241,13 @@ pub trait Connection: Send + Sync {
     /// Atomically appends `data` to the end of a remote file over SFTP.
     ///
     /// This is the additive counterpart to [`sftp_write`](Self::sftp_write):
-    /// it opens the file with `O_APPEND` (paramiko mode `"a+"`) so every write
-    /// lands at the current end-of-file, and **creates the file if it is
-    /// missing** (`O_CREAT`). Unlike the exclusive [`sftp_write`] path there is
-    /// no read-modify-write window and no TOCTOU to close — concurrent
-    /// appenders each extend the file without clobbering one another, which is
-    /// exactly what the shared `/var/log/mtui.log` history contract needs when a
-    /// Rust and a Python mtui write to the same host.
+    /// it opens the file with `O_APPEND` so every write lands at the current
+    /// end-of-file, and **creates the file if it is missing** (`O_CREAT`).
+    /// Unlike the exclusive [`sftp_write`](Self::sftp_write) path there is no
+    /// read-modify-write window and no TOCTOU to close — concurrent appenders
+    /// each extend the file without clobbering one another, which is exactly
+    /// what the shared `/var/log/mtui.log` history contract needs when several
+    /// mtui processes (including older releases) write to the same host.
     ///
     /// It never truncates: existing contents are preserved and `data` is placed
     /// after them, byte-for-byte.

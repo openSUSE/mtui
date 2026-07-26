@@ -376,10 +376,13 @@ fn started_jobs_reply(command: &str, job_ids: &[String]) -> String {
     )
 }
 
-/// The four background-job control tools (stubbed until `mtui-rs-76e.12`).
+/// The four background-job control tools (`job_list`, `job_status`,
+/// `job_result`, `job_cancel`).
 ///
-/// Their schemas and descriptions are final; only the handlers
-/// ([`dispatch_job_tool`]) are stubbed.
+/// Their names and schemas are a downstream contract (see `AGENTS.md`) and are
+/// snapshot-tested; the schemas are strict (`additionalProperties: false`) so a
+/// misspelled field is a clean error rather than a silently ignored argument.
+/// [`dispatch_job_tool`] routes them onto the session's job table.
 #[must_use]
 pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
     let job_id_schema = || {

@@ -1,8 +1,9 @@
 //! The command-layer error hierarchy.
 //!
 //! Ports the command-relevant subset of upstream `mtui.support.messages`. The
-//! `Display` strings are byte-for-byte identical to the Python originals so the
-//! REPL and MCP surfaces present the same user-facing messages:
+//! `Display` strings are **frozen** — the REPL and MCP surfaces both render
+//! them, operators grep for them, and the tests below pin each one, so reword a
+//! variant only deliberately and update its test with it:
 //!
 //! * [`CommandError::NoRefhostsDefined`] ← `NoRefhostsDefinedError`
 //! * [`CommandError::HostNotConnected`] ← `HostIsNotConnectedError`

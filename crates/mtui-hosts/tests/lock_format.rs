@@ -1,8 +1,9 @@
 //! Golden snapshot of the remote-lock wire format.
 //!
 //! The `/var/lock/mtui.lock` (and `/var/lock/mtui-pool.lock`) line layout is a
-//! **cross-implementation contract**: a Python `mtui` and this Rust `mtui` may
-//! share a host fleet, so the exact bytes must not drift. This test freezes the
+//! **cross-process contract**: other tools on the fleet parse the same layout,
+//! including older mtui releases, so the exact bytes must not change. This test
+//! freezes the
 //! serialized form for both the operation lock (`TargetLock`) and the pool
 //! claim lock (`PoolLock`), including the pool comment that carries the RRID.
 //!

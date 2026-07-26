@@ -215,12 +215,14 @@ fn blank_counts_stable_across_reexports() {
 
 /// Golden snapshot of the fully-injected template.
 ///
-/// The `overview_inject` BEGIN/END block is a **cross-implementation text
-/// contract** (see `AGENTS.md`: "the `overview_inject` BEGIN/END idempotent
-/// block under `regression tests:`"). The other tests in this file assert
-/// placement, idempotency, and blank-line invariants structurally; this one
-/// freezes the exact rendered bytes so the block layout cannot silently drift
-/// away from what a Python `mtui` reading the same template would expect.
+/// The `overview_inject` BEGIN/END block is a **text contract** (see
+/// `AGENTS.md`: "the `overview_inject` BEGIN/END idempotent block under
+/// `regression tests:`"). The other tests in this file assert placement,
+/// idempotency, and blank-line invariants structurally; this one freezes the
+/// exact rendered bytes. mtui re-reads them itself: a repeat export finds the
+/// previous block by these markers and replaces it (see
+/// `export::overview_inject`), so drift would turn one block into two in a
+/// report already committed to SVN and read by human reviewers.
 #[test]
 fn injected_block_text_is_stable() {
     let mut template = template_with_regression_section();

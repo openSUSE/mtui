@@ -17,12 +17,11 @@
 //! values, and **lenient loading** (a bad or missing file is logged and skipped,
 //! never fatal).
 //!
-//! ## Scope (Phase 1)
+//! ## Scope
 //!
-//! Only the Phase-1-relevant option subset is modelled here (paths, connection
-//! timeout, refhosts, URLs, svn, target). Later phases add their own sections
-//! (`[lock]`, `[openqa]`, `[mcp]`, ...) additively. CLI-argument merging
-//! (`merge_args`) is deferred to Phase 6, where the `clap` args struct exists.
+//! Every option section mtui understands is modelled here (see [`options`]).
+//! CLI-argument merging lives with the `clap` args structs that own it —
+//! `mtui_core::args` for the REPL and `mtui_mcp::args` for the MCP server.
 
 pub mod atomic;
 pub mod error;

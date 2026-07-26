@@ -26,8 +26,8 @@
 //!   The Rust `--days` uses a `value_parser!(u32).range(1..=30)` parser; `clap`
 //!   erases the parser behind [`clap::builder::ValueParser`] and does not expose
 //!   the numeric bounds, so we emit a plain `integer` (the parser still enforces
-//!   the range at call time). The Rust arg spec — not the Python one — is the
-//!   source of truth here.
+//!   the range at call time). The `clap` arg spec is the source of truth for the
+//!   synthesised schema.
 
 use std::any::TypeId;
 

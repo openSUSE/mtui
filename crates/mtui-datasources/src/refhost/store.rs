@@ -162,9 +162,10 @@ impl Refhosts {
     /// With neither, every host is returned. A host matches an `attributes`
     /// query when it satisfies **any** of the alternatives (upstream `any`).
     ///
-    /// The loaded `data` is already de-duplicated by name at load time
-    /// (`mtui-types::load_refhosts`), so the extra dedup upstream performs here
-    /// is a no-op guard kept for byte-parity with the upstream contract.
+    /// The dedup is first-occurrence-wins. It is redundant for a store built by
+    /// [`Refhosts::from_path`] (`mtui-types::load_refhosts` already de-dups at load
+    /// time) but **load-bearing** for [`Refhosts::from_hosts`], which accepts a
+    /// raw row list — matching the first-occurrence semantics of `host_by_name`.
     #[must_use]
     pub fn query(
         &self,
