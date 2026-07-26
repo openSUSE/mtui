@@ -47,6 +47,16 @@ fn sle11_branches() {
 
     let out = normalize_sle11(p("SLES-SAP", "11-CORE", "x86_64"));
     assert_eq!(out.name, "SUSE_SLES_LTSS-EXTREME-CORE");
+    assert_eq!(out.version, "11-CORE");
+
+    // The only input that exercises the `-LTSS-EXTREME-CORE` strip: the branch
+    // rewrites the name, strips the suffix, then falls through to the final
+    // return. Every other CORE case leaves the version untouched, so without
+    // this the strip is a no-op in the whole suite.
+    let out = normalize_sle11(p("SLE-SERVER", "11-SP3-LTSS-EXTREME-CORE", "x86_64"));
+    assert_eq!(out.name, "SUSE_SLES_LTSS-EXTREME-CORE");
+    assert_eq!(out.version, "11-SP3");
+    assert_eq!(out.arch, "x86_64");
 
     let out = normalize_sle11(p("SLES-SAP", "11-TERADATA", "x86_64"));
     assert_eq!(out.name, "teradata");
