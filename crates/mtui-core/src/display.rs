@@ -394,11 +394,10 @@ impl CommandPromptDisplay {
 
     /// Displays the products of a reference host.
     ///
-    /// Mirrors upstream `list_products`. Note: upstream literally prints
-    /// "Referenece host" (sic) — preserved for byte-parity with existing tools.
+    /// Mirrors upstream `list_products`, except for the label: upstream printed
+    /// "Referenece host" (sic), a typo with no consumer, corrected here.
     pub(crate) fn list_products(&mut self, hostname: &str, system: &System) {
-        // sic: upstream typo "Referenece", kept for output parity.
-        let label = Self::green(self, "Referenece host");
+        let label = Self::green(self, "Reference host");
         let host = Self::yellow(self, hostname);
         self.println(&format!("{label}: {host}"));
         for x in system.pretty() {
@@ -931,11 +930,11 @@ mod tests {
     }
 
     #[test]
-    fn list_products_preserves_upstream_typo() {
+    fn list_products_labels_the_reference_host() {
         let (mut d, buf) = buffered(ColorMode::Never);
         d.list_products("refhost", &system("SLES"));
         let out = rendered(&buf);
-        assert!(out.contains("Referenece host: refhost"));
+        assert!(out.contains("Reference host: refhost"));
         assert!(out.contains("Base product: SLES-15.5-x86_64"));
     }
 
