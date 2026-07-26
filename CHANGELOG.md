@@ -23,6 +23,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - mtui is now licensed GPL-3.0-or-later (previously GPL-2.0-only, matching
   upstream); see `LICENSE`.
+- Internal only, no behaviour change: the OBS/QAM precondition guard is now
+  named `skips_maintenance_testreport` rather than `is_slfo`, which claimed
+  less than it does — it is true for PI requests as well as SLFO ones.
 
 ### Removed
 

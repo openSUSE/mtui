@@ -259,6 +259,57 @@ fn json_parser_tolerates_missing_optional_keys() {
     assert!(report.repositories.is_empty());
 }
 
+#[test]
+fn json_parser_drops_malformed_rrid() {
+    // `JSONParser::parse` deliberately swallows the RRID parse error
+    // (`RequestReviewID::parse(s).ok()`) so a bad id degrades to `None` instead
+    // of failing the whole load. That leniency was unpinned: nothing asserted
+    // the drop actually happens, nor that the surrounding fields survive it.
+    // One case per failure mode of the RRID grammar (an AGENTS.md Contract).
+    for rrid in [
+        "SUSE:Maintenance:24993",     // MissingComponent — truncated
+        "SUSE:Maintenance:24993:abc", // ComponentParse — non-integer review id
+        "openSUSE:Maintenance:1:2",   // ComponentParse — wrong project
+        "SUSE:boo:1:2",               // ComponentParse — unknown kind
+        "SUSE:Maintenance:1:2:3",     // TooManyComponents
+        "",                           // MissingComponent — empty
+    ] {
+        // Seed a good RRID first: `rrid` defaults to `None`, so parsing into a
+        // fresh report would assert the *initial state* and pass even against a
+        // parser that never touched the field. Starting from `Some` makes the
+        // assertion below prove the malformed value actually replaced it.
+        let mut report = empty_report();
+        JSONParser::parse_str(&mut report, r#"{"rrid": "SUSE:Maintenance:1:1"}"#)
+            .expect("valid json");
+        assert!(report.rrid.is_some(), "precondition: seeded a valid rrid");
+
+        let data = format!(r#"{{"rrid": "{rrid}", "packager": "someone@suse.de"}}"#);
+        JSONParser::parse_str(&mut report, &data).expect("valid json");
+
+        assert!(
+            report.rrid.is_none(),
+            "malformed rrid {rrid:?} must be dropped, got {:?}",
+            report.rrid
+        );
+        // The load is lenient, not aborted: neighbouring fields still apply.
+        assert_eq!(report.packager, "someone@suse.de", "for rrid {rrid:?}");
+    }
+}
+
+#[test]
+fn json_parser_clears_rrid_when_key_absent() {
+    // The other route to `None`: the assignment is unconditional, so a payload
+    // with no `rrid` key clears whatever was there. Seeded first for the same
+    // reason as above — against a fresh report this assertion is vacuous.
+    let mut report = empty_report();
+    JSONParser::parse_str(&mut report, r#"{"rrid": "SUSE:Maintenance:1:1"}"#).expect("valid json");
+    assert!(report.rrid.is_some(), "precondition: seeded a valid rrid");
+
+    JSONParser::parse_str(&mut report, r#"{"packager": "someone@suse.de"}"#).expect("valid json");
+
+    assert!(report.rrid.is_none());
+}
+
 /// Golden snapshot of the parsed `metadata.json` envelope.
 ///
 /// The field-by-field assertions in `json_parser_parses_golden_fixture` pin

@@ -151,6 +151,32 @@ mod tests {
         assert_eq!(QemIncident::incident_number(&rrid), "1.1");
     }
 
+    /// The `1.2` here is a whole-RRID test, not a maintenance-id test: a PI
+    /// request that happens to carry `1.2` still keys on the maintenance id.
+    /// Pins the `kind` half of the guard, which a "simplification" down to
+    /// `maintenance_id == "1.2"` would drop while every other test stayed green.
+    #[test]
+    fn incident_number_ignores_maintenance_id_1_2_on_non_slfo_kinds() {
+        let pi: RequestReviewID = "SUSE:PI:1.2:199773".parse().unwrap();
+        assert_eq!(QemIncident::incident_number(&pi), "1.2");
+        let maint: RequestReviewID = "SUSE:Maintenance:1.2:199773".parse().unwrap();
+        assert_eq!(QemIncident::incident_number(&maint), "1.2");
+    }
+
+    /// This guard is closed (`== "1.2"`) where `apicall::is_gitea_workflow` is
+    /// open (`!= "1.1"`). On the ids that occur today (`1.1`, `1.2`) the two
+    /// agree, so nothing else records that they differ.
+    ///
+    /// The id below is **hypothetical** — there is no SLFO 2.0 product, and none
+    /// is expected soon. The test pins that this predicate stays closed, so a
+    /// future id would key on the maintenance id rather than silently inheriting
+    /// the review-id behaviour of `1.2`.
+    #[test]
+    fn incident_number_stays_closed_beyond_1_2() {
+        let rrid: RequestReviewID = "SUSE:SLFO:2.0:199773".parse().unwrap();
+        assert_eq!(QemIncident::incident_number(&rrid), "2.0");
+    }
+
     #[tokio::test]
     async fn metadata_and_shortest_package_name() {
         // Ported from test_qem_incident_metadata.

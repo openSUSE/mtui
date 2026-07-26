@@ -30,8 +30,15 @@ use crate::obs::models::{
 
 const PREFIX: &str = "[oscqam] ";
 
-/// PI/SLFO requests carry no maintenance testreport or `MAINT` attribute.
-fn is_slfo(rrid: &RequestReviewID) -> bool {
+/// Whether the request carries no maintenance testreport or `MAINT` attribute,
+/// so the `qam.suse.de` preconditions do not apply. True for **both** PI and
+/// SLFO — the old name (`is_slfo`) claimed otherwise.
+///
+/// Do **not** fold this into `openqa::base`'s bare `kind == Slfo` test, which it
+/// otherwise resembles: that one excludes PI. Merging them would make PI
+/// requests demand a maintenance testreport they never have, and retag every PI
+/// openQA `build` param `git` instead of `smelt`.
+fn skips_maintenance_testreport(rrid: &RequestReviewID) -> bool {
     matches!(rrid.kind, RequestKind::Pi | RequestKind::Slfo)
 }
 
@@ -226,7 +233,7 @@ pub async fn assign(
         )));
     }
     let resolved = resolve_assign_groups(client, &request, user, groups).await?;
-    if !is_slfo(rrid) {
+    if !skips_maintenance_testreport(rrid) {
         if super::preconditions::fetch_testreport_log(reports_url, ssl_verify, rrid)
             .await
             .is_none()
@@ -338,7 +345,7 @@ pub async fn approve(
             request.reqid
         )));
     }
-    if !is_slfo(rrid) {
+    if !skips_maintenance_testreport(rrid) {
         let log = super::preconditions::fetch_testreport_log(reports_url, ssl_verify, rrid).await;
         if log.is_none_or(|log| super::preconditions::summary(&log) != "PASSED") {
             return Err(ObsError::Op(format!(
@@ -407,7 +414,7 @@ pub async fn reject(
         tracing::info!("reject ignores -g/--group (native reject is always by_user)");
     }
     let request = get_request(client, rrid).await?;
-    if !is_slfo(rrid) {
+    if !skips_maintenance_testreport(rrid) {
         let log = super::preconditions::fetch_testreport_log(reports_url, ssl_verify, rrid).await;
         let log = match log {
             Some(log) if super::preconditions::summary(&log) == "FAILED" => log,
@@ -430,4 +437,31 @@ pub async fn reject(
         fancy_url(fancy_reports_url, rrid)
     );
     changereviewstate(client, rrid, "declined", user, &comment).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the case that separates this predicate from the bare
+    /// `kind == Slfo` test in `openqa::base`: PI skips the preconditions too.
+    /// Without this, folding the two into one shared helper compiles, passes,
+    /// and silently makes PI requests demand a maintenance testreport that PI
+    /// requests never have.
+    #[test]
+    fn pi_and_slfo_both_skip_the_maintenance_testreport() {
+        for id in ["SUSE:PI:1.1:70000", "SUSE:PI:42:99", "SUSE:SLFO:1.1:70000"] {
+            let rrid = RequestReviewID::parse(id).unwrap();
+            assert!(
+                skips_maintenance_testreport(&rrid),
+                "{id} must skip the qam.suse.de preconditions"
+            );
+        }
+    }
+
+    #[test]
+    fn maintenance_still_requires_the_testreport() {
+        let rrid = RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap();
+        assert!(!skips_maintenance_testreport(&rrid));
+    }
 }
