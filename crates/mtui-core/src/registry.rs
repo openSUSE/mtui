@@ -114,9 +114,9 @@ impl Registry {
 /// [`register_all`], so the deny-list and the command surface it filters live in
 /// one place.
 ///
-/// Names not yet backed by a registered command are reserved for their later
-/// waves; [`mcp_denylist_is_consistent`] tolerates them so adding the command
-/// later does not require touching this list.
+/// Every name here currently resolves to a registered command or alias. The
+/// `mcp_denylist_is_consistent` test pins the exact expected set, so renaming or
+/// removing one of them is caught rather than drifting silently.
 pub const MCP_DENYLIST: &[&str] = &[
     "quit", "exit", "EOF",    // session exit (Wave 2)
     "switch", // active-template pointer, REPL-only (Wave 2)
@@ -129,10 +129,9 @@ pub const MCP_DENYLIST: &[&str] = &[
 /// Builds the process-wide command registry — the single, explicit place every
 /// command is wired (replacing upstream's `__init_subclass__` auto-discovery).
 ///
-/// The command waves (Phase 5.6+) register their commands here; until then this
-/// returns an empty registry. Both the REPL (`mtui`) and MCP (`mtui-mcp`) build
-/// their command surface from the [`Registry`] this returns, so a command added
-/// here becomes a REPL command **and** an MCP tool automatically.
+/// Both the REPL (`mtui`) and MCP (`mtui-mcp`) build their command surface from
+/// the [`Registry`] this returns, so a command added here becomes a REPL command
+/// **and** an MCP tool automatically.
 #[must_use]
 pub fn register_all() -> Registry {
     use crate::commands;
@@ -400,15 +399,13 @@ mod tests {
 
     #[test]
     fn mcp_denylist_is_consistent() {
-        // Every deny-listed name that is *registered* must be present as a name
-        // or alias; names not yet backed by a command (reserved for later waves)
-        // are tolerated. Nothing in the deny-list may be a duplicate.
+        // This loop checks only that nothing in the deny-list is duplicated;
+        // that every entry actually resolves to a registered command or alias
+        // is asserted below, against the full expected list.
         let r = register_all();
         let mut seen = std::collections::HashSet::new();
         for name in MCP_DENYLIST {
             assert!(seen.insert(*name), "duplicate deny-list entry: {name}");
-            // A registered deny-listed name resolves; an unregistered one is a
-            // reserved placeholder for a later wave.
             let _reserved_or_registered = r.contains(name);
         }
         // Sanity: the currently-registered deny-listed commands are the Wave 2

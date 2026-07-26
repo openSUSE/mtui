@@ -1,18 +1,15 @@
 //! Typed configuration options and their defaults.
 //!
-//! This is the **Phase-1 subset** of upstream `mtui/support/config.py`'s option
-//! table, since extended with the `[lock]` section (Phase 2). Options belonging
-//! to later phases — `mcp_*` (Phase 7), `openqa_*`/`teregen_*`/`qem_dashboard_*`
-//! (Phase 3) — are deliberately omitted; they will be added, additively, as
-//! their sections land.
-//!
-//! Every default here matches the corresponding upstream default value exactly,
-//! preserving behavioural parity for the options mtui already understands.
+//! Covers every option section mtui understands. Most scalar defaults are
+//! long-standing values operators already rely on and are pinned by
+//! `default_matches_upstream_scalars` below; a handful deviate deliberately, and
+//! those carry a note on their `default_*` fn.
 //!
 //! ## Shape
 //!
 //! The on-disk format is **sectioned TOML** (`[mtui]`, `[connection]`,
-//! `[refhosts]`, `[url]`, `[svn]`, `[target]`, `[lock]`). `RawConfig` mirrors that
+//! `[refhosts]`, `[url]`, `[qem_dashboard]`, `[teregen]`, `[openqa]`, `[svn]`,
+//! `[target]`, `[gitea]`, `[slack]`, `[lock]`, `[mcp]`, `[obs]`). `RawConfig` mirrors that
 //! structure for serde; [`Config`] is the flattened, fully-typed view the rest
 //! of the workspace consumes. Every serde field defaults, so an empty (or
 //! partial) TOML document deserialises into all-defaults.
@@ -489,8 +486,9 @@ pub(crate) struct LockSection {
 ///
 /// Mirrors upstream `mtui/support/config.py`'s `mcp_*` options (which live under
 /// the `[mcp]` INI section). `session_cap` / `session_idle_timeout` configure the
-/// http transport's per-client session budget (enforcement is a follow-up —
-/// mtui-rs-odq8). `profile` / `tools_allow` / `tools_deny` select the exposed
+/// http transport's per-client session budget, enforced application-side by
+/// `mtui_mcp::provider::SessionRegistry`. `profile` / `tools_allow` /
+/// `tools_deny` select the exposed
 /// tool surface (see `mtui_mcp::profiles`).
 ///
 /// Note: upstream names the profile key `tool_profile`; here it is `profile`
@@ -804,8 +802,9 @@ pub struct Config {
     /// upstream equivalent — this is a hardening addition.
     pub mcp_max_completed_jobs: usize,
     /// Ceiling on concurrent per-client sessions under `--transport http` (DoS
-    /// guard). Upstream default is 32. Enforcement is a follow-up
-    /// (mtui-rs-odq8); this value is parsed and surfaced now.
+    /// guard). Default is 32. Enforced by
+    /// `mtui_mcp::provider::SessionRegistry::try_make_server`, which refuses a
+    /// new session once the cap is reached.
     pub mcp_session_cap: usize,
     /// Seconds of inactivity after which an idle http session is swept. `0`
     /// disables the sweeper. Also pins the rmcp streamable-HTTP session

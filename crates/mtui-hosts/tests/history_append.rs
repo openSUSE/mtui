@@ -72,7 +72,8 @@ async fn add_history_is_one_append_per_entry_regardless_of_size() {
 async fn concurrent_appenders_do_not_lose_entries() {
     // `MockConnection`'s file store is an `Arc<Mutex<..>>` shared across clones,
     // so two clones model two independent writers against one host's
-    // /var/log/mtui.log (mirrors a Rust and a Python mtui sharing the fleet).
+    // /var/log/mtui.log (mirrors two mtui processes, including different
+    // releases, sharing the fleet).
     let handle = MockConnection::new("h1");
     let mut alice = handle.clone();
     let mut bob = handle.clone();

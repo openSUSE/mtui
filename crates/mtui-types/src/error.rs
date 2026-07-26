@@ -183,10 +183,9 @@ pub struct RequestKindParseError {
 
 /// Errors produced while parsing an OBS Request Review ID (RRID).
 ///
-/// Mirrors upstream `RequestReviewIDParseError` and its subclasses. Every
-/// message is rendered with the upstream `"OBS Request Review ID: "` prefix so
-/// the user-facing text remains a stable contract across the Python and Rust
-/// implementations.
+/// Every message is rendered with the `"OBS Request Review ID: "` prefix so a
+/// parse failure is self-identifying in a log line or a CI transcript, where the
+/// bare component error would be ambiguous.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RridParseError {

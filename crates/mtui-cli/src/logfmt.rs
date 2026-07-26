@@ -1,14 +1,12 @@
-//! Custom compact `tracing` event format mirroring upstream's `ColorFormatter`.
+//! Custom compact `tracing` event format for the REPL.
 //!
-//! Upstream mtui routes every log record through a single
-//! `ColorFormatter("%(levelname)s: %(message)s")`
-//! (`python-mtui/mtui/cli/colors/formatter.py`): a **lowercased**, colorized
-//! level token (green `info` / yellow `warning` / red `error`), then `": "`, then
-//! the message — no timestamp, no module path. mtui already renders *command
-//! errors* that way through the session display (see `repl::render_error`); this
-//! layer brings `tracing::info!`/`warn!` (and any other event at the default
-//! verbosity) to the same look so the two channels are consistent
-//! (`mtui-rs-ilt`, follow-up to `mtui-rs-7h9`).
+//! One line per record: a **lowercased**, colorized level token (green `info` /
+//! yellow `warning` / red `error`), then `": "`, then the message — no
+//! timestamp, no module path. mtui already renders *command errors* that way
+//! through the session display (see `repl::render_error`); this layer brings
+//! `tracing::info!`/`warn!` (and any other event at the default verbosity) to
+//! the same look, so the two channels are indistinguishable to an operator
+//! reading the terminal.
 //!
 //! **ANSI decision is shared with the display.** Whether escapes are emitted is
 //! computed once from the resolved [`ColorMode`](mtui_core::ColorMode) handed to

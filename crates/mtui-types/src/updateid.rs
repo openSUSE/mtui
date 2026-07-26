@@ -8,15 +8,14 @@
 //!
 //! This is the **value-type slice only**: an [`UpdateID`] wrapping the parsed
 //! [`RequestReviewID`], constructed by parsing an RRID string. The TestReport
-//! factory, the SVN/Gitea checkout, and the interactive prompter are deferred to
-//! a later phase (the update workflow lives in `mtui-testreport` / `mtui-core`),
-//! keeping this crate I/O-free.
+//! factory, the SVN/Gitea checkout and the interactive prompter live in
+//! `mtui-testreport` / `mtui-core` — this crate is I/O-free.
 //!
 //! Because the RRID grammar is an interop **Contract** (see `AGENTS.md`),
 //! [`UpdateID::parse`] delegates verbatim to [`RequestReviewID::parse`], and
-//! [`Display`](fmt::Display) forwards to the inner RRID so that path
-//! construction downstream (upstream builds `template_dir/<str(uid.id)>`) stays
-//! byte-for-byte consistent between the Rust and Python implementations.
+//! [`Display`](fmt::Display) forwards to the inner RRID. That rendering is the
+//! per-update template directory name on disk (`template_dir/<rrid>`), so
+//! changing it orphans every existing checkout.
 
 use std::fmt;
 use std::str::FromStr;
@@ -39,10 +38,8 @@ pub struct UpdateID {
 impl UpdateID {
     /// Parses an update identifier from an RRID string.
     ///
-    /// Mirrors upstream `OBSUpdateID(rrid)`, whose `__init__` does
-    /// `id_ = RequestReviewID(rrid)`. The I/O collaborators upstream attaches
-    /// at the same point (TestReport factory, VCS checkout) are deferred to a
-    /// later phase.
+    /// Parsing only — the I/O collaborators (TestReport factory, VCS checkout)
+    /// are attached by `mtui-testreport`, keeping this crate I/O-free.
     ///
     /// # Errors
     ///

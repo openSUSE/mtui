@@ -784,16 +784,17 @@ impl Target {
     ///
     /// Ports upstream `Target.add_history`: on **enabled** hosts only, writes one
     /// `timestamp:user:field1:field2…\n` line (Unix-epoch-seconds timestamp,
-    /// `config.session_user`, then the colon-joined `fields`). The upstream
-    /// wire-format contract is shared with the Python mtui and read back by
-    /// `list_history`, so it is preserved byte-for-byte.
+    /// `config.session_user`, then the colon-joined `fields`). The wire format is
+    /// shared with every other mtui on the fleet (including older releases) and
+    /// read back by `list_history`, so it is preserved byte-for-byte.
     ///
     /// Upstream opens the file `"a+"` and writes one line; this sends only that
     /// new line via [`sftp_append`](Connection::sftp_append), which appends at
     /// end-of-file and creates the file if it is missing. Unlike the former
     /// read-concatenate-rewrite emulation, the cost per entry is now O(1) in the
-    /// line size (not O(history)), and concurrent writers (a Rust and a Python
-    /// mtui sharing the host) no longer clobber one another's entries.
+    /// line size (not O(history)), and concurrent writers (several mtui
+    /// processes, including older releases, sharing the host) no longer clobber
+    /// one another's entries.
     ///
     /// Best-effort, matching upstream: a write failure (read-only or full remote
     /// fs, unconnected host) is logged and swallowed so a bookkeeping write never
