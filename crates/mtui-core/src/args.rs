@@ -7,10 +7,9 @@
 //! overrides, colour mode, Gitea token) and the mutually-exclusive update
 //! selector that seeds a workflow.
 //!
-//! ## Intentional deviations from upstream
+//! ## Deliberate design choices
 //!
-//! This is a redesign, not a 1:1 transpile (see `AGENTS.md`), so a few surfaces
-//! differ where it improves the tool:
+//! A few surfaces are shaped for this tool rather than inherited:
 //!
 //! * **`-V/--version`** prints `mtui <version> (<sha>[-dirty], <profile>,
 //!   <target>)`. Upstream listed separately-installed *runtime* dependency

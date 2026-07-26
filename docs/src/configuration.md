@@ -1,9 +1,7 @@
 # Configuration
 
-mtui is configured with a **sectioned TOML** file. (This is an intentional
-deviation from upstream mtui's INI; every option's default matches upstream
-exactly.) All configuration is optional: with no file present, mtui runs on
-built-in defaults.
+mtui is configured with a **sectioned TOML** file. All configuration is optional:
+with no file present, mtui runs on built-in defaults.
 
 ## File resolution
 
@@ -44,7 +42,7 @@ configured secret (currently `gitea_token`) instead of its value.
 
 ## Options
 
-Defaults below are the built-in (upstream-matching) values.
+Defaults below are the built-in values.
 
 ### `[mtui]`
 
@@ -177,8 +175,7 @@ channel = "#qam-review"
 
 ### `[lock]`
 
-Remote-lock behaviour on target hosts (interoperable with Python mtui on a shared
-fleet).
+Remote-lock behaviour on target hosts, so concurrent testers can share a fleet.
 
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
@@ -201,15 +198,16 @@ fleet).
 | `max_active_jobs` | int | `16` | Ceiling on concurrent background jobs per session. `0` disables. |
 | `max_completed_jobs` | int | `128` | Ceiling on retained terminal job records per session (FIFO eviction). `0` disables. |
 | `session_cap` | int (>0) | `32` | Ceiling on concurrent per-client sessions under `--transport http`. |
-| `session_idle_timeout` | seconds (>0) | `14400` | Inactivity before an idle http session is swept. Deliberately higher than upstream's `1800` so it comfortably exceeds rmcp's own HTTP session keep-alive floor. |
+| `session_idle_timeout` | seconds (>0) | `14400` | Inactivity before an idle http session is swept. Also pins rmcp's streamable-HTTP keep-alive (rmcp's own default is 300 s), so the transport never tears a quiet session down before this sweeper would. |
 | `sweep_parallel` | int (>0) | `4` | Max stale sessions the idle sweeper tears down concurrently per cycle. |
 | `profile` | string | `full` | Tool-surface profile: `full` (every synthesised tool) or `core` (curated everyday subset). Unknown → `full` with a warning. |
 | `tools_allow` | array of strings | *(empty)* | Extra tool names to keep on top of the profile. |
 | `tools_deny` | array of strings | *(empty)* | Tool names to remove regardless of profile/allow (deny wins last). |
 
-> Upstream names the profile key `tool_profile`; here it is `profile` under the
-> already tool-scoped `[mcp]` table. `tools_allow`/`tools_deny` are native TOML
-> arrays rather than upstream's comma-separated strings.
+> The profile key is `profile`, not `tool_profile` — it already sits under the
+> tool-scoped `[mcp]` table. `tools_allow`/`tools_deny` are native TOML arrays,
+> not comma-separated strings. (Both matter if you are carrying over a config
+> from a pre-26.0 release.)
 
 ### `[obs]`
 

@@ -55,14 +55,18 @@ composition root — never introduce a crate cycle.**
 ## Contracts
 
 These data-format and workflow contracts keep mtui interoperable with the SUSE
-maintenance ecosystem and with a Python MTUI sharing the same fleet. They are
-preserved deliberately; upstream `tests/` fixtures are the authority for the
-formats.
+maintenance ecosystem. Each is owed to something live: the RRID grammar to
+OBS/IBS/QEM, the `refhosts.yml` schema to the qam-metadata fleet database, the
+testreport/export format to SVN/Gitea/TeReGen, the MCP tool surface to downstream
+LLM clients, and the on-host formats to **other mtui processes sharing a fleet**
+— including older releases, which is why they are a wire format and not an
+implementation detail. The `crates/*/tests/` fixtures are the authority.
 
 - **RRID grammar** — `project:kind:maintenance_id:review_id` and its parse errors
   (see the [FAQ](faq.md#what-is-an-rrid)).
 - **`refhosts.yml` schema** — location-grouped on disk, but rows are
-  merged/flattened/de-duplicated at load; parses identically to upstream fixtures.
+  merged/flattened/de-duplicated at load; parses identically to the golden
+  fixtures.
 - **Testreport / export text format** — including the idempotent
   `overview_inject` BEGIN/END block under `regression tests:`.
 - **Remote-lock wire format** — one line, `timestamp:user:pid[:comment]`, shared
@@ -71,11 +75,10 @@ formats.
 - **MCP tool names/schemas** — downstream LLM configs depend on them; the
   synthesised, slimmed schemas are snapshot-tested.
 
-## Intentional deviations from upstream
+## Deliberate design choices
 
-mtui is a redesign, not a transpile. The deliberate departures:
-
-- **TOML config**, not INI (defaults still match upstream exactly).
+- **TOML config**, not INI.
 - **Native OBS/IBS API** for the QAM review workflow, not an `osc` subprocess.
-- **Two static binaries** (`mtui`, `mtui-mcp`), no Python runtime or virtualenv.
+- **Two static binaries** (`mtui`, `mtui-mcp`), no runtime interpreter or
+  virtualenv to install.
 - **Async I/O** (`tokio`) with true parallel host fan-out.

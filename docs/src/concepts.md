@@ -95,8 +95,9 @@ concurrently across enabled hosts.
 ## Locking
 
 Two independent locks coordinate concurrent testers on a shared fleet. Both use
-the same on-host wire format (`timestamp:user:pid[:comment]`), so a Rust `mtui` and
-a Python MTUI interoperate.
+the same on-host wire format (`timestamp:user:pid[:comment]`), so concurrent
+`mtui` processes — and any other fleet tooling that reads the same files —
+cooperate rather than clobber one another.
 
 - **Operation / zypper lock** (`/var/lock/mtui.lock`, PID-based) — guards
   serialized repository transactions (enabling/disabling the test repo,

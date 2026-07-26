@@ -36,11 +36,14 @@ template). Host-action commands need a loaded template with connected hosts.
 No — and it never will. mtui is **pubkey-only by design**: it authenticates from
 your SSH agent or `~/.ssh/id_*`. This is preserved from MTUI.
 
-## Can a Rust mtui and a Python mtui share the same reference hosts?
+## Can several testers use the same reference hosts at once?
 
-Yes. The remote-lock wire format is identical across both implementations, so
-they cooperate on a shared host fleet. There are two locks with the same
-`timestamp:user:pid[:comment]` layout: the operation lock
+Yes, but the locks are **advisory and fail-fast, not a queue**. Every mtui on the
+fleet writes the same `timestamp:user:pid[:comment]` layout, so sessions see one
+another's claims — a host held by someone else is *skipped*, and an
+install/update aborts with "Hosts locked" rather than waiting. Raise
+`[lock] wait` (default `0`) to poll for a busy host during pool arbitration.
+There are two locks with that layout: the operation lock
 (`/var/lock/mtui.lock`, PID-based, guards serialized zypper transactions) and the
 pool-claim lock (`/var/lock/mtui-pool.lock`, RRID-based). Stale-lock reaping is
 configurable under `[lock]` — see [Configuration](configuration.md).

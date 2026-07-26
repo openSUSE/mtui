@@ -6,18 +6,16 @@ a request by RRID, install and test it on reference hosts over SSH in parallel,
 then approve or reject. It drives OBS/IBS and Gitea review workflows, `svn`, and
 openQA/QEM under the hood.
 
-This is a **redesign, not a transpile**: MTUI is the behavioral reference and
-source of domain truth, but mtui aims to be memory-safe, async-native, and
-distributable as a single static binary — while preserving the data-format and
-workflow contracts that keep it interoperable with the SUSE maintenance
-ecosystem.
+mtui is memory-safe, async-native, and distributed as static binaries, while
+preserving the data-format and workflow contracts that keep it interoperable with
+the SUSE maintenance ecosystem.
 
-## Why a rewrite
+## Design goals
 
 - **Safety & robustness** — strong types, exhaustive error enums, no interpreter.
 - **Performance** — async I/O (`tokio`), true parallel host fan-out, fast startup.
-- **Distribution** — two static binaries (`mtui`, `mtui-mcp`), no Python runtime
-  or virtualenv; generated shell completions and man pages.
+- **Distribution** — two static binaries (`mtui`, `mtui-mcp`), no runtime
+  interpreter or virtualenv; generated shell completions and man pages.
 - **Maintainability** — a Cargo workspace with clean crate boundaries and one
   composition root.
 
@@ -57,8 +55,8 @@ authenticated boundary trusted to operate the remaining maintenance tools.
   regeneration (`regenerate`).
 - Reference-host discovery via `refhosts.yml` (HTTPS- or filesystem-resolved,
   cached) and offline inventory search (`list_refhosts`).
-- Cooperative reference-host locking (`/var/lock/mtui.lock`), interoperable with
-  Python MTUI on a shared fleet.
+- Cooperative reference-host locking (`/var/lock/mtui.lock`) so concurrent
+  testers can share a fleet.
 - Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`
   (SVN and Gitea backends).
 - File transfer (`put`/`get`) over SFTP.
