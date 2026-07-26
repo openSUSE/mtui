@@ -79,6 +79,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bump appeared in the report depended on the packager's whitespace style. Both
   added and removed `Version:` lines are now listed under "Version / macro
   changes:"; `%define`/`%global …ver…` macro bumps match exactly as before.
+- Corrected a user-facing typo: `list_products` labelled each host's product
+  list "Referenece host:" — inherited verbatim from the Python implementation,
+  where it was the string's only occurrence and had no consumer — and now
+  prints "Reference host:". Affects the REPL and the `list_products` MCP tool.
 
 ### Removed
 

@@ -14,8 +14,9 @@ extend-exclude = [
 # Accepted alternative spelling of "cannot be parsed", used consistently across
 # the datasources/testreport crates and their tests (error text, doc comments).
 unparseable = "unparseable"
-# Deliberate `sic`: upstream mtui literally prints "Referenece host"; the Rust
-# port preserves the byte-for-byte output for tool parity (see display.rs).
+# The label was corrected to "Reference host". This entry stays for the two
+# places that still quote the old misspelling: the CHANGELOG entry recording
+# the fix, and the `list_products` doc comment in display.rs explaining it.
 referenece = "referenece"
 # SUSE product name: SLE-HAE (High Availability Extension), e.g. "SLE-HAE",
 # "sle-hae" in product-normalisation code and its tests.

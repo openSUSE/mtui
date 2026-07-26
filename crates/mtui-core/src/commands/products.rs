@@ -91,8 +91,8 @@ mod tests {
         let args = matches(&ListProducts, &["-t", "h1"]);
         ListProducts.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        // Upstream's (sic) label + the host name are rendered.
-        assert!(out.contains("Referenece host"), "{out}");
+        // The label + the host name are rendered.
+        assert!(out.contains("Reference host"), "{out}");
         assert!(out.contains("h1"), "{out}");
     }
 
