@@ -59,6 +59,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Internal only, no behaviour change: the OBS/QAM precondition guard is now
   named `skips_maintenance_testreport` rather than `is_slfo`, which claimed
   less than it does — it is true for PI requests as well as SLFO ones.
+- The `update`/`downgrade` commands sent to reference hosts no longer carry
+  doubled awk braces (`'{{ print $2; }}'` → `'{ print $2; }'`), a leftover of
+  an older templating scheme. The two forms are equivalent to awk, so the
+  update itself behaves identically; what changes is the command text shown by
+  `show_log` and written into the exported `install_logs/<host>.log`, which is
+  now what a person would type when reproducing the run by hand.
 
 ### Fixed
 

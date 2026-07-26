@@ -9,12 +9,13 @@
 //! (see `hostgroup.py::perform_downgrade`) so the shell/awk `$`-tokens survive.
 //! The `slmicro` entry is transactional with a reboot.
 //!
-//! Template strings are ported **verbatim**, including leading newlines.
+//! `LIST_COMMAND`'s leading newline keeps the first command off the prompt line
+//! in the transcript `show_log` prints.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
 
 /// zypper/slmicro downgrade list command (upstream `list_command_template`),
-/// verbatim and shared by both.
+/// shared by both.
 ///
 /// One `zypper -n se -s` invocation for the whole package list (upstream
 /// PR #336): a per-package `for p in $packages; do zypper ... $$p; done` loop
@@ -27,7 +28,7 @@ zypper -n se -s --match-exact -t package $packages \
 | grep -v "(System" \
 | grep ^[iv] \
 | sed "s, ,,g" \
-| awk -F "|" '{{ print $2,"=",$4 }}'
+| awk -F "|" '{ print $2,"=",$4 }'
 "#;
 
 /// zypper downgrade command (upstream `zypper()["command"]`), verbatim.
@@ -120,7 +121,9 @@ mod tests {
             "{listed}"
         );
         // awk field refs preserved.
-        assert!(listed.contains("print $2,\"=\",$4"));
+        assert!(listed.contains("{ print $2,\"=\",$4 }"));
+        // Discriminating: the doubled form contains the single-brace substring.
+        assert!(!listed.contains("{{"), "{listed}");
     }
 
     #[test]

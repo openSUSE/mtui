@@ -6,37 +6,37 @@
 //! (`awk … print $2`, `while read r … $$r`) that must reach the remote shell
 //! unaltered. The `slmicro` (`slm_update`) entry is transactional with a reboot.
 //!
-//! The template strings are ported **verbatim**, including their leading
-//! newline, so the emitted commands are byte-identical to upstream.
+//! Each template's leading newline keeps the first command off the prompt line
+//! in the transcript `show_log` prints.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
 
-/// yum update command (upstream `yum_update["command"]`), verbatim.
+/// yum update command (upstream `yum_update["command"]`).
 const YUM_UPDATE: &str = "
 export LANG=
 yum repolist
 yum -y update $packages
 ";
 
-/// zypper update command (upstream `zypper_update["command"]`), verbatim.
+/// zypper update command (upstream `zypper_update["command"]`).
 const ZYPPER_UPDATE: &str = r#"
 export LANG=
 zypper -n lr -puU
 zypper -n refresh
 zypper -n patches | grep $repa
-zypper -n in -l -y -t patch $(zypper -n patches | awk -F "|" '/$repa\>/ {{ print $2; }}')
+zypper -n in -l -y -t patch $(zypper -n patches | awk -F "|" '/$repa\>/ { print $2; }')
 zypper -n patches | grep $repa
-zypper -n lr | awk -F "|" '/$repa\>/ {{ print $2; }}' | while read r; do zypper -n rr $$r; done
+zypper -n lr | awk -F "|" '/$repa\>/ { print $2; }' | while read r; do zypper -n rr $$r; done
 "#;
 
-/// slmicro update command (upstream `slm_update["command"]`), verbatim.
+/// slmicro update command (upstream `slm_update["command"]`).
 const SLM_UPDATE: &str = r#"
 export LANG=
 zypper -n lr -puU
 zypper -n patches | grep $repa
-transactional-update -n pkg in -l -y -t patch $(zypper -n patches | awk -F "|" '/$repa\>/ {{ print $2; }}')
+transactional-update -n pkg in -l -y -t patch $(zypper -n patches | awk -F "|" '/$repa\>/ { print $2; }')
 zypper -n patches | grep $repa
-zypper -n lr | awk -F "|" '/$repa\>/ {{ print $2; }}' | while read r; do zypper -n rr $$r; done
+zypper -n lr | awk -F "|" '/$repa\>/ { print $2; }' | while read r; do zypper -n rr $$r; done
 "#;
 
 fn yum() -> ActionCommands {
@@ -98,8 +98,12 @@ mod tests {
         assert!(rendered.contains("print $2;"));
         // `$$r` -> literal `$r` for the shell loop.
         assert!(rendered.contains("zypper -n rr $r; done"));
-        // Template braces `{{ }}` are literal in string.Template.
-        assert!(rendered.contains("{{ print $2; }}"));
+        // Braces are literal to the substituter — only `$` is special — so the
+        // awk action reaches the remote shell exactly as written.
+        assert!(rendered.contains("{ print $2; }"));
+        // Discriminating: `"{{ print $2; }}"` *contains* `"{ print $2; }"`, so
+        // the assertion above alone would also pass on the old doubled form.
+        assert!(!rendered.contains("{{"), "{rendered}");
     }
 
     #[test]
@@ -118,6 +122,8 @@ mod tests {
         );
         let rendered = cmds.render_command(&vars(":p=1:2", "p")).unwrap();
         assert!(rendered.contains("transactional-update -n pkg in -l -y -t patch"));
+        assert!(rendered.contains("{ print $2; }"));
+        assert!(!rendered.contains("{{"), "{rendered}");
     }
 
     #[test]
