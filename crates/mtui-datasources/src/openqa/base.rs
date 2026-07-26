@@ -276,6 +276,22 @@ pub(crate) mod tests {
         assert_eq!(build, ":smelt:1:bash");
     }
 
+    /// PI takes the `smelt` prefix. This is the single case that separates the
+    /// bare `kind == Slfo` test here from `qam`'s precondition guard, which
+    /// groups PI *with* SLFO — merging the two would silently retag every PI
+    /// job's `build` parameter as `git` and break openQA job lookup.
+    #[test]
+    fn build_param_uses_smelt_prefix_for_pi() {
+        let base = OpenQABase::new(dummy_client(), &rrid("PI"), &MockIncident::new("bash"));
+        let build = base
+            .params
+            .iter()
+            .find(|(k, _)| k == "build")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert_eq!(build, ":smelt:1:bash");
+    }
+
     #[test]
     fn build_param_uses_git_prefix_for_slfo() {
         // SLFO maintenance ids are dotted; use one that parses.

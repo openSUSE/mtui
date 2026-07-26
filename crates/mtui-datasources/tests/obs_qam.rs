@@ -23,8 +23,17 @@ fn rrid() -> RequestReviewID {
     RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap()
 }
 
+/// A genuine PI-kind RRID. `qam`'s precondition guard is
+/// `matches!(kind, Pi | Slfo)`, so PI is a distinct arm from SLFO and needs its
+/// own fixture — this used to return an SLFO RRID, which left every `_pi_` test
+/// below exercising the SLFO arm twice and the PI arm not at all.
 fn pi_rrid() -> RequestReviewID {
-    // SLFO kind -> skips preconditions.
+    RequestReviewID::parse("SUSE:PI:1.1:70000").unwrap()
+}
+
+/// An SLFO-kind RRID sharing the same review id, so the two kinds can be run
+/// through the identical mock setup and compared.
+fn slfo_rrid() -> RequestReviewID {
     RequestReviewID::parse("SUSE:SLFO:1.1:70000").unwrap()
 }
 
@@ -441,8 +450,10 @@ async fn assign_previous_reject_ignores_non_qam_declined() {
     assert_eq!(query_val(&q, "by_group"), Some("qam-sle"));
 }
 
-#[tokio::test]
-async fn assign_skips_preconditions_for_pi() {
+/// Asserts `assign` skipped the `qam.suse.de` preconditions for `rrid`: only
+/// the request GET and the assign POST reach OBS, and the reports server is
+/// never contacted.
+async fn assert_assign_skips_preconditions(rrid: &RequestReviewID) {
     let api = MockServer::start().await;
     let reports = MockServer::start().await;
     Mock::given(method("GET"))
@@ -456,7 +467,7 @@ async fn assign_skips_preconditions_for_pi() {
         &client_for(&api),
         &reports.uri(),
         &SslVerify::Enabled,
-        &pi_rrid(),
+        rrid,
         USER,
         &["qam-sle".to_owned()],
     )
@@ -466,6 +477,18 @@ async fn assign_skips_preconditions_for_pi() {
     // Only the request GET and the assign POST — no testreport / collection.
     assert_eq!(api.received_requests().await.unwrap().len(), 2);
     assert!(reports.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn assign_skips_preconditions_for_pi() {
+    assert_assign_skips_preconditions(&pi_rrid()).await;
+}
+
+#[tokio::test]
+async fn assign_skips_preconditions_for_slfo() {
+    // The arm the `_for_pi` test above covered before its fixture was corrected;
+    // kept so both halves of `matches!(kind, Pi | Slfo)` stay pinned.
+    assert_assign_skips_preconditions(&slfo_rrid()).await;
 }
 
 // --------------------------------------------------------------------------- //

@@ -508,6 +508,35 @@ mod tests {
         assert!(!is_gitea_workflow(&maint));
     }
 
+    /// PI is *not* a Gitea request, even though `qam`'s precondition guard
+    /// treats PI and SLFO alike. This is a live distinction — merging the two
+    /// guards would route PI through the wrong backend.
+    #[test]
+    fn is_gitea_workflow_excludes_pi() {
+        for id in ["SUSE:PI:1.1:5", "SUSE:PI:1.2:5", "SUSE:PI:42:99"] {
+            let rrid: mtui_types::RequestReviewID = id.parse().unwrap();
+            assert!(!is_gitea_workflow(&rrid), "{id} must use the OSC backend");
+        }
+    }
+
+    /// Upstream `_is_gitea_workflow` is open-ended (`!= "1.1"`), unlike the QEM
+    /// dashboard's closed `== "1.2"`. Today only `1.1` and `1.2` occur, so the
+    /// two agree on every real RRID and this test is the only thing recording
+    /// that they are nonetheless different predicates.
+    ///
+    /// The id below is **hypothetical** — there is no SLFO 2.0 product, and none
+    /// is expected soon. The test exists so that if one ever appears, the
+    /// open-ended formulation is still in force rather than having been quietly
+    /// narrowed to `== "1.2"` while the suite stayed green.
+    #[test]
+    fn is_gitea_workflow_stays_open_ended_beyond_1_2() {
+        let rrid: mtui_types::RequestReviewID = "SUSE:SLFO:2.0:5".parse().unwrap();
+        assert!(
+            is_gitea_workflow(&rrid),
+            "a future SLFO id must still route to Gitea"
+        );
+    }
+
     #[test]
     fn reject_requires_reason_and_validates_choices() {
         let cmd = Reject.configure(clap::Command::new("reject").no_binary_name(true));
