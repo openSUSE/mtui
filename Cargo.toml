@@ -120,7 +120,7 @@ wiremock = "0.6"
 # serialises tests that mutate process-global env vars ($OSC_CONFIG, $HOME,
 # $XDG_CONFIG_HOME) for the osc-parity oscrc discovery reader — cargo runs tests
 # in parallel threads, so env mutation must not race.
-serial_test = "3"
+serial_test = "4"
 # perf baselines (mtui-rs-0mop.1): criterion for in-process latency/throughput
 # benches, dhat for allocation + peak-heap profiles. Dev-only; benches use
 # `harness = false` so they compile only under `cargo bench`, never in the
