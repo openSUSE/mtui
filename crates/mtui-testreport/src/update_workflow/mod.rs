@@ -479,7 +479,23 @@ mod tests {
     #[test]
     fn registry_check_unknown_key_is_none() {
         let reg = WorkflowRegistry::default();
-        assert!(reg.check(Role::Update, "slmicro", true).is_none());
+        // Was `("slmicro", true)` — which is now a *registered* update key, so
+        // it no longer demonstrates anything. Use keys with no doer either.
+        assert!(reg.check(Role::Update, "nonesuch", false).is_none());
+        assert!(reg.check(Role::Update, "15", true).is_none());
+    }
+
+    #[test]
+    fn registry_resolves_the_update_checks_that_used_to_be_missing() {
+        // `("slmicro", true)` and `("YUM", false)` have had an *updater* since
+        // the port but no check, so `run_checks` skipped them via its
+        // `else { continue }` and `update` reported success on those hosts
+        // whatever the command did. Pins the table wiring, not just the
+        // function: resolving through the registry is the path `run_checks`
+        // actually takes.
+        let reg = WorkflowRegistry::default();
+        assert!(reg.check(Role::Update, "slmicro", true).is_some());
+        assert!(reg.check(Role::Update, "YUM", false).is_some());
     }
 
     // --- the mtui-hosts PlanProvider adapter --------------------------------
