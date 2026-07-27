@@ -1699,7 +1699,7 @@ mod tests {
         // The install itself still ran and the reboot was still dispatched —
         // only the verdict changed.
         assert_eq!(
-            handle.commands(),
+            package_commands(&handle),
             vec!["transactional-update -n pkg install pkg-a"]
         );
         assert_eq!(handle.fired_commands(), vec!["systemctl reboot"]);
@@ -1714,8 +1714,12 @@ mod tests {
         exit: i16,
         alive: bool,
     ) -> (Target, MockConnection) {
-        let conn =
-            MockConnection::new(hostname).with_default(CommandLog::new("", stdout, "", exit, 0));
+        // `with_changing_boot_id` models a host that really restarted; without
+        // it both boot-id probes return `stdout` and the reboot is correctly
+        // judged never to have happened.
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", stdout, "", exit, 0))
+            .with_changing_boot_id();
         let conn = if alive {
             conn
         } else {
@@ -1732,6 +1736,15 @@ mod tests {
             true,
         );
         (t, handle)
+    }
+
+    /// The commands a mock was asked to run, minus the reboot lifecycle's own
+    /// boot-id probes — those are bookkeeping, not the operation's work.
+    fn package_commands(conn: &MockConnection) -> Vec<String> {
+        conn.commands()
+            .into_iter()
+            .filter(|c| !c.contains("/proc/sys/kernel/random/boot_id"))
+            .collect()
     }
 
     /// A transactional host with a scripted reconnect failure, so the reboot
@@ -1770,7 +1783,7 @@ mod tests {
         // Both hosts really did install and really were rebooted — the healthy
         // one is not skipped just because its neighbour died.
         assert_eq!(
-            m1.commands(),
+            package_commands(&m1),
             vec!["transactional-update -n pkg install pkg-a"]
         );
         assert_eq!(m1.fired_commands(), vec!["systemctl reboot"]);
@@ -2276,8 +2289,12 @@ mod tests {
     /// Builds an enabled SL Micro (transactional) target on a mock returning
     /// `stdout` with `exit` for every command.
     fn slmicro_target(hostname: &str, stdout: &str, exit: i16) -> (Target, MockConnection) {
-        let conn =
-            MockConnection::new(hostname).with_default(CommandLog::new("", stdout, "", exit, 0));
+        // `with_changing_boot_id` models a host that really restarted; without
+        // it both boot-id probes return `stdout` and the reboot is correctly
+        // judged never to have happened.
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", stdout, "", exit, 0))
+            .with_changing_boot_id();
         let handle = conn.clone();
         let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
         t.set_system(
@@ -2722,9 +2739,9 @@ mod tests {
         // No package command was dispatched (cancelled at index 0), proving
         // the loop stopped rather than running to completion.
         assert!(
-            handle.commands().is_empty(),
+            package_commands(&handle).is_empty(),
             "cancelled at package 0, so no package command may run: {:?}",
-            handle.commands()
+            package_commands(&handle)
         );
         // ...but the reboot still fired. This is the whole point of `break`
         // rather than an early return: the snapshot must be activated even

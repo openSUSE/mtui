@@ -76,8 +76,12 @@ fn target(
     version: &str,
     transactional: bool,
 ) -> (Target, mtui_hosts::MockConnection) {
+    // `with_changing_boot_id`: a fresh boot id on every read, modelling a host
+    // that really restarted. Without it both boot-id probes return the
+    // `with_default` stdout and the reboot reads as "never went down".
     let conn = mtui_hosts::MockConnection::new(hostname)
-        .with_default(CommandLog::new("", "done", "", 0, 1));
+        .with_default(CommandLog::new("", "done", "", 0, 1))
+        .with_changing_boot_id();
     let handle = conn.clone();
     let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
     let system = System::new(
@@ -87,6 +91,15 @@ fn target(
     );
     t.set_system(system, transactional);
     (t, handle)
+}
+
+/// The commands a mock was asked to run, minus the reboot lifecycle's own
+/// boot-id probes — those are bookkeeping, not the operation's work.
+fn package_commands(conn: &mtui_hosts::MockConnection) -> Vec<String> {
+    conn.commands()
+        .into_iter()
+        .filter(|c| !c.contains("/proc/sys/kernel/random/boot_id"))
+        .collect()
 }
 
 #[tokio::test]
@@ -125,9 +138,11 @@ async fn install_drives_doer_and_reboots_only_transactional() {
 
     // The transactional host ran only the install as a normal command; the
     // reboot is dispatched fire-and-forget (the reboot drops the connection),
-    // then the host is reconnected — the P2.9 `_reboot` lifecycle.
+    // then the host is reconnected and its boot id re-read to confirm it
+    // really restarted. The boot-id probes are part of that lifecycle rather
+    // than work the operation asked for, so they are filtered out here.
     assert_eq!(
-        m2.commands(),
+        package_commands(&m2),
         vec!["zypper -n in -y -l pkg-a pkg-b".to_owned()]
     );
     assert_eq!(m2.fired_commands(), vec!["systemctl reboot".to_owned()]);

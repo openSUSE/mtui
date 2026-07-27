@@ -1213,10 +1213,13 @@ impl HostsGroup {
     /// tell the difference. A host named in `reboot` but absent from the group
     /// is silently skipped, as everywhere else in the fan-out.
     ///
-    /// Unlike [`reboot_selected`](Self::reboot_selected) this path takes no
-    /// boot-id snapshot, so it detects a host that did not come *back* but not
-    /// one that never went *down* (a reboot command that silently no-ops leaves
-    /// the connection reconnectable and the snapshot inert).
+    /// Each host's boot id is snapshotted before the reboot and re-read after,
+    /// as in [`reboot_selected`](Self::reboot_selected). "Never went down" is at
+    /// least as likely here as "never came back": the reboot is dispatched
+    /// fire-and-forget, so its exit status is never seen, and a
+    /// `transactional-update reboot` that silently no-ops leaves the host
+    /// reconnectable with the snapshot inert. Reconnecting proves only that the
+    /// host is reachable, not that it restarted.
     async fn reboot_transactional(&mut self, reboot: &BTreeMap<String, String>) -> RebootOutcomes {
         use std::sync::Mutex;
 
@@ -1236,6 +1239,29 @@ impl HostsGroup {
         // ran), so a per-host result has to leave by a side channel — the same
         // shape `reboot_where` uses.
         let outcomes: Mutex<RebootOutcomes> = Mutex::new(BTreeMap::new());
+
+        // Record each host's boot id before rebooting, so a host that comes
+        // back without having restarted can be told apart from one that did.
+        let old_boot_ids: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+        actions::run_fanout(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            Some("boot_id"),
+            |t| reboot.contains_key(t.hostname()),
+            |t| {
+                let old_boot_ids = &old_boot_ids;
+                Box::pin(async move {
+                    let id = t.boot_id().await;
+                    old_boot_ids
+                        .lock()
+                        .unwrap()
+                        .insert(t.hostname().to_owned(), id);
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+        let old_boot_ids = old_boot_ids.into_inner().unwrap();
 
         // Fire the reboot on every named host first (it drops the connection),
         // then reconnect each once it is back up — both phases fan out
@@ -1292,6 +1318,34 @@ impl HostsGroup {
                     let mut map = outcomes.lock().unwrap();
                     if !matches!(map.get(&hostname), Some(Err(_))) {
                         map.insert(hostname, outcome);
+                    }
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+
+        // Verify each host's boot id actually changed. Only a host that got
+        // this far cleanly can be downgraded here — an earlier failure is the
+        // more fundamental one. An unreadable id is not a failure (it is
+        // logged), so this can only ever catch a host that provably did not
+        // restart, never one it merely could not confirm.
+        actions::run_fanout(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            Some("verify_reboot"),
+            |t| reboot.contains_key(t.hostname()),
+            |t| {
+                let old = old_boot_ids.get(t.hostname()).cloned().unwrap_or_default();
+                let outcomes = &outcomes;
+                Box::pin(async move {
+                    let hostname = t.hostname().to_owned();
+                    let new_boot_id = t.boot_id().await;
+                    if let Err(reason) = Self::verify_boot_id(&hostname, &old, &new_boot_id) {
+                        let mut map = outcomes.lock().unwrap();
+                        if !matches!(map.get(&hostname), Some(Err(_))) {
+                            map.insert(hostname, Err(HostError::Update(reason)));
+                        }
                     }
                 }) as actions::BoxTargetFut<'_>
             },
@@ -2029,7 +2083,10 @@ mod tests {
 
     #[tokio::test]
     async fn operation_reboot_fires_and_reconnects_named_hosts() {
-        let (m1, m2) = (reboot_mock("h1", "id-1"), reboot_mock("h2", "id-2"));
+        // `rebooted_mock`: a fresh boot id on every read, i.e. a host that
+        // really restarted. `reboot_mock` returns a fixed id, which now
+        // (correctly) reads as "this host never went down".
+        let (m1, m2) = (rebooted_mock("h1"), rebooted_mock("h2"));
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = HostsGroup::new(
             vec![
@@ -2086,6 +2143,64 @@ mod tests {
         assert!(
             matches!(&outcomes["h1"], Err(HostError::ReconnectFailed { host }) if host == "h1"),
             "reconnect failure must be recorded, got {:?}",
+            outcomes["h1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_reboot_records_a_host_that_never_went_down() {
+        // The reboot is dispatched fire-and-forget, so its exit status is never
+        // seen. A `transactional-update reboot` that silently no-ops leaves the
+        // host reachable and its staged snapshot inert — reconnecting proves
+        // only that the host is up, not that it restarted. The unchanged boot
+        // id is the only evidence.
+        let m1 = reboot_mock("h1", "id-1");
+        let h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+
+        let map: HostCommandMap = vec![("h1".to_owned(), "transactional-update reboot".to_owned())];
+        let outcomes = OperationGroup::reboot(&mut g, map).await;
+
+        // It reconnected fine — that is exactly what makes this case sneaky.
+        assert_eq!(h1.reconnect_count(), 1);
+        assert!(
+            outcomes["h1"].is_err(),
+            "an unchanged boot id means the host never rebooted: {:?}",
+            outcomes["h1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_reboot_unreadable_boot_id_is_not_a_failure() {
+        // The boot-id probe is best-effort: `Target::boot_id` returns "" on any
+        // error. An unconfirmed reboot must not be reported as a failed one, or
+        // every host whose probe hiccups fails its install.
+        let m1 = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
+        let h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+
+        let map: HostCommandMap = vec![("h1".to_owned(), "transactional-update reboot".to_owned())];
+        let outcomes = OperationGroup::reboot(&mut g, map).await;
+
+        assert_eq!(h1.reconnect_count(), 1);
+        assert!(
+            outcomes["h1"].is_ok(),
+            "an unreadable boot id cannot confirm or deny the reboot, so it \
+             must not manufacture a failure: {:?}",
             outcomes["h1"]
         );
     }

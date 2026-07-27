@@ -169,6 +169,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   host has passed its check, so the two cannot arise together. A failed reboot
   on `update` is treated as any other per-host update failure, so it still
   triggers the rollback.
+- A transactional host that never *went down* was also reported as a success.
+  The post-operation reboot is dispatched fire-and-forget, so its exit status
+  is never seen: a `transactional-update reboot` that silently no-ops (a
+  systemd inhibitor, a masked rebootmgr, a polkit denial) leaves the host
+  reachable and its staged snapshot inert, and reconnecting proves only that
+  the host is up. That reboot now snapshots each host's boot id beforehand and
+  re-reads it after, as the `reboot` command already did. A boot id that cannot
+  be read is still not a failure, so an unreadable probe cannot manufacture one.
 - A reboot that could not be *dispatched* at all — an unconnected target, or a
   channel that would not open — was also dropped. Because a failed dispatch
   leaves the SSH session open, the reconnect that follows succeeded trivially
