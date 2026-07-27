@@ -139,6 +139,9 @@ next actionable task before working on a subsystem.
   an early timeout as a failure.
 - **"Done" means CI observed green, not predicted green.** Report status from the
   actual run.
+- **A regression test must be observed failing** against the unfixed code before
+  the fix is claimed done. Revert the fix (or hand-break the line), run that one
+  test, see red, restore. A pinning test that was never red pins nothing.
 - New/changed code needs **>=80% patch coverage**. If a line is genuinely
   un-coverable (best-effort network/error paths), add a focused test or a
   justified allow — never leave coverage silently red.
@@ -268,6 +271,21 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
   lands with that prefix automatically; don't hand-name it otherwise.
 - **Gate real hosts/containers** behind `#[ignore]` + a CI env flag (sshd
   integration fixture); unit tests must run offline and fast.
+- **A test that cannot fail is not evidence.** Twice a real regression has sailed
+  through a green workspace run: once because the fixture disarmed the assertion
+  (a `MockConnection` answering empty stdout builds no downgrade command, so
+  "assert no `--oldpackage`" could not fail; a fresh report "clears" a field that
+  was already `None`), once because the fix landed one layer too low
+  (`Target::reboot` gated on `TargetState`) — which half-gated the lifecycle and
+  silently broke the `reboot` command while every test stayed green. Green CI is
+  a claim about the suite, not a proof about the code. For each new assertion,
+  name the mutation it must catch and check the fixture can express it: a
+  *changing* boot id passes the disabled-host test even when only the dispatch is
+  skipped, so that test pins a *fixed* one. Then break the code and watch it go
+  red. Apply the same scepticism to the fix — when the leaf you are gating has
+  other callers (`Target::reboot` is also reached by `close` and by the explicit
+  `reboot` command), gate on the layer that owns the state and probe the sibling
+  paths before believing the gate landed where you meant it.
 
 ## Style & error handling
 - Edition 2024, MSRV 1.96. `rustfmt` defaults; `clippy` clean with

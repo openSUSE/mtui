@@ -175,6 +175,15 @@ display) passed into each call. There are no hidden globals.
 - **Snapshot text contracts** with `insta` (testreport/export rendering, metadata
   parsing, MCP schemas, the lock wire format, display output). Review new
   snapshots with `cargo insta review`.
+- **Make sure the test can fail.** A green run means something only if red was
+  reachable. Watch for fixtures that quietly disarm the assertion: a
+  `MockConnection` answering empty stdout builds no downgrade command, so an
+  "assert no `--oldpackage`" passes vacuously; a `with_changing_boot_id()` mock
+  passes a skip-the-reboot test even when only the dispatch was skipped. For a
+  test written to pin a bug, revert the fix, watch it go red, then restore. The
+  same applies to the fix itself — when the leaf you are gating has other callers
+  (`Target::reboot` is reached by `close` and the `reboot` command, not just the
+  fan-out), gate on the layer that owns the state and probe the sibling paths.
 
 ### The one-`it.rs`-per-crate rule
 
