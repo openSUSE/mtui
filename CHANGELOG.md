@@ -72,6 +72,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A post-operation reboot whose SSH link had gone idle during the (multi-
+  minute) package transaction now reconnects before dispatching, as ordinary
+  commands already did. Without it the reboot failed to dispatch against a
+  perfectly healthy host — and since a failed dispatch followed by a
+  *successful* reconnect is exactly the signature of "the host is up but never
+  got the command", `update` routed its group-wide rollback on it: an idle TCP
+  session could downgrade every host in the group.
+- A **disabled** host is no longer rebooted by the post-operation reboot, nor
+  probed by it, nor reported by it. It is excluded from the command fan-out,
+  so it stages no snapshot and has nothing to activate; rebooting it restarted
+  a machine the operator had deliberately taken out of the run. Left
+  unreported it also read as "never rebooted" — which `update` treats as
+  still-reachable, rolling the whole group back on behalf of a host that was
+  never in it. The `reboot` command and `quit --reboot`/`--poweroff` are
+  unchanged: they reboot whichever hosts the operator named.
 - `install`/`uninstall` now check whether a host's install/uninstall command
   actually succeeded *before* rebooting its transactional (read-only-root)
   snapshot into it. The install/uninstall template used to reboot first and
