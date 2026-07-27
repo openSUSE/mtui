@@ -86,6 +86,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `update` specifically reports the new `UpdateFailure::Reboot` and — since
   the host is unreachable — skips the rollback downgrade it runs for a check
   failure.
+- A transactional host that *never rebooted at all* is no longer reported as
+  updated. The reboot outcome above records only whether the host reconnected,
+  which left two failures reading as success: a reboot that was never
+  dispatched — the failed dispatch leaves the SSH session live, so the
+  reconnect that follows returns immediately — and a reboot the host accepted
+  and silently ignored (a masked `rebootmgr`, a systemd inhibitor, a polkit
+  denial), which leaves it up on the old snapshot. The post-operation reboot
+  now takes the same boot-id snapshot and verification the explicit `reboot`
+  command already performed, and records a failed dispatch; the explicit
+  `reboot` command gains the dispatch check it was also missing.
+- `update` now decides on the rollback downgrade from *why* a reboot failed,
+  not merely that one did — refining the `UpdateFailure::Reboot` behaviour
+  described above. The rollback is group-wide, so it runs only when it can
+  actually repair every host that failed: when all of them are still reachable
+  but running an un-activated snapshot (the new `UpdateFailure::RebootNotTaken`)
+  — the split-brain a rollback exists to undo. If any failed host is
+  unreachable the rollback is skipped (`UpdateFailure::Reboot`), because
+  reverting the healthy hosts cannot repair a machine nothing can reach. Every
+  failed host is named either way.
 - `install`/`uninstall`/`downgrade`/`update` now write their
   `/var/log/mtui.log` history row *after* dispatching a command on the host,
   not before. A run that never starts (no doer resolves, the host is held by

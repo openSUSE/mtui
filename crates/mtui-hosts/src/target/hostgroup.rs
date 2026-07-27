@@ -1155,10 +1155,16 @@ impl HostsGroup {
                         }
                     };
                     let mut map = outcomes.lock().unwrap();
-                    // Preserve a dispatch failure from phase 2 — that host was
-                    // never sent a reboot in the first place.
-                    if !matches!(map.get(&hostname), Some(Err(_))) {
-                        map.insert(hostname, outcome);
+                    // As in `reboot_transactional`: a failed reconnect is the
+                    // only direct evidence about reachability and outranks
+                    // phase 2's dispatch diagnosis, but a *successful* one must
+                    // not erase a dispatch failure — that reconnect succeeded
+                    // only because the session was never torn down.
+                    match (&outcome, map.get(&hostname)) {
+                        (Err(_), _) | (Ok(()), None) => {
+                            map.insert(hostname, outcome);
+                        }
+                        (Ok(()), Some(_)) => {}
                     }
                 }) as actions::BoxTargetFut<'_>
             },
@@ -1180,12 +1186,15 @@ impl HostsGroup {
                 Box::pin(async move {
                     let hostname = t.hostname().to_owned();
                     let new_boot_id = t.boot_id().await;
-                    if let Err(reason) = Self::verify_boot_id(&hostname, &old, &new_boot_id) {
+                    if Self::verify_boot_id(&hostname, &old, &new_boot_id).is_err() {
                         let mut map = outcomes.lock().unwrap();
-                        // Preserve a reconnect failure; only mark a cleanly
-                        // reconnected host as failed for an unchanged boot id.
+                        // Preserve an earlier failure; only mark a host that got
+                        // this far cleanly as never having rebooted.
                         if !matches!(map.get(&hostname), Some(Err(_))) {
-                            map.insert(hostname, Err(HostError::Update(reason)));
+                            map.insert(
+                                hostname.clone(),
+                                Err(HostError::RebootDidNotHappen { host: hostname }),
+                            );
                         }
                     }
                 }) as actions::BoxTargetFut<'_>
@@ -1209,13 +1218,16 @@ impl HostsGroup {
     /// Transactional hosts contribute a
     /// per-host reboot command from the operation's doer. Each is dispatched
     /// fire-and-forget, then reconnected (sorted) with the connection's retry +
-    /// backoff. Unlike [`reboot`](Self::reboot) this path takes no boot-id
-    /// snapshot / verification, and is a no-op
-    /// when the map is empty.
+    /// backoff, with the same boot-id snapshot and verification
+    /// [`reboot`](Self::reboot) performs. A no-op when the map is empty.
     ///
     /// Returns each named host's outcome, mirroring
-    /// [`reboot_where`](Self::reboot_where): `Ok(())` when the reboot demonstrably
-    /// took effect, `Err(HostError)` otherwise. A caller that discards this map
+    /// [`reboot_where`](Self::reboot_where): `Err(HostError)` when the reboot is
+    /// known to have failed, `Ok(())` otherwise. Note `Ok(())` is "nothing
+    /// contradicted it", not proof: an unreadable boot id (see
+    /// [`verify_boot_id`](Self::verify_boot_id)) leaves the host unverified and
+    /// passing, logged at WARN — failing open here beats reverting a fleet on a
+    /// probe that timed out. A caller that discards this map
     /// cannot tell a transactional host whose snapshot never activated from one
     /// that came back healthy.
     ///
@@ -1324,11 +1336,25 @@ impl HostsGroup {
                         }
                     };
                     let mut map = outcomes.lock().unwrap();
-                    // Preserve a dispatch failure from phase 2: this host was
-                    // never sent a reboot, so whatever the reconnect made of it
-                    // is a consequence, not the cause.
-                    if !matches!(map.get(&hostname), Some(Err(_))) {
-                        map.insert(hostname, outcome);
+                    // Precedence is deliberately *not* plain earliest-wins.
+                    //
+                    // A failed reconnect is the only direct evidence anyone
+                    // gathers about reachability, and reachability is what
+                    // decides whether the caller runs a destructive group-wide
+                    // rollback. So it outranks phase 2's dispatch diagnosis: a
+                    // link that died before the dispatch produces a `Transport`
+                    // error there, which would otherwise claim the host is
+                    // still up and send the whole group into a rollback on
+                    // behalf of a machine nothing can reach.
+                    //
+                    // A *successful* reconnect must not overwrite a dispatch
+                    // failure, though — that is the trivially-succeeding
+                    // reconnect this whole change exists to catch.
+                    match (&outcome, map.get(&hostname)) {
+                        (Err(_), _) | (Ok(()), None) => {
+                            map.insert(hostname, outcome);
+                        }
+                        (Ok(()), Some(_)) => {}
                     }
                 }) as actions::BoxTargetFut<'_>
             },
@@ -2066,7 +2092,7 @@ mod tests {
         assert_eq!(h1.reconnect_count(), 1);
         // Reconnect succeeded but the boot id was unchanged -> recorded failure.
         assert!(
-            matches!(&outcomes["h1"], Err(HostError::Update(msg)) if msg.contains("boot id unchanged")),
+            matches!(&outcomes["h1"], Err(HostError::RebootDidNotHappen { host }) if host == "h1"),
             "unchanged boot id must be recorded as a failure, got {:?}",
             outcomes["h1"]
         );
@@ -2130,7 +2156,7 @@ mod tests {
 
     #[tokio::test]
     async fn operation_reboot_fires_and_reconnects_named_hosts() {
-        let (m1, m2) = (reboot_mock("h1", "id-1"), reboot_mock("h2", "id-2"));
+        let (m1, m2) = (rebooted_mock("h1"), rebooted_mock("h2"));
         let (h1, h2) = (m1.clone(), m2.clone());
         let mut g = HostsGroup::new(
             vec![
@@ -2142,8 +2168,13 @@ mod tests {
 
         // Only h1 is transactional -> only it appears in the reboot map.
         let map: HostCommandMap = vec![("h1".to_owned(), "transactional-update reboot".to_owned())];
-        OperationGroup::reboot(&mut g, map).await;
+        let failures = OperationGroup::reboot(&mut g, map).await;
 
+        // The healthy path, which nothing else asserts: a transactional host
+        // that really rebooted must produce **no** failure. Discarding this
+        // `Vec` is what let the fixture drift to a fixed boot id — modelling a
+        // host that never went down — without any test noticing.
+        assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(
             h1.fired_commands(),
             vec!["transactional-update reboot".to_owned()]
@@ -2154,6 +2185,100 @@ mod tests {
         // h2 was not in the map: untouched.
         assert!(h2.fired_commands().is_empty());
         assert_eq!(h2.reconnect_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn operation_reboot_a_dead_link_is_unreachable_not_undispatched() {
+        // The regression this guards: a link that dies *before* the dispatch
+        // makes `fire_and_forget` fail, which phase 2 records as
+        // `RebootNotDispatched` — a variant that asserts the host is still
+        // reachable. If phase 2 simply won, that claim would stand unchallenged
+        // and `update` would revert the whole group on behalf of a machine
+        // nothing can talk to. Phase 3 actually probes reachability, so its
+        // failure has to outrank the phase-2 diagnosis.
+        let m1 = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .failing_fire_and_forget()
+            .failing_reconnect();
+        let h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+
+        let map: HostCommandMap = vec![("h1".to_owned(), "systemctl reboot".to_owned())];
+        let failures = OperationGroup::reboot(&mut g, map).await;
+
+        assert_eq!(h1.reconnect_count(), 1);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(
+            failures[0].cause,
+            RebootFailureCause::Unreachable,
+            "a host that failed BOTH dispatch and reconnect is unreachable"
+        );
+        assert!(
+            !failures[0].cause.host_still_reachable(),
+            "must not claim reachability that would trigger a rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_reboot_undispatched_but_alive_stays_repairable() {
+        // The complement: dispatch fails and the reconnect *succeeds* (the
+        // session was never torn down). Here the host really is up, so the
+        // phase-2 verdict must survive rather than be erased by the Ok.
+        let m1 = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_changing_boot_id()
+            .failing_fire_and_forget();
+        let h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+
+        let map: HostCommandMap = vec![("h1".to_owned(), "systemctl reboot".to_owned())];
+        let failures = OperationGroup::reboot(&mut g, map).await;
+
+        assert_eq!(h1.reconnect_count(), 1);
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].cause, RebootFailureCause::NotDispatched);
+        assert!(failures[0].cause.host_still_reachable());
+    }
+
+    #[tokio::test]
+    async fn reboot_selected_reports_a_reboot_it_could_not_dispatch() {
+        // The explicit `reboot` command had the same hole as the operation
+        // path: a failed dispatch left the session live, so the reconnect
+        // succeeded and the host was reported as rebooted.
+        let m1 = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_changing_boot_id()
+            .failing_fire_and_forget();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+
+        let only_h1: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let outcomes = g.reboot_selected("systemctl reboot", "", &only_h1).await;
+        assert!(
+            matches!(&outcomes["h1"], Err(HostError::RebootNotDispatched { .. })),
+            "{:?}",
+            outcomes["h1"]
+        );
     }
 
     #[tokio::test]

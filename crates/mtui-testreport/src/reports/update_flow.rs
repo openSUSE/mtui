@@ -120,9 +120,11 @@ where
     .await
 }
 
-/// Drives [`perform_update_from_report`] and, on a *check* failure, rolls the
-/// packages back via [`perform_downgrade`] before re-surfacing the original
-/// error.
+/// Drives [`perform_update_from_report`] and rolls the packages back via
+/// [`perform_downgrade`], before re-surfacing the original error, on the two
+/// failures that leave the group repairable: a *check* failure, and a reboot
+/// that did not take effect on a host still reachable
+/// ([`UpdateFailure::RebootNotTaken`]).
 ///
 /// A `MissingUpdater` failure installed nothing, so it re-surfaces without a
 /// rollback attempt. The rollback is best-effort ([`perform_downgrade`] returns
@@ -1228,10 +1230,13 @@ pub async fn perform_update(
 /// success, and **always** unlocks.
 ///
 /// Returns `Ok(())` when every host's check passed and every transactional
-/// host reconnected; otherwise `Err` with the aggregated failure: a check
-/// failure (packages may be half-applied) is [`UpdateFailure::Check`] and
-/// **suppresses the reboot entirely**; a post-patch reconnect failure is
-/// [`UpdateFailure::Reboot`]. A single failure is returned verbatim; more than
+/// host's reboot took effect — reconnecting is not sufficient, since a host can
+/// answer without ever having gone down. Otherwise `Err` with the aggregated
+/// failure: a check failure (packages may be half-applied) is
+/// [`UpdateFailure::Check`] and **suppresses the reboot entirely**; a reboot
+/// failure is [`UpdateFailure::Reboot`] when the host is unreachable and
+/// [`UpdateFailure::RebootNotTaken`] when every failed host is still reachable,
+/// which is what decides whether the group-wide rollback runs. A single failure is returned verbatim; more than
 /// one is summarised into `"update failed on {hosts} ({detail})"`.
 async fn update_run_phase(
     targets: &mut HostsGroup,
@@ -1269,11 +1274,18 @@ async fn update_run_phase(
         // behalf of one this flow cannot reach. A host that is still up, on the
         // other hand, is running the un-activated snapshot while the rest of the
         // group moved on, and that is precisely the split-brain the rollback
-        // undoes. Mixed causes take the repairable route: the reachable host is
-        // the one that can still be put right.
-        let repairable = reboot_failures
-            .iter()
-            .any(|f| f.cause.host_still_reachable());
+        // undoes.
+        //
+        // Mixed causes take the *conservative* route. `all`, not `any`: the
+        // rollback reverts the whole group, so it is only worth running when
+        // every failed host can actually be repaired by it. With one host
+        // unreachable and one merely inert, rolling back cannot reach the
+        // first, leaves the second needing manual work anyway, and reverts the
+        // hosts that did everything right. Both are still named in the error.
+        let repairable = !reboot_failures.is_empty()
+            && reboot_failures
+                .iter()
+                .all(|f| f.cause.host_still_reachable());
         let wrap: fn(UpdateError) -> UpdateFailure = if repairable {
             UpdateFailure::RebootNotTaken
         } else {
@@ -2366,6 +2378,33 @@ mod tests {
             "a reachable host on an inactive snapshot must be rolled back: {:?}",
             handle.commands()
         );
+    }
+
+    #[tokio::test]
+    async fn update_skips_the_rollback_when_any_failed_host_is_unreachable() {
+        // Mixed causes: h1 is gone, h2 is up but never rebooted. The rollback
+        // is group-wide, so running it could not repair h1, would leave h2
+        // needing manual work anyway, and would revert every healthy host in
+        // the group. `all`, not `any` — and both hosts are still named.
+        let (t1, h1) = slmicro_reboot_failure("h1", RebootFault::Unreachable);
+        let (t2, h2) = slmicro_reboot_failure("h2", RebootFault::WentNowhere);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        let err = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("two failed reboots must not report success");
+        assert!(err.reason.contains("h1"), "reason: {}", err.reason);
+        assert!(err.reason.contains("h2"), "reason: {}", err.reason);
+        for (name, handle) in [("h1", &h1), ("h2", &h2)] {
+            assert!(
+                !handle.commands().iter().any(|c| c.contains("--oldpackage")),
+                "{name} must not be rolled back when a peer is unreachable: {:?}",
+                handle.commands()
+            );
+        }
     }
 
     #[tokio::test]
