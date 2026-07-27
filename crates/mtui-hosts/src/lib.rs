@@ -36,7 +36,7 @@ pub(crate) use target::POOL_LOCK_PATH;
 pub use target::{
     Check, CheckArgs, Clock, Command, Doer, HostArbiter, HostPlan, HostsGroup, InstallOperation,
     LockOutcome, Operation, OperationGroup, Owner, PackageQuerier, PlanProvider, PoolLock,
-    RemoteLock, RepoManager, RepoOp, SetRepo, Sink, SpinnerGuard, Suspend, SystemClock,
-    TARGET_LOCK_PATH, Target, TargetLock, TtySpinner, UninstallOperation, get_arbiter,
+    RebootOutcomes, RemoteLock, RepoManager, RepoOp, SetRepo, Sink, SpinnerGuard, Suspend,
+    SystemClock, TARGET_LOCK_PATH, Target, TargetLock, TtySpinner, UninstallOperation, get_arbiter,
     parse_system, set_test_sink, spinner, suspend,
 };

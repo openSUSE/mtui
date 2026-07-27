@@ -15,7 +15,8 @@
 //! 2. `group.update_lock()`,
 //! 3. in a fallible section: `group.run(commands)` → per-host `check(...)` →
 //!    `group.reboot(reboot)`,
-//! 4. **always** `group.unlock()` afterwards.
+//! 4. **always** `group.unlock()` afterwards, and only then report a host that
+//!    failed to come back from its reboot.
 //!
 //! ## Scope: template + seams
 //!
@@ -46,6 +47,18 @@ use crate::error::HostError;
 /// An ordered `(hostname, command)` command/reboot map, kept as
 /// an ordered `Vec` so fan-out order is deterministic (sorted iteration).
 pub type HostCommandMap = Vec<(String, String)>;
+
+/// Per-host outcome of the post-operation reboot, keyed by hostname.
+///
+/// `Ok(())` means the host rebooted and reconnected; `Err` names why it did
+/// not. Only transactional hosts appear — they are the only ones that
+/// contribute a reboot entry (see [`Operation::collect`]).
+///
+/// The reboot is what activates the snapshot a transactional host staged the
+/// packages into, so a host that never comes back has *not* had the operation
+/// applied, however cleanly its command exited. Returning the outcome per host
+/// rather than logging it is what lets the caller say so.
+pub type RebootOutcomes = std::collections::BTreeMap<String, Result<(), HostError>>;
 
 /// A resolved *doer*: the command and (transactional) reboot templates for one
 /// target
@@ -162,8 +175,13 @@ pub trait OperationGroup: Send {
     /// Runs the per-host command map.
     async fn run(&mut self, commands: HostCommandMap);
 
-    /// Reboots the transactional hosts named in `reboot`.
-    async fn reboot(&mut self, reboot: HostCommandMap);
+    /// Reboots the transactional hosts named in `reboot`, returning each
+    /// host's outcome.
+    ///
+    /// A host that does not come back is reported, not logged and dropped:
+    /// its staged snapshot never activated, so the operation did not take
+    /// effect there no matter what its command printed.
+    async fn reboot(&mut self, reboot: HostCommandMap) -> RebootOutcomes;
 
     /// Releases the shared operation lock.
     async fn unlock(&mut self);
@@ -231,6 +249,12 @@ pub trait Operation: Send + Sync {
     /// from "could not even start" will print success for an update that never
     /// touched a host — the same reasoning that makes
     /// `UpdateFailure::MissingUpdater` a hard failure in the update flow.
+    ///
+    /// Returns [`HostError::RebootFailed`] when a transactional host did not
+    /// come back. **This one means the opposite**: the command ran everywhere,
+    /// and only the reboot that activates the snapshot failed. A caller that
+    /// computes a per-host verdict must still compute it — see
+    /// `update_flow::perform_operation`, which routes the two apart.
     async fn run(&self, group: &mut dyn OperationGroup) -> Result<(), HostError> {
         let plans = group.plans(self.role())?;
 
@@ -243,20 +267,51 @@ pub trait Operation: Send + Sync {
         group.update_lock().await?;
 
         // Everything past the lock must reach `unlock()`, so this section stays
-        // free of `?`. It is infallible over the group seam today (run/reboot
-        // return `()`); a future fallible step must capture its error and fall
-        // through to the unlock rather than returning early.
+        // free of `?`: the reboot's verdict is *captured* here and returned
+        // only after the unlock below, never propagated with `?`. Anything
+        // fallible added here must follow the same shape — an early return
+        // would strand `/var/lock/mtui.lock` on every host in the group.
         group.run(commands).await;
         for plan in &mut plans {
             (plan.check)(CheckArgs {
                 hostname: &plan.hostname,
             });
         }
-        group.reboot(reboot).await;
+        let reboot_outcomes = group.reboot(reboot).await;
 
         group.unlock().await;
+
+        // Reported after the unlock, and deliberately *not* as a "could not
+        // start" error: the command ran on every host, and only the reboot
+        // that activates a transactional host's snapshot failed.
+        if let Some(err) = reboot_failure(&reboot_outcomes) {
+            return Err(err);
+        }
         Ok(())
     }
+}
+
+/// Folds a [`RebootOutcomes`] map into one [`HostError::RebootFailed`], or
+/// `None` when every host came back.
+///
+/// Each failed host is named with its own reason rather than collapsed into a
+/// count: "h1 did not come back" and "h1 refused the connection" send an
+/// operator to different places. The map is a `BTreeMap`, so the order is
+/// hostname-sorted and the message is stable across runs.
+fn reboot_failure(outcomes: &RebootOutcomes) -> Option<HostError> {
+    let hosts: Vec<(String, String)> = outcomes
+        .iter()
+        .filter_map(|(host, outcome)| {
+            outcome
+                .as_ref()
+                .err()
+                .map(|e| (host.clone(), e.to_string()))
+        })
+        .collect();
+    if hosts.is_empty() {
+        return None;
+    }
+    Some(HostError::RebootFailed { hosts })
 }
 
 /// Install `packages` on every target in the group.
@@ -440,6 +495,9 @@ mod tests {
         /// When `true`, `update_lock` records its event then returns
         /// [`HostError::Update`] to model a foreign-locked host.
         fail_update_lock: bool,
+        /// Hosts whose post-operation reboot reports a failed reconnect,
+        /// modelling a transactional host that never came back.
+        failing_reboot_hosts: Vec<String>,
     }
 
     impl MockGroup {
@@ -459,12 +517,20 @@ mod tests {
                 roles_seen: Arc::new(Mutex::new(Vec::new())),
                 events,
                 fail_update_lock: false,
+                failing_reboot_hosts: Vec::new(),
             }
         }
 
         /// Marks `update_lock` to fail, modelling a foreign-locked host.
         fn failing_update_lock(mut self) -> Self {
             self.fail_update_lock = true;
+            self
+        }
+
+        /// Marks `hostname`'s post-operation reboot to fail its reconnect,
+        /// modelling a transactional host that never came back up.
+        fn failing_reboot(mut self, hostname: &str) -> Self {
+            self.failing_reboot_hosts.push(hostname.to_owned());
             self
         }
 
@@ -498,8 +564,20 @@ mod tests {
             self.events.lock().unwrap().push(Event::Run(commands));
         }
 
-        async fn reboot(&mut self, reboot: HostCommandMap) {
+        async fn reboot(&mut self, reboot: HostCommandMap) -> RebootOutcomes {
+            let outcomes: RebootOutcomes = reboot
+                .iter()
+                .map(|(host, _)| {
+                    let outcome = if self.failing_reboot_hosts.contains(host) {
+                        Err(HostError::ReconnectFailed { host: host.clone() })
+                    } else {
+                        Ok(())
+                    };
+                    (host.clone(), outcome)
+                })
+                .collect();
             self.events.lock().unwrap().push(Event::Reboot(reboot));
+            outcomes
         }
 
         async fn unlock(&mut self) {
@@ -641,9 +719,9 @@ mod tests {
     }
 
     // --- run(): unlock always happens after run -----------------------------
-    // The Rust template's run→check→reboot section is infallible over the group
-    // seam today, so we assert the *ordering contract*: unlock is the final
-    // event and always follows update_lock+run.
+    // Unlock is the final event and always follows update_lock+run. The reboot
+    // step is fallible, so the second test drives the case that contract exists
+    // for — a failing step must still reach the unlock before it reports.
 
     #[tokio::test]
     async fn run_always_unlocks_after_running() {
@@ -668,6 +746,75 @@ mod tests {
             1
         );
         assert_eq!(events.iter().filter(|e| **e == Event::Unlock).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_reports_a_host_that_never_came_back_and_still_unlocks() {
+        // The regression: a transactional host whose post-install reboot never
+        // reconnected was logged at ERROR and dropped, so `install` reported
+        // success on a host whose snapshot never activated.
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![
+            plan_with_recording_check(
+                "h1",
+                true,
+                Doer::new("in $packages", "systemctl reboot"),
+                sink.clone(),
+            ),
+            plan_with_recording_check(
+                "h2",
+                true,
+                Doer::new("in $packages", "systemctl reboot"),
+                sink,
+            ),
+        ];
+        let mut group = MockGroup::new(Ok(plans)).failing_reboot("h2");
+
+        let err = InstallOperation::new(strs(&["pkg-a"]))
+            .run(&mut group)
+            .await
+            .expect_err("a host that never came back is reported, not swallowed");
+
+        // Named as a reboot failure, not as a start failure: the command *did*
+        // run, so a caller must still consult its per-host verdict.
+        assert!(matches!(err, HostError::RebootFailed { .. }), "{err:?}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("h2"),
+            "names the host that did not return: {msg}"
+        );
+        assert!(
+            !msg.contains("h1"),
+            "must not implicate the host that came back fine: {msg}"
+        );
+
+        // The lock is still released — the failure is reported *after* the
+        // unlock, never propagated with `?` from inside the section.
+        let events = group.events();
+        assert_eq!(
+            events.last(),
+            Some(&Event::Unlock),
+            "a failing reboot must still reach the unlock: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_succeeds_when_every_transactional_host_comes_back() {
+        // The inertness control for the test above: the same transactional
+        // shape, nothing scripted to fail, must stay `Ok`.
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![plan_with_recording_check(
+            "h1",
+            true,
+            Doer::new("in $packages", "systemctl reboot"),
+            sink,
+        )];
+        let mut group = MockGroup::new(Ok(plans));
+
+        InstallOperation::new(strs(&["pkg-a"]))
+            .run(&mut group)
+            .await
+            .expect("a reboot that reconnects is not a failure");
     }
 
     // --- run(): update_lock failure aborts before run/unlock ----------------

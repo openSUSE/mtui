@@ -144,6 +144,30 @@ pub enum HostError {
     #[error("{0}")]
     Update(String),
 
+    /// One or more transactional hosts did not come back after the reboot that
+    /// activates the operation's snapshot.
+    ///
+    /// Unlike every other variant an [`Operation`](crate::Operation) returns,
+    /// this one means the operation **did** run: the package-manager command
+    /// was dispatched on every host and only the post-command reboot failed.
+    /// Callers must therefore still consult their per-host verdict rather than
+    /// treating it as a "nothing happened" abort — and must not trust the
+    /// `last*` snapshot of a host named here, which is whatever the host
+    /// reported before it went away.
+    ///
+    /// Carries `(hostname, reason)` per failed host rather than one joined
+    /// string so a caller can fold each host into its own per-host verdict
+    /// instead of re-parsing the message.
+    #[error(
+        "did not come back after the reboot: {}",
+        .hosts.iter().map(|(h, r)| format!("{h} ({r})")).collect::<Vec<_>>().join(", ")
+    )]
+    RebootFailed {
+        /// Each failed host with its own reason. `Operation::run` builds this
+        /// from a `BTreeMap`, so from there it arrives hostname-sorted.
+        hosts: Vec<(String, String)>,
+    },
+
     /// No installer "doer" is defined for the given product release.
     ///
     /// The message is `Missing Installer for

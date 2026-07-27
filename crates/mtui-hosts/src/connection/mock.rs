@@ -129,6 +129,10 @@ pub struct MockConnection {
     reconnects: Arc<Mutex<usize>>,
     /// When `true`, [`reconnect`](Connection::reconnect) fails.
     reconnect_fails: bool,
+    /// When `true`, [`fire_and_forget`](Connection::fire_and_forget) fails
+    /// *without* tearing down the local link, modelling a reboot command that
+    /// never reached the host and so left the session live.
+    fire_and_forget_fails: bool,
     /// The `(retry, backoff)` args of the most recent
     /// [`reconnect`](Connection::reconnect) call, so a test can assert the
     /// caller passed the expected budget (e.g. the reboot lifecycle's
@@ -247,6 +251,7 @@ impl MockConnection {
             close_fails: false,
             reconnects: Arc::new(Mutex::new(0)),
             reconnect_fails: false,
+            fire_and_forget_fails: false,
             last_reconnect_args: Arc::new(Mutex::new(None)),
             fired: Arc::new(Mutex::new(Vec::new())),
             sftp_ops: Arc::new(Mutex::new(Vec::new())),
@@ -448,11 +453,24 @@ impl MockConnection {
     }
 
     /// Scripts [`reconnect`](Connection::reconnect) to fail with
-    /// [`HostError::ReconnectFailed`].
-    #[cfg(test)]
+    /// [`HostError::ReconnectFailed`], modelling a host that never comes back
+    /// after a reboot.
+    ///
+    /// `pub` because the flows that must report such a host live in
+    /// `mtui-testreport`, which cannot see this crate's `cfg(test)` items.
     #[must_use]
-    pub(crate) fn failing_reconnect(mut self) -> Self {
+    pub fn failing_reconnect(mut self) -> Self {
         self.reconnect_fails = true;
+        self
+    }
+
+    /// Scripts [`fire_and_forget`](Connection::fire_and_forget) to fail with
+    /// [`HostError::Transport`], leaving the session **active** — the shape a
+    /// reboot takes when its channel cannot be opened, where a following
+    /// `reconnect` then succeeds against the host that never rebooted.
+    #[must_use]
+    pub fn failing_fire_and_forget(mut self) -> Self {
+        self.fire_and_forget_fails = true;
         self
     }
 
@@ -841,6 +859,14 @@ impl Connection for MockConnection {
     }
 
     async fn fire_and_forget(&mut self, command: &str) -> Result<()> {
+        if self.fire_and_forget_fails {
+            // Nothing was dispatched and the link is untouched: the caller
+            // still holds a live session to a host that never got the command.
+            return Err(HostError::Transport {
+                host: self.hostname.clone(),
+                reason: "channel open failed".to_owned(),
+            });
+        }
         self.fired
             .lock()
             .expect("mock fired lock")

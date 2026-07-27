@@ -54,7 +54,7 @@ pub(crate) use locks::POOL_LOCK_PATH;
 pub use locks::{Clock, LockRow, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock};
 pub use operation::{
     Check, CheckArgs, Doer, HostPlan, InstallOperation, Operation, OperationGroup, PlanProvider,
-    UninstallOperation,
+    RebootOutcomes, UninstallOperation,
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::parse_system;
@@ -574,16 +574,27 @@ impl Target {
     /// Dispatches via
     /// [`Connection::fire_and_forget`]. The command is expected to drop the SSH
     /// connection, so callers follow up with [`reconnect`](Self::reconnect). A
-    /// no-op (logged) when the target is not connected; a dispatch error is
-    /// logged, not propagated, since a link dropped by the reboot is expected.
-    async fn reboot(&mut self, command: &str) {
+    /// Returns `Err` when the command could not be *dispatched* — the target is
+    /// not connected, or the channel could not be opened. That is not the same
+    /// as the link dropping afterwards, which is the expected outcome and is
+    /// reported as success: `fire_and_forget` never waits for an exit status,
+    /// so this can only fail before the host has seen the command at all.
+    ///
+    /// A caller must not treat a dispatch failure as "the host is rebooting".
+    /// A failed dispatch leaves the SSH handle open, so a following
+    /// [`reconnect`](Self::reconnect) short-circuits on the still-live session
+    /// and returns `Ok` — making an undispatched reboot otherwise
+    /// indistinguishable from a completed one.
+    async fn reboot(&mut self, command: &str) -> Result<()> {
         let Some(conn) = self.connection.as_mut() else {
             tracing::error!(host = %self.hostname, "reboot on unconnected target");
-            return;
+            return Err(HostError::NotConnected {
+                host: self.hostname.clone(),
+            });
         };
-        if let Err(e) = conn.fire_and_forget(command).await {
+        conn.fire_and_forget(command).await.inspect_err(|e| {
             tracing::error!(host = %self.hostname, error = %e, "failed to dispatch reboot");
-        }
+        })
     }
 
     /// The post-reboot reconnect attempt budget (`[connection]
@@ -649,13 +660,16 @@ impl Target {
         }
 
         match action {
+            // A dispatch failure on the way out is logged by `reboot` itself
+            // and deliberately not folded into the shutdown outcome, which
+            // reports whether the *connection* closed cleanly.
             Some("reboot") => {
                 tracing::info!(host = %self.hostname, "rebooting");
-                self.reboot("reboot").await;
+                let _ = self.reboot("reboot").await;
             }
             Some("poweroff") => {
                 tracing::info!(host = %self.hostname, "powering off");
-                self.reboot("halt").await;
+                let _ = self.reboot("halt").await;
             }
             _ => {
                 tracing::info!(host = %self.hostname, "closing connection");
@@ -1817,15 +1831,26 @@ mod tests {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
         let mut t = enabled_with(conn);
-        t.reboot("systemctl reboot").await;
+        t.reboot("systemctl reboot")
+            .await
+            .expect("a dispatched reboot is a success even though it drops the link");
         assert_eq!(handle.fired_commands(), vec!["systemctl reboot".to_owned()]);
     }
 
     #[tokio::test]
-    async fn reboot_on_unconnected_is_noop() {
+    async fn reboot_on_unconnected_target_is_reported() {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
-        // Must not panic; nothing to assert beyond the no-op completing.
-        t.reboot("systemctl reboot").await;
+        // Not a no-op verdict: nothing was dispatched, so the caller must not
+        // go on to treat the host as rebooting. `reconnect` would report `Ok`
+        // for this same target, so this is the only place it can be caught.
+        let err = t
+            .reboot("systemctl reboot")
+            .await
+            .expect_err("a reboot that was never dispatched is not a success");
+        assert!(
+            matches!(err, HostError::NotConnected { ref host } if host == "h1"),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]
