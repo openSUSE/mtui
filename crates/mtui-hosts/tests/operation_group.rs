@@ -1,5 +1,5 @@
-//! Integration test for `impl OperationGroup for HostsGroup` — the
-//! composition-root binding that drives the install/uninstall
+//! Integration test for `impl OperationGroup for HostsGroup` — the binding that
+//! drives the install/uninstall
 //! [`Operation`](mtui_hosts::Operation) template against a real
 //! [`HostsGroup`](mtui_hosts::HostsGroup) via an injected
 //! [`PlanProvider`](mtui_hosts::PlanProvider).
@@ -100,7 +100,8 @@ async fn install_drives_doer_and_reboots_only_transactional() {
 
     InstallOperation::new(vec!["pkg-a".to_owned(), "pkg-b".to_owned()])
         .run(&mut group)
-        .await;
+        .await
+        .expect("a wired group installs");
 
     // The provider was consulted for each host with the release derived from
     // its parsed system: SLES 15.5 -> "15", SL-Micro -> "slmicro".
@@ -150,7 +151,8 @@ async fn install_shell_quotes_malicious_package_name_end_to_end() {
 
     InstallOperation::new(vec!["foo; rm -rf /".to_owned()])
         .run(&mut group)
-        .await;
+        .await
+        .expect("a wired group installs");
 
     let cmd = m1.commands().into_iter().next().expect("one command ran");
     assert!(
@@ -181,7 +183,8 @@ async fn uninstall_uses_uninstaller_role() {
 
     UninstallOperation::new(vec!["pkg".to_owned()])
         .run(&mut group)
-        .await;
+        .await
+        .expect("a wired group uninstalls");
 
     let looked = lookups.lock().unwrap().clone();
     assert_eq!(
@@ -228,7 +231,8 @@ async fn select_preserves_injected_provider() {
     let mut sub = group.select(Some(&["h1".to_owned()]), false).unwrap();
     InstallOperation::new(vec!["pkg".to_owned()])
         .run(&mut sub)
-        .await;
+        .await
+        .expect("a wired group installs");
 
     assert_eq!(
         lookups.lock().unwrap().clone(),

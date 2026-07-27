@@ -126,6 +126,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   default is `14400`, chosen so an idle HTTP MCP session outlasts rmcp's own
   streamable-HTTP keep-alive floor. The runtime behaviour was never wrong —
   only the documented value was.
+- `install` and `uninstall` ran no command on any host while reporting
+  `install completed on <hosts>`. Both drive a shared operation template that
+  resolves each host's package-manager command through an injected provider;
+  nothing ever injected one, so the template failed to resolve a plan, logged to
+  the tracing subscriber, and returned as if it had succeeded. The per-host
+  verdict then read exit codes from hosts nothing had run on and found no
+  failures. Over MCP the diagnostic went to the server's stderr, so a client saw
+  only success. Both commands now execute, and a run that cannot start (no
+  package-manager command for a host's product release, or a host locked by
+  another tester) is reported instead of being logged and swallowed.
+  `prepare`, `update`, and `downgrade` were never affected — they resolve their
+  commands directly and bypass that seam.
+- `uninstall` would have run the *install* command had the provider been wired:
+  the only test covering it used a stub that returned the same command for every
+  role, so the assertion pinned `zypper -n in -y -l` for an uninstall. It now
+  runs `zypper -n rm` from the uninstaller table.
+- An `install` that finishes with one of zypper's informational exit codes
+  (100-103, 106 — "update needed", "reboot needed", "restart needed", "repo
+  skipped") is no longer reported as a failure. The verdict now consults the
+  install check table, which also names the failure it finds ("package not
+  found", "update stack locked", "RPM Error", "Dependency Error") instead of a
+  flat "install command failed". Output on stderr no longer fails an install
+  that exited cleanly — zypper, `transactional-update` and `yum` all write
+  warnings there on success. Product keys with no check table (`slmicro`, `YUM`)
+  are judged on the exit code alone.
+- An `install` or `uninstall` that cannot start because a host's product has no
+  package-manager command now names that host and its product. The underlying
+  error reports only the role and release, and a host whose product never parsed
+  has no release, so the message read `Missing Installer for ` — while aborting
+  the operation for every host in the group.
 
 ## [26.0.1] - 2026-07-22
 

@@ -21,9 +21,7 @@ use std::collections::HashMap;
 use mtui_config::options::Config;
 use mtui_datasources::error::GiteaError;
 use mtui_datasources::gitea::Gitea;
-use mtui_hosts::{
-    HostsGroup, InstallOperation, Operation, RepoOp, SetRepo, Target, UninstallOperation,
-};
+use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
 use mtui_types::{RequestReviewID, SystemProduct};
 use tracing::debug;
 
@@ -123,8 +121,7 @@ impl TestReport for SlReport {
         packages: &[String],
     ) -> Result<(), crate::update_workflow::UpdateError> {
         update_flow::add_op_history(targets, "install", None, packages).await;
-        InstallOperation::new(packages.to_vec()).run(targets).await;
-        update_flow::install_verdict("install", targets)
+        update_flow::perform_install(targets, packages).await
     }
 
     async fn perform_uninstall(
@@ -133,10 +130,7 @@ impl TestReport for SlReport {
         packages: &[String],
     ) -> Result<(), crate::update_workflow::UpdateError> {
         update_flow::add_op_history(targets, "uninstall", None, packages).await;
-        UninstallOperation::new(packages.to_vec())
-            .run(targets)
-            .await;
-        update_flow::install_verdict("uninstall", targets)
+        update_flow::perform_uninstall(targets, packages).await
     }
 
     async fn perform_prepare(

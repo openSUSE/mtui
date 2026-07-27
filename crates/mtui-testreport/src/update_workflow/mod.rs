@@ -15,15 +15,15 @@
 //!   `(hostname, stdout, stdin, stderr, exitcode) -> None` that raises
 //!   [`UpdateError`] when it recognises a failure.
 //!
-//! ## Scope (P4.6): tables + traits, no wiring
+//! ## How the tables reach the hosts
 //!
-//! This lands the tables, the [`template`] helper, and the injectable
-//! [`DoerProvider`] / [`CheckProvider`] seams that `mtui-core::wiring` will later
-//! bind to `mtui_hosts::OperationGroup`. It deliberately does **not** implement
-//! `impl OperationGroup for HostsGroup` — that binding (and the
-//! `(release, transactional)` key derivation from live `Target` state) is the
-//! composition-root task, kept out of here so `mtui-hosts` never depends on
-//! `mtui-testreport`.
+//! [`WorkflowRegistry`] implements three seams over these tables: the crate-local
+//! [`DoerProvider`] / [`CheckProvider`] (used directly by the bespoke
+//! prepare/update/downgrade flows) and `mtui_hosts::PlanProvider` (used by the
+//! shared install/uninstall template). The `PlanProvider` impl lives in this
+//! crate because the trait is foreign and the type is local — and because the
+//! check tables' `CheckArgs` fields are `pub(crate)`. `impl OperationGroup for
+//! HostsGroup` stays in `mtui-hosts`, so that crate never depends on this one.
 
 pub mod actions;
 pub mod checks;
@@ -131,6 +131,37 @@ pub enum Role {
 }
 
 impl Role {
+    /// The role string `mtui-hosts` dispatches on
+    /// (`mtui_hosts::Operation::role`).
+    #[must_use]
+    pub const fn as_operation_role(self) -> &'static str {
+        match self {
+            Role::Install => "installer",
+            Role::Uninstall => "uninstaller",
+            Role::Update => "updater",
+            Role::Prepare => "preparer",
+            Role::Downgrade => "downgrader",
+        }
+    }
+
+    /// Parses the role string `mtui-hosts` dispatches on back into a typed role.
+    ///
+    /// `mtui_hosts::PlanProvider` is keyed by `&str` because `mtui-hosts` cannot
+    /// name this enum without a crate cycle; this is the inverse of
+    /// [`as_operation_role`](Self::as_operation_role) and the only place that
+    /// stringly-typed seam is decoded.
+    #[must_use]
+    pub fn from_operation_role(role: &str) -> Option<Self> {
+        match role {
+            "installer" => Some(Role::Install),
+            "uninstaller" => Some(Role::Uninstall),
+            "updater" => Some(Role::Update),
+            "preparer" => Some(Role::Prepare),
+            "downgrader" => Some(Role::Downgrade),
+            _ => None,
+        }
+    }
+
     /// Builds the role's "missing doer" [`HostError`] for `release`.
     ///
     /// Mirrors the per-module `key_error=Missing*Error` on upstream's
@@ -151,9 +182,10 @@ impl Role {
 /// The injectable seam that resolves an action's command templates for a
 /// `(release, transactional)` key.
 ///
-/// The composition root (`mtui-core::wiring`) implements this over the
-/// [`actions`] tables and hands it to `mtui-hosts` so `OperationGroup::plans`
-/// can build a `mtui_hosts::Doer` without `mtui-hosts` depending on this crate.
+/// Implemented by [`WorkflowRegistry`] over the [`actions`] tables. The
+/// install/uninstall path reaches it through that type's
+/// `mtui_hosts::PlanProvider` impl, so `OperationGroup::plans` can build a
+/// `mtui_hosts::Doer` without `mtui-hosts` depending on this crate.
 pub trait DoerProvider: Send + Sync {
     /// Resolves the action command set for `role` at `(release, transactional)`.
     ///
@@ -172,10 +204,9 @@ pub trait DoerProvider: Send + Sync {
 /// The injectable seam that resolves a post-run check for a
 /// `(release, transactional)` key.
 ///
-/// The composition root implements this over the [`checks`] tables. A check is
-/// returned as a boxed function with the upstream signature; an unknown key
-/// yields `None` (upstream's plain `dict.get`, which the caller treats as
-/// "no check to run").
+/// Implemented by [`WorkflowRegistry`] over the [`checks`] tables. A check is
+/// returned as a boxed function; an unknown key yields `None`, which the caller
+/// treats as "no check to run".
 pub trait CheckProvider: Send + Sync {
     /// Resolves the post-run check for `role` at `(release, transactional)`, or
     /// `None` when no check is registered for the key.
@@ -185,7 +216,8 @@ pub trait CheckProvider: Send + Sync {
 /// The default [`DoerProvider`] / [`CheckProvider`], backed by the ported
 /// [`actions`] and [`checks`] tables.
 ///
-/// This is the concrete registry `mtui-core::wiring` injects. It carries the
+/// The concrete registry every flow builds and, for install/uninstall, injects
+/// into the `HostsGroup` as a `mtui_hosts::PlanProvider`. It carries the
 /// prepare-only `force` / `testing` flags (the other actions ignore them),
 /// mirroring how upstream threads them into `t.doer("preparer", force, testing)`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -236,6 +268,61 @@ impl CheckProvider for WorkflowRegistry {
             Role::Prepare => checks::prepare::prepare_check(release, transactional),
             Role::Downgrade => checks::downgrade::downgrade_check(release, transactional),
         }
+    }
+}
+
+/// Adapts the registry to the `mtui-hosts` install/uninstall template seam.
+///
+/// [`mtui_hosts::Operation`] resolves each host's command through
+/// [`mtui_hosts::PlanProvider`], a trait declared in `mtui-hosts` purely in
+/// terms of `mtui-hosts` types so that crate never has to depend on this one.
+/// This impl is the other half: it is legal here (foreign trait, local type)
+/// and nowhere else, because the check tables' `CheckArgs` fields are
+/// `pub(crate)`.
+///
+/// Injected by `update_flow::perform_install` / `perform_uninstall` immediately
+/// before the template runs.
+impl mtui_hosts::PlanProvider for WorkflowRegistry {
+    fn doer(
+        &self,
+        role: &str,
+        release: &str,
+        transactional: bool,
+    ) -> Result<mtui_hosts::Doer, HostError> {
+        // An unrecognised role string cannot resolve to a table; report it as a
+        // missing installer rather than panicking. Only "installer" and
+        // "uninstaller" ever reach here (`Operation::role`).
+        let Some(role) = Role::from_operation_role(role) else {
+            return Err(HostError::MissingInstaller {
+                release: release.to_owned(),
+            });
+        };
+        let commands = DoerProvider::doer(self, role, release, transactional)?;
+        // The raw templates go across the seam, not rendered strings: the
+        // package list is only known inside `mtui-hosts`, at
+        // `Operation::collect` time. `Doer` substitutes `$packages` with a plain
+        // `replace`, which agrees with this crate's `string.Template`
+        // semantics for every install/uninstall template (each holds exactly one
+        // `$packages` and no `$$` or `${}`); `doer_templates_render_like_the_action_tables`
+        // pins that agreement.
+        Ok(mtui_hosts::Doer::new(
+            commands.command_template(),
+            // Only read back for a transactional host, which is exactly when the
+            // table carries a reboot.
+            commands.reboot_template().unwrap_or_default(),
+        ))
+    }
+
+    fn check(&self, _role: &str, _release: &str, _transactional: bool) -> mtui_hosts::Check {
+        // Deliberately a no-op: the real check needs the command's
+        // stdout/stderr/exit code, which `mtui_hosts::CheckArgs` does not carry
+        // (it holds only the hostname) and which `mtui_hosts::Check` could not
+        // report anyway, since it returns `()`. The install/uninstall verdict is
+        // therefore produced *after* the template returns, by
+        // `update_flow::install_verdict`, which reads each target's `last*`
+        // snapshot and runs this same registry's `CheckFn` over it — the same
+        // path `perform_prepare` / `perform_update` / `perform_downgrade` use.
+        Box::new(|_a: mtui_hosts::CheckArgs<'_>| {})
     }
 }
 
@@ -367,5 +454,93 @@ mod tests {
     fn registry_check_unknown_key_is_none() {
         let reg = WorkflowRegistry::default();
         assert!(reg.check(Role::Update, "slmicro", true).is_none());
+    }
+
+    // --- the mtui-hosts PlanProvider adapter --------------------------------
+
+    #[test]
+    fn operation_role_strings_round_trip() {
+        for role in [
+            Role::Install,
+            Role::Uninstall,
+            Role::Update,
+            Role::Prepare,
+            Role::Downgrade,
+        ] {
+            assert_eq!(
+                Role::from_operation_role(role.as_operation_role()),
+                Some(role)
+            );
+        }
+        assert_eq!(Role::from_operation_role("nonesuch"), None);
+    }
+
+    #[test]
+    fn plan_provider_resolves_the_role_specific_table() {
+        use mtui_hosts::PlanProvider;
+
+        let reg = WorkflowRegistry::default();
+        // The role string must actually select the table: an adapter that
+        // ignored it would make `uninstall` run the *install* command.
+        let install = PlanProvider::doer(&reg, "installer", "15", false).expect("installer");
+        let uninstall = PlanProvider::doer(&reg, "uninstaller", "15", false).expect("uninstaller");
+        assert_ne!(
+            format!("{install:?}"),
+            format!("{uninstall:?}"),
+            "installer and uninstaller must not resolve to the same doer"
+        );
+    }
+
+    #[test]
+    fn plan_provider_surfaces_missing_and_unknown_roles() {
+        use mtui_hosts::PlanProvider;
+
+        let reg = WorkflowRegistry::default();
+        assert!(matches!(
+            PlanProvider::doer(&reg, "installer", "99", false),
+            Err(HostError::MissingInstaller { .. })
+        ));
+        assert!(matches!(
+            PlanProvider::doer(&reg, "uninstaller", "99", false),
+            Err(HostError::MissingUninstaller { .. })
+        ));
+        assert!(
+            PlanProvider::doer(&reg, "nonesuch", "15", false).is_err(),
+            "an unrecognised role must not resolve to a command"
+        );
+    }
+
+    /// `mtui_hosts::Doer` substitutes `$packages` with a plain `str::replace`,
+    /// while this crate renders the same templates through `string.Template`
+    /// semantics. They agree for every install/uninstall entry today; this
+    /// fails if a future template gains `$$` or `${}`, which `replace` would
+    /// mangle.
+    #[test]
+    fn doer_templates_render_like_the_action_tables() {
+        use std::collections::HashMap;
+
+        for (release, transactional) in [
+            ("11", false),
+            ("12", false),
+            ("15", false),
+            ("16", false),
+            ("YUM", false),
+            ("slmicro", true),
+        ] {
+            for role in [Role::Install, Role::Uninstall] {
+                let commands = WorkflowRegistry::default()
+                    .doer(role, release, transactional)
+                    .expect("a table entry");
+                let vars: HashMap<&str, &str> = [("packages", "pkg-a pkg-b")].into_iter().collect();
+                let expected = commands.render_command(&vars).expect("renders");
+                let naive = commands
+                    .command_template()
+                    .replace("$packages", "pkg-a pkg-b");
+                assert_eq!(
+                    naive, expected,
+                    "{role:?} @ ({release}, {transactional}) renders differently across the seam"
+                );
+            }
+        }
     }
 }

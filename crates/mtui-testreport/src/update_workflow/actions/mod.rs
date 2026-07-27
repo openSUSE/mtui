@@ -139,6 +139,24 @@ impl ActionCommands {
         }
     }
 
+    /// The raw, unrendered [`command`](Self::command) template.
+    ///
+    /// Needed by the [`PlanProvider`](mtui_hosts::PlanProvider) adapter, which
+    /// hands the template to a [`Doer`](mtui_hosts::Doer) that performs the
+    /// `$packages` substitution itself (the package list is only known inside
+    /// `mtui-hosts`, at
+    /// [`Operation::collect`](mtui_hosts::Operation::collect) time). Prefer
+    /// [`render_command`](Self::render_command) everywhere else.
+    pub(crate) fn command_template(&self) -> &str {
+        &self.command
+    }
+
+    /// The raw, unrendered [`reboot`](Self::reboot) template, if any. See
+    /// [`command_template`](Self::command_template).
+    pub(crate) fn reboot_template(&self) -> Option<&str> {
+        self.reboot.as_deref()
+    }
+
     /// Renders [`installed_only`](Self::installed_only) with `vars` if present,
     /// honouring the action's [`mode`](Self::mode).
     ///
