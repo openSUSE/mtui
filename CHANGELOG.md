@@ -156,6 +156,31 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   error reports only the role and release, and a host whose product never parsed
   has no release, so the message read `Missing Installer for ` — while aborting
   the operation for every host in the group.
+- A transactional host that never came back from its post-operation reboot was
+  not reported. On a read-only-root host (SL Micro) the packages are staged into
+  a snapshot that only the reboot activates, so a host that fails to reconnect
+  has *not* had the operation applied however cleanly its command exited — yet
+  the failed reconnect was logged and dropped. `install`, `uninstall`, `prepare`
+  and `update` reported outright success; `downgrade` reported only a vague
+  "downgrade not completed" from the version re-probe that the dead host then
+  failed. All five now name the host and why it did not return. For `install`,
+  `uninstall`, `prepare` and `downgrade` that appears alongside the per-host
+  verdict rather than instead of it; on `update` the reboot only runs once every
+  host has passed its check, so the two cannot arise together. A failed reboot
+  on `update` is treated as any other per-host update failure, so it still
+  triggers the rollback.
+- A reboot that could not be *dispatched* at all — an unconnected target, or a
+  channel that would not open — was also dropped. Because a failed dispatch
+  leaves the SSH session open, the reconnect that follows succeeded trivially
+  and the host looked rebooted. Both the post-operation reboot and the `reboot`
+  command now report it.
+- `install`/`uninstall` now observe cooperative cancellation (MCP `job_cancel`)
+  at an entry gate, stopping before the group lock is taken instead of running
+  the whole operation to completion, and reporting the stop as a cancellation.
+  This is deliberately the only checkpoint in that flow: every later step is a
+  parallel host fan-out, and skipping one would leave a host's stale state to
+  pass the verdict as success — skipping the reboot in particular would leave a
+  transactional host's snapshot inert while the packages reported installed.
 
 ## [26.0.1] - 2026-07-22
 

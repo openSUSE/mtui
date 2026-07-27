@@ -103,6 +103,38 @@ impl UpdateError {
     }
 }
 
+impl From<HostError> for UpdateError {
+    /// Lifts a host-layer error into the flow's error type.
+    ///
+    /// This is the **default** lifting, and the point of it is that `cancelled`
+    /// is decided in one place rather than at each call site, where a
+    /// `reason_only(e.to_string())` silently hard-codes `false`. The command
+    /// layer reads nothing but that flag to choose `CommandError::Cancelled`
+    /// over `CommandError::Other`, so a call site that guesses wrong reports a
+    /// cancelled flow as a generic failure. A caller with better per-host
+    /// structure still builds its own error — `perform_operation` does, to name
+    /// each host that did not come back.
+    ///
+    /// No [`HostError`] variant represents a cancellation today — the flows
+    /// stop at their own checkpoints and build the error with
+    /// [`UpdateError::cancelled`] directly, so a cancel never arrives through
+    /// here. `HostError` is `#[non_exhaustive]`; a future cancellation variant
+    /// gets its mapping added here and nowhere else.
+    ///
+    /// The host is left unset: every `HostError` that names a host already
+    /// interpolates it into its own `Display`, so setting it too would render
+    /// as `h1: failed to reconnect to h1`. A caller with better per-host
+    /// structure (`update_flow::perform_operation`) builds its own errors
+    /// instead of routing through this.
+    fn from(err: HostError) -> Self {
+        Self {
+            reason: err.to_string(),
+            host: None,
+            cancelled: false,
+        }
+    }
+}
+
 impl std::fmt::Display for UpdateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.host {
@@ -339,6 +371,68 @@ mod tests {
     fn update_error_display_without_host_is_reason_only() {
         let e = UpdateError::reason_only("RPM Error");
         assert_eq!(e.to_string(), "RPM Error");
+    }
+
+    #[test]
+    fn host_error_converts_preserving_its_message() {
+        let e: UpdateError = HostError::Update("Hosts locked".to_owned()).into();
+        assert_eq!(e.to_string(), "Hosts locked");
+
+        // A host-naming variant keeps its own rendering rather than being
+        // re-prefixed into `h1: failed to reconnect to h1`.
+        let e: UpdateError = HostError::ReconnectFailed {
+            host: "h1".to_owned(),
+        }
+        .into();
+        assert_eq!(e.to_string(), "failed to reconnect to h1");
+    }
+
+    #[test]
+    fn reboot_failure_names_every_host_with_its_own_reason() {
+        // Rendered with two hosts on purpose: with one, a Display that dropped
+        // the join, truncated to the first entry, or omitted the reason would
+        // read identically.
+        let e = HostError::RebootFailed {
+            hosts: vec![
+                ("h1".to_owned(), "failed to reconnect to h1".to_owned()),
+                ("h2".to_owned(), "host h2 is not connected".to_owned()),
+            ],
+        };
+        assert_eq!(
+            e.to_string(),
+            "did not come back after the reboot: h1 (failed to reconnect to h1), \
+             h2 (host h2 is not connected)"
+        );
+    }
+
+    #[test]
+    fn host_error_never_converts_into_a_cancellation() {
+        // The command layer reads nothing but this flag to choose
+        // `CommandError::Cancelled` over `CommandError::Other`. No host-layer
+        // error means "the operator asked to stop" — cancellations are built by
+        // the flows' own checkpoints with `UpdateError::cancelled`. If a
+        // `HostError::Cancelled`-style variant is ever added, its mapping
+        // belongs in the `From` impl, and this assertion is what will catch it
+        // being forgotten.
+        for err in [
+            HostError::Update("Hosts locked".to_owned()),
+            HostError::ReconnectFailed {
+                host: "h1".to_owned(),
+            },
+            HostError::NoPlanProvider,
+            HostError::MissingInstaller {
+                release: "15".to_owned(),
+            },
+            HostError::RebootFailed {
+                hosts: vec![("h1".to_owned(), "failed to reconnect to h1".to_owned())],
+            },
+        ] {
+            let converted: UpdateError = err.into();
+            assert!(
+                !converted.is_cancelled(),
+                "a host failure must never masquerade as a cancel: {converted:?}"
+            );
+        }
     }
 
     #[test]
