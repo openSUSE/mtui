@@ -1024,6 +1024,14 @@ impl Connection for MockConnection {
     }
 
     async fn sftp_append(&mut self, path: &Path, data: &[u8]) -> Result<()> {
+        // Reconnect at entry if inactive, mirroring `sftp_session` and the ssh
+        // impl (whose `sftp()` does exactly this). Without it the mock accepted
+        // an append on a host that had gone away — so a host lost to its reboot
+        // still "wrote" its history row here, and any test for that regression
+        // would pass however the flow ordered the write.
+        if !self.active {
+            self.reconnect(0, false).await?;
+        }
         self.record_sftp(MockSftpOp::Append(path.to_path_buf()));
         if self.sftp_append_errors.contains(path) {
             return Err(HostError::Sftp {

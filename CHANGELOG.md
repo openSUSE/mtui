@@ -87,6 +87,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   equivalent of the downgrade check's "timed out or failed to run" gate, so a
   patch that never completed left an empty transcript that matched none of the
   failure markers and passed.
+- A transactional host lost to its post-operation reboot keeps its
+  `/var/log/mtui.log` row. The row was written after the reboot, so on the one
+  host an operator most needs to reconstruct — the one that never came back —
+  the append failed and was swallowed at WARN, leaving no record that
+  `install`, `uninstall`, `update` or `downgrade` had run there at all. It is
+  now written between the command dispatch and the reboot: still never for a
+  run that did not start, and still exactly one row per operation.
 - `prepare` and `downgrade` no longer reboot a transactional host whose
   package transaction failed. Both flows collected the failure and then
   rebooted every transactional host anyway, activating the very snapshot the

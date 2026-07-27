@@ -182,7 +182,11 @@ where
     }
 }
 
-/// Records a workflow op in every target's remote history file before fan-out.
+/// Records a workflow op in every target's remote history file.
+///
+/// Called after the command has dispatched — a row must never claim work that
+/// never started — but *before* any transactional reboot, since a host that
+/// does not come back can no longer be written to.
 ///
 /// `id_field` carries the RRID for ops that log it (`update`/`downgrade`) and
 /// is `None` for `install`/`uninstall`. The op label and package list
@@ -443,9 +447,9 @@ async fn perform_operation(
         Ok(report) => report,
     };
 
-    // The template has now dispatched a command on every host, whatever the
-    // verdict: record the history row here, not before the run started.
-    add_op_history(targets, op, None, packages).await;
+    // The history row is written inside `Operation::run`, between the command
+    // fan-out and the reboot — writing it here would lose it on exactly the
+    // transactional hosts that never came back.
 
     // A host whose post-run check failed, and any transactional host that
     // rebooted and never reconnected, both fail the operation by name. A
@@ -1012,16 +1016,19 @@ async fn downgrade_body(
             !dead_probes.contains(h)
         })
         .collect();
+    // The downgrade commands have now dispatched, whatever the verdict: record
+    // the history row here — after the run started, but *before* the reboot.
+    // A transactional host that never comes back cannot be written to
+    // afterwards, and the row would be lost on exactly the host whose state an
+    // operator most needs to reconstruct.
+    add_op_history(targets, "downgrade", id, packages).await;
+
     failures.extend(
         reboot_transactional(targets, healthy_reboot)
             .await
             .into_iter()
             .map(reboot_error),
     );
-
-    // The downgrade commands have now dispatched, whatever the verdict:
-    // record the history row here, not before the run started.
-    add_op_history(targets, "downgrade", id, packages).await;
 
     let not_downgraded = downgrade_verdict(targets).await;
 
@@ -1253,12 +1260,18 @@ pub async fn perform_update(
     }
 
     // Two-phase: run + check + reboot under the lock (unlock always), then the
-    // repo cleanup only on success.
-    let update_result = update_run_phase(targets, &registry, commands, reboot, diagnostics).await;
-
-    // The updater command has now dispatched, whatever the verdict: record
-    // the history row here, not before the run started.
-    add_op_history(targets, "update", id, packages).await;
+    // repo cleanup only on success. The history row is written inside, between
+    // the fan-out and the reboot — see `update_run_phase`.
+    let update_result = update_run_phase(
+        targets,
+        &registry,
+        commands,
+        reboot,
+        diagnostics,
+        id,
+        packages,
+    )
+    .await;
 
     if let Err(e) = update_result {
         // KEEP the test update repositories in place for retry/diagnosis.
@@ -1305,8 +1318,17 @@ async fn update_run_phase(
     commands: BTreeMap<String, String>,
     reboot: BTreeMap<String, String>,
     diagnostics: &mut Vec<Diagnostic>,
+    id: Option<&str>,
+    packages: &[String],
 ) -> Result<(), UpdateFailure> {
     targets.run(Command::PerHost(commands)).await;
+
+    // The updater command has now dispatched, whatever the verdict: record the
+    // history row here — after the run started, but *before* the reboot. A
+    // transactional host that never comes back cannot be written to
+    // afterwards, and the row would be lost on exactly the host whose state an
+    // operator most needs to reconstruct.
+    add_op_history(targets, "update", id, packages).await;
 
     let failures = run_checks(targets, registry, Role::Update, diagnostics);
     let failed_hosts: std::collections::HashSet<String> =
@@ -1823,6 +1845,87 @@ mod tests {
         assert_eq!(contents.lines().count(), 1);
         assert!(
             contents.contains(":install:pkg-a"),
+            "history line: {contents:?}"
+        );
+    }
+
+    /// A host lost to its post-operation reboot must still carry its history
+    /// row: the row is the operator's only record that the command ran there,
+    /// and it is needed most on exactly the host that did not come back.
+    ///
+    /// This is only observable because `MockConnection::sftp_append` now
+    /// reconnects at entry like the real `SshConnection::sftp()` — before that
+    /// the mock accepted an append on a dead host, so this test would have
+    /// passed whichever side of the reboot the write happened on.
+    #[tokio::test]
+    async fn install_records_history_for_a_host_lost_to_its_reboot() {
+        let (t, handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a lost transactional host must not report success");
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("a host lost to its reboot must still have its history row"),
+        )
+        .unwrap();
+        assert_eq!(contents.lines().count(), 1);
+        assert!(
+            contents.contains(":install:pkg-a"),
+            "history line: {contents:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_records_history_for_a_host_lost_to_its_reboot() {
+        let (t, handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        assert!(res.is_err(), "a lost host must not report success: {res:?}");
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("a host lost to its reboot must still have its history row"),
+        )
+        .unwrap();
+        assert!(contents.contains(":update:"), "history line: {contents:?}");
+    }
+
+    #[tokio::test]
+    async fn downgrade_records_history_for_a_host_lost_to_its_reboot() {
+        let (t, handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None)
+            .await
+            .expect_err("a lost transactional host must not report success");
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("a host lost to its reboot must still have its history row"),
+        )
+        .unwrap();
+        assert!(
+            contents.contains(":downgrade:"),
             "history line: {contents:?}"
         );
     }
