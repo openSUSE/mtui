@@ -380,28 +380,40 @@ async fn perform_operation(
     role: Role,
     packages: &[String],
 ) -> Result<(), UpdateError> {
-    targets.set_plan_provider(Arc::new(WorkflowRegistry::default()));
-
     // Matched exhaustively on purpose: a `_ =>` arm defaulting to install would
     // quietly run the wrong package-manager command if a role were ever added,
     // which is the same shape of silent-wrong-default this function exists to
     // fix. Only the two template roles reach here.
-    let (op, outcome) = match role {
-        Role::Install => (
-            "install",
-            InstallOperation::new(packages.to_vec()).run(targets).await,
-        ),
-        Role::Uninstall => (
-            "uninstall",
-            UninstallOperation::new(packages.to_vec())
-                .run(targets)
-                .await,
-        ),
+    let op = match role {
+        Role::Install => "install",
+        Role::Uninstall => "uninstall",
         Role::Update | Role::Prepare | Role::Downgrade => {
             return Err(UpdateError::reason_only(format!(
                 "{} is not driven by the install/uninstall template",
                 role.as_operation_role()
             )));
+        }
+    };
+
+    // Entry gate: nothing has run yet, so a cancel here is a clean no-op,
+    // mirroring `perform_update`'s own entry gate.
+    if targets.cancel_requested() {
+        return Err(UpdateError::cancelled(format!(
+            "cancelled before the {op} started"
+        )));
+    }
+
+    targets.set_plan_provider(Arc::new(WorkflowRegistry::default()));
+
+    let outcome = match role {
+        Role::Install => InstallOperation::new(packages.to_vec()).run(targets).await,
+        Role::Uninstall => {
+            UninstallOperation::new(packages.to_vec())
+                .run(targets)
+                .await
+        }
+        Role::Update | Role::Prepare | Role::Downgrade => {
+            unreachable!("returned above for these roles")
         }
     };
 
@@ -1578,6 +1590,41 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn install_stops_at_the_entry_gate_when_cancelled() {
+        // install/uninstall had no cancellation checkpoint of their own; a
+        // cancel requested before the run must stop it before any command
+        // reaches a host, exactly like `perform_update`'s entry gate.
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.cancel_token().cancel();
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a cancelled install reports an error");
+
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        assert!(
+            handle.commands().is_empty(),
+            "entry gate must dispatch no command: {:?}",
+            handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn uninstall_stops_at_the_entry_gate_when_cancelled() {
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.cancel_token().cancel();
+
+        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a cancelled uninstall reports an error");
+
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        assert!(handle.commands().is_empty());
     }
 
     #[tokio::test]
