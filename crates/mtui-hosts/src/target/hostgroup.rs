@@ -1254,6 +1254,21 @@ impl HostsGroup {
         if reboot.is_empty() {
             return BTreeMap::new();
         }
+        // The single predicate every phase below shares. A **disabled** host is
+        // skipped by all of them: `plans()` resolves a plan per target
+        // regardless of state, so a disabled transactional host reaches this
+        // map -- but it was excluded from the command fan-out, so it staged no
+        // snapshot and there is nothing to activate. Rebooting it anyway
+        // restarts a machine the operator deliberately took out of the run.
+        //
+        // Skipping it in only *some* phases would be worse than not skipping it
+        // at all: the boot-id probes would then read the same id twice and
+        // report a host that "never rebooted" -- which `update` reads as still
+        // reachable, and routes a group-wide rollback on.
+        let selected = |t: &Target| {
+            reboot.contains_key(t.hostname())
+                && t.state() != mtui_types::enums::TargetState::Disabled
+        };
         let mut names: Vec<&String> = reboot.keys().collect();
         names.sort();
         tracing::info!(
@@ -1273,7 +1288,7 @@ impl HostsGroup {
             is_repl,
             max_parallel,
             Some("boot_id"),
-            |t| reboot.contains_key(t.hostname()),
+            &selected,
             |t| {
                 let old_boot_ids = &old_boot_ids;
                 Box::pin(async move {
@@ -1297,7 +1312,7 @@ impl HostsGroup {
             is_repl,
             max_parallel,
             Some("reboot"),
-            |t| reboot.contains_key(t.hostname()),
+            &selected,
             |t| {
                 let command = reboot.get(t.hostname()).cloned().unwrap_or_default();
                 let outcomes = &outcomes;
@@ -1319,7 +1334,7 @@ impl HostsGroup {
             is_repl,
             max_parallel,
             Some("reconnect"),
-            |t| reboot.contains_key(t.hostname()),
+            &selected,
             |t| {
                 let outcomes = &outcomes;
                 Box::pin(async move {
@@ -1369,7 +1384,7 @@ impl HostsGroup {
             is_repl,
             max_parallel,
             Some("verify_reboot"),
-            |t| reboot.contains_key(t.hostname()),
+            &selected,
             |t| {
                 let old = old_boot_ids.get(t.hostname()).cloned().unwrap_or_default();
                 let outcomes = &outcomes;
@@ -2297,6 +2312,78 @@ mod tests {
         assert!(h1.fired_commands().is_empty());
         assert_eq!(h1.reconnect_count(), 0);
         assert!(failures.is_empty());
+    }
+
+    #[tokio::test]
+    async fn operation_reboot_skips_a_disabled_host_in_every_phase() {
+        // A disabled host is excluded from the command fan-out, so it staged no
+        // snapshot and has nothing to activate. `plans()` still resolves a plan
+        // for it, so it reaches the reboot map and must be skipped here --
+        // rebooting it restarts a machine the operator took out of the run.
+        //
+        // Deliberately a *fixed* boot id. With a changing one this test would
+        // pass even if only the dispatch were skipped, because the probes would
+        // report a restart that never happened. A fixed id is what a real
+        // untouched host returns, and it is what catches a phase that forgot
+        // the state check: phase 4 would then record `NotRebooted`, which
+        // `update` reads as still-reachable and routes a group-wide rollback
+        // on -- reverting every healthy host on behalf of a disabled one.
+        let m1 = reboot_mock("h1", "id-1");
+        let h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Disabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+
+        let map: HostCommandMap = vec![("h1".to_owned(), "transactional-update reboot".to_owned())];
+        let failures = OperationGroup::reboot(&mut g, map).await;
+
+        assert!(
+            h1.fired_commands().is_empty(),
+            "a disabled host must not be rebooted: {:?}",
+            h1.fired_commands()
+        );
+        assert!(failures.is_empty(), "skipped, not failed: {failures:?}");
+        // Every phase, not just the dispatch: no boot-id probe, no reconnect.
+        assert!(
+            h1.commands().is_empty(),
+            "a skipped host must cost no SSH reads either: {:?}",
+            h1.commands()
+        );
+        assert_eq!(h1.reconnect_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn operation_reboot_still_reboots_an_enabled_host_alongside_a_disabled_one() {
+        // The inertness control for the test above: the state check must skip
+        // the disabled host only, not collapse the whole fan-out.
+        let (m1, m2) = (rebooted_mock("h1"), reboot_mock("h2", "id-2"));
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Disabled, Box::new(m2)),
+            ],
+            false,
+        );
+
+        let map: HostCommandMap = vec![
+            ("h1".to_owned(), "transactional-update reboot".to_owned()),
+            ("h2".to_owned(), "transactional-update reboot".to_owned()),
+        ];
+        let failures = OperationGroup::reboot(&mut g, map).await;
+
+        assert_eq!(
+            h1.fired_commands(),
+            vec!["transactional-update reboot".to_owned()]
+        );
+        assert_eq!(h1.reconnect_count(), 1);
+        assert!(h2.fired_commands().is_empty());
+        assert!(failures.is_empty(), "{failures:?}");
     }
 
     #[tokio::test]
