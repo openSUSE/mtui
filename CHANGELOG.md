@@ -8,6 +8,58 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `update` now reaches a verdict on SL Micro and RHEL/YUM hosts. Both have had
+  an update command since the port but no post-update *check*, so the flow
+  skipped them silently and reported success however the patch went — a locked
+  update stack, an unresolved dependency or an RPM error on those hosts was
+  simply not looked at, and on SL Micro the host was then rebooted into the
+  failed transaction. As on every other host, a failed update check on these
+  also drives the group-wide rollback downgrade, which they could not reach
+  before.
+  SL Micro is judged on the command's output markers rather than its exit code:
+  its update template ends with a repo-cleanup loop, so the status the shell
+  reports is that loop's and not the patch's. RHEL/YUM is judged only on
+  whether the command ran: that key covers every RHEL version, `yum` is `dnf`
+  on RHEL 8/9, and mtui passes the whole package list to hosts that carry only
+  a subset — so neither a non-zero exit nor an `Error:` line (the template also
+  runs `yum repolist` in the same shell) reliably means the update failed.
+- An `update` that timed out, or whose connection dropped part-way, is no
+  longer reported as successful on **any** host. The update check had no
+  equivalent of the downgrade check's "timed out or failed to run" gate, so a
+  patch that never completed left an empty transcript that matched none of the
+  failure markers and passed. Such a host fails the command but does **not**
+  trigger the rollback downgrade: the flow could not talk to it, so a
+  group-wide downgrade could not repair it and would only revert the hosts that
+  patched cleanly. A run mixing one lost host with a genuine check failure
+  still rolls back, on behalf of the host the rollback can actually repair.
+- A transactional host is no longer rebooted by `prepare` or `downgrade` when
+  nothing was staged on it — no package resolved to a version to downgrade, or
+  no prepare command was dispatched. The reboot was gratuitous on its own, and
+  when the downgrade is the `update` rollback it activated whatever the failed
+  update had staged, undoing the update flow's own decision not to reboot.
+- `prepare --installed-only` reports a package that failed anywhere in its
+  per-package run, not only in the last one. It installs one package per
+  round-trip but read a single post-run snapshot, and its template exits 0 when
+  a package is absent — so a later no-op masked an earlier failure, and the
+  host was rebooted into it.
+- A transactional host lost to its post-operation reboot keeps its
+  `/var/log/mtui.log` row. The row was written after the reboot, so on the one
+  host an operator most needs to reconstruct — the one that never came back —
+  the append failed and was swallowed at WARN, leaving no record that
+  `install`, `uninstall`, `update` or `downgrade` had run there at all. It is
+  now written between the command dispatch and the reboot: still never for a
+  run that did not start, and still exactly one row per operation.
+- `prepare` and `downgrade` no longer reboot a transactional host whose
+  package transaction failed. Both flows collected the failure and then
+  rebooted every transactional host anyway, activating the very snapshot the
+  failure came from. The gate is per-host, matching `install`/`uninstall`: a
+  healthy host in the same group still reboots so its staged snapshot
+  activates, and every skipped host is named in the log. A failed combined
+  transactional downgrade is now also reported as a per-host failure rather
+  than relying solely on the post-rollback version verdict.
+
 ## [26.1.1] - 2026-07-27
 
 ### Added
@@ -74,34 +126,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `update` now reaches a verdict on SL Micro and RHEL/YUM hosts. Both have had
-  an update command since the port but no post-update *check*, so the flow
-  skipped them silently and reported success however the patch went — a locked
-  update stack, an unresolved dependency or an RPM error on those hosts was
-  simply not looked at, and on SL Micro the host was then rebooted into the
-  failed transaction. SL Micro is judged on the command's output markers rather
-  than its exit code: its update template ends with a repo-cleanup loop, so the
-  status the shell reports is that loop's and not the patch's.
-- An `update` that timed out, or whose connection dropped part-way, is no
-  longer reported as successful on **any** host. The update check had no
-  equivalent of the downgrade check's "timed out or failed to run" gate, so a
-  patch that never completed left an empty transcript that matched none of the
-  failure markers and passed.
-- A transactional host lost to its post-operation reboot keeps its
-  `/var/log/mtui.log` row. The row was written after the reboot, so on the one
-  host an operator most needs to reconstruct — the one that never came back —
-  the append failed and was swallowed at WARN, leaving no record that
-  `install`, `uninstall`, `update` or `downgrade` had run there at all. It is
-  now written between the command dispatch and the reboot: still never for a
-  run that did not start, and still exactly one row per operation.
-- `prepare` and `downgrade` no longer reboot a transactional host whose
-  package transaction failed. Both flows collected the failure and then
-  rebooted every transactional host anyway, activating the very snapshot the
-  failure came from. The gate is per-host, matching `install`/`uninstall`: a
-  healthy host in the same group still reboots so its staged snapshot
-  activates, and every skipped host is named in the log. A failed combined
-  transactional downgrade is now also reported as a per-host failure rather
-  than relying solely on the post-rollback version verdict.
 - A post-operation reboot whose SSH link had gone idle during the (multi-
   minute) package transaction now reconnects before dispatching, as ordinary
   commands already did. Without it the reboot failed to dispatch against a
