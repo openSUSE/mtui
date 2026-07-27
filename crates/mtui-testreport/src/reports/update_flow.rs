@@ -106,8 +106,10 @@ where
 /// error.
 ///
 /// A `MissingUpdater` failure installed nothing, so it re-surfaces without a
-/// rollback attempt. The rollback is best-effort ([`perform_downgrade`] returns
-/// `()`), so it can never bury the original update error.
+/// rollback attempt. The rollback is best-effort: [`perform_downgrade`] does
+/// return a `Result` — including, on a transactional host, "did not come back
+/// after the reboot" — but its error is logged rather than returned, so it can
+/// never bury the original update error the operator actually needs.
 pub async fn perform_update_with_rollback<R>(
     report: &R,
     targets: &mut HostsGroup,
@@ -147,8 +149,12 @@ where
             let token = targets.suspend_cancellation();
             // Rollback is best-effort; a failed downgrade must never bury the
             // original update error, so its result is logged, not returned.
+            // ERROR, not WARN: this is not "the recovery was untidy", it is
+            // "the fleet is still on the bad update" — and on a transactional
+            // host the failure may be that it never came back, so the operator
+            // has a machine to attend to that the returned error does not name.
             if let Err(de) = perform_downgrade(targets, report, &pkgs).await {
-                warn!(error = %de, "rollback downgrade failed");
+                error!(error = %de, "rollback downgrade failed -- these hosts are still on the failed update");
             }
             targets.set_cancel_token(token);
             Err(e)
@@ -367,23 +373,17 @@ async fn perform_operation(
     role: Role,
     packages: &[String],
 ) -> Result<(), UpdateError> {
-    targets.set_plan_provider(Arc::new(WorkflowRegistry::default()));
-
     // Matched exhaustively on purpose: a `_ =>` arm defaulting to install would
     // quietly run the wrong package-manager command if a role were ever added,
     // which is the same shape of silent-wrong-default this function exists to
     // fix. Only the two template roles reach here.
-    let (op, outcome) = match role {
-        Role::Install => (
-            "install",
-            InstallOperation::new(packages.to_vec()).run(targets).await,
-        ),
-        Role::Uninstall => (
-            "uninstall",
-            UninstallOperation::new(packages.to_vec())
-                .run(targets)
-                .await,
-        ),
+    //
+    // `op` is the command verb the operator typed (`install`), not the doer
+    // table's role key (`installer`) — it labels every message this function
+    // produces, and those are read by a human or an MCP client.
+    let op = match role {
+        Role::Install => "install",
+        Role::Uninstall => "uninstall",
         Role::Update | Role::Prepare | Role::Downgrade => {
             return Err(UpdateError::reason_only(format!(
                 "{} is not driven by the install/uninstall template",
@@ -392,16 +392,74 @@ async fn perform_operation(
         }
     };
 
-    // The template ran nothing at all — a missing doer, or a host held by
-    // another tester. Report it instead of falling through to a verdict that
-    // would read stale `last*` values and call it success.
-    if let Err(e) = outcome {
-        return Err(UpdateError::reason_only(describe_start_failure(
-            &e, role, targets,
+    // Entry gate: no package-manager command has run yet, so a cancel here
+    // leaves no host half-changed. It is the last checkpoint this flow gets —
+    // every step below is a parallel fan-out, and a fan-out is never
+    // interrupted part-way: a host skipped mid-batch would leave its stale
+    // `last*` snapshot to sail through the verdict as a success. Skipping the
+    // reboot in particular would leave a transactional host's snapshot inert
+    // while the packages reported installed.
+    //
+    // The caller has already dispatched a history line to each host
+    // (`add_op_history`), so this is not quite "nothing happened" — say so
+    // rather than let the operator infer a clean slate. "Dispatched", not
+    // "written": `Target::add_history` is best-effort and logs rather than
+    // fails, so a host that was unreachable has no entry.
+    if targets.cancel_requested() {
+        return Err(UpdateError::cancelled(format!(
+            "cancelled before the {op} ran; no host was touched beyond the \
+             history entry already dispatched for it"
         )));
     }
 
-    install_verdict(op, role, targets)
+    targets.set_plan_provider(Arc::new(WorkflowRegistry::default()));
+
+    // Exhaustive, with no `_ =>` arm: a wildcard defaulting to install would
+    // quietly run the wrong package-manager command if a role were ever added.
+    // The last arm is unreachable — `op` above already returned for those
+    // roles — but it is spelled out rather than left to a wildcard so adding a
+    // role is a compile error here, not a silent mis-dispatch.
+    let outcome = match role {
+        Role::Install => InstallOperation::new(packages.to_vec()).run(targets).await,
+        Role::Uninstall => {
+            UninstallOperation::new(packages.to_vec())
+                .run(targets)
+                .await
+        }
+        Role::Update | Role::Prepare | Role::Downgrade => {
+            return Err(UpdateError::reason_only(format!(
+                "{} is not driven by the install/uninstall template",
+                role.as_operation_role()
+            )));
+        }
+    };
+
+    match outcome {
+        Ok(()) => install_verdict(op, role, targets),
+
+        // The command ran on every host and only the post-command reboot
+        // failed, so the per-host verdict still applies and is still computed —
+        // the reboot failures are folded in alongside it. Treating this like a
+        // start failure would throw the verdict away.
+        Err(HostError::RebootFailed { hosts }) => {
+            let mut failures = install_failures(op, role, targets);
+            for (host, reason) in hosts {
+                error!(host = %host, reason = %reason, "host did not come back after the reboot");
+                failures.push(UpdateError::new(
+                    format!("did not come back after the reboot ({reason})"),
+                    host,
+                ));
+            }
+            aggregate_failures(op, failures)
+        }
+
+        // The template ran nothing at all — a missing doer, or a host held by
+        // another tester. Report it instead of falling through to a verdict
+        // that would read stale `last*` values and call it success.
+        Err(e) => Err(UpdateError::reason_only(describe_start_failure(
+            &e, role, targets,
+        ))),
+    }
 }
 
 /// Turns an [`Operation::run`](mtui_hosts::Operation::run) start failure into a
@@ -474,6 +532,16 @@ fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> 
 ///
 /// Returns the aggregated [`UpdateError`] when any host failed.
 pub fn install_verdict(op: &str, role: Role, targets: &HostsGroup) -> Result<(), UpdateError> {
+    aggregate_failures(op, install_failures(op, role, targets))
+}
+
+/// The per-host half of [`install_verdict`], before aggregation.
+///
+/// Split out so a caller that has *additional* per-host failures to report —
+/// `perform_operation`, when a transactional host did not come back from its
+/// reboot — can merge both sets into one aggregate. Aggregating twice would
+/// either drop one set or emit two errors for one operation.
+fn install_failures(op: &str, role: Role, targets: &HostsGroup) -> Vec<UpdateError> {
     let registry = WorkflowRegistry::default();
     let reason = format!("{op} command failed");
     let mut failures = Vec::new();
@@ -518,16 +586,30 @@ pub fn install_verdict(op: &str, role: Role, targets: &HostsGroup) -> Result<(),
         }
     }
 
-    aggregate_failures(op, failures)
+    failures
 }
 
 /// Reboots the transactional hosts named in `reboot`.
-async fn reboot_transactional(targets: &mut HostsGroup, reboot: BTreeMap<String, String>) {
+async fn reboot_transactional(
+    targets: &mut HostsGroup,
+    reboot: BTreeMap<String, String>,
+) -> Vec<UpdateError> {
     if reboot.is_empty() {
-        return;
+        return Vec::new();
     }
     let map: Vec<(String, String)> = reboot.into_iter().collect();
-    OperationGroup::reboot(targets, map).await;
+    OperationGroup::reboot(targets, map)
+        .await
+        .into_iter()
+        .filter_map(|(host, outcome)| {
+            let err = outcome.err()?;
+            error!(host = %host, error = %err, "host did not come back after the reboot");
+            Some(UpdateError::new(
+                format!("did not come back after the reboot ({err})"),
+                host,
+            ))
+        })
+        .collect()
 }
 
 /// Runs the prepare step: adds/removes the issue repo, then installs
@@ -562,7 +644,7 @@ pub async fn perform_prepare(
     };
 
     if let Err(e) = targets.update_lock().await {
-        return Err(UpdateError::reason_only(e.to_string()));
+        return Err(e.into());
     }
 
     // The body runs, then we always unlock, matching a try/finally.
@@ -646,7 +728,10 @@ async fn prepare_body(
         error!(error = %e, "prepare check failed");
         failures.push(e);
     }
-    reboot_transactional(targets, reboot).await;
+    // A host that never came back is a prepare failure like any other: its
+    // staged snapshot never activated, so the packages are not in place however
+    // cleanly the command exited.
+    failures.extend(reboot_transactional(targets, reboot).await);
     // A genuine host failure outranks the cancellation: reporting only
     // "cancelled" would bury a broken host the operator must still see.
     if !failures.is_empty() {
@@ -727,7 +812,7 @@ pub async fn perform_downgrade(
     };
 
     if let Err(e) = targets.update_lock().await {
-        return Err(UpdateError::reason_only(e.to_string()));
+        return Err(e.into());
     }
 
     let result = downgrade_body(targets, &registry, report, packages, reboot).await;
@@ -932,7 +1017,10 @@ async fn downgrade_body(
         .into_iter()
         .filter(|(h, _)| !dead_probes.contains(h))
         .collect();
-    reboot_transactional(targets, healthy_reboot).await;
+    // Collected before `downgrade_verdict` re-queries every host: a host that
+    // never came back would otherwise only surface as a vague "downgrade not
+    // completed" from its failed version probe.
+    failures.extend(reboot_transactional(targets, healthy_reboot).await);
 
     let not_downgraded = downgrade_verdict(targets).await;
 
@@ -1121,9 +1209,7 @@ pub async fn perform_update(
     targets.package_check(false).await;
 
     if let Err(e) = targets.update_lock().await {
-        return Err(UpdateFailure::Check(UpdateError::reason_only(
-            e.to_string(),
-        )));
+        return Err(UpdateFailure::Check(e.into()));
     }
 
     targets.fanout_set_repo(RepoOp::Add, report).await;
@@ -1172,10 +1258,14 @@ pub async fn perform_update(
         return Err(UpdateFailure::Check(e));
     }
 
+    // The update itself succeeded, so this cannot become the operation's
+    // verdict — but it must not vanish either: `perform_prepare` reports a
+    // transactional host that never came back, and swallowing that would put
+    // the operator back to reading success for a host that is not reachable.
     if newpackage
         && let Err(e) = perform_prepare(targets, report, packages, false, true, false).await
     {
-        warn!(error = %e, "newpackage prepare after update failed");
+        error!(error = %e, "the update succeeded but the --newpackage prepare that follows it did not");
     }
 
     targets.package_check(true).await;
@@ -1220,25 +1310,15 @@ async fn update_run_phase(
         error!(error = %e, "update failed");
     }
 
-    let result = if failures.is_empty() {
-        reboot_transactional(targets, reboot).await;
-        Ok(())
-    } else if failures.len() == 1 {
-        // Preserve the exact single-host error the caller used to get.
-        Err(failures.remove(0))
-    } else {
-        let hosts: Vec<String> = {
-            let mut h: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
-            h.sort();
-            h
-        };
-        let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
-        Err(UpdateError::reason_only(format!(
-            "update failed on {} ({})",
-            hosts.join(", "),
-            detail.join("; ")
-        )))
-    };
+    // Only reboot when every host's check passed: a host whose update failed
+    // has nothing worth activating. A host that then fails to come back joins
+    // the same failure set — its snapshot is inert, so the update did not take
+    // effect there. `aggregate_failures` still returns a lone failure verbatim,
+    // so the single-host message is unchanged.
+    if failures.is_empty() {
+        failures.extend(reboot_transactional(targets, reboot).await);
+    }
+    let result = aggregate_failures("update", failures);
 
     targets.unlock().await;
     result
@@ -1577,6 +1657,261 @@ mod tests {
             .await
             .expect("a clean install");
         assert_eq!(handle.commands(), vec!["zypper -n in -y -l pkg-a"]);
+    }
+
+    /// A transactional host that never comes back has an inert snapshot: the
+    /// packages are staged but not live, so the install did not take effect
+    /// there. This used to be logged at ERROR and reported as success.
+    #[tokio::test]
+    async fn perform_install_reports_a_transactional_host_that_never_came_back() {
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .failing_reconnect();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a host that never came back is not a successful install");
+
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(
+            err.reason.contains("did not come back after the reboot"),
+            "names the real failure rather than a generic one: {err:?}"
+        );
+        assert!(
+            err.reason.contains("failed to reconnect to h1"),
+            "carries the underlying reason, not just the category: {err:?}"
+        );
+        assert!(
+            !err.is_cancelled(),
+            "a dead host is a failure, not a cancellation: {err:?}"
+        );
+        // The install itself still ran and the reboot was still dispatched —
+        // only the verdict changed.
+        assert_eq!(
+            handle.commands(),
+            vec!["transactional-update -n pkg install pkg-a"]
+        );
+        assert_eq!(handle.fired_commands(), vec!["systemctl reboot"]);
+    }
+
+    /// A transactional (SL-Micro) host. `alive` controls whether it comes back
+    /// from the reboot that activates its snapshot; `exit` is the exit code its
+    /// commands report.
+    fn slmicro_maybe_dead(
+        hostname: &str,
+        stdout: &str,
+        exit: i16,
+        alive: bool,
+    ) -> (Target, MockConnection) {
+        let conn =
+            MockConnection::new(hostname).with_default(CommandLog::new("", stdout, "", exit, 0));
+        let conn = if alive {
+            conn
+        } else {
+            conn.failing_reconnect()
+        };
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    /// A transactional host with a scripted reconnect failure, so the reboot
+    /// that activates its snapshot leaves it unreachable.
+    fn dead_after_reboot_slmicro(hostname: &str, stdout: &str) -> (Target, MockConnection) {
+        slmicro_maybe_dead(hostname, stdout, 0, false)
+    }
+
+    /// Two transactional hosts, only `h2` dead. Without a second, *healthy*
+    /// host every "the dead host is named" assertion is vacuous: in a one-host
+    /// group any hostname the implementation picks is the right one.
+    #[tokio::test]
+    async fn perform_install_names_only_the_host_that_did_not_come_back() {
+        let (t1, m1) = slmicro_maybe_dead("h1", "", 0, true);
+        let (t2, m2) = slmicro_maybe_dead("h2", "", 0, false);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("one dead host fails the install");
+
+        assert_eq!(
+            err.host.as_deref(),
+            Some("h2"),
+            "the failure must be attributed to the host that did not return, \
+             not to whichever host happened to be first: {err:?}"
+        );
+        assert!(
+            err.reason.contains("failed to reconnect to h2"),
+            "carries the underlying reason, not just the category: {err:?}"
+        );
+        assert!(
+            !err.to_string().contains("h1"),
+            "the healthy host must not be implicated: {err}"
+        );
+        // Both hosts really did install and really were rebooted — the healthy
+        // one is not skipped just because its neighbour died.
+        assert_eq!(
+            m1.commands(),
+            vec!["transactional-update -n pkg install pkg-a"]
+        );
+        assert_eq!(m1.fired_commands(), vec!["systemctl reboot"]);
+        assert_eq!(m2.fired_commands(), vec!["systemctl reboot"]);
+    }
+
+    /// The claim this whole change rests on: a reboot failure is reported
+    /// *alongside* the per-host verdict, not instead of it. `h1` fails its
+    /// install command, `h2` installs cleanly but never comes back — both must
+    /// appear.
+    #[tokio::test]
+    async fn perform_install_reports_the_command_failure_and_the_dead_host_together() {
+        // Exit 1 is a genuine failure for the slmicro key, which has no check
+        // table and is judged on the exit code alone.
+        let (t1, _m1) = slmicro_maybe_dead("h1", "", 1, true);
+        let (t2, _m2) = slmicro_maybe_dead("h2", "", 0, false);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("both a failed command and a dead host fail the install");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("install command failed"),
+            "the per-host verdict must survive the reboot failure: {msg}"
+        );
+        assert!(
+            msg.contains("did not come back after the reboot"),
+            "the reboot failure must survive the per-host verdict: {msg}"
+        );
+        assert!(
+            msg.contains("h1") && msg.contains("h2"),
+            "names both: {msg}"
+        );
+    }
+
+    /// `prepare` stages packages into a snapshot that only the reboot
+    /// activates, so a host that never comes back has not been prepared.
+    #[tokio::test]
+    async fn perform_prepare_reports_a_transactional_host_that_never_came_back() {
+        let (t, handle) = dead_after_reboot_slmicro("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("a host that never came back is not a successful prepare");
+
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(
+            err.reason.contains("did not come back after the reboot"),
+            "names the real failure: {err:?}"
+        );
+        assert!(
+            err.reason.contains("failed to reconnect to h1"),
+            "carries the underlying reason, not just the category: {err:?}"
+        );
+        assert_eq!(handle.fired_commands(), vec!["systemctl reboot"]);
+    }
+
+    /// Same for `downgrade`: the rollback only takes effect once the host
+    /// reboots into the restored snapshot.
+    #[tokio::test]
+    async fn perform_downgrade_reports_a_transactional_host_that_never_came_back() {
+        let (t, handle) = dead_after_reboot_slmicro("h1", "pkg-a = 1.0-1\n");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a host that never came back is not a successful downgrade");
+
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(
+            err.reason.contains("did not come back after the reboot"),
+            "the dead host must be named as such, not left to surface as a \
+             vague \"downgrade not completed\" from its failed re-probe: {err:?}"
+        );
+        assert_eq!(handle.fired_commands(), vec!["systemctl reboot"]);
+    }
+
+    /// The install entry gate: a cancel observed before anything runs stops the
+    /// flow without taking the group lock, and reports a cancellation rather
+    /// than a generic failure.
+    #[tokio::test]
+    async fn perform_install_entry_gate_reports_cancelled_and_runs_nothing() {
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.cancel_token().cancel();
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a cancelled install reports an error");
+
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        assert!(
+            err.reason.contains("install"),
+            "names the command verb the operator typed, not the doer table's \
+             role key (`installer`): {err:?}"
+        );
+        assert!(
+            handle.commands().is_empty(),
+            "entry gate must run no host command: {:?}",
+            handle.commands()
+        );
+        // The group lock is taken over SFTP, not `run`, so an empty command log
+        // says nothing about it. This is what pins "before the group lock".
+        assert!(
+            handle.sftp_ops().is_empty(),
+            "entry gate must not take the group lock: {:?}",
+            handle.sftp_ops()
+        );
+    }
+
+    /// Same gate, on the uninstall role — the two share `perform_operation`,
+    /// so this pins that the message names the role that was actually asked
+    /// for rather than hard-coding "install".
+    #[tokio::test]
+    async fn perform_uninstall_entry_gate_names_the_uninstall_role() {
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.cancel_token().cancel();
+
+        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a cancelled uninstall reports an error");
+
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        assert!(
+            err.reason.contains("uninstall") && !err.reason.contains("uninstaller"),
+            "names the verb `uninstall`, not the role key `uninstaller` -- a \
+             bare contains(\"uninstall\") also matches `uninstaller`: {err:?}"
+        );
+        assert!(handle.commands().is_empty(), "{:?}", handle.commands());
+        assert!(handle.sftp_ops().is_empty(), "{:?}", handle.sftp_ops());
     }
 
     #[tokio::test]
@@ -1986,6 +2321,67 @@ mod tests {
         );
     }
 
+    /// The twin of the test above: every check passed, so the update looked
+    /// clean, but the host never came back from the reboot that activates it.
+    /// This path used to return `Ok(())` unconditionally after the reboot.
+    #[tokio::test]
+    async fn perform_update_reports_a_transactional_host_that_never_came_back() {
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .failing_reconnect();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let err = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("a host that never came back is not a successful update");
+
+        // A `Check` failure, so `perform_update_with_rollback` treats it like
+        // any other per-host update failure and rolls back — deliberate: the
+        // update is not live on that host, and a partially-applied fleet is
+        // exactly what the rollback exists for.
+        let UpdateFailure::Check(err) = err else {
+            panic!("expected a check failure, got {err:?}");
+        };
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err:?}");
+        assert!(
+            err.reason.contains("did not come back after the reboot"),
+            "names the real failure: {err:?}"
+        );
+        assert!(
+            err.reason.contains("failed to reconnect to h1"),
+            "carries the underlying reason, not just the category: {err:?}"
+        );
+        assert!(
+            handle
+                .fired_commands()
+                .iter()
+                .any(|c| c.contains("systemctl reboot")),
+            "the reboot must still be dispatched: {:?}",
+            handle.fired_commands()
+        );
+    }
+
     #[tokio::test]
     async fn perform_update_keeps_repos_on_check_failure() {
         // exit 104 on the updater command ⇒ the update check flags "package not
@@ -2299,7 +2695,11 @@ mod tests {
     /// transactional host inert.
     #[tokio::test]
     async fn prepare_cancel_mid_loop_still_reaches_the_reboot_fallthrough() {
-        let (t, handle) = sles_target("h1", "");
+        // A *transactional* host: with a non-transactional one the reboot map
+        // is empty and `reboot_transactional` returns before touching the
+        // group, so the fall-through this test is named for never runs and the
+        // assertions below hold vacuously.
+        let (t, handle) = slmicro_maybe_dead("h1", "", 0, true);
         let mut group = HostsGroup::new(vec![t], false);
         let report = crate::reports::PiReport::new(Config::default());
         let packages = vec!["pkg-a".to_owned(), "pkg-b".to_owned()];
@@ -2325,6 +2725,14 @@ mod tests {
             handle.commands().is_empty(),
             "cancelled at package 0, so no package command may run: {:?}",
             handle.commands()
+        );
+        // ...but the reboot still fired. This is the whole point of `break`
+        // rather than an early return: the snapshot must be activated even
+        // though the operator asked to stop.
+        assert_eq!(
+            handle.fired_commands(),
+            vec!["systemctl reboot"],
+            "the cancelled prepare must still reach the reboot fall-through"
         );
     }
 
