@@ -449,9 +449,8 @@ impl MockConnection {
 
     /// Scripts [`reconnect`](Connection::reconnect) to fail with
     /// [`HostError::ReconnectFailed`].
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn failing_reconnect(mut self) -> Self {
+    pub fn failing_reconnect(mut self) -> Self {
         self.reconnect_fails = true;
         self
     }

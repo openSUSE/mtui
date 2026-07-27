@@ -61,6 +61,12 @@ pub enum UpdateFailure {
     /// a rollback is itself a multi-minute downgrade, so rolling back on a
     /// cancel would *extend* the work the caller just asked to stop.
     Cancelled(UpdateError),
+    /// A transactional host rebooted after a successful patch and did not
+    /// reconnect.
+    ///
+    /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback:
+    /// the host is unreachable, so a downgrade cannot run on it.
+    Reboot(UpdateError),
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
@@ -131,6 +137,12 @@ where
             // Anything an earlier `prepare` step installed is left as-is (see
             // `UpdateFailure::Cancelled`).
             info!(reason = %e, "update cancelled");
+            Err(e)
+        }
+        Err(UpdateFailure::Reboot(e)) => {
+            // The patch succeeded but the host never came back: it is
+            // unreachable, so a downgrade cannot run on it either.
+            error!(error = %e, "update failed");
             Err(e)
         }
         Err(UpdateFailure::Check(e)) => {
@@ -395,13 +407,29 @@ async fn perform_operation(
     // The template ran nothing at all — a missing doer, or a host held by
     // another tester. Report it instead of falling through to a verdict that
     // would read stale `last*` values and call it success.
-    if let Err(e) = outcome {
-        return Err(UpdateError::reason_only(describe_start_failure(
-            &e, role, targets,
-        )));
-    }
+    let report = match outcome {
+        Err(e) => {
+            return Err(UpdateError::reason_only(describe_start_failure(
+                &e, role, targets,
+            )));
+        }
+        Ok(report) => report,
+    };
 
-    install_verdict(op, role, targets)
+    // A transactional host that rebooted and never reconnected must fail the
+    // operation by name, alongside any install-check failure `install_verdict`
+    // finds over the other hosts' `last*` snapshots.
+    let mut failures: Vec<UpdateError> = report
+        .reboot_failures
+        .into_iter()
+        .map(|(host, reason)| {
+            UpdateError::new(format!("reconnect after reboot failed: {reason}"), host)
+        })
+        .collect();
+    if let Err(e) = install_verdict(op, role, targets) {
+        failures.push(e);
+    }
+    aggregate_failures(op, failures)
 }
 
 /// Turns an [`Operation::run`](mtui_hosts::Operation::run) start failure into a
@@ -521,13 +549,27 @@ pub fn install_verdict(op: &str, role: Role, targets: &HostsGroup) -> Result<(),
     aggregate_failures(op, failures)
 }
 
-/// Reboots the transactional hosts named in `reboot`.
-async fn reboot_transactional(targets: &mut HostsGroup, reboot: BTreeMap<String, String>) {
+/// Reboots the transactional hosts named in `reboot`, returning one
+/// [`UpdateError`] per host that did not reconnect.
+///
+/// A transactional host that rebooted and never came back must fail the flow
+/// by name, not vanish into a discarded `()` — the caller pushes these into
+/// its own failure list before aggregating.
+async fn reboot_transactional(
+    targets: &mut HostsGroup,
+    reboot: BTreeMap<String, String>,
+) -> Vec<UpdateError> {
     if reboot.is_empty() {
-        return;
+        return Vec::new();
     }
     let map: Vec<(String, String)> = reboot.into_iter().collect();
-    OperationGroup::reboot(targets, map).await;
+    OperationGroup::reboot(targets, map)
+        .await
+        .into_iter()
+        .map(|(host, reason)| {
+            UpdateError::new(format!("reconnect after reboot failed: {reason}"), host)
+        })
+        .collect()
 }
 
 /// Runs the prepare step: adds/removes the issue repo, then installs
@@ -646,7 +688,7 @@ async fn prepare_body(
         error!(error = %e, "prepare check failed");
         failures.push(e);
     }
-    reboot_transactional(targets, reboot).await;
+    failures.extend(reboot_transactional(targets, reboot).await);
     // A genuine host failure outranks the cancellation: reporting only
     // "cancelled" would bury a broken host the operator must still see.
     if !failures.is_empty() {
@@ -932,7 +974,7 @@ async fn downgrade_body(
         .into_iter()
         .filter(|(h, _)| !dead_probes.contains(h))
         .collect();
-    reboot_transactional(targets, healthy_reboot).await;
+    failures.extend(reboot_transactional(targets, healthy_reboot).await);
 
     let not_downgraded = downgrade_verdict(targets).await;
 
@@ -1169,7 +1211,7 @@ pub async fn perform_update(
             "update did not complete; leaving the test update repositories in place \
              for retry/diagnosis (remove later with `set_repo --remove`)"
         );
-        return Err(UpdateFailure::Check(e));
+        return Err(e);
     }
 
     if newpackage
@@ -1193,19 +1235,22 @@ pub async fn perform_update(
 /// Runs the update commands, checks every host (collecting failures), reboots on
 /// success, and **always** unlocks.
 ///
-/// Returns `Ok(())` when every host's check passed, otherwise `Err` with the
-/// aggregated [`UpdateError`]: a single failure is returned verbatim; more
-/// than one is summarised into `"update failed on {hosts} ({detail})"`.
+/// Returns `Ok(())` when every host's check passed and every transactional
+/// host reconnected; otherwise `Err` with the aggregated failure: a check
+/// failure (packages may be half-applied) is [`UpdateFailure::Check`] and
+/// **suppresses the reboot entirely**; a post-patch reconnect failure is
+/// [`UpdateFailure::Reboot`]. A single failure is returned verbatim; more than
+/// one is summarised into `"update failed on {hosts} ({detail})"`.
 async fn update_run_phase(
     targets: &mut HostsGroup,
     registry: &WorkflowRegistry,
     commands: BTreeMap<String, String>,
     reboot: BTreeMap<String, String>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Result<(), UpdateError> {
+) -> Result<(), UpdateFailure> {
     targets.run(Command::PerHost(commands)).await;
 
-    let mut failures = run_checks(targets, registry, Role::Update, diagnostics);
+    let failures = run_checks(targets, registry, Role::Update, diagnostics);
     let failed_hosts: std::collections::HashSet<String> =
         failures.iter().filter_map(|e| e.host.clone()).collect();
     let ok_hosts: Vec<String> = targets
@@ -1220,24 +1265,13 @@ async fn update_run_phase(
         error!(error = %e, "update failed");
     }
 
-    let result = if failures.is_empty() {
-        reboot_transactional(targets, reboot).await;
-        Ok(())
-    } else if failures.len() == 1 {
-        // Preserve the exact single-host error the caller used to get.
-        Err(failures.remove(0))
+    // A check failure keeps precedence and suppresses the reboot entirely: a
+    // transactional host whose patch failed must not be rebooted into it.
+    let result = if !failures.is_empty() {
+        aggregate_failures("update", failures).map_err(UpdateFailure::Check)
     } else {
-        let hosts: Vec<String> = {
-            let mut h: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
-            h.sort();
-            h
-        };
-        let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
-        Err(UpdateError::reason_only(format!(
-            "update failed on {} ({})",
-            hosts.join(", "),
-            detail.join("; ")
-        )))
+        let reboot_failures = reboot_transactional(targets, reboot).await;
+        aggregate_failures("update", reboot_failures).map_err(UpdateFailure::Reboot)
     };
 
     targets.unlock().await;
@@ -1954,6 +1988,122 @@ mod tests {
             true,
         );
         (t, handle)
+    }
+
+    /// Like [`slmicro_target`] but its reconnect after a reboot always fails,
+    /// modelling a transactional host that never comes back.
+    fn slmicro_target_failing_reconnect(hostname: &str) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .failing_reconnect();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    #[tokio::test]
+    async fn perform_install_reports_a_transactional_host_that_never_reconnects() {
+        // The install itself succeeds (exit 0), but the post-reboot reconnect
+        // never comes back: the whole point of this fix is that mtui must not
+        // report success on a host it lost.
+        let (t, _handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a lost transactional host must not report success");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(
+            err.reason.contains("reconnect after reboot failed"),
+            "reason: {}",
+            err.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_uninstall_reports_a_transactional_host_that_never_reconnects() {
+        let (t, _handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_uninstall(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a lost transactional host must not report success");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_fails_when_a_transactional_host_does_not_come_back() {
+        let (t, _handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("a lost transactional host must not report success");
+        assert!(
+            err.reason.contains("reconnect after reboot failed"),
+            "reason: {}",
+            err.reason
+        );
+        assert_eq!(err.host.as_deref(), Some("h1"));
+    }
+
+    #[tokio::test]
+    async fn perform_downgrade_fails_when_a_transactional_host_does_not_come_back() {
+        let (t, _handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a lost transactional host must not report success");
+        assert!(
+            err.reason.contains("reconnect after reboot failed"),
+            "reason: {}",
+            err.reason
+        );
+        assert_eq!(err.host.as_deref(), Some("h1"));
+    }
+
+    #[tokio::test]
+    async fn update_reports_a_host_that_never_came_back_and_skips_the_rollback() {
+        // A successful patch followed by a dead reconnect must fail as
+        // `UpdateFailure::Reboot` and must NOT trigger the rollback downgrade:
+        // the host is unreachable, so a downgrade cannot run on it.
+        let (t, handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        let res = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await;
+        let err = res.expect_err("a lost transactional host must not report success");
+        assert!(
+            err.reason.contains("reconnect after reboot failed"),
+            "reason: {}",
+            err.reason
+        );
+
+        // No downgrade (rollback) command was issued.
+        assert!(
+            !handle.commands().iter().any(|c| c.contains("--oldpackage")),
+            "a dead host must not trigger a rollback downgrade: {:?}",
+            handle.commands()
+        );
     }
 
     #[tokio::test]

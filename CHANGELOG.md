@@ -68,6 +68,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `install`/`uninstall`/`prepare`/`downgrade`/`update` now fail, naming the
+  host, when a transactional (read-only-root) host reboots and does not
+  reconnect. The reboot outcome used to be logged at ERROR and discarded, so
+  every one of these commands reported success on a host it had just lost;
+  `update` specifically reports the new `UpdateFailure::Reboot` and — since
+  the host is unreachable — skips the rollback downgrade it runs for a check
+  failure.
 - A `-t <host>` subset operation no longer silently resets the `[connection]
   max_parallel` fan-out bound to its built-in default: splitting the host group
   for a subset op carried only the workflow provider, dropping the configured
