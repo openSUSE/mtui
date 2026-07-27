@@ -1171,6 +1171,19 @@ impl Connection for SshConnection {
     }
 
     async fn fire_and_forget(&mut self, command: &str) -> Result<()> {
+        // Revive an idle-dropped link before dispatching, as [`run`] does.
+        //
+        // The only caller is the post-operation reboot, which fires after a
+        // `transactional-update` that can run for minutes — long enough for the
+        // server to have closed an idle session. Without this, that reboot
+        // fails to dispatch against a perfectly healthy host, and because a
+        // failed dispatch with a *successful* reconnect is precisely the
+        // signature of "host is up but never got the command", `update` routes
+        // its group-wide rollback on it: an idle TCP session would downgrade
+        // every host in the group. One reconnect removes the trigger.
+        if !self.is_active() {
+            self.reconnect(0, false).await?;
+        }
         let channel = self
             .handle()?
             .channel_open_session()
