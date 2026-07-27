@@ -573,15 +573,24 @@ impl Target {
     ///
     /// Dispatches via
     /// [`Connection::fire_and_forget`]. The command is expected to drop the SSH
-    /// connection, so callers follow up with [`reconnect`](Self::reconnect). A
-    /// no-op (logged) when the target is not connected; a dispatch error is
-    /// logged, not propagated, since a link dropped by the reboot is expected.
+    /// connection, so callers follow up with [`reconnect`](Self::reconnect).
+    ///
+    /// A dispatch failure is logged **and returned**: the link is torn down
+    /// only after the dispatch succeeds, so a failure leaves the session live
+    /// and the reconnect that follows returns immediately — which is precisely
+    /// how a reboot that never happened used to read as one that did. An
+    /// unconnected target reports [`ReconnectFailed`](HostError::ReconnectFailed),
+    /// not [`RebootNotDispatched`](HostError::RebootNotDispatched), because the
+    /// latter asserts the host is still reachable.
     async fn reboot(&mut self, command: &str) -> Result<()> {
         let Some(conn) = self.connection.as_mut() else {
             tracing::error!(host = %self.hostname, "reboot on unconnected target");
-            return Err(HostError::RebootNotDispatched {
+            // Deliberately *not* `RebootNotDispatched`: that variant asserts
+            // the host is still reachable, and a target with no connection at
+            // all is the least reachable state there is. Claiming otherwise
+            // would route a group-wide rollback at a host nothing can talk to.
+            return Err(HostError::ReconnectFailed {
                 host: self.hostname.clone(),
-                reason: "the target has no live connection".to_owned(),
             });
         };
         conn.fire_and_forget(command).await.map_err(|e| {
@@ -1843,8 +1852,12 @@ mod tests {
             .reboot("systemctl reboot")
             .await
             .expect_err("an unconnected target cannot be rebooted");
+        // `ReconnectFailed`, deliberately, and NOT `RebootNotDispatched`: the
+        // latter asserts the host is still reachable, which routes a
+        // destructive group-wide rollback at it. A target with no connection
+        // is the least reachable state there is.
         assert!(
-            matches!(&err, HostError::RebootNotDispatched { host, .. } if host == "h1"),
+            matches!(&err, HostError::ReconnectFailed { host } if host == "h1"),
             "{err:?}"
         );
     }
@@ -1864,13 +1877,27 @@ mod tests {
             matches!(&err, HostError::RebootNotDispatched { .. }),
             "{err:?}"
         );
-        // The mock deliberately leaves the session active on a failed dispatch,
-        // exactly as the real connection does — which is what made the
-        // following reconnect succeed and hide this.
+        // The link must survive the failed dispatch, exactly as the real
+        // connection's does — that is what makes the following reconnect
+        // succeed trivially and hides the lost reboot.
+        //
+        // Asserted through `is_closed()`, which reads the `Arc`-shared flag.
+        // `is_active()` would be vacuous here: `active` is a plain `bool` and
+        // `handle` is a clone, so it reports the value it was cloned with no
+        // matter what the connection does.
         assert!(
-            handle.is_active(),
-            "a failed dispatch must not close the link"
+            !handle.is_closed(),
+            "a failed dispatch must not tear the link down"
         );
+        // And the behavioural consequence, which is the actual trap: the
+        // reconnect that follows a lost dispatch still succeeds, so it can
+        // never be the signal — the dispatch result is the only evidence.
+        // (The real connection short-circuits on `is_active()`; this double
+        // simply succeeds. Different mechanism, same observable outcome, which
+        // is the part the caller depends on.)
+        t.reconnect(1, false)
+            .await
+            .expect("a reconnect after a lost dispatch still reports success");
     }
 
     #[tokio::test]

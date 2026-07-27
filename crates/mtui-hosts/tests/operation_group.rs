@@ -95,13 +95,27 @@ fn target(
     (t, handle)
 }
 
-/// The commands a test actually cares about: the operation's own, with the
-/// reboot lifecycle's boot-id probes filtered out.
-fn package_commands(conn: &mtui_hosts::MockConnection) -> Vec<String> {
+/// Splits a host's issued commands into the operation's own and the reboot
+/// lifecycle's boot-id probes.
+///
+/// The probes are returned rather than discarded so a caller can pin how many
+/// there were: filtering them away silently would make "two probes" (the
+/// snapshot plus the verification) indistinguishable from one, or from none at
+/// all — i.e. it would hide the deletion of either boot-id phase.
+fn split_commands(conn: &mtui_hosts::MockConnection) -> (Vec<String>, Vec<String>) {
     conn.commands()
         .into_iter()
-        .filter(|c| c != "cat /proc/sys/kernel/random/boot_id")
-        .collect()
+        .partition(|c| c != "cat /proc/sys/kernel/random/boot_id")
+}
+
+/// Just the operation's own commands.
+fn package_commands(conn: &mtui_hosts::MockConnection) -> Vec<String> {
+    split_commands(conn).0
+}
+
+/// How many boot-id probes a host saw.
+fn probe_count(conn: &mtui_hosts::MockConnection) -> usize {
+    split_commands(conn).1.len()
 }
 
 #[tokio::test]
@@ -112,10 +126,14 @@ async fn install_drives_doer_and_reboots_only_transactional() {
     let (h2, m2) = target("h2", "SL-Micro", "6.0", true);
     let mut group = HostsGroup::new(vec![h1, h2], false).with_plan_provider(Arc::new(provider));
 
-    let _ = InstallOperation::new(vec!["pkg-a".to_owned(), "pkg-b".to_owned()])
+    let report = InstallOperation::new(vec!["pkg-a".to_owned(), "pkg-b".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group installs");
+    // Asserted, not discarded: this is the end-to-end healthy-reboot case, and
+    // it is what makes the fixture's changing boot id load-bearing.
+    assert!(report.reboot_failures.is_empty(), "{report:?}");
+    assert!(report.check_failures.is_empty(), "{report:?}");
 
     // The provider was consulted for each host with the release derived from
     // its parsed system: SLES 15.5 -> "15", SL-Micro -> "slmicro".
@@ -134,9 +152,15 @@ async fn install_drives_doer_and_reboots_only_transactional() {
         package_commands(&m1),
         vec!["zypper -n in -y -l pkg-a pkg-b".to_owned()]
     );
-    // The non-transactional host was never rebooted.
+    // The non-transactional host was never rebooted — and never probed, which
+    // the old exact-command-list assertion used to enforce.
     assert!(m1.fired_commands().is_empty());
     assert_eq!(m1.reconnect_count(), 0);
+    assert_eq!(
+        probe_count(&m1),
+        0,
+        "a non-transactional host is not probed"
+    );
 
     // The transactional host ran only the install as a normal command; the
     // reboot is dispatched fire-and-forget (the reboot drops the connection),
@@ -147,6 +171,9 @@ async fn install_drives_doer_and_reboots_only_transactional() {
     );
     assert_eq!(m2.fired_commands(), vec!["systemctl reboot".to_owned()]);
     assert_eq!(m2.reconnect_count(), 1);
+    // Exactly two: the pre-reboot snapshot and the post-reboot verification.
+    // Deleting either phase drops this to one.
+    assert_eq!(probe_count(&m2), 2, "snapshot + verify");
 
     // The check fired once per host.
     let mut who = checked.lock().unwrap().clone();

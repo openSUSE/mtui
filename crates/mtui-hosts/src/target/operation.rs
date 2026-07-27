@@ -196,9 +196,10 @@ pub trait OperationGroup: Send {
 
     /// Reboots the transactional hosts named in `reboot`.
     ///
-    /// Returns `(hostname, reason)` for every host that did not reconnect —
-    /// a transactional host that rebooted and never came back must fail the
-    /// operation, not report success on a host it lost.
+    /// Returns one [`RebootFailure`] for every host whose reboot did not take
+    /// effect, carrying *why* — a transactional host whose snapshot never
+    /// activated must fail the operation, not report success, and the caller
+    /// routes its recovery on the cause.
     async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<RebootFailure>;
 
     /// Releases the shared operation lock.
@@ -211,7 +212,7 @@ pub trait OperationGroup: Send {
 ///
 /// `Err` from [`Operation::run`] keeps meaning "never started" (no plans, or a
 /// foreign lock); `Ok(report)` means it ran, and the two failure lists name any
-/// host that failed its check or was left unreachable by its reboot.
+/// host that failed its check or whose reboot did not take effect.
 #[must_use = "the report names the hosts that failed; dropping it silently \
               reports a failed operation as a clean one"]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -319,9 +320,9 @@ pub trait Operation: Send + Sync {
     /// activates; a host left inert by a failed check is named at WARN.
     ///
     /// Returns the started run's [`OperationReport`], which names any host
-    /// that failed its check and any transactional host that rebooted and did
-    /// not reconnect — a caller that discards it cannot tell either apart from
-    /// a host that came back healthy.
+    /// that failed its check and any transactional host whose reboot did not
+    /// take effect — a caller that discards it cannot tell either apart from a
+    /// host that came back healthy.
     ///
     /// # Errors
     ///
