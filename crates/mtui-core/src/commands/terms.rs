@@ -12,19 +12,19 @@ use crate::session::Session;
 
 /// Spawns terminal screens onto the connected reference hosts.
 ///
-/// Ports upstream `mtui.commands.terms.Terms`. With no `termname`, prints the
+/// With no `termname`, prints the
 /// list of available terminal-launcher scripts; with a name, runs
 /// `term.<name>.sh` from [`terms_path`](mtui_config::terms_path), passing the
 /// selected (sorted) host names as arguments.
 ///
 /// The available term names are derived **from disk** by globbing `term.*.sh`
-/// in the terms directory (mirroring upstream's dynamic `_list_terms`), rather
-/// than from a config key. The launcher script spawns its own detached terminal
-/// emulators and does not need mtui's controlling terminal, so — unlike `edit`
-/// and `shell` — the spawn runs directly in [`call`](Terms::call).
+/// in the terms directory, rather than from a config key. The launcher script
+/// spawns its own detached terminal emulators and does not need mtui's
+/// controlling terminal, so — unlike `edit` and `shell` — the spawn runs
+/// directly in [`call`](Terms::call).
 ///
-/// Deviation from upstream: the not-found path emits a single clean error rather
-/// than also logging the (typo'd) "Aviable term scripts" info line.
+/// The not-found path emits a single clean error rather than an additional
+/// info line.
 ///
 /// REPL-oriented — on the MCP deny-list.
 pub struct Terms;
@@ -37,8 +37,7 @@ const TERM_SUFFIX: &str = ".sh";
 ///
 /// Strips the `term.` prefix and `.sh` suffix from each match and returns the
 /// names sorted. A missing or unreadable directory yields an empty list
-/// (graceful degrade — upstream lists "available terminals" and no-ops when the
-/// script dir is absent).
+/// (graceful degrade when the script dir is absent).
 fn discover_term_names(dir: Option<&Path>) -> Vec<String> {
     let Some(dir) = dir else {
         return Vec::new();
@@ -68,8 +67,8 @@ fn term_script_argv(dir: &Path, name: &str, hosts: &[String]) -> (PathBuf, Vec<S
 }
 
 /// Render the no-argument listing: a header line followed by the space-joined
-/// term names (matching upstream's two `println` calls). Factored out so the
-/// exact text is snapshot-testable with deterministic names.
+/// term names. Factored out so the exact text is snapshot-testable with
+/// deterministic names.
 fn render_listing(names: &[String]) -> String {
     format!("available terminal scripts:\n{}\n", names.join(" "))
 }
@@ -216,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn listing_matches_upstream_two_line_format() {
+    fn listing_has_stable_two_line_format() {
         // Deterministic snapshot of the exact no-arg output with seeded names.
         let names = vec!["gnome".to_owned(), "xterm".to_owned()];
         insta::assert_snapshot!(render_listing(&names), @r"

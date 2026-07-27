@@ -15,7 +15,7 @@
 //! identically to the `error:` line. The subscriber's own ANSI is disabled
 //! (`with_ansi(false)`) so only this layer's explicit coloring emits escapes.
 //!
-//! **Deviation from upstream:** the DEBUG-only `" [module:function]"` suffix is
+//! **Design choice:** the DEBUG-only `" [module:function]"` suffix is
 //! intentionally not reproduced (low value in Rust — under `-d/--debug` the
 //! verbose Rust format restores the module `target`, which covers the diagnostic
 //! need). This compact layer is only installed at the *default* verbosity;
@@ -52,7 +52,7 @@ impl CompactLevelFormat {
         Self { ansi }
     }
 
-    /// The lowercased level token, colorized per upstream `COLORS` when ANSI is
+    /// The lowercased level token, colorized when ANSI is
     /// on: info→green, warn→yellow, error→red. `trace`/`debug` fall through
     /// uncolored (they only appear under `-d`, which uses the verbose format
     /// anyway, but stay defensive).
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn level_token_colored_matches_upstream_palette() {
+    fn level_token_colored_with_stable_palette() {
         let f = CompactLevelFormat::new(true);
         let info = f.level_token(&Level::INFO);
         let warn = f.level_token(&Level::WARN);

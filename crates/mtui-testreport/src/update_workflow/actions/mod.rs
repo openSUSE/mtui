@@ -3,11 +3,9 @@
 //!
 //! ## Reference
 //!
-//! Ports upstream `mtui/update_workflow/actions/`. Each upstream module builds a
-//! `DictWithInjections` keyed by `(release, transactional)` whose values are
-//! dicts of `string.Template` commands. This port keeps the **template strings
-//! verbatim** and resolves them through [`crate::update_workflow::substitute`],
-//! preserving `$$` escaping and `${}` bracing (see [`template`] docs).
+//! Each action's templates are keyed by `(release, transactional)` and
+//! resolved through [`crate::update_workflow::substitute`], preserving `$$`
+//! escaping and `${}` bracing (see [`template`] docs).
 //!
 //! The value type is [`ActionCommands`]: an owning bundle of the command
 //! templates an action can carry. Not every action uses every field —
@@ -31,16 +29,14 @@ use crate::update_workflow::template::{TemplateError, safe_substitute, substitut
 /// Whether a template is rendered with strict [`substitute`] or lenient
 /// [`safe_substitute`] semantics.
 ///
-/// Mirrors upstream's choice of `.substitute` vs `.safe_substitute` per action:
-/// `install` / `uninstall` / `prepare` are [`Strict`](SubstMode::Strict);
-/// `update` / `downgrade` are [`Safe`](SubstMode::Safe) because their templates
+/// `install` / `uninstall` / `prepare` use [`Strict`](SubstMode::Strict);
+/// `update` / `downgrade` use [`Safe`](SubstMode::Safe) because their templates
 /// embed shell/awk `$`-tokens that must survive unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubstMode {
-    /// Raise on a missing key / malformed placeholder (upstream `.substitute`).
+    /// Raise on a missing key / malformed placeholder.
     Strict,
-    /// Leave a missing key / malformed placeholder verbatim (upstream
-    /// `.safe_substitute`).
+    /// Leave a missing key / malformed placeholder verbatim.
     Safe,
 }
 
@@ -56,22 +52,21 @@ impl SubstMode {
 
 /// The command templates for one resolved action.
 ///
-/// The Rust analogue of upstream's per-key `{"command": Template, ...}` dict.
-/// `command` is always present; the remaining fields mirror the optional keys
-/// upstream stores for specific actions. [`mode`](Self::mode) records whether
-/// the action's call site used `.substitute` or `.safe_substitute`.
+/// `command` is always present; the remaining fields are optional and used
+/// only by specific actions. [`mode`](Self::mode) records whether the
+/// action's call site uses [`Strict`](SubstMode::Strict) or
+/// [`Safe`](SubstMode::Safe) substitution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionCommands {
-    /// The primary command template (upstream `"command"`), always present.
+    /// The primary command template, always present.
     command: String,
-    /// The transactional reboot template (upstream `"reboot"`); present only for
-    /// transactional (`slmicro`) entries.
+    /// The transactional reboot template; present only for transactional
+    /// (`slmicro`) entries.
     reboot: Option<String>,
-    /// The "only if already installed" variant (upstream `"installed_only"`);
-    /// present only for `prepare` actions.
+    /// The "only if already installed" variant; present only for `prepare`
+    /// actions.
     installed_only: Option<String>,
-    /// The package-listing helper (upstream `"list_command"`); present only for
-    /// `downgrade` actions.
+    /// The package-listing helper; present only for `downgrade` actions.
     list_command: Option<String>,
     /// The substitution mode for this action's templates.
     mode: SubstMode,
@@ -125,7 +120,7 @@ impl ActionCommands {
     }
 
     /// Renders [`reboot`](Self::reboot) if present. The reboot template takes no
-    /// variables upstream, so an empty map is passed (always strict — it has no
+    /// variables, so an empty map is passed (always strict — it has no
     /// placeholders).
     ///
     /// # Errors

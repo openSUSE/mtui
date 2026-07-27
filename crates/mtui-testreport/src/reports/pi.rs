@@ -1,25 +1,24 @@
 //! The PI [`TestReport`] implementation ([`PiReport`]).
 //!
-//! Port of upstream `mtui.test_reports.pi_report.PITestReport`. It keys its
-//! identity on the parsed [`RequestReviewID`] and derives its update-repo map by
-//! delegating unconditionally to [`reporepoparse`](super::repoparse::reporepoparse)
-//! — the simplest of the concrete reports, reusing the helper already ported for
+//! Keys its identity on the parsed [`RequestReviewID`] and derives its
+//! update-repo map by delegating unconditionally to
+//! [`reporepoparse`](super::repoparse::reporepoparse) — the simplest of the
+//! concrete reports, reusing the same helper as
 //! [`SlReport`](super::sl::SlReport). PI has no git commit to verify, so
-//! [`check_hash`](TestReport::check_hash) is a constant `(true, "", "")`
-//! (upstream always returns `True, "", ""`).
+//! [`check_hash`](TestReport::check_hash) is a constant `(true, "", "")`.
 //!
 //! ## Scope (task nbv.12)
 //!
 //! Mirrors the `SlReport` boundaries:
 //! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`]) is
-//!   implemented here (task nbv.fly): add uses upstream's `-n ar -cfGkn` (same as
+//!   implemented here (task nbv.fly): add uses `-n ar -cfGkn` (same as
 //!   SL), remove uses `-n rr`.
-//! * `list_update_commands` renders per-host commands via `target.doer('updater')`
-//!   upstream, but the `OperationGroup`/doer seam on `Target` is deferred (see the
-//!   `TODO(Phase 4)` in `mtui-hosts::target::operation`). Until it is wired this
-//!   is a documented no-op stub.
-//! * `id()` returns `""` when no RRID is loaded (upstream `str(self.rrid)` would
-//!   raise); this matches the graceful path chosen for `SlReport`.
+//! * `list_update_commands` would render per-host commands via
+//!   `target.doer('updater')`, but the `OperationGroup`/doer seam on `Target`
+//!   is deferred (see the `TODO(Phase 4)` in `mtui-hosts::target::operation`).
+//!   Until it is wired this is a documented no-op stub.
+//! * `id()` returns `""` when no RRID is loaded; this matches the graceful
+//!   path chosen for `SlReport`.
 
 use std::collections::HashMap;
 
@@ -33,7 +32,7 @@ use super::set_repo_with_add_flags;
 use super::update_flow;
 use crate::testreport::{HashCheck, TestReport, TestReportBase};
 
-/// A [`TestReport`] for PI updates (upstream `PITestReport`).
+/// A [`TestReport`] for PI updates.
 pub struct PiReport {
     base: TestReportBase,
 }
@@ -41,9 +40,9 @@ pub struct PiReport {
 impl PiReport {
     /// Builds a [`PiReport`] from `config`.
     ///
-    /// Upstream's `__init__` seeds the rating/realid envelope fields to empty and
-    /// `repositories` to an empty set; [`TestReportBase::new`] already applies
-    /// those defaults, so this simply wraps a fresh base.
+    /// [`TestReportBase::new`] already seeds the rating/realid envelope
+    /// fields to empty and `repositories` to an empty set, so this simply
+    /// wraps a fresh base.
     #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
@@ -63,7 +62,7 @@ impl TestReport for PiReport {
     }
 
     fn id(&self) -> String {
-        // Upstream `str(self.rrid)`. Empty when nothing is loaded.
+        // Empty when nothing is loaded.
         self.base
             .rrid
             .as_ref()
@@ -72,10 +71,9 @@ impl TestReport for PiReport {
     }
 
     fn parser(&self) -> HashMap<String, String> {
-        // Upstream registers `{"hosts": ReducedMetadataParser, "json": JSONParser}`.
         // The skeleton trait models the table's *keys* as strings; the concrete
         // parser dispatch lives in the loader (a later task). Values are the
-        // upstream parser names so callers can branch on them.
+        // parser names so callers can branch on them.
         HashMap::from([
             ("hosts".to_string(), "ReducedMetadataParser".to_string()),
             ("json".to_string(), "JSONParser".to_string()),
@@ -83,23 +81,22 @@ impl TestReport for PiReport {
     }
 
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
-        // Upstream `reporepoparse(self.repositories, self.products)` — no
-        // maintenance-id branching (unlike SL).
+        // No maintenance-id branching (unlike SL).
         let repos: Vec<String> = self.base.repositories.iter().cloned().collect();
         reporepoparse(&repos, &self.base.products)
     }
 
     fn list_update_commands(&self, _targets: &HostsGroup) {
-        // Upstream renders per-host `updater` commands for display; the bespoke
-        // `perform_update` flow that runs them is implemented below. A standalone
-        // read-only listing has no consumer yet (the `list`/`run` Wave-1 command
-        // lands in mtui-rs-2d3.6), so this stays a no-op until then.
+        // This would render per-host `updater` commands for display; the
+        // bespoke `perform_update` flow that runs them is implemented below.
+        // A standalone read-only listing has no consumer yet (the `list`/`run`
+        // Wave-1 command lands in mtui-rs-2d3.6), so this stays a no-op until
+        // then.
         debug!("list_update_commands: no listing consumer yet (see mtui-rs-2d3.6)");
     }
 
-    // Shared `perform_*` flows (upstream defines these once on the base
-    // `TestReport`; SL/PI/OBS behave identically). See `SlReport` for the
-    // rationale behind the per-report delegation.
+    // Shared `perform_*` flows (SL/PI/OBS behave identically). See
+    // `SlReport` for the rationale behind the per-report delegation.
     async fn perform_install(
         &self,
         targets: &mut HostsGroup,
@@ -165,8 +162,8 @@ impl TestReport for PiReport {
 
 #[async_trait::async_trait]
 impl SetRepo for PiReport {
-    /// Ports `PITestReport.set_repo`: add uses `-n ar -cfGkn` (same as SL),
-    /// remove uses `-n rr`, fanned out over [`TestReportBase::update_repos`].
+    /// Adds a repo with `-n ar -cfGkn` (same as SL),
+    /// removes with `-n rr`, fanned out over [`TestReportBase::update_repos`].
     async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
         set_repo_with_add_flags(&self.base, target, operation, "-n ar -cfGkn").await;
     }

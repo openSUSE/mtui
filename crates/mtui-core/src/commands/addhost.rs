@@ -12,7 +12,7 @@ use crate::session::Session;
 
 /// Adds one or more reference hosts to the target host list.
 ///
-/// Ports upstream `mtui.commands.addhost.AddHost`. Running `add_host` is a manual
+/// Running `add_host` is a manual
 /// action, so if the session is still in the automatic workflow it is moved to
 /// manual (unless `-k`/`--keep-mode`). Then:
 ///
@@ -22,9 +22,8 @@ use crate::session::Session;
 ///   refhosts factory and the resulting hosts are connected and added
 ///   ([`Session::add_testplatform_hosts`]).
 ///
-/// **Deviation:** upstream additionally calls `prompt.set_prompt()` after the
-/// workflow switch to refresh the REPL prompt string; that is a Phase-6 REPL
-/// concern, so this command only mutates the report's workflow.
+/// Refreshing the REPL prompt string after the workflow switch is a separate,
+/// Phase-6 REPL concern, so this command only mutates the report's workflow.
 pub struct AddHost;
 
 #[async_trait]
@@ -155,7 +154,7 @@ mod tests {
 
     use crate::commands::testkit::{matches, session_with_hosts};
 
-    /// Path to the ported offline refhosts fixture (no network).
+    /// Path to the offline refhosts fixture (no network).
     const REFHOSTS_FIXTURE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../mtui-datasources/tests/fixtures/refhosts.yml"

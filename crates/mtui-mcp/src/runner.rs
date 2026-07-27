@@ -1,8 +1,8 @@
 //! The `mtui-mcp` boot sequence: parse args → resolve config → serve.
 //!
-//! The Rust analogue of upstream `mtui/mcp/main.py`. It parses [`McpArgs`],
-//! initialises a stderr `tracing` subscriber (under stdio, stdout is the
-//! JSON-RPC transport), resolves the [`Config`] the way the REPL does, and
+//! It parses [`McpArgs`], initialises a stderr `tracing` subscriber (under
+//! stdio, stdout is the JSON-RPC transport), resolves the [`Config`] the way
+//! the REPL does, and
 //! serves the runtime-synthesised tool surface on the chosen transport:
 //!
 //! * **stdio** (default) — one process == one client: a single [`McpSession`]

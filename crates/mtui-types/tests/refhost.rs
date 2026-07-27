@@ -1,6 +1,5 @@
-//! Golden test for the `refhosts.yml` loader against the ported upstream
-//! fixture (`tests/fixtures/refhosts.yml`, byte-identical to upstream
-//! `mtui/tests/fixtures/refhosts.yml`).
+//! Golden test for the `refhosts.yml` loader against a golden fixture
+//! (`tests/fixtures/refhosts.yml`).
 //!
 //! This locks the `refhosts.yml` data-format contract: the loader must merge
 //! every legacy location group into one flat list and preserve each row's typed

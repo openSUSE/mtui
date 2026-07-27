@@ -308,7 +308,7 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
         // A create (with or without O_EXCL) materialises the file so a
         // subsequent exclusive create sees it and a read observes the write.
-        // TRUNCATE resets any existing contents (paramiko "w+"/"x" semantics).
+        // TRUNCATE resets any existing contents (truncating-open / exclusive-create semantics).
         if pflags.contains(OpenFlags::CREATE) {
             let mut fs = self.fs.lock().await;
             if pflags.contains(OpenFlags::TRUNCATE) {
@@ -809,7 +809,7 @@ async fn sftp_get_folder_suffixes_with_hostname() {
     let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
 
     let dir = tempfile::tempdir().expect("tmp");
-    // Trailing slash: upstream builds "<local>/<name>.<hostname>".
+    // Trailing slash: builds "<local>/<name>.<hostname>".
     let local = format!("{}/", dir.path().to_string_lossy());
     conn.sftp_get_folder(std::path::Path::new("/logs"), std::path::Path::new(&local))
         .await
@@ -913,7 +913,7 @@ async fn fire_and_forget_dispatches_and_closes() {
     let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
     assert!(conn.is_active());
     conn.fire_and_forget("reboot").await.expect("dispatch");
-    // The local link is torn down after dispatch, matching upstream.
+    // The local link is torn down after dispatch.
     assert!(!conn.is_active());
 }
 

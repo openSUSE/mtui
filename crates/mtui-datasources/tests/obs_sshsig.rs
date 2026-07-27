@@ -5,9 +5,8 @@
 //! blob goes straight into the OBS `Authorization: Signature` header. The
 //! fixtures under `tests/fixtures/obs/` are committed goldens:
 //!
-//! * `id_ed25519` — derived from the fixed 32-byte seed upstream uses
-//!   (`test_obs_sshsig.py`), so its signature is deterministic and equals
-//!   upstream's committed `GOLDEN` byte-for-byte.
+//! * `id_ed25519` — derived from a fixed 32-byte seed, so its signature is
+//!   deterministic and equals the committed `GOLDEN` byte-for-byte.
 //! * `id_rsa` / `id_ecdsa` — generated once with `ssh-keygen`; their `.sig`
 //!   files are `ssh-keygen -Y sign` output over the same `(created)` payload.
 //!
@@ -23,7 +22,7 @@ use mtui_datasources::obs::sshsig;
 const NAMESPACE: &str = "Use your developer account";
 const CREATED: i64 = 1_700_000_000;
 
-/// Upstream's committed Ed25519 golden (`test_obs_sshsig.py::GOLDEN`).
+/// The committed Ed25519 golden.
 const ED25519_GOLDEN: &str = concat!(
     "U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgA6EHv/POEL4dcN0Y50vAmWfk1jCb",
     "pQ1fHdyGZBJVMbgAAAAaVXNlIHlvdXIgZGV2ZWxvcGVyIGFjY291bnQAAAAAAAAABnNoYTUx",
@@ -51,8 +50,8 @@ fn golden_from_sig(name: &str) -> String {
 }
 
 #[test]
-fn ed25519_matches_upstream_committed_golden() {
-    // The fixture key is byte-identical to upstream's seed-derived key, so the
+fn ed25519_matches_committed_golden() {
+    // The fixture key is derived from a fixed seed, so the
     // deterministic Ed25519 signature equals the committed GOLDEN exactly.
     let key = load_key("id_ed25519");
     assert_eq!(

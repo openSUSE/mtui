@@ -12,23 +12,22 @@ use crate::session::Session;
 /// Loads a maintenance-update template into the session and connects its
 /// reference hosts.
 ///
-/// Ports upstream `mtui.commands.loadtemplate.LoadTemplate`. Exactly one of
-/// `-a`/`--auto-review-id` (an automatic OBS update) or `-k`/`--kernel-review-id`
-/// (a kernel/live-patch update) names the update by RRID; the two are mutually
-/// exclusive and one is required. The template is **added** to the registry
-/// (keyed by RRID) and made active — re-loading an already-loaded RRID replaces
-/// its stored report and re-activates it, leaving sibling templates untouched.
+/// Exactly one of `-a`/`--auto-review-id` (an automatic OBS update) or
+/// `-k`/`--kernel-review-id` (a kernel/live-patch update) names the update by
+/// RRID; the two are mutually exclusive and one is required. The template is
+/// **added** to the registry (keyed by RRID) and made active — re-loading an
+/// already-loaded RRID replaces its stored report and re-activates it, leaving
+/// sibling templates untouched.
 ///
 /// It names its own target RRID via `-a`/`-k` and connects only that template's
 /// reference hosts, so it runs once ([`Scope::Single`]) regardless of how many
 /// templates are loaded — without this it would fan out under MCP and re-run the
 /// autoconnect (grabbing pool hosts) on every loaded template.
 ///
-/// The `-a` update autoconnects its reference hosts by default (upstream
-/// `AutoOBSUpdateID.make_testreport(autoconnect=True)`); `-k` starts the kernel
-/// workflow and does not autoconnect on load (upstream `KernelOBSUpdateID`
-/// defaults `autoconnect=False`). The autoconnect intent is honoured by
-/// [`Session::load_update`], which the concrete workflow selection flows through.
+/// The `-a` update autoconnects its reference hosts by default; `-k` starts
+/// the kernel workflow and does not autoconnect on load. The autoconnect
+/// intent is honoured by [`Session::load_update`], which the concrete
+/// workflow selection flows through.
 pub struct LoadTemplate;
 
 #[async_trait]
@@ -66,8 +65,7 @@ impl Command for LoadTemplate {
                 .value_name("RequestReviewID")
                 .help("OBS kernel/live-patch request review id, e.g. SUSE:Maintenance:1:1"),
         )
-        // Mutually exclusive, and exactly one is required (upstream
-        // `add_mutually_exclusive_group(required=True)`).
+        // Mutually exclusive, and exactly one is required.
         .group(
             ArgGroup::new("review_id")
                 .args(["auto", "kernel"])
@@ -77,7 +75,7 @@ impl Command for LoadTemplate {
     }
 
     fn complete(&self, _session: &Session, text: &str, _line: &str) -> Vec<String> {
-        // Upstream offers the two RRID prefixes plus the flags.
+        // Offer the two RRID prefixes plus the flags.
         [
             "SUSE:Maintenance:",
             "openSUSE:Maintenance:",
@@ -114,9 +112,8 @@ impl Command for LoadTemplate {
 
         // `load_update` builds the report (workflow seeded from `kind`), adds it
         // to the registry, activates it, and — for an autoconnecting update —
-        // connects its reference hosts. autoconnect is always requested here
-        // (upstream `load_update(..., autoconnect=True)`); the update kind
-        // decides whether a connect actually happens.
+        // connects its reference hosts. autoconnect is always requested here;
+        // the update kind decides whether a connect actually happens.
         let (loaded, reason) = session.load_update_reported(&update, true, kind).await;
         if loaded.is_empty() {
             return Err(CommandError::Other(match reason {

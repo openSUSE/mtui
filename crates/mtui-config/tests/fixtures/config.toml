@@ -1,8 +1,7 @@
 # Realistic minimal mtui config fixture used by the integration tests to
 # exercise the TOML parser end-to-end (multiple sections, multiple value types).
 #
-# This is the TOML translation of upstream `tests/fixtures/mtuirc`, restricted
-# to the Phase-1 option subset that `mtui-config` currently models.
+# This covers the Phase-1 option subset that `mtui-config` currently models.
 
 [mtui]
 user = "qauser"
@@ -35,8 +34,8 @@ reap_stale = false                # boolean value
 stale_age = 3600                  # integer value
 pool_stale_age = 7200             # integer value
 wait = 30
-# wait_poll omitted on purpose: it must keep its upstream default (15)
-# pool_reap_stale omitted on purpose: it must keep its upstream default (true)
+# wait_poll omitted on purpose: it must keep its built-in default (15)
+# pool_reap_stale omitted on purpose: it must keep its built-in default (true)
 
 [slack]
 enabled = true                    # boolean value

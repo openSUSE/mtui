@@ -1,18 +1,16 @@
 //! Product-identity normalizers.
 //!
-//! Ported from `mtui/test_reports/products/` (`__init__.py`, `misc.py`,
-//! `sle11.py`, `sle12.py`, `sle15.py`). These are pure, I/O-free functions that
-//! canonicalize SUSE product identity so downstream repo parsers
-//! (`obsrepoparse`/`reporepoparse`, landing in a later task) can key on a
-//! stable `(name, version, arch)` tuple.
+//! These are pure, I/O-free functions that canonicalize SUSE product
+//! identity so downstream repo parsers (`obsrepoparse`/`reporepoparse`,
+//! landing in a later task) can key on a stable `(name, version, arch)`
+//! tuple.
 //!
-//! ## Deviation from upstream
+//! ## Design
 //!
-//! Upstream mutates a `[name, version, arch]` list in place and returns the
-//! enclosing container (accessed as `x[0]`). The idiomatic Rust port operates
-//! directly on a [`SystemProduct`] by value: each function takes one, rewrites
-//! its fields, and returns it. The dispatch ordering and every branch's string
-//! rewrite are preserved verbatim.
+//! Each function operates directly on a [`SystemProduct`] by value: it takes
+//! one, rewrites its fields, and returns it. The dispatch ordering and every
+//! branch's string rewrite are stable contracts the [`normalize`] callers
+//! depend on.
 
 pub mod misc;
 pub mod sle11;
@@ -45,7 +43,7 @@ pub fn normalize_16(mut x: SystemProduct) -> SystemProduct {
 
 /// Dispatches a product to its family-specific normalizer.
 ///
-/// The routing order is significant and mirrors upstream exactly:
+/// The routing order is significant:
 /// `SLE-RT` (by name) is matched before any version-based comparison, then the
 /// `11`/`12`/`15` version prefixes, then `Storage`, then SUSE Manager /
 /// SLE Manager Tools (by name substring), then openSUSE Leap (by version

@@ -19,9 +19,8 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(not(feature = "mcp"))]
 fn main() -> anyhow::Result<()> {
-    // The MCP SDK is compiled in only behind the `mcp` feature. Mirror upstream's
-    // "mcp is not installed" hint: fail with a clear, actionable message rather
-    // than a silent no-op.
+    // The MCP SDK is compiled in only behind the `mcp` feature: fail with a
+    // clear, actionable message rather than a silent no-op.
     eprintln!(
         "mtui-mcp was built without the `mcp` feature; rebuild with \
          `cargo build -p mtui-mcp --features mcp`."

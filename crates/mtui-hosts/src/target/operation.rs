@@ -1,12 +1,10 @@
 //! The install/uninstall [`Operation`] template — `lock → run → check →
 //! reboot → unlock` in one place.
 //!
-//! ## Reference
+//! ## Overview
 //!
-//! Ported from upstream `mtui/hosts/target/operation.py` (`Operation`,
-//! `InstallOperation`, `UninstallOperation`). Upstream consolidates the shared
-//! skeleton behind a template method so it is not duplicated across
-//! `HostsGroup.perform_install` and `perform_uninstall`. A concrete operation
+//! The shared skeleton lives behind a template method so it is not duplicated
+//! across install and uninstall. A concrete operation
 //! supplies two hooks — the *doer* (the installer/uninstaller command +
 //! transactional reboot templates) and the paired *check* callable — and the
 //! base drives:
@@ -17,14 +15,14 @@
 //! 2. `group.update_lock()`,
 //! 3. in a fallible section: `group.run(commands)` → per-host `check(...)` →
 //!    `group.reboot(reboot)`,
-//! 4. **always** `group.unlock()` afterwards (upstream's `finally`).
+//! 4. **always** `group.unlock()` afterwards.
 //!
 //! ## Scope: template + seams
 //!
-//! This module ports the **template and its seams**. The upstream template
+//! This module owns the **template and its seams**. The template
 //! consumes machinery that is deliberately *not* owned by `mtui-hosts`:
 //!
-//! * the *doer*/*check* dispatch (`Target.doer(role)` / `Target.check(role)`)
+//! * the *doer*/*check* dispatch (each target's doer/check for a role)
 //!   is fed by the update-workflow registries that live in `mtui-testreport`;
 //!   taking a direct dependency on them here would make `mtui-hosts` depend on
 //!   `mtui-testreport` and **break the acyclic crate graph**,
@@ -36,9 +34,8 @@
 //! binding — resolving each target's [`Doer`] / [`Check`] via the injected
 //! [`PlanProvider`] and delegating the reboot/reconnect lifecycle to the
 //! inherent [`HostsGroup`](super::HostsGroup) methods — lives in
-//! [`hostgroup`](super::hostgroup). This mirrors upstream's own
-//! `test_operation.py`, which drives the template against fully mocked targets
-//! and a mocked group, so the port is faithfully unit-testable offline.
+//! [`hostgroup`](super::hostgroup). The template is driven against fully mocked
+//! targets and a mocked group, so it is unit-testable offline.
 
 use mtui_types::shellquote::quote_args;
 
@@ -46,16 +43,15 @@ use crate::error::HostError;
 
 /// A per-host command (or reboot) map as ordered `(hostname, command)` pairs.
 ///
-/// The Rust analogue of upstream's `dict[str, str]` command/reboot maps; kept as
-/// an ordered `Vec` so fan-out order is deterministic (matching upstream's
-/// sorted iteration).
+/// An ordered `(hostname, command)` command/reboot map, kept as
+/// an ordered `Vec` so fan-out order is deterministic (sorted iteration).
 pub type HostCommandMap = Vec<(String, String)>;
 
 /// A resolved *doer*: the command and (transactional) reboot templates for one
-/// target, the Rust analogue of upstream's `Target.doer(role)` mapping
+/// target
 /// (`{"command": Template, "reboot": Template}`).
 ///
-/// Upstream stores `string.Template` values and calls `.substitute(...)`. The
+/// The templates store values interpolated via variable substitution. The
 /// only variable the install/uninstall command templates interpolate is
 /// `$packages`; the reboot template takes none. [`Doer::command`] performs that
 /// single substitution and [`Doer::reboot`] returns the reboot command verbatim.
@@ -82,7 +78,8 @@ impl Doer {
 
     /// Substitutes `$packages` in the command template.
     ///
-    /// Mirrors upstream `doer["command"].substitute(packages=" ".join(packages))`.
+    /// Substitutes the shell-quoted, space-joined package list into the
+    /// command template.
     #[must_use]
     fn command(&self, packages: &str) -> String {
         self.command_template.replace("$packages", packages)
@@ -90,7 +87,7 @@ impl Doer {
 
     /// The reboot command for a transactional host.
     ///
-    /// Mirrors upstream `doer["reboot"].substitute()` (no variables).
+    /// Takes no variables.
     #[must_use]
     fn reboot(&self) -> String {
         self.reboot_template.clone()
@@ -99,8 +96,8 @@ impl Doer {
 
 /// The post-run *check* callable for one target.
 ///
-/// Invoked once per target as `check(hostname)`, mirroring upstream's
-/// per-target check hook. Boxed so it is object-safe and can be produced per
+/// Invoked once per target as `check(hostname)`. Boxed so it is object-safe
+/// and can be produced per
 /// target by the doer/check registry seam.
 pub type Check = Box<dyn FnMut(CheckArgs<'_>) + Send>;
 
@@ -138,7 +135,6 @@ pub struct HostPlan {
 /// [`HostPlan`]s through this trait instead of touching `HostsGroup`,
 /// `Target::doer`, or the reboot lifecycle directly. The concrete binding lives
 /// in [`hostgroup`](super::hostgroup) (`impl OperationGroup for HostsGroup`).
-/// Upstream's `test_operation.py` mocks exactly this surface.
 #[async_trait::async_trait]
 pub trait OperationGroup: Send {
     /// Resolves the per-host plans for `role`.
@@ -150,10 +146,9 @@ pub trait OperationGroup: Send {
     /// logs and returns before any lock is taken.
     fn plans(&mut self, role: &str) -> Result<Vec<HostPlan>, HostError>;
 
-    /// Acquires the shared operation lock across the group
-    /// (`HostsGroup.update_lock`).
+    /// Acquires the shared operation lock across the group.
     ///
-    /// Mirrors upstream `HostsGroup.update_lock`: on success every host is
+    /// On success every host is
     /// locked for this process; on failure (some host is locked by another
     /// owner) the group has already released the locks it took and returns
     /// [`HostError::Update`], so the template aborts before running.
@@ -164,14 +159,13 @@ pub trait OperationGroup: Send {
     /// another owner.
     async fn update_lock(&mut self) -> Result<(), HostError>;
 
-    /// Runs the per-host command map (`HostsGroup.run`).
+    /// Runs the per-host command map.
     async fn run(&mut self, commands: HostCommandMap);
 
-    /// Reboots the transactional hosts named in `reboot`
-    /// (`HostsGroup._reboot`).
+    /// Reboots the transactional hosts named in `reboot`.
     async fn reboot(&mut self, reboot: HostCommandMap);
 
-    /// Releases the shared operation lock (`HostsGroup.unlock`).
+    /// Releases the shared operation lock.
     async fn unlock(&mut self);
 }
 
@@ -180,7 +174,7 @@ pub trait OperationGroup: Send {
 /// A concrete operation names its [`role`](Operation::role) (`"installer"` /
 /// `"uninstaller"`) and how to build its [`missing_error`](Operation::missing_error);
 /// the provided [`collect`](Operation::collect) and [`run`](Operation::run)
-/// methods reproduce upstream's control flow behaviour-for-behaviour.
+/// methods reproduce the control flow behaviour-for-behaviour.
 #[async_trait::async_trait]
 pub trait Operation: Send + Sync {
     /// The doer/check dispatch role: `"installer"` or `"uninstaller"`.
@@ -195,7 +189,7 @@ pub trait Operation: Send + Sync {
 
     /// Builds the per-host command map and the transactional-only reboot map.
     ///
-    /// Mirrors upstream `Operation.collect`: one command entry per host (with
+    /// One command entry per host (with
     /// `$packages` substituted by the shell-quoted, space-joined package list)
     /// and a reboot entry only for transactional hosts. Consumes `plans` (each
     /// carries a `FnMut` check) and returns them alongside the two maps so `run`
@@ -232,8 +226,8 @@ pub trait Operation: Send + Sync {
     /// `update_lock` finds a host held by another owner. In both cases nothing
     /// ran on any host.
     ///
-    /// Both were previously logged and swallowed, which is how upstream behaves.
-    /// mtui reports them instead: a caller that cannot distinguish "installed"
+    /// mtui reports both instead of logging and swallowing them: a caller that
+    /// cannot distinguish "installed"
     /// from "could not even start" will print success for an update that never
     /// touched a host — the same reasoning that makes
     /// `UpdateFailure::MissingUpdater` a hard failure in the update flow.
@@ -267,8 +261,8 @@ pub trait Operation: Send + Sync {
 
 /// Install `packages` on every target in the group.
 ///
-/// Mirrors upstream `InstallOperation` (role `"installer"`, missing sentinel
-/// [`HostError::MissingInstaller`]).
+/// Role `"installer"`, missing sentinel
+/// [`HostError::MissingInstaller`].
 pub struct InstallOperation {
     packages: Vec<String>,
 }
@@ -299,8 +293,8 @@ impl Operation for InstallOperation {
 
 /// Uninstall `packages` from every target in the group.
 ///
-/// Mirrors upstream `UninstallOperation` (role `"uninstaller"`, missing sentinel
-/// [`HostError::MissingUninstaller`]). Note upstream's uninstaller deliberately
+/// Role `"uninstaller"`, missing sentinel
+/// [`HostError::MissingUninstaller`]. Note the uninstaller deliberately
 /// consults the *install* checks; that role→check mapping lives in the doer/check
 /// registry injected via [`PlanProvider`] (implemented in `mtui-testreport`),
 /// not here.
@@ -349,25 +343,25 @@ impl Operation for UninstallOperation {
 /// verdict. The real install/uninstall check runs in `mtui-testreport` after
 /// the template returns, over each target's `last*` snapshot.
 ///
-/// Mirrors upstream `Target.doer(role)` / `Target.check(role)`, which key the
+/// Keys the
 /// registry lookup by `(self.system.get_release(), self.transactional)`.
 pub trait PlanProvider: Send + Sync {
     /// Resolves the [`Doer`] (command + reboot templates) for `role` at
     /// `(release, transactional)`.
     ///
-    /// `role` is the upstream role string (`"installer"` / `"uninstaller"` /
+    /// `role` is the role string (`"installer"` / `"uninstaller"` /
     /// `"updater"` / `"preparer"` / `"downgrader"`).
     ///
     /// # Errors
     ///
     /// Returns the role's [`HostError::MissingInstaller`] / etc. when the
-    /// registry has no entry for the key, matching upstream's `Missing*Error`.
+    /// registry has no entry for the key.
     fn doer(&self, role: &str, release: &str, transactional: bool) -> Result<Doer, HostError>;
 
     /// Resolves the post-run [`Check`] for `role` at `(release, transactional)`.
     ///
-    /// A registry with no entry yields a no-op check (upstream's `_no_checks`
-    /// fallback), so this is infallible.
+    /// A registry with no entry yields a no-op check,
+    /// so this is infallible.
     fn check(&self, role: &str, release: &str, transactional: bool) -> Check;
 }
 
@@ -416,9 +410,8 @@ mod plan_provider_tests {
 
 #[cfg(test)]
 mod tests {
-    //! Ported from upstream `tests/test_operation.py`. Upstream drives the
-    //! template against a `MagicMock` group and `MagicMock` targets; the Rust
-    //! analogue is [`MockGroup`], an [`OperationGroup`] that records the ordered
+    //! Drives the
+    //! template against [`MockGroup`], an [`OperationGroup`] that records the ordered
     //! sequence of calls and serves scripted plans.
 
     use std::sync::{Arc, Mutex};
@@ -548,7 +541,6 @@ mod tests {
     }
 
     // --- collect(): commands per host; reboot only for transactional --------
-    // Upstream: test_operation_collects_commands_and_reboot_per_transactional.
 
     #[test]
     fn collect_emits_command_per_host_and_reboot_only_for_transactional() {
@@ -627,7 +619,6 @@ mod tests {
     }
 
     // --- run(): early return on missing doer, no lock/run/unlock/reboot -----
-    // Upstream: test_operation_returns_early_when_doer_raises_missing_error.
 
     #[tokio::test]
     async fn run_returns_early_without_touching_lock_when_plans_errors() {
@@ -650,10 +641,9 @@ mod tests {
     }
 
     // --- run(): unlock always happens after run -----------------------------
-    // Upstream: test_operation_always_unlocks_in_finally_when_run_raises.
     // The Rust template's run→check→reboot section is infallible over the group
-    // seam today, so we assert the *ordering contract* upstream's `finally`
-    // guarantees: unlock is the final event and always follows update_lock+run.
+    // seam today, so we assert the *ordering contract*: unlock is the final
+    // event and always follows update_lock+run.
 
     #[tokio::test]
     async fn run_always_unlocks_after_running() {
@@ -681,7 +671,7 @@ mod tests {
     }
 
     // --- run(): update_lock failure aborts before run/unlock ----------------
-    // Upstream: `update_lock()` is called outside the try/finally; if it raises
+    // `update_lock()` is called outside the fallible section; if it raises
     // `UpdateError` (a host is locked by another owner) it has already released
     // the locks it took, so `run` returns without entering the run/unlock body.
 
@@ -735,7 +725,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_drives_events_in_upstream_order() {
+    async fn run_drives_events_in_template_order() {
         // Share one event log between the group and the per-host check so the
         // full lock → run → check → reboot → unlock timeline is observable in
         // a single ordered vector.
@@ -767,7 +757,6 @@ mod tests {
     }
 
     // --- role strings + missing_error sentinels -----------------------------
-    // Upstream: test_install_and_uninstall_operations_use_correct_role_string.
 
     #[test]
     fn install_operation_uses_installer_role_and_sentinel() {

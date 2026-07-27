@@ -1,28 +1,23 @@
-//! Ported from upstream `tests/test_metadata_parsers.py`.
-//!
 //! Covers only the JSON-related surface that survives in the Rust port:
-//! [`JSONParser`] and [`patchinfo_titles`]. Upstream's `ReducedMetadataParser`
-//! (dropped legacy text-embedding) and the `*repoparse` helpers (which belong to
-//! the products/report tasks) are intentionally not exercised here.
+//! [`JSONParser`] and [`patchinfo_titles`]. `ReducedMetadataParser` (dropped
+//! legacy text-embedding) and the `*repoparse` helpers (which belong to the
+//! products/report tasks) are intentionally not exercised here.
 
 use std::collections::{HashMap, HashSet};
 
 use mtui_config::options::Config;
 use mtui_testreport::{JSONParser, ReducedMetadataParser, TestReportBase, patchinfo_titles};
 
-/// A bare [`TestReportBase`] to parse into — the analogue of upstream's
-/// `FakeTestreport` / `MagicMock` results object.
+/// A bare [`TestReportBase`] to parse into.
 fn empty_report() -> TestReportBase {
     TestReportBase::new(Config::default())
 }
 
-/// Golden fixture: the same `metadata.json` upstream pins in
-/// `tests/fixtures/metadata/metadata.json`.
+/// Golden fixture: `tests/fixtures/metadata/metadata.json`.
 const METADATA_JSON: &str = include_str!("fixtures/metadata/metadata.json");
 
 #[test]
 fn reduced_metadata_parser_parses_hosts_jira_bugs() {
-    // Port of upstream `test_reduced_metadata_parser_parse`.
     let mut report = empty_report();
 
     // Hostname line.
@@ -100,8 +95,8 @@ fn reduced_metadata_parser_skips_placeholder_host_and_ignores_other_lines() {
 
 #[test]
 fn json_parser_parses_golden_fixture() {
-    // Port of the JSON half of upstream `test_parse_new` (the reduced text
-    // parser it also exercises is dropped, so hostnames are out of scope).
+    // The JSON half: hostnames are out of scope since the reduced text
+    // parser is exercised separately.
     let mut report = empty_report();
     JSONParser::parse_str(&mut report, METADATA_JSON).expect("valid metadata.json");
 
@@ -173,7 +168,6 @@ fn json_parser_parses_golden_fixture() {
 
 #[test]
 fn json_parser_parse_maps_every_field() {
-    // Port of upstream `test_json_parser_parse`.
     let mut report = empty_report();
     let data = r#"{
         "jira": ["ABC-123"],
@@ -245,9 +239,8 @@ fn json_parser_drops_injection_shaped_package_names() {
 
 #[test]
 fn json_parser_tolerates_missing_optional_keys() {
-    // Port of upstream
-    // `test_json_parser_parse_tolerates_missing_optional_keys`: absent list/dict
-    // keys and an explicit null must not raise and must yield empty containers.
+    // Absent list/dict keys and an explicit null must not raise and must
+    // yield empty containers.
     let mut report = empty_report();
     let data = r#"{"rrid": "SUSE:Maintenance:1:1", "packages": null}"#;
 
@@ -313,8 +306,8 @@ fn json_parser_clears_rrid_when_key_absent() {
 /// Golden snapshot of the parsed `metadata.json` envelope.
 ///
 /// The field-by-field assertions in `json_parser_parses_golden_fixture` pin
-/// individual values; this freezes the whole parsed view of the pinned upstream
-/// fixture as one stable rendering, so a regression in the JSON envelope -> struct
+/// individual values; this freezes the whole parsed view of the fixture as
+/// one stable rendering, so a regression in the JSON envelope -> struct
 /// mapping surfaces as a single reviewable snapshot diff. `HashMap`/`HashSet`
 /// fields are rendered in sorted order to keep the snapshot deterministic.
 #[test]
@@ -369,7 +362,6 @@ fn parsed_metadata_json_is_stable() {
 
 #[test]
 fn patchinfo_titles_maps_ids_to_titles() {
-    // Port of upstream `test_patchinfo_titles`.
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("patchinfo.xml"),
@@ -389,15 +381,14 @@ fn patchinfo_titles_maps_ids_to_titles() {
 
 #[test]
 fn patchinfo_titles_absent_is_empty() {
-    // Port of upstream `test_patchinfo_titles_absent`: no file -> empty map.
+    // No file -> empty map.
     let dir = tempfile::tempdir().expect("tempdir");
     assert!(patchinfo_titles(dir.path()).is_empty());
 }
 
 #[test]
 fn patchinfo_titles_malformed_is_empty() {
-    // Port of upstream `test_patchinfo_titles_malformed`: unparseable XML must
-    // degrade to an empty map rather than an error.
+    // Unparseable XML must degrade to an empty map rather than an error.
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("patchinfo.xml"), "<patchinfo><issue ")
         .expect("write patchinfo");

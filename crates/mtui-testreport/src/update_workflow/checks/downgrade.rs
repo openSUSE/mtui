@@ -1,22 +1,23 @@
-//! Post-downgrade check (upstream `checks/downgrade.py`).
+//! Post-downgrade check.
 
 use crate::update_workflow::UpdateError;
 use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
 
-/// The zypper downgrade check (upstream `checks.downgrade.zypper`).
+/// The zypper downgrade check.
 ///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "downgrade command timed out or
 /// failed to run" (exit `-1`), "update stack locked", "Dependency Error", or
-/// "Unspecified Error" per upstream's branch logic. Exit code `106` is a warning
-/// (not an error); any other unrecognised result passes. This check surfaces no
-/// [`Diagnostic`]s (only `update` does).
+/// "Unspecified Error" depending on the exit code and stderr/stdout markers.
+/// Exit code `106` is a warning (not an error); any other unrecognised
+/// result passes. This check surfaces no [`Diagnostic`]s (only `update`
+/// does).
 fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     // Exit -1 is what a timed-out (SSH no-output window exceeded) or unrunnable
     // command records. Continuing past it turns an interrupted rollback into a
     // silent half-rollback: the remaining packages stay at the update version
-    // while the flow ends looking done (upstream PR #336).
+    // while the flow ends looking done.
     if args.exitcode == -1 {
         log_failed(args);
         return Err(UpdateError::new(
@@ -61,8 +62,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     Ok(Vec::new())
 }
 
-/// The transactional (`slmicro`) downgrade check (upstream PR #336's
-/// `checks.downgrade.transactional_update`).
+/// The transactional (`slmicro`) downgrade check.
 ///
 /// Only the timed-out/unrunnable gate: transactional-update's own exit codes and
 /// messages differ from zypper's, so the zypper-specific branches (104, lock
@@ -85,8 +85,8 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
     Ok(Vec::new())
 }
 
-/// The downgrade check for `(release, transactional)`, or `None` for an unknown
-/// key (upstream `downgrade_checks.get(...)`).
+/// The downgrade check for `(release, transactional)`, or `None` for an
+/// unknown key.
 #[must_use]
 pub(crate) fn downgrade_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn zypper_exitcode_minus_one_raises() {
         // Exit -1 (a timed-out or unrunnable command) raises instead of letting
-        // the flow continue past an interrupted rollback (upstream PR #336).
+        // the flow continue past an interrupted rollback.
         let err = zypper(args("", "", -1)).unwrap_err();
         assert_eq!(err.reason, "downgrade command timed out or failed to run");
         assert_eq!(err.host.as_deref(), Some("h1"));
@@ -182,8 +182,8 @@ mod tests {
         assert!(downgrade_check("15", false).is_some());
         assert!(downgrade_check("16", false).is_some());
         // The transactional slmicro key now dispatches to its own check (NOT
-        // the no-op fallback): a dead run must raise (upstream PR #336). Verify
-        // via behavior since CheckFn is not comparable by identity.
+        // the no-op fallback): a dead run must raise. Verify via behavior
+        // since CheckFn is not comparable by identity.
         let check = downgrade_check("slmicro", true).expect("slmicro check registered");
         let err = check(CheckArgs {
             hostname: "h1",

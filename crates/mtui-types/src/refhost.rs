@@ -1,28 +1,27 @@
 //! Pure, I/O-free loader for the `refhosts.yml` document format.
 //!
-//! Ported from upstream `mtui/hosts/refhost/store.py::Refhosts._parse_refhosts`.
-//! The legacy `refhosts.yml` groups host rows under top-level *location* keys
-//! (`default:`, `nuremberg:`, …). Location support has been retired upstream, so
-//! every group is merged into a single flat list of [`Host`]s.
+//! The `refhosts.yml` file groups host rows under top-level *location* keys
+//! (`default:`, `nuremberg:`, …), but location is a legacy grouping rather than
+//! a live query dimension, so every group is merged into a single flat list of
+//! [`Host`]s.
 //!
 //! This crate is deliberately I/O-free (see `AGENTS.md`), so the loader takes
 //! the already-read YAML text as a `&str` rather than opening a file. The
-//! `Path`-based loader, the resolver chain, and the search / query / slot engine
-//! (`store.py`'s `Refhosts` class and `_RefhostsFactory`) belong to Phase 3
-//! (`mtui-datasources`) and are intentionally *not* ported here.
+//! `Path`-based loader and the resolver / search / query / slot engine belong
+//! to `mtui-datasources` and are intentionally not implemented here.
 //!
-//! # Divergence from upstream: load-time dedup
-//! Upstream flattens groups at load and defers de-duplication to `query()`.
-//! This port de-duplicates by [`Host::name`] **at load time** (first occurrence
+//! # Load-time dedup
+//! Rows are de-duplicated by [`Host::name`] **at load time** (first occurrence
 //! wins), so downstream consumers receive a canonical, duplicate-free list.
-//! Phase 3 must therefore *not* dedup again. The golden fixture has only unique
-//! names, so the dedup path is covered by a dedicated unit test below.
+//! `mtui-datasources` must therefore *not* dedup again. The golden fixture has
+//! only unique names, so the dedup path is covered by a dedicated unit test
+//! below.
 //!
 //! # Best-effort row handling
-//! Like upstream `_host_from_dict`, a single malformed row (missing required
-//! field, wrong nesting) is dropped and logged at `tracing::warn!` so one bad
-//! row never aborts the whole load. Only a document-level YAML parse failure is
-//! fatal and surfaces as [`RefhostsParseError`].
+//! A single malformed row (missing required field, wrong nesting) is dropped
+//! and logged at `tracing::warn!` so one bad row never aborts the whole load.
+//! Only a document-level YAML parse failure is fatal and surfaces as
+//! [`RefhostsParseError`].
 
 use std::collections::HashSet;
 
@@ -34,8 +33,7 @@ use crate::product::Host;
 /// The top-level `refhosts.yml` shape: location key → list of raw host rows.
 ///
 /// Rows are kept as `serde_yaml::Value` first so that a single malformed row can
-/// be dropped without failing the whole document (mirroring upstream's
-/// per-row `_host_from_dict` degradation).
+/// be dropped without failing the whole document.
 type RawDocument = std::collections::BTreeMap<String, Option<Vec<serde_yaml::Value>>>;
 
 /// Parse a `refhosts.yml` document into a flat, de-duplicated list of hosts.
@@ -49,7 +47,7 @@ type RawDocument = std::collections::BTreeMap<String, Option<Vec<serde_yaml::Val
 /// Returns [`RefhostsParseError::Yaml`] if `yaml` is not a valid `refhosts.yml`
 /// document (top-level mapping of location → row list).
 pub fn load_refhosts(yaml: &str) -> Result<Vec<Host>, RefhostsParseError> {
-    // An empty document is a valid, empty host list (upstream `raw or {}`).
+    // An empty document is a valid, empty host list.
     let doc: RawDocument = match serde_yaml::from_str::<Option<RawDocument>>(yaml)? {
         Some(doc) => doc,
         None => return Ok(Vec::new()),

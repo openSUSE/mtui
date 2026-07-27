@@ -1,14 +1,13 @@
-//! Product / addon version, ported from `mtui/hosts/refhost/models.py::Version`.
+//! Product / addon version.
 //!
 //! A version has a `major` and an optional `minor`. Both fields may be either
-//! numeric (`15`, `5`) or textual (`sp4`). Upstream deliberately preserves this
-//! distinction — `isinstance(minor, int)` drives the `.` vs `""`/`-` separator
-//! in the refhost formatters — so the Rust port models each field as a
+//! numeric (`15`, `5`) or textual (`sp4`); the distinction drives the `.` vs
+//! `""`/`-` separator in the refhost formatters, so each field is modeled as a
 //! [`VersionField`] enum rather than collapsing everything to a string.
 //!
-//! `minor == ""` is an upstream sentinel used in *queries* meaning "match
-//! candidates that have no minor set"; in *candidates* loaded from
-//! `refhosts.yml`, an omitted `minor` key deserializes to `None`.
+//! `minor == ""` is a sentinel used in *queries* meaning "match candidates
+//! that have no minor set"; in *candidates* loaded from `refhosts.yml`, an
+//! omitted `minor` key deserializes to `None`.
 
 use serde::{Deserialize, Serialize};
 
@@ -55,8 +54,7 @@ impl From<&str> for VersionField {
 
 /// A product or addon version (`major` plus optional `minor`).
 ///
-/// Mirrors upstream `Version` (a frozen dataclass). Deserializes directly from
-/// the `refhosts.yml` `version:` mapping.
+/// Deserializes directly from the `refhosts.yml` `version:` mapping.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Version {
     /// The major version component (numeric or textual).

@@ -1,6 +1,6 @@
 //! Process-level command-line arguments for the `mtui-mcp` server.
 //!
-//! Port of upstream `mtui/mcp/args.py`. Deliberately a **subset** of the REPL's
+//! Deliberately a **subset** of the REPL's
 //! [`mtui_core::Args`]: it declares only the flags `Config` merging + logging
 //! care about (`-c/--config`, `-t/--template-dir`, `-w/--connection-timeout`,
 //! `-g/--gitea-token`, `--color`, `-d/--debug`; clap auto-handles `-V/--version`
@@ -93,8 +93,7 @@ impl McpArgs {
     /// Load the config from the file chain (keyed on `--config`) and overlay the
     /// CLI overrides, returning the fully-resolved [`Config`].
     ///
-    /// Mirrors upstream `Config(args.config)` + `Config.merge_args(args)`: the
-    /// file layers first ([`Config::load`]), then the CLI layer on top so a flag
+    /// The file layers first ([`Config::load`]), then the CLI layer on top so a flag
     /// wins over every config file. `--config`, `--debug`, `--color`, and the
     /// transport flags are not config keys and are intentionally not merged.
     #[cfg(any(feature = "mcp", test))]

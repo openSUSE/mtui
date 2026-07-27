@@ -1,4 +1,4 @@
-//! The openQA connectors, ported from `mtui/data_sources/openqa/`.
+//! The openQA connectors.
 //!
 //! openQA is the automated-test system that runs the maintenance-update install
 //! and regression jobs. These connectors query an openQA instance for the jobs

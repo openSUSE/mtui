@@ -12,10 +12,10 @@
 //! path) hermetically in `startup::tests` (the `seed_session` function).
 //!
 //! There is deliberately **no** non-interactive / single-command CLI mode to
-//! e2e here: like upstream `mtui` (`mtui/main.py`, only `cmdloop`), the `mtui`
-//! binary's one driving surface is the REPL — headless single-command dispatch
-//! is an `mtui-mcp`/`run_once` concern, covered in `mtui-core`/`mtui-mcp`. The
-//! closest binary-level analogue is the piped-stdin path exercised below: it
+//! e2e here: the `mtui` binary's one driving surface is the REPL — headless
+//! single-command dispatch is an `mtui-mcp`/`run_once` concern, covered in
+//! `mtui-core`/`mtui-mcp`. The closest binary-level analogue is the
+//! piped-stdin path exercised below: it
 //! drives the real `reedline` editor (not the `step` unit seam), so it is the
 //! only test that reaches `repl::Repl::run` itself — the intro banner and the
 //! loop's exit-on-`read_line`-failure arm.

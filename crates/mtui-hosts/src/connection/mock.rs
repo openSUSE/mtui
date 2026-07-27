@@ -111,7 +111,7 @@ pub struct MockConnection {
     /// Set once [`close`](Connection::close) has been called.
     closed: Arc<Mutex<bool>>,
     /// When set, [`close`](Connection::close) blocks until the [`Notify`] is
-    /// fired before completing — models a wedged paramiko teardown (a dead peer
+    /// fired before completing — models a wedged teardown (a dead peer
     /// with no RST) so a caller's bounded close budget can be exercised. Shared
     /// across `Clone`d handles so the test fires the same notify. Never set by
     /// default (an instant close).
@@ -199,9 +199,8 @@ pub struct MockConnection {
     /// outcome tracking can be exercised. `None` (the default) keeps both `Ok`.
     fail_sftp_put: Option<String>,
     /// Directory paths scripted to raise [`HostError::SftpNotFound`] from
-    /// `sftp_listdir` (mirrors upstream `listdir` raising `OSError`, e.g. a host
-    /// with no `/etc/products.d`). Distinct from unscripted paths, which return
-    /// an empty listing.
+    /// `sftp_listdir` (e.g. a host with no `/etc/products.d`). Distinct from
+    /// unscripted paths, which return an empty listing.
     missing_dirs: HashSet<PathBuf>,
     /// File paths scripted to raise a generic [`HostError::Sftp`] (non
     /// not-found) from `sftp_open`, mirroring a dangling symlink whose target
@@ -440,8 +439,8 @@ impl MockConnection {
     }
 
     /// Scripts [`close`](Connection::close) to fail, modelling a host that does
-    /// not disconnect cleanly so `quit`'s per-host failure naming (upstream
-    /// `failed to disconnect from <host>`) can be exercised.
+    /// not disconnect cleanly so `quit`'s per-host failure naming
+    /// (`failed to disconnect from <host>`) can be exercised.
     #[must_use]
     pub fn with_failing_close(mut self) -> Self {
         self.close_fails = true;
@@ -515,8 +514,8 @@ impl MockConnection {
 
     /// Scripts a directory `path` to raise [`HostError::SftpNotFound`] from
     /// [`sftp_listdir`](Connection::sftp_listdir), mirroring a host whose
-    /// directory does not exist (upstream `listdir` raising `OSError`). Without
-    /// this, unscripted directories return an empty listing.
+    /// directory does not exist. Without this, unscripted directories return
+    /// an empty listing.
     #[must_use]
     pub fn with_missing_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.missing_dirs.insert(path.into());
@@ -846,7 +845,7 @@ impl Connection for MockConnection {
             .lock()
             .expect("mock fired lock")
             .push(command.to_owned());
-        // Mirrors upstream: dispatch, then tear down the local link.
+        // Dispatch, then tear down the local link.
         self.active = false;
         *self.closed.lock().expect("mock closed lock") = true;
         Ok(())
@@ -1480,9 +1479,8 @@ mod tests {
     #[tokio::test]
     async fn shell_read_carries_over_chunk_larger_than_buffer() {
         // A chunk larger than the read buffer is served in pieces across
-        // successive reads (leftover carryover), never truncated — mirroring
-        // paramiko's `recv(n)` and the real SSH channel, so no PTY bytes are
-        // lost on a short buffer.
+        // successive reads (leftover carryover), never truncated — matching
+        // the real SSH channel, so no PTY bytes are lost on a short buffer.
         let mut conn = MockConnection::new("h1").with_shell_output(b"abcdef".to_vec());
         let mut ch = conn.shell(80, 24).await.expect("spawn");
         let mut buf = [0u8; 3];

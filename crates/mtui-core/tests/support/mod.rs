@@ -16,7 +16,7 @@ use mtui_types::hostlog::CommandLog;
 
 /// A minimal [`TestReport`] double with a settable RRID and host group.
 ///
-/// The Rust analogue of upstream's `MagicMock`-based `make_report`: it carries a
+/// A lightweight stand-in report: it carries a
 /// [`TestReportBase`] (so `base()`/`targets` work) and reports the RRID it was
 /// built with. Everything else is a no-op / empty, which is all the registry and
 /// fan-out engine exercise.

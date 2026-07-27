@@ -9,7 +9,7 @@ use crate::session::Session;
 
 /// Lists available commands, or shows detailed help for one command.
 ///
-/// Ports upstream `mtui.commands.help.Help`. With no argument it lists every
+/// With no argument it lists every
 /// registered command (documented vs undocumented buckets, fixed-width
 /// columns); with a command name it prints that command's `--help`. Listing and
 /// per-command help both need the command [`Registry`](crate::Registry), which

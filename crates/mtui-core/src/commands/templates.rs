@@ -9,7 +9,7 @@ use crate::session::Session;
 
 /// Lists all loaded templates, marking the active one.
 ///
-/// Ports upstream `mtui.commands.templates.ListTemplates`. For each loaded
+/// For each loaded
 /// template the RRID, connected host count and workflow mode are shown. In the
 /// REPL the active template (the one plain action commands act on) is marked
 /// with a leading `*`; under MCP there is no client-addressable active pointer

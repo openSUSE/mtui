@@ -1,8 +1,7 @@
-//! Golden-vector tests for [`RPMVersion`], ported from upstream
-//! `mtui/tests/test_rpm_version.py`. These lock the RPM version-comparison
-//! Contract: the exact ordering of the fixture pairs (including the tilde-suffix
-//! `~` cases), equality, the empty-string rejection, last-dash splitting, and
-//! `Display` rendering.
+//! Golden-vector tests for [`RPMVersion`]. These lock the RPM
+//! version-comparison Contract: the exact ordering of the fixture pairs
+//! (including the tilde-suffix `~` cases), equality, the empty-string
+//! rejection, last-dash splitting, and `Display` rendering.
 
 use mtui_types::{RPMVersion, RpmVersionParseError};
 
@@ -10,7 +9,7 @@ fn v(s: &str) -> RPMVersion {
     RPMVersion::parse(s).unwrap_or_else(|e| panic!("expected {s:?} to parse, got {e}"))
 }
 
-/// Upstream `test_version_lt`: the lower string sorts before the higher.
+/// The lower string sorts before the higher.
 #[test]
 fn version_lt() {
     let cases = [
@@ -27,7 +26,7 @@ fn version_lt() {
     }
 }
 
-/// Upstream `test_version_gt`: the higher string sorts after the lower.
+/// The higher string sorts after the lower.
 #[test]
 fn version_gt() {
     let cases = [
@@ -43,7 +42,7 @@ fn version_gt() {
     }
 }
 
-/// Upstream `test_version_eq`: a version compares equal to itself.
+/// A version compares equal to itself.
 #[test]
 fn version_eq() {
     for version in ["1.2.0-8.1", "0.8+12.ae4"] {
@@ -51,7 +50,6 @@ fn version_eq() {
     }
 }
 
-/// Upstream `test_version_le`.
 #[test]
 fn version_le() {
     for (higher, lower) in [("1.2-2", "1.2-2"), ("1.2.3-7.2", "1.2.3-7.2")] {
@@ -59,7 +57,6 @@ fn version_le() {
     }
 }
 
-/// Upstream `test_version_ge`.
 #[test]
 fn version_ge() {
     for (higher, lower) in [("1.2-2", "1.2-2"), ("1.2.3-7.2", "1.2.3-7.2")] {
@@ -67,23 +64,21 @@ fn version_ge() {
     }
 }
 
-/// Upstream `test_version_ne`.
 #[test]
 fn version_ne() {
     assert!(v("1-1.1") != v("1-1.2"));
 }
 
-/// Upstream `test_version_none`: an empty version string is rejected.
+/// An empty version string is rejected.
 ///
-/// Python passed `None` and expected `ValueError`; the Rust API is `&str`, so
-/// the equivalent invalid input is the empty string, which returns the typed
-/// [`RpmVersionParseError::Empty`] rather than panicking.
+/// The Rust API takes `&str`, so the input representing "no version" is the
+/// empty string, which returns the typed [`RpmVersionParseError::Empty`]
+/// rather than panicking.
 #[test]
 fn version_empty_is_error() {
     assert_eq!(RPMVersion::parse(""), Err(RpmVersionParseError::Empty));
 }
 
-/// Upstream `test_version_with_multiple_dashes_splits_on_last`.
 #[test]
 fn version_with_multiple_dashes_splits_on_last() {
     let ver = v("1.2-3-4");
@@ -92,8 +87,8 @@ fn version_with_multiple_dashes_splits_on_last() {
     assert_eq!(ver.to_string(), "1.2-3-4");
 }
 
-/// Upstream `test_version_str`: `Display` rendering, including the `-0` sentinel
-/// elision and the no-release case.
+/// `Display` rendering, including the `-0` sentinel elision and the no-release
+/// case.
 #[test]
 fn version_str() {
     for (version, expected) in [

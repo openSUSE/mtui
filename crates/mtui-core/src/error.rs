@@ -1,19 +1,12 @@
 //! The command-layer error hierarchy.
 //!
-//! Ports the command-relevant subset of upstream `mtui.support.messages`. The
+//! The command-relevant error variants. The
 //! `Display` strings are **frozen** — the REPL and MCP surfaces both render
 //! them, operators grep for them, and the tests below pin each one, so reword a
-//! variant only deliberately and update its test with it:
+//! variant only deliberately and update its test with it.
 //!
-//! * [`CommandError::NoRefhostsDefined`] ← `NoRefhostsDefinedError`
-//! * [`CommandError::HostNotConnected`] ← `HostIsNotConnectedError`
-//! * [`CommandError::TemplateNotLoaded`] ← `TemplateNotLoadedError`
-//! * [`CommandError::MissingPackages`] ← `MissingPackagesError`
-//! * [`CommandError::FanOut`] ← `FanOutError`
-//!
-//! Upstream distinguishes `UserError` (usage mistakes) from `ErrorMessage`
-//! (program errors); that split drives only logging tone, not control flow, so
-//! it is not modelled as separate Rust types.
+//! Usage mistakes and program errors are not modelled as separate Rust types:
+//! the distinction only drives logging tone, not control flow.
 
 use thiserror::Error;
 
@@ -23,28 +16,27 @@ pub type CommandResult = Result<(), CommandError>;
 /// An error raised while resolving or running a command.
 #[derive(Debug, Error)]
 pub enum CommandError {
-    /// A `-T/--template RRID` named a template that is not loaded (upstream
-    /// `TemplateNotLoadedError`).
+    /// A `-T/--template RRID` named a template that is not loaded.
     #[error("Template not loaded: {0}")]
     TemplateNotLoaded(String),
 
     /// A command resolved to no runnable target — every candidate template was
-    /// skipped for lack of a connected host (upstream `NoRefhostsDefinedError`).
+    /// skipped for lack of a connected host.
     #[error("No refhosts defined")]
     NoRefhostsDefined,
 
-    /// An explicitly named host is not among the connected targets (upstream
-    /// `HostIsNotConnectedError`). The `!r` repr renders as single quotes.
+    /// An explicitly named host is not among the connected targets.
+    /// The `!r` repr renders as single quotes.
     #[error("Host '{0}' is not connected")]
     HostNotConnected(String),
 
     /// `list_packages` had nothing to list — no template is loaded and no
-    /// `-p/--package` was given (upstream `MissingPackagesError`).
+    /// `-p/--package` was given.
     #[error("Missing packages: TestReport not loaded and no -p given.")]
     MissingPackages,
 
-    /// Aggregate raised after a fan-out command failed on one or more templates
-    /// (upstream `FanOutError`). Every template still got its turn; the
+    /// Aggregate raised after a fan-out command failed on one or more templates.
+    /// Every template still got its turn; the
     /// per-template failures are collected here keyed by RRID.
     #[error("fan-out failed on {} ({})", .0.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join(", "), .0.iter().map(|(r, e)| format!("{r}: {e}")).collect::<Vec<_>>().join("; "))]
     FanOut(Vec<(String, CommandError)>),
@@ -60,15 +52,14 @@ pub enum CommandError {
     /// cancel is never a verdict the operator cannot act on. It is empty only
     /// for the pre-dispatch checkpoint, where nothing had run yet. A genuine
     /// failure always outranks a cancellation — a broken host is never buried
-    /// behind "cancelled". No Python counterpart: upstream had no in-band
-    /// cancellation.
+    /// behind "cancelled".
     #[error("cancelled{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     Cancelled(String),
 
     /// A command-specific failure whose message the command supplies directly.
     ///
-    /// Catch-all for the many concrete upstream `ErrorMessage` subclasses not
-    /// yet ported individually; command bodies (Phase 5 waves) map their own
+    /// Catch-all for command-specific failures not yet given a dedicated
+    /// variant; command bodies map their own
     /// failure conditions onto this until a dedicated variant is warranted.
     #[error("{0}")]
     Other(String),
@@ -93,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn no_refhosts_matches_upstream() {
+    fn no_refhosts_message_is_stable() {
         assert_eq!(
             CommandError::NoRefhostsDefined.to_string(),
             "No refhosts defined"
@@ -101,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    fn template_not_loaded_matches_upstream() {
+    fn template_not_loaded_message_is_stable() {
         let e = CommandError::TemplateNotLoaded("SUSE:Maintenance:1:1".into());
         assert_eq!(e.to_string(), "Template not loaded: SUSE:Maintenance:1:1");
     }
@@ -113,7 +104,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_packages_matches_upstream() {
+    fn missing_packages_message_is_stable() {
         assert_eq!(
             CommandError::MissingPackages.to_string(),
             "Missing packages: TestReport not loaded and no -p given."
@@ -121,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn fanout_display_matches_upstream_format() {
+    fn fanout_display_has_stable_format() {
         // Upstream: "fan-out failed on {rrids} ({detail})" where
         // rrids = ", ".join(rrid) and detail = "; ".join(f"{rrid}: {exc}").
         let e = CommandError::FanOut(vec![

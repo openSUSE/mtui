@@ -1,9 +1,8 @@
 //! Sub-bead A (mtui-rs-0pe.1): `TestReport::read` + `make_testreport`.
 //!
-//! Ports the parse-and-populate slice of upstream `TestReport.read`
-//! (`_open_and_parse` → `_parse_json` → `_enrich_issue_titles` →
-//! `_update_repos_parse`) and the `UpdateID.make_testreport` factory
-//! (`tr_factory` + `_checkout` + workflow/autoconnect selection).
+//! Tests the parse-and-populate slice of `TestReport::read` and the
+//! `make_testreport` factory (report-class selection + checkout +
+//! workflow/autoconnect selection).
 //!
 //! All tests run offline: `make_testreport` reads a template pre-placed on disk
 //! (so the read-succeeds-first path is taken and no `svn` is spawned), and the
@@ -170,9 +169,9 @@ fn read_populates_metadata_and_hosts() {
     assert!(base.hostnames.contains("refhost-a.example.com"));
     assert!(base.hostnames.contains("refhost-b.example.com"));
     // Bug 12345 is listed in the JSON envelope, so after `_parse_json` the JSON
-    // placeholder wins over the log's `Bug N ("title"):` line (upstream runs the
-    // hosts parser first, then the JSON parser, which re-seeds the ids). Without
-    // a patchinfo entry for 12345, the placeholder survives.
+    // placeholder wins over the log's `Bug N ("title"):` line (the hosts
+    // parser runs first, then the JSON parser, which re-seeds the ids).
+    // Without a patchinfo entry for 12345, the placeholder survives.
     assert_eq!(
         base.bugs.get("12345").map(String::as_str),
         Some("Description not available")
@@ -255,8 +254,7 @@ fn read_invalid_metadata_errors() {
 /// `make_testreport` with an on-disk template loads it, selects the OBS report
 /// (Maintenance kind), and — when the dashboard reports **no install jobs** —
 /// downgrades the AUTO workflow to MANUAL and (autoconnect=true) marks the
-/// report autoconnect-pending (upstream connects only on the manual-downgrade
-/// path).
+/// report autoconnect-pending.
 #[tokio::test]
 async fn make_testreport_auto_no_install_jobs_downgrades_to_manual() {
     let tmp = tempfile::tempdir().unwrap();
@@ -284,7 +282,7 @@ async fn make_testreport_auto_no_install_jobs_downgrades_to_manual() {
 }
 
 /// When the dashboard reports passing install jobs, the AUTO workflow is kept
-/// and — matching upstream — the auto happy-path does **not** autoconnect.
+/// and the auto happy-path does **not** autoconnect.
 #[tokio::test]
 async fn make_testreport_auto_with_install_jobs_stays_auto_no_connect() {
     let tmp = tempfile::tempdir().unwrap();
@@ -313,8 +311,7 @@ async fn make_testreport_auto_with_install_jobs_stays_auto_no_connect() {
 }
 
 /// The kernel kind (`-k`) starts the KERNEL workflow and does **not** autoconnect
-/// even when `autoconnect=true` (matching upstream's `autoconnect=False` default
-/// for `KernelOBSUpdateID.make_testreport`).
+/// even when `autoconnect=true`.
 #[tokio::test]
 async fn make_testreport_kernel_does_not_autoconnect() {
     let tmp = tempfile::tempdir().unwrap();
@@ -396,9 +393,9 @@ async fn make_testreport_sets_targets_is_repl_from_session_mode() {
 }
 
 /// When neither the template is on disk nor a checkout can succeed, the factory
-/// falls back to a `NullReport` (upstream returns `NullTestReport`) — never an
-/// error. `svn_path` is pointed at a bare local `file://` path so `svn co` fails
-/// immediately and offline (no network / SSH).
+/// falls back to a `NullReport` — never an error. `svn_path` is pointed at a
+/// bare local `file://` path so `svn co` fails immediately and offline (no
+/// network / SSH).
 #[tokio::test]
 async fn make_testreport_falls_back_to_null_on_load_failure() {
     let tmp = tempfile::tempdir().unwrap();
@@ -430,8 +427,7 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
 
 // --- Gitea token + hash verification on load (SLFO / `SlReport`) ------------
 //
-// Upstream runs `check_hash` at the tail of `TestReport.read` inside
-// `UpdateID._checkout`; mtui runs it in `make_testreport` (async seam). These
+// mtui runs hash verification in `make_testreport` (async seam). These
 // exercise the three non-`Ok` branches (the interactive TeReGen regenerate path
 // is covered in Phase C) plus the happy path.
 
@@ -534,8 +530,8 @@ async fn make_testreport_slfo_missing_token_yields_null() {
 }
 
 /// A stale template hash (differs from the Gitea PR head) abandons the load
-/// (null report) in the non-interactive path — matching upstream's
-/// `InvalidGiteaHashError` degradation before the TeReGen prompt (Phase C).
+/// (null report) in the non-interactive path — the degradation happens
+/// before the TeReGen prompt (Phase C).
 #[tokio::test]
 async fn make_testreport_slfo_hash_mismatch_yields_null() {
     let server = MockServer::start().await;
@@ -568,7 +564,7 @@ async fn make_testreport_slfo_hash_mismatch_yields_null() {
     );
 }
 
-// --- Interactive stale-hash handling (upstream `_checkout` prompt sequence) --
+// --- Interactive stale-hash handling ---
 //
 // A scripted `Prompter` answers each `[y/n]` question by matching a substring of
 // its prompt text, so a test can drive the regenerate / force-continue / delete
@@ -588,8 +584,8 @@ fn scripted_prompter(script: &'static [(&'static str, &'static str)]) -> mtui_ho
     }))
 }
 
-/// Interactive, stale hash, decline TeReGen, then **force continue**: the stale
-/// report is kept (loaded), matching upstream's "Template is loaded, but hash
+/// Interactive, stale hash, decline TeReGen, then **force continue**: the
+/// stale report is kept (loaded), logged as "Template is loaded, but hash
 /// differs".
 #[tokio::test]
 async fn make_testreport_slfo_mismatch_force_continue_keeps_stale() {

@@ -1,13 +1,12 @@
 //! Validated package name / `name=version` specifier.
 //!
 //! Package specifiers parsed from testreport metadata are joined into remote
-//! commands executed **as root** on reference hosts. Upstream mtui interpolates
-//! them raw (`" ".join(packages)`), which is a command-injection vector. As an
-//! improvement over upstream, [`PackageSpec`] validates a specifier at ingestion
-//! and rejects anything that is not a plausible RPM package form with a typed
-//! [`PackageSpecParseError`], so malformed input never reaches host execution.
-//! The exec-boundary sinks additionally shell-quote every argument
-//! (defense-in-depth).
+//! commands executed **as root** on reference hosts. Raw interpolation (naive
+//! whitespace-joining) would be a command-injection vector, so [`PackageSpec`]
+//! validates a specifier at ingestion and rejects anything that is not a
+//! plausible RPM package form with a typed [`PackageSpecParseError`], so
+//! malformed input never reaches host execution. The exec-boundary sinks
+//! additionally shell-quote every argument (defense-in-depth).
 //!
 //! ## Grammar
 //!

@@ -11,7 +11,7 @@ use crate::session::Session;
 
 /// Locks hosts for exclusive usage (the operation/zypper lock).
 ///
-/// Ports upstream `mtui.commands.hostslock.HostLock`. Locks all repository
+/// Locks all repository
 /// transactions on the target hosts with a `timestamp:user:pid[:comment]`
 /// remote lock. Enabled locks are removed automatically on session exit; a
 /// comment (`-c`) keeps the lock effective against other sessions too.
@@ -64,8 +64,8 @@ impl Command for HostLock {
         let outcomes = session.targets_mut().lock(&comment).await;
 
         // Report each host's lock verdict. `Contended` is benign (the lock is
-        // held by another owner — upstream's `suppress(TargetLockedError)`), so
-        // it is *not* a failure; only a real transport error (`Failed`) fails.
+        // held by another owner), so it is *not* a failure; only a real
+        // transport error (`Failed`) fails.
         let mut failed: Vec<String> = Vec::new();
         for (host, outcome) in &outcomes {
             match outcome {

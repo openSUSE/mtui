@@ -10,9 +10,8 @@ use crate::session::Session;
 
 /// Lists related bugs and their Bugzilla/Jira URLs.
 ///
-/// Ports upstream `mtui.commands.simplelists.ListBugs`. Reads the loaded
-/// report's Bugzilla and Jira id→title maps (upstream `metadata.list_bugs`,
-/// which forwards `self.bugs`/`self.jira`) and renders them through the
+/// Reads the loaded
+/// report's Bugzilla and Jira id→title maps and renders them through the
 /// display's `list_bugs` sink together with `config.bugzilla_url`. With nothing
 /// loaded the maps are empty, so the sink prints the "No bugs…"/"No Jira…"
 /// sentinels.
@@ -68,8 +67,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_report_renders_bug_query_and_no_jira() {
-        // The null report has genuinely empty bug/jira maps (not the upstream
-        // `[""]` sentinel), so the display prints the (empty) Buglist query URL
+        // The null report has genuinely empty bug/jira maps (not the `[""]`
+        // sentinel), so the display prints the (empty) Buglist query URL
         // and the "No Jira issues" sentinel. Exercises the command wiring.
         let (mut session, buf) = empty_session();
         let args = matches(&ListBugs, &[]);

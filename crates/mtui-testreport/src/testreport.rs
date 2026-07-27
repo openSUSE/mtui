@@ -1,9 +1,8 @@
 //! The [`TestReport`] trait and its shared-state carrier [`TestReportBase`].
 //!
-//! This is the Phase 4.1 skeleton. Upstream mtui models test reports with an
-//! abstract base class (`mtui.test_reports.testreport.TestReport`) whose
-//! `__init__` populates a large block of shared state, plus a handful of
-//! `@abstractmethod`s that each concrete report (SL/PI/OBS/Null) must supply.
+//! This is the Phase 4.1 skeleton. Each concrete report (SL/PI/OBS/Null)
+//! shares a large block of state, plus a handful of behaviors that only the
+//! concrete report can supply.
 //!
 //! Rust has no class inheritance, so the shared state lives in a plain
 //! [`TestReportBase`] struct that concrete reports embed, and the abstract
@@ -31,10 +30,10 @@ use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, Workflow};
 
 /// The concrete openQA state holder carried on a report.
 ///
-/// Monomorphizes upstream `metadata.openqa` (`OpenQAResults`) to the concrete
-/// connectors: the QEM-dashboard "auto" result, the per-instance "kernel"
-/// results, and the `openqa_overview` payload. `mtui-testreport` already depends
-/// on `mtui-datasources`, so pinning these types here adds no new crate edge.
+/// Monomorphizes [`OpenQAResults`] to the concrete connectors: the
+/// QEM-dashboard "auto" result, the per-instance "kernel" results, and the
+/// `openqa_overview` payload. `mtui-testreport` already depends on
+/// `mtui-datasources`, so pinning these types here adds no new crate edge.
 pub type ReportOpenQA = OpenQAResults<DashboardAutoOpenQA, KernelOpenQA, OpenQAOverviewResult>;
 
 use crate::checkout::TemplateIoError;
@@ -42,11 +41,9 @@ use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_title
 
 /// Shared state common to every [`TestReport`] implementation.
 ///
-/// Ported field-for-field from upstream `TestReport.__init__` so that concrete
-/// reports and the workflow engine observe the same defaults. Fields whose
-/// behavior is only exercised by later Phase 4 tasks (pool selection, host
-/// arbitration, connect) are carried here as pure state — no logic is wired to
-/// them yet.
+/// Fields whose behavior is only exercised by later Phase 4 tasks (pool
+/// selection, host arbitration, connect) are carried here as pure state — no
+/// logic is wired to them yet.
 ///
 /// The [`openqa`](Self::openqa) holder carries the report's openQA state
 /// ([`ReportOpenQA`]) — the QEM-dashboard "auto" result, the per-instance
@@ -59,8 +56,7 @@ use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_title
 pub struct TestReportBase {
     /// The application configuration.
     pub(crate) config: Config,
-    /// Per-report workflow mode (upstream replaced the global `config.auto` /
-    /// `config.kernel` with this). Defaults to [`Workflow::Manual`].
+    /// Per-report workflow mode. Defaults to [`Workflow::Manual`].
     pub workflow: Workflow,
     /// Path to the loaded testreport file, or `None` when nothing is loaded.
     pub path: Option<PathBuf>,
@@ -70,10 +66,10 @@ pub struct TestReportBase {
     pub targets: HostsGroup,
     /// `SystemProduct -> repository` map for the update repositories.
     ///
-    /// Keyed on the flat [`SystemProduct`] `(name, version, arch)` tuple —
-    /// upstream's `Product` `NamedTuple`. This is what the `*repoparse` helpers
-    /// build and what [`RepoManager::run_zypper`](mtui_hosts) consumes; keying
-    /// on the refhost `Product` (no `arch`) would be lossy and mismatch that
+    /// Keyed on the flat [`SystemProduct`] `(name, version, arch)` tuple. This
+    /// is what the `*repoparse` helpers build and what
+    /// [`RepoManager::run_zypper`](mtui_hosts) consumes; keying on the
+    /// refhost `Product` (no `arch`) would be lossy and mismatch that
     /// consumer.
     pub update_repos: HashMap<SystemProduct, String>,
     /// Known hostnames for this report.
@@ -124,30 +120,29 @@ pub struct TestReportBase {
     pub slack_review: Option<SlackReviewMarker>,
     /// Update repository string.
     pub repository: String,
-    /// Update repository URLs (upstream `repositories`, a `frozenset[str]`).
+    /// Update repository URLs.
     pub repositories: HashSet<String>,
     /// Nested package map: `product -> { package name -> version }`.
     ///
     /// A test report routinely spans multiple products, each shipping its own
-    /// set of packages and versions (mirrors upstream `self.packages`, a
-    /// `dict[str, dict[str, str]]`). Consumed by the future `get_package_list`
+    /// set of packages and versions. Consumed by the future `get_package_list`
     /// which iterates products and flattens their package sets.
     pub packages: HashMap<String, HashMap<String, String>>,
-    /// Parsed Request Review ID (upstream `rrid`), or `None` when unset/invalid.
+    /// Parsed Request Review ID, or `None` when unset/invalid.
     pub rrid: Option<RequestReviewID>,
-    /// Update rating (upstream `rating`).
+    /// Update rating.
     pub rating: Option<String>,
-    /// Raw request id from the metadata envelope (upstream `realid`, JSON `id`).
+    /// Raw request id from the metadata envelope (JSON key `id`).
     pub realid: Option<String>,
-    /// Gitea pull-request reference (upstream `giteapr`, JSON `gitea_pr`).
+    /// Gitea pull-request reference (JSON key `gitea_pr`).
     pub giteapr: Option<String>,
-    /// Gitea pull-request API URL (upstream `giteaprapi`, JSON `gitea_pr_api`).
+    /// Gitea pull-request API URL (JSON key `gitea_pr_api`).
     pub giteaprapi: Option<String>,
-    /// Gitea commit hash (upstream `giteacohash`, JSON `gitea_commit_hash`).
+    /// Gitea commit hash (JSON key `gitea_commit_hash`).
     pub giteacohash: Option<String>,
     /// `hostname -> product-drift warning lines` from the last connect.
     pub product_warnings: HashMap<String, Vec<String>>,
-    /// The report's openQA results (upstream `metadata.openqa`).
+    /// The report's openQA results.
     ///
     /// Empty until `reload_openqa` / `set_workflow` populate it; consumed by the
     /// exporters for openQA-enriched templates.
@@ -155,7 +150,7 @@ pub struct TestReportBase {
 }
 
 impl TestReportBase {
-    /// Builds the shared state with upstream `TestReport.__init__` defaults.
+    /// Builds the shared state with its default values.
     ///
     /// The
     /// targets [`HostsGroup`] starts headless (`is_repl = false`); the load site
@@ -202,22 +197,20 @@ impl TestReportBase {
         }
     }
 
-    /// The working directory of the loaded report checkout (upstream
-    /// `report_wd`).
+    /// The working directory of the loaded report checkout.
     ///
-    /// Upstream returns `ensure_dir_exists(self.path.parent, *paths)`; the base
-    /// case every current caller needs is the parent directory of the loaded
-    /// report [`path`](Self::path), created if absent. The OBS report feeds this
-    /// to [`obsrepoparse`](crate::reports::repoparse::obsrepoparse), which reads
+    /// Returns the parent directory of the loaded report [`path`](Self::path),
+    /// created if absent. The OBS report feeds this to
+    /// [`obsrepoparse`](crate::reports::repoparse::obsrepoparse), which reads
     /// `project.xml` from it.
     ///
-    /// Returns [`io::ErrorKind::NotFound`] when no report is loaded (upstream
-    /// `assert self.path, "empty path"`), and propagates any directory-creation
-    /// error, so callers can degrade explicitly rather than panic.
+    /// Returns [`io::ErrorKind::NotFound`] when no report is loaded, and
+    /// propagates any directory-creation error, so callers can degrade
+    /// explicitly rather than panic.
     ///
-    /// The variadic `*paths` join upstream accepts is intentionally omitted: no
-    /// current caller needs it. Extend when the load/checkout lifecycle task
-    /// introduces one, rather than speculating on the shape now.
+    /// A variadic path-join is intentionally omitted: no current caller needs
+    /// it. Extend when the load/checkout lifecycle task introduces one,
+    /// rather than speculating on the shape now.
     pub fn report_wd(&self) -> std::io::Result<PathBuf> {
         let path = self
             .path
@@ -238,13 +231,12 @@ impl TestReportBase {
 ///   that ships one product-agnostic set — e.g. SLFO metadata);
 /// * otherwise use the sub-map keyed by the host's `base_version`;
 /// * additionally, when `base_version` starts with `"12"`, merge in the
-///   `"12"` sub-map (upstream's SLE-12 special case).
+///   `"12"` sub-map (the SLE-12 special case).
 ///
 /// Each resolved `name -> version` becomes a [`Package`] with its
 /// [`required`](Package::required) set. An unparseable version is skipped
-/// (best-effort, mirroring upstream's tolerant setters), leaving that
-/// package unseeded rather than aborting the whole host. Returns an empty
-/// vec when no sub-map matches (upstream returns `{}`).
+/// (best-effort), leaving that package unseeded rather than aborting the
+/// whole host. Returns an empty vec when no sub-map matches.
 ///
 /// Factored out so the composition root (`mtui-core::session`) can resolve seed
 /// packages from a *snapshot* of the metadata map (cloned before a
@@ -291,12 +283,11 @@ pub fn packages_for_map(
 
 /// The abstract test-report surface.
 ///
-/// Mirrors the `@abstractmethod`s of upstream `TestReport`. Concrete reports
-/// embed a [`TestReportBase`] and expose it through [`base`](Self::base) /
-/// [`base_mut`](Self::base_mut); the remaining required methods are the abstract
-/// surface every report must supply. Non-abstract lifecycle methods
-/// (`connect_target`, `export`, pool selection, …) are added by the later
-/// Phase 4 tasks.
+/// Concrete reports embed a [`TestReportBase`] and expose it through
+/// [`base`](Self::base) / [`base_mut`](Self::base_mut); the remaining
+/// required methods are the abstract surface every report must supply.
+/// Non-abstract lifecycle methods (`connect_target`, `export`, pool
+/// selection, …) are added by the later Phase 4 tasks.
 ///
 /// The trait is `#[async_trait]` because [`check_hash`](Self::check_hash) drives
 /// async I/O for git-backed reports (`SLTestReport` awaits `Gitea::get_hash`).
@@ -308,36 +299,34 @@ pub trait TestReport {
     /// Mutably borrows the shared state.
     fn base_mut(&mut self) -> &mut TestReportBase;
 
-    /// The report ID (upstream `id` property). Empty for an unloaded report.
+    /// The report ID. Empty for an unloaded report.
     fn id(&self) -> String;
 
-    /// The metadata field parser table (upstream `_parser`).
+    /// The metadata field parser table.
     ///
     /// Maps a template field name to its parsed value. The concrete shape of
     /// parsed values is refined in the metadata-parser task (P4.2); the
     /// skeleton uses `String` values, which the null object leaves empty.
     fn parser(&self) -> HashMap<String, String>;
 
-    /// The update-repository parser table (upstream `_update_repos_parser`).
+    /// The update-repository parser table.
     ///
     /// Keyed on the flat [`SystemProduct`] to match the `*repoparse` helpers and
     /// [`TestReportBase::update_repos`].
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String>;
 
-    /// Reads and parses a checkout's test-report template into this report
-    /// (upstream `TestReport.read` → `_open_and_parse` + `_update_repos_parse`).
+    /// Reads and parses a checkout's test-report template into this report.
     ///
     /// `path` names the checkout's `log` file; `metadata.json` is read from the
-    /// same directory. The two-parser pipeline mirrors upstream `_parse_json`:
-    /// the `hosts` parser ([`ReducedMetadataParser`]) is fed the `log` lines
-    /// (reference hosts + bug/jira titles), then the `json` parser
-    /// ([`JSONParser`]) applies the metadata envelope, and finally
-    /// `patchinfo.xml` overlays real bug/jira titles onto the ids the envelope
-    /// carried. On success [`path`](TestReportBase::path) is set and the
-    /// update-repo map is derived via [`update_repos_parser`](Self::update_repos_parser).
+    /// same directory. The two-parser pipeline: the `hosts` parser
+    /// ([`ReducedMetadataParser`]) is fed the `log` lines (reference hosts +
+    /// bug/jira titles), then the `json` parser ([`JSONParser`]) applies the
+    /// metadata envelope, and finally `patchinfo.xml` overlays real bug/jira
+    /// titles onto the ids the envelope carried. On success
+    /// [`path`](TestReportBase::path) is set and the update-repo map is
+    /// derived via [`update_repos_parser`](Self::update_repos_parser).
     ///
-    /// The Gitea-hash verification upstream runs at the tail of `read`
-    /// (`check_hash` → `InvalidGiteaHashError`) is deferred to
+    /// The Gitea-hash verification is deferred to
     /// [`make_testreport`](crate::make_testreport): `read` is sync while
     /// [`check_hash`](Self::check_hash) is async (it fetches the PR head from
     /// Gitea), so the check fires in the async load orchestrator right after a
@@ -354,7 +343,7 @@ pub trait TestReport {
         // `_open_and_parse`: read the template `log` and the sibling metadata.
         let tpl = std::fs::read_to_string(path).map_err(|e| {
             // A missing/unreadable template must carry its errno so the checkout
-            // seam can branch on ENOENT (upstream `TemplateIOError`).
+            // seam can branch on ENOENT.
             ReadError::Template(TemplateIoError::from_io(&e))
         })?;
 
@@ -385,7 +374,7 @@ pub trait TestReport {
             }
         }
 
-        // Upstream `read` resolves the path and then derives update repos.
+        // Resolves the path and then derives update repos.
         self.base_mut().path = Some(path.to_path_buf());
         let repos = self.update_repos_parser();
         self.base_mut().update_repos = repos;
@@ -394,8 +383,7 @@ pub trait TestReport {
 
     /// Drops this report's arbiter ownership and removes its remote pool locks.
     ///
-    /// Ports upstream `TestReport.release_pool_claims`: for every host this
-    /// report claimed through the arbiter, best-effort
+    /// For every host this report claimed through the arbiter, best-effort
     /// [`Target::pool_unlock`](mtui_hosts::Target::pool_unlock) the remote
     /// pool-claim lock (`force = false`, so a claim owned by another template is
     /// left alone), then clear the in-process claim set and drop the arbiter
@@ -403,7 +391,7 @@ pub trait TestReport {
     ///
     /// Idempotent and safe when pool selection was never used
     /// ([`arbiter`](TestReportBase::arbiter)/[`owner`](TestReportBase::owner) are
-    /// then `None`). Called from the exit path (upstream `quit` and
+    /// then `None`). Called from the exit path (`quit` and
     /// `TemplateRegistry.release_claims`); the remote lock-wire format is
     /// untouched — release goes through the same `pool_unlock` primitive that
     /// created the claim.
@@ -427,7 +415,7 @@ pub trait TestReport {
     /// Releases one host's in-process arbiter claim and prunes it from the
     /// slot-candidate map.
     ///
-    /// Ports upstream `TestReport.release_pool_claim`: the per-host analogue of
+    /// The per-host analogue of
     /// [`release_pool_claims`](Self::release_pool_claims), called from
     /// `remove_host` so a disconnected refhost does not stay claimed in the
     /// process-global [`HostArbiter`](mtui_hosts::HostArbiter) for the rest of
@@ -459,20 +447,18 @@ pub trait TestReport {
         }
     }
 
-    /// Emits the per-host update commands for `targets` (upstream
-    /// `list_update_commands`). The null object is a no-op.
+    /// Emits the per-host update commands for `targets`. The null object is a
+    /// no-op.
     fn list_update_commands(&self, targets: &HostsGroup);
 
-    /// The deduplicated list of every package named in the report metadata
-    /// (upstream `get_package_list`).
+    /// The deduplicated list of every package named in the report metadata.
     ///
     /// Iterates the nested [`packages`](TestReportBase::packages) map
     /// (`product -> { name -> version }`) and flattens the package **names**
-    /// across all products, deduplicated. Upstream returns them in `set` order;
-    /// the port sorts for determinism (the callers — `perform_update` /
-    /// `perform_prepare` — only join the list into a command string, so order is
-    /// not behaviourally significant, but a stable order keeps snapshots and
-    /// tests reproducible).
+    /// across all products, deduplicated. Sorted for determinism (the callers
+    /// — `perform_update` / `perform_prepare` — only join the list into a
+    /// command string, so order is not behaviourally significant, but a
+    /// stable order keeps snapshots and tests reproducible).
     fn get_package_list(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .base()
@@ -485,26 +471,22 @@ pub trait TestReport {
         names
     }
 
-    /// The plain-text test-report log URL (upstream `_testreport_url`):
-    /// `{reports_url}/{id}/log`.
+    /// The plain-text test-report log URL: `{reports_url}/{id}/log`.
     fn testreport_url(&self) -> String {
         format!("{}/{}/log", self.base().config.reports_url, self.id())
     }
 
-    /// The "fancy" test-report log URL (upstream `fancy_report_url`):
-    /// `{fancy_reports_url}/{id}/log`.
+    /// The "fancy" test-report log URL: `{fancy_reports_url}/{id}/log`.
     fn fancy_report_url(&self) -> String {
         format!("{}/{}/log", self.base().config.fancy_reports_url, self.id())
     }
 
-    /// The Bugzilla `id -> title` and Jira `id -> title` maps (upstream
-    /// `list_bugs`, which forwards `self.bugs`/`self.jira` to the display sink).
+    /// The Bugzilla `id -> title` and Jira `id -> title` maps.
     ///
     /// Returned as sorted [`BTreeMap`](std::collections::BTreeMap)s so the
-    /// display renders ids in a stable order (upstream sorts at render time).
-    /// The `list_bugs` command feeds these to
-    /// [`CommandPromptDisplay::list_bugs`](../../mtui_core/display); an empty
-    /// map renders the upstream "No bugs…"/"No Jira…" sentinels.
+    /// display renders ids in a stable order. The `list_bugs` command feeds
+    /// these to [`CommandPromptDisplay::list_bugs`](../../mtui_core/display);
+    /// an empty map renders the "No bugs…"/"No Jira…" sentinels.
     fn bug_maps(
         &self,
     ) -> (
@@ -524,12 +506,10 @@ pub trait TestReport {
         )
     }
 
-    /// The aligned `(label, value)` metadata rows for `list_metadata` (upstream
-    /// `_show_yourself_data` + `_aligned_write`).
+    /// The aligned `(label, value)` metadata rows for `list_metadata`.
     ///
     /// Rows with an empty value are dropped, and the whole set is sorted by
-    /// label, matching upstream's `sorted(data)` + `if value:` filter. The
-    /// caller renders each surviving row as `{label:15}: {value}`.
+    /// label. The caller renders each surviving row as `{label:15}: {value}`.
     fn show_yourself_data(&self) -> Vec<(String, String)> {
         let base = self.base();
         let mut systems: Vec<&String> = base.systems.keys().collect();
@@ -547,8 +527,7 @@ pub trait TestReport {
 
         let build_checks = {
             let url = self.testreport_url();
-            // Upstream `_testreport_url()[:-3] + "build_checks"` strips the
-            // trailing "log" and appends "build_checks".
+            // Strips the trailing "log" and appends "build_checks".
             format!("{}build_checks", &url[..url.len().saturating_sub(3)])
         };
 
@@ -601,8 +580,7 @@ pub trait TestReport {
         rows
     }
 
-    /// Installs `packages` on every host in `targets` (upstream
-    /// `metadata.perform_install` → `targets.perform_install`).
+    /// Installs `packages` on every host in `targets`.
     ///
     /// Drives the [`InstallOperation`](mtui_hosts::InstallOperation) template
     /// through the group's [`OperationGroup`](mtui_hosts::OperationGroup) impl,
@@ -624,8 +602,7 @@ pub trait TestReport {
         Ok(())
     }
 
-    /// Uninstalls `packages` from every host in `targets` (upstream
-    /// `metadata.perform_uninstall` → `targets.perform_uninstall`).
+    /// Uninstalls `packages` from every host in `targets`.
     ///
     /// Drives the [`UninstallOperation`](mtui_hosts::UninstallOperation)
     /// template; see [`perform_install`](Self::perform_install). Default no-op
@@ -638,8 +615,7 @@ pub trait TestReport {
         Ok(())
     }
 
-    /// Prepares `packages` on every host (upstream
-    /// `HostsGroup.perform_prepare`).
+    /// Prepares `packages` on every host.
     ///
     /// The bespoke (non-template) preparer flow: fan the issue repo add/remove
     /// out, install every package in a single transaction (or per-package for
@@ -665,8 +641,7 @@ pub trait TestReport {
         Ok(())
     }
 
-    /// Downgrades `packages` on every host (upstream
-    /// `HostsGroup.perform_downgrade`).
+    /// Downgrades `packages` on every host.
     ///
     /// Removes the issue repos, resolves each package's available downgrade
     /// version via the downgrader `list_command`, then downgrades — per-package
@@ -686,8 +661,7 @@ pub trait TestReport {
         Ok(())
     }
 
-    /// Updates the hosts with this report's maintenance update (upstream
-    /// `HostsGroup.perform_update`).
+    /// Updates the hosts with this report's maintenance update.
     ///
     /// The full bespoke update flow: optional prepare, pre/post package checks,
     /// repo add, `updater` command render (with the `$repa` RRID selector), the
@@ -701,9 +675,9 @@ pub trait TestReport {
     /// failure (after a best-effort downgrade rollback) or a hard
     /// missing-updater failure. The null object's default is a no-op `Ok(())`.
     ///
-    /// Recognised-but-non-fatal diagnostic sections from the update check
-    /// (upstream `checks/update.py`'s two `print(...)` blocks) are appended to
-    /// `diagnostics` for the command layer to render through the display.
+    /// Recognised-but-non-fatal diagnostic sections from the update check are
+    /// appended to `diagnostics` for the command layer to render through the
+    /// display.
     async fn perform_update(
         &self,
         _targets: &mut HostsGroup,
@@ -714,21 +688,19 @@ pub trait TestReport {
         Ok(())
     }
 
-    /// Verifies the loaded template hash (upstream `check_hash`).
+    /// Verifies the loaded template hash.
     ///
     /// Returns a [`HashCheck`] describing the outcome. The null object and the
     /// non-git reports (OBS/PI) report [`HashCheck::Ok`] since they have nothing
     /// to verify. Async because git-backed reports compare against a hash
     /// fetched from Gitea.
     ///
-    /// Unlike upstream — which raises `MissingGiteaTokenError`,
-    /// `FailedGiteaCallError`, or `InvalidGiteaHashError` from inside `read` —
-    /// this returns the outcome so the async load orchestrator
-    /// ([`make_testreport`](crate::make_testreport)) can branch on it (`read`
-    /// is sync; `check_hash` is async).
+    /// Returns the outcome (rather than raising) so the async load
+    /// orchestrator ([`make_testreport`](crate::make_testreport)) can branch
+    /// on it (`read` is sync; `check_hash` is async).
     async fn check_hash(&self) -> HashCheck;
 
-    /// The working directory for target artifacts (upstream `target_wd`).
+    /// The working directory for target artifacts.
     ///
     /// Defaults to joining `config.target_tempdir` with `paths`, matching the
     /// null object; concrete reports override to root under the loaded report.
@@ -740,8 +712,8 @@ pub trait TestReport {
         p
     }
 
-    /// Whether a real report is loaded (upstream `__bool__`). Defaults to
-    /// `true`; the null object overrides to `false`.
+    /// Whether a real report is loaded. Defaults to `true`; the null object
+    /// overrides to `false`.
     fn is_loaded(&self) -> bool {
         true
     }
@@ -758,20 +730,19 @@ pub trait TestReport {
         None
     }
 
-    /// The report's parsed [`RequestReviewID`], if loaded (upstream
-    /// `metadata.rrid`).
+    /// The report's parsed [`RequestReviewID`], if loaded.
     ///
     /// Reads [`TestReportBase::rrid`]; `None` for the null report.
     fn rrid(&self) -> Option<&RequestReviewID> {
         self.base().rrid.as_ref()
     }
 
-    /// The report's workflow mode (upstream `metadata.workflow`).
+    /// The report's workflow mode.
     fn workflow(&self) -> Workflow {
         self.base().workflow
     }
 
-    /// The report's openQA state holder (upstream `metadata.openqa`).
+    /// The report's openQA state holder.
     ///
     /// Reads [`TestReportBase::openqa`]; empty for the null report.
     fn openqa(&self) -> &ReportOpenQA {
@@ -786,27 +757,25 @@ pub trait TestReport {
         &mut self.base_mut().openqa
     }
 
-    /// The Gitea pull-request API URL (upstream `metadata.giteaprapi`), if any.
+    /// The Gitea pull-request API URL, if any.
     fn giteaprapi(&self) -> Option<&str> {
         self.base().giteaprapi.as_deref()
     }
 
-    /// The Gitea checkout hash recorded in the template (upstream
-    /// `metadata.giteacohash`), if any.
+    /// The Gitea checkout hash recorded in the template, if any.
     fn giteacohash(&self) -> Option<&str> {
         self.base().giteacohash.as_deref()
     }
 
     /// The openQA incident id used by the QEM Dashboard / oqa-search queries.
     ///
-    /// Ports upstream's use of `rrid.maintenance_id` as the incident number.
-    /// `None` for the null report (no RRID).
+    /// Uses `rrid.maintenance_id` as the incident number. `None` for the null
+    /// report (no RRID).
     fn incident_id(&self) -> Option<String> {
         self.base().rrid.as_ref().map(|r| r.maintenance_id.clone())
     }
 
-    /// Records the reviewer in the loaded testreport template on disk (upstream
-    /// `set_reviewer`).
+    /// Records the reviewer in the loaded testreport template on disk.
     ///
     /// Replaces the `Test Plan Reviewer:` metadata line with `name`, rewrites
     /// the template file atomically, and updates the in-memory
@@ -926,7 +895,7 @@ fn collapse_extra_marker_lines(text: &str) -> String {
 }
 
 /// Matches the `Test Plan Reviewer:` (or legacy `Suggested Test Plan
-/// Reviewer:`) metadata line, ported from upstream `_reviewer_line`.
+/// Reviewer:`) metadata line.
 ///
 /// Compiled on demand; [`TestReport::set_reviewer`] replaces it, and
 /// [`TestReport::set_slack_review`] uses it as the anchor to insert after.
@@ -1000,61 +969,56 @@ pub enum SlackReviewError {
     Io(#[source] std::io::Error),
 }
 
-/// The outcome of [`TestReport::check_hash`] (upstream's `check_hash` plus the
-/// exception family `_checkout` catches around it).
+/// The outcome of [`TestReport::check_hash`].
 ///
-/// Upstream signals these four states by raising exceptions from inside `read`
-/// (`MissingGiteaTokenError`, `FailedGiteaCallError`, `InvalidGiteaHashError`)
-/// or returning a `(True, …)` tuple; the Rust load path branches on this enum
-/// instead (see [`make_testreport`](crate::make_testreport)).
+/// These four states let the load path branch explicitly on the result (see
+/// [`make_testreport`](crate::make_testreport)) rather than relying on
+/// exceptions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HashCheck {
     /// The template hash matches the Gitea PR head, or there is nothing to
     /// verify (null / OBS / PI reports, or the legacy `1.1` maintenance id).
     Ok,
-    /// The template hash differs from the Gitea PR head — the template is stale
-    /// (upstream `InvalidGiteaHashError`).
+    /// The template hash differs from the Gitea PR head — the template is
+    /// stale.
     Mismatch {
         /// The hash recorded in the checked-out template (`giteacohash`).
         expected: String,
         /// The hash currently at the PR head, fetched from Gitea.
         actual: String,
     },
-    /// No Gitea API token is configured (upstream `MissingGiteaTokenError`).
+    /// No Gitea API token is configured.
     MissingToken,
-    /// The Gitea API call failed (upstream `FailedGiteaCallError`); carries the
-    /// underlying error text for logging.
+    /// The Gitea API call failed; carries the underlying error text for
+    /// logging.
     Failed(String),
 }
 
-/// Failure reading/parsing a checkout's template (upstream `TemplateIOError` /
-/// `MetadataNotLoadedError` raised from `_open_and_parse`).
+/// Failure reading/parsing a checkout's template.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
     /// The template `log` file could not be read.
     ///
     /// Carries the [`TemplateIoError`] so the checkout seam can branch on
-    /// [`is_not_found`](TemplateIoError::is_not_found) (upstream `e.errno !=
-    /// ENOENT`) to decide whether a missing template triggers a fresh checkout.
+    /// [`is_not_found`](TemplateIoError::is_not_found) to decide whether a
+    /// missing template triggers a fresh checkout.
     #[error(transparent)]
     Template(#[from] TemplateIoError),
-    /// The sibling `metadata.json` is absent (upstream `MetadataNotLoadedError`).
+    /// The sibling `metadata.json` is absent.
     #[error("metadata.json is missing from the checkout")]
     MetadataMissing,
-    /// The `metadata.json` is not valid JSON (upstream `JSONDecodeError` →
-    /// `MetadataNotLoadedError`).
+    /// The `metadata.json` is not valid JSON.
     #[error("metadata.json is not valid JSON")]
     MetadataInvalid,
 }
 
-/// Failure recording a reviewer into the loaded template (upstream raises
-/// `ValueError` / `RuntimeError` / `TemplateFormatError`).
+/// Failure recording a reviewer into the loaded template.
 #[derive(Debug, thiserror::Error)]
 pub enum ReviewerError {
     /// The reviewer name was empty or whitespace-only.
     #[error("reviewer must be a non-empty string")]
     Empty,
-    /// No template is loaded (upstream "Called while missing path").
+    /// No template is loaded.
     #[error("Called while missing path")]
     NoTemplate,
     /// The template has no `Test Plan Reviewer:` line to replace.
@@ -1075,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn base_defaults_match_upstream_init() {
+    fn base_defaults_are_stable() {
         let cfg = config();
         let base = TestReportBase::new(cfg);
 

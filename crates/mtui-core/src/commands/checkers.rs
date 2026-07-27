@@ -10,16 +10,13 @@ use crate::error::CommandResult;
 use crate::session::Session;
 
 /// Checker result strings that count as success (everything else renders red).
-///
-/// Ported verbatim from upstream `checkers._PASSING`.
 const PASSING: &[&str] = &["passed", "success", "ok", "done"];
 
 /// Lists the build-check (checker) result runs for the loaded update.
 ///
-/// Ports upstream `mtui.commands.checkers.Checkers`: fetches the live checker
-/// results from the TeReGen report API (`GET /reports/{id}/checkers`) and prints
-/// one colored `status name` row per checker. Requires a loaded update
-/// (upstream `@requires_update`).
+/// Fetches the live checker results from the TeReGen report API
+/// (`GET /reports/{id}/checkers`) and prints one colored `status name` row
+/// per checker. Requires a loaded update.
 pub struct Checkers;
 
 #[async_trait]
@@ -72,8 +69,8 @@ impl Command for Checkers {
     }
 }
 
-/// Extracts `(name, status)` from a checker entry, mirroring upstream's
-/// dict-vs-scalar handling (`name`/`status`|`state`, falling back to `?`).
+/// Extracts `(name, status)` from a checker entry (`name`/`status`|`state`,
+/// falling back to `?`).
 fn checker_fields(c: &serde_json::Value) -> (String, String) {
     if let Some(obj) = c.as_object() {
         let name = obj

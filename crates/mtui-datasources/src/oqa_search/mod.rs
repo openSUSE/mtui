@@ -1,6 +1,5 @@
-//! The openQA / QAM Dashboard / build-check overview search, ported from
-//! `mtui/data_sources/oqa_search/` (itself an adaptation of
-//! <https://github.com/mjdonis/oqa-search>).
+//! The openQA / QAM Dashboard / build-check overview search, adapting the
+//! heuristics from <https://github.com/mjdonis/oqa-search>.
 //!
 //! This connector answers "what is the openQA state of this incident?" along
 //! three paths, each a public entry point returning typed rows the command
@@ -18,9 +17,9 @@
 //! them directly: [`get_incident_info`] (build name + affected versions from the
 //! Dashboard) and [`incident_jobs`] (the individual openQA jobs for a build).
 //!
-//! The module is split along the upstream submodule seams:
+//! The module is split along these submodule seams:
 //!
-//! * [`heuristics`] — the verbatim upstream constants / blocklists that drive
+//! * [`heuristics`] — the constants / blocklists that drive
 //!   group filtering and log-line extraction.
 //! * [`results`] — the public result shapes.
 //! * [`search`] — the fetch layer, the pure helpers, and the entry points.

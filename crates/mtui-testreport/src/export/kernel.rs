@@ -1,9 +1,8 @@
 //! Exporter for kernel jobs.
 //!
-//! Ports `mtui.update_workflow.export.kernel.KernelExport`. It inserts the
-//! kernel openQA result matrices under the `regression tests:` section,
-//! downloads the per-job logs via the shared [`download_logs`], and runs the
-//! base sequence.
+//! Inserts the kernel openQA result matrices under the `regression tests:`
+//! section, downloads the per-job logs via the shared [`download_logs`], and
+//! runs the base sequence.
 
 use mtui_datasources::OpenQAOverviewResult;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
@@ -38,7 +37,7 @@ impl KernelExport {
     }
 
     /// Downloads the kernel logs and returns the `*.log` filenames now present
-    /// in the install-logs directory (upstream `get_logs`).
+    /// in the install-logs directory.
     async fn get_logs(&self, fetcher: &dyn BytesFetcher) -> Vec<String> {
         let in_path = self.ctx.install_logs_dir();
         let res_path = self
@@ -64,7 +63,7 @@ impl KernelExport {
             })
             .collect();
 
-        // TODO: configurable errormode (upstream hard-codes "tolerant").
+        // TODO: configurable errormode (currently hard-coded to "tolerant").
         let _ = download_logs(
             fetcher,
             &connectors,
@@ -91,8 +90,7 @@ impl KernelExport {
         filenames
     }
 
-    /// Inserts the kernel result matrices under `regression tests:`
-    /// (upstream `kernel_results`).
+    /// Inserts the kernel result matrices under `regression tests:`.
     ///
     /// The insertion point is the `(put your details here)` placeholder (removed
     /// if present); otherwise the block replaces any existing content between the
@@ -144,11 +142,11 @@ impl KernelExport {
         }
     }
 
-    /// Runs the exporter (upstream `run`).
+    /// Runs the exporter.
     pub async fn run(&mut self, fetcher: &dyn BytesFetcher) -> Vec<String> {
         self.ctx.install_results();
-        // Kernel exports have no "auto" connector, so inject_openqa is a no-op
-        // (upstream guards on self.openqa.auto being falsy).
+        // Kernel exports have no "auto" connector, so inject_openqa is a
+        // no-op.
         self.ctx.inject_openqa(&[]);
         if let Some(overview) = self.overview.clone() {
             self.ctx.inject_overview(&overview);

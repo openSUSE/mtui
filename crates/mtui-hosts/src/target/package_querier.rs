@@ -1,7 +1,7 @@
 //! Per-target package-version querier.
 //!
-//! Ported from `mtui/hosts/target/package_querier.py`. Turns a list of package
-//! names into a `name -> Option<RPMVersion>` map by running `rpm -q` (or
+//! Turns a list of package names into a `name -> Option<RPMVersion>` map by
+//! running `rpm -q` (or
 //! `dpkg-query` on Ubuntu) on the target and parsing the output. `None` means
 //! the package is not installed. Duplicate lines for one package collapse to the
 //! highest version.
@@ -19,7 +19,7 @@ use super::Target;
 /// output (`no packages found matching X`) is reported on stderr and does not
 /// appear in the stdout line loop, so it needs no matcher here.
 ///
-/// Mirrors the upstream regex `package (.*) is not installed` exactly: the name
+/// Matches the rpm `package (.*) is not installed` line exactly: the name
 /// is everything between the fixed prefix and suffix.
 fn not_installed_name(line: &str) -> Option<&str> {
     line.strip_prefix("package ")
@@ -45,7 +45,7 @@ impl<'a> PackageQuerier<'a> {
     /// Returns a map from package name to [`RPMVersion`], or to `None` when the
     /// package is not installed. Duplicate lines for the same package collapse
     /// to the highest version. A version string that fails to parse is logged
-    /// and skipped (best-effort, mirroring upstream's tolerance of odd output).
+    /// and skipped (best-effort tolerance of odd output).
     pub async fn versions(&mut self, packages: &[String]) -> HashMap<String, Option<RPMVersion>> {
         // Package names reach this root command line; quote each so a name
         // carrying shell metacharacters can never break out of its argument.

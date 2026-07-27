@@ -6,14 +6,12 @@
 //! from (highest precedence first): the `--config` flag, then `$MTUI_CONF`, then
 //! the XDG per-user file (`$XDG_CONFIG_HOME/mtui/mtui.toml`), then the home
 //! dotfile (`~/.mtui.toml`), then `/etc/mtui.toml`. Missing keys fall back to
-//! defaults that match upstream mtui exactly.
+//! their documented defaults.
 //!
-//! ## Intentional deviation from upstream
+//! ## Design choices
 //!
-//! Upstream mtui reads **INI** (`configparser`) from `/etc/mtui.cfg` and
-//! `~/.mtuirc`. mtui deliberately adopts **TOML** with XDG paths — a cleaner,
-//! typed, modern format — as this is a redesign, not a 1:1 port. The
-//! *behavioural* contract is preserved: sectioned options, upstream default
+//! Config is **TOML** with XDG paths — a typed, modern format. The
+//! *behavioural* contract is: sectioned options, well-defined default
 //! values, and **lenient loading** (a bad or missing file is logged and skipped,
 //! never fatal).
 //!
@@ -46,7 +44,7 @@ impl Config {
     /// shared keys and the XDG file wins over the home dotfile. A file that does not exist is
     /// silently skipped; a file that fails to read or parse is logged at ERROR
     /// and skipped — loading never hard-fails. Absent options take their
-    /// upstream defaults.
+    /// documented defaults.
     #[must_use]
     pub fn load(explicit: Option<PathBuf>) -> Self {
         let mut merged = RawConfig::default();
@@ -127,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn reboot_backoff_options_default_to_upstream() {
+    fn reboot_backoff_options_have_expected_defaults() {
         let d = Config::default();
         assert_eq!(d.reboot_timeout, 10);
         assert_eq!(d.reboot_retries, 10);
@@ -181,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_session_bounds_default_to_upstream() {
+    fn mcp_session_bounds_have_expected_defaults() {
         let d = Config::default();
         assert_eq!(d.mcp_session_cap, 32);
         assert_eq!(d.mcp_session_idle_timeout, 14_400);

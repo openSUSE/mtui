@@ -1,4 +1,4 @@
-//! Ports `tests/test_updateid_checkout.py`: `UpdateID._checkout` error mapping.
+//! Tests for `UpdateID` checkout error mapping.
 //!
 //! The seam reads a template; a missing template (ENOENT) triggers an `svn`
 //! checkout, and any checkout failure is mapped to the same clean

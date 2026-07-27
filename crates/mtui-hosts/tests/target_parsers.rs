@@ -1,10 +1,9 @@
-//! Integration port of upstream `tests/test_target_parsers.py::TestParseSystem`.
+//! Integration tests for the host-system parser.
 //!
-//! Upstream mocks the `product` module and feeds `parse_system` canned
-//! `(name, version, arch)` tuples. This port instead drives the *real*
+//! Drives the *real*
 //! `parse_product` over real product XML bytes served by a `MockConnection`, so
 //! the whole SUSE/non-SUSE/dangling/transactional branch matrix is exercised
-//! end-to-end (a strictly stronger check than the upstream module-mock).
+//! end-to-end.
 
 use mtui_hosts::{Connection, MockConnection, parse_system};
 

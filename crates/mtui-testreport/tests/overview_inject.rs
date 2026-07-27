@@ -1,4 +1,4 @@
-//! Ports `tests/test_overview_inject.py` — the idempotent overview injector.
+//! Tests for the idempotent overview injector.
 //!
 //! The renderer half (`render_overview`) is unit-tested in
 //! `mtui-datasources::oqa_search::render`; here we exercise the injector's

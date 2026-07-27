@@ -30,7 +30,7 @@ fn add_package_arg(cmd: clap::Command, help: &'static str) -> clap::Command {
 
 /// Installs packages from the current active repositories.
 ///
-/// Ports upstream `mtui.commands.zypper.Install`. Drives
+/// Drives
 /// [`TestReport::perform_install`](mtui_testreport::TestReport::perform_install)
 /// over the selected hosts.
 pub struct Install;
@@ -70,7 +70,7 @@ impl Command for Install {
 
 /// Removes packages from the system.
 ///
-/// Ports upstream `mtui.commands.zypper.Uninstall`. Drives
+/// Drives
 /// [`TestReport::perform_uninstall`](mtui_testreport::TestReport::perform_uninstall).
 pub struct Uninstall;
 
@@ -219,8 +219,7 @@ mod tests {
 
     #[tokio::test]
     async fn install_no_template_loaded_errors() {
-        // No report loaded → requires_update guard fires first (upstream
-        // @requires_update / TestReportNotLoadedError).
+        // No report loaded → requires_update guard fires first.
         let (mut session, _buf) = empty_session();
         let args = matches(&Install, &["pkg"]);
         let err = Install.call(&mut session, &args).await.unwrap_err();
@@ -230,8 +229,8 @@ mod tests {
     #[tokio::test]
     async fn install_hosts_present_no_template_refuses() {
         // Regression: hosts present but no report loaded must NOT silently
-        // succeed via the null report's no-op perform_install. Upstream refuses
-        // with TestReportNotLoadedError; the guard maps to CommandError::Other.
+        // succeed via the null report's no-op perform_install; the guard
+        // must fire and map to CommandError::Other.
         let (mut session, _buf) = session_host_no_template(&["h1"], "ok");
         let args = matches(&Install, &["pkg"]);
         let err = Install.call(&mut session, &args).await.unwrap_err();
@@ -241,8 +240,8 @@ mod tests {
     #[tokio::test]
     async fn install_t_subset_keeps_unselected_host() {
         // The bead's required regression: `install -t h1` on a two-host report
-        // must leave h2 in the live report afterwards (upstream shares Target
-        // references; the Rust split+merge preserves the unselected host).
+        // must leave h2 in the live report afterwards (the split+merge
+        // preserves the unselected host).
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
         let args = matches(&Install, &["-t", "h1", "pkg"]);
         Install.call(&mut session, &args).await.unwrap();

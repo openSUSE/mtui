@@ -1,5 +1,4 @@
-//! The refhosts **search engine**, ported from
-//! `mtui/hosts/refhost/store.py::Refhosts`.
+//! The refhosts **search engine**.
 //!
 //! [`Refhosts`] holds the flattened, de-duplicated list of [`Host`] rows and
 //! answers queries expressed as [`Attributes`]. Parsing of the `refhosts.yml`
@@ -24,7 +23,7 @@ use mtui_types::{Addon, Host, Product, Version, load_refhosts};
 
 /// A test-target slot key: `(product, version, arch, sorted addon names)`.
 ///
-/// The full identity an update distinguishes (upstream `slot_of`'s 4-tuple).
+/// The full identity an update distinguishes (a 4-tuple).
 pub type Slot = (String, String, String, Vec<String>);
 
 use super::models::Attributes;
@@ -111,8 +110,8 @@ impl Refhosts {
 
     /// Return the names of hosts matching **any** of the given queries.
     ///
-    /// Mirrors upstream `search`: results are accumulated per query in order
-    /// (so a host matching two queries appears twice, as upstream does).
+    /// Results are accumulated per query in order (so a host matching two
+    /// queries appears twice).
     #[must_use]
     pub fn search(&self, attributes: &[Attributes]) -> Vec<String> {
         let mut results = Vec::new();
@@ -155,12 +154,12 @@ impl Refhosts {
 
     /// Return refhosts matching the filters, de-duplicated by host name.
     ///
-    /// Ports upstream `Refhosts.query`. `attributes` (parsed from a
+    /// `attributes` (parsed from a
     /// `testplatform`) and the ad-hoc field filters (`name` glob, `arch` list,
     /// `product` substring, `version` loose, `addon` substring list) are
     /// alternatives — when `attributes` is `Some` the field filters are ignored.
     /// With neither, every host is returned. A host matches an `attributes`
-    /// query when it satisfies **any** of the alternatives (upstream `any`).
+    /// query when it satisfies **any** of the alternatives.
     ///
     /// The dedup is first-occurrence-wins. It is redundant for a store built by
     /// [`Refhosts::from_path`] (`mtui-types::load_refhosts` already de-dups at load
@@ -195,8 +194,8 @@ impl Refhosts {
 
     /// Return `true` iff `host` satisfies every supplied ad-hoc field filter.
     ///
-    /// An unset filter (empty/`None`) imposes no constraint. Ports upstream
-    /// `_field_match`: `name` is a shell glob, `arch` is membership in a list,
+    /// An unset filter (empty/`None`) imposes no constraint: `name` is a shell
+    /// glob, `arch` is membership in a list,
     /// `product` is a case-insensitive substring of the base product name,
     /// `version` is the loose form matched by [`version_str_match`], and each
     /// `addon` term is a case-insensitive substring of some installed addon.
@@ -245,7 +244,7 @@ impl Refhosts {
 
     /// Loosely match a host version against `15-SP6` / `15.6` / `15`.
     ///
-    /// Ports upstream `_version_str_match`: `SP` is optional and
+    /// `SP` is optional and
     /// case-insensitive; a bare major matches any minor. A host with no version
     /// never matches a versioned query.
     #[must_use]
@@ -274,7 +273,7 @@ impl Refhosts {
 
     /// Return the test-target [`Slot`] key for `host`.
     ///
-    /// Ports upstream `slot_of`: the full `(product, version, arch, addons)` an
+    /// The full `(product, version, arch, addons)` an
     /// update distinguishes, so only genuine duplicates collapse to one slot.
     /// Addon names are sorted for a stable key.
     #[must_use]
@@ -291,10 +290,10 @@ impl Refhosts {
     }
 
     /// Return the test-target [`Slot`] key derived from the **queried**
-    /// attributes (upstream `slot_for_query`).
+    /// attributes.
     ///
-    /// Unlike [`slot_of`](Self::slot_of) — which keys on every module a host
-    /// happens to have installed — this keys on what the testplatform actually
+    /// Where [`slot_of`](Self::slot_of) keys on every module a host
+    /// happens to have installed, this keys on what the testplatform actually
     /// distinguishes: the base product + version it requests, the host's arch
     /// (testplatforms fan out one query per arch), and only the addons the
     /// testplatform explicitly asked for. Hosts that satisfy the same query are
@@ -314,8 +313,7 @@ impl Refhosts {
         (name, ver_str, host.arch.clone(), addons)
     }
 
-    /// Return pool candidates `(host, slot)` keyed on the query slot
-    /// (upstream `search_pool_by_query`).
+    /// Return pool candidates `(host, slot)` keyed on the query slot.
     ///
     /// Each host matching any of `attributes` is returned once, tagged with the
     /// [`slot_for_query`](Self::slot_for_query) of the **first** attribute it
@@ -410,7 +408,7 @@ impl Refhosts {
     }
 }
 
-/// Render a [`Version`] as upstream `slot_of` / `_ver_str` does.
+/// Render a [`Version`] for a [`Slot`] key.
 ///
 /// `None` → empty; a missing/empty minor → bare major; else `major-minor`.
 fn version_display(ver: Option<&Version>) -> String {
@@ -424,14 +422,13 @@ fn version_display(ver: Option<&Version>) -> String {
     }
 }
 
-/// Match `text` against a shell glob supporting `*` and `?` (upstream uses
-/// Python's `fnmatch` for the `--name` filter).
+/// Match `text` against a shell glob supporting `*` and `?` for the `--name`
+/// filter.
 ///
 /// `*` matches any run (including empty), `?` matches exactly one character;
-/// every other character is literal. Matching is case-sensitive, mirroring
-/// `fnmatch.fnmatch` on a case-sensitive filesystem for the hostnames mtui
-/// deals with. Implemented inline to avoid a glob dependency (no-runtime-deps
-/// goal).
+/// every other character is literal. Matching is case-sensitive, which suits
+/// the hostnames mtui deals with. Implemented inline to avoid a glob dependency
+/// (no-runtime-deps goal).
 fn name_glob(text: &str, pattern: &str) -> bool {
     let t: Vec<char> = text.chars().collect();
     let p: Vec<char> = pattern.chars().collect();
@@ -1009,8 +1006,8 @@ default:
 
     #[test]
     fn search_pool_by_query_dedups_host_across_attributes() {
-        // A host matching two overlapping attributes appears once (upstream's
-        // `seen` set), tagged with the first attribute it matches.
+        // A host matching two overlapping attributes appears once, tagged with
+        // the first attribute it matches.
         let mut attrs = Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
         // A second, equivalent query the same hosts also satisfy.
         attrs.extend(Attributes::from_testplatform(

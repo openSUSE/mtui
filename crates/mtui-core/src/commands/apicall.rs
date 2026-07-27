@@ -1,7 +1,7 @@
 //! Backend-API commands (`assign`, `unassign`, `reject`, `comment`).
 //!
-//! Ports upstream `mtui.commands.apicall`. Each command dispatches to the OSC or
-//! Gitea backend depending on the loaded request's kind (Gitea for SLFO with a
+//! Each command dispatches to the OSC or Gitea backend depending on the
+//! loaded request's kind (Gitea for SLFO with a
 //! maintenance id other than `1.1`, OSC otherwise), and — for a Product
 //! Increment with `lock_pi_autolock` — locks/unlocks the reference hosts around
 //! the action. `approve` lives in [`approve`](super::approve) and reuses the
@@ -20,16 +20,16 @@ use crate::session::Session;
 /// The PI host-lock action a command performs around its backend call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PiAction {
-    /// Lock reference hosts (upstream `_pi_action = "lock"`, e.g. `assign`).
+    /// Lock reference hosts (e.g. `assign`).
     Lock,
-    /// Unlock reference hosts (upstream `"unlock"`, e.g. `unassign`/`reject`).
+    /// Unlock reference hosts (e.g. `unassign`/`reject`).
     Unlock,
-    /// Neither (upstream `None`, e.g. `comment`).
+    /// Neither (e.g. `comment`).
     None,
 }
 
-/// Whether the loaded request is handled by the Gitea backend (upstream
-/// `_is_gitea_workflow`): SLFO with a maintenance id other than `1.1`.
+/// Whether the loaded request is handled by the Gitea backend: SLFO with a
+/// maintenance id other than `1.1`.
 pub(crate) fn is_gitea_workflow(rrid: &mtui_types::RequestReviewID) -> bool {
     rrid.kind == RequestKind::Slfo && rrid.maintenance_id != "1.1"
 }
@@ -94,7 +94,7 @@ pub(crate) fn teregen_client(session: &Session) -> Result<TeReGen, CommandError>
     Ok(TeReGen::with_client(http, &session.config.teregen_api))
 }
 
-/// Locks/unlocks the reference hosts around a PI action (upstream `_pi_autolock`).
+/// Locks/unlocks the reference hosts around a PI action.
 ///
 /// No-op unless the request is a PI, `lock_pi_autolock` is enabled, and the
 /// command declares a lock/unlock action.
@@ -124,8 +124,7 @@ pub(crate) async fn pi_autolock(session: &mut Session, action: PiAction) {
     }
 }
 
-/// Prints best-effort TeReGen context for the loaded update
-/// (upstream `BaseApiCall._show_priority_deadline`).
+/// Prints best-effort TeReGen context for the loaded update.
 ///
 /// Sourced from a single `GET /reports/{id}` fetch: the live priority/deadline
 /// and, when the report already carries assignment state, who currently holds
@@ -199,8 +198,7 @@ async fn show_priority_deadline(session: &mut Session, rrid: &mtui_types::Reques
     }
 }
 
-/// Adds the common `-g/--group` + `-u/--user` args (upstream base
-/// `_add_arguments`).
+/// Adds the common `-g/--group` + `-u/--user` args.
 fn add_common_args(cmd: clap::Command) -> clap::Command {
     cmd.arg(
         Arg::new("group")
@@ -234,7 +232,7 @@ fn common_complete(session: &Session, text: &str, extra: &[&str]) -> Vec<String>
 
 // --- assign -----------------------------------------------------------------
 
-/// Assigns a review request to a user or group (upstream `Assign`).
+/// Assigns a review request to a user or group.
 pub struct Assign;
 
 #[async_trait]
@@ -285,7 +283,7 @@ impl Command for Assign {
 
 // --- unassign ---------------------------------------------------------------
 
-/// Unassigns a review request (upstream `Unassign`).
+/// Unassigns a review request.
 pub struct Unassign;
 
 #[async_trait]
@@ -329,7 +327,7 @@ impl Command for Unassign {
 
 // --- reject -----------------------------------------------------------------
 
-/// Valid `--reason` values for `reject` (upstream `choices`).
+/// Valid `--reason` values for `reject`.
 const REJECT_REASONS: &[&str] = &[
     "admin",
     "retracted",
@@ -340,7 +338,7 @@ const REJECT_REASONS: &[&str] = &[
     "tracking_issue",
 ];
 
-/// Rejects a review request (upstream `Reject`).
+/// Rejects a review request.
 pub struct Reject;
 
 #[async_trait]
@@ -409,11 +407,10 @@ impl Command for Reject {
 
 // --- comment ----------------------------------------------------------------
 
-/// Adds a comment to a review request (upstream `Comment`).
+/// Adds a comment to a review request.
 ///
-/// Deviation from upstream: upstream prompts interactively (`ask_user`). The
-/// interactive prompt is a Phase-6 REPL concern; here the comment is supplied
-/// via `-m/--message` so the command works headlessly (MCP) and in the REPL.
+/// The comment is supplied via `-m/--message` rather than an interactive
+/// prompt, so the command works headlessly (MCP) as well as in the REPL.
 pub struct Comment;
 
 #[async_trait]
@@ -499,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn is_gitea_workflow_matches_upstream() {
+    fn is_gitea_workflow_behaves_as_specified() {
         let slfo: mtui_types::RequestReviewID = "SUSE:SLFO:1.2:5".parse().unwrap();
         assert!(is_gitea_workflow(&slfo));
         let slfo_11: mtui_types::RequestReviewID = "SUSE:SLFO:1.1:5".parse().unwrap();

@@ -1,22 +1,20 @@
 //! Public entry points and supporting helpers for the openQA / QAM Dashboard
-//! search, ported from `mtui/data_sources/oqa_search/search.py`.
+//! search.
 //!
 //! The three high-level entry points are [`single_incidents`],
 //! [`aggregated_updates`], and [`build_checks`]. Each returns a list of typed
 //! result rows (defined in [`super::results`]) that the command layer renders.
 //!
-//! ## Deviations from upstream
+//! ## Notable design points
 //!
-//! * Upstream memoises the openQA job-group list with an `lru_cache` keyed on
-//!   the host. That is a per-process performance detail, not a behavioural
-//!   contract; this port fetches the groups per call. A memo can be reintroduced
-//!   if a consumer needs it.
-//! * Upstream's plain-text renderer (`render_overview` + the `OVERVIEW_*`
+//! * The openQA job-group list is fetched per call rather than memoised, since
+//!   that is a per-process performance detail, not a behavioural
+//!   contract. A memo can be reintroduced if a consumer needs it.
+//! * The plain-text renderer (`render_overview` + the `OVERVIEW_*`
 //!   markers) lives in the sibling [`super::render`] module, shared by the
 //!   command layer and the Phase 4 export injector.
-//! * The build-check directory-index scan uses the `scraper` HTML parser instead
-//!   of upstream's minimal `html.parser` subclass; the golden test pins the
-//!   extracted `.log` set so any parser drift is caught.
+//! * The build-check directory-index scan uses the `scraper` HTML parser; the
+//!   golden test pins the extracted `.log` set so any parser drift is caught.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -36,7 +34,7 @@ use super::results::{BuildCheckResult, GroupResult, JobResult, VersionResult};
 
 // --- JSON fetch helpers over the shared HttpClient ---
 
-/// GET `url` and parse the body as JSON, mirroring upstream `_get_json`.
+/// GET `url` and parse the body as JSON.
 ///
 /// Any transport, non-2xx, or JSON-parse failure collapses onto
 /// [`OqaSearchError::Http`] so callers can convert into a user-facing message
@@ -46,8 +44,7 @@ async fn get_json(http: &HttpClient, url: &str) -> Result<serde_json::Value, Oqa
     serde_json::from_slice(&bytes).map_err(|e| OqaSearchError::Http(e.to_string()))
 }
 
-/// GET `url` and return the body as UTF-8 text, mirroring upstream
-/// `_fetch_url_content`.
+/// GET `url` and return the body as UTF-8 text.
 async fn fetch_url_content(http: &HttpClient, url: &str) -> Result<String, OqaSearchError> {
     let bytes = http.get_bytes_capped(url, MAX_API_BODY).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -58,7 +55,7 @@ async fn fetch_url_content(http: &HttpClient, url: &str) -> Result<String, OqaSe
 /// Get the incident build name and the affected SLE versions.
 ///
 /// Returns `(build, versions)`. `versions` is `None` when no openQA builds exist
-/// for the incident yet. Mirrors upstream `get_incident_info`.
+/// for the incident yet.
 ///
 /// # Errors
 ///
@@ -122,8 +119,7 @@ pub async fn get_incident_info(
     ))
 }
 
-/// Synthesise a build name from `/api/incidents/<id>` when no builds exist yet,
-/// mirroring upstream `_fallback_build`.
+/// Synthesise a build name from `/api/incidents/<id>` when no builds exist yet.
 async fn fallback_build(
     http: &HttpClient,
     url_dashboard_qam: &str,
@@ -140,8 +136,7 @@ async fn fallback_build(
     Ok(format!(":{incident_id}:{package}"))
 }
 
-/// List the individual openQA jobs for an incident `build`, mirroring upstream
-/// `incident_jobs`.
+/// List the individual openQA jobs for an incident `build`.
 ///
 /// `obsoleted` jobs (superseded by a later retrigger) are dropped unless
 /// `include_obsoleted` is set. Returns the jobs sorted by result then arch then
@@ -220,8 +215,7 @@ pub async fn incident_jobs(
 
 // --- openQA job-group enumeration ---
 
-/// Fetch the full openQA job-group list for a host, mirroring upstream
-/// `_fetch_openqa_groups` (without the per-process `lru_cache`).
+/// Fetch the full openQA job-group list for a host.
 async fn fetch_openqa_groups(
     http: &HttpClient,
     url_openqa: &str,
@@ -246,8 +240,7 @@ fn is_name_matching(
     match_terms.iter().any(|t| name.contains(t)) && !excluded_terms.iter().any(|t| name.contains(t))
 }
 
-/// Extract a normalised SLE version label from a job-group name, mirroring
-/// upstream `_extract_version`.
+/// Extract a normalised SLE version label from a job-group name.
 fn extract_version(name: &str) -> String {
     use regex::Regex;
     use std::sync::LazyLock;
@@ -275,8 +268,7 @@ fn extract_version(name: &str) -> String {
     String::new()
 }
 
-/// Map an aggregated job-group name to its short key, mirroring upstream
-/// `_extract_aggregated_name`.
+/// Map an aggregated job-group name to its short key.
 fn extract_aggregated_name(name: &str) -> String {
     for (label, key) in AGGREGATED_NAME_MAP {
         if name.contains(label) {
@@ -289,8 +281,7 @@ fn extract_aggregated_name(name: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Filter openQA job groups, keyed by the extractor's output, mirroring upstream
-/// `_filter_openqa_groups`.
+/// Filter openQA job groups, keyed by the extractor's output.
 fn filter_openqa_groups(
     groups: &[serde_json::Value],
     match_text: &[&str],
@@ -326,8 +317,8 @@ fn aggregated_groups(groups: &[serde_json::Value]) -> HashMap<String, i64> {
     })
 }
 
-/// Resolve a SLE version or aggregated-group name to its openQA group id,
-/// mirroring upstream `_get_group_id`. Returns `None` when the key is unknown.
+/// Resolve a SLE version or aggregated-group name to its openQA group id.
+/// Returns `None` when the key is unknown.
 fn get_group_id(groups: &[serde_json::Value], key: &str) -> Option<i64> {
     incident_groups(groups)
         .get(key)
@@ -337,16 +328,15 @@ fn get_group_id(groups: &[serde_json::Value], key: &str) -> Option<i64> {
 
 // --- openQA job lookups ---
 
-/// Browser-facing openQA overview URL, mirroring upstream
-/// `_get_openqa_print_url`.
+/// Browser-facing openQA overview URL.
 fn openqa_print_url(url_openqa: &str, version: &str, build: &str, group_id: i64) -> String {
     format!(
         "{url_openqa}/tests/overview?distri=sle&version={version}&build={build}&groupid={group_id}"
     )
 }
 
-/// API endpoint for filtered openQA jobs in a build, mirroring upstream
-/// `_get_openqa_build_url`. Returns `None` for an unknown state.
+/// API endpoint for filtered openQA jobs in a build. Returns `None` for an
+/// unknown state.
 fn openqa_build_url(
     state: &str,
     url_openqa: &str,
@@ -360,8 +350,7 @@ fn openqa_build_url(
     ))
 }
 
-/// Set of incident IDs being tested by an openQA job, mirroring upstream
-/// `_get_openqa_job_issues`.
+/// Set of incident IDs being tested by an openQA job.
 async fn openqa_job_issues(
     http: &HttpClient,
     url_openqa: &str,
@@ -391,12 +380,12 @@ async fn openqa_job_issues(
 
 /// The current UTC date, as a `chrono::NaiveDate`.
 ///
-/// Upstream uses `datetime.now()` (local time) to build the aggregated day-walk
-/// build strings. The workspace pins `chrono` without the `clock` feature to
-/// keep the single-static-binary contract lean, so this computes "today" from
-/// [`std::time::SystemTime`] in UTC. The two differ only within the local
-/// UTC-offset window around midnight; the day-walk simply starts one day over,
-/// which the N-day window absorbs.
+/// The aggregated day-walk build strings are keyed on "today". The workspace
+/// pins `chrono` without the `clock` feature to keep the single-static-binary
+/// contract lean, so this computes "today" from
+/// [`std::time::SystemTime`] in UTC rather than local time. The two differ
+/// only within the local UTC-offset window around midnight; the day-walk
+/// simply starts one day over, which the N-day window absorbs.
 fn current_utc_date() -> chrono::NaiveDate {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -412,8 +401,7 @@ fn overview_len(value: &serde_json::Value) -> usize {
     value.as_array().map_or(0, Vec::len)
 }
 
-/// Resolve PASSED / FAILED / RUNNING for one openQA build, mirroring upstream
-/// `_query_version_status`.
+/// Resolve PASSED / FAILED / RUNNING for one openQA build.
 async fn query_version_status(
     http: &HttpClient,
     version: &str,
@@ -421,7 +409,7 @@ async fn query_version_status(
     group_id: i64,
     url_openqa: &str,
 ) -> Result<VersionResult, OqaSearchError> {
-    // Upstream workaround: TERADATA jobs share the base version's URL.
+    // Workaround: TERADATA jobs share the base version's URL.
     let version_oqa = if version == "12-SP3-TERADATA" {
         "12-SP3"
     } else {
@@ -473,9 +461,8 @@ async fn query_version_status(
 
 // --- Build-check log parsing ---
 
-/// Collect `.log` link targets from an HTML directory index, mirroring
-/// upstream's `LogFileLinkParser`. Hrefs are percent-decoded before comparison
-/// and returned decoded.
+/// Collect `.log` link targets from an HTML directory index. Hrefs are
+/// percent-decoded before comparison and returned decoded.
 fn parse_log_links(html: &str) -> Vec<String> {
     let document = Html::parse_document(html);
     // A malformed selector is a programming error, not runtime input.
@@ -493,12 +480,10 @@ fn parse_log_links(html: &str) -> Vec<String> {
     out
 }
 
-/// Extract test-summary lines from a build-check log, mirroring upstream
-/// `extract_test_results`.
+/// Extract test-summary lines from a build-check log.
 ///
 /// With `custom_pattern` the user's regex wins (invalid regex logs a warning and
-/// returns empty). Otherwise the same multi-stage heuristic upstream uses
-/// decides.
+/// returns empty). Otherwise a multi-stage heuristic decides.
 #[must_use]
 pub fn extract_test_results(log_text: &str, custom_pattern: Option<&str>) -> Vec<String> {
     use regex::RegexBuilder;
@@ -552,8 +537,7 @@ pub fn extract_test_results(log_text: &str, custom_pattern: Option<&str>) -> Vec
     matches
 }
 
-/// Collapse a long match list into a one-line summary, mirroring upstream
-/// `summarize_test_results`.
+/// Collapse a long match list into a one-line summary.
 #[must_use]
 pub fn summarize_test_results(lines: &[String]) -> String {
     use regex::Regex;
@@ -570,7 +554,7 @@ pub fn summarize_test_results(lines: &[String]) -> String {
 
     let mut total_passed: u64 = 0;
     let mut total_failed: u64 = 0;
-    // Skip the first and last line (upstream `lines[1:-1]`).
+    // Skip the first and last line.
     let middle = if lines.len() > 2 {
         &lines[1..lines.len() - 1]
     } else {
@@ -598,8 +582,8 @@ pub fn summarize_test_results(lines: &[String]) -> String {
     format!("({more} more results, {total_passed} passed, {total_failed} failed)")
 }
 
-/// Return `true` if `log` belongs to any package in `packages`, mirroring
-/// upstream `log_matches_package` (with the flavored-Python normalisation).
+/// Return `true` if `log` belongs to any package in `packages`, including via
+/// the flavored-Python normalisation.
 #[must_use]
 fn log_matches_package(log: &str, packages: &[String]) -> bool {
     for pkg in packages {
@@ -616,8 +600,7 @@ fn log_matches_package(log: &str, packages: &[String]) -> bool {
 
 // --- Public entry points used by the command layer ---
 
-/// Resolve openQA status for each SLE version of a single incident, mirroring
-/// upstream `single_incidents`.
+/// Resolve openQA status for each SLE version of a single incident.
 ///
 /// Never fails as a whole: an unknown version or an openQA query failure is
 /// recorded as a `failed` row with a note, so a flaky openQA cannot abort the
@@ -691,8 +674,7 @@ pub async fn single_incidents(
     indexed.into_iter().map(|(_, row)| row).collect()
 }
 
-/// Walk the last `days` days of aggregated builds for each group, mirroring
-/// upstream `aggregated_updates`.
+/// Walk the last `days` days of aggregated builds for each group.
 pub async fn aggregated_updates(
     http: &HttpClient,
     incident_id: &str,
@@ -723,7 +705,7 @@ pub async fn aggregated_updates(
     };
 
     // Resolve the valid groups first, preserving `groups_wanted` order (invalid
-    // groups are skipped with a warning, as upstream). Each surviving group gets
+    // groups are skipped with a warning). Each surviving group gets
     // a stable output position.
     let mut valid_groups: Vec<(String, i64)> = Vec::new();
     for group in groups_wanted {
@@ -787,8 +769,7 @@ pub async fn aggregated_updates(
     results
 }
 
-/// Find the most recent aggregated build covering the incident, mirroring
-/// upstream `_scan_aggregated_for_version`.
+/// Find the most recent aggregated build covering the incident.
 async fn scan_aggregated_for_version(
     http: &HttpClient,
     version: &str,
@@ -844,14 +825,13 @@ async fn scan_aggregated_for_version(
     }
 }
 
-/// Parse the qam.suse.de build_checks index and extract summaries, mirroring
-/// upstream `build_checks`.
+/// Parse the qam.suse.de build_checks index and extract summaries.
 ///
 /// A missing index (or an unreadable log) is not an error — it yields no (or a
 /// bare) entry, so a flaky QAM host cannot abort the command.
-// The parameters mirror the upstream `build_checks` signature plus the 0mop.7
-// concurrency bound; the single internal caller (`openqa_overview`) passes them
-// positionally, so a params struct would add ceremony without a readability win.
+// The parameters plus the max-parallel concurrency bound are passed
+// positionally by the single internal caller (`openqa_overview`), so a params
+// struct would add ceremony without a readability win.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_checks(
     http: &HttpClient,
@@ -943,7 +923,7 @@ mod tests {
         json!({"id": id, "name": name, "template": template})
     }
 
-    // --- extract_version (upstream test_extract_version_handles_all_three_forms) ---
+    // --- extract_version ---
 
     #[test]
     fn extract_version_handles_all_three_forms() {
@@ -973,7 +953,7 @@ mod tests {
         );
     }
 
-    // --- is_valid_template (upstream test_is_valid_template) ---
+    // --- is_valid_template ---
 
     #[test]
     fn is_valid_template_filters_micro_and_empty() {
@@ -984,7 +964,7 @@ mod tests {
         assert!(is_valid_template(&group(1, "n", "sometext")));
     }
 
-    // --- is_name_matching (upstream single-incidents + aggregated tables) ---
+    // --- is_name_matching (single-incidents + aggregated tables) ---
 
     #[test]
     fn is_name_matching_single_incidents() {
@@ -1025,7 +1005,7 @@ mod tests {
         }
     }
 
-    // --- filter_openqa_groups (upstream test_filter_openqa_groups) ---
+    // --- filter_openqa_groups ---
 
     #[test]
     fn filter_openqa_groups_single_incidents() {
@@ -1065,7 +1045,7 @@ mod tests {
         assert_eq!(out, expected);
     }
 
-    // --- log_matches_package (upstream parametrized table) ---
+    // --- log_matches_package (parametrized table) ---
 
     #[test]
     fn log_matches_package_table() {
@@ -1089,7 +1069,7 @@ mod tests {
         }
     }
 
-    // --- extract_test_results custom pattern (upstream tests) ---
+    // --- extract_test_results custom pattern ---
 
     #[test]
     fn extract_test_results_custom_pattern_overrides_heuristics() {
@@ -1103,7 +1083,7 @@ mod tests {
         assert!(extract_test_results("anything", Some("[unclosed")).is_empty());
     }
 
-    // --- summarize_test_results (upstream parametrized table) ---
+    // --- summarize_test_results (parametrized table) ---
 
     #[test]
     fn summarize_test_results_counts_passed_and_failed() {
@@ -1160,7 +1140,7 @@ mod tests {
         }
     }
 
-    // --- parse_log_links (upstream LogFileLinkParser on _HTML_INDEX) ---
+    // --- parse_log_links ---
 
     #[test]
     fn parse_log_links_extracts_only_log_hrefs() {

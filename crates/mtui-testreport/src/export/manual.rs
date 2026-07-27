@@ -1,18 +1,17 @@
 //! Exporter for the manual workflow.
 //!
-//! Ports `mtui.update_workflow.export.manual.ManualExport`. It rewrites the
-//! per-host result sections of the template from the connected hosts' package
-//! before/after versions and command logs, then runs the base sequence.
+//! Rewrites the per-host result sections of the template from the connected
+//! hosts' package before/after versions and command logs, then runs the base
+//! sequence.
 //!
 //! ## Host input
 //!
-//! Upstream reads `self.results`, a list of connected `Target`s, for
-//! `hostname`, `system`, `packages`, and `hostlog`. Coupling this crate to the
-//! concrete `mtui-hosts::Target` (which carries live connection state) would be
-//! the wrong dependency direction, so the exporter takes a decoupled
-//! [`ManualHost`] view capturing exactly those four fields. The composition root
-//! (Phase 5) builds these from the live targets, mirroring how the downloader
-//! takes `(host, tests)` pairs.
+//! Coupling this crate to the concrete `mtui-hosts::Target` (which carries
+//! live connection state) would be the wrong dependency direction, so the
+//! exporter takes a decoupled [`ManualHost`] view capturing exactly the
+//! `hostname`, `system`, `packages`, and `hostlog` fields it needs. The
+//! composition root (Phase 5) builds these from the live targets, mirroring
+//! how the downloader takes `(host, tests)` pairs.
 
 use std::sync::LazyLock;
 
@@ -38,27 +37,24 @@ pub struct ManualHost {
     pub hostlog: HostLog,
 }
 
-/// Matches a `reference host: <name>` line and captures the hostname (upstream
-/// `reference host:\s+([^)\s]+)`). The pre-fix pattern (`reference host:\s (.*)$`
-/// with `group(0)`) required two spaces after the colon (the template emits one)
-/// and read the whole match, so it never matched a bare hostname and the
-/// stale-result cleanup was dead (upstream `c870fe58`).
+/// Matches a `reference host: <name>` line and captures the hostname. The
+/// template emits a single space after the colon, so the pattern requires at
+/// least one (not two).
 static REFERENCE_HOST_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"reference host:\s+([^)\s]+)").expect("valid reference-host regex")
 });
 
-/// Matches a per-host verdict result line (upstream
-/// `\s:\s(SUCCEEDED|(?<!PASSED/)FAILED|INTERNAL ERROR)`). Rust `regex` has no
-/// look-behind, so the `PASSED/FAILED` placeholder is excluded explicitly in
-/// [`is_result_line`].
+/// Matches a per-host verdict result line: `\s:\s(SUCCEEDED|FAILED|INTERNAL
+/// ERROR)`. Rust `regex` has no look-behind, so the `PASSED/FAILED`
+/// placeholder is excluded explicitly in [`is_result_line`].
 static RESULT_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\s:\s(SUCCEEDED|FAILED|INTERNAL ERROR)").expect("valid result regex")
 });
 
 /// Whether `line` is a per-host verdict result line to be stripped.
 ///
-/// Excludes the `PASSED/FAILED` placeholder (upstream's negative look-behind
-/// `(?<!PASSED/)FAILED`).
+/// Excludes the `PASSED/FAILED` placeholder, since Rust `regex` has no
+/// negative look-behind to do it inline.
 fn is_result_line(line: &str) -> bool {
     RESULT_LINE_RE.is_match(line) && !line.contains("PASSED/FAILED")
 }
@@ -67,13 +63,12 @@ fn is_result_line(line: &str) -> bool {
 pub struct ManualExport {
     /// Shared export state and helpers.
     pub ctx: ExportContext,
-    /// The connected-host views (upstream `self.results`).
+    /// The connected-host views.
     results: Vec<ManualHost>,
     /// The "auto" openQA connector (for `inject_openqa`), if present.
     ///
-    /// Upstream's manual export reads `metadata.openqa.auto`, a
-    /// [`DashboardAutoOpenQA`]; only its rendered [`pp`](DashboardAutoOpenQA::pp)
-    /// block is consumed here.
+    /// Only its rendered [`pp`](DashboardAutoOpenQA::pp) block is consumed
+    /// here.
     auto: Option<DashboardAutoOpenQA>,
     /// The openqa_overview payload, if the overview command ran.
     overview: Option<OpenQAOverviewResult>,
@@ -96,8 +91,7 @@ impl ManualExport {
         }
     }
 
-    /// Converts a host's install log to template lines (upstream
-    /// `_host_installog_to_template`).
+    /// Converts a host's install log to template lines.
     ///
     /// Emits a `log from <host>:` header followed by the stdout of each
     /// `zypper `/`transactional-update` command; returns empty for an unknown
@@ -117,8 +111,7 @@ impl ManualExport {
         t
     }
 
-    /// Writes each host's install log and returns the filenames
-    /// (upstream `get_logs`).
+    /// Writes each host's install log and returns the filenames.
     fn get_logs(&self, hosts: &[String], prompt: &dyn OverwritePrompt) -> Vec<String> {
         let dir = self.ctx.install_logs_dir();
         let mut filenames = Vec::new();
@@ -131,8 +124,7 @@ impl ManualExport {
         filenames
     }
 
-    /// Strips previously-exported verdict lines, then rebuilds host sections
-    /// (upstream `install_results`).
+    /// Strips previously-exported verdict lines, then rebuilds host sections.
     pub fn install_results(&mut self) {
         let hostnames: Vec<String> = self.results.iter().map(|h| h.hostname.clone()).collect();
 
@@ -173,8 +165,7 @@ impl ManualExport {
     }
 
     /// Ensures each host has a section and fills its package before/after
-    /// versions, flipping the verdict placeholder (upstream
-    /// `_fillup_hosts_to_template`).
+    /// versions, flipping the verdict placeholder.
     fn fillup_hosts_to_template(&mut self) {
         // Pass 1: ensure a section exists for every host.
         for host in &self.results {
@@ -301,7 +292,7 @@ impl ManualExport {
         }
     }
 
-    /// Runs the exporter (upstream `run`).
+    /// Runs the exporter.
     pub fn run(&mut self, hosts: &[String], prompt: &dyn OverwritePrompt) -> Vec<String> {
         self.install_results();
         let pp: Vec<String> = self.auto.as_ref().map(|a| a.pp.clone()).unwrap_or_default();
@@ -411,8 +402,7 @@ mod tests {
         // A real per-host verdict line is a result line...
         assert!(is_result_line("something : FAILED\n"));
         assert!(is_result_line("x : SUCCEEDED\n"));
-        // ...but the "=> PASSED/FAILED" placeholder is not (negative
-        // look-behind in upstream's regex).
+        // ...but the "=> PASSED/FAILED" placeholder is not.
         assert!(!is_result_line("=> PASSED/FAILED\n"));
     }
 

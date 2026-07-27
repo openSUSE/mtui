@@ -1,9 +1,9 @@
 //! Integration tests for the QEM Dashboard connector, exercising the public
 //! `QemIncident` + `DashboardAutoOpenQA` API end-to-end against a mock server.
 //!
-//! Ported from `tests/test_qem_dashboard_connector.py` (the `@responses`
-//! end-to-end cases). The `_pretty_print` / pure-helper and async-timeout
-//! assertions are colocated unit tests in `src/qem_dashboard/`.
+//! The end-to-end cases against a mock server. The pure-helper and
+//! async-timeout assertions are colocated unit tests in
+//! `src/qem_dashboard/`.
 
 use mtui_datasources::http::{HttpClient, VerifyPolicy};
 use mtui_datasources::qem_dashboard::{DashboardAutoOpenQA, QemDashboardClient, QemIncident};
@@ -21,7 +21,6 @@ fn client_for(server: &MockServer) -> QemDashboardClient {
 
 #[tokio::test]
 async fn loads_incident_and_aggregate_jobs() {
-    // Ported from test_dashboard_auto_openqa_loads_incident_and_aggregate_jobs.
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -117,7 +116,7 @@ async fn loads_incident_and_aggregate_jobs() {
 
 #[tokio::test]
 async fn slfo_1_2_incident_uses_review_id() {
-    // Ported from test_qem_incident_uses_review_id_for_slfo_1_2: the incident
+    // The incident
     // number for an SLFO 1.2 request is the review id, so every dashboard URL
     // keys on it.
     let server = MockServer::start().await;
@@ -154,7 +153,7 @@ async fn slfo_1_2_incident_uses_review_id() {
 
 #[tokio::test]
 async fn incident_metadata_shortest_package_name() {
-    // Ported from test_qem_incident_metadata (public-API path).
+    // Public-API path.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))

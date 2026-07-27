@@ -10,8 +10,7 @@ use crate::session::Session;
 
 /// Prints the current command timeout per host, in seconds.
 ///
-/// Ports upstream `mtui.commands.simplelists.ListTimeout`, which calls
-/// `targets.report_timeout(display.list_timeout)`. Each host's
+/// Each host's
 /// `(hostname, system, timeout_secs)` is snapshotted first (the
 /// [`Reporter::timeout`](mtui_hosts) fields), then rendered through the
 /// display's `list_timeout` sink.

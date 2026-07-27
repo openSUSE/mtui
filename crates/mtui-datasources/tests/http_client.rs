@@ -1,9 +1,8 @@
 //! Integration tests for the shared [`HttpClient`] GET-to-bytes path.
 //!
-//! Ports the behavioral core of upstream `test_support_http.py`'s `get_bytes`
+//! Exercises the `get_bytes`
 //! group against a real HTTP transport (`wiremock`) instead of a fake session:
-//! a 2xx returns the body bytes, and a non-2xx status is surfaced as an error
-//! (upstream `response.raise_for_status()`).
+//! a 2xx returns the body bytes, and a non-2xx status is surfaced as an error.
 
 use mtui_datasources::{HttpClient, HttpError, VerifyPolicy};
 use wiremock::matchers::{method, path};

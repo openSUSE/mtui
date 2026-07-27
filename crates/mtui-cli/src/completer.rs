@@ -1,8 +1,6 @@
 //! reedline [`Completer`] adapter over the Phase-5 command surface.
 //!
-//! Ports upstream `mtui/cli/_completer.py::MtuiCompleter`, which bridges
-//! prompt_toolkit's `Completer` onto the `cmd.Cmd`-style `complete_<name>`
-//! methods. Here the bridge is from [`reedline::Completer`] onto the
+//! Bridges [`reedline::Completer`] onto the
 //! [`Command::complete`](mtui_core::Command::complete) surface every command
 //! already implements (P5), plus [`Registry::keys`] (names **and** aliases) for
 //! first-token completion.
@@ -18,9 +16,8 @@
 //! the candidates). The completer therefore holds a clone of the same
 //! `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl) loop drives and takes a
 //! short-lived lock inside [`complete`](MtuiCompleter::complete) to read live
-//! state — the analogue of upstream holding a live `CommandPrompt` reference.
-//! Completion happens *during* `read_line`; dispatch happens *after* it returns,
-//! so the lock never overlaps the per-line dispatch lock.
+//! state. Completion happens *during* `read_line`; dispatch happens *after* it
+//! returns, so the lock never overlaps the per-line dispatch lock.
 
 use std::sync::{Arc, Mutex};
 
@@ -44,10 +41,10 @@ impl MtuiCompleter {
 
 /// Splits `line` into `(word_before_cursor, begidx)`.
 ///
-/// Mirrors upstream `_split_text_word` / `cmd.Cmd.complete`: `text` is the
-/// contiguous non-whitespace tail of `line`, `begidx` the byte offset where that
-/// tail starts. When `line` ends in whitespace (e.g. `"run -t "`), `text` is
-/// empty and `begidx == line.len()` — the command completer is still invoked.
+/// `text` is the contiguous non-whitespace tail of `line`, `begidx` the byte
+/// offset where that tail starts. When `line` ends in whitespace (e.g.
+/// `"run -t "`), `text` is empty and `begidx == line.len()` — the command
+/// completer is still invoked.
 ///
 /// Offsets are byte offsets into `line`, matching reedline's [`Span`] contract.
 fn split_text_word(line: &str) -> (&str, usize) {
@@ -63,13 +60,12 @@ impl Completer for MtuiCompleter {
     /// Returns completion candidates for the buffer `line` up to byte offset
     /// `pos`.
     ///
-    /// Dispatch rules (upstream parity):
+    /// Dispatch rules:
     ///
     /// * The buffer before the cursor is `&line[..pos]`, then left-trimmed so
-    ///   column offsets match upstream's `lstrip`.
+    ///   column offsets match the trimmed buffer.
     /// * `begidx == 0` → **first-token** completion: registry command names
-    ///   **and aliases** by case-sensitive prefix match (upstream
-    ///   `_completer.py` iterates `prompt.commands`, which includes aliases).
+    ///   **and aliases** by case-sensitive prefix match.
     /// * otherwise → **per-command**: look up the first token in the registry
     ///   and delegate to its `complete(session, text, line)`; an unknown token
     ///   or a command with no completer yields nothing.
@@ -79,7 +75,7 @@ impl Completer for MtuiCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         // The buffer up to the cursor (reedline hands us the whole line + pos).
         let before = &line[..pos.min(line.len())];
-        // Upstream lstrips before computing offsets; track the shift so the
+        // Left-trim before computing offsets; track the shift so the
         // reported span still indexes the *original* buffer in bytes.
         let leading = before.len() - before.trim_start().len();
         let stripped = &before[leading..];
@@ -89,8 +85,7 @@ impl Completer for MtuiCompleter {
         let span = Span::new(leading + begidx_in_stripped, pos.min(line.len()));
 
         let candidates = if begidx_in_stripped == 0 {
-            // First-token completion: registry names *and aliases* by prefix
-            // (upstream parity — `prompt.commands` carries aliases as keys).
+            // First-token completion: registry names *and aliases* by prefix.
             self.registry
                 .keys()
                 .filter(|key| key.starts_with(text))
@@ -99,10 +94,10 @@ impl Completer for MtuiCompleter {
         } else {
             // Per-command completion: first token names the command.
             let first_token = stripped.split(' ').next().unwrap_or("");
-            // `help <cmd>` completes over command names. Upstream `Help.complete`
-            // reaches the registry via the base-class command set; the trait's
-            // `complete(session, …)` has no registry handle, so the adapter — which
-            // does — supplies the candidates here (canonical names + aliases).
+            // `help <cmd>` completes over command names. The trait's
+            // `complete(session, …)` has no registry handle, so the adapter —
+            // which does — supplies the candidates here (canonical names +
+            // aliases).
             if first_token == "help" {
                 self.registry
                     .keys()
@@ -265,7 +260,7 @@ mod tests {
         let mut c = completer();
         let s = c.complete("", 0);
         // Insertion order, each command's name before its own aliases
-        // (`run` carries alias `r`) — upstream `prompt.commands` parity.
+        // (`run` carries alias `r`).
         assert_eq!(values(&s), vec!["run", "r", "shell", "reboot"]);
     }
 
@@ -282,8 +277,7 @@ mod tests {
     #[test]
     fn first_token_completes_aliases() {
         // An alias-only prefix must surface the alias: `run` carries alias `r`,
-        // so completing `r` (before any space) offers the alias itself —
-        // upstream parity with `prompt.commands` iteration.
+        // so completing `r` (before any space) offers the alias itself.
         let mut c = completer();
         let s = c.complete("r", 1);
         assert!(

@@ -11,8 +11,7 @@ use crate::session::Session;
 
 /// Lists all connected hosts with their system and state.
 ///
-/// Ports upstream `mtui.commands.simplelists.ListHosts`, which calls
-/// `targets.report_self(display.list_host)`. Each host's status tuple
+/// Each host's status tuple
 /// (`hostname, system, transactional, state` — the
 /// [`Reporter::self_`](mtui_hosts) fields) is snapshotted first so the report
 /// borrow does not overlap the display's mutable borrow, then rendered through

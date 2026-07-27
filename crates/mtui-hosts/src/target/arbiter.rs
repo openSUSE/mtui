@@ -1,16 +1,11 @@
 //! In-process arbitration of reference hosts across loaded templates.
 //!
-//! ## Reference
-//!
-//! Ported from upstream `mtui/hosts/host_arbiter.py` (`HostArbiter`,
-//! `get_arbiter`) and its `tests/test_host_arbiter.py`.
-//!
 //! When several templates are loaded in one process (one REPL, or several MCP
 //! sessions sharing an interpreter) and fan-out connects them concurrently, the
 //! remote `/var/lock/mtui.lock` cannot keep two templates off the same shared
 //! host: that lock is keyed on `(user, pid)` and every same-process template
 //! shares the pid, so [`TargetLock::is_mine`](super::locks::TargetLock) is true
-//! for all of them (upstream RFC §5.7).
+//! for all of them.
 //!
 //! [`HostArbiter`] closes that gap. It is a task-safe map `hostname -> owner`
 //! where the owner is the composite [`Owner`] `(registry_id, RRID)`, so two MCP
@@ -23,15 +18,13 @@
 //! and SSH session. A single process-global instance is shared by every caller;
 //! obtain it via [`get_arbiter`].
 //!
-//! ## Concurrency model (deviation from upstream)
+//! ## Concurrency model
 //!
-//! Upstream blocks a worker thread on a `threading.Condition`. This port is
-//! async-native: [`HostArbiter::acquire_any`] is `async`, the queue wakes via a
+//! [`HostArbiter::acquire_any`] is `async`: the queue wakes via a
 //! [`tokio::sync::Notify`], and the wait budget is driven by an injected
 //! [`Clock`] (the same trait [`TargetLock`](super::locks::TargetLock) uses), so
 //! timeout behaviour is deterministic and fast under a fake clock in tests. The
-//! process-global singleton uses [`std::sync::OnceLock`] in place of upstream's
-//! double-checked `_ARBITER` / `_ARBITER_LOCK`.
+//! process-global singleton uses [`std::sync::OnceLock`].
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -46,7 +39,7 @@ use super::locks::{Clock, SystemClock};
 /// owners, so the arbiter keys on the pair, not the RRID alone.
 pub type Owner = (String, String);
 
-/// The default per-wake-up poll ceiling, in seconds (upstream `poll=15`).
+/// The default per-wake-up poll ceiling, in seconds.
 const DEFAULT_POLL: u64 = 15;
 
 /// Task-safe `hostname -> owner` map with an async wait queue.
@@ -222,8 +215,7 @@ impl<C: Clock> HostArbiter<C> {
 
 /// The process-global [`HostArbiter`] (created on first use).
 ///
-/// The Rust-idiomatic replacement for upstream's `_ARBITER` / `_ARBITER_LOCK`
-/// double-checked singleton. Pinned to [`SystemClock`]; tests construct their
+/// A double-checked singleton, pinned to [`SystemClock`]; tests construct their
 /// own [`HostArbiter::with_clock`] instead of touching the global.
 #[must_use]
 pub fn get_arbiter() -> &'static HostArbiter<SystemClock> {

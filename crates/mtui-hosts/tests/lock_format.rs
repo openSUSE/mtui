@@ -6,9 +6,6 @@
 //! freezes the
 //! serialized form for both the operation lock (`TargetLock`) and the pool
 //! claim lock (`PoolLock`), including the pool comment that carries the RRID.
-//!
-//! Port of the intent behind upstream `tests/test_locks.py`'s serialization
-//! assertions (`to_lockfile` / `from_lockfile`), pinned as a snapshot.
 
 use mtui_hosts::RemoteLock;
 

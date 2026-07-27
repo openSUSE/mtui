@@ -13,7 +13,7 @@ use crate::session::Session;
 
 /// Lists packages and their installed versions on the reference hosts.
 ///
-/// Ports upstream `mtui.commands.listpackages.ListPackages`. For each selected
+/// For each selected
 /// host it queries the installed version of every package (the report's package
 /// list plus any `-p/--package` extras) and prints a colored state versus the
 /// version the report requires:
@@ -28,15 +28,13 @@ pub struct ListPackages;
 
 /// The rendered state of a package on a host.
 ///
-/// Distinguishes three outcomes upstream keeps separate but which a bare
+/// Distinguishes three outcomes a bare
 /// `Option<Ordering>` cannot express:
 /// * [`PkgState::Blank`] — installed but with no required version to compare
 ///   against (no template loaded, the host was never seeded with this package —
 ///   e.g. a `-p` extra or a host whose system failed to parse — or a seeded
-///   package with an empty required). Upstream renders an empty state column
-///   (`"" if v`), the `KeyError`/no-metadata branch.
-/// * [`PkgState::NotInstalled`] — the querier found the package absent
-///   (upstream's `state_map[None]`, printed only when `v` is falsy).
+///   package with an empty required). Renders as an empty state column.
+/// * [`PkgState::NotInstalled`] — the querier found the package absent.
 /// * [`PkgState::Cmp`] — installed and comparable to a required version.
 #[derive(Clone, Copy)]
 enum PkgState {
@@ -45,7 +43,7 @@ enum PkgState {
     Cmp(Ordering),
 }
 
-/// Maps a [`PkgState`] to the upstream colored state label.
+/// Maps a [`PkgState`] to its colored state label.
 fn state_label(display: &crate::display::CommandPromptDisplay, state: PkgState) -> String {
     match state {
         PkgState::Blank => String::new(),
@@ -123,9 +121,9 @@ impl Command for ListPackages {
             return Err(CommandError::NoRefhostsDefined);
         }
 
-        // Query every selected host concurrently (upstream fans this out; a
-        // serial `.await` per host turned an 11-host group into 11 sequential
-        // SSH round-trips). `values_mut()` hands back disjoint `&mut Target`, so
+        // Query every selected host concurrently: a serial `.await` per host
+        // would turn an 11-host group into 11 sequential SSH round-trips.
+        // `values_mut()` hands back disjoint `&mut Target`, so
         // each host's `rpm -q` is an independent future driven together by
         // `join_all`; the per-host render then reads the snapshotted result.
         let selected: std::collections::HashSet<&str> = hosts.iter().map(String::as_str).collect();
@@ -146,12 +144,11 @@ impl Command for ListPackages {
                             .iter()
                             .find(|p| &p.name == pkg)
                             .and_then(|p| p.required().cloned());
-                        // Mirror upstream exactly (`listpackages.py`): a package
-                        // absent from the querier is "not installed"; an
+                        // A package absent from the querier is "not installed"; an
                         // installed package with no required version to compare
                         // against renders BLANK — never "not installed". The
-                        // "no required version" case covers all three upstream
-                        // paths that lack one: no template loaded, the host's
+                        // "no required version" case covers three situations: no
+                        // template loaded, the host's
                         // seed does not carry this package (e.g. a `-p` extra, or
                         // a host whose system failed to parse so it was never
                         // seeded), and a seeded package with an empty required.
@@ -191,8 +188,8 @@ impl Command for ListPackages {
 }
 
 impl ListPackages {
-    /// The `-w/--wanted` path: print the versions the report wants (upstream
-    /// `_run_just_wanted`), grouped by product, without touching any host.
+    /// The `-w/--wanted` path: print the versions the report wants, grouped by
+    /// product, without touching any host.
     fn run_wanted(&self, session: &mut Session) -> CommandResult {
         let packages = session.metadata().base().packages.clone();
         if packages.is_empty() {

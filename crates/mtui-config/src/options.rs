@@ -1,9 +1,8 @@
 //! Typed configuration options and their defaults.
 //!
 //! Covers every option section mtui understands. Most scalar defaults are
-//! long-standing values operators already rely on and are pinned by
-//! `default_matches_upstream_scalars` below; a handful deviate deliberately, and
-//! those carry a note on their `default_*` fn.
+//! long-standing values operators rely on (pinned by the default-scalars test
+//! below); a handful deviate deliberately, each flagged on its `default_*` fn.
 //!
 //! ## Shape
 //!
@@ -27,8 +26,7 @@ use crate::paths::expanduser;
 ///
 /// * a native boolean — `ssl_verify = true` / `ssl_verify = false`;
 /// * a boolean *spelling* string — `"yes"`, `"no"`, `"on"`, `"off"`, `"1"`,
-///   `"0"`, `"true"`, `"false"` (case-insensitive), matching upstream
-///   `_parse_ssl_verify`;
+///   `"0"`, `"true"`, `"false"` (case-insensitive);
 /// * any other string — treated as a path to a custom CA bundle/certificate,
 ///   e.g. `ssl_verify = "/my/own/cert.pem"`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -43,7 +41,7 @@ pub enum SslVerify {
 }
 
 impl SslVerify {
-    /// Coerce a raw string value, following upstream's accepted spellings.
+    /// Coerce a raw string value from its accepted spellings.
     ///
     /// A recognised boolean spelling maps to [`Enabled`](Self::Enabled) /
     /// [`Disabled`](Self::Disabled); anything else is a CA bundle path.
@@ -101,19 +99,19 @@ impl<'de> Deserialize<'de> for SslVerify {
     }
 }
 
-// -- Parse-time validators (mirror upstream `config.py` `_parse_*`). ----------
+// -- Parse-time validators. ---------------------------------------------------
 //
-// Upstream validates a handful of options at parse time and, on failure, logs at
-// ERROR and falls back to the option's default (per-option, never hard-failing).
-// mtui applies the same per-field fallback in `Config::from_raw`. Rust's typed
+// A handful of options are validated at parse time and, on failure, logged at
+// ERROR and fall back to the option's default (per-option, never hard-failing).
+// mtui applies this per-field fallback in `Config::from_raw`. Rust's typed
 // `u64`/`usize` fields already reject non-numeric and negative literals at TOML
 // deserialise time, so the positive-int guard reduces to rejecting `0`.
 
-/// Validate an `http(s)` endpoint URL, mirroring upstream `_parse_base_url`.
+/// Validate an `http(s)` endpoint URL.
 ///
 /// Requires an `http` or `https` scheme, a non-empty host, and — when a port is
-/// present — a numeric one. This is deliberately lenient (matching Python's
-/// `urlsplit`, not full RFC 3986): a bad value like `https://openqa.suse.de:44e3`
+/// present — a numeric one. This is deliberately lenient (a split-based check,
+/// not full RFC 3986): a bad value like `https://openqa.suse.de:44e3`
 /// is rejected, but exotic-yet-usable forms are accepted.
 fn validate_base_url(raw: &str) -> bool {
     let token = raw.trim();
@@ -156,8 +154,7 @@ fn is_numeric_port(port: &str) -> bool {
     !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok()
 }
 
-/// Validate `[mtui] install_logs` as a single relative directory name, mirroring
-/// upstream `_parse_install_logs`.
+/// Validate `[mtui] install_logs` as a single relative directory name.
 ///
 /// The value is joined per update as `template_dir / <rrid> / install_logs`;
 /// an empty, absolute, separator-containing, or `.`/`..` value would crash or
@@ -171,7 +168,7 @@ fn is_relative_dir_name(raw: &str) -> bool {
         && token != ".."
 }
 
-// -- Upstream default helpers (used both by serde and by `Config::default`). --
+// -- Default helpers (used both by serde and by `Config::default`). --
 
 fn default_connection_timeout() -> u64 {
     300
@@ -214,10 +211,9 @@ fn default_openqa_instance_baremetal() -> String {
 }
 /// Default trusted Gitea origin the PR-review token may be sent to.
 ///
-/// A redesign addition with no upstream counterpart (upstream mtui derives the
-/// Gitea host solely from attacker-influenceable checked-out metadata). The
-/// token is only attached to requests whose origin matches this value, so it
-/// defaults to the internal SUSE Gitea (`src.suse.de`) that serves SLFO so the
+/// The trusted origin the PR-review token may be attached to: the token is
+/// only sent on requests whose origin matches this value, so it defaults to the
+/// internal SUSE Gitea (`src.suse.de`) that serves SLFO so the
 /// standard workflow keeps working out-of-the-box; point it elsewhere (e.g.
 /// `https://src.opensuse.org`) for other instances.
 fn default_gitea_url() -> String {
@@ -266,8 +262,8 @@ fn default_refhosts_https_expiration() -> u64 {
     3600 * 12
 }
 fn default_refhosts_path() -> PathBuf {
-    // Deliberate deviation from upstream (which hardcodes
-    // /usr/share/qam-metadata/refhosts.yml): mtui defaults to a per-user path.
+    // Deliberate design choice: mtui defaults to a per-user path
+    // (rather than a hardcoded /usr/share/qam-metadata/refhosts.yml).
     expanduser(&PathBuf::from("~/.local/share/refdb/refhosts.yml"))
 }
 fn default_install_logs() -> PathBuf {
@@ -331,8 +327,9 @@ fn default_mcp_session_cap() -> usize {
     32
 }
 fn default_mcp_session_idle_timeout() -> u64 {
-    // 4 hours. Deliberately higher than upstream's 1800s: this value also pins
-    // the rmcp streamable-HTTP session keep-alive (`serve_http`), whose own
+    // 4 hours. Chosen higher than a bare keep-alive floor because this value
+    // also pins the rmcp streamable-HTTP session keep-alive (`serve_http`),
+    // whose own
     // default (300s) tore down idle http sessions mid-conversation.
     14_400
 }
@@ -439,8 +436,8 @@ pub(crate) struct TargetSection {
 
 /// `[gitea]` table — credentials for the Gitea PR review workflow.
 ///
-/// Mirrors upstream `mtui/support/config.py`'s `gitea_token` option (INI
-/// `[gitea] token`). The Gitea connector refuses to build without it.
+/// The `gitea_token` credential lives here as `[gitea] token`. The Gitea
+/// connector refuses to build without it.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct GiteaSection {
@@ -467,9 +464,8 @@ pub(crate) struct SlackSection {
 
 /// `[lock]` table — remote-lock behaviour on target hosts.
 ///
-/// Mirrors upstream `mtui/support/config.py`'s `lock_*` options (which live
-/// under the `[lock]` INI section): stale-lock reaping on connect and the
-/// host-arbitration pool-claim wait queue.
+/// The `lock_*` options live under the `[lock]` table: stale-lock reaping on
+/// connect and the host-arbitration pool-claim wait queue.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct LockSection {
@@ -484,17 +480,15 @@ pub(crate) struct LockSection {
 
 /// `[mcp]` table — `mtui-mcp` server behaviour.
 ///
-/// Mirrors upstream `mtui/support/config.py`'s `mcp_*` options (which live under
-/// the `[mcp]` INI section). `session_cap` / `session_idle_timeout` configure the
+/// The `mcp_*` options live under the `[mcp]` table. `session_cap` /
+/// `session_idle_timeout` configure the
 /// http transport's per-client session budget, enforced application-side by
 /// `mtui_mcp::provider::SessionRegistry`. `profile` / `tools_allow` /
 /// `tools_deny` select the exposed
 /// tool surface (see `mtui_mcp::profiles`).
 ///
-/// Note: upstream names the profile key `tool_profile`; here it is `profile`
-/// under the already tool-scoped `[mcp]` table (an intentional TOML-idiomatic
-/// deviation). The list keys keep their upstream names, but are native TOML
-/// arrays of strings rather than upstream's comma-separated INI strings.
+/// Note: the profile key is `profile` under the already tool-scoped `[mcp]`
+/// table. The list keys are native TOML arrays of strings.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct McpSection {
@@ -513,9 +507,8 @@ pub(crate) struct McpSection {
 
 /// `[obs]` table — the native OBS/IBS QAM review backend.
 ///
-/// Mirrors upstream `mtui/support/config.py`'s `obs_*` options (INI `[obs]`
-/// section), added when upstream cut over to the native OBS API backend and
-/// dropped the transitional `backend` selector (mtui is native-only). No OBS
+/// The `obs_*` options live under the `[obs]` table. mtui uses the native OBS
+/// API backend only, so there is no transitional `backend` selector. No OBS
 /// credentials live here — the oscrc remains the sole credential source (see
 /// `mtui_datasources::obs::oscrc`).
 ///
@@ -626,8 +619,8 @@ impl RawConfig {
 /// Fully-typed configuration consumed by the rest of the workspace.
 ///
 /// Construct via [`Config::load`](crate::Config::load) (file/env/defaults) or
-/// [`Config::default`] (all upstream defaults). Path-typed options have `~`
-/// expanded to the user's home directory, matching upstream `expanduser`.
+/// [`Config::default`] (all defaults). Path-typed options have `~`
+/// expanded to the user's home directory via [`expanduser`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Config {
@@ -658,7 +651,7 @@ pub struct Config {
     /// Maximum number of hosts to fan out to concurrently (SSH command,
     /// SFTP, lock-probe, and connect batches). Caps peak sockets/tasks/RSS
     /// and remote load on large fleets; serial-host semantics are unaffected.
-    /// A non-positive value falls back to the default (upstream is unbounded).
+    /// A non-positive value falls back to the default.
     pub max_parallel: u64,
     /// Maximum number of independent openQA/QAM HTTP requests to run
     /// concurrently in the oqa-search overview (per-version, group×version, and
@@ -688,19 +681,19 @@ pub struct Config {
     pub fancy_reports_url: String,
 
     // [qem_dashboard]
-    /// QEM Dashboard API base URL (upstream `qem_dashboard_api`).
+    /// QEM Dashboard API base URL.
     pub qem_dashboard_api: String,
 
     // [teregen]
-    /// TeReGen report/queue API base URL (upstream `teregen_api`).
+    /// TeReGen report/queue API base URL.
     pub teregen_api: String,
 
     // [openqa]
-    /// openQA instance URL (upstream `openqa_instance`).
+    /// openQA instance URL.
     pub openqa_instance: String,
-    /// Baremetal openQA instance URL (upstream `openqa_instance_baremetal`).
+    /// Baremetal openQA instance URL.
     pub openqa_instance_baremetal: String,
-    /// openQA install `distri` parameter (upstream `openqa_install_distri`).
+    /// openQA install `distri` parameter.
     pub openqa_install_distri: String,
 
     // [svn]
@@ -778,8 +771,8 @@ pub struct Config {
     /// `mcp_max_output_bytes` (the wire-result cap): this bounds the *source*
     /// read so a huge or slow file cannot exhaust memory, while still letting a
     /// caller page through a large log via `offset`/`limit`. Reads past this are
-    /// truncated with a notice (never refused). `0` disables the cap. No upstream
-    /// equivalent — this is a hardening addition. Default is 10_000_000.
+    /// truncated with a notice (never refused). `0` disables the cap. A
+    /// hardening addition. Default is 10_000_000.
     pub mcp_max_input_bytes: usize,
     /// Upper bound (bytes) on an inbound HTTP request body the `--transport http`
     /// MCP server will buffer before rejecting it (413). Distinct from
@@ -787,19 +780,18 @@ pub struct Config {
     /// http transport itself, so an unauthenticated pre-session request cannot be
     /// buffered until memory exhaustion. `0` disables mtui's limit entirely
     /// (`DefaultBodyLimit::disable()`), removing even axum's implicit 2 MB floor.
-    /// No upstream equivalent — this is a hardening addition. Default is
-    /// 10_000_000.
+    /// A hardening addition. Default is 10_000_000.
     pub mcp_max_request_bytes: usize,
     /// Ceiling on concurrent (running) background jobs a single `mtui-mcp`
     /// session may hold (DoS guard). A `start`/`start_jobs` request that would
     /// exceed this is rejected *before* any worker is spawned. `0` disables the
-    /// cap. Default is 16. No upstream equivalent — this is a hardening addition.
+    /// cap. Default is 16. A hardening addition.
     pub mcp_max_active_jobs: usize,
     /// Ceiling on retained *terminal* (done/failed/cancelled) background-job
     /// records per session; the oldest-finished records beyond this are evicted
     /// FIFO so a long-lived session does not accumulate job history unbounded.
-    /// Running jobs are never evicted. `0` disables the cap. Default is 128. No
-    /// upstream equivalent — this is a hardening addition.
+    /// Running jobs are never evicted. `0` disables the cap. Default is 128. A
+    /// hardening addition.
     pub mcp_max_completed_jobs: usize,
     /// Ceiling on concurrent per-client sessions under `--transport http` (DoS
     /// guard). Default is 32. Enforced by
@@ -810,14 +802,14 @@ pub struct Config {
     /// disables the sweeper. Also pins the rmcp streamable-HTTP session
     /// keep-alive (`serve_http`) so the transport does not tear a session down
     /// before this sweeper would. Default is 14400 (4h) — deliberately higher
-    /// than upstream's 1800 (which would let rmcp's own 300s keep-alive drop
-    /// idle sessions mid-conversation).
+    /// than a bare keep-alive floor (a lower value would let rmcp's own 300s
+    /// keep-alive drop idle sessions mid-conversation).
     pub mcp_session_idle_timeout: u64,
     /// Max stale sessions the idle sweeper tears down concurrently in one sweep
     /// cycle (each teardown is bounded by the per-session disconnect timeout).
     /// Bounding the fan-out keeps a mass eviction from a host-teardown thundering
     /// herd while making sweep latency ~independent of stale-session count.
-    /// Default is 4. No upstream equivalent — this is a hardening addition
+    /// Default is 4. A hardening addition
     /// (mtui-rs-0mop.10).
     pub mcp_sweep_parallel: usize,
     /// Tool-surface profile the `mtui-mcp` server exposes: `"full"` (default,
@@ -911,7 +903,7 @@ impl Config {
         let d = Config::default();
 
         // Per-field parse-time validation with fallback to the default (logged
-        // at ERROR), mirroring upstream `config.py`. A present-but-invalid value
+        // at ERROR). A present-but-invalid value
         // never invalidates the rest of the file.
         macro_rules! validated_url {
             ($opt:expr, $field:literal, $default:expr) => {
@@ -1108,7 +1100,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_matches_upstream_scalars() {
+    fn default_scalars_are_pinned() {
         let c = Config::default();
         assert_eq!(c.connection_timeout, 300);
         assert_eq!(c.reboot_timeout, 10);
@@ -1136,7 +1128,7 @@ mod tests {
         }
         assert_eq!(c.install_logs, PathBuf::from("install_logs"));
         assert_eq!(c.target_tempdir, PathBuf::from("/tmp"));
-        // [lock] defaults mirror upstream config.py exactly.
+        // [lock] defaults.
         assert!(c.lock_reap_stale);
         assert_eq!(c.lock_stale_age, 86400);
         // Pool-claim reaping defaults match the operation lock's.
@@ -1145,13 +1137,13 @@ mod tests {
         assert!(c.lock_pi_autolock);
         assert_eq!(c.lock_wait, 0);
         assert_eq!(c.lock_wait_poll, 15);
-        // openQA / QEM Dashboard / TeReGen defaults mirror upstream config.py.
+        // openQA / QEM Dashboard / TeReGen defaults.
         assert_eq!(c.qem_dashboard_api, "http://dashboard.qam.suse.de/api");
         assert_eq!(c.teregen_api, "https://qam.suse.de/api/v1");
         assert_eq!(c.openqa_instance, "https://openqa.suse.de");
         assert_eq!(c.openqa_instance_baremetal, "http://openqa.qam.suse.cz");
         assert_eq!(c.openqa_install_distri, "sle");
-        // [obs] defaults mirror upstream config.py exactly (native-only backend).
+        // [obs] defaults (native-only backend).
         assert_eq!(c.obs_api_url, "https://api.suse.de");
         assert_eq!(c.obs_request_timeout, 180);
     }
@@ -1173,7 +1165,7 @@ mod tests {
 
     #[test]
     fn obs_section_partial_keeps_defaults() {
-        // A partial [obs] table leaves absent keys at their upstream defaults.
+        // A partial [obs] table leaves absent keys at their built-in defaults.
         let raw: RawConfig = toml::from_str("[obs]\nrequest_timeout = 90\n").unwrap();
         let c = Config::from_raw(raw);
         assert_eq!(c.obs_request_timeout, 90);
@@ -1342,7 +1334,7 @@ mod tests {
 
     #[test]
     fn lock_section_partial_keeps_defaults() {
-        // A partial [lock] table leaves absent keys at their upstream defaults.
+        // A partial [lock] table leaves absent keys at their built-in defaults.
         let raw: RawConfig = toml::from_str("[lock]\nwait = 45\n").unwrap();
         let c = Config::from_raw(raw);
         assert_eq!(c.lock_wait, 45);
@@ -1475,7 +1467,7 @@ mod tests {
     }
 
     #[test]
-    fn is_relative_dir_name_matches_upstream() {
+    fn is_relative_dir_name_behaves_as_specified() {
         assert!(is_relative_dir_name("install_logs"));
         assert!(is_relative_dir_name("logs"));
         for bad in ["", "a/b", "/abs", ".", "..", "sub/dir/"] {
@@ -1562,7 +1554,7 @@ mod tests {
 
     #[test]
     fn zero_legal_int_options_accept_zero() {
-        // These upstream options use plain `int`; 0 is meaningful and must NOT
+        // These options use a plain integer; 0 is meaningful and must NOT
         // be rejected: lock_stale_age (disables reaping), lock_wait (fail fast),
         // mcp_max_output_bytes (disables the cap).
         let raw: RawConfig = toml::from_str(

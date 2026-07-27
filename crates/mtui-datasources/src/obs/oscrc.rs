@@ -1,6 +1,6 @@
 //! Native reader for OBS/IBS credentials from oscrc (no `osc` subprocess).
 //!
-//! Ported from upstream `mtui/data_sources/obs/oscrc.py`. Parses the user's
+//! Parses the user's
 //! existing oscrc (genuine INI) and resolves the credentials for one apiurl (the
 //! fixed `https://api.suse.de`) into a small [`ObsCredentials`]. The oscrc is
 //! located exactly like `osc` itself (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc`
@@ -20,8 +20,7 @@ use super::errors::ObsError;
 
 /// An `sshkey` value like `SHA256:abc…` names a key held by the ssh agent by
 /// fingerprint rather than a file on disk; the native backend resolves it
-/// through the agent at signing time. Mirrors upstream `_FINGERPRINT_RE`
-/// (`^[A-Z0-9]+:`).
+/// through the agent at signing time (matches `^[A-Z0-9]+:`).
 fn is_fingerprint(value: &str) -> bool {
     match value.find(':') {
         // At least one leading char, all of them ASCII-uppercase or digit.
@@ -35,8 +34,7 @@ fn is_fingerprint(value: &str) -> bool {
 /// `credentials_mgr_class` values whose secret lives outside the oscrc (a system
 /// keyring, or a transient prompt), so the native backend can never read it and
 /// will not prompt. Only consulted when no usable `sshkey` is configured: a
-/// working key authenticates by signature regardless of the manager. Mirrors
-/// upstream `_UNSUPPORTED_MGR`.
+/// working key authenticates by signature regardless of the manager.
 const UNSUPPORTED_MGR: [&str; 2] = ["keyring", "transient"];
 
 /// Resolved OBS Signature-auth credentials for one apiurl.
@@ -62,8 +60,8 @@ pub struct ObsCredentials {
 
 /// Expand a leading `~` / `~/` in a path against `$HOME` (best effort).
 ///
-/// Mirrors upstream `Path.expanduser`. A path without a leading `~` is returned
-/// unchanged; a missing `$HOME` leaves the `~` in place (as upstream does).
+/// Behaves like Python's `Path.expanduser`: a path without a leading `~` is
+/// returned unchanged; a missing `$HOME` leaves the `~` in place.
 fn expanduser(raw: &str) -> PathBuf {
     if raw == "~" {
         if let Some(home) = home_dir() {
@@ -102,7 +100,7 @@ fn xdg_config_home() -> PathBuf {
 
 /// Locate the oscrc exactly like `osc` (its `identify_conf`).
 ///
-/// Precedence, mirroring upstream `osc`:
+/// Precedence, matching `osc`:
 ///
 /// 1. `$OSC_CONFIG` (verbatim, `~`-expanded, if set) — the explicit override.
 /// 2. `$XDG_CONFIG_HOME/osc/oscrc` (default `~/.config/osc/oscrc`) if it exists.
@@ -160,7 +158,7 @@ pub fn resolve_sshkey(raw: &str) -> Result<(Option<PathBuf>, Option<String>), Ob
 /// A key is usable if its private file or its `.pub` (agent) counterpart exists.
 ///
 /// A `.pub`-only key on disk is signed via an ssh-agent that holds the private
-/// half (matched by public blob at auth time). Mirrors upstream `_key_available`.
+/// half (matched by public blob at auth time).
 fn key_available(key_path: &Path) -> bool {
     if key_path.is_file() {
         return true;
@@ -172,8 +170,8 @@ fn key_available(key_path: &Path) -> bool {
 
 /// Warn (Unix only) when the oscrc file is group/world-accessible.
 ///
-/// Mirrors upstream's `st_mode & (S_IRWXG | S_IRWXO)` check. On non-Unix targets
-/// there are no such permission bits, so this is a no-op.
+/// Checks `st_mode & (S_IRWXG | S_IRWXO)`. On non-Unix targets there are no
+/// such permission bits, so this is a no-op.
 #[cfg(unix)]
 fn warn_loose_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;

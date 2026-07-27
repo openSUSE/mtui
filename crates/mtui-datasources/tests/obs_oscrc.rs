@@ -1,18 +1,16 @@
 //! Golden tests for the native oscrc credential reader
-//! (`mtui_datasources::obs::oscrc`), ported 1:1 from upstream
-//! `tests/test_obs_oscrc.py`.
+//! (`mtui_datasources::obs::oscrc`).
 //!
 //! The reader locates oscrc exactly like `osc` (`$OSC_CONFIG` →
 //! `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`), so each case writes a throwaway
 //! oscrc under a `TempDir` and points `$OSC_CONFIG` at it, then asserts the
 //! resolved [`ObsCredentials`] or the fail-closed [`ObsError::Config`] message
-//! substring upstream pins. No network, no real `~/.oscrc`, no interactive
+//! substring. No network, no real `~/.oscrc`, no interactive
 //! prompt.
 //!
 //! `$OSC_CONFIG`/`$HOME`/`$XDG_CONFIG_HOME` are process-global, so every test
 //! that mutates them is `#[serial(osc_config_env)]` and installs an [`EnvGuard`]
-//! that isolates all three under a temp dir (mirroring upstream's autouse
-//! `_isolate_oscrc_discovery` fixture) and restores them on drop.
+//! that isolates all three under a temp dir and restores them on drop.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,8 +25,8 @@ const API: &str = "https://api.suse.de";
 ///
 /// On construction it clears `$OSC_CONFIG` and redirects `$HOME` and
 /// `$XDG_CONFIG_HOME` under a fresh temp dir, so the reader never touches the
-/// developer's real files (mirrors upstream's autouse `_isolate_oscrc_discovery`
-/// fixture). On drop it restores every variable to its prior value. Must only be
+/// developer's real files. On drop it restores every variable to its prior
+/// value. Must only be
 /// used inside `#[serial(osc_config_env)]` tests: `std::env` mutation is
 /// process-global.
 struct EnvGuard {

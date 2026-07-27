@@ -1,6 +1,6 @@
 //! XML parsers for the OBS payloads the native QAM ops need (no `osc`).
 //!
-//! Ported from upstream `mtui/data_sources/obs/models.py`. Small, explicit
+//! Small, explicit
 //! `quick-xml` parsers over the `withfullhistory=1` request document, the
 //! `group?login` directory, and the `MAINT:RejectReason` attribute envelope.
 //! The request parser exposes each review's NESTED `<history>`
@@ -79,8 +79,8 @@ pub struct Request {
 
 /// Refuse an OBS document carrying a DTD, before any parsing.
 ///
-/// Reproduces upstream `models._fromstring`'s pre-parse guard: a body carrying
-/// `<!DOCTYPE` or `<!ENTITY` is rejected. The message contains `"DTD"`.
+/// A body carrying `<!DOCTYPE` or `<!ENTITY` is rejected before parsing. The
+/// message contains `"DTD"`.
 fn refuse_dtd(xml: &str) -> Result<(), ObsError> {
     if xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY") {
         return Err(ObsError::Parse(
@@ -389,8 +389,6 @@ pub fn parse_reject_reason_values(xml: &str) -> Result<Vec<String>, ObsError> {
 }
 
 /// Build the `<attributes>` POST body for `MAINT:RejectReason`.
-///
-/// Mirrors upstream `models.build_reject_reason_body`'s serialised element.
 #[must_use]
 pub(crate) fn build_reject_reason_body(values: &[String]) -> String {
     let mut body = format!(

@@ -1,7 +1,6 @@
 //! The `list_refhosts` command: query/search the refhost inventory offline.
 //!
-//! Ports upstream `mtui.commands.list_refhosts.ListRefhosts`. It reads the
-//! refhost inventory — the same source `add_host` resolves through
+//! Reads the refhost inventory — the same source `add_host` resolves through
 //! [`RefhostsFactory`] — and prints matching hosts **without connecting**: no
 //! SSH, no lock, no loaded template required, so fleet-maintenance and manual
 //! users can find refhosts through mtui instead of parsing `refhosts.yml` by
@@ -49,13 +48,13 @@ pub struct Record {
     /// The test-target slot key when `--pool` grouped the result, else `None`.
     pub slot: Option<String>,
     /// Live mtui-lock state from `--free` (`locked` / `free` / `unreachable`),
-    /// else `None`. Omitted from JSON when absent for byte-parity with upstream.
+    /// else `None`. Omitted from JSON when absent.
     pub lock: Option<String>,
 }
 
 impl Record {
     /// Serialize this record into a JSON object, omitting `lock` when unset
-    /// (mirrors upstream, which only sets the key under `--free`).
+    /// (only set under `--free`).
     fn to_json(&self) -> Value {
         let mut obj = json!({
             "name": self.name,
@@ -75,7 +74,7 @@ impl Record {
 /// Lists reference hosts from `refhosts.yml` (offline search, no connect).
 pub struct ListRefhosts;
 
-/// Render a [`Host`]'s version the way upstream `_ver_str` does.
+/// Renders a [`Host`]'s version string.
 fn ver_str(host: &Host) -> String {
     match &host.product.version {
         None => String::new(),
@@ -107,7 +106,7 @@ fn record(host: &Host, with_slot: bool) -> Record {
 /// Resolve refhosts against the parsed filters and return the matched records.
 ///
 /// Pure and offline: `testplatform` (parsed to [`Attributes`]) takes precedence
-/// over the ad-hoc field filters, matching upstream `_gather`.
+/// over the ad-hoc field filters.
 #[must_use]
 pub fn gather(store: &Refhosts, args: &Filters<'_>) -> Vec<Record> {
     let hits = if let Some(tp) = args.testplatform {
@@ -148,7 +147,7 @@ pub struct Filters<'a> {
 
 /// Render `records` as an aligned human table (grouped by slot when `pool`).
 ///
-/// Returns the full multi-line text (upstream `_render_table` accumulated).
+/// Returns the full multi-line text.
 #[must_use]
 pub fn render_table(records: &[Record], pool: bool, free: bool, verbose: bool) -> String {
     let fmt = |r: &Record| -> String {
@@ -195,7 +194,7 @@ pub fn render_table(records: &[Record], pool: bool, free: bool, verbose: bool) -
     out
 }
 
-/// Serialize `records` as pretty JSON (upstream `json.dumps(records, indent=2)`).
+/// Serialize `records` as pretty JSON.
 ///
 /// # Panics
 /// Never in practice: the value is a plain array of objects.
@@ -377,7 +376,7 @@ impl Command for ListRefhosts {
 /// Connect to each matched host (best-effort, in parallel) and record its live
 /// mtui-lock state under [`Record::lock`].
 ///
-/// Mirrors upstream `_probe_locks`: `locked` / `free` when the host answers,
+/// `locked` / `free` when the host answers,
 /// `unreachable` when the connect or probe fails. This is the only on-wire part
 /// of the command; failures are swallowed per host so one dead host never aborts
 /// the listing.

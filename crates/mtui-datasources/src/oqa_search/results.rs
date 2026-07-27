@@ -1,6 +1,6 @@
 //! Result types — the public return shapes of the entry points.
 //!
-//! Ported from `mtui/data_sources/oqa_search/results.py`. These are the typed
+//! These are the typed
 //! rows the command layer renders; the search functions never print.
 
 use mtui_types::OverviewResult;
@@ -73,7 +73,6 @@ pub struct JobResult {
 
 /// The structured payload produced by the `openqa_overview` command.
 ///
-/// Ported from upstream `OpenQAOverviewResult` (`mtui/types/oqaresults.py`).
 /// Carries the three sections the oqa-search script prints so consumers such as
 /// the exporters can render them without re-fetching.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -92,7 +91,7 @@ pub struct OpenQAOverviewResult {
 }
 
 impl OverviewResult for OpenQAOverviewResult {
-    /// True if any of the three sections has content (upstream `__bool__`).
+    /// True if any of the three sections has content.
     fn has_overview(&self) -> bool {
         !self.single_incidents.is_empty()
             || !self.aggregated_updates.is_empty()

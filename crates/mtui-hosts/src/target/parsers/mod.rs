@@ -1,7 +1,5 @@
 //! Parsers that turn raw host output into typed domain values.
 //!
-//! Ported from `mtui/hosts/target/parsers/`:
-//!
 //! * [`product`] — pure `(name, version, arch)` extraction from a product XML
 //!   file or an `/etc/os-release` file.
 //! * [`system`] — the SFTP-driven [`parse_system`] that probes

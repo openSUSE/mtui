@@ -1,7 +1,4 @@
-//! Metadata parsers for testreport sources.
-//!
-//! Port of the metadata parsers in upstream
-//! `mtui/test_reports/metadata_parsers.py`:
+//! Metadata parsers for testreport sources:
 //!
 //! * [`ReducedMetadataParser`] — line-based parser for the template's `hosts`
 //!   field; extracts reference hostnames plus jira/bug ids and their titles.
@@ -30,13 +27,13 @@ use tracing::error;
 
 use crate::testreport::TestReportBase;
 
-/// Placeholder description upstream assigns to bare bug/jira ids from the JSON
-/// envelope (their human-readable titles are filled later, e.g. from
+/// Placeholder description for bare bug/jira ids from the JSON envelope
+/// (their human-readable titles are filled later, e.g. from
 /// [`patchinfo_titles`]).
 const NO_DESCRIPTION: &str = "Description not available";
 
 /// `.* \(reference host: (\S+).*\)` — a reference-host line. The captured host
-/// is skipped when it contains `?` (upstream guards `"?" not in match`).
+/// is skipped when it contains `?`.
 static HOSTNAMES_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r".* \(reference host: (\S+).*\)").expect("valid hostnames regex"));
 
@@ -50,10 +47,9 @@ static BUGS_RE: LazyLock<Regex> =
 
 /// A line-based parser for the template's `hosts` field.
 ///
-/// Port of upstream `ReducedMetadataParser`. Registered under the `"hosts"` key
-/// in each concrete report's parser table; the report feeds it the field's lines
-/// one at a time. Each line is matched against three patterns, in order, and the
-/// first match wins (mirroring upstream's early `return` after each match):
+/// Registered under the `"hosts"` key in each concrete report's parser
+/// table; the report feeds it the field's lines one at a time. Each line is
+/// matched against three patterns, in order, and the first match wins:
 ///
 /// * a reference-host line adds a hostname (skipping placeholders containing
 ///   `?`);
@@ -100,10 +96,10 @@ impl ReducedMetadataParser {
 
 /// The JSON metadata envelope produced by the build pipeline.
 ///
-/// Every field is optional so a partial envelope parses without error, mirroring
-/// upstream's `data.get(...)` access (absent list/dict keys behave as empty).
-/// The field names map to the envelope keys; where a Rust field name would clash
-/// with the report's own naming, `#[serde(rename)]` restores the wire key.
+/// Every field is optional so a partial envelope parses without error,
+/// treating an absent key as empty. The field names map to the envelope
+/// keys; where a Rust field name would clash with the report's own naming,
+/// `#[serde(rename)]` restores the wire key.
 #[derive(Debug, Default, Deserialize)]
 pub struct MetadataEnvelope {
     /// Jira issue ids.
@@ -155,9 +151,8 @@ pub struct MetadataEnvelope {
 
 /// A parser for the JSON metadata envelope.
 ///
-/// Port of upstream `JSONParser`. Stateless; [`parse`](JSONParser::parse)
-/// mutates the supplied [`TestReportBase`] in place, matching upstream's
-/// mutate-`results` shape.
+/// Stateless; [`parse`](JSONParser::parse) mutates the supplied
+/// [`TestReportBase`] in place.
 pub struct JSONParser;
 
 impl JSONParser {
@@ -178,12 +173,12 @@ impl JSONParser {
 
     /// Applies a parsed [`MetadataEnvelope`] to `results`.
     ///
-    /// Field-for-field port of upstream `JSONParser.parse`:
+    /// Applies the envelope fields to `results`:
     ///
     /// * jira/bugs ids are seeded with the [`NO_DESCRIPTION`] placeholder;
     /// * `rrid` is parsed via [`RequestReviewID`] (an absent or malformed value
-    ///   leaves the field `None` — upstream constructs it eagerly, but a typed
-    ///   `Result` here degrades gracefully rather than panicking on bad input);
+    ///   leaves the field `None`, degrading gracefully rather than panicking
+    ///   on bad input);
     /// * scalar fields map straight through;
     /// * each package entry `"pkg _ version"` is split on whitespace, taking the
     ///   first token as the package name and the third as the version.
@@ -214,8 +209,8 @@ impl JSONParser {
         for (prod, pkgvers) in data.packages.iter().flatten() {
             let mut pkgs = HashMap::new();
             for entry in pkgvers {
-                // Upstream: `pkg, _, ver = p.split()` — first token is the
-                // package name, third the version, middle token discarded.
+                // `"pkg _ version"`: first token is the package name, third
+                // the version, middle token discarded.
                 let mut tokens = entry.split_whitespace();
                 if let (Some(pkg), Some(_), Some(ver)) =
                     (tokens.next(), tokens.next(), tokens.next())
@@ -244,10 +239,10 @@ impl JSONParser {
 
 /// Maps `issue id -> title` from a checkout's `patchinfo.xml`.
 ///
-/// Port of upstream `patchinfo_titles`. The JSON metadata envelope carries only
-/// bare bug/jira *ids* (their descriptions are the [`NO_DESCRIPTION`]
-/// placeholder); the human-readable titles live in the checkout's
-/// `patchinfo.xml` as `<issue tracker="bnc" id="123">title</issue>` elements.
+/// The JSON metadata envelope carries only bare bug/jira *ids* (their
+/// descriptions are the [`NO_DESCRIPTION`] placeholder); the human-readable
+/// titles live in the checkout's `patchinfo.xml` as
+/// `<issue tracker="bnc" id="123">title</issue>` elements.
 ///
 /// Best-effort: a missing or unparseable `patchinfo.xml` yields an empty map —
 /// not every report kind ships one, and a malformed file must never break
@@ -263,8 +258,8 @@ pub fn patchinfo_titles(directory: &Path) -> HashMap<String, String> {
 
 /// Parses `patchinfo.xml` content into an `id -> title` map.
 ///
-/// Returns `None` on any XML error so the caller can degrade to an empty map,
-/// mirroring upstream's `except ET.ParseError: return {}`.
+/// Returns `None` on any XML error so the caller can degrade to an empty
+/// map.
 fn parse_patchinfo(content: &str) -> Option<HashMap<String, String>> {
     let mut reader = Reader::from_str(content);
     reader.config_mut().trim_text(true);

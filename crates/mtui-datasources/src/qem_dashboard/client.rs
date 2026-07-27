@@ -1,10 +1,9 @@
-//! Low-level read-only HTTP client for the QEM Dashboard API, ported from
-//! `mtui/data_sources/qem_dashboard/client.py`.
+//! Low-level read-only HTTP client for the QEM Dashboard API.
 //!
 //! Every endpoint is a thin GET-to-JSON wrapper over the shared
-//! [`HttpClient`](crate::http::HttpClient). Mirroring upstream
-//! `QEMDashboardClient._get`, any transport, non-2xx, or JSON-parse failure is
-//! logged at `debug` and folded into a `None` (for [`incident`](Self::incident))
+//! [`HttpClient`](crate::http::HttpClient). Any transport, non-2xx, or
+//! JSON-parse failure is logged at `debug` and folded into a `None` (for
+//! [`incident`](Self::incident))
 //! or an empty `Vec` (for the list endpoints), so a fetch failure never escapes
 //! the client — the caller sees the same "no data" shape whether the dashboard
 //! was unreachable or genuinely empty.
@@ -19,21 +18,19 @@ use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy};
 /// openQA job result statuses reported individually in the exported log.
 ///
 /// Every other status (`passed`, `softfailed`, …) is collapsed into a per-group
-/// summary count to keep the report short and reviewable. Ported verbatim from
-/// upstream `FAILED_RESULTS`.
+/// summary count to keep the report short and reviewable.
 pub(crate) const FAILED_RESULTS: [&str; 3] = ["failed", "incomplete", "timeout_exceeded"];
 
 /// Wall-clock cap per future in the parallel fan-out.
 ///
 /// Defence-in-depth on top of the shared per-request HTTP timeout: a stuck
-/// worker will not block the whole batch. Ported from upstream
-/// `_FUTURE_TIMEOUT` (60s); consumed by
+/// worker will not block the whole batch. 60s; consumed by
 /// [`DashboardAutoOpenQA`](super::DashboardAutoOpenQA).
 pub(crate) const FUTURE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A small read-only client for the QEM Dashboard API.
 ///
-/// Mirrors upstream `QEMDashboardClient`: it pins the resolved TLS-verify policy
+/// It pins the resolved TLS-verify policy
 /// on a shared [`HttpClient`] and exposes one method per dashboard endpoint.
 #[derive(Debug, Clone)]
 pub struct QemDashboardClient {
@@ -44,8 +41,8 @@ pub struct QemDashboardClient {
 impl QemDashboardClient {
     /// Build a client for `apiurl` with the given TLS-verify `policy`.
     ///
-    /// The trailing slash on `apiurl` is stripped, matching upstream
-    /// `apiurl.rstrip("/")`, so callers may pass either form.
+    /// The trailing slash on `apiurl` is stripped, so callers may pass either
+    /// form.
     ///
     /// # Errors
     ///
@@ -71,7 +68,7 @@ impl QemDashboardClient {
 
     /// GET `path` and parse the body as JSON, folding any failure into `None`.
     ///
-    /// Mirrors upstream `_get`: a transport error, a non-2xx status, or a
+    /// A transport error, a non-2xx status, or a
     /// malformed JSON body is logged at `debug` and returns `None`.
     async fn get(&self, path: &str) -> Option<Value> {
         let url = format!("{}/{}", self.apiurl, path.trim_start_matches('/'));
@@ -92,9 +89,8 @@ impl QemDashboardClient {
 
     /// GET a list endpoint, folding any failure (or a non-array body) into `[]`.
     ///
-    /// Mirrors the upstream `_get(...) or []` idiom on the settings/jobs
-    /// endpoints, extended to also treat a non-array JSON body as empty (upstream
-    /// implicitly relied on the endpoint always returning a list).
+    /// Treats a non-array JSON body as empty too, rather than relying on the
+    /// endpoint always returning a list.
     async fn get_list(&self, path: &str) -> Vec<Value> {
         match self.get(path).await {
             Some(Value::Array(items)) => items,
@@ -138,7 +134,7 @@ impl QemDashboardClient {
 
     /// Fetch the incident record for `incident_number`.
     ///
-    /// Returns `None` on any failure, mirroring upstream `incident`.
+    /// Returns `None` on any failure.
     pub(crate) async fn incident(&self, incident_number: &str) -> Option<Value> {
         self.get(&format!("incidents/{incident_number}")).await
     }

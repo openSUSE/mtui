@@ -1,6 +1,6 @@
 //! OpenSSH SSHSIG wire-format signer for OBS "Signature" auth.
 //!
-//! Ported from upstream `mtui/data_sources/obs/sshsig.py`. Reproduces
+//! Reproduces
 //! `ssh-keygen -Y sign` for any key type (Ed25519, ECDSA, RSA), so mtui
 //! authenticates to the OBS API in-process — no `osc` library and no signing
 //! subprocess. The format is OpenSSH's SSHSIG ([PROTOCOL.sshsig]): the message
@@ -113,7 +113,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn created_message_matches_upstream_payload() {
+    fn created_message_has_stable_payload() {
         assert_eq!(created_message(1_700_000_000), b"(created): 1700000000");
     }
 }

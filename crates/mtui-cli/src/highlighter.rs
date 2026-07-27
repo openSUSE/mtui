@@ -1,7 +1,7 @@
 //! reedline [`Highlighter`] over the REPL input line.
 //!
-//! Ports upstream `mtui/cli/_lexer.py::MtuiCommandLexer`, giving a quick visual
-//! signal about what the user has typed *before* pressing Enter:
+//! Gives a quick visual signal about what the user has typed *before* pressing
+//! Enter:
 //!
 //! * The **first token** (the command name) is green when it names a registered
 //!   command ([`Registry::contains`], which matches command names *and* aliases)
@@ -11,8 +11,7 @@
 //!
 //! Whitespace runs are preserved verbatim so the styled text round-trips the
 //! input exactly (reedline re-renders the line from the `(Style, String)`
-//! chunks; dropping a character would shift the cursor — same requirement as
-//! upstream `_tokenize`).
+//! chunks; dropping a character would shift the cursor).
 //!
 //! Coloring is gated on the live [`ColorMode`](mtui_core::ColorMode): when it
 //! resolves to *off* (`--color never`, or `auto` piped to a non-TTY), every
@@ -29,7 +28,7 @@ use mtui_core::{Registry, Session};
 use nu_ansi_term::{Color, Style};
 use reedline::{Highlighter, StyledText};
 
-/// A whitespace-vs-token chunk of an input line (mirrors upstream `_tokenize`).
+/// A whitespace-vs-token chunk of an input line.
 enum Chunk<'a> {
     /// A run of spaces / tabs, preserved verbatim.
     Ws(&'a str),

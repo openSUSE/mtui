@@ -1,69 +1,59 @@
-//! A minimal `string.Template`-parity substituter.
+//! A minimal `$name` / `${name}` template substituter.
 //!
-//! ## Reference
+//! ## Grammar
 //!
-//! The upstream update-workflow action tables (`mtui/update_workflow/actions/`)
-//! store their commands as [Python `string.Template`][pytemplate] objects and
-//! call `.substitute(...)` on them. The command strings use every `Template`
-//! feature: bare `$name` (`$packages`, `$repa`), braced `${name}`, and the
-//! `$$` escape (the update/downgrade shell loops rely on `$$r` / `$$p` to emit
-//! a literal `$r` / `$p` for the remote shell). A naive `str::replace` would
-//! corrupt those, so this module reproduces `string.Template.substitute`
-//! semantics faithfully:
+//! Command strings use every template feature: bare `$name` (`$packages`,
+//! `$repa`), braced `${name}`, and the `$$` escape (the update/downgrade
+//! shell loops rely on `$$r` / `$$p` to emit a literal `$r` / `$p` for the
+//! remote shell). A naive `str::replace` would corrupt those, so this module
+//! implements the substitution grammar precisely:
 //!
 //! * `$$`            → a single literal `$`,
 //! * `$name`         → the value of `name` (identifier = `[A-Za-z_][A-Za-z0-9_]*`),
 //! * `${name}`       → the value of `name`,
-//! * a missing key   → [`TemplateError::MissingKey`] (upstream `substitute`
-//!   raises `KeyError`; it is **not** `safe_substitute`),
+//! * a missing key   → [`TemplateError::MissingKey`] ([`substitute`] only,
+//!   not [`safe_substitute`]),
 //! * a malformed `$` (e.g. `$` at end of string, `$1`, `${}`, unterminated
-//!   `${`) → [`TemplateError::Invalid`] (upstream raises `ValueError`).
+//!   `${`) → [`TemplateError::Invalid`].
 //!
-//! Both [`substitute`] and [`safe_substitute`] are ported: the `install`,
-//! `uninstall`, and `prepare` call sites use `.substitute` (raise on a missing
-//! key / malformed `$`), while `update` and `downgrade` use `.safe_substitute`
-//! (leave a missing key or malformed `$` untouched). The distinction matters:
-//! the `update`/`downgrade` templates embed shell/awk `$`-tokens — `$2` awk
-//! fields and `$$r`-style escapes — that only `safe_substitute` tolerates
-//! alongside the real `$repa` / `$package` placeholders (upstream
-//! `hostgroup.py` calls `.safe_substitute(repa=..., packages=...)` on them).
-//!
-//! [pytemplate]: https://docs.python.org/3/library/string.html#string.Template
+//! [`substitute`] and [`safe_substitute`] serve different call sites: the
+//! `install`, `uninstall`, and `prepare` call sites use [`substitute`] (raise
+//! on a missing key / malformed `$`), while `update` and `downgrade` use
+//! [`safe_substitute`] (leave a missing key or malformed `$` untouched). The
+//! distinction matters: the `update`/`downgrade` templates embed shell/awk
+//! `$`-tokens — `$2` awk fields and `$$r`-style escapes — that only
+//! [`safe_substitute`] tolerates alongside the real `$repa` / `$package`
+//! placeholders.
 
 use std::collections::HashMap;
 
 use thiserror::Error;
 
-/// Errors raised by [`substitute`], mirroring `string.Template.substitute`.
+/// Errors raised by [`substitute`].
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TemplateError {
     /// A `$name` / `${name}` referenced a key not present in the mapping.
-    ///
-    /// Mirrors the `KeyError` raised by `string.Template.substitute`.
     #[error("template placeholder ${{{0}}} has no value")]
     MissingKey(String),
 
     /// The template contained a malformed `$` construct (a lone `$`, a
     /// non-identifier after `$`, or an unterminated / empty `${...}`).
-    ///
-    /// Mirrors the `ValueError` raised by `string.Template.substitute`.
     #[error("invalid placeholder in template at byte offset {0}")]
     Invalid(usize),
 }
 
-/// Whether `c` may start a `string.Template` identifier (`[A-Za-z_]`).
+/// Whether `c` may start a template identifier (`[A-Za-z_]`).
 fn is_ident_start(c: char) -> bool {
     c.is_ascii_alphabetic() || c == '_'
 }
 
-/// Whether `c` may continue a `string.Template` identifier (`[A-Za-z0-9_]`).
+/// Whether `c` may continue a template identifier (`[A-Za-z0-9_]`).
 fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
 }
 
 /// Substitutes `$name` / `${name}` placeholders in `template` from `mapping`.
 ///
-/// Behaves like Python's `string.Template(template).substitute(mapping)`:
 /// `$$` is an escaped literal `$`, identifiers match `[A-Za-z_][A-Za-z0-9_]*`,
 /// a missing key is an error ([`TemplateError::MissingKey`]), and a malformed
 /// `$` construct is an error ([`TemplateError::Invalid`]).
@@ -83,7 +73,7 @@ pub(crate) fn substitute(
 /// Like [`substitute`] but never fails: a missing key or malformed `$` is left
 /// in the output verbatim.
 ///
-/// Mirrors Python's `string.Template(template).safe_substitute(mapping)`, which
+/// A missing key or malformed `$` is left in the output verbatim, which
 /// the `update` and `downgrade` command templates rely on so their embedded
 /// shell/awk `$`-tokens (`$2` awk fields, an unresolved `$package` at the list
 /// stage) survive substitution unharmed.
@@ -168,8 +158,8 @@ fn render(
                 i = end;
             }
             // Lone `$` (end of string) or `$` before a non-identifier char:
-            // upstream `substitute` treats this as an invalid placeholder;
-            // `safe_substitute` emits it verbatim.
+            // an invalid placeholder in strict mode; `safe_substitute` emits
+            // it verbatim.
             _ => {
                 if safe {
                     out.push('$');
@@ -184,7 +174,7 @@ fn render(
     Ok(out)
 }
 
-/// Whether `name` is a valid `string.Template` identifier.
+/// Whether `name` is a valid template identifier.
 fn is_valid_ident(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
@@ -235,7 +225,7 @@ mod tests {
 
     #[test]
     fn awk_field_and_escaped_dollar_coexist() {
-        // From zypper_update: `awk ... $$2` must become `$2` (awk field ref),
+        // From the zypper update template: `awk ... $$2` must become `$2` (awk field ref),
         // while `$repa` expands.
         let m = map(&[("repa", "R")]);
         assert_eq!(
@@ -266,8 +256,8 @@ mod tests {
 
     #[test]
     fn dollar_before_digit_is_invalid() {
-        // `$1` is not a valid Template placeholder (identifiers can't start
-        // with a digit) — upstream raises ValueError.
+        // `$1` is not a valid placeholder (identifiers can't start with a
+        // digit).
         let m = map(&[]);
         assert_eq!(substitute("$1", &m), Err(TemplateError::Invalid(0)));
     }

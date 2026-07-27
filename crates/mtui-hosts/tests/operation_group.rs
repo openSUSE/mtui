@@ -4,8 +4,7 @@
 //! [`HostsGroup`](mtui_hosts::HostsGroup) via an injected
 //! [`PlanProvider`](mtui_hosts::PlanProvider).
 //!
-//! Upstream's `test_operation.py` drives the template against a fully-mocked
-//! group; here we drive it against the real group so the binding itself
+//! This drives the template against the real group so the binding itself
 //! (plans → run → check → reboot → last_output) is exercised, with hosts backed
 //! by [`MockConnection`] so it stays offline and fast.
 
@@ -208,7 +207,7 @@ async fn plans_without_provider_is_no_plan_provider_error() {
 async fn plans_with_unknown_system_surfaces_missing_doer() {
     let (provider, _lookups, _checked) = RecordingProvider::new();
     // "mystery" maps to no known release -> get_release() errors -> the role's
-    // Missing*Error with an empty release (upstream: no doer for empty key).
+    // Missing*Error with an empty release (no doer for empty key).
     let (h1, _m1) = target("h1", "mystery", "1.0", false);
     let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
 

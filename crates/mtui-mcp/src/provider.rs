@@ -3,8 +3,7 @@
 //!
 //! The tool layer (P7.6 `tools`, P7.8 `testreport_tools`) resolves the
 //! [`McpSession`] for each call through a [`SessionProvider`], so it never cares
-//! which transport it runs under. This mirrors upstream
-//! `mtui.mcp.registry.SessionProvider`, which has exactly two implementers:
+//! which transport it runs under. There are exactly two implementers:
 //!
 //! - **stdio** — one process serves one client, so a single session is reused
 //!   for every call (the `key` is accepted and ignored). That is
@@ -92,9 +91,8 @@ pub trait SessionProvider {
 ///
 /// One `mtui-mcp` process over stdio serves exactly one client, so there is no
 /// per-client isolation to do — every `get_or_create` returns the same session
-/// regardless of `key`. This is the Rust analogue of upstream `McpSession`
-/// doubling as the degenerate single-entry provider (`get_or_create` returning
-/// `self`).
+/// regardless of `key`: it is the degenerate single-entry provider
+/// (`get_or_create` returning `self`).
 #[derive(Clone)]
 pub struct StdioProvider {
     session: Arc<McpSession>,
@@ -163,9 +161,8 @@ impl Drop for SessionGuard {
 /// [`try_make_server`](Self::try_make_server) — the closure rmcp's
 /// `StreamableHttpService` invokes once per session.
 ///
-/// It is the Rust analogue of upstream `mtui.mcp.registry.SessionRegistry`, but
-/// its live set holds [`Weak`] handles rather than owning the session map (rmcp
-/// owns that, keyed by `Mcp-Session-Id`). It enforces the two upstream safety
+/// Its live set holds [`Weak`] handles rather than owning the session map (rmcp
+/// owns that, keyed by `Mcp-Session-Id`). It enforces two safety
 /// bounds around the factory:
 ///
 /// * `cap` (`[mcp] session_cap`) — [`try_make_server`](Self::try_make_server)
@@ -244,8 +241,7 @@ impl SessionRegistry {
 
     /// Strong handles to every live session, for inspection.
     ///
-    /// Upgrades each tracked [`Weak`], skipping the dead. This is the Rust
-    /// analogue of upstream tests reaching `SessionRegistry._sessions`; it lets
+    /// Upgrades each tracked [`Weak`], skipping the dead. This lets
     /// callers (and the sweeper tests) observe a session's teardown after an
     /// eviction.
     #[must_use]
@@ -487,8 +483,7 @@ mod tests {
     use super::*;
 
     /// A stdio provider is single-entry: any two keys resolve to the *same*
-    /// session instance, mirroring upstream `McpSession.get_or_create` returning
-    /// `self` regardless of key.
+    /// session instance, regardless of key.
     #[tokio::test]
     async fn stdio_provider_returns_same_session_for_any_key() {
         let provider = StdioProvider::new(Config::default());
@@ -605,8 +600,7 @@ mod tests {
     }
 
     /// A session re-activated after the stale snapshot but before eviction is
-    /// spared by the pre-close re-check (upstream
-    /// `test_sweep_spares_session_reactivated_during_the_sweep`).
+    /// spared by the pre-close re-check.
     #[tokio::test]
     async fn sweeper_respects_reactivation_before_close() {
         let reg = reg_with_idle(Duration::from_millis(200));

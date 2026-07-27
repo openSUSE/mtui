@@ -1,10 +1,8 @@
-//! Update identifier, ported from `mtui/types/updateid.py`.
+//! Update identifier.
 //!
-//! Upstream `UpdateID` is an abstract base that bundles a [`RequestReviewID`]
-//! with a `TestReport` factory and a VCS-checkout callable; its concrete
-//! `OBSUpdateID(rrid)` constructor simply parses the RRID string into a
-//! [`RequestReviewID`] and stores it (`id_ = RequestReviewID(rrid)`), then wires
-//! up the I/O collaborators.
+//! An [`UpdateID`] bundles a [`RequestReviewID`] with a `TestReport` factory and
+//! a VCS-checkout callable; construction parses the RRID string into a
+//! [`RequestReviewID`] and stores it, then wires up the I/O collaborators.
 //!
 //! This is the **value-type slice only**: an [`UpdateID`] wrapping the parsed
 //! [`RequestReviewID`], constructed by parsing an RRID string. The TestReport
@@ -28,7 +26,7 @@ use crate::rrid::RequestReviewID;
 ///
 /// Construct one with [`UpdateID::parse`] or via [`FromStr`]. The inner RRID is
 /// normalised on parse (see [`RequestReviewID`]), so structural equality and
-/// hashing match upstream's string-identity semantics.
+/// hashing have string-identity semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UpdateID {
     /// The Request Review ID naming this update.
@@ -61,8 +59,8 @@ impl FromStr for UpdateID {
 }
 
 impl fmt::Display for UpdateID {
-    /// Renders the inner RRID's canonical string, matching upstream's
-    /// `str(uid.id)` used for the per-update template directory name.
+    /// Renders the inner RRID's canonical string, used for the per-update
+    /// template directory name.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.id, f)
     }

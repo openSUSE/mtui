@@ -1,5 +1,5 @@
-//! Ports the fan-out contract from upstream `Command._resolve_templates` /
-//! `Command.run` (`mtui/commands/_command.py`).
+//! Tests the fan-out contract: `Command::run` resolving templates and driving
+//! `call` across them.
 
 mod support;
 
@@ -248,8 +248,8 @@ async fn default_trait_methods_are_sensible() {
 #[tokio::test]
 async fn named_hosts_disable_skip() {
     // With an explicit -t, a host-less template is NOT skipped (it runs and,
-    // here, succeeds because the MockCommand body ignores hosts). This mirrors
-    // upstream: named hosts must keep failing/running loudly.
+    // here, succeeds because the MockCommand body ignores hosts): named hosts
+    // must keep failing/running loudly.
     let mut s = session(true, &[("a", &["h1"]), ("b", &[])]);
     let cmd = MockCommand::new(Scope::Fanout);
     cmd.run(&mut s, &matches(&["-t", "h1"])).await.unwrap();

@@ -11,7 +11,7 @@ use crate::session::Session;
 
 /// Adds or removes an issue repository to or from hosts.
 ///
-/// Ports upstream `mtui.commands.setrepo.SetRepo`. The mutually-exclusive
+/// The mutually-exclusive
 /// (and required) `-A/--add` vs `-R/--remove` selects the operation, which is
 /// fanned out over the selected hosts via
 /// [`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup) driven by the active
@@ -92,7 +92,7 @@ impl Command for SetRepo {
             return Err(CommandError::NoRefhostsDefined);
         }
         // The active report must be able to set repos (SL/PI/OBS). The null
-        // report cannot, which mirrors upstream's `@requires_update` guard.
+        // report cannot.
         let has_set_repo = session.metadata().as_set_repo().is_some();
         let result = if has_set_repo {
             let set_repo = session.metadata().as_set_repo().expect("checked above");
@@ -199,7 +199,7 @@ mod tests {
     #[tokio::test]
     async fn report_without_set_repo_capability_errors() {
         // FakeReport does not implement `as_set_repo` (returns None), mirroring
-        // the null/unloaded report — upstream's `@requires_update` guard.
+        // the null/unloaded report.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&SetRepo, &["-A"]);
         let err = SetRepo.call(&mut session, &args).await.unwrap_err();

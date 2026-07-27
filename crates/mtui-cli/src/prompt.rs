@@ -2,13 +2,12 @@
 //!
 //! [`MtuiPrompt`] renders two segments from the live [`Session`]:
 //!
-//! * **Left prompt** — the workflow-aware `mtui[-mode]> ` (upstream
-//!   `repl.py::set_prompt`): plain `mtui> ` for [`Workflow::Manual`], and
-//!   `mtui-<mode]> ` (e.g. `mtui-kernel> `, `mtui-auto> `) otherwise.
-//! * **Right prompt** — the `mode / hosts / templates / active:RRID` status line
-//!   (upstream `repl.py::_bottom_toolbar`). reedline 0.49 has no bottom-toolbar
-//!   segment, so the status lives in the right prompt — the closest persistent
-//!   analogue.
+//! * **Left prompt** — the workflow-aware `mtui[-mode]> `: plain `mtui> ` for
+//!   [`Workflow::Manual`], and `mtui-<mode]> ` (e.g. `mtui-kernel> `,
+//!   `mtui-auto> `) otherwise.
+//! * **Right prompt** — the `mode / hosts / templates / active:RRID` status
+//!   line. reedline 0.49 has no bottom-toolbar segment, so the status lives in
+//!   the right prompt — the closest persistent analogue.
 //!
 //! Both read the shared `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl)
 //! loop and the [`MtuiCompleter`](crate::completer::MtuiCompleter) already share.
@@ -28,7 +27,7 @@ use reedline::{Prompt, PromptEditMode, PromptHistorySearch};
 ///
 /// Holds a clone of the same `Arc<Mutex<Session>>` the loop drives so the prompt
 /// reflects the active workflow, loaded RRID, and host/template counts as they
-/// change mid-session (upstream's live `CommandPrompt` reference).
+/// change mid-session.
 #[derive(Clone)]
 pub struct MtuiPrompt {
     session: Arc<Mutex<Session>>,
@@ -48,7 +47,7 @@ impl Prompt for MtuiPrompt {
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Upstream `set_prompt`: bare `mtui` for MANUAL, `mtui-<mode>` otherwise.
+        // Bare `mtui` for MANUAL, `mtui-<mode>` otherwise.
         let workflow = session.metadata().workflow();
         let prompt = match workflow {
             Workflow::Manual => "mtui> ".to_owned(),
@@ -62,7 +61,7 @@ impl Prompt for MtuiPrompt {
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Upstream `_bottom_toolbar`: mode / hosts / templates / active(RRID).
+        // mode / hosts / templates / active(RRID).
         let mode = session.metadata().workflow();
         let n_hosts = session.targets().len();
         let n_templates = session.templates.len();

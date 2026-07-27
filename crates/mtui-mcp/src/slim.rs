@@ -1,7 +1,6 @@
 //! Token-slimming helpers for the MCP wire surface.
 //!
-//! Two token-budget concerns live here, co-located exactly as upstream
-//! `mtui/mcp/_slim.py` groups them:
+//! Two token-budget concerns live here, co-located:
 //!
 //! * [`cap_output`] — the per-tool-result byte bound.
 //! * [`slim_tool_schema`] — the JSON-Schema slimming pass (P7.9) that drops
@@ -9,10 +8,9 @@
 //!   and terse-rewrites the long shared `help` strings before the tool list goes
 //!   on the wire.
 //!
-//! Unlike upstream — which mutates a live pydantic-generated schema in the SDK's
-//! tool table — the Rust schema is built directly from `clap` by
-//! [`crate::schema`], so it never emits pydantic `title` keys and renders a
-//! nullable scalar as the same `anyOf: [{type: X}, {type: null}]` shape via
+//! The schema is built directly from `clap` by [`crate::schema`], so it never
+//! emits a `title` key and renders a nullable scalar as the
+//! `anyOf: [{type: X}, {type: null}]` shape via
 //! [`crate::schema::command_input_schema`]'s `wrap_nullable`. The `title`-drop is
 //! therefore mostly defensive here; the substantive wins are the nullable
 //! flatten and the terse descriptions. The transforms run on the plain
@@ -33,9 +31,8 @@ use serde_json::{Map, Value};
 /// returned byte-identical. The cut is made on a `char` boundary so the result
 /// is always valid UTF-8 even when the byte cut would split a codepoint.
 ///
-/// Mirrors upstream `mtui.mcp._slim.cap_output`: the reported dropped-byte count
-/// is `total − limit` (the budget overrun), independent of the small extra bytes
-/// a codepoint-boundary trim may shed.
+/// The reported dropped-byte count is `total − limit` (the budget overrun),
+/// independent of the small extra bytes a codepoint-boundary trim may shed.
 #[must_use]
 pub(crate) fn cap_output(text: String, limit: usize) -> String {
     if limit == 0 {
@@ -45,8 +42,8 @@ pub(crate) fn cap_output(text: String, limit: usize) -> String {
     if total <= limit {
         return text;
     }
-    // Largest char boundary at or below `limit` (upstream decodes `[:limit]`
-    // with errors="ignore", which likewise drops a split trailing codepoint).
+    // Largest char boundary at or below `limit`, dropping a split trailing
+    // codepoint entirely.
     let cut = (0..=limit)
         .rev()
         .find(|&i| text.is_char_boundary(i))
@@ -77,7 +74,6 @@ pub(crate) fn truncation_notice(dropped: usize, limit: usize) -> String {
 /// Long `clap`/argparse `help` strings shared across many synthesised tools,
 /// mapped to a terse equivalent. Rewriting only the MCP wire copy keeps the REPL
 /// `--help` output (sourced from the same `clap` args) verbose and unchanged.
-/// Mirrors upstream `_slim._TERSE_DESCRIPTIONS`.
 ///
 /// Keys are matched **exactly** against a field's `description`, so a key must
 /// stay byte-identical to the `help` its source arg builds: a drifted key
@@ -96,7 +92,7 @@ const TERSE_DESCRIPTIONS: &[(&str, &str)] = &[(
 /// Schema keywords whose value is a mapping of *names* to sub-schemas. Under
 /// these, the map keys are parameter/definition names, not schema keywords, so
 /// the slimming transforms are suspended for that one level (a parameter literally
-/// named `title`/`description` must survive). Mirrors upstream `_slim._NAME_MAPS`.
+/// named `title`/`description` must survive).
 const NAME_MAPS: &[&str] = &["properties", "patternProperties", "$defs", "definitions"];
 
 /// Return `schema` recursively slimmed of redundant JSON-Schema weight.
@@ -112,8 +108,7 @@ const NAME_MAPS: &[&str] = &["properties", "patternProperties", "$defs", "defini
 ///
 /// The input is not mutated; a new [`Value`] is returned. The keys of a
 /// `properties`/`$defs`-style map are *names*, not schema keywords, so the
-/// transforms are suspended for that one level. Mirrors upstream
-/// `_slim.slim_tool_schema`.
+/// transforms are suspended for that one level.
 #[must_use]
 fn slim_tool_schema(schema: &Value) -> Value {
     slim(schema, false)
@@ -143,7 +138,7 @@ pub fn slim_input_schema(schema: &Map<String, Value>) -> Map<String, Value> {
 /// field is optional), so the non-null arm's `type` (and any sibling keys it
 /// carries, e.g. `items`) is hoisted to node level and the `anyOf` is dropped.
 /// Only the exact two-member `[T, null]` shape is touched; genuine multi-type
-/// unions are left alone. Mirrors upstream `_slim._flatten_nullable`.
+/// unions are left alone.
 fn flatten_nullable(node: &mut Map<String, Value>) {
     let Some(Value::Array(any_of)) = node.get("anyOf") else {
         return;
@@ -177,8 +172,7 @@ fn flatten_nullable(node: &mut Map<String, Value>) {
 }
 
 /// Recursive slimming worker. `keys_are_names` suspends the keyword transforms
-/// for one level (the values of a [`NAME_MAPS`] key). Mirrors upstream
-/// `_slim._slim`.
+/// for one level (the values of a [`NAME_MAPS`] key).
 fn slim(schema: &Value, keys_are_names: bool) -> Value {
     match schema {
         Value::Object(obj) => {

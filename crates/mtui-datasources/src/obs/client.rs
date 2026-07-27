@@ -1,13 +1,13 @@
 //! HTTP transport for the native OBS/IBS API (native `reqwest`, no `osc`).
 //!
-//! Ported from upstream `mtui/data_sources/obs/client.py`. Mirrors the crate's
+//! Mirrors the crate's
 //! [`Gitea`](crate::gitea::Gitea) request wrapper: one shared
 //! [`HttpClient`](crate::http::HttpClient) (built with a fixed timeout + TLS
 //! posture) carries the handful of calls one QAM operation makes. SSH-signature
 //! auth is injected through the [`ObsAuth`] seam so this transport foundation
 //! (G1a) is testable now with [`NoAuth`]; the real signer lands in G1c.
 //!
-//! Two upstream behaviours are load-bearing and preserved:
+//! Two behaviours are load-bearing and preserved:
 //!
 //! * **Never log the Authorization header or the request body.** Only the
 //!   method + URL are logged, at `debug`.
@@ -67,8 +67,7 @@ impl ObsAuth for NoAuth {
 
 /// Extract the top-level `<status><summary>` text from an OBS error body.
 ///
-/// Ported from upstream `_error_summary`. Best-effort: any parse failure or an
-/// absent summary yields an empty string.
+/// Best-effort: any parse failure or an absent summary yields an empty string.
 ///
 /// **Security (DTD/XXE guard):** OBS never sends a DTD, so a body carrying
 /// `<!DOCTYPE` or `<!ENTITY` is refused *before* parsing — this neutralises an
@@ -117,7 +116,7 @@ fn error_summary(body: &str) -> String {
 
 /// A thin OBS API client over one shared, authenticated HTTP transport.
 ///
-/// Build once per operation (like upstream): the constructor fixes the API base
+/// Build once per operation: the constructor fixes the API base
 /// URL, the TLS posture, the auth signer, and the coarse time budget; each
 /// [`get`](ObsClient::get) / [`post`](ObsClient::post) is one bounded hop.
 #[derive(Clone)]
@@ -135,9 +134,8 @@ impl ObsClient {
     /// Explicit parameters rather than a `Config`/oscrc coupling keep this
     /// transport foundation self-contained; wiring from `[obs]` config +
     /// resolved credentials lands in later subtasks. The trailing `/` is
-    /// stripped from `api_url` (upstream `rstrip("/")`), and the coarse deadline
-    /// is set to `now + request_timeout` (upstream `time.monotonic() +
-    /// obs_request_timeout`).
+    /// stripped from `api_url`, and the coarse deadline is set to
+    /// `now + request_timeout`.
     ///
     /// # Errors
     ///
@@ -158,8 +156,7 @@ impl ObsClient {
         })
     }
 
-    /// Join `path` (with any query params) onto the API base, mirroring upstream
-    /// `_url` + the params `requests` would have appended.
+    /// Join `path` (with any query params) onto the API base.
     ///
     /// The query is encoded manually because this workspace's minimal `reqwest`
     /// build does not expose `.query()` (see [`crate::teregen`] /
@@ -186,7 +183,7 @@ impl ObsClient {
 
     /// Build a fresh request builder for `url` with the standard OBS headers and
     /// optional body. `auth` is deliberately *not* applied here — the first
-    /// request goes out unauthenticated (upstream), and the retry attaches the
+    /// request goes out unauthenticated, and the retry attaches the
     /// signed header directly.
     fn builder(&self, method: &Method, url: &str, body: Option<&str>) -> RequestBuilder {
         let mut builder = self
@@ -221,7 +218,7 @@ impl ObsClient {
         })
     }
 
-    /// The shared request path for GET/POST, ported from upstream `_request`.
+    /// The shared request path for GET/POST.
     ///
     /// Sends the first request unauthenticated; on a `401` that offers a
     /// `Signature` challenge, signs `(created)` over the challenge realm and
@@ -393,7 +390,6 @@ fn host_of(url: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    // Ported from upstream tests/test_obs_client.py::test_error_summary.
     #[test]
     fn error_summary_extracts_trimmed_summary() {
         assert_eq!(

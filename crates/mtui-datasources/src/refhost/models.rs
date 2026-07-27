@@ -1,5 +1,4 @@
-//! Refhost **search query** model, ported from
-//! `mtui/hosts/refhost/models.py::Attributes` (+ its free parsing helpers).
+//! Refhost **search query** model.
 //!
 //! The `refhosts.yml` *row* schema ([`Host`], [`Product`], [`Addon`],
 //! [`Version`]) lives in `mtui-types` (it is pure, I/O-free wire data). This
@@ -7,9 +6,8 @@
 //! and [`Attributes::from_testplatform`], which parses a SMELT `testplatform`
 //! string into one [`Attributes`] per architecture.
 //!
-//! # Divergence from upstream
-//! Upstream keeps `Attributes` alongside `Host` in `models.py`. In mtui the
-//! `mtui-types` crate is deliberately the pure wire-schema and carries no
+//! # Design note
+//! The `mtui-types` crate is deliberately the pure wire-schema and carries no
 //! query/parsing concerns (and no `regex` dependency), so the query model and
 //! its grammar parser live here in `mtui-datasources` next to the search engine
 //! that consumes them (`store.rs`).
@@ -19,11 +17,11 @@ use std::sync::LazyLock;
 use mtui_types::{Addon, Product, Version, version::VersionField};
 use regex::Regex;
 
-/// `arch=[a, b, c]` capture, anchored at start like upstream `re.match`.
+/// `arch=[a, b, c]` capture, anchored at start.
 static ARCH_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[(.*)\]").expect("static arch regex is valid"));
 
-/// `name(fields)` — greedy `.*` before `(` mirrors upstream `re.match`.
+/// `name(fields)` — greedy `.*` before `(`, anchored at start.
 static NAMED_VERSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.*)\((.*)\)").expect("static named-version regex is valid"));
 
@@ -31,8 +29,8 @@ static NAMED_VERSION_RE: LazyLock<Regex> =
 ///
 /// Each field is optional; the matcher skips constraints on unset fields (an
 /// empty `arch`, `product == None`, and empty `addons` are the "unset"
-/// sentinels). Mirrors upstream's mutable `Attributes` dataclass — mutable
-/// because [`from_testplatform`](Self::from_testplatform) builds it up segment
+/// sentinels). Mutable because
+/// [`from_testplatform`](Self::from_testplatform) builds it up segment
 /// by segment before fanning out per arch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Attributes {
@@ -54,8 +52,8 @@ impl Attributes {
     /// segment (the shared `base`/`addon` constraints are cloned into each).
     /// A segment with no `=` is logged at `error` and skipped; an unknown
     /// segment name (not `base`/`arch`/`addon`) is logged at `error` and
-    /// skipped. With no `arch=[…]` segment, the result is empty (matching
-    /// upstream, which fans out over an empty arch list).
+    /// skipped. With no `arch=[…]` segment, the result is empty (fanning out
+    /// over an empty arch list).
     ///
     #[must_use]
     pub fn from_testplatform(testplatform: &str) -> Vec<Self> {
@@ -108,7 +106,7 @@ impl Attributes {
 impl std::fmt::Display for Attributes {
     /// Human-readable query, e.g. `sles 15.5 x86_64 ha 15 sdk 15.5`.
     ///
-    /// Mirrors upstream `__str__`: product first, then arch, then addons sorted
+    /// Product first, then arch, then addons sorted
     /// alphabetically by name. Empty parts are omitted.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts: Vec<String> = Vec::new();
@@ -143,7 +141,7 @@ impl std::fmt::Display for Attributes {
 
 /// Render `name` + optional `version` like `"sles 15.5"` / `"sles 12sp4"`.
 ///
-/// Ported from `_format_named_version`: a numeric minor uses a `.` separator, a
+/// A numeric minor uses a `.` separator, a
 /// textual minor is concatenated, and the empty-string minor sentinel (or an
 /// absent minor) renders as major only.
 fn format_named_version(name: &str, version: Option<&Version>) -> String {
@@ -162,7 +160,7 @@ fn format_named_version(name: &str, version: Option<&Version>) -> String {
 
 /// Parse `name(major=X,minor=Y)` → `(name, Some(Version))`.
 ///
-/// Ported from `_parse_named_version`. Returns `None` when `content` does not
+/// Returns `None` when `content` does not
 /// match the `name(...)` grammar at all. When it matches but has no `major`
 /// field, returns `(name, None)`. Each field value is parsed as numeric when it
 /// parses as an integer, else kept as text — so `minor=` yields the empty-string
@@ -194,7 +192,7 @@ fn parse_named_version(content: &str) -> Option<(String, Option<Version>)> {
 /// Parse a single field value: numeric if it parses as `u64`, else textual.
 ///
 /// `""` therefore becomes `VersionField::Text("")` — the "no minor" query
-/// sentinel — matching upstream's `int(value)` / fallback-to-`str` behavior.
+/// sentinel: parse as an integer, falling back to text on failure.
 fn parse_field(value: &str) -> VersionField {
     match value.parse::<u64>() {
         Ok(n) => VersionField::Num(n),
@@ -213,7 +211,7 @@ mod tests {
         }
     }
 
-    // --- Attributes Display (test_refhost.py::TestAttributes) ---
+    // --- Attributes Display ---
 
     #[test]
     fn empty_attributes_is_blank() {
@@ -297,7 +295,7 @@ mod tests {
         assert_eq!(attr.to_string(), "sles 11");
     }
 
-    // --- from_testplatform (test_refhost.py::TestFromTestplatform) ---
+    // --- from_testplatform ---
 
     #[test]
     fn base_arch_addon_with_int_minor() {

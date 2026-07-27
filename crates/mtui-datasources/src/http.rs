@@ -1,11 +1,10 @@
 //! Single source of truth for outbound HTTP timeout and TLS policy.
 //!
-//! Ported from upstream `mtui/support/http.py`. Every place in mtui that talks
-//! to an HTTP(S) service (the Gitea PR client, the QEM Dashboard client, the
-//! openQA / QAM Dashboard search, the openQA install/result-log downloads, and
-//! the `refhosts.yml` fetch) historically defined its own `(connect, read)`
-//! timeout and made its own, inconsistent decision about TLS certificate
-//! verification. This module centralises both:
+//! Every place in mtui that talks to an HTTP(S) service (the Gitea PR client,
+//! the QEM Dashboard client, the openQA / QAM Dashboard search, the openQA
+//! install/result-log downloads, and the `refhosts.yml` fetch) shares one
+//! `(connect, read)` timeout and one TLS-verification policy instead of each
+//! making its own, inconsistent decision. This module centralises both:
 //!
 //! - [`HTTP_TIMEOUT`] is the one `(connect, read)` timeout shared by all
 //!   callers. It bounds a stuck socket so a broken network cannot hang mtui.
@@ -17,23 +16,21 @@
 //!   actionable message for the internal-CA hosts (openqa.suse.de,
 //!   dashboard.qam.suse.de, ...) instead of a raw transport error.
 //!
-//! ## Deviation from upstream
+//! ## Client construction and verify precedence
 //!
-//! Python `requests` accepts a `verify=` value per *request*; reqwest fixes the
-//! TLS posture when the `Client` is built and reuses one connection pool across
-//! calls. So upstream's free `get_bytes(url, verify=...)` becomes
-//! [`HttpClient::new`]`(verify)` + [`HttpClient::get_bytes`]`(url)`. The
-//! `resolve_verify` precedence logic is preserved verbatim so callers pick the
-//! posture the same way before constructing the client.
+//! reqwest fixes the TLS posture when the `Client` is built and reuses one
+//! connection pool across calls, so a caller resolves the effective
+//! [`VerifyPolicy`] with [`resolve_verify`] before constructing the client via
+//! [`HttpClient::new`]`(verify)`, then issues requests through
+//! [`HttpClient::get_bytes`]`(url)`.
 //!
-//! `_parse_ssl_verify` (the config-string coercion) is **not** re-ported here:
-//! it already lives in [`mtui_config::SslVerify`]. [`VerifyPolicy::from_config`]
-//! bridges that typed config value into this layer's posture.
+//! The config-string coercion for `ssl_verify` lives in
+//! [`mtui_config::SslVerify`]; [`VerifyPolicy::from_config`] bridges that typed
+//! config value into this layer's posture.
 //!
-//! ## Bounded response bodies (new, no upstream target)
+//! ## Bounded response bodies
 //!
-//! Upstream `get_bytes` buffers the whole body unconditionally. Here every body
-//! is read through [`read_body_capped`], which rejects an oversized advertised
+//! Every body is read through [`read_body_capped`], which rejects an oversized advertised
 //! `Content-Length` before reading and enforces the same ceiling while streaming
 //! chunked/unknown-length bodies — a hostile or misconfigured datasource cannot
 //! OOM mtui. Callers pick [`MAX_API_BODY`] (small JSON/text) or
@@ -49,9 +46,9 @@ use mtui_config::SslVerify;
 
 use crate::error::{HttpError, Result};
 
-/// Shared `(connect, read)` timeout for every outbound HTTP call, mirroring
-/// upstream `HTTP_TIMEOUT = (5.0, 30.0)`. Bounds a stuck socket so a broken
-/// network can't hang mtui indefinitely.
+/// Shared `(connect, read)` timeout for every outbound HTTP call: 5s to
+/// connect, 30s to read. Bounds a stuck socket so a broken network can't hang
+/// mtui indefinitely.
 pub(crate) const HTTP_TIMEOUT: (Duration, Duration) =
     (Duration::from_secs(5), Duration::from_secs(30));
 
@@ -75,7 +72,6 @@ const MAX_DOWNLOAD_BODY: usize = 256 * 1024 * 1024;
 
 /// Fallback locations of the distribution-managed CA bundle, probed only when
 /// the interpreter/OpenSSL default (via `SSL_CERT_FILE`) names no existing file.
-/// Mirrors upstream `_SYSTEM_CA_BUNDLES`.
 const SYSTEM_CA_BUNDLES: &[&str] = &[
     "/etc/ssl/ca-bundle.pem",             // openSUSE / SLE
     "/etc/ssl/certs/ca-certificates.crt", // Debian / Ubuntu
@@ -83,14 +79,12 @@ const SYSTEM_CA_BUNDLES: &[&str] = &[
     "/etc/ssl/cert.pem",                  // Alpine, BSDs
 ];
 
-/// Process-wide idempotency flag for the "verification disabled" warning,
-/// mirroring upstream's `_warnings_disabled` guard around
-/// `urllib3.disable_warnings`.
+/// Process-wide idempotency flag for the "verification disabled" warning: the
+/// first call warns and every later call is a no-op.
 static INSECURE_WARNED: AtomicBool = AtomicBool::new(false);
 
-/// The default connection-pool width, matching upstream `default_pool_size`
-/// (`min(32, cpu + 4)`) so concurrent fan-out at a single host reuses
-/// connections instead of churning the pool.
+/// The default connection-pool width (`min(32, cpu + 4)`) so concurrent
+/// fan-out at a single host reuses connections instead of churning the pool.
 #[must_use]
 fn default_pool_size() -> usize {
     let cpus = std::thread::available_parallelism()
@@ -101,8 +95,7 @@ fn default_pool_size() -> usize {
 
 /// A `reqwest`-compatible TLS verification posture: verify against the system
 /// trust store (`Default(true)`), skip verification (`Default(false)`), or
-/// verify against a specific CA bundle file (`CaBundle`). Mirrors upstream's
-/// `VerifyPolicy = bool | str`.
+/// verify against a specific CA bundle file (`CaBundle`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyPolicy {
     /// Verify (`true`) or skip (`false`) using the default trust store.
@@ -115,9 +108,8 @@ impl VerifyPolicy {
     /// Bridge a typed [`mtui_config::SslVerify`] into this layer's posture.
     ///
     /// - [`SslVerify::Enabled`] → verify, preferring the system CA bundle
-    ///   ([`system_ca_bundle`]) when one is found (matching upstream's default,
-    ///   which prefers the distribution bundle over certifi), else
-    ///   `Default(true)`.
+    ///   ([`system_ca_bundle`]) when one is found (the distribution bundle
+    ///   takes precedence over any bundled default), else `Default(true)`.
     /// - [`SslVerify::Disabled`] → `Default(false)`.
     /// - [`SslVerify::CaBundle`] → the configured path verbatim.
     #[must_use]
@@ -141,8 +133,7 @@ impl VerifyPolicy {
     }
 }
 
-/// Pick the effective verify value for a request, mirroring upstream
-/// `resolve_verify`.
+/// Pick the effective verify value for a request.
 ///
 /// `override_` wins whenever it is `Some`; otherwise the per-call `default`
 /// (call sites pass `Default(true)` so verification is on unless the user has
@@ -154,9 +145,9 @@ pub fn resolve_verify(default: VerifyPolicy, override_: Option<VerifyPolicy>) ->
 
 /// Silence the "verification disabled" warning once, idempotently.
 ///
-/// Mirrors upstream `disable_insecure_warnings`: the first call warns
-/// process-wide and later calls are cheap no-ops. Called only when
-/// verification is deliberately disabled, so REPL output stays readable.
+/// The first call warns process-wide and later calls are cheap no-ops. Called
+/// only when verification is deliberately disabled, so REPL output stays
+/// readable.
 fn disable_insecure_warnings() {
     if !INSECURE_WARNED.swap(true, Ordering::SeqCst) {
         tracing::warn!(
@@ -169,7 +160,7 @@ fn disable_insecure_warnings() {
 /// A shared outbound HTTP client with a fixed timeout and TLS-verify posture.
 ///
 /// Built once and reused so concurrent fan-out at a single host reuses pooled
-/// connections. Replaces upstream's `build_session(verify)`.
+/// connections.
 #[derive(Debug, Clone)]
 pub struct HttpClient {
     inner: reqwest::Client,
@@ -184,9 +175,8 @@ impl HttpClient {
     /// - `Default(true)` → verify against the built-in trust store;
     /// - `Default(false)` → accept invalid certs (and warn once via
     ///   [`disable_insecure_warnings`]);
-    /// - `CaBundle(path)` → verify against *only* that PEM bundle, matching
-    ///   upstream's `session.verify = "/path"` (which replaces, not augments,
-    ///   the trust store).
+    /// - `CaBundle(path)` → verify against *only* that PEM bundle (replacing,
+    ///   not augmenting, the trust store).
     ///
     /// # Errors
     ///
@@ -226,8 +216,7 @@ impl HttpClient {
     /// [`MAX_DOWNLOAD_BODY`].
     ///
     /// The single GET-to-bytes path for callers that just want a payload (a log
-    /// file, a YAML document). Raises for any non-2xx status, mirroring
-    /// upstream `get_bytes` → `response.raise_for_status()`. Use
+    /// file, a YAML document). Errors on any non-2xx status. Use
     /// [`get_bytes_capped`](Self::get_bytes_capped) with [`MAX_API_BODY`] for
     /// small JSON/text API responses.
     ///
@@ -301,8 +290,8 @@ fn load_ca_bundle(path: &Path) -> Result<Vec<reqwest::Certificate>> {
 /// Return `true` if `err` is (or was caused by) a TLS certificate-verification
 /// failure.
 ///
-/// Mirrors upstream `is_ssl_verification_error`: reqwest wraps the underlying
-/// rustls verification error several layers deep, so this walks the
+/// reqwest wraps the underlying rustls verification error several layers deep,
+/// so this walks the
 /// [`std::error::Error::source`] chain (guarding against cycles) and falls back
 /// to matching `CERTIFICATE_VERIFY_FAILED` / a certificate-verify phrase in the
 /// stringified error for transports that only surface it in the message.
@@ -331,8 +320,8 @@ pub(crate) fn is_ssl_verification_error(err: &(dyn std::error::Error + 'static))
 
 /// A short, actionable message for a TLS certificate-verification failure.
 ///
-/// Ported from upstream `ssl_verification_hint`: it names the concrete remedies
-/// instead of dumping a transport error. The custom-bundle example stays
+/// Names the concrete remedies instead of dumping a transport error. The
+/// custom-bundle example stays
 /// generic on purpose — naming the system bundle would suggest a no-op, since it
 /// is usually already the verify source that just failed.
 #[must_use]
@@ -385,10 +374,10 @@ fn rest_after_at(s: &str) -> Option<&str> {
 
 /// The system's CA bundle path, or `None` when none is found.
 ///
-/// Ported from upstream `system_ca_bundle`: prefer the `SSL_CERT_FILE`
-/// environment override (the interpreter's OpenSSL default cafile in the Python
-/// version), then the well-known distribution paths in [`SYSTEM_CA_BUNDLES`].
-/// Returns the first candidate that is an existing file.
+/// Prefers the `SSL_CERT_FILE` environment override (an OpenSSL-standard
+/// default-cafile variable), then the well-known distribution paths in
+/// [`SYSTEM_CA_BUNDLES`]. Returns the first candidate that is an existing
+/// file.
 #[must_use]
 fn system_ca_bundle() -> Option<PathBuf> {
     let env_cafile = std::env::var_os("SSL_CERT_FILE").map(PathBuf::from);
@@ -425,15 +414,15 @@ mod tests {
 
     #[test]
     fn default_pool_size_is_bounded() {
-        // Cannot monkeypatch available_parallelism, but the invariant upstream
-        // asserts (min(32, cpu + 4)) means the result is always in [5, 32].
+        // Cannot mock available_parallelism, but the invariant
+        // (min(32, cpu + 4)) means the result is always in [5, 32].
         let n = default_pool_size();
         assert!((5..=32).contains(&n), "pool size {n} out of [5, 32]");
     }
 
     #[test]
     fn resolve_verify_precedence() {
-        // (default, override, expected) mirroring upstream's parametrization.
+        // (default, override, expected) test cases.
         let f = || VerifyPolicy::Default(false);
         let t = || VerifyPolicy::Default(true);
         let ca = || VerifyPolicy::CaBundle(PathBuf::from("/etc/ssl/ca.pem"));
@@ -465,7 +454,7 @@ mod tests {
     #[test]
     fn from_config_enabled_uses_system_bundle_when_present() {
         // Enabled + a resolved system bundle -> verify against that bundle
-        // (matching upstream's prefer-system default).
+        // (the system bundle takes precedence).
         let ca = PathBuf::from("/sys/ca.pem");
         assert_eq!(
             VerifyPolicy::from_config_with_bundle(&SslVerify::Enabled, Some(ca.clone())),

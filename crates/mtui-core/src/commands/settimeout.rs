@@ -10,13 +10,12 @@ use crate::session::Session;
 
 /// Sets the command-execution timeout, in seconds, for the selected hosts.
 ///
-/// Ports upstream `mtui.commands.simpleset.SetTimeout`, which calls
-/// `target.set_timeout(value)` per host. `0` disables the timeout. Selection
-/// acts on the named `-t` hosts, or all enabled hosts when omitted.
+/// Calls `target.set_timeout(value)` per host. `0` disables the timeout.
+/// Selection acts on the named `-t` hosts, or all enabled hosts when omitted.
 ///
-/// A host-phase command that takes only `-t/--target` (upstream `_add_hosts_arg`
-/// without `_add_template_arg`), so it is [`Scope::Active`] to match upstream:
-/// it acts on the active template's host set, not once per loaded template.
+/// A host-phase command that takes only `-t/--target`, so it is
+/// [`Scope::Active`]: it acts on the active template's host set, not once per
+/// loaded template.
 pub struct SetTimeout;
 
 #[async_trait]

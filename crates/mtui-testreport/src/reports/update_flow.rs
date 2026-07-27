@@ -1,27 +1,25 @@
 //! The bespoke (non-template) update flows: `perform_prepare`,
 //! `perform_downgrade`, `perform_update`.
 //!
-//! ## Reference
+//! ## Design
 //!
-//! Ports upstream `HostsGroup.perform_prepare` / `perform_downgrade` /
-//! `perform_update`. Unlike install/uninstall (which route through the shared
+//! Unlike install/uninstall (which route through the shared
 //! [`Operation`](mtui_hosts::Operation) template), these three are deliberately
-//! open-coded upstream — they have per-package loops, `set_repo` add/remove
+//! open-coded — they have per-package loops, `set_repo` add/remove
 //! fan-outs, package-version comparison, and (for `update`) a two-phase
 //! try/finally that guarantees repo cleanup on success while **keeping** the
 //! test repos on failure for retry/diagnosis.
 //!
 //! ## Crate boundary
 //!
-//! Upstream hangs these off `HostsGroup`, but that class also owns
-//! `get_package_list` / `set_repo`, which in the Rust split live in
-//! `mtui-testreport`. Putting the flows here (as the concrete reports'
+//! These flows need `get_package_list` / `set_repo`, which in the Rust split
+//! live in `mtui-testreport`. Putting the flows here (as the concrete reports'
 //! `perform_*` bodies, alongside `perform_install`) keeps `mtui-hosts` free of a
 //! `mtui-testreport` dependency and reuses the report's own [`SetRepo`] hook and
 //! package list. The flows resolve each host's command templates directly from
 //! the [`WorkflowRegistry`] (`ActionCommands` + `CheckFn`) — the same tables the
 //! `PlanProvider` adapter uses — keyed on `(system.get_release(),
-//! transactional)`, mirroring upstream `Target.doer(role)` / `Target.check(role)`.
+//! transactional)`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -52,18 +50,16 @@ type UpdateMaps = (BTreeMap<String, String>, BTreeMap<String, String>);
 pub enum UpdateFailure {
     /// One or more hosts failed the `updater` check after the command ran.
     Check(UpdateError),
-    /// A concrete target has no updater doer (upstream `MissingUpdaterError`);
-    /// unlike upstream — which logs and returns as if successful — mtui treats
-    /// this as a hard failure so a target that cannot be updated never reports
-    /// "finished".
+    /// A concrete target has no updater doer; mtui treats this as a hard
+    /// failure (rather than logging and returning as if successful) so a
+    /// target that cannot be updated never reports "finished".
     MissingUpdater(UpdateError),
     /// Cooperative cancellation was requested (MCP `job_cancel`) and the flow
     /// stopped at a step boundary.
     ///
     /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback:
     /// a rollback is itself a multi-minute downgrade, so rolling back on a
-    /// cancel would *extend* the work the caller just asked to stop. No
-    /// upstream counterpart — Python had no in-band cancellation.
+    /// cancel would *extend* the work the caller just asked to stop.
     Cancelled(UpdateError),
 }
 
@@ -107,8 +103,7 @@ where
 
 /// Drives [`perform_update_from_report`] and, on a *check* failure, rolls the
 /// packages back via [`perform_downgrade`] before re-surfacing the original
-/// error — the port of upstream `testreport.perform_update`'s
-/// `except UpdateError: ... perform_downgrade(...); raise`.
+/// error.
 ///
 /// A `MissingUpdater` failure installed nothing, so it re-surfaces without a
 /// rollback attempt. The rollback is best-effort ([`perform_downgrade`] returns
@@ -163,11 +158,9 @@ where
 
 /// Records a workflow op in every target's remote history file before fan-out.
 ///
-/// Ports upstream `testreport.perform_*`'s `targets.add_history([...])` calls
-/// (`test_reports/testreport.py`). `id_field` carries the RRID for ops that log
-/// it (`update`/`downgrade`) and is `None` for `install`/`uninstall`, matching
-/// upstream's differing field lists. The op label and package list complete the
-/// colon-joined line written by [`HostsGroup::add_history`].
+/// `id_field` carries the RRID for ops that log it (`update`/`downgrade`) and
+/// is `None` for `install`/`uninstall`. The op label and package list
+/// complete the colon-joined line written by [`HostsGroup::add_history`].
 pub async fn add_op_history(
     targets: &mut HostsGroup,
     op: &str,
@@ -182,25 +175,22 @@ pub async fn add_op_history(
     targets.add_history(&fields).await;
 }
 
-/// The `$repa` maintenance-selector for an update, mirroring upstream
-/// `f":p={rrid.maintenance_id}:{rrid.review_id}"`.
+/// The `$repa` maintenance-selector for an update.
 fn repa_for(maintenance_id: &str, review_id: &str) -> String {
     format!(":p={maintenance_id}:{review_id}")
 }
 
 /// Resolves a host's `(release, transactional)` key from its parsed system.
 ///
-/// Returns `None` when the system has no release (an unknown/unparsed host),
-/// which upstream surfaces as the role's `Missing*Error`; the callers treat a
-/// `None` as "no doer for this host".
+/// Returns `None` when the system has no release (an unknown/unparsed host);
+/// the callers treat a `None` as "no doer for this host".
 fn host_key(target: &mtui_hosts::Target) -> Option<(String, bool)> {
     let release = target.system().get_release().ok()?;
     Some((release, target.transactional()))
 }
 
-/// Resolves one host's [`ActionCommands`] for `role`, or logs and returns `None`
-/// on a missing doer (mirroring upstream's `logger.error("%s", e)` +
-/// early-return semantics).
+/// Resolves one host's [`ActionCommands`] for `role`, or logs and returns
+/// `None` on a missing doer.
 fn resolve_doer(
     registry: &WorkflowRegistry,
     role: Role,
@@ -218,10 +208,8 @@ fn resolve_doer(
 
 /// Builds the transactional-only reboot map for `role` across the group.
 ///
-/// Mirrors upstream's `reboot = {t.hostname: doer["reboot"].substitute() for t
-/// in group if t.transactional}`. Returns `Err` if any transactional host is
-/// missing a doer (upstream lets the `Missing*Error` abort before the lock),
-/// so the caller can early-return without locking.
+/// Returns `Err` if any transactional host is missing a doer, so the caller
+/// can early-return without locking.
 fn build_reboot_map(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -246,8 +234,8 @@ fn build_reboot_map(
 }
 
 /// Runs `role`'s post-run check on every host, returning the recognised
-/// [`UpdateError`]s (upstream iterates `t.check(role)(...)`) and appending any
-/// recognised-but-non-fatal [`Diagnostic`] sections to `diagnostics`.
+/// [`UpdateError`]s and appending any recognised-but-non-fatal [`Diagnostic`]
+/// sections to `diagnostics`.
 ///
 /// The check reads each host's `last*` snapshot after the command ran. Only the
 /// `update` check currently emits diagnostics; the other roles append nothing.
@@ -533,7 +521,7 @@ pub fn install_verdict(op: &str, role: Role, targets: &HostsGroup) -> Result<(),
     aggregate_failures(op, failures)
 }
 
-/// Reboots the transactional hosts named in `reboot` (upstream `group._reboot`).
+/// Reboots the transactional hosts named in `reboot`.
 async fn reboot_transactional(targets: &mut HostsGroup, reboot: BTreeMap<String, String>) {
     if reboot.is_empty() {
         return;
@@ -542,7 +530,8 @@ async fn reboot_transactional(targets: &mut HostsGroup, reboot: BTreeMap<String,
     OperationGroup::reboot(targets, map).await;
 }
 
-/// Ports upstream `HostsGroup.perform_prepare`.
+/// Runs the prepare step: adds/removes the issue repo, then installs
+/// `packages`.
 ///
 /// `report` is the [`SetRepo`] hook for the issue repos; `packages` the list to
 /// prepare. `testing` selects repo-`add` + the testing preparer variant;
@@ -560,15 +549,14 @@ pub async fn perform_prepare(
 ) -> Result<(), UpdateError> {
     let registry = WorkflowRegistry::new(force, testing);
     let operation = if testing { RepoOp::Add } else { RepoOp::Remove };
-    // Upstream drops branding-upstream from the prepare set.
+    // The prepare set excludes the branding-upstream package.
     let pkgs: Vec<String> = packages
         .iter()
         .filter(|p| *p != "branding-upstream")
         .cloned()
         .collect();
 
-    // Resolve the reboot map before locking; a missing preparer aborts early
-    // (upstream's `except MissingPreparerError: return`).
+    // Resolve the reboot map before locking; a missing preparer aborts early.
     let Ok(reboot) = build_reboot_map(targets, &registry, Role::Prepare) else {
         return Err(UpdateError::reason_only("missing preparer"));
     };
@@ -577,8 +565,7 @@ pub async fn perform_prepare(
         return Err(UpdateError::reason_only(e.to_string()));
     }
 
-    // From here upstream guarantees `unlock()` via `finally`; we mirror that by
-    // running the body then always unlocking.
+    // The body runs, then we always unlock, matching a try/finally.
     let result = prepare_body(
         targets,
         &registry,
@@ -594,7 +581,7 @@ pub async fn perform_prepare(
 }
 
 /// The locked body of [`perform_prepare`], factored out so the caller's
-/// `unlock()` runs unconditionally (upstream's `finally`).
+/// `unlock()` runs unconditionally.
 #[allow(clippy::too_many_arguments)]
 async fn prepare_body(
     targets: &mut HostsGroup,
@@ -716,14 +703,14 @@ fn build_prepare_map(
     map
 }
 
-/// Ports upstream `HostsGroup.perform_downgrade`.
+/// Rolls `packages` back to the pre-update version on every host.
 pub async fn perform_downgrade(
     targets: &mut HostsGroup,
     report: &dyn SetRepo,
     packages: &[String],
 ) -> Result<(), UpdateError> {
-    // Nothing to downgrade: return before locking or touching repos (upstream
-    // PR #336). The guard also keeps the probe template from rendering with an
+    // Nothing to downgrade: return before locking or touching repos.
+    // The guard also keeps the probe template from rendering with an
     // empty package list — `zypper se` without names would list the entire
     // repository catalog.
     if packages.is_empty() {
@@ -787,9 +774,9 @@ async fn downgrade_body(
         targets.run(Command::PerHost(list_map.clone())).await;
     }
 
-    // A dead probe must abort that host's downgrade, not degrade it (upstream
-    // PR #336). When the probe dies (an SSH no-output timeout records exit -1)
-    // its stdout is empty, the version map below stays empty, and the flow would
+    // A dead probe must abort that host's downgrade, not degrade it. When the
+    // probe dies (an SSH no-output timeout records exit -1) its stdout is
+    // empty, the version map below stays empty, and the flow would
     // "complete" having run zero downgrade commands — leaving every package at
     // the update version behind a success-looking run. The pipeline's exit
     // status is awk's, so a recorded non-zero exit here always means the probe
@@ -886,7 +873,7 @@ async fn downgrade_body(
             // Check only the hosts that actually ran this command: a host
             // outside `cmd` (e.g. a dead-probe host) still carries its previous
             // record, whose stale -1 would trip the new timeout gate and cancel
-            // the healthy hosts' rollback (upstream PR #336).
+            // the healthy hosts' rollback.
             for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
                 let host = e.host.as_deref().unwrap_or("");
                 if cmd.contains_key(host) && !transactional_hosts.contains(host) {
@@ -940,8 +927,7 @@ async fn downgrade_body(
     }
 
     // Reboot the healthy transactional hosts first (their staged snapshots must
-    // still activate), then surface the dead probes as the command's failure
-    // (upstream PR #336).
+    // still activate), then surface the dead probes as the command's failure.
     let healthy_reboot: BTreeMap<String, String> = reboot
         .into_iter()
         .filter(|(h, _)| !dead_probes.contains(h))
@@ -999,9 +985,9 @@ async fn downgrade_body(
 
 /// Emits the post-downgrade "done" / "downgrade not completed" verdict.
 ///
-/// Ports upstream PR #336's `commands/downgrade.py` post-loop: re-query each
-/// host, rotate `before = after; after = current` per package, then compare each
-/// package's re-queried `current` against the update's `required` version. Every
+/// Re-queries each host, rotates `before = after; after = current` per
+/// package, then compares each package's re-queried `current` against the
+/// update's `required` version. Every
 /// package still `current >= required` did **not** roll back; it is named per
 /// host, at ERROR, with versions — with no short-circuit, so the bookkeeping
 /// still advances for the packages that did move. New packages (no released
@@ -1061,8 +1047,7 @@ async fn downgrade_verdict(targets: &mut HostsGroup) -> BTreeMap<String, Vec<Str
 }
 
 /// Parses the downgrader `list_command` output into a `name -> highest version`
-/// map, matching upstream's `(.*) = (.*)` regex + `sorted(..., key=RPMVersion,
-/// reverse=True)[0]` selection.
+/// map, selecting the highest version per package by RPM version ordering.
 fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
     use mtui_types::rpmver::RPMVersion;
 
@@ -1093,7 +1078,7 @@ fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
     out
 }
 
-/// Ports upstream `HostsGroup.perform_update`.
+/// Runs the full update: prepare, patch, check, reboot, and repo cleanup.
 ///
 /// `packages` is the report's package list; `maintenance_id`/`review_id` build
 /// the `$repa` selector. `noprepare` skips the initial prepare; `newpackage`
@@ -1101,9 +1086,9 @@ fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
 /// uses to run [`perform_prepare`] (the report drives it so this module does not
 /// need to know the report type). `diagnostics` collects the update check's
 /// recognised-but-non-fatal output sections for the command layer to render.
-// Ports upstream's positional `perform_update` signature plus the diagnostic
-// sink threaded from the display-owning command layer; grouping into a struct
-// would obscure the 1:1 upstream mapping for no real gain.
+// Plain positional args plus the diagnostic sink threaded from the
+// display-owning command layer; grouping them into a struct would only
+// obscure the call site for no real gain.
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_update(
     targets: &mut HostsGroup,
@@ -1125,9 +1110,8 @@ pub async fn perform_update(
     }
 
     if !noprepare {
-        // Upstream: `perform_prepare(get_package_list(), testreport)` (default
-        // flags: remove-repo prepare). Prepare is best-effort within the update
-        // flow (upstream logs and proceeds), so a failure is logged, not
+        // Runs prepare with default flags (remove-repo prepare). Prepare is
+        // best-effort within the update flow, so a failure is logged, not
         // returned.
         if let Err(e) = perform_prepare(targets, report, packages, false, false, false).await {
             warn!(error = %e, "prepare before update failed");
@@ -1149,9 +1133,9 @@ pub async fn perform_update(
     let (commands, reboot) = match build_update_maps(targets, &registry, &repa, &joined) {
         Ok(maps) => maps,
         Err(e) => {
-            // MissingUpdaterError: remove the repo we just added and abort. Unlike
-            // upstream (log + return as success), a target with no updater doer is
-            // a hard failure so it never reports "finished".
+            // A missing updater doer: remove the repo we just added and abort.
+            // Treated as a hard failure (rather than logged and returned as
+            // success) so it never reports "finished".
             targets.fanout_set_repo(RepoOp::Remove, report).await;
             targets.unlock().await;
             return Err(UpdateFailure::MissingUpdater(e));
@@ -1207,12 +1191,11 @@ pub async fn perform_update(
 }
 
 /// Runs the update commands, checks every host (collecting failures), reboots on
-/// success, and **always** unlocks (upstream's inner `finally`).
+/// success, and **always** unlocks.
 ///
 /// Returns `Ok(())` when every host's check passed, otherwise `Err` with the
-/// aggregated [`UpdateError`]. The aggregation mirrors upstream
-/// (`hostgroup.py:661-667`): a single failure is returned verbatim; more than
-/// one is summarised into `"update failed on {hosts} ({detail})"`.
+/// aggregated [`UpdateError`]: a single failure is returned verbatim; more
+/// than one is summarised into `"update failed on {hosts} ({detail})"`.
 async fn update_run_phase(
     targets: &mut HostsGroup,
     registry: &WorkflowRegistry,
@@ -1263,8 +1246,7 @@ async fn update_run_phase(
 
 /// Builds the per-host updater command map (with `$repa` + `$packages`) and the
 /// transactional reboot map. Returns `Err` with the offending host's
-/// [`UpdateError`] if any host is missing an updater (upstream's
-/// `MissingUpdaterError`) — a hard failure in mtui.
+/// [`UpdateError`] if any host is missing an updater — a hard failure in mtui.
 fn build_update_maps(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -1335,7 +1317,7 @@ mod tests {
     // --- pure helpers ------------------------------------------------------
 
     #[test]
-    fn repa_for_matches_upstream_format() {
+    fn repa_for_has_stable_format() {
         assert_eq!(repa_for("42", "7"), ":p=42:7");
     }
 
@@ -1826,7 +1808,7 @@ mod tests {
     #[tokio::test]
     async fn perform_downgrade_empty_package_list_is_a_noop() {
         // An empty package list returns before locking or probing: the probe
-        // template with zero names would list the entire catalog (upstream #336).
+        // template with zero names would list the entire catalog.
         let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -1842,7 +1824,7 @@ mod tests {
     #[tokio::test]
     async fn perform_downgrade_dead_probe_aborts() {
         // A dead version probe (exit -1 for every command) aborts instead of
-        // "completing" with zero downgrade commands run (upstream PR #336).
+        // "completing" with zero downgrade commands run.
         let (t, handle) = sles_target_with_exit("h1", "", -1);
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -1861,8 +1843,7 @@ mod tests {
     #[tokio::test]
     async fn perform_downgrade_partial_dead_probe_rolls_back_healthy_host() {
         // h1's probe succeeds (rolls back), h2's probe dies (exit -1). h2 is
-        // skipped but h1 still rolls back; the error names only h2 at the end
-        // (upstream PR #336).
+        // skipped but h1 still rolls back; the error names only h2 at the end.
         let (t1, h1) = sles_target("h1", "pkg-a = 1.0-1\n");
         let (t2, h2) = sles_target_with_exit("h2", "", -1);
         let mut group = HostsGroup::new(vec![t1, t2], false);
@@ -1890,8 +1871,8 @@ mod tests {
     #[tokio::test]
     async fn downgrade_verdict_names_packages_still_at_update_version() {
         // Re-query returns pkg-a still at 1.5-1, which is the update's `required`
-        // version ⇒ current >= required ⇒ named as not-downgraded (upstream
-        // PR #336). The bookkeeping still rotates before/after for it.
+        // version ⇒ current >= required ⇒ named as not-downgraded. The
+        // bookkeeping still rotates before/after for it.
         let (mut t, _h) = sles_target("h1", "pkg-a 1.5-1\n");
         let mut pkg = mtui_types::package::Package::new("pkg-a");
         pkg.set_required(Some("1.5-1")).unwrap();
@@ -1916,8 +1897,8 @@ mod tests {
 
     #[tokio::test]
     async fn downgrade_verdict_no_short_circuit_names_every_host() {
-        // Two hosts each still at the update version: BOTH are named, not just
-        // the first (upstream PR #336 removed the short-circuit).
+        // Two hosts each still at the update version: BOTH are named, not
+        // just the first — there is no short-circuit.
         let (mut t1, _h1) = sles_target("h1", "pkg-a 2.0-1\n");
         let mut p1 = mtui_types::package::Package::new("pkg-a");
         p1.set_required(Some("2.0-1")).unwrap();
@@ -1995,9 +1976,9 @@ mod tests {
         .await;
         assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
-        // The slmicro updater is transactional, so a reboot command is fired on
-        // success (upstream `_reboot`); reboot uses fire-and-forget, recorded
-        // separately from the run log.
+        // The slmicro updater is transactional, so a reboot command is fired
+        // on success; reboot uses fire-and-forget, recorded separately from
+        // the run log.
         let fired = handle.fired_commands();
         assert!(
             fired.iter().any(|c| c.contains("systemctl reboot")),
@@ -2071,7 +2052,7 @@ mod tests {
             Err(UpdateFailure::Check(e)) => e,
             other => panic!("multi-host failure returns Err(Check): {other:?}"),
         };
-        // Aggregated message names both hosts (sorted) — upstream's summary form.
+        // Aggregated message names both hosts (sorted).
         let msg = err.to_string();
         assert!(
             msg.contains("update failed on h1, h2"),
@@ -2092,9 +2073,9 @@ mod tests {
         // the original UpdateError AND issues a downgrade (rollback). The mock
         // returns a resolvable version line so the downgrade command renders.
         //
-        // The downgrade version probe must exit 0 (a non-zero probe exit is now a
-        // dead-probe abort, upstream PR #336); the shared `sles_target_with_exit`
-        // would apply 104 to the probe too, so script the probe explicitly.
+        // The downgrade version probe must exit 0 (a non-zero probe exit is a
+        // dead-probe abort); the shared `sles_target_with_exit` would apply
+        // 104 to the probe too, so script the probe explicitly.
         let probe = {
             let cmds = crate::update_workflow::actions::downgrade::downgrader("15", false).unwrap();
             let vars: std::collections::HashMap<&str, &str> =

@@ -11,8 +11,7 @@ use crate::commands::support::{
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Reloads information from the openQA instances (upstream
-/// `mtui.commands.reloadoqa.ReloadOpenQA`).
+/// Reloads information from the openQA instances.
 ///
 /// For a kernel-workflow report the per-instance kernel results are (re)fetched
 /// from the primary and the baremetal openQA instances; the QEM-dashboard "auto"

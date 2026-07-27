@@ -11,10 +11,9 @@ use crate::session::Session;
 
 /// Updates the loaded template's files from SVN (`svn up`).
 ///
-/// Ports upstream `mtui.commands.checkout.Checkout`, which runs `svn up` in the
-/// report working directory. Requires a loaded report (upstream `@requires_update`);
-/// with nothing loaded the report has no path and the command reports a clear
-/// error rather than shelling out.
+/// Runs `svn up` in the report working directory. Requires a loaded report;
+/// with nothing loaded the report has no path and the command reports a
+/// clear error rather than shelling out.
 pub struct Checkout;
 
 #[async_trait]

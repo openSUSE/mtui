@@ -1,7 +1,6 @@
 //! Assignment/role inference — the plugin's exact state machine.
 //!
-//! Ported from upstream `mtui/data_sources/obs/inference.py`, which itself was
-//! ported verbatim from openSUSE/osc-plugin-qam
+//! Ported verbatim from openSUSE/osc-plugin-qam
 //! (`oscqam/models/assignment.py` `Assignment.infer`/`infer_group`),
 //! **GPL-2.0-only**. That GPL-2.0 provenance is preserved here per its
 //! attribution requirement, independent of mtui's own license.
@@ -46,11 +45,10 @@ impl Assignment {
 
 /// A chronological sort key for a history `when` string.
 ///
-/// Lenient, mirroring upstream `_when_key` (Python `datetime.fromisoformat`):
-/// parses an offset-aware ISO-8601 timestamp (with or without a `Z`), falling
+/// Lenient, akin to Python's `datetime.fromisoformat`: parses an
+/// offset-aware ISO-8601 timestamp (with or without a `Z`), falling
 /// back to a naive `YYYY-MM-DDTHH:MM:SS`; both normalise to a naive UTC instant
-/// so all keys compare. Unparseable values sort **last** (bucket 1), matching
-/// Python's `(1, datetime.max)`.
+/// so all keys compare. Unparseable values sort **last** (bucket 1).
 fn when_key(when: &str) -> (u8, Option<NaiveDateTime>) {
     let trimmed = when.trim().replace('Z', "+00:00");
     if let Ok(dt) = DateTime::parse_from_rfc3339(&trimmed) {
@@ -65,7 +63,7 @@ fn when_key(when: &str) -> (u8, Option<NaiveDateTime>) {
 /// Replay one group review's relevant history into the assignments it implies.
 ///
 /// A stable sort by [`when_key`] preserves document order for equal instants and
-/// for the unparseable bucket, matching Python's stable `sorted`.
+/// for the unparseable bucket.
 fn infer_group(review: &Review, group: &str) -> HashSet<Assignment> {
     let mut events: Vec<&crate::obs::models::HistoryEvent> = review
         .history

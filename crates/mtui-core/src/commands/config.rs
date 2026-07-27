@@ -10,8 +10,7 @@ use crate::session::Session;
 
 /// The configuration attributes exposed to `show`, each with a value renderer.
 ///
-/// Ports the read side of upstream `config show`, which iterates
-/// `config.data`. The Rust [`Config`] is a typed struct (no reflection), so the
+/// The Rust [`Config`] is a typed struct (no reflection), so the
 /// attribute↔value mapping is spelled out here — the single place `show`/`set`
 /// and completion agree on the attribute surface.
 fn attr_value(config: &Config, attr: &str) -> Option<String> {
@@ -144,8 +143,8 @@ const ATTRS: [&str; 40] = [
     "lock_wait_poll",
 ];
 
-/// Parses `raw` for `attr` and stores it, mirroring upstream's getter/fixup
-/// rejection (an invalid value leaves the attribute unchanged).
+/// Parses `raw` for `attr` and stores it. An invalid value leaves the
+/// attribute unchanged.
 fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
     let parse_bool = |s: &str| match s {
         "1" | "yes" | "true" | "on" => Ok(true),
@@ -214,11 +213,11 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
 
 /// Shows or sets runtime configuration values.
 ///
-/// Ports upstream `mtui.commands.config.Config` (the command). `config show
-/// [attr ...]` prints the current values (all when none named); `config set
-/// <attr> <value>` updates one, going through value parsing/validation at least
-/// as strict as config-file loading, so a runtime `set` cannot store a value the
-/// file would reject. Self-describing, so it runs once ([`Scope::Single`]).
+/// `config show [attr ...]` prints the current values (all when none named);
+/// `config set <attr> <value>` updates one, going through value
+/// parsing/validation at least as strict as config-file loading, so a runtime
+/// `set` cannot store a value the file would reject. Self-describing, so it
+/// runs once ([`Scope::Single`]).
 pub struct ConfigCmd;
 
 #[async_trait]

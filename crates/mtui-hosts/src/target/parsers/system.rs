@@ -1,17 +1,16 @@
 //! The host-system parser: probes a target over SFTP and builds a [`System`].
 //!
-//! Ported from `mtui/hosts/target/parsers/system.py`. Like upstream, every SFTP
+//! Every SFTP
 //! read is issued through a **single** batched [`SftpSession`] opened once via
 //! [`Connection::sftp_session`] — a host with many product files pays the SFTP
-//! channel+subsystem handshake once, not per probe (mtui-rs-0mop.3, restoring
-//! upstream's `sftp_session()` shape). The `sftp_session_count == 1` invariant
+//! channel+subsystem handshake once, not per probe (mtui-rs-0mop.3). The
+//! `sftp_session_count == 1` invariant
 //! is pinned by the `parse_system_opens_single_sftp_session` oracle.
 //!
 //! The branch logic — SUSE detection via `/etc/products.d`, the non-SUSE
 //! `/etc/os-release` → RHEL-6 fallback chain, baseproduct symlink
 //! normalization, dangling/missing-base degradation, the addon loop, the
-//! SLES_SAP 12/16 repo workarounds, and the two-location transactional probe —
-//! mirrors upstream exactly.
+//! SLES_SAP 12/16 repo workarounds, and the two-location transactional probe.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -42,8 +41,8 @@ const TRANSACTIONAL_CONFS: [&str; 2] = [
 /// status that drives the SUSE/non-SUSE/dangling branches) or a product-file
 /// XML parse error.
 pub async fn parse_system(conn: &mut dyn Connection) -> Result<(System, bool)> {
-    // Read every probe through one batched SFTP session (upstream
-    // `sftp_session()`): the channel+subsystem handshake is paid once for the
+    // Read every probe through one batched SFTP session: the
+    // channel+subsystem handshake is paid once for the
     // whole parse instead of per file. `hostname` is captured before the
     // borrow so error/warn context survives while `sftp` holds `&mut conn`.
     let hostname = conn.hostname().to_owned();
@@ -178,7 +177,7 @@ async fn parse_non_suse(sftp: &mut dyn SftpSession) -> Result<(System, bool)> {
 /// The target may be absolute (`/etc/products.d/SLES.prod`) or relative
 /// (`SLES.prod`); both normalize to the basename so the product file is looked
 /// up under `/etc/products.d`. A missing/empty target yields `None` (treated as
-/// a dangling base upstream).
+/// a dangling base).
 async fn resolve_basefile(sftp: &mut dyn SftpSession) -> Result<Option<String>> {
     let target = match sftp.readlink(Path::new(BASEPRODUCT_LINK)).await {
         Ok(t) => t,
@@ -201,7 +200,7 @@ mod tests {
 
     /// A SLES 15-SP5 host carrying a base product plus **two** addon product
     /// files — exercises the multi-read addon loop so the single-session
-    /// batching is meaningfully tested (upstream `sftp_session()` shape).
+    /// batching is meaningfully tested.
     fn sles_with_two_addons() -> MockConnection {
         let base = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
         let ha = br#"<product><name>sle-ha</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;

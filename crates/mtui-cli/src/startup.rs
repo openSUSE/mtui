@@ -1,19 +1,17 @@
 //! Startup seeding: the pre-REPL work the `mtui` binary does before entering the
 //! interactive loop.
 //!
-//! Port of the argv-driven half of upstream `mtui.main.run_mtui` — the part that
-//! runs *before* `prompt.cmdloop(...)`:
+//! The argv-driven startup sequence that runs *before* the interactive loop
+//! starts:
 //!
-//! 1. **`-a`/`-k` update** → [`Session::load_update`] (upstream
-//!    `prompt.load_update`). An explicitly requested update that resolves to a
-//!    null report exits the process (upstream returns `1` rather than dropping
-//!    into an empty session).
+//! 1. **`-a`/`-k` update** → [`Session::load_update`]. An explicitly requested
+//!    update that resolves to a null report exits the process with code `1`
+//!    rather than dropping into an empty session.
 //! 2. **`--sut` hosts** → the `add_host` command dispatched through the shared
-//!    engine (upstream `prompt.do_add_host(x.print_args())`), best-effort: a bad
-//!    host is logged and skipped.
+//!    engine, best-effort: a bad host is logged and skipped.
 //!
-//! There is **no single-command / non-interactive mode**: upstream `mtui` has
-//! only two surfaces — the REPL and `mtui-mcp` — and neither takes a positional
+//! There is **no single-command / non-interactive mode**: mtui has only two
+//! surfaces — the REPL and `mtui-mcp` — and neither takes a positional
 //! command. This module therefore only *seeds* the session; the binary always
 //! enters the REPL afterwards. (The `run_once`/`ExitStatus` primitive in
 //! `mtui-core` exists for `mtui-mcp`/embedding, not a CLI headless mode.)
@@ -31,18 +29,15 @@ use mtui_types::Workflow;
 
 /// Seeds `session` from the top-level `args` before the REPL starts.
 ///
-/// Mirrors the pre-`cmdloop` body of upstream `run_mtui`:
-///
 /// * If `args.update()` is set (`-a`/`-k`), loads it via
 ///   [`Session::load_update`]. Autoconnect is requested iff no `--sut` override
-///   was given (upstream `autoconnect=not bool(args.sut)`). If the load yields an
-///   empty RRID — a null report for an *explicitly requested* update — the
-///   user-facing "does not exist" message has already been logged, so this
-///   returns [`ControlFlow::Break`] with exit code `1` rather than entering an
-///   empty REPL.
+///   was given. If the load yields an empty RRID — a null report for an
+///   *explicitly requested* update — the user-facing "does not exist" message
+///   has already been logged, so this returns [`ControlFlow::Break`] with exit
+///   code `1` rather than entering an empty REPL.
 /// * For each `--sut` entry, dispatches `add_host <fragment>` through the shared
-///   engine (upstream `do_add_host(x.print_args())`), logging any failure and
-///   continuing — one bad host never aborts startup.
+///   engine, logging any failure and continuing — one bad host never aborts
+///   startup.
 ///
 /// Returns [`ControlFlow::Continue`] when the session is ready for the REPL, or
 /// [`ControlFlow::Break(code)`] when the process should exit with `code` instead.
@@ -63,7 +58,7 @@ pub async fn seed_session(
         if rrid.is_empty() {
             // Null report for an explicitly requested update: the "does not
             // exist" message was already logged by the load path. Exit rather
-            // than drop into an empty interactive session (upstream parity).
+            // than drop into an empty interactive session.
             tracing::error!(update = %update.id, "requested update could not be loaded");
             return ControlFlow::Break(1);
         }
@@ -72,8 +67,8 @@ pub async fn seed_session(
     for sut in &args.sut {
         let line = format!("add_host {}", sut.print_args());
         if let Err(err) = dispatch_line(registry, session, &line).await {
-            // Best-effort, upstream `do_add_host` + `logger.error`: log and keep
-            // going so one malformed `--sut` never blocks the REPL.
+            // Best-effort: log and keep going so one malformed `--sut` never
+            // blocks the REPL.
             tracing::error!(%err, sut = ?sut.hosts(), "failed to add SUT host(s)");
         }
     }

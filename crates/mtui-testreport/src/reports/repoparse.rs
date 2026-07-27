@@ -1,10 +1,8 @@
 //! Repository-URL derivation helpers (`*repoparse`).
 //!
-//! Port of the `*repoparse` free functions from upstream
-//! `mtui/test_reports/metadata_parsers.py`. Each derives a
-//! [`SystemProduct`] → repository-URL mapping — the `update_repos` table a
-//! concrete report's `update_repos_parser()` returns and
-//! [`RepoManager::run_zypper`](mtui_hosts) consumes.
+//! Each derives a [`SystemProduct`] → repository-URL mapping — the
+//! `update_repos` table a concrete report's `update_repos_parser()` returns
+//! and [`RepoManager::run_zypper`](mtui_hosts) consumes.
 //!
 //! They live next to the report impls (rather than in
 //! [`metadata_parsers`](crate::metadata_parsers)) because they *are* the report
@@ -16,8 +14,7 @@
 //! The OBS variant ([`obsrepoparse`] + its private `read_project`/`xmlparse`
 //! helpers) parses a checkout's `project.xml`; it is used by the OBS report.
 //!
-//! All helpers operate on the flat [`SystemProduct`] `(name, version, arch)` —
-//! upstream's `Product` `NamedTuple`.
+//! All helpers operate on the flat [`SystemProduct`] `(name, version, arch)`.
 //!
 //! ## Security
 //!
@@ -67,13 +64,12 @@ fn validated_url(url: String) -> Option<String> {
     }
 }
 
-/// Joins a base URL and a path segment the way upstream `os.path.join` does for
-/// the URL cases here: a single `/` separator, without collapsing an existing
-/// trailing slash on `base` into a doubled one.
+/// Joins a base URL and a path segment with a single `/` separator, without
+/// collapsing an existing trailing slash on `base` into a doubled one.
 ///
-/// Upstream builds these with `os.path.join(repository, tail)`; the tails used
-/// (`"standard"`, `"images/repo/..."`) never start with `/`, so a plain
-/// separator-aware join reproduces the exact strings the tests assert.
+/// The tails used (`"standard"`, `"images/repo/..."`) never start with `/`,
+/// so a plain separator-aware join reproduces the exact strings the tests
+/// assert.
 fn urljoin(base: &str, tail: &str) -> String {
     if base.ends_with('/') {
         format!("{base}{tail}")
@@ -85,9 +81,9 @@ fn urljoin(base: &str, tail: &str) -> String {
 /// Parses a product string such as `"SLES 15 (x86_64, aarch64)"` into one
 /// [`SystemProduct`] per architecture.
 ///
-/// Port of upstream `_parse_product`: splits on `" ("`, strips the trailing
-/// `")"`, splits the arch list on `", "`, and the base on `" "` — taking the
-/// first two whitespace tokens as `(name, version)`.
+/// Splits on `" ("`, strips the trailing `")"`, splits the arch list on
+/// `", "`, and the base on `" "` — taking the first two whitespace tokens as
+/// `(name, version)`.
 ///
 /// # Errors
 ///
@@ -115,7 +111,7 @@ pub fn parse_product(product: &str) -> Result<Vec<SystemProduct>, ProductParseEr
 
 /// Derives the update-repo map for SUSE Linux (maintenance `1.1`, still in IBS).
 ///
-/// Port of upstream `slrepoparse`: each product/arch maps to
+/// Each product/arch maps to
 /// `<repository>/images/repo/<name>-<version>-<arch>/`.
 #[must_use]
 pub fn slrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProduct, String> {
@@ -146,8 +142,7 @@ fn parse_products(product: &str) -> Vec<SystemProduct> {
 
 /// Derives the update-repo map for git-backed reports.
 ///
-/// Port of upstream `gitrepoparse`: every product/arch maps to
-/// `<repository>/standard`.
+/// Every product/arch maps to `<repository>/standard`.
 #[must_use]
 pub fn gitrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProduct, String> {
     products
@@ -159,8 +154,8 @@ pub fn gitrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProd
 
 /// Derives the update-repo map from an explicit set of repository URLs.
 ///
-/// Port of upstream `reporepoparse`: for each product/arch, matches the repo URL
-/// that contains `<name>-<version>-<arch>` and keys it under the
+/// For each product/arch, matches the repo URL that contains
+/// `<name>-<version>-<arch>` and keys it under the
 /// [`normalize_16`]-canonicalized product.
 #[must_use]
 pub fn reporepoparse(
@@ -185,16 +180,16 @@ pub fn reporepoparse(
 
 /// Reads the `project.xml` file from an OBS/IBS checkout directory.
 ///
-/// Port of upstream `_read_project`: reads `<dir>/project.xml` to a string.
+/// Reads `<dir>/project.xml` to a string.
 fn read_project(dir: &Path) -> std::io::Result<String> {
     std::fs::read_to_string(dir.join("project.xml"))
 }
 
 /// Parses an OBS `project.xml` into `(product, repo-name)` pairs.
 ///
-/// Port of upstream `_xmlparse`, whose XPath
-/// `repository/path[@repository='update']/..` selects each `<repository>` that
-/// has an `update` `<path>` child, excluding any whose `name` contains `DEBUG`.
+/// Selects each `<repository>` that has an `update` `<path>` child (the
+/// equivalent of the XPath `repository/path[@repository='update']/..`),
+/// excluding any whose `name` contains `DEBUG`.
 /// For each such repository it yields the [`SystemProduct`] built from the
 /// `<releasetarget>` child's `project` attribute (split on `:`, last three
 /// segments → `name`/`version`/`arch`) paired with the repository's `name`.
@@ -260,8 +255,8 @@ fn xmlparse(xml: &str) -> Vec<(SystemProduct, String)> {
 /// Builds a [`SystemProduct`] from a releasetarget `project` attribute by
 /// taking the last three `:`-separated segments as `name`/`version`/`arch`.
 ///
-/// Mirrors upstream `project.split(":")[-3:]`; returns `None` when fewer than
-/// three segments are present rather than panicking.
+/// Returns `None` when fewer than three segments are present rather than
+/// panicking.
 fn product_from_project(project: &str) -> Option<SystemProduct> {
     let parts: Vec<&str> = project.split(':').collect();
     let [name, version, arch] = parts[parts.len().checked_sub(3)?..] else {
@@ -282,11 +277,11 @@ fn attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
 
 /// Derives the update-repo map for an OBS/IBS incident from its checkout.
 ///
-/// Port of upstream `obsrepoparse`: parses `<dir>/project.xml`, [`normalize`]s
-/// each parsed product, and keys it to `<repository>/<repo-name>`.
+/// Parses `<dir>/project.xml`, [`normalize`]s each parsed product, and keys
+/// it to `<repository>/<repo-name>`.
 ///
-/// A missing or unreadable `project.xml` yields an empty map (upstream would
-/// raise; here loading is best-effort — the caller has no repos to act on).
+/// A missing or unreadable `project.xml` yields an empty map — loading is
+/// best-effort, and the caller has no repos to act on.
 #[must_use]
 pub fn obsrepoparse(repository: &str, dir: &Path) -> HashMap<SystemProduct, String> {
     let Ok(xml) = read_project(dir) else {

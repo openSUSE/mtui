@@ -1,10 +1,6 @@
-//! Port of upstream `tests/test_products_sle.py`.
-//!
 //! Covers the per-family normalizers, `normalize_16`, and the `normalize`
-//! dispatcher. Upstream's dispatch tests use `mock.patch` to assert *which*
-//! helper ran; since Rust cannot monkeypatch, the dispatch cases here assert on
-//! the observable transformed output of each branch, which uniquely identifies
-//! the branch taken.
+//! dispatcher. The dispatch cases assert on the observable transformed
+//! output of each branch, which uniquely identifies the branch taken.
 
 use mtui_testreport::products::{
     normalize, normalize_16, normalize_manager, normalize_osle, normalize_rt, normalize_ses,
@@ -17,8 +13,8 @@ fn p(name: &str, version: &str, arch: &str) -> SystemProduct {
 }
 
 // ---------------------------------------------------------------------------
-// Per-family normalizers: assert the rewritten name (and version where upstream
-// strips a suffix).
+// Per-family normalizers: assert the rewritten name (and version where a
+// suffix is stripped).
 // ---------------------------------------------------------------------------
 
 #[test]

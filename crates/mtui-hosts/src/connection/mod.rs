@@ -5,12 +5,11 @@
 //! [`Target`](crate) state machine drives one `Box<dyn Connection>` per host and
 //! swaps in the mock under test.
 //!
-//! ## Reference
+//! ## Command results
 //!
-//! Ported from upstream `mtui/hosts/connection/connection.py` (`Connection`).
 //! The result of running a command is modelled with
-//! [`mtui_types::hostlog::CommandLog`], which already carries exactly the
-//! fields upstream records — the command, its stdout/stderr, the exit code
+//! [`mtui_types::hostlog::CommandLog`], which carries exactly the
+//! relevant fields — the command, its stdout/stderr, the exit code
 //! (with the `-1` "no exit code / timed out" sentinel), and the runtime.
 //!
 //! ## Scope
@@ -55,8 +54,7 @@ use mtui_types::hostlog::CommandLog;
 
 use crate::error::Result;
 
-/// The default SSH login user when `~/.ssh/config` names none, matching
-/// upstream's `opts.get("user", "root")`.
+/// The default SSH login user when `~/.ssh/config` names none.
 pub(crate) const DEFAULT_USER: &str = "root";
 
 /// One SSH/SFTP connection to a single remote host.
@@ -71,9 +69,9 @@ pub trait Connection: Send + Sync {
     /// Clones this connection into a fresh `Box<dyn Connection>` that shares the
     /// same underlying transport channel.
     ///
-    /// Upstream a [`Target`](crate::Target) and its
-    /// [`TargetLock`](crate::TargetLock) hold the *same* connection object; in
-    /// Rust each owns a `Box<dyn Connection>`, so the lock is built from a clone
+    /// A [`Target`](crate::Target) and its
+    /// [`TargetLock`](crate::TargetLock) each own a `Box<dyn Connection>`, so
+    /// the lock is built from a clone
     /// of the target's connection. The clone is cheap and shares the live link
     /// (russh's `Handle` is an `mpsc` sender; [`MockConnection`] shares its
     /// scripted state via `Arc`), so a command or SFTP op issued through either
@@ -84,9 +82,9 @@ pub trait Connection: Send + Sync {
     /// Runs a command over the channel, blocking until it terminates.
     ///
     /// Returns a [`CommandLog`] capturing the command, its stdout/stderr, the
-    /// exit code, and the runtime. Mirrors upstream `Connection.run`, which
-    /// returns `-1` as the exit code when the command could not complete
-    /// (killed / timed out); the same sentinel convention applies here.
+    /// exit code, and the runtime. The exit code is
+    /// `-1` when the command could not complete
+    /// (killed / timed out).
     ///
     /// # Errors
     ///
@@ -96,13 +94,9 @@ pub trait Connection: Send + Sync {
     async fn run(&mut self, command: &str) -> Result<CommandLog>;
 
     /// Reports whether the underlying transport is currently active.
-    ///
-    /// Mirrors upstream `Connection.is_active`.
     fn is_active(&self) -> bool;
 
     /// Closes the channel and disconnects.
-    ///
-    /// Mirrors upstream `Connection.close`.
     ///
     /// # Errors
     ///
@@ -112,7 +106,6 @@ pub trait Connection: Send + Sync {
 
     /// Re-establishes the transport if it has dropped.
     ///
-    /// Mirrors upstream `Connection.reconnect(retry, timeout, backoff)`:
     /// `retry` is the number of probe attempts beyond the first, and
     /// `backoff` selects between a flat per-probe sleep and one that grows
     /// (`2*(base + 5*count)`) across attempts. Callers recovering from a
@@ -131,7 +124,6 @@ pub trait Connection: Send + Sync {
     /// Intended for commands that deliberately tear down the link (e.g. a
     /// reboot): no output or exit status is collected and a dropped link is
     /// expected — callers should follow up with [`reconnect`](Self::reconnect).
-    /// Mirrors upstream `Connection.fire_and_forget`.
     ///
     /// # Errors
     ///
@@ -142,8 +134,6 @@ pub trait Connection: Send + Sync {
 
     /// Transfers a local file to the remote host over SFTP, creating parent
     /// directories and making the uploaded file executable (mode `0770`).
-    ///
-    /// Mirrors upstream `Connection.sftp_put`.
     ///
     /// # Errors
     ///
@@ -166,8 +156,6 @@ pub trait Connection: Send + Sync {
 
     /// Transfers a remote file to the local host over SFTP.
     ///
-    /// Mirrors upstream `Connection.sftp_get`.
-    ///
     /// # Errors
     ///
     /// Returns an SFTP/transport error if the transfer fails.
@@ -176,7 +164,7 @@ pub trait Connection: Send + Sync {
     /// Transfers every file in a remote folder to the local host, suffixing
     /// each local filename with `.{hostname}`.
     ///
-    /// Mirrors upstream `Connection.sftp_get_folder`, whose per-host suffix is
+    /// The per-host suffix is
     /// a workflow contract (parallel fan-out writes many hosts' copies into one
     /// local dir without clobbering).
     ///
@@ -194,8 +182,6 @@ pub trait Connection: Send + Sync {
 
     /// Lists the entries of a remote directory.
     ///
-    /// Mirrors upstream `Connection.sftp_listdir`.
-    ///
     /// # Errors
     ///
     /// Returns an SFTP/transport error if the directory cannot be listed.
@@ -203,8 +189,7 @@ pub trait Connection: Send + Sync {
 
     /// Reads a remote file's full contents over SFTP.
     ///
-    /// The upstream `Connection.sftp_open` returns a paramiko `SFTPFile`
-    /// handle; in this port the object-safe surface returns the file's bytes,
+    /// The object-safe surface returns the file's bytes,
     /// which covers every current caller (small config/metadata reads).
     ///
     /// # Errors
@@ -216,10 +201,10 @@ pub trait Connection: Send + Sync {
     ///
     /// This is the object-safe write counterpart to
     /// [`sftp_open`](Self::sftp_open) and the primitive the remote-lock
-    /// protocol is built on. It ports upstream's two lockfile write modes:
+    /// protocol is built on. It supports two lockfile write modes:
     ///
     /// * `exclusive = true` — an **atomic create** that fails if the file
-    ///   already exists (paramiko mode `"x"` → `O_CREAT | O_EXCL`). A
+    ///   already exists (`O_CREAT | O_EXCL`). A
     ///   collision returns [`HostError::AlreadyExists`](crate::HostError::AlreadyExists)
     ///   so a racing caller can reconcile instead of clobbering the winner —
     ///   this is what closes the read-then-write TOCTOU window. Because SFTPv3
@@ -228,7 +213,7 @@ pub trait Connection: Send + Sync {
     ///   failure (permission denied, connection lost, …) propagates as a real
     ///   SFTP/transport error — the exclusive create fails *closed*, never
     ///   silently reconciled as if it had lost a race.
-    /// * `exclusive = false` — a truncating overwrite (paramiko mode `"w+"`).
+    /// * `exclusive = false` — a truncating overwrite.
     ///
     /// # Errors
     ///
@@ -260,8 +245,6 @@ pub trait Connection: Send + Sync {
 
     /// Deletes a remote file over SFTP.
     ///
-    /// Mirrors upstream `Connection.sftp_remove`.
-    ///
     /// # Errors
     ///
     /// Returns an SFTP/transport error if the file cannot be removed.
@@ -269,16 +252,12 @@ pub trait Connection: Send + Sync {
 
     /// Recursively deletes a remote directory over SFTP (files then the dir).
     ///
-    /// Mirrors upstream `Connection.sftp_rmdir`.
-    ///
     /// # Errors
     ///
     /// Returns an SFTP/transport error if the directory cannot be removed.
     async fn sftp_rmdir(&mut self, path: &Path) -> Result<()>;
 
     /// Returns the target of a remote symbolic link.
-    ///
-    /// Mirrors upstream `Connection.sftp_readlink`.
     ///
     /// # Errors
     ///
@@ -288,7 +267,7 @@ pub trait Connection: Send + Sync {
     /// Opens a batched SFTP session that reuses one channel+subsystem across
     /// several reads, returning an object-safe [`SftpSession`] handle.
     ///
-    /// Ports upstream `Connection.sftp_session`: a caller running several reads
+    /// A caller running several reads
     /// in a row (e.g. [`parse_system`](crate::target::parse_system) on a host
     /// with many product files) opens one session, issues its reads through the
     /// handle, then closes it — paying the SFTP handshake **once** instead of
@@ -309,11 +288,11 @@ pub trait Connection: Send + Sync {
     /// Opens an interactive PTY shell on the host, returning an object-safe
     /// [`ShellChannel`] duplex.
     ///
-    /// Requests an `xterm` PTY sized `cols`×`rows` and invokes a login shell,
-    /// mirroring upstream `Connection.__invoke_shell` + `shell`. The returned
+    /// Requests an `xterm` PTY sized `cols`×`rows` and invokes a login shell.
+    /// The returned
     /// handle carries the transport only — the raw-`termios` local-terminal
-    /// bridge (stdin↔channel↔stdout) that upstream runs inline is a CLI concern
-    /// (Phase 6) and deliberately not part of the host library.
+    /// bridge (stdin↔channel↔stdout) is a CLI concern
+    /// and deliberately not part of the host library.
     ///
     /// Available only with the `shell` feature.
     ///

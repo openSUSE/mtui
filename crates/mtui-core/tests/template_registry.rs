@@ -1,4 +1,4 @@
-//! Ports upstream `tests/test_template_registry.py`.
+//! Tests the [`TemplateRegistry`] add/replace/remove/active-pointer contract.
 
 mod support;
 

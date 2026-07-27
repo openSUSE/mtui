@@ -10,10 +10,10 @@ use crate::session::Session;
 
 /// Opens an interactive shell on a reference host.
 ///
-/// Ports upstream `mtui.commands.shell.Shell`. Attaching an interactive PTY to a
+/// Attaching an interactive PTY to a
 /// remote shell needs a controlling terminal, which only the Phase-6 `mtui`
 /// binary owns; the command surface (name, args, host selection, completion) is
-/// ported here so the registry and MCP synthesiser see it, but the runtime PTY
+/// defined here so the registry and MCP synthesiser see it, but the runtime PTY
 /// attach is deferred to Phase 6. Invoked headlessly it errors cleanly rather
 /// than hanging. REPL-only — on the MCP deny-list.
 pub struct Shell;

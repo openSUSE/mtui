@@ -1,10 +1,8 @@
 //! Integration tests for `mtui-config`.
 //!
-//! Ports the intent of upstream `tests/test_config.py`
-//! (`test_mtuirc_fixture_parses_all_sections`) to the TOML format: a realistic
-//! multi-section document round-trips into a fully-typed `Config` across all
-//! three value kinds the parser knows (string, integer, boolean), plus tilde
-//! expansion and `ssl_verify` coercion.
+//! A realistic multi-section document round-trips into a fully-typed `Config`
+//! across all three value kinds the parser knows (string, integer, boolean),
+//! plus tilde expansion and `ssl_verify` coercion.
 
 use std::path::{Path, PathBuf};
 
@@ -35,7 +33,7 @@ fn config_toml_fixture_parses_all_sections() {
     // Integer-typed options.
     assert_eq!(cfg.connection_timeout, 450);
     assert_eq!(cfg.reboot_timeout, 25);
-    assert_eq!(cfg.reboot_retries, 10); // omitted -> upstream default
+    assert_eq!(cfg.reboot_retries, 10); // omitted -> default
     assert_eq!(cfg.max_parallel, 8);
     assert_eq!(cfg.max_oqa_parallel, 4);
     assert_eq!(cfg.refhosts_https_expiration, 3600);
@@ -62,9 +60,9 @@ fn config_toml_fixture_parses_all_sections() {
     assert!(!cfg.lock_reap_stale);
     assert_eq!(cfg.lock_stale_age, 3600);
     assert_eq!(cfg.pool_stale_age, 7200);
-    assert!(cfg.pool_reap_stale); // omitted -> upstream default (true)
+    assert!(cfg.pool_reap_stale); // omitted -> default (true)
     assert_eq!(cfg.lock_wait, 30);
-    assert_eq!(cfg.lock_wait_poll, 15); // omitted -> upstream default
+    assert_eq!(cfg.lock_wait_poll, 15); // omitted -> default
 
     // [mcp] section: explicit override lands.
     assert_eq!(cfg.mcp_max_output_bytes, 65536);
@@ -83,6 +81,6 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.obs_api_url, "https://api.example.de");
     assert_eq!(cfg.obs_request_timeout, 90);
 
-    // An option absent from the fixture keeps its upstream default.
+    // An option absent from the fixture keeps its default.
     assert_eq!(cfg.fancy_reports_url, "https://qam.suse.de/reports");
 }

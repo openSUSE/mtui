@@ -1,8 +1,7 @@
 //! Normalizers for miscellaneous product families.
 //!
-//! Ported from `mtui/test_reports/products/misc.py`. Upstream mutates a
-//! `[name, version, arch]` list in place and returns it; the idiomatic Rust
-//! port takes a [`SystemProduct`] by value, rewrites its fields, and returns it.
+//! Each normalizer takes a [`SystemProduct`] by value, rewrites its fields, and
+//! returns it.
 
 use mtui_types::SystemProduct;
 
@@ -38,9 +37,9 @@ pub fn normalize_manager(mut x: SystemProduct) -> SystemProduct {
 
 /// Normalizes openSUSE Leap product information.
 ///
-/// Note the deliberate field shift mirrored from upstream: the name becomes
-/// `leap`, the version is replaced by the old `arch` value, and the arch is
-/// reset to `x86_64`. This is intentional, not a bug.
+/// Note the deliberate field shift: the name becomes `leap`, the version is
+/// replaced by the old `arch` value, and the arch is reset to `x86_64`. This
+/// is intentional, not a bug.
 #[must_use]
 pub fn normalize_osle(mut x: SystemProduct) -> SystemProduct {
     x.name = "leap".to_string();

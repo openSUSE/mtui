@@ -1,15 +1,14 @@
 //! Integration tests for the native OBS HTTP transport against a real HTTP
 //! transport (`wiremock`).
 //!
-//! Ports the behavioral core of upstream `tests/test_obs_client.py`: GET/POST
+//! Covers GET/POST
 //! success (headers + XML body), the `<status><summary>` error envelope → typed
 //! [`ObsError::Api`], the empty-summary fallback for a non-XML body, and the
 //! coarse between-calls budget abort. Auth is [`NoAuth`] — the SSH-signature
 //! signer lands in a later subtask (G1c).
 //!
-//! Deviation from upstream: `test_tls_error_*` forges a `requests.SSLError` via
-//! the `responses` library, which has no wiremock analogue (a mock server can't
-//! forge a TLS handshake failure). The transport-error branch is instead
+//! A mock server can't forge a TLS handshake failure, so there is no test that
+//! forges a TLS error directly. The transport-error branch is instead
 //! covered by pointing the client at an unroutable/closed endpoint so `request`
 //! returns [`ObsError::Http`]; the `is_ssl_verification_error` mapping itself is
 //! unit-tested in `src/http.rs`.
@@ -130,7 +129,7 @@ async fn non_2xx_non_xml_body_has_empty_summary() {
 #[tokio::test]
 async fn between_calls_budget_aborts_next_call() {
     // A zero budget means the deadline is already in the past by the time the
-    // first call checks it, mirroring upstream's `client._deadline = past`.
+    // first call checks it.
     let server = MockServer::start().await;
     let client = ObsClient::new(
         &server.uri(),

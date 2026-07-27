@@ -1,6 +1,6 @@
 //! `qam.suse.de` testreport preconditions for the native QAM ops.
 //!
-//! Ported from upstream `mtui/data_sources/obs/preconditions.py`. A plain HTTPS
+//! A plain HTTPS
 //! GET of the machine-readable testreport log (**no OBS auth** — this is the
 //! public reports host, not the OBS API), applying the same guards the `osc qam`
 //! plugin does: [`assign`](crate::obs::qam::assign) only needs the log to EXIST
@@ -21,17 +21,16 @@ use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, sani
 /// Capture the whole trimmed `SUMMARY:` value, not just the first token, so a
 /// trailing qualifier ("PASSED with notes") reads as UNKNOWN — matching the
 /// plugin's whole-value compare rather than approving/rejecting on the first
-/// word. Mirrors upstream `_SUMMARY_RE` (`^SUMMARY:\s*(.+?)\s*$`, MULTILINE).
+/// word.
 static SUMMARY_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^SUMMARY:\s*(.+?)\s*$").expect("static SUMMARY regex"));
 
-/// Capture the `comment:` value. Mirrors upstream `_COMMENT_RE`
-/// (`^comment:\s*(.*)$`, MULTILINE).
+/// Capture the `comment:` value.
 static COMMENT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^comment:\s*(.*)$").expect("static comment regex"));
 
-/// The machine-readable testreport log URL, mirroring upstream `_log_url`
-/// (`reports_url.rstrip('/') + "/" + rrid + "/log"`).
+/// The machine-readable testreport log URL:
+/// `reports_url.rstrip('/') + "/" + rrid + "/log"`.
 fn log_url(reports_url: &str, rrid: &RequestReviewID) -> String {
     format!("{}/{rrid}/log", reports_url.trim_end_matches('/'))
 }
@@ -39,7 +38,7 @@ fn log_url(reports_url: &str, rrid: &RequestReviewID) -> String {
 /// GET the testreport log; `None` when absent (404), unreachable, or any other
 /// non-2xx status.
 ///
-/// Best-effort by design (mirrors upstream `fetch_testreport_log`): a transport
+/// Best-effort by design: a transport
 /// failure or a non-404 error status is logged at ERROR and folded to `None`, so
 /// a flaky reports host degrades to "no testreport" rather than aborting the
 /// operation. Uses a status-preserving GET (`HttpClient::inner`) rather than
@@ -86,7 +85,7 @@ pub(crate) async fn fetch_testreport_log(
 
 /// The upper-cased `SUMMARY:` value of a testreport log (else `UNKNOWN`).
 ///
-/// Mirrors upstream `summary`: the WHOLE trimmed captured value is upper-cased,
+/// The WHOLE trimmed captured value is upper-cased,
 /// so "PASSED with notes" becomes `PASSED WITH NOTES` (i.e. not exactly
 /// `PASSED`).
 #[must_use]
@@ -98,8 +97,6 @@ pub(crate) fn summary(log: &str) -> String {
 }
 
 /// The `comment:` value of a testreport log (empty when absent).
-///
-/// Mirrors upstream `comment`.
 #[must_use]
 pub(crate) fn comment(log: &str) -> String {
     COMMENT_RE
@@ -112,7 +109,6 @@ pub(crate) fn comment(log: &str) -> String {
 mod tests {
     use super::*;
 
-    // Ported from upstream test_obs_qam.py::test_summary_captures_whole_value_not_first_token.
     #[test]
     fn summary_captures_whole_value_not_first_token() {
         assert_eq!(summary("SUMMARY: PASSED\n"), "PASSED");

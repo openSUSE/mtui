@@ -1,8 +1,7 @@
 //! Integration tests for the openQA connectors against a real HTTP transport
 //! (`wiremock`).
 //!
-//! Ports the behavioral core of upstream `test_openqa_connector.py`'s
-//! `TestGetJobsErrorHandling` and the request/auth contract: `get_jobs` folds
+//! Covers the request/auth contract: `get_jobs` folds
 //! every failure into `None`, a well-formed response deserialises into jobs, and
 //! the signed request carries the `X-API-Key`/`X-API-Hash` auth headers.
 

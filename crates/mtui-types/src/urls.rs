@@ -1,17 +1,14 @@
-//! A set of URLs describing an openQA install-log artefact, ported from the
-//! `URLs` `NamedTuple` in `mtui/types/urls.py`.
+//! A set of URLs describing an openQA install-log artefact.
 //!
-//! Produced by the "auto" openQA connectors ([`AutoOpenQA`] upstream) to point
-//! at the install-test log a passing job published, tagged with the
-//! distribution / architecture / version the job ran on and the job result.
-//!
-//! [`AutoOpenQA`]: https://github.com/openSUSE/mtui
+//! Produced by the "auto" openQA connectors (e.g. `Dashboardn` in
+//! `mtui-datasources`) to point at the install-test log a passing job
+//! published, tagged with the distribution / architecture / version the job
+//! ran on and the job result.
 
 /// A distribution/arch/version-tagged URL for an openQA log artefact.
 ///
-/// Mirrors the upstream `URLs` `NamedTuple`
-/// `(distri, arch, version, url, result="")`. `result` defaults to the empty
-/// string to match upstream's optional trailing field.
+/// The tuple is `(distri, arch, version, url, result="")`; `result` defaults
+/// to the empty string when not explicitly set.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct URLs {
     /// The distribution (e.g. `SLES`).

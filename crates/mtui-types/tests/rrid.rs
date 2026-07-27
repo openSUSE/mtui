@@ -1,13 +1,12 @@
-//! Golden-vector tests for [`RequestReviewID`], ported from upstream
-//! `mtui/tests/test_types.py`. These lock the RRID parse Contract: the exact
-//! set of strings that parse, and the exact error category each malformed
-//! string produces.
+//! Golden-vector tests for [`RequestReviewID`]. These lock the RRID parse
+//! Contract: the exact set of strings that parse, and the exact error
+//! category each malformed string produces.
 
 use mtui_types::{RequestKind, RequestReviewID, RridParseError};
 
-/// Upstream `test_RRID_ok`: every listed template parses. The `{m}` slot is the
-/// maintenance ID and `{r}` the review ID; for SLFO the maintenance ID is the
-/// literal `1.1` string, otherwise a plain integer.
+/// Every listed template parses. The `{m}` slot is the maintenance ID and
+/// `{r}` the review ID; for SLFO the maintenance ID is the literal `1.1`
+/// string, otherwise a plain integer.
 #[test]
 fn valid_rrids_parse() {
     // (template, maintenance_id token, review_id token)
@@ -32,7 +31,7 @@ fn valid_rrids_parse() {
         assert_eq!(rrid.review_id, 42, "review_id for {input:?}");
 
         if rrid.kind == RequestKind::Slfo {
-            // Upstream: SLFO keeps the maintenance_id as the "1.1" string.
+            // SLFO keeps the maintenance_id as the "1.1" string.
             assert_eq!(
                 rrid.maintenance_id, "1.1",
                 "SLFO maintenance_id for {input:?}"
@@ -43,11 +42,11 @@ fn valid_rrids_parse() {
     }
 }
 
-/// Upstream `test_parse_rrid_mc`: an absent component is a MissingComponent.
-/// Four components are *required*, not merely a maximum, so any input with
-/// one, two, or three components fails on the first absent one. The 3-token
-/// `SUSE:Maintenance:1` case (only the review_id missing) locks the exact-count
-/// lower bound alongside the upstream 1- and 2-token fixtures.
+/// An absent component is a MissingComponent. Four components are *required*,
+/// not merely a maximum, so any input with one, two, or three components
+/// fails on the first absent one. The 3-token `SUSE:Maintenance:1` case (only
+/// the review_id missing) locks the exact-count lower bound alongside the
+/// 1- and 2-token fixtures.
 #[test]
 fn missing_components_error() {
     for input in ["SUSE:Maintenance:1", "SUSE:Maintenance", "SUSE:M", "SUSE"] {
@@ -60,10 +59,10 @@ fn missing_components_error() {
     }
 }
 
-/// Upstream `test_parse_rrid_cpe`: a component that fails its parser is a
-/// ComponentParse error — unknown project (`DOOH`, `openSUSE`), unknown kind
-/// (`boo`), a non-integer review ID (`aa`), or a single bogus token whose first
-/// component isn't a valid project (`d131dd02c5e6eec4`).
+/// A component that fails its parser is a ComponentParse error — unknown
+/// project (`DOOH`, `openSUSE`), unknown kind (`boo`), a non-integer review ID
+/// (`aa`), or a single bogus token whose first component isn't a valid
+/// project (`d131dd02c5e6eec4`).
 #[test]
 fn component_parse_errors() {
     for input in [
@@ -81,7 +80,7 @@ fn component_parse_errors() {
     }
 }
 
-/// Upstream `test_parse_rrid_long`: more than four components is TooMany.
+/// More than four components is TooMany.
 #[test]
 fn too_many_components_error() {
     let err = RequestReviewID::parse("SUSE:Maintenance:1:2:3")
@@ -92,15 +91,15 @@ fn too_many_components_error() {
     );
 }
 
-/// Upstream `test_str`: the canonical string round-trips.
+/// The canonical string round-trips.
 #[test]
 fn display_round_trips() {
     let rrid = "SUSE:Maintenance:1:2";
     assert_eq!(rrid, RequestReviewID::parse(rrid).unwrap().to_string());
 }
 
-/// Upstream `test_cmp`: equality is by canonical string identity, so the short
-/// and long forms compare equal, and differing review IDs compare unequal.
+/// Equality is by canonical string identity, so the short and long forms
+/// compare equal, and differing review IDs compare unequal.
 #[test]
 fn equality_is_by_canonical_identity() {
     let long = RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap();
@@ -111,8 +110,8 @@ fn equality_is_by_canonical_identity() {
     assert_ne!(long, other);
 }
 
-/// Hashing agrees with equality (`S:M:1:1` and `SUSE:Maintenance:1:1` collide),
-/// matching upstream's `__hash__` = `hash(str(self))`.
+/// Hashing agrees with equality (`S:M:1:1` and `SUSE:Maintenance:1:1`
+/// collide).
 #[test]
 fn equal_rrids_hash_equally() {
     use std::collections::HashSet;

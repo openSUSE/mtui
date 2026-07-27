@@ -1,9 +1,8 @@
 //! The null-object [`TestReport`] implementation.
 //!
-//! Port of upstream `mtui.test_reports.null_report.NullTestReport`: used when no
-//! test report is loaded. It is falsy, has an empty ID and empty parser tables,
-//! roots its target working directory directly under `config.target_tempdir`,
-//! and reports a trivially-valid hash.
+//! Used when no test report is loaded. It is falsy, has an empty ID and empty
+//! parser tables, roots its target working directory directly under
+//! `config.target_tempdir`, and reports a trivially-valid hash.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,10 +21,10 @@ pub struct NullReport {
 impl NullReport {
     /// Builds a [`NullReport`] from `config`.
     ///
-    /// Mirrors upstream, which sets `self.path = Path.cwd() / "None"`. When the
-    /// current directory cannot be determined the path falls back to a bare
-    /// `None` component, matching the upstream intent (a placeholder path that
-    /// never resolves to a real template).
+    /// Sets the path to the current directory joined with a `None`
+    /// component — a placeholder path that never resolves to a real
+    /// template. Falls back to `./None` if the current directory cannot be
+    /// determined.
     #[must_use]
     pub fn new(config: Config) -> Self {
         let mut base = TestReportBase::new(config);
@@ -69,6 +68,5 @@ impl TestReport for NullReport {
         false
     }
 
-    // `target_wd` uses the trait default (join under `config.target_tempdir`),
-    // which is exactly upstream `NullTestReport.target_wd`.
+    // `target_wd` uses the trait default (join under `config.target_tempdir`).
 }

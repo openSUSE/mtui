@@ -12,13 +12,12 @@ use crate::session::Session;
 
 /// Lists the lock state of all connected hosts.
 ///
-/// Ports upstream `mtui.commands.simplelists.ListLocks`. By default only the
+/// By default only the
 /// zypper/operation locks (set by `lock` and the install/update/prepare/downgrade
 /// flows) are shown; `-p`/`--pool` instead lists the host *pool* claims taken
 /// during pool selection.
 ///
-/// Upstream does `self.targets.select(enabled=True).report_locks(...)`: the
-/// enabled hosts (honouring the `-t` sub-selection) are resolved via
+/// The enabled hosts (honouring the `-t` sub-selection) are resolved via
 /// [`Target::lock_status`](mtui_hosts::Target::lock_status) and forwarded through
 /// the per-host [`Reporter::locks`](mtui_hosts::Reporter) sink into
 /// `display.list_locks`. The lock accessors are async `&mut self`; the resolved

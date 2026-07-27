@@ -1,8 +1,7 @@
 //! Synthesise MCP tools from the command [`Registry`].
 //!
-//! Port of upstream `mtui/mcp/tools.py`. For every command in the registry that
-//! is not on the [`crate::deny`] list, this module builds one plain-data
-//! [`ToolDescriptor`] whose:
+//! For every command in the registry that is not on the [`crate::deny`] list,
+//! this module builds one plain-data [`ToolDescriptor`] whose:
 //!
 //! * **name** is the command name (e.g. `run`);
 //! * **description** is the command's [`about`](mtui_core::Command::about);
@@ -38,8 +37,8 @@ use crate::session::{
 };
 
 /// Commands that touch reference hosts and can run for minutes. These gain a
-/// `background` boolean parameter (see [`dispatch_tool`]). Pinned here, matching
-/// upstream `tools.SLOW_COMMANDS`.
+/// `background` boolean parameter (see [`dispatch_tool`]). Pinned here as an
+/// explicit list.
 const SLOW_COMMANDS: &[&str] = &[
     "run",
     "update",
@@ -354,9 +353,8 @@ pub(crate) async fn dispatch_tool(
 
 /// The client-facing reply after starting one or more background jobs.
 ///
-/// Matches upstream `tools.py` verbatim: a single job points at
-/// `job_status`/`job_result` for that id; a fan-out lists every id and tells the
-/// client to poll per job.
+/// A single job points at `job_status`/`job_result` for that id; a fan-out
+/// lists every id and tells the client to poll per job.
 fn started_jobs_reply(command: &str, job_ids: &[String]) -> String {
     if let [job_id] = job_ids {
         return format!(
@@ -446,7 +444,7 @@ pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
 ///
 /// Routes `job_list` / `job_status` / `job_result` / `job_cancel` to the
 /// matching [`McpSession`] method and renders its result into the one-line text
-/// the client sees (upstream `tools.py` job tools).
+/// the client sees.
 ///
 /// # Errors
 ///

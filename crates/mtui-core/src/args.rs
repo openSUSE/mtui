@@ -1,6 +1,6 @@
 //! Process-level command-line arguments (`Args`).
 //!
-//! Port of upstream `mtui.cli.args.get_parser` — the *top-level* argument parser
+//! The *top-level* argument parser
 //! for the `mtui` process, distinct from the per-command `clap::Command`s the
 //! [`engine`](crate::engine) builds from the registry. It declares the global
 //! flags that configure the whole session (config/template overrides, SUT host
@@ -12,17 +12,14 @@
 //! A few surfaces are shaped for this tool rather than inherited:
 //!
 //! * **`-V/--version`** prints `mtui <version> (<sha>[-dirty], <profile>,
-//!   <target>)`. Upstream listed separately-installed *runtime* dependency
-//!   versions (paramiko, openqa-client) because those could drift per operator
-//!   environment; a statically-compiled binary has no such drift (deps are
-//!   compiled in at lockfile-pinned versions), so that block would be redundant.
-//!   What *does* vary for an out-of-tree build is the build provenance — commit,
-//!   profile, target — which [`build.rs`](../../build.rs) captures into the
+//!   <target>)`. A statically-compiled binary has no runtime dependency drift
+//!   (deps are compiled in at lockfile-pinned versions), so the build
+//!   provenance — commit, profile, target — is what varies for an out-of-tree
+//!   build. [`build.rs`](../../build.rs) captures it into the
 //!   `MTUI_LONG_VERSION` env var fed to clap's `long_version` below. Outside a
 //!   git checkout the sha field is omitted; profile and target are always shown.
-//! * **`-a/--auto-review-id` vs `-k/--kernel-review-id`** upstream construct two
-//!   distinct `UpdateID` subclasses that later stamp `TestReport.workflow`. Here
-//!   both parse into the same [`UpdateID`] value type (all this crate has today)
+//! * **`-a/--auto-review-id` vs `-k/--kernel-review-id`** both parse into the
+//!   same [`UpdateID`] value type (all this crate has today)
 //!   paired with the [`Workflow`] the flag selects, surfaced as [`Args::update`].
 //!
 //! Config merging lives here as [`Args::apply_to`] / [`Args::resolve_config`]:
@@ -149,7 +146,7 @@ impl Args {
     /// and its [`Workflow`], or `None` when neither was given.
     ///
     /// The two flags share a clap [`ArgGroup`](clap::ArgGroup), so at most one is
-    /// ever set; upstream's `add_mutually_exclusive_group` maps to that.
+    /// ever set.
     #[must_use]
     pub fn update(&self) -> Option<Update> {
         match (&self.auto_review_id, &self.kernel_review_id) {
@@ -167,7 +164,7 @@ impl Args {
 
     /// Overlay the process-level CLI overrides onto an already-loaded [`Config`].
     ///
-    /// This is the highest-precedence config layer (upstream `Config.merge_args`):
+    /// This is the highest-precedence config layer:
     /// it runs *after* [`Config::load`] has merged the file chain (`/etc` →
     /// `~/.mtui.toml` → XDG, or the single `--config`/`$MTUI_CONF` file), so a
     /// flag given on the command line wins over every config file.
@@ -227,7 +224,7 @@ pub struct Update {
 
 /// The `--color` choice, before it is resolved against the terminal.
 ///
-/// [`Auto`](Self::Auto) mirrors upstream's default; turning it into a concrete
+/// [`Auto`](Self::Auto) is the default; turning it into a concrete
 /// [`ColorMode`](crate::display::ColorMode) (TTY + `NO_COLOR` detection) is the
 /// consumer's job, not the parser's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
@@ -261,7 +258,7 @@ impl From<ColorArg> for crate::display::ColorMode {
 
 /// A comma-separated SUT (System Under Test) host override.
 ///
-/// Port of upstream `mtui.support.misc.SUTParse`: `"a,b,c"` becomes the argv
+/// `"a,b,c"` becomes the argv
 /// fragment `-t a -t b -t c` that the `add host` command consumes. The split
 /// happens on construction; [`print_args`](Self::print_args) renders the stored
 /// fragment.
@@ -271,8 +268,8 @@ pub struct Sut {
 }
 
 impl Sut {
-    /// Renders the `-t <host>`-joined argv fragment, matching upstream
-    /// `SUTParse.print_args` (space-joined, one `-t` per host).
+    /// Renders the `-t <host>`-joined argv fragment (space-joined, one `-t`
+    /// per host).
     #[must_use]
     pub fn print_args(&self) -> String {
         self.hosts
@@ -292,9 +289,8 @@ impl Sut {
 impl FromStr for Sut {
     type Err = std::convert::Infallible;
 
-    /// Splits on `,`, mirroring upstream `args.split(",")`. Upstream keeps every
-    /// token verbatim (it never trims or drops empties), so this does too — a
-    /// trailing comma yields an empty host token exactly as upstream would.
+    /// Splits on `,`, keeping every token verbatim (never trimming or dropping
+    /// empties), so a trailing comma yields an empty host token.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self {
             hosts: s.split(',').map(str::to_owned).collect(),
@@ -443,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn sut_print_args_matches_upstream_format() {
+    fn sut_print_args_has_stable_format() {
         let s: Sut = "a,b,c".parse().unwrap();
         assert_eq!(s.print_args(), "-t a -t b -t c");
     }
@@ -456,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn sut_trailing_comma_keeps_empty_token_like_upstream() {
+    fn sut_trailing_comma_keeps_empty_token() {
         // Upstream `"a,".split(",")` -> `["a", ""]`; we preserve that verbatim.
         let s: Sut = "a,".parse().unwrap();
         assert_eq!(s.hosts(), ["a", ""]);

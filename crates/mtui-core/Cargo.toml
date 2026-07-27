@@ -36,8 +36,8 @@ rand.workspace = true
 # call sites are `#[cfg(unix)]`-gated with an unexpanded fallback elsewhere.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", features = ["user"] }
-# `ioctl(TIOCGWINSZ)` for the interactive pager's terminal size (`display::termsize`),
-# mirroring upstream `mtui.cli.term.termsize`. Already deep in the tree.
+# `ioctl(TIOCGWINSZ)` for the interactive pager's terminal size (`display::termsize`).
+# Already deep in the tree.
 libc = "0.2"
 
 [dev-dependencies]

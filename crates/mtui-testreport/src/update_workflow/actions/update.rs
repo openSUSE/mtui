@@ -1,24 +1,24 @@
-//! Update command templates (upstream `actions/update.py`, role `updater`).
+//! Update command templates (role `updater`).
 //!
 //! These command templates interpolate `$repa` (the patch repo/RRID selector)
-//! and `$packages` **via `safe_substitute`** upstream (see
-//! `hostgroup.py::perform_update`), because they also embed shell/awk `$`-tokens
+//! and `$packages` **via safe substitution**, because they also embed shell/awk
+//! `$`-tokens
 //! (`awk … print $2`, `while read r … $$r`) that must reach the remote shell
-//! unaltered. The `slmicro` (`slm_update`) entry is transactional with a reboot.
+//! unaltered. The `slmicro` entry is transactional with a reboot.
 //!
 //! Each template's leading newline keeps the first command off the prompt line
 //! in the transcript `show_log` prints.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
 
-/// yum update command (upstream `yum_update["command"]`).
+/// yum update command.
 const YUM_UPDATE: &str = "
 export LANG=
 yum repolist
 yum -y update $packages
 ";
 
-/// zypper update command (upstream `zypper_update["command"]`).
+/// zypper update command.
 const ZYPPER_UPDATE: &str = r#"
 export LANG=
 zypper -n lr -puU
@@ -29,7 +29,7 @@ zypper -n patches | grep $repa
 zypper -n lr | awk -F "|" '/$repa\>/ { print $2; }' | while read r; do zypper -n rr $$r; done
 "#;
 
-/// slmicro update command (upstream `slm_update["command"]`).
+/// slmicro update command.
 const SLM_UPDATE: &str = r#"
 export LANG=
 zypper -n lr -puU

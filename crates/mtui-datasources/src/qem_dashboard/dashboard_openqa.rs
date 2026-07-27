@@ -1,12 +1,11 @@
-//! Dashboard-backed *auto* workflow openQA data provider, ported from
-//! `mtui/data_sources/qem_dashboard/dashboard_openqa.py`.
+//! Dashboard-backed *auto* workflow openQA data provider.
 //!
 //! [`DashboardAutoOpenQA`] loads an incident's openQA jobs from the QEM
 //! Dashboard (both the per-incident jobs and the aggregate/update jobs), derives
 //! the install-log URLs when the install jobs passed, and renders the
 //! review-facing `Results from openQA jobs` text block.
 //!
-//! ## Rendering contract (mirrors upstream `_pretty_print`)
+//! ## Rendering contract
 //!
 //! The block collapses all-passed jobs into per-group summary counts and lists
 //! only the failing jobs individually, so a reviewer scans a short report rather
@@ -19,16 +18,15 @@
 //! * failing jobs are nested under a per-group header with their openQA URLs
 //!   right-aligned by padding the test-name column.
 //!
-//! The exact byte-for-byte layout is pinned by the ported upstream assertions
+//! The exact byte-for-byte layout is pinned by assertions
 //! and `insta` snapshots in the crate tests.
 //!
-//! ## Async fan-out (deviation from upstream)
+//! ## Async fan-out
 //!
-//! Upstream fans the per-setting fetches out over a `ThreadPoolExecutor` with a
-//! 60s per-future cap. This port uses native `tokio` concurrency with a
-//! [`tokio::time::timeout`] per fetch, preserving both the ordering (incident
-//! settings first, then update settings; jobs in submission order) and the
-//! warn-and-skip-on-timeout behaviour.
+//! Per-setting fetches use native `tokio` concurrency with a
+//! [`tokio::time::timeout`] per fetch (a 60s per-future cap), preserving both
+//! a fixed ordering (incident settings first, then update settings; jobs in
+//! submission order) and a warn-and-skip-on-timeout behaviour.
 
 use std::collections::BTreeMap;
 
@@ -48,8 +46,7 @@ use super::incident::QemIncident;
 const INCIDENT_INSTALL_MARKER: &str = "qam-incidentinstall";
 
 /// Counter keys in display order. `total` is always kept; the others are only
-/// printed when non-zero so the Summary block stays scannable. Ported from
-/// upstream `_COUNT_KEYS`.
+/// printed when non-zero so the Summary block stays scannable.
 const COUNT_KEYS: [&str; 6] = [
     "passed",
     "softfailed",
@@ -61,7 +58,7 @@ const COUNT_KEYS: [&str; 6] = [
 
 /// A dashboard job normalized to the fields the provider reads.
 ///
-/// The typed replacement for upstream's untyped `dict` (`_normalize_job`): only
+/// A typed structure rather than an untyped map: only
 /// the fields consumed downstream are retained, keeping the pretty-printer and
 /// URL builder honest about their inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,8 +84,8 @@ struct NormalizedJob {
 }
 
 impl NormalizedJob {
-    /// Normalize a raw dashboard job for a given `source`/`setting`, mirroring
-    /// upstream `_normalize_job` for the fields this port consumes.
+    /// Normalize a raw dashboard job for a given `source`/`setting`, for the
+    /// fields this connector consumes.
     fn from_raw(job: &Value, source: &str, setting: &Value) -> Self {
         let settings = setting.get("settings");
         let s = |key: &str| settings.and_then(|s| s.get(key)).and_then(Value::as_str);
@@ -96,7 +93,7 @@ impl NormalizedJob {
         let set_str = |key: &str| setting.get(key).and_then(Value::as_str);
 
         // `distri`/`flavor`/... take the job-level value first, then the
-        // setting-level fallback, matching upstream's `job.get(x) or setting...`.
+        // setting-level fallback.
         let pick = |job_key: &str, setting_val: Option<&str>| -> String {
             job_str(job_key)
                 .filter(|v| !v.is_empty())
@@ -170,7 +167,7 @@ impl NormalizedJob {
 
     /// Whether this is a superseded run that must not count toward results.
     ///
-    /// Mirrors upstream `_is_obsolete`: when an openQA job is retriggered the
+    /// When an openQA job is retriggered the
     /// dashboard keeps the older run but marks it superseded — either with an
     /// `obsolete` flag or an `"obsoleted"` result. Both must be dropped so a
     /// stale failure does not poison the install verdict
@@ -250,7 +247,7 @@ impl Counts {
 
 /// Dashboard-backed auto-workflow data provider.
 ///
-/// Mirrors upstream `DashboardAutoOpenQA`: [`run`](Self::run) loads the jobs,
+/// [`run`](Self::run) loads the jobs,
 /// resolves the install-log [`results`](Self::results) when the install jobs
 /// passed, and renders the [`pp`](Self::pp) text block.
 #[derive(Debug, Clone)]
@@ -272,7 +269,7 @@ pub struct DashboardAutoOpenQA {
 }
 
 impl DashboardAutoOpenQA {
-    /// The connector kind tag, mirroring upstream `kind = "auto"`.
+    /// The connector kind tag.
     const KIND: &'static str = "auto";
 
     /// Build the provider for an incident on a given openQA `host`.
@@ -297,7 +294,7 @@ impl DashboardAutoOpenQA {
         }
     }
 
-    /// Load, resolve, and render. Mirrors upstream `run`.
+    /// Load, resolve, and render.
     ///
     /// # Errors
     ///
@@ -305,8 +302,8 @@ impl DashboardAutoOpenQA {
     /// asked at all — i.e. *both* top-level settings fetches hard-failed
     /// (transport/non-2xx/JSON). A genuinely-empty-but-successful response is
     /// `Ok` with `results = None`; a partial batch where some per-setting job
-    /// fetches timed out is also `Ok` (the timeouts are warn-and-skipped,
-    /// preserving upstream best-effort behaviour).
+    /// fetches timed out is also `Ok` (the timeouts are warn-and-skipped, a
+    /// best-effort behaviour).
     pub async fn run(&mut self) -> Result<&mut Self, QemDashboardError> {
         self.run_inner(FUTURE_TIMEOUT).await
     }
@@ -713,7 +710,7 @@ impl DashboardAutoOpenQA {
             // problems are entirely in the `other` bucket (still-running,
             // parallel_failed, skipped, ...). The Summary already flags them;
             // don't claim success (the old bug) and don't print an empty
-            // `Failed jobs:` block. Mirrors upstream.
+            // `Failed jobs:` block.
             ret.push(
                 "  No failed jobs, but some groups need review (see Summary above).\n".to_string(),
             );
@@ -729,7 +726,7 @@ impl OpenQAResult for DashboardAutoOpenQA {
         Self::KIND
     }
 
-    /// The port of upstream `DashboardAutoOpenQA.__bool__`: truthy when the
+    /// Truthy when the
     /// rendered block or the resolved install-log results are non-empty
     /// (delegates to [`is_present`](Self::is_present)).
     fn has_results(&self) -> bool {
@@ -812,9 +809,9 @@ fn failed_group_header(
 
 #[cfg(test)]
 mod tests {
-    //! Ported from `tests/test_qem_dashboard_connector.py`, the
-    //! `_pretty_print` / pure-helper assertions. The `run`/`load_jobs`
-    //! wiremock + timeout tests live in `tests/qem_dashboard.rs`.
+    //! Pure-helper assertions (pretty-printing and the like). The
+    //! `run`/`load_jobs` wiremock + timeout tests live in
+    //! `tests/qem_dashboard.rs`.
     use super::*;
     use serde_json::json;
 
@@ -1402,8 +1399,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_jobs_fans_out_and_preserves_order() {
-        // Ported from test_dashboard_auto_openqa_fans_out_per_setting_fetches:
-        // incident jobs (in setting order) come before aggregate jobs, and each
+        // Incident jobs (in setting order) come before aggregate jobs, and each
         // per-setting URL is hit exactly once.
         let server = MockServer::start().await;
         let incident_ids = [11i64, 12, 13];
@@ -1520,7 +1516,6 @@ mod tests {
 
     #[tokio::test]
     async fn load_jobs_skips_timed_out_per_setting_future() {
-        // Ported from test_load_jobs_skips_timed_out_per_setting_future.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/12358"))

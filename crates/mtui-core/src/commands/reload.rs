@@ -10,15 +10,14 @@ use crate::session::Session;
 
 /// Reloads and re-parses the products on the target reference hosts.
 ///
-/// Ports upstream `mtui.commands.reload.ReloadProducts`. Re-runs the
-/// system/product parse over each selected host's live connection via
-/// [`Target::reload_system`](mtui_hosts::Target::reload_system). Best-effort: a
-/// host whose parse fails logs a warning and keeps its previously recorded
-/// system.
+/// Re-runs the system/product parse over each selected host's live connection
+/// via [`Target::reload_system`](mtui_hosts::Target::reload_system).
+/// Best-effort: a host whose parse fails logs a warning and keeps its
+/// previously recorded system.
 ///
-/// A host-phase command that takes only `-t/--target` (upstream `_add_hosts_arg`
-/// without `_add_template_arg`), so it is [`Scope::Active`] to match upstream:
-/// it acts on the active template's host set, not once per loaded template.
+/// A host-phase command that takes only `-t/--target`, so it is
+/// [`Scope::Active`]: it acts on the active template's host set, not once per
+/// loaded template.
 pub struct ReloadProducts;
 
 #[async_trait]

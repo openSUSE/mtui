@@ -9,7 +9,7 @@ use crate::session::Session;
 
 /// Shows the update repositories that are valid for the current update.
 ///
-/// Ports upstream `mtui.commands.showrepos.Showrepos`. Reads the active report's
+/// Reads the active report's
 /// [`update_repos`](mtui_testreport::TestReportBase::update_repos) and lists them
 /// through the display.
 pub struct ShowUpdateRepos;

@@ -1,7 +1,7 @@
 //! OBS "Signature" (SSH) authentication for the native OBS backend.
 //!
-//! Ported from upstream `mtui/data_sources/obs/auth.py`. Reproduces the OBS
-//! Signature challenge/response in-process (no `osc`, no subprocess): the first
+//! Implements the OBS Signature challenge/response in-process (no `osc`, no
+//! subprocess): the first
 //! request goes out unauthenticated (the session may already hold a cookie); on
 //! a `401` the `WWW-Authenticate: Signature` realm is read, an SSHSIG over
 //! `(created): <epoch>` is built (see [`crate::obs::sshsig`]), and the request
@@ -28,8 +28,8 @@ use crate::obs::sshsig;
 
 /// The current wall-clock Unix timestamp, seamed for deterministic tests.
 ///
-/// Upstream calls `int(time.time())`; a signed `i64` matches `chrono`'s epoch
-/// type used elsewhere in the crate and is wide enough for any real clock.
+/// A signed `i64` matches `chrono`'s epoch type used elsewhere in the crate
+/// and is wide enough for any real clock.
 fn now_unix() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -117,9 +117,9 @@ impl AgentKeys for RusshAgent {
 /// Read the public-key blob from `<path>.pub`, or `None` if absent/malformed.
 ///
 /// Used to identify a passphrase-protected private key's counterpart among the
-/// ssh-agent's loaded keys by comparing public-key data. Mirrors upstream
-/// `_pubkey_blob`: any read/parse failure (absent file, too few fields,
-/// non-base64) yields `None` rather than an error.
+/// ssh-agent's loaded keys by comparing public-key data. Any read/parse
+/// failure (absent file, too few fields, non-base64) yields `None` rather than
+/// an error.
 fn pubkey_data(path: &Path) -> Option<KeyData> {
     let pub_path = format!("{}.pub", path.display());
     let text = std::fs::read_to_string(pub_path).ok()?;
@@ -131,8 +131,8 @@ fn pubkey_data(path: &Path) -> Option<KeyData> {
 /// The RSA signature-algorithm selector for the agent path.
 ///
 /// Only RSA needs an explicit `rsa-sha2-512`; Ed25519/ECDSA have a single
-/// algorithm (upstream `_sig_algorithm`). The file-key path handles this inside
-/// `ssh-key`'s RSA signer, which defaults to SHA-512.
+/// algorithm. The file-key path handles this inside `ssh-key`'s RSA signer,
+/// which defaults to SHA-512.
 fn agent_hash_alg(key: &KeyData) -> Option<HashAlg> {
     if key.is_rsa() {
         Some(HashAlg::Sha512)
@@ -216,7 +216,7 @@ impl<A: AgentKeys> ObsSignatureAuth<A> {
     }
 
     /// Sign with a private-key file, falling back to the ssh-agent when the file
-    /// is encrypted or absent (upstream `_load_key_file`).
+    /// is encrypted or absent.
     async fn sign_with_file(
         &self,
         path: &Path,
@@ -238,8 +238,8 @@ impl<A: AgentKeys> ObsSignatureAuth<A> {
         }
     }
 
-    /// Select an ssh-agent key by `SHA256:…` fingerprint and sign (upstream
-    /// `_agent_key_by_fingerprint`). The `SHA256:` prefix is optional.
+    /// Select an ssh-agent key by `SHA256:…` fingerprint and sign. The
+    /// `SHA256:` prefix is optional.
     async fn sign_with_agent_fingerprint(
         &self,
         fingerprint: &str,
@@ -263,7 +263,7 @@ impl<A: AgentKeys> ObsSignatureAuth<A> {
     }
 
     /// Find the ssh-agent key that is `path`'s decrypted counterpart, matched by
-    /// public-key data from `<path>.pub` (upstream `_agent_key_for_file`).
+    /// public-key data from `<path>.pub`.
     async fn sign_with_agent_for_file(
         &self,
         path: &Path,
@@ -319,12 +319,11 @@ impl<A: AgentKeys + Sync> ObsAuth for ObsSignatureAuth<A> {
 /// Parse `WWW-Authenticate` into `{scheme: {param: value}}`.
 ///
 /// Reads **every** `WWW-Authenticate` header value separately (reqwest's
-/// `HeaderMap::get_all` preserves duplicates, unlike Python `requests` which
-/// comma-merges them into one unparseable string), so a second challenge (e.g.
+/// `HeaderMap::get_all` preserves duplicates rather than comma-merging them
+/// into one unparseable string), so a second challenge (e.g.
 /// `Basic` alongside `Signature`) never hides `Signature`. Blank lines are
 /// skipped; a param-less scheme yields an empty map; a malformed param list
-/// yields an empty map. Scheme names are lowercased. Upstream
-/// `_challenge_params`.
+/// yields an empty map. Scheme names are lowercased.
 #[must_use]
 pub(crate) fn challenge_params(
     headers: &reqwest::header::HeaderMap,
@@ -351,9 +350,8 @@ pub(crate) fn challenge_params(
 
 /// Parse a comma-separated `key="value"` / `key=value` auth-param list.
 ///
-/// Mirrors urllib's `parse_keqv_list(parse_http_list(...))`: a token without an
-/// `=` makes the whole list malformed → an empty map (upstream catches the
-/// `ValueError`). Surrounding double-quotes are stripped from values.
+/// A token without an `=` makes the whole list malformed → an empty map.
+/// Surrounding double-quotes are stripped from values.
 fn parse_auth_params(rest: &str) -> std::collections::BTreeMap<String, String> {
     let mut params = std::collections::BTreeMap::new();
     for token in rest.split(',') {
@@ -441,7 +439,7 @@ mod tests {
         // Malformed .pub (not a valid key line).
         std::fs::write(dir.path().join("k.pub"), "only-one-field\n").unwrap();
         assert!(pubkey_data(&base).is_none());
-        // Non-base64 body (upstream `test_pubkey_blob_missing_and_malformed`).
+        // Non-base64 body.
         std::fs::write(dir.path().join("k.pub"), "ssh-rsa @@@not-base64@@@ me\n").unwrap();
         assert!(pubkey_data(&base).is_none());
         // Valid .pub parses to key data.

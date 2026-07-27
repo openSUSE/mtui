@@ -7,20 +7,16 @@
 //! reconstruction purely, introspecting the command's built [`clap::Command`] —
 //! the identical `get_arguments()` surface [`crate::schema`] reads.
 //!
-//! Port of upstream `mtui/mcp/_argv.py::kwargs_to_argv`.
+//! # Design notes
 //!
-//! # Deliberate deviations from upstream
-//!
-//! * **No synthetic-dest / const-mutex routing.** Upstream carries a
-//!   `_mtui_synthetic_dests` pass and a StoreConst-mutex pass to un-collapse
-//!   argparse mutually-exclusive groups that share one `dest` (`load_template
-//!   -a/-k`, `set_repo -A/-R`). In `clap` each group member carries a *distinct*
-//!   arg id (`auto`/`kernel`, `add`/`remove`), so its kwarg maps straight to its
-//!   own long flag through the normal loop — no special-casing.
+//! * **No synthetic-dest / const-mutex routing.** `clap` gives each group
+//!   member of a mutually-exclusive group a *distinct* arg id (`auto`/`kernel`,
+//!   `add`/`remove` for `load_template -a/-k`, `set_repo -A/-R`), so its kwarg
+//!   maps straight to its own long flag through the normal loop — no
+//!   special-casing.
 //! * **No "exactly one required" pre-check.** `clap::ArgGroup` enforces that when
 //!   the reconstructed argv is re-parsed by the engine, which already surfaces a
-//!   clean [`mtui_core::EngineError::Parse`]. Upstream pre-validated only to
-//!   dodge argparse's ugly usage dump.
+//!   clean [`mtui_core::EngineError::Parse`].
 //!
 //! # Ordering
 //!
@@ -28,7 +24,7 @@
 //! positional tail. Append / multi-value flags are routed into the tail as well:
 //! such a flag consumes every token after it, so a later flag (notably the base
 //! parser's `-T/--template`, declared after per-command args) must not sit behind
-//! it — mirroring upstream's REMAINDER handling.
+//! it.
 
 use clap::{Arg, ArgAction};
 use serde_json::{Map, Value};

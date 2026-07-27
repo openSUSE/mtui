@@ -1,6 +1,6 @@
 //! The five QAM review operations as direct OBS REST calls (no `osc`).
 //!
-//! Ported from upstream `mtui/data_sources/obs/qam.py`. Each function performs
+//! Each function performs
 //! the OBS calls for one operation and returns `Err` on any failure or refused
 //! precondition; the never-raise `OSC` facade (G1g) wraps every call and folds a
 //! returned error into the `false` its callers expect. Semantics mirror the
@@ -10,8 +10,8 @@
 //! read-modify-write, and the `qam.suse.de` preconditions (skipped for PI/SLFO).
 //! The `[oscqam] ` prefix is applied to approve/reject comments only.
 //!
-//! Unlike upstream (which takes a `Config`), these functions take the URL/verify
-//! values they need as explicit parameters — the `[obs]` config table and the
+//! These functions take the URL/verify values they need as explicit
+//! parameters, rather than a `Config` — the `[obs]` config table and the
 //! facade that binds these from a resolved `Config` land in G1g. This keeps the
 //! ops self-contained and testable now, mirroring how [`ObsClient`] itself takes
 //! an explicit API URL / timeout / verify posture rather than a `Config`.
@@ -47,8 +47,8 @@ fn reqid(rrid: &RequestReviewID) -> String {
     rrid.review_id.to_string()
 }
 
-/// The fancy testreport log URL for approve/reject comments, mirroring upstream
-/// `_fancy_url` (`fancy_reports_url.rstrip('/') + "/" + rrid + "/log"`).
+/// The fancy testreport log URL for approve/reject comments:
+/// `fancy_reports_url.rstrip('/') + "/" + rrid + "/log"`.
 fn fancy_url(fancy_reports_url: &str, rrid: &RequestReviewID) -> String {
     format!("{}/{rrid}/log", fancy_reports_url.trim_end_matches('/'))
 }
@@ -395,9 +395,9 @@ async fn write_reject_reason(
 ///
 /// Returns [`ObsError::Op`] if the testreport is not `FAILED` or has no comment
 /// (non-SLFO); or a transport/API error.
-// The explicit-params design (no `Config` coupling until the G1g facade) means
-// this faithful port of upstream `reject` carries one arg past clippy's default
-// threshold; the facade will bundle the URL/verify values.
+// The explicit-params design (no `Config` coupling until the G1g facade)
+// means `reject` carries one arg past clippy's default threshold; the facade
+// will bundle the URL/verify values.
 #[allow(clippy::too_many_arguments)]
 pub async fn reject(
     client: &ObsClient,

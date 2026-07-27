@@ -1,23 +1,19 @@
 //! Cap + idle-TTL enforcement for the http `SessionRegistry` (bead `mtui-rs-odq8`).
 //!
-//! Ports the offline-portable subset of upstream `tests/test_mcp_registry.py`.
-//! The `_session_key` / `_log_label` cases are **not** ported: upstream keys its
-//! own session dict on `id(ctx.session)`, but here rmcp owns session keying by
-//! `Mcp-Session-Id`; the Rust registry tracks a `Weak` live-set around rmcp's
-//! factory instead, so those tests are N/A.
+//! Covers the offline-portable subset of the registry's cap/idle-TTL behaviour.
+//! Session-key/log-label-style cases do not apply here: rmcp owns session
+//! keying by `Mcp-Session-Id`; the Rust registry tracks a `Weak` live-set
+//! around rmcp's factory instead.
 //!
-//! What is ported (behaviour-equivalent):
+//! What is covered (behaviour-equivalent):
 //!
-//! * cap refuses a new session past `session_cap`
-//!   (`test_cap_refuses_creation_past_limit`);
-//! * dropping a server frees a cap slot (Rust analogue of
-//!   `test_cap_frees_a_slot_after_evict` — rmcp drops the server on session
+//! * cap refuses a new session past `session_cap`;
+//! * dropping a server frees a cap slot (rmcp drops the server on session
 //!   close, our `SessionGuard::drop` frees the slot);
-//! * a re-mint after a drop is a fresh session (`test_evict_..._mints_anew`);
-//! * the idle sweeper evicts + `close()`-es a stale session
-//!   (`test_idle_sweeper_evicts_stale_session`);
-//! * fresh activity keeps a session alive (`test_fresh_activity_keeps_session_alive`);
-//! * `idle_timeout == 0` starts no sweeper (`test_sweeper_disabled_when_idle_timeout_zero`).
+//! * a re-mint after a drop is a fresh session;
+//! * the idle sweeper evicts + `close()`-es a stale session;
+//! * fresh activity keeps a session alive;
+//! * `idle_timeout == 0` starts no sweeper.
 
 #![cfg(feature = "mcp")]
 
@@ -104,8 +100,7 @@ async fn drop_frees_a_slot() {
 }
 
 /// Each mint is an independent session (no shared `Arc<McpSession>`), so a
-/// re-mint after a drop is a brand-new session — the Rust analogue of
-/// upstream's "refetch after evict mints anew".
+/// re-mint after a drop is a brand-new session.
 #[tokio::test]
 async fn remint_after_drop_is_a_new_session() {
     // Cap of 2 so the first session can be held alive in the live-set *across*

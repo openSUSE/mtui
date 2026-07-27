@@ -1,29 +1,27 @@
-//! Prepare command templates (upstream `actions/prepare.py`, role `preparer`).
+//! Prepare command templates (role `preparer`).
 //!
 //! Unlike the other actions, prepare entries are **parameterized** by `force`
-//! and `testing` (upstream `zypper_prepare(force, testing)` etc.): the flag is
-//! baked into the command string at construction. Prepare carries an
-//! `installed_only` variant ("run only if the package is already installed") and
-//! interpolates `$package`. The `slmicro` entry is transactional with a reboot.
+//! and `testing`: the flag is baked into the command string at construction.
+//! Prepare carries an `installed_only` variant ("run only if the package is
+//! already installed") and interpolates `$package`. The `slmicro` entry is
+//! transactional with a reboot.
 //!
-//! ## Substitution mode: `Safe` (deviates from upstream's `.substitute`)
+//! ## Substitution mode: `Safe`
 //!
-//! Upstream renders these with `.substitute(package=...)`. That is a **latent
-//! bug** for the `installed_only` template, whose shell command-substitution
-//! `$(rpm -q ...)` is an invalid `string.Template` placeholder — `.substitute`
-//! raises `ValueError` (verified against CPython), so the intended command can
-//! never actually run under strict mode. We therefore use `safe_substitute`,
-//! which leaves `$(` verbatim and produces the command upstream clearly
-//! intended. For the `command` template (no `$(`), `safe_substitute` is
-//! byte-identical to `substitute` when `package` is supplied, so the happy path
-//! is preserved exactly while the crash is fixed.
+//! The `installed_only` template's shell command-substitution `$(rpm -q ...)`
+//! is not a valid `$name` / `${name}` placeholder, so strict substitution
+//! would reject it as a malformed `$` construct — the command could never
+//! actually run under strict mode. `safe_substitute` leaves `$(` verbatim
+//! instead, letting the intended command through. For the `command` template
+//! (no `$(`), `safe_substitute` is byte-identical to `substitute` when
+//! `package` is supplied, so the happy path is unaffected.
 
 use crate::update_workflow::actions::ActionCommands;
 
-/// zypper prepare (upstream `zypper_prepare`).
+/// zypper prepare.
 ///
 /// `force` toggles `--force-resolution`; `testing` is accepted for signature
-/// parity but unused by zypper (matching upstream).
+/// parity but unused by zypper.
 fn zypper(force: bool, _testing: bool) -> ActionCommands {
     let parameter = if force { "--force-resolution" } else { "" };
     ActionCommands {
@@ -37,10 +35,10 @@ fn zypper(force: bool, _testing: bool) -> ActionCommands {
     }
 }
 
-/// yum prepare (upstream `yum_prepare`).
+/// yum prepare.
 ///
 /// `testing` toggles `--disablerepo=*testing*` (present when **not** testing);
-/// `force` is accepted for parity but unused by yum (matching upstream).
+/// `force` is accepted for parity but unused by yum.
 fn yum(_force: bool, testing: bool) -> ActionCommands {
     let parameter = if testing {
         ""
@@ -58,7 +56,7 @@ fn yum(_force: bool, testing: bool) -> ActionCommands {
     }
 }
 
-/// slmicro (transactional) prepare (upstream `slm_prepare`).
+/// slmicro (transactional) prepare.
 fn slmicro(force: bool, _testing: bool) -> ActionCommands {
     let parameter = if force { "--force-resolution" } else { "" };
     ActionCommands {
@@ -105,8 +103,8 @@ mod tests {
     #[test]
     fn zypper_without_force_omits_flag() {
         let cmds = preparer("15", false, false, false).unwrap();
-        // No force flag -> empty parameter leaves a double space (matches
-        // upstream's `f"...-l {parameter} $package"` with parameter == "").
+        // No force flag -> empty parameter leaves a double space
+        // (parameter == "").
         assert_eq!(
             cmds.render_command(&pkg("kernel")).unwrap(),
             "zypper -n in -y -l  kernel"

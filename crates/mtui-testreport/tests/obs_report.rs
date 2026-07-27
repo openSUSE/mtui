@@ -1,16 +1,12 @@
-//! Ported from upstream `tests/test_obs_report.py`.
-//!
-//! Covers the `OBSTestReport` surface that lands in task nbv.11: `id`, `parser`,
+//! Covers the `ObsReport` surface that lands in task nbv.11: `id`, `parser`,
 //! `update_repos_parser` (dispatching to `obsrepoparse` over `report_wd()`), and
 //! `check_hash` (the constant `(true, "", "")`).
 //!
 //! Not covered here (deferred by design, mirroring the `SlReport`/`PiReport`
 //! boundary):
-//! * `list_update_commands` doer-rendering — awaits the `OperationGroup` seam
-//!   (upstream `test_obs_list_update_commands_invokes_display`); only the no-op
-//!   stub is smoke-checked.
-//! * `_show_yourself_data` — not on the trait skeleton yet
-//!   (upstream `test_obs_show_yourself_data_includes_rrid_and_rating`).
+//! * `list_update_commands` doer-rendering — awaits the `OperationGroup` seam;
+//!   only the no-op stub is smoke-checked.
+//! * `_show_yourself_data` — not on the trait skeleton yet.
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
@@ -25,7 +21,6 @@ fn rrid(s: &str) -> RequestReviewID {
     RequestReviewID::parse(s).expect("valid rrid")
 }
 
-/// Upstream `test_obs_id_returns_rrid_str`.
 #[test]
 fn id_returns_rrid_string() {
     let mut r = ObsReport::new(config());
@@ -39,7 +34,6 @@ fn id_empty_when_no_rrid() {
     assert_eq!(r.id(), "");
 }
 
-/// Upstream `test_obs_parser_returns_hosts_and_json`.
 #[test]
 fn parser_returns_hosts_and_json_keys() {
     let r = ObsReport::new(config());
@@ -54,7 +48,7 @@ fn parser_returns_hosts_and_json_keys() {
 
 /// OBS dispatches to `obsrepoparse`, reading `project.xml` from `report_wd()`
 /// (the parent dir of the loaded report path). Points `base.path` into the
-/// ported OBS fixture directory so `report_wd()` resolves there.
+/// OBS fixture directory so `report_wd()` resolves there.
 #[test]
 fn update_repos_parser_parses_obs_project_xml() {
     let fixture_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/obs");
@@ -70,8 +64,7 @@ fn update_repos_parser_parses_obs_project_xml() {
 }
 
 /// When no report is loaded, `report_wd()` errors and `update_repos_parser`
-/// degrades to an empty map (upstream asserts `self.path`; the Rust port
-/// degrades gracefully like the sibling reports).
+/// degrades to an empty map gracefully, like the sibling reports.
 #[test]
 fn update_repos_parser_empty_when_no_report_loaded() {
     let r = ObsReport::new(config());

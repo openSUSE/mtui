@@ -9,15 +9,14 @@ use crate::commands::apicall::teregen_client;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// The `--status` value that widens the queue to every status (upstream
-/// `Updates.STATUS_ALL`).
+/// The `--status` value that widens the queue to every status.
 const STATUS_ALL: &str = "all";
 
 /// Lists the update queue (unassigned + in-testing by default), fetched live
 /// from the TeReGen API.
 ///
-/// Ports upstream `mtui.commands.updates.Updates`. The default view is the
-/// actionable pickup queue: **unassigned** updates that are **in testing**.
+/// The default view is the actionable pickup queue: **unassigned** updates
+/// that are **in testing**.
 /// `--assignee`/`--mine`/`--all-assignees` pick another assignment view (and
 /// drop the unassigned default); `--status all` widens to every status. This is
 /// a session-global query, so it runs exactly once ([`Scope::Single`]) rather
@@ -183,7 +182,7 @@ impl Command for Updates {
     }
 }
 
-/// Renders one queue row, mirroring upstream's fixed-width layout.
+/// Renders one queue row in a fixed-width layout.
 fn render_row(u: &serde_json::Value, want_assignment: bool) -> String {
     let Some(obj) = u.as_object() else {
         return format!("  {u}");
@@ -195,8 +194,7 @@ fn render_row(u: &serde_json::Value, want_assignment: bool) -> String {
     };
     // deadline is normally an ISO timestamp; the date alone is enough for a
     // row. Stringify first so shape drift (a non-string value) shows its raw
-    // form rather than crashing or vanishing the whole row (upstream
-    // `str(u.get("deadline") or "")[:10] or "-"`).
+    // form rather than crashing or vanishing the whole row.
     let deadline = obj.get("deadline").filter(|v| !is_falsy(v)).map_or_else(
         || "-".to_owned(),
         |v| json_scalar(v).chars().take(10).collect(),
@@ -221,9 +219,8 @@ fn render_row(u: &serde_json::Value, want_assignment: bool) -> String {
     row
 }
 
-/// Whether a JSON value is "falsy" the way Python's `x or ""` treats it: null,
-/// `false`, numeric zero, or the empty string. Used to collapse an
-/// absent/blank `deadline` to `-`.
+/// Whether a JSON value is "falsy": null, `false`, numeric zero, or the empty
+/// string. Used to collapse an absent/blank `deadline` to `-`.
 fn is_falsy(v: &serde_json::Value) -> bool {
     match v {
         serde_json::Value::Null => true,
@@ -234,7 +231,7 @@ fn is_falsy(v: &serde_json::Value) -> bool {
     }
 }
 
-/// Renders a JSON scalar the way upstream's `str()` interpolation would.
+/// Renders a JSON scalar as a plain string.
 fn json_scalar(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s.clone(),
@@ -323,7 +320,7 @@ mod tests {
     #[test]
     fn render_row_non_string_deadline_shows_raw_value() {
         // Shape drift: a numeric `deadline` must render its raw value (first 10
-        // chars), not crash and not vanish to '-' (upstream str() behavior).
+        // chars), not crash and not vanish to '-'.
         let u = serde_json::json!({
             "priority": 100, "status": "testing", "kind": "Maintenance",
             "deadline": 12345, "id": "SUSE:Maintenance:1:2"

@@ -1,9 +1,9 @@
 //! Parsers for product and OS-release metadata read from a target host.
 //!
-//! Ported from `mtui/hosts/target/parsers/product.py`. Both functions are pure:
-//! they take the already-read file bytes (upstream took file-like SFTP handles;
-//! the Rust [`Connection::sftp_open`](crate::Connection::sftp_open) returns the
-//! bytes directly) and return a flat `(name, version, arch)` tuple.
+//! Both functions are pure:
+//! they take the already-read file bytes (the
+//! [`Connection::sftp_open`](crate::Connection::sftp_open) SFTP read returns
+//! the bytes directly) and return a flat `(name, version, arch)` tuple.
 //!
 //! Both are `pub` (not `pub(crate)`) solely so the detached cargo-fuzz harness
 //! in `fuzz/` can drive them with arbitrary bytes — the content is
@@ -24,9 +24,6 @@ use crate::error::{HostError, Result};
 ///   `"0"`;
 /// * otherwise the `<version>` element is used verbatim.
 ///
-/// Mirrors upstream `parsers.product.parse_product` exactly, including the
-/// patchlevel-`"0"`-means-no-SP rule.
-///
 /// # Errors
 /// Returns [`HostError::Sftp`] with a parse reason when the bytes are not valid
 /// XML.
@@ -39,7 +36,7 @@ pub fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
     let arch = text("arch");
 
     let version = if let Some(baseversion) = fields.get("baseversion") {
-        // Upstream: sp = patchlevel-text ("" default) unless patchlevel == "0".
+        // sp = patchlevel-text ("" default) unless patchlevel == "0".
         let sp = match fields.get("patchlevel").map(String::as_str) {
             Some("0") | None => String::new(),
             Some(other) => other.to_owned(),
@@ -60,13 +57,11 @@ pub fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
 ///
 /// Splits each `KEY=VALUE` line, strips surrounding double quotes and trailing
 /// newlines, skips comment (`#`) and blank lines, and returns
-/// `(ID, VERSION_ID, "x86_64")`. The architecture is hard-coded to `x86_64`,
-/// matching upstream `parsers.product.parse_os_release`.
+/// `(ID, VERSION_ID, "x86_64")`. The architecture is hard-coded to `x86_64`.
 ///
 /// # Errors
 /// Returns [`HostError::Sftp`] when the required `ID` or `VERSION_ID` keys are
-/// absent (upstream raised `KeyError`, which the caller treats as a failed
-/// parse).
+/// absent.
 pub fn parse_os_release(bytes: &[u8]) -> Result<(String, String, String)> {
     let text = String::from_utf8_lossy(bytes);
     let mut info: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -78,8 +73,8 @@ pub fn parse_os_release(bytes: &[u8]) -> Result<(String, String, String)> {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        // Strip a trailing '\r' (CRLF), then surrounding double quotes, matching
-        // upstream's `.rstrip("\n").translate({34: None})` (drop all '"').
+        // Strip a trailing '\r' (CRLF), then surrounding double quotes (all
+        // '"' characters are dropped).
         let value = value.trim_end_matches(['\r']).replace('"', "");
         info.insert(key.to_owned(), value);
     }

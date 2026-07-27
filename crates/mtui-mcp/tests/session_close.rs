@@ -1,21 +1,16 @@
-//! Port of the `close()` host-teardown behaviours from upstream
-//! `tests/test_mcp_session.py` (bead `mtui-rs-76e.13`).
+//! Tests for the `close()` host-teardown behaviours (bead `mtui-rs-76e.13`).
 //!
-//! Three behaviours, matching upstream 1:1:
+//! Three behaviours:
 //!
 //! * `close_releases_pool_claims` — `close()` releases every loaded template's
-//!   host-arbitration pool claims (upstream `test_close_releases_pool_claims`).
+//!   host-arbitration pool claims.
 //! * `close_disconnects_every_loaded_templates_hosts` — `close()` disconnects
-//!   hosts on *all* loaded templates, not just the active one (upstream
-//!   `test_close_disconnects_every_loaded_templates_hosts`).
+//!   hosts on *all* loaded templates, not just the active one.
 //! * the wedged-close bounded-wait case is a colocated `#[cfg(test)]` unit test
 //!   in `src/session.rs` (it needs the `pub(crate)` timeout seam) — see
 //!   `close_with_timeout_survives_a_wedged_close` there.
 //!
-//! ## Rust deviation
-//!
-//! Upstream clears `report.targets` after closing and asserts `targets == {}`.
-//! The Rust `HostsGroup::close` (like the REPL `quit`) closes each `Target` but
+//! `HostsGroup::close` (like the REPL `quit`) closes each `Target` but
 //! leaves it in the group with its now-dead connection, so these tests assert
 //! the connection observes `is_closed()` rather than an emptied group.
 
@@ -62,8 +57,7 @@ async fn close_releases_pool_claims() {
         for rrid in [RRID_A, RRID_B] {
             let mut report = ObsReport::new(guard.config.clone());
             report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
-            // Seed a pool claim so release has something to clear (the observable
-            // analogue of upstream's `release_pool_claims.assert_called_once()`).
+            // Seed a pool claim so release has something to clear.
             report.base_mut().pool_claims.insert("some-host".to_owned());
             guard.templates.add(Box::new(report));
         }

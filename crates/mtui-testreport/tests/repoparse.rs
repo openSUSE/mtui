@@ -1,9 +1,6 @@
-//! Ported from the `*repoparse` cases in upstream
-//! `tests/test_metadata_parsers.py` (originally `tests/test_repoparse.py`).
-//!
-//! Golden checks that the repository-URL derivation reproduces upstream's exact
-//! output strings for all `*repoparse` variants (`parse_product`, `slrepoparse`,
-//! `gitrepoparse`, `reporepoparse`, `obsrepoparse`).
+//! Golden checks of the exact output strings for all `*repoparse` variants
+//! (`parse_product`, `slrepoparse`, `gitrepoparse`, `reporepoparse`,
+//! `obsrepoparse`).
 
 use std::fs;
 
@@ -136,8 +133,7 @@ fn reporepoparse_drops_products_with_no_matching_repo() {
 
 #[test]
 fn obsrepoparse_parses_project_xml() {
-    // Golden port of upstream `test_obsrepoparse`: the fixture's
-    // `SLE-Product-SLES:15:x86_64` releasetarget normalizes to
+    // The fixture's `SLE-Product-SLES:15:x86_64` releasetarget normalizes to
     // `Product("SLES", "15", "x86_64")`, keyed to `<repo>/<repository name>`.
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/obs");
     let repos = obsrepoparse("https://example.com", dir.as_ref());
@@ -147,8 +143,8 @@ fn obsrepoparse_parses_project_xml() {
 
 #[test]
 fn obsrepoparse_excludes_debug_repositories() {
-    // A `<repository>` whose name contains `DEBUG` is dropped (upstream's
-    // `if "DEBUG" not in x.attrib["name"]`), leaving only the update repo.
+    // A `<repository>` whose name contains `DEBUG` is dropped, leaving only
+    // the update repo.
     let tmp = tempfile::tempdir().unwrap();
     fs::write(
         tmp.path().join("project.xml"),
@@ -175,7 +171,7 @@ fn obsrepoparse_excludes_debug_repositories() {
 #[test]
 fn obsrepoparse_skips_repositories_without_update_path() {
     // A `<repository>` with no `path[@repository='update']` child is not an
-    // update target and is omitted, matching upstream's XPath selection.
+    // update target and is omitted.
     let tmp = tempfile::tempdir().unwrap();
     fs::write(
         tmp.path().join("project.xml"),

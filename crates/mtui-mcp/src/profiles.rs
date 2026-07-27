@@ -18,8 +18,7 @@
 //! The default is `full` so existing deployments are unchanged; slimming the tool
 //! surface is strictly opt-in.
 //!
-//! Unlike upstream `mtui/mcp/profiles.py` — which mutates the live SDK tool table
-//! (`FastMCP._tool_manager._tools`) — the Rust surface is built from a plain
+//! The tool surface is built from a plain
 //! `Vec<`[`ToolDescriptor`]`>`, so [`apply_profile`] simply filters that vec
 //! before it is converted to `rmcp::model::Tool`s.
 
@@ -31,8 +30,7 @@ use crate::tools::ToolDescriptor;
 /// load → inspect → run/install → fill report → approve/reject without the long
 /// tail of host-bookkeeping and server-tuning verbs. The hand-written
 /// `testreport_*` and `job_*` tools are always part of core because the slow
-/// background-command flow and report editing depend on them. Mirrors upstream
-/// `profiles.CORE`.
+/// background-command flow and report editing depend on them.
 pub const CORE: &[&str] = &[
     // load / inspect
     "load_template",
@@ -102,8 +100,7 @@ fn is_known_profile(profile: &str) -> bool {
 /// Resolution order: start from the profile's allow-set (`full` → everything),
 /// add back any `allow` names that are actually registered, then subtract `deny`
 /// last (deny always wins). Unknown profile names fall back to `full` with a
-/// warning, so a typo never silently hides the whole tool surface. Mirrors
-/// upstream `profiles.resolve_keep_set`.
+/// warning, so a typo never silently hides the whole tool surface.
 #[must_use]
 pub fn resolve_keep_set(
     registered: &BTreeSet<String>,
@@ -140,7 +137,7 @@ pub fn resolve_keep_set(
 
 /// Filter `descriptors` in place, removing every tool not in the resolved
 /// keep-set. `full` with no overrides is a fast no-op. Returns the sorted list of
-/// tool names that remain. Mirrors upstream `profiles.apply_profile`.
+/// tool names that remain.
 ///
 /// The registered set is taken from `descriptors` themselves, so the result is
 /// always a subset of what was synthesised.

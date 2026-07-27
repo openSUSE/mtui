@@ -1,13 +1,13 @@
 //! Validated repository URL.
 //!
 //! Repository URLs derived from testreport metadata are placed on remote
-//! `zypper ar`/`rr` command lines run **as root** on reference hosts. Upstream
-//! mtui interpolates them raw (`f"zypper {cmd} {name} {url} {name}"`), which is a
-//! command-injection vector. As an improvement over upstream, [`RepoUrl`]
-//! validates a URL at ingestion — rejecting unsupported URI schemes and any
-//! shell-unsafe character with a typed [`RepoUrlParseError`] — so a malformed URL
-//! never reaches host execution. The exec-boundary sink additionally shell-quotes
-//! every argument (defense-in-depth).
+//! `zypper ar`/`rr` command lines run **as root** on reference hosts. Raw
+//! interpolation (naive string formatting) would be a command-injection
+//! vector, so [`RepoUrl`] validates a URL at ingestion — rejecting unsupported
+//! URI schemes and any shell-unsafe character with a typed
+//! [`RepoUrlParseError`] — so a malformed URL never reaches host execution.
+//! The exec-boundary sink additionally shell-quotes every argument
+//! (defense-in-depth).
 //!
 //! ## Accepted schemes
 //!

@@ -2,7 +2,7 @@
 //! third-party python `openqa_client` package on top of this crate's shared
 //! [`HttpClient`].
 //!
-//! Upstream mtui wraps `openqa_client.client.OpenQA_Client`, which:
+//! `openqa_client.client.OpenQA_Client`'s wire contract is:
 //!
 //! 1. reads `key`/`secret` for the server from INI `client.conf` files under
 //!    `/etc/openqa` and `~/.config/openqa` (later files override earlier);
@@ -14,7 +14,8 @@
 //! This module rebuilds that contract with `reqwest` (via [`HttpClient`]) so
 //! mtui needs no python runtime and no third-party client. GET requests do
 //! not strictly require signing (openQA allows unauthenticated GETs), but the
-//! signature is always attached when a secret is configured, matching upstream.
+//! signature is always attached when a secret is configured, matching that
+//! contract.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -32,7 +33,7 @@ type HmacSha1 = Hmac<Sha1>;
 ///
 /// Mirrors the `key`/`secret` pair `OpenQA_Client` reads from `client.conf`.
 /// Both may be empty, in which case only unauthenticated GET requests are
-/// possible (upstream logs this at debug and continues).
+/// possible (logged at debug, and the caller continues).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ApiCredentials {
     /// The API key, sent as the `X-API-Key` header.
@@ -50,8 +51,8 @@ impl ApiCredentials {
 
     /// Resolve credentials for `server` from parsed `client.conf` sections.
     ///
-    /// Mirrors upstream's lookup order: try the bare `server` section first,
-    /// then the full `baseurl` section, else empty credentials.
+    /// Tries the bare `server` section first, then the full `baseurl`
+    /// section, else empty credentials.
     #[must_use]
     pub fn resolve(sections: &ClientConf, server: &str, baseurl: &str) -> Self {
         sections
@@ -74,7 +75,7 @@ pub struct ClientConf {
 impl ClientConf {
     /// The standard `client.conf` search paths, lowest precedence first.
     ///
-    /// Matches upstream `("/etc/openqa", "~/.config/openqa")`; later files
+    /// `("/etc/openqa", "~/.config/openqa")`; later files
     /// override earlier ones for the same section/key.
     #[must_use]
     fn default_paths() -> Vec<PathBuf> {
@@ -88,8 +89,7 @@ impl ClientConf {
     /// Read and merge the [`default_paths`](Self::default_paths).
     ///
     /// Missing files are skipped; an unreadable or malformed file is logged at
-    /// `warn` and skipped, so a bad config never hard-fails a lookup (matching
-    /// upstream's lenient posture).
+    /// `warn` and skipped, so a bad config never hard-fails a lookup.
     #[must_use]
     pub fn load() -> Self {
         Self::load_from(&Self::default_paths())
@@ -162,7 +162,7 @@ impl ClientConf {
 
 /// Apply openQA's path-encoding quirks before signing.
 ///
-/// Mirrors upstream `path.replace("%20", "+").replace("~", "%7E")`. The input
+/// Applies `path.replace("%20", "+").replace("~", "%7E")`. The input
 /// is the already-percent-encoded request path+query.
 #[must_use]
 fn encode_path_for_signing(path: &str) -> String {
@@ -222,7 +222,7 @@ impl OpenQAClient {
 
     /// Build a signed GET request to `/api/v1/{path}` with `params`.
     ///
-    /// Reproduces the upstream request shape: `Accept: json`, `X-API-Key` when a
+    /// Builds the standard request shape: `Accept: json`, `X-API-Key` when a
     /// key is set, and the `X-API-Microtime`/`X-API-Hash` pair when a secret is
     /// set. The signature covers the request path+query (`/api/v1/{path}?...`).
     ///

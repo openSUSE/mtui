@@ -10,12 +10,11 @@ use crate::error::CommandResult;
 use crate::session::Session;
 
 /// The two accepted boot actions, mirrored onto the CLI positional and reused
-/// for completion (upstream `choices=["reboot", "poweroff"]`).
+/// for completion.
 const BOOT_ACTIONS: [&str; 2] = ["reboot", "poweroff"];
 
-/// Wall-clock budget for a template's host-close fan-out (upstream
-/// `concurrent.futures.wait(futures, timeout=45)`); quit must still exit if a
-/// host hangs during teardown.
+/// Wall-clock budget for a template's host-close fan-out; quit must still
+/// exit if a host hangs during teardown.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Resolves the per-template close budget. In tests it is overridable (via
@@ -32,7 +31,7 @@ fn close_timeout() -> Duration {
 
 /// Disconnects from all hosts and exits the interactive session.
 ///
-/// Ports upstream `mtui.commands.quit.Quit`. It accepts an optional positional
+/// It accepts an optional positional
 /// `bootarg ∈ {reboot, poweroff}` and, on quit, for **every** loaded template:
 /// releases the report's host-arbitration pool claims (in-process arbiter
 /// ownership + remote pool locks) then closes its host group — rebooting
@@ -41,8 +40,8 @@ fn close_timeout() -> Duration {
 /// 45s budget so a hung host never blocks exit; a host that fails to disconnect
 /// is named (`failed to disconnect from <host>: <err>`) and a host still
 /// disconnecting at the budget is named as a straggler
-/// (`still disconnecting from <host> after <secs> seconds`), mirroring upstream
-/// `quit`'s per-future logging. Afterwards it flips
+/// (`still disconnecting from <host> after <secs> seconds`). Afterwards it
+/// flips
 /// [`Session::request_exit`](crate::Session::request_exit) and returns `Ok(())`
 /// (the REPL checks [`should_exit`](crate::Session::should_exit) after each line
 /// and breaks its loop).
@@ -119,8 +118,7 @@ impl Command for Quit {
                 let close = report.base_mut().targets.close(action.as_deref());
                 match tokio::time::timeout(timeout, close).await {
                     Ok(outcomes) => {
-                        // Name every host that failed to disconnect (upstream
-                        // `failed to disconnect from %s: %s`).
+                        // Name every host that failed to disconnect.
                         for (host, outcome) in &outcomes {
                             if let Err(e) = outcome {
                                 tracing::warn!("failed to disconnect from {host}: {e}");
@@ -129,8 +127,7 @@ impl Command for Quit {
                     }
                     Err(_) => {
                         // Budget expired: the group is a straggler. Name each
-                        // host (upstream `still disconnecting from %s after %s
-                        // seconds`).
+                        // host.
                         let secs = timeout.as_secs();
                         for host in &hosts {
                             tracing::warn!("still disconnecting from {host} after {secs} seconds");
