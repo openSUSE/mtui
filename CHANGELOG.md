@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.1.1] - 2026-07-27
+
 ### Added
 
 - Fuzzing: a `cargo-fuzz` harness (`fuzz/`, detached from the workspace) over
