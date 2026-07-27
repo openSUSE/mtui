@@ -1370,6 +1370,16 @@ impl OperationGroup for HostsGroup {
         HostsGroup::run(self, Command::PerHost(map)).await;
     }
 
+    fn last_output(&self, hostname: &str) -> Option<super::operation::HostOutput> {
+        let target = self.data.get(hostname)?;
+        Some(super::operation::HostOutput {
+            stdout: target.lastout().to_owned(),
+            stdin: target.lastin().to_owned(),
+            stderr: target.lasterr().to_owned(),
+            exitcode: target.lastexit().map_or(0, i32::from),
+        })
+    }
+
     async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<(String, String)> {
         // Only transactional hosts contribute reboot entries; the reboot is
         // fired fire-and-forget on each, then each is reconnected

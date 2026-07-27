@@ -312,16 +312,43 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
         ))
     }
 
-    fn check(&self, _role: &str, _release: &str, _transactional: bool) -> mtui_hosts::Check {
-        // Deliberately a no-op: the real check needs the command's
-        // stdout/stderr/exit code, which `mtui_hosts::CheckArgs` does not carry
-        // (it holds only the hostname) and which `mtui_hosts::Check` could not
-        // report anyway, since it returns `()`. The install/uninstall verdict is
-        // therefore produced *after* the template returns, by
-        // `update_flow::install_verdict`, which reads each target's `last*`
-        // snapshot and runs this same registry's `CheckFn` over it — the same
-        // path `perform_prepare` / `perform_update` / `perform_downgrade` use.
-        Box::new(|_a: mtui_hosts::CheckArgs<'_>| {})
+    fn check(&self, role: &str, release: &str, transactional: bool) -> mtui_hosts::Check {
+        // An unrecognised role resolves to no check table below, which is
+        // itself a no-op fallback (`op` only labels a raw-exit failure).
+        let op = match Role::from_operation_role(role) {
+            Some(Role::Install) => "install",
+            Some(Role::Uninstall) => "uninstall",
+            _ => "operation",
+        };
+        let check_fn = Role::from_operation_role(role)
+            .and_then(|role| CheckProvider::check(self, role, release, transactional));
+
+        Box::new(move |a: mtui_hosts::CheckArgs<'_>| match &check_fn {
+            Some(check) => {
+                let args = checks::CheckArgs {
+                    hostname: a.hostname,
+                    stdout: a.stdout,
+                    stdin: a.stdin,
+                    stderr: a.stderr,
+                    exitcode: a.exitcode,
+                };
+                match check(args) {
+                    Ok(diagnostics) => {
+                        for d in diagnostics {
+                            tracing::info!("{}", d.text);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => Err(e.reason),
+                }
+            }
+            // No check table for this key (`slmicro`, `YUM`): fall back to the
+            // exit code alone, exactly as `install_verdict` used to. Not "any
+            // stderr is a failure" — `transactional-update` and `yum` both
+            // write progress and warnings to stderr on a successful run.
+            None if a.exitcode != 0 => Err(format!("{op} command failed")),
+            None => Ok(()),
+        })
     }
 }
 

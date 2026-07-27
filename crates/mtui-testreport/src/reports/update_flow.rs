@@ -333,8 +333,9 @@ fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError>
 /// The shared body behind every report's `perform_install`. Injects the
 /// [`WorkflowRegistry`] as the group's
 /// [`PlanProvider`](mtui_hosts::PlanProvider) and drives the
-/// [`InstallOperation`](mtui_hosts::InstallOperation) template, then returns the
-/// verdict from [`install_verdict`].
+/// [`InstallOperation`](mtui_hosts::InstallOperation) template, whose own
+/// per-host [`Check`](mtui_hosts::Check) — also adapted from this registry —
+/// now produces the verdict, before the (possible) reboot.
 ///
 /// Injecting here rather than where the group is built is deliberate:
 /// [`OperationGroup::plans`](mtui_hosts::OperationGroup::plans) has exactly one
@@ -416,19 +417,18 @@ async fn perform_operation(
         Ok(report) => report,
     };
 
-    // A transactional host that rebooted and never reconnected must fail the
-    // operation by name, alongside any install-check failure `install_verdict`
-    // finds over the other hosts' `last*` snapshots.
+    // A host whose post-run check failed, and any transactional host that
+    // rebooted and never reconnected, both fail the operation by name. A
+    // failed check already excluded its host from the reboot map (see
+    // `Operation::run`), so the two lists never double-name the same host.
     let mut failures: Vec<UpdateError> = report
-        .reboot_failures
+        .check_failures
         .into_iter()
-        .map(|(host, reason)| {
-            UpdateError::new(format!("reconnect after reboot failed: {reason}"), host)
-        })
+        .map(|(host, reason)| UpdateError::new(reason, host))
         .collect();
-    if let Err(e) = install_verdict(op, role, targets) {
-        failures.push(e);
-    }
+    failures.extend(report.reboot_failures.into_iter().map(|(host, reason)| {
+        UpdateError::new(format!("reconnect after reboot failed: {reason}"), host)
+    }));
     aggregate_failures(op, failures)
 }
 
@@ -475,78 +475,6 @@ fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> 
         role.as_operation_role(),
         unresolved.join(", ")
     )
-}
-
-/// Reports whether a shared install/uninstall [`Operation`](mtui_hosts::Operation)
-/// fan-out succeeded on every host.
-///
-/// The template's own per-host check hook cannot produce a verdict — it receives
-/// only a hostname and returns `()` — so the real check runs here, over each
-/// target's post-fan-out `last*` snapshot, reusing the same registry `CheckFn`
-/// that `perform_prepare` and `perform_update` drive through `run_checks`.
-/// Unlike those flows, this one runs the check *instead of* a raw exit-code
-/// scan rather than in addition to it, because the check already classifies
-/// every exit code it cares about. `op` labels the aggregated summary.
-///
-/// Where the registry has a check for a host's `(release, transactional)` key,
-/// it is authoritative: it knows that zypper's exit codes 100-103 and 106
-/// ("update needed", "reboot needed", "repo skipped") are *informational*, and
-/// classifies real failures as "package not found" / "update stack locked" /
-/// "RPM Error" / "Dependency Error". A bare `lastexit() != 0` scan would call a
-/// routine post-kernel-install "reboot needed" a failed install.
-///
-/// Keys with no registered check — `slmicro` (transactional) and `YUM` — fall
-/// back to that raw scan, which is better than no verdict at all.
-///
-/// # Errors
-///
-/// Returns the aggregated [`UpdateError`] when any host failed.
-pub fn install_verdict(op: &str, role: Role, targets: &HostsGroup) -> Result<(), UpdateError> {
-    let registry = WorkflowRegistry::default();
-    let reason = format!("{op} command failed");
-    let mut failures = Vec::new();
-
-    for target in targets.targets() {
-        let check = host_key(target)
-            .and_then(|(release, transactional)| registry.check(role, &release, transactional));
-
-        let Some(check) = check else {
-            // No check table for this key (`slmicro`, `YUM`): fall back to the
-            // exit code alone. Deliberately *not* "any stderr output is a
-            // failure" — `transactional-update` and `yum` both write progress
-            // and warnings to stderr on a successful run, and no check table in
-            // this crate treats bare stderr as a failure either; they all match
-            // specific markers.
-            if target.lastexit().is_some_and(|c| c != 0) {
-                failures.push(UpdateError::new(reason.clone(), target.hostname()));
-            }
-            continue;
-        };
-
-        // The install checks emit no diagnostics (only the update checks do),
-        // but drain the channel rather than assuming that stays true.
-        let mut diagnostics = Vec::new();
-        match check(CheckArgs {
-            hostname: target.hostname(),
-            stdout: target.lastout(),
-            stdin: target.lastin(),
-            stderr: target.lasterr(),
-            exitcode: target.lastexit().map_or(0, i32::from),
-        }) {
-            Ok(diags) => diagnostics.extend(diags),
-            Err(mut e) => {
-                if e.host.is_none() {
-                    e.host = Some(target.hostname().to_owned());
-                }
-                failures.push(e);
-            }
-        }
-        for d in diagnostics {
-            info!("{}", d.text);
-        }
-    }
-
-    aggregate_failures(op, failures)
 }
 
 /// Reboots the transactional hosts named in `reboot`, returning one
@@ -1574,7 +1502,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_verdict_fallback_ignores_stderr_on_a_clean_exit() {
+    async fn perform_install_ignores_stderr_on_a_clean_exit() {
         // `transactional-update` and `yum` write progress and warnings to stderr
         // on a successful run. Treating any stderr as failure would fail every
         // SL Micro install.
@@ -1595,10 +1523,11 @@ mod tests {
             true,
         );
         let mut group = HostsGroup::new(vec![t], false);
-        group.run(Command::All("t-u pkg install".to_owned())).await;
 
         assert!(
-            install_verdict("install", Role::Install, &group).is_ok(),
+            perform_install(&mut group, &["pkg-a".to_owned()])
+                .await
+                .is_ok(),
             "stderr alone on a zero exit is not a failure"
         );
     }
@@ -1624,14 +1553,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_verdict_surfaces_per_host_command_failure() {
-        // A host left with a non-zero lastexit after an install fan-out is
-        // reported by install_verdict (the report-level install/uninstall hook).
+    async fn perform_install_surfaces_a_failed_command() {
+        // A host whose install command exits 104 is reported by the template's
+        // own check — over the same host's post-run snapshot the removed
+        // `install_verdict` used to read *after* the template returned.
         let (t, _h) = sles_target_with_exit("h1", "", 104);
         let mut group = HostsGroup::new(vec![t], false);
-        // Run one command so the host records its (failing) last* snapshot.
-        group.run(Command::All("zypper in".to_owned())).await;
-        let err = install_verdict("install", Role::Install, &group)
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
             .expect_err("non-zero exit surfaces as Err");
         assert_eq!(err.host.as_deref(), Some("h1"));
         // 104 is zypper's ZYPPER_EXIT_INF_CAP_NOT_FOUND, which the install check
@@ -1641,15 +1570,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_verdict_ok_when_all_hosts_succeed() {
+    async fn perform_install_ok_when_all_hosts_succeed() {
         let (t, _h) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
-        group.run(Command::All("zypper in".to_owned())).await;
-        assert!(install_verdict("install", Role::Install, &group).is_ok());
+        assert!(
+            perform_install(&mut group, &["pkg-a".to_owned()])
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
-    async fn install_verdict_accepts_zyppers_informational_exit_codes() {
+    async fn perform_install_accepts_zyppers_informational_exit_codes() {
         // zypper exits 100-103/106 to mean "update needed", "reboot needed",
         // "restart needed", "repo skipped" — all *successful* installs. Exit 102
         // (reboot needed) is routine after a kernel update, so a bare
@@ -1658,8 +1590,7 @@ mod tests {
         for exit in [100, 101, 102, 103, 106] {
             let (t, _h) = sles_target_with_exit("h1", "", exit);
             let mut group = HostsGroup::new(vec![t], false);
-            group.run(Command::All("zypper in".to_owned())).await;
-            let res = install_verdict("install", Role::Install, &group);
+            let res = perform_install(&mut group, &["pkg-a".to_owned()]).await;
             assert!(
                 res.is_ok(),
                 "exit {exit} is informational, not a failure: {res:?}"
@@ -1668,7 +1599,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_verdict_falls_back_to_raw_scan_without_a_check_table() {
+    async fn perform_install_falls_back_to_raw_scan_without_a_check_table() {
         // slmicro/YUM keys have no install check registered. They must still get
         // a verdict rather than an unconditional pass.
         let conn = MockConnection::new("h1").with_default(CommandLog::new("t-u", "", "", 1, 0));
@@ -1681,22 +1612,17 @@ mod tests {
             ),
             true,
         );
-        let mut group = HostsGroup::new(vec![t], false);
-        group.run(Command::All("t-u pkg install".to_owned())).await;
-
-        let key = host_key(group.targets().next().expect("one target"));
+        let key = host_key(&t).expect("resolvable key");
         assert!(
             WorkflowRegistry::default()
-                .check(
-                    Role::Install,
-                    &key.clone().expect("key").0,
-                    key.expect("key").1
-                )
+                .check(Role::Install, &key.0, key.1)
                 .is_none(),
             "this test is only meaningful while the key has no check table"
         );
+        let mut group = HostsGroup::new(vec![t], false);
 
-        let err = install_verdict("install", Role::Install, &group)
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
             .expect_err("a non-zero exit must still be reported");
         assert_eq!(err.host.as_deref(), Some("h1"));
         assert_eq!(err.reason, "install command failed");

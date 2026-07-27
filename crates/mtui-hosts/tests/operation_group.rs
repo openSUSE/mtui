@@ -63,6 +63,7 @@ impl PlanProvider for RecordingProvider {
         let checked = self.checked.clone();
         Box::new(move |a: CheckArgs<'_>| {
             checked.lock().unwrap().push(a.hostname.to_owned());
+            Ok(())
         })
     }
 }
@@ -137,6 +138,67 @@ async fn install_drives_doer_and_reboots_only_transactional() {
     let mut who = checked.lock().unwrap().clone();
     who.sort();
     assert_eq!(who, vec!["h1".to_owned(), "h2".to_owned()]);
+}
+
+/// One host's output as seen by [`OutputRecordingProvider`]'s check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SeenOutput {
+    hostname: String,
+    stdout: String,
+    exitcode: i32,
+}
+
+/// A [`PlanProvider`] whose check records the [`CheckArgs`] it is called with,
+/// so a test can assert the check actually sees the host's post-run output
+/// rather than a hostname-only stub.
+struct OutputRecordingProvider {
+    seen: Arc<Mutex<Vec<SeenOutput>>>,
+}
+
+impl PlanProvider for OutputRecordingProvider {
+    fn doer(&self, _role: &str, _release: &str, _transactional: bool) -> Result<Doer, HostError> {
+        Ok(Doer::new(
+            "zypper -n in -y -l $packages",
+            "systemctl reboot",
+        ))
+    }
+
+    fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
+        let seen = self.seen.clone();
+        Box::new(move |a: CheckArgs<'_>| {
+            seen.lock().unwrap().push(SeenOutput {
+                hostname: a.hostname.to_owned(),
+                stdout: a.stdout.to_owned(),
+                exitcode: a.exitcode,
+            });
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn install_check_sees_the_hosts_post_run_output() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let provider = OutputRecordingProvider { seen: seen.clone() };
+    let (h1, _m1) = target("h1", "SLES", "15.5", false);
+    let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
+
+    InstallOperation::new(vec!["pkg-a".to_owned()])
+        .run(&mut group)
+        .await
+        .expect("a wired group installs");
+
+    // `target()`'s mock answers every command with a fixed "done"/exit-0
+    // `CommandLog`; the check must see exactly that snapshot, not a
+    // hostname-only stub.
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        vec![SeenOutput {
+            hostname: "h1".to_owned(),
+            stdout: "done".to_owned(),
+            exitcode: 0,
+        }]
+    );
 }
 
 #[tokio::test]

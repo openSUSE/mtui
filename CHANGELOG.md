@@ -68,6 +68,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `install`/`uninstall` now check whether a host's install/uninstall command
+  actually succeeded *before* rebooting its transactional (read-only-root)
+  snapshot into it. The install/uninstall template used to reboot first and
+  run its real verdict afterward, so a failed install on a transactional host
+  was rebooted into anyway; the check now runs first and a failed host is
+  named at WARN and excluded from the reboot — healthy transactional hosts in
+  the same run still reboot.
 - `install`/`uninstall`/`prepare`/`downgrade`/`update` now fail, naming the
   host, when a transactional (read-only-root) host reboots and does not
   reconnect. The reboot outcome used to be logged at ERROR and discarded, so
