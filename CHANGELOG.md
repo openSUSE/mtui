@@ -74,6 +74,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `update` now reaches a verdict on SL Micro and RHEL/YUM hosts. Both have had
+  an update command since the port but no post-update *check*, so the flow
+  skipped them silently and reported success however the patch went — a locked
+  update stack, an unresolved dependency or an RPM error on those hosts was
+  simply not looked at, and on SL Micro the host was then rebooted into the
+  failed transaction. SL Micro is judged on the command's output markers rather
+  than its exit code: its update template ends with a repo-cleanup loop, so the
+  status the shell reports is that loop's and not the patch's.
+- An `update` that timed out, or whose connection dropped part-way, is no
+  longer reported as successful on **any** host. The update check had no
+  equivalent of the downgrade check's "timed out or failed to run" gate, so a
+  patch that never completed left an empty transcript that matched none of the
+  failure markers and passed.
 - A post-operation reboot whose SSH link had gone idle during the (multi-
   minute) package transaction now reconnects before dispatching, as ordinary
   commands already did. Without it the reboot failed to dispatch against a

@@ -2165,6 +2165,29 @@ mod tests {
         (t, handle)
     }
 
+    /// A transactional SL-Micro target whose commands answer with `stderr`.
+    ///
+    /// The update check for `("slmicro", true)` is deliberately judged on the
+    /// output markers rather than the exit code — the slmicro update template
+    /// ends with a repo-cleanup loop that masks the patch's status — so a
+    /// stderr marker is the signal a genuinely failing patch leaves behind.
+    fn slmicro_target_with_stderr(hostname: &str, stderr: &str) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", stderr, 0, 0))
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
     /// Which of the three reboot failure modes a fixture should exhibit.
     #[derive(Debug, Clone, Copy)]
     enum RebootFault {
@@ -2461,6 +2484,49 @@ mod tests {
         assert!(
             fired.iter().any(|c| c.contains("systemctl reboot")),
             "expected transactional reboot after a successful update: {fired:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_fails_a_transactional_host_whose_stack_is_locked() {
+        // `("slmicro", true)` had an *updater* but no *check*, so `run_checks`
+        // hit its `else { continue }` and the host contributed no verdict at
+        // all: `update` reported success however the patch went. This is the
+        // end-to-end proof the newly registered check is actually reached —
+        // registering it in the table alone would not show that.
+        let (t, handle) = slmicro_target_with_stderr("h1", "System management is locked");
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Check(e)) = res else {
+            panic!("a locked update stack must fail the update: {res:?}");
+        };
+        assert_eq!(e.reason, "update stack locked");
+        assert_eq!(e.host.as_deref(), Some("h1"));
+
+        // And the check failure must suppress the reboot: activating the new
+        // snapshot would hide the failed patch behind a healthy-looking boot.
+        // Before the check existed this branch was unreachable for a
+        // transactional host, so #385's "a check failure suppresses the reboot
+        // entirely" comment described a path nothing could take.
+        let fired = handle.fired_commands();
+        assert!(
+            !fired.iter().any(|c| c.contains("systemctl reboot")),
+            "a host whose update check failed must not be rebooted: {fired:?}"
         );
     }
 
