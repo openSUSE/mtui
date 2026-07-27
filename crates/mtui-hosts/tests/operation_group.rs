@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use mtui_hosts::{
     Check, CheckArgs, Doer, HostError, HostsGroup, InstallOperation, Operation, OperationGroup,
-    PlanProvider, Target, UninstallOperation,
+    PlanProvider, RebootFailure, RebootFailureCause, Target, UninstallOperation,
 };
 use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
@@ -77,8 +77,13 @@ fn target(
     version: &str,
     transactional: bool,
 ) -> (Target, mtui_hosts::MockConnection) {
+    // A *fresh* boot id on every read models a host that really rebooted. A
+    // fixture built with `with_default` alone answers both probes identically,
+    // which the reboot lifecycle now correctly reads as "this host never went
+    // down" — right for a test about that, wrong for every other test here.
     let conn = mtui_hosts::MockConnection::new(hostname)
-        .with_default(CommandLog::new("", "done", "", 0, 1));
+        .with_default(CommandLog::new("", "done", "", 0, 1))
+        .with_changing_boot_id();
     let handle = conn.clone();
     let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
     let system = System::new(
@@ -90,6 +95,15 @@ fn target(
     (t, handle)
 }
 
+/// The commands a test actually cares about: the operation's own, with the
+/// reboot lifecycle's boot-id probes filtered out.
+fn package_commands(conn: &mtui_hosts::MockConnection) -> Vec<String> {
+    conn.commands()
+        .into_iter()
+        .filter(|c| c != "cat /proc/sys/kernel/random/boot_id")
+        .collect()
+}
+
 #[tokio::test]
 async fn install_drives_doer_and_reboots_only_transactional() {
     let (provider, lookups, checked) = RecordingProvider::new();
@@ -98,7 +112,7 @@ async fn install_drives_doer_and_reboots_only_transactional() {
     let (h2, m2) = target("h2", "SL-Micro", "6.0", true);
     let mut group = HostsGroup::new(vec![h1, h2], false).with_plan_provider(Arc::new(provider));
 
-    InstallOperation::new(vec!["pkg-a".to_owned(), "pkg-b".to_owned()])
+    let _ = InstallOperation::new(vec!["pkg-a".to_owned(), "pkg-b".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group installs");
@@ -117,7 +131,7 @@ async fn install_drives_doer_and_reboots_only_transactional() {
 
     // The install command ran on both hosts with $packages substituted.
     assert_eq!(
-        m1.commands(),
+        package_commands(&m1),
         vec!["zypper -n in -y -l pkg-a pkg-b".to_owned()]
     );
     // The non-transactional host was never rebooted.
@@ -128,7 +142,7 @@ async fn install_drives_doer_and_reboots_only_transactional() {
     // reboot is dispatched fire-and-forget (the reboot drops the connection),
     // then the host is reconnected — the P2.9 `_reboot` lifecycle.
     assert_eq!(
-        m2.commands(),
+        package_commands(&m2),
         vec!["zypper -n in -y -l pkg-a pkg-b".to_owned()]
     );
     assert_eq!(m2.fired_commands(), vec!["systemctl reboot".to_owned()]);
@@ -183,7 +197,7 @@ async fn install_check_sees_the_hosts_post_run_output() {
     let (h1, _m1) = target("h1", "SLES", "15.5", false);
     let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
 
-    InstallOperation::new(vec!["pkg-a".to_owned()])
+    let _ = InstallOperation::new(vec!["pkg-a".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group installs");
@@ -228,7 +242,11 @@ async fn install_reports_a_transactional_host_that_never_reconnects() {
 
     assert_eq!(
         report.reboot_failures,
-        vec![("h1".to_owned(), "failed to reconnect to h1".to_owned())]
+        vec![RebootFailure {
+            host: "h1".to_owned(),
+            cause: RebootFailureCause::Unreachable,
+            reason: "failed to reconnect to h1".to_owned(),
+        }]
     );
     assert_eq!(handle.reconnect_count(), 1);
 }
@@ -242,12 +260,15 @@ async fn install_shell_quotes_malicious_package_name_end_to_end() {
     let (h1, m1) = target("h1", "SLES", "15.5", false);
     let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
 
-    InstallOperation::new(vec!["foo; rm -rf /".to_owned()])
+    let _ = InstallOperation::new(vec!["foo; rm -rf /".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group installs");
 
-    let cmd = m1.commands().into_iter().next().expect("one command ran");
+    let cmd = package_commands(&m1)
+        .into_iter()
+        .next()
+        .expect("one command ran");
     assert!(
         !cmd.ends_with("foo; rm -rf /"),
         "metacharacters leaked unquoted: {cmd:?}"
@@ -274,7 +295,7 @@ async fn uninstall_uses_uninstaller_role() {
     let (h1, _m1) = target("h1", "SLES", "15.5", false);
     let mut group = HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(provider));
 
-    UninstallOperation::new(vec!["pkg".to_owned()])
+    let _ = UninstallOperation::new(vec!["pkg".to_owned()])
         .run(&mut group)
         .await
         .expect("a wired group uninstalls");
@@ -322,7 +343,7 @@ async fn select_preserves_injected_provider() {
     // Selecting a subset must carry the provider through so the sub-group can
     // still drive an operation.
     let mut sub = group.select(Some(&["h1".to_owned()]), false).unwrap();
-    InstallOperation::new(vec!["pkg".to_owned()])
+    let _ = InstallOperation::new(vec!["pkg".to_owned()])
         .run(&mut sub)
         .await
         .expect("a wired group installs");

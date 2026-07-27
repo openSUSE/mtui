@@ -25,8 +25,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use mtui_hosts::{
-    Command, HostError, HostsGroup, InstallOperation, Operation, OperationGroup, RepoOp, SetRepo,
-    UninstallOperation,
+    Command, HostError, HostsGroup, InstallOperation, Operation, OperationGroup, RebootFailure,
+    RebootFailureCause, RepoOp, SetRepo, UninstallOperation,
 };
 use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
@@ -65,8 +65,19 @@ pub enum UpdateFailure {
     /// reconnect.
     ///
     /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback:
-    /// the host is unreachable, so a downgrade cannot run on it.
+    /// the host is unreachable, so a downgrade cannot run on it — and the
+    /// rollback is group-wide, so running it would revert the *healthy* hosts
+    /// on behalf of one that cannot be reached either way.
     Reboot(UpdateError),
+    /// A transactional host was patched but its reboot never took effect, and
+    /// the host is **still reachable**: the command was never dispatched, or
+    /// the host answered with an unchanged boot id.
+    ///
+    /// Unlike [`Reboot`](Self::Reboot) this *does* roll back. The host is up,
+    /// serving from the old snapshot while the rest of the group runs the new
+    /// packages — the split-brain the rollback exists to undo — and, being
+    /// reachable, it is a host the downgrade can actually reach.
+    RebootNotTaken(UpdateError),
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
@@ -147,7 +158,7 @@ where
             error!(error = %e, "update failed");
             Err(e)
         }
-        Err(UpdateFailure::Check(e)) => {
+        Err(UpdateFailure::Check(e) | UpdateFailure::RebootNotTaken(e)) => {
             error!("Update failed");
             warn!("Error while updating. Rolling back changes");
             let pkgs = report.get_package_list();
@@ -443,10 +454,24 @@ async fn perform_operation(
         .into_iter()
         .map(|(host, reason)| UpdateError::new(reason, host))
         .collect();
-    failures.extend(report.reboot_failures.into_iter().map(|(host, reason)| {
-        UpdateError::new(format!("reconnect after reboot failed: {reason}"), host)
-    }));
+    failures.extend(report.reboot_failures.into_iter().map(reboot_error));
     aggregate_failures(op, failures)
+}
+
+/// Renders a [`RebootFailure`] as the operator-facing per-host error.
+///
+/// The three causes deliberately read differently: they send an operator to
+/// opposite places. "Did not come back" means go find the machine; "never
+/// rebooted" means it is right there, still serving, with an inert snapshot.
+/// A single "reconnect after reboot failed" message was accurate for only one
+/// of the three.
+fn reboot_error(failure: RebootFailure) -> UpdateError {
+    let what = match failure.cause {
+        RebootFailureCause::Unreachable => "did not come back after the reboot",
+        RebootFailureCause::NotDispatched => "never received the reboot",
+        RebootFailureCause::NotRebooted => "never rebooted, so its snapshot is still inactive",
+    };
+    UpdateError::new(format!("{what} ({})", failure.reason), failure.host)
 }
 
 /// Turns an [`Operation::run`](mtui_hosts::Operation::run) start failure into a
@@ -495,26 +520,21 @@ fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> 
 }
 
 /// Reboots the transactional hosts named in `reboot`, returning one
-/// [`UpdateError`] per host that did not reconnect.
+/// [`RebootFailure`] per host whose reboot did not demonstrably take effect.
 ///
-/// A transactional host that rebooted and never came back must fail the flow
-/// by name, not vanish into a discarded `()` — the caller pushes these into
-/// its own failure list before aggregating.
+/// Such a host must fail the flow by name, not vanish into a discarded `()` —
+/// the caller renders these through [`reboot_error`] into its own failure list
+/// before aggregating. The cause is carried rather than flattened to a string
+/// because `update` routes its rollback on it.
 async fn reboot_transactional(
     targets: &mut HostsGroup,
     reboot: BTreeMap<String, String>,
-) -> Vec<UpdateError> {
+) -> Vec<RebootFailure> {
     if reboot.is_empty() {
         return Vec::new();
     }
     let map: Vec<(String, String)> = reboot.into_iter().collect();
-    OperationGroup::reboot(targets, map)
-        .await
-        .into_iter()
-        .map(|(host, reason)| {
-            UpdateError::new(format!("reconnect after reboot failed: {reason}"), host)
-        })
-        .collect()
+    OperationGroup::reboot(targets, map).await
 }
 
 /// Runs the prepare step: adds/removes the issue repo, then installs
@@ -633,7 +653,12 @@ async fn prepare_body(
         error!(error = %e, "prepare check failed");
         failures.push(e);
     }
-    failures.extend(reboot_transactional(targets, reboot).await);
+    failures.extend(
+        reboot_transactional(targets, reboot)
+            .await
+            .into_iter()
+            .map(reboot_error),
+    );
     // A genuine host failure outranks the cancellation: reporting only
     // "cancelled" would bury a broken host the operator must still see.
     if !failures.is_empty() {
@@ -924,7 +949,12 @@ async fn downgrade_body(
         .into_iter()
         .filter(|(h, _)| !dead_probes.contains(h))
         .collect();
-    failures.extend(reboot_transactional(targets, healthy_reboot).await);
+    failures.extend(
+        reboot_transactional(targets, healthy_reboot)
+            .await
+            .into_iter()
+            .map(reboot_error),
+    );
 
     // The downgrade commands have now dispatched, whatever the verdict:
     // record the history row here, not before the run started.
@@ -1233,7 +1263,27 @@ async fn update_run_phase(
         aggregate_failures("update", failures).map_err(UpdateFailure::Check)
     } else {
         let reboot_failures = reboot_transactional(targets, reboot).await;
-        aggregate_failures("update", reboot_failures).map_err(UpdateFailure::Reboot)
+        // Route the rollback on *why* the reboot failed, not on the fact that
+        // it did. A host that never came back cannot be downgraded, and the
+        // rollback is group-wide — running it would revert the healthy hosts on
+        // behalf of one this flow cannot reach. A host that is still up, on the
+        // other hand, is running the un-activated snapshot while the rest of the
+        // group moved on, and that is precisely the split-brain the rollback
+        // undoes. Mixed causes take the repairable route: the reachable host is
+        // the one that can still be put right.
+        let repairable = reboot_failures
+            .iter()
+            .any(|f| f.cause.host_still_reachable());
+        let wrap: fn(UpdateError) -> UpdateFailure = if repairable {
+            UpdateFailure::RebootNotTaken
+        } else {
+            UpdateFailure::Reboot
+        };
+        aggregate_failures(
+            "update",
+            reboot_failures.into_iter().map(reboot_error).collect(),
+        )
+        .map_err(wrap)
     };
 
     targets.unlock().await;
@@ -2084,8 +2134,58 @@ mod tests {
     /// Builds an enabled SL Micro (transactional) target on a mock returning
     /// `stdout` with `exit` for every command.
     fn slmicro_target(hostname: &str, stdout: &str, exit: i16) -> (Target, MockConnection) {
-        let conn =
-            MockConnection::new(hostname).with_default(CommandLog::new("", stdout, "", exit, 0));
+        // A changing boot id models a host that really rebooted. Without it
+        // both probes read the same and the lifecycle correctly concludes the
+        // host never went down — see `RebootFault::WentNowhere` for that.
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", stdout, "", exit, 0))
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    /// Which of the three reboot failure modes a fixture should exhibit.
+    #[derive(Debug, Clone, Copy)]
+    enum RebootFault {
+        /// Went away and never came back. Unreachable.
+        Unreachable,
+        /// Answers afterwards with the same boot id: it never went down.
+        WentNowhere,
+        /// The dispatch itself failed, leaving the session live so the
+        /// following reconnect succeeds trivially.
+        Undispatched,
+    }
+
+    /// A transactional SL-Micro target whose reboot fails in one of the three
+    /// distinguishable ways, wired so a rollback *would* render if one ran.
+    ///
+    /// The stdout matters: a mock answering `""` makes the downgrade version
+    /// probe yield nothing, so `combined` stays empty and **no downgrade
+    /// command is ever built** — which silently turns any "assert no
+    /// `--oldpackage`" into a test that cannot fail. Answering with a parseable
+    /// `pkg = version` line is what makes those assertions real.
+    fn slmicro_reboot_failure(hostname: &str, how: RebootFault) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname).with_default(CommandLog::new(
+            "",
+            "pkg-a = 1.0-1\n",
+            "",
+            0,
+            0,
+        ));
+        let conn = match how {
+            RebootFault::Unreachable => conn.with_changing_boot_id().failing_reconnect(),
+            RebootFault::WentNowhere => conn,
+            RebootFault::Undispatched => conn.with_changing_boot_id().failing_fire_and_forget(),
+        };
         let handle = conn.clone();
         let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
         t.set_system(
@@ -2102,20 +2202,7 @@ mod tests {
     /// Like [`slmicro_target`] but its reconnect after a reboot always fails,
     /// modelling a transactional host that never comes back.
     fn slmicro_target_failing_reconnect(hostname: &str) -> (Target, MockConnection) {
-        let conn = MockConnection::new(hostname)
-            .with_default(CommandLog::new("", "", "", 0, 0))
-            .failing_reconnect();
-        let handle = conn.clone();
-        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
-        t.set_system(
-            System::new(
-                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
-                BTreeSet::new(),
-                true,
-            ),
-            true,
-        );
-        (t, handle)
+        slmicro_reboot_failure(hostname, RebootFault::Unreachable)
     }
 
     #[tokio::test]
@@ -2131,7 +2218,14 @@ mod tests {
             .expect_err("a lost transactional host must not report success");
         assert_eq!(err.host.as_deref(), Some("h1"));
         assert!(
-            err.reason.contains("reconnect after reboot failed"),
+            err.reason.contains("did not come back after the reboot"),
+            "reason: {}",
+            err.reason
+        );
+        // Discriminating: the two reachable causes must not be claimed for a
+        // host that genuinely went away — they route the rollback differently.
+        assert!(
+            !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
             err.reason
         );
@@ -2164,7 +2258,14 @@ mod tests {
         .await
         .expect_err("a lost transactional host must not report success");
         assert!(
-            err.reason.contains("reconnect after reboot failed"),
+            err.reason.contains("did not come back after the reboot"),
+            "reason: {}",
+            err.reason
+        );
+        // Discriminating: the two reachable causes must not be claimed for a
+        // host that genuinely went away — they route the rollback differently.
+        assert!(
+            !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
             err.reason
         );
@@ -2180,7 +2281,14 @@ mod tests {
             .await
             .expect_err("a lost transactional host must not report success");
         assert!(
-            err.reason.contains("reconnect after reboot failed"),
+            err.reason.contains("did not come back after the reboot"),
+            "reason: {}",
+            err.reason
+        );
+        // Discriminating: the two reachable causes must not be claimed for a
+        // host that genuinely went away — they route the rollback differently.
+        assert!(
+            !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
             err.reason
         );
@@ -2202,15 +2310,86 @@ mod tests {
             .await;
         let err = res.expect_err("a lost transactional host must not report success");
         assert!(
-            err.reason.contains("reconnect after reboot failed"),
+            err.reason.contains("did not come back after the reboot"),
+            "reason: {}",
+            err.reason
+        );
+        // Discriminating: the two reachable causes must not be claimed for a
+        // host that genuinely went away — they route the rollback differently.
+        assert!(
+            !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
             err.reason
         );
 
-        // No downgrade (rollback) command was issued.
+        // No downgrade (rollback) command was issued. The fixture answers the
+        // version probe with a parseable line, so a rollback that *did* run
+        // would render `--oldpackage` here — without that, this assertion would
+        // pass no matter how the failure was routed.
         assert!(
             !handle.commands().iter().any(|c| c.contains("--oldpackage")),
             "a dead host must not trigger a rollback downgrade: {:?}",
+            handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rolls_back_when_the_host_never_went_down() {
+        // The inverse of the test above, and the reason the cause is carried
+        // rather than flattened: this host is *reachable*. Its patch was staged
+        // into a snapshot that never activated, so it is serving the old
+        // packages while the rest of the group moved on — the split-brain the
+        // rollback exists to undo, and a host the downgrade can actually reach.
+        let (t, handle) = slmicro_reboot_failure("h1", RebootFault::WentNowhere);
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        let err = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("a host that never rebooted must not report success");
+        assert!(
+            err.reason.contains("never rebooted"),
+            "reason: {}",
+            err.reason
+        );
+        // Discriminating: this is NOT the unreachable case, which skips the
+        // rollback. Asserting the positive alone would pass on either routing.
+        assert!(
+            !err.reason.contains("did not come back"),
+            "reason: {}",
+            err.reason
+        );
+        assert!(
+            handle.commands().iter().any(|c| c.contains("--oldpackage")),
+            "a reachable host on an inactive snapshot must be rolled back: {:?}",
+            handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rolls_back_when_the_reboot_was_never_dispatched() {
+        // The subtlest of the three: the dispatch fails, which leaves the SSH
+        // session live, so the reconnect that follows returns Ok immediately.
+        // Before the dispatch result was captured this read as a clean reboot.
+        let (t, handle) = slmicro_reboot_failure("h1", RebootFault::Undispatched);
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        let err = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("an undispatched reboot must not report success");
+        assert!(
+            err.reason.contains("never received the reboot"),
+            "reason: {}",
+            err.reason
+        );
+        assert!(
+            handle.commands().iter().any(|c| c.contains("--oldpackage")),
+            "a host that never got the reboot is still up and must be rolled back: {:?}",
             handle.commands()
         );
     }
