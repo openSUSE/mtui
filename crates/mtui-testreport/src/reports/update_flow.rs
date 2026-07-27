@@ -91,6 +91,7 @@ where
         debug!("perform_update: no RRID loaded; nothing to update");
         return Ok(());
     };
+    let id = rrid.to_string();
     let maintenance_id = rrid.maintenance_id.clone();
     let review_id = rrid.review_id.to_string();
     let packages = report.get_package_list();
@@ -100,6 +101,7 @@ where
         &packages,
         &maintenance_id,
         &review_id,
+        Some(&id),
         noprepare,
         newpackage,
         diagnostics,
@@ -150,7 +152,6 @@ where
             warn!("Error while updating. Rolling back changes");
             let pkgs = report.get_package_list();
             let id = report.base().rrid.as_ref().map(ToString::to_string);
-            add_op_history(targets, "downgrade", id.as_deref(), &pkgs).await;
             // Suspend cancellation for the rollback. The update has already
             // been applied, so this recovery is what prevents a half-applied
             // state; letting the downgrade's own per-package checkpoint see a
@@ -159,7 +160,7 @@ where
             let token = targets.suspend_cancellation();
             // Rollback is best-effort; a failed downgrade must never bury the
             // original update error, so its result is logged, not returned.
-            if let Err(de) = perform_downgrade(targets, report, &pkgs).await {
+            if let Err(de) = perform_downgrade(targets, report, &pkgs, id.as_deref()).await {
                 warn!(error = %de, "rollback downgrade failed");
             }
             targets.set_cancel_token(token);
@@ -429,6 +430,10 @@ async fn perform_operation(
         Ok(report) => report,
     };
 
+    // The template has now dispatched a command on every host, whatever the
+    // verdict: record the history row here, not before the run started.
+    add_op_history(targets, op, None, packages).await;
+
     // A host whose post-run check failed, and any transactional host that
     // rebooted and never reconnected, both fail the operation by name. A
     // failed check already excluded its host from the reboot map (see
@@ -686,10 +691,14 @@ fn build_prepare_map(
 }
 
 /// Rolls `packages` back to the pre-update version on every host.
+///
+/// `id` is the RRID string recorded in the remote history line once the
+/// downgrade has dispatched a command (`None` when no RRID is available).
 pub async fn perform_downgrade(
     targets: &mut HostsGroup,
     report: &dyn SetRepo,
     packages: &[String],
+    id: Option<&str>,
 ) -> Result<(), UpdateError> {
     // Nothing to downgrade: return before locking or touching repos.
     // The guard also keeps the probe template from rendering with an
@@ -712,7 +721,7 @@ pub async fn perform_downgrade(
         return Err(UpdateError::reason_only(e.to_string()));
     }
 
-    let result = downgrade_body(targets, &registry, report, packages, reboot).await;
+    let result = downgrade_body(targets, &registry, report, packages, reboot, id).await;
     targets.unlock().await;
     result
 }
@@ -724,6 +733,7 @@ async fn downgrade_body(
     report: &dyn SetRepo,
     packages: &[String],
     reboot: BTreeMap<String, String>,
+    id: Option<&str>,
 ) -> Result<(), UpdateError> {
     targets.fanout_set_repo(RepoOp::Remove, report).await;
 
@@ -916,6 +926,10 @@ async fn downgrade_body(
         .collect();
     failures.extend(reboot_transactional(targets, healthy_reboot).await);
 
+    // The downgrade commands have now dispatched, whatever the verdict:
+    // record the history row here, not before the run started.
+    add_op_history(targets, "downgrade", id, packages).await;
+
     let not_downgraded = downgrade_verdict(targets).await;
 
     // A per-host check failure aborts first (matches the pre-#336 aggregation).
@@ -1063,11 +1077,14 @@ fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
 /// Runs the full update: prepare, patch, check, reboot, and repo cleanup.
 ///
 /// `packages` is the report's package list; `maintenance_id`/`review_id` build
-/// the `$repa` selector. `noprepare` skips the initial prepare; `newpackage`
-/// runs a testing prepare after the update. `prepare` is the closure the caller
-/// uses to run [`perform_prepare`] (the report drives it so this module does not
-/// need to know the report type). `diagnostics` collects the update check's
-/// recognised-but-non-fatal output sections for the command layer to render.
+/// the `$repa` selector. `id` is the RRID string recorded in the remote
+/// history line once the update has dispatched a command (`None` when no RRID
+/// is available, e.g. a direct call with no report). `noprepare` skips the
+/// initial prepare; `newpackage` runs a testing prepare after the update.
+/// `prepare` is the closure the caller uses to run [`perform_prepare`] (the
+/// report drives it so this module does not need to know the report type).
+/// `diagnostics` collects the update check's recognised-but-non-fatal output
+/// sections for the command layer to render.
 // Plain positional args plus the diagnostic sink threaded from the
 // display-owning command layer; grouping them into a struct would only
 // obscure the call site for no real gain.
@@ -1078,6 +1095,7 @@ pub async fn perform_update(
     packages: &[String],
     maintenance_id: &str,
     review_id: &str,
+    id: Option<&str>,
     noprepare: bool,
     newpackage: bool,
     diagnostics: &mut Vec<Diagnostic>,
@@ -1144,6 +1162,10 @@ pub async fn perform_update(
     // Two-phase: run + check + reboot under the lock (unlock always), then the
     // repo cleanup only on success.
     let update_result = update_run_phase(targets, &registry, commands, reboot, diagnostics).await;
+
+    // The updater command has now dispatched, whatever the verdict: record
+    // the history row here, not before the run started.
+    add_op_history(targets, "update", id, packages).await;
 
     if let Err(e) = update_result {
         // KEEP the test update repositories in place for retry/diagnosis.
@@ -1451,7 +1473,7 @@ mod tests {
     #[tokio::test]
     async fn perform_downgrade_surfaces_missing_downgrader() {
         let mut group = HostsGroup::new(vec![missing_doer_target("h1")], false);
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
         let err = res.expect_err("missing downgrader must surface as Err");
         assert!(
             err.reason.contains("missing downgrader"),
@@ -1627,6 +1649,118 @@ mod tests {
         assert!(handle.commands().is_empty());
     }
 
+    // --- history is written after the operation ran, not before -----------
+
+    const HISTORY_LOG: &str = "/var/log/mtui.log";
+
+    #[tokio::test]
+    async fn install_writes_no_history_when_no_doer_resolves() {
+        // A run that never starts (no installer doer for this host) must not
+        // record a history row: nothing happened on the host.
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("sle-studioonsite", "11", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("no installer doer resolves for this host");
+
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "a run that never started must leave no history row"
+        );
+    }
+
+    #[tokio::test]
+    async fn install_writes_history_when_the_command_failed() {
+        // The install command ran and failed; the host was touched, so the
+        // history row must still be written even though the command failed.
+        let (t, handle) = sles_target_with_exit("h1", "", 104);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a failed install command surfaces as Err");
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("a run that dispatched a command records history"),
+        )
+        .unwrap();
+        assert_eq!(contents.lines().count(), 1);
+        assert!(
+            contents.contains(":install:pkg-a"),
+            "history line: {contents:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn downgrade_rollback_still_records_history() {
+        // perform_update_with_rollback's best-effort rollback dispatches a
+        // real downgrade; it must record its own history row like a
+        // directly-invoked downgrade would.
+        let probe = {
+            let cmds = crate::update_workflow::actions::downgrade::downgrader("15", false).unwrap();
+            let vars: std::collections::HashMap<&str, &str> =
+                [("packages", "pkg-a")].into_iter().collect();
+            cmds.render_list_command(&vars).unwrap().unwrap()
+        };
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("zypper", "pkg-a = 1.0-1\n", "", 104, 0))
+            .with_response(
+                probe,
+                CommandLog::new("zypper", "pkg-a = 1.0-1\n", "", 0, 0),
+            );
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("the update check fails, triggering the rollback");
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("the rollback downgrade records its own history row"),
+        )
+        .unwrap();
+        let downgrade_lines: Vec<&str> = contents
+            .lines()
+            .filter(|l| l.contains(":downgrade:"))
+            .collect();
+        assert_eq!(
+            downgrade_lines.len(),
+            1,
+            "exactly one downgrade history row: {contents:?}"
+        );
+        assert!(
+            downgrade_lines[0].contains("SUSE:Maintenance:42:7"),
+            "the rollback's history row carries the RRID: {contents:?}"
+        );
+    }
+
     #[tokio::test]
     async fn perform_install_accepts_zyppers_informational_exit_codes() {
         // zypper exits 100-103/106 to mean "update needed", "reboot needed",
@@ -1721,6 +1855,7 @@ mod tests {
             &packages,
             "42",
             "7",
+            None,
             true,
             false,
             &mut Vec::new(),
@@ -1763,6 +1898,7 @@ mod tests {
             &["pkg-a".to_owned()],
             "42",
             "7",
+            None,
             true,
             false,
             &mut Vec::new(),
@@ -1801,7 +1937,7 @@ mod tests {
         let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
         assert!(res.is_ok(), "a clean downgrade returns Ok: {res:?}");
 
         let cmds = handle.commands();
@@ -1819,7 +1955,7 @@ mod tests {
         let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &[]).await;
+        let res = perform_downgrade(&mut group, &NoopRepo, &[], None).await;
         assert!(res.is_ok(), "empty list is a no-op Ok: {res:?}");
         assert!(
             handle.commands().is_empty(),
@@ -1835,7 +1971,7 @@ mod tests {
         let (t, handle) = sles_target_with_exit("h1", "", -1);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
         let err = res.expect_err("a dead probe must abort");
         assert_eq!(err.reason, "package version probe failed");
         assert_eq!(err.host.as_deref(), Some("h1"));
@@ -1855,7 +1991,7 @@ mod tests {
         let (t2, h2) = sles_target_with_exit("h2", "", -1);
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
-        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()]).await;
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
         let err = res.expect_err("a partial dead probe still fails the command");
         assert_eq!(err.reason, "package version probe failed");
         assert_eq!(err.host.as_deref(), Some("h2"));
@@ -2040,7 +2176,7 @@ mod tests {
         let (t, _handle) = slmicro_target_failing_reconnect("h1");
         let mut group = HostsGroup::new(vec![t], false);
 
-        let err = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()])
+        let err = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None)
             .await
             .expect_err("a lost transactional host must not report success");
         assert!(
@@ -2092,6 +2228,7 @@ mod tests {
             &packages,
             "42",
             "7",
+            None,
             true,
             false,
             &mut Vec::new(),
@@ -2129,6 +2266,7 @@ mod tests {
             &packages,
             "42",
             "7",
+            None,
             true,
             false,
             &mut Vec::new(),
@@ -2166,6 +2304,7 @@ mod tests {
             &packages,
             "42",
             "7",
+            None,
             true,
             false,
             &mut Vec::new(),
@@ -2253,6 +2392,7 @@ mod tests {
             &packages,
             "42",
             "7",
+            None,
             true,
             false,
             &mut Vec::new(),
@@ -2283,6 +2423,7 @@ mod tests {
             &packages,
             "42",
             "7",
+            None,
             false,
             false,
             &mut Vec::new(),
@@ -2308,6 +2449,7 @@ mod tests {
             &mut group,
             &NoopRepo,
             &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            None,
         )
         .await;
         assert!(res.is_ok(), "a clean downgrade returns Ok: {res:?}");
@@ -2405,7 +2547,7 @@ mod tests {
         let report = crate::reports::PiReport::new(Config::default());
         let packages = vec!["pkg-a".to_owned(), "pkg-b".to_owned()];
 
-        let err = perform_downgrade(&mut group, &report, &packages)
+        let err = perform_downgrade(&mut group, &report, &packages, None)
             .await
             .expect_err("a cancelled downgrade reports an error");
 

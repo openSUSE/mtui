@@ -110,7 +110,6 @@ impl TestReport for ObsReport {
         targets: &mut HostsGroup,
         packages: &[String],
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::add_op_history(targets, "install", None, packages).await;
         update_flow::perform_install(targets, packages).await
     }
 
@@ -119,7 +118,6 @@ impl TestReport for ObsReport {
         targets: &mut HostsGroup,
         packages: &[String],
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        update_flow::add_op_history(targets, "uninstall", None, packages).await;
         update_flow::perform_uninstall(targets, packages).await
     }
 
@@ -140,8 +138,7 @@ impl TestReport for ObsReport {
         packages: &[String],
     ) -> Result<(), crate::update_workflow::UpdateError> {
         let id = self.rrid().map(ToString::to_string);
-        update_flow::add_op_history(targets, "downgrade", id.as_deref(), packages).await;
-        update_flow::perform_downgrade(targets, self, packages).await
+        update_flow::perform_downgrade(targets, self, packages, id.as_deref()).await
     }
 
     async fn perform_update(
@@ -151,9 +148,6 @@ impl TestReport for ObsReport {
         newpackage: bool,
         diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
-        let id = self.rrid().map(ToString::to_string);
-        let packages = self.get_package_list();
-        update_flow::add_op_history(targets, "update", id.as_deref(), &packages).await;
         update_flow::perform_update_with_rollback(self, targets, noprepare, newpackage, diagnostics)
             .await
     }
