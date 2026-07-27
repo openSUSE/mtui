@@ -27,7 +27,8 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed}
 /// failure: the zypper update template ends with the same repo-cleanup loop
 /// that masks the patch status on `slmicro` (see [`transactional_update`]), so
 /// the code reaching here is not the patch's either. It is judged on the
-/// markers plus the two exit codes zypper is known to surface.
+/// markers, the `-1` never-ran sentinel, and the two exit codes zypper is
+/// known to surface.
 fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     not_run(args)?;
     if args.stdin.contains("zypper") && args.exitcode == 104 {
@@ -73,28 +74,38 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 
 /// The yum update check.
 ///
-/// Unlike [`transactional_update`], this key *may* be judged on its exit code:
-/// the `YUM` update template's last line **is** `yum -y update $packages`, so
-/// the recorded status is genuinely the updater's. `yum` has no informational
-/// non-zero success code for `update` (`100` is `check-update`-only), so any
-/// non-zero status is a real failure.
+/// Deliberately gates **only** on the [`not_run`] sentinel. That is a narrow
+/// verdict, and narrow is the point: it is the part that can be justified
+/// without guessing, on a key whose failures route the **group-wide** rollback
+/// downgrade.
 ///
-/// A recognised marker still wins over the generic verdict, so a locked stack
-/// or an RPM error keeps its specific reason.
+/// Neither of the other two signals survives scrutiny here:
+///
+/// * **The exit code.** `("YUM", false)` is not one package manager —
+///   `System::get_release` maps *every* `rhel` version to this key, and on
+///   RHEL 8/9 `yum` is `dnf`, whose handling of a package spec matching
+///   nothing installed differs from yum 3's. mtui hands the updater the
+///   update's whole package list while a refhost routinely carries only a
+///   subset (the reason `prepare --installed-only` exists), so a bare `!= 0`
+///   rule risks failing a host that upgraded everything it had.
+/// * **The stdout/stderr markers.** [`markers`] is written for the zypper
+///   transcript; three of its four strings are zypper-only and cannot appear
+///   here. The fourth, `Error:` in stderr, *can* — but the YUM update template
+///   is three commands in one remote `exec`, so `lasterr()` also carries
+///   `yum repolist`'s output. An unreachable repository or a GPG complaint
+///   there would fail an update whose patch step succeeded.
+///
+/// Settling either would take observed `yum`/`dnf` output from a real RHEL
+/// refhost rather than inference, so the check claims only what it can prove:
+/// a command that never ran is not a successful update.
 ///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "update command timed out or
-/// failed to run", one of [`markers`]' reasons, or "update command failed" for
-/// an unrecognised non-zero exit.
+/// failed to run".
 fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     not_run(args)?;
-    let diagnostics = markers(args)?;
-    if args.exitcode != 0 {
-        log_failed(args);
-        return Err(UpdateError::new("update command failed", args.hostname));
-    }
-    Ok(diagnostics)
+    Ok(Vec::new())
 }
 
 /// Raises when the command never produced a real exit status.
@@ -234,8 +245,10 @@ mod tests {
     }
 
     #[test]
-    fn non_zypper_104_does_not_trip_lock_branch() {
-        // 104 only means "locked" when the command was a zypper invocation.
+    fn non_zypper_104_is_not_package_not_found() {
+        // 104 only means "package not found" when the command was a zypper
+        // invocation. (The old name said "lock branch"; there is no such
+        // branch on 104 — the lock verdict comes from the stderr markers.)
         assert!(zypper(args("yum update", "", "", 104)).is_ok());
     }
 
@@ -394,26 +407,30 @@ mod tests {
     }
 
     #[test]
-    fn yum_is_judged_on_its_exit_code() {
-        // The YUM template's last line *is* `yum -y update`, so unlike
-        // slmicro the recorded status is genuinely the updater's.
-        let err = yum(args("yum -y update pkg-a", "", "", 1)).unwrap_err();
-        assert_eq!(err.reason, "update command failed");
-        assert!(yum(args("yum -y update pkg-a", "all good", "", 0)).is_ok());
-    }
+    fn yum_judges_only_whether_the_command_ran() {
+        // The narrow verdict is deliberate — see `yum`'s doc. Both of these
+        // would fail a host that updated fine:
+        //
+        // - a bare `!= 0`: on RHEL 8/9 `yum` is `dnf`, and mtui passes the
+        //   update's whole package list to a host that carries only a subset;
+        // - the `Error:` marker: the YUM template runs `yum repolist` in the
+        //   same `exec`, so an unreachable repo lands in the same stderr.
+        //
+        // Both would then route the group-wide rollback downgrade.
+        assert!(yum(args("yum -y update pkg-a pkg-b", "Upgraded: pkg-a", "", 1)).is_ok());
+        assert!(
+            yum(args(
+                "yum -y update pkg-a",
+                "",
+                "Error: Cannot retrieve repository metadata for repo 'x'",
+                0,
+            ))
+            .is_ok()
+        );
 
-    #[test]
-    fn yum_prefers_a_recognised_marker_over_the_generic_verdict() {
-        // A non-zero exit *and* a known marker: the specific reason wins, so
-        // the operator is told the stack is locked rather than just "failed".
-        let err = yum(args(
-            "yum -y update pkg-a",
-            "",
-            "System management is locked",
-            1,
-        ))
-        .unwrap_err();
-        assert_eq!(err.reason, "update stack locked");
+        // What it does catch: the command never ran to completion.
+        let err = yum(args("yum -y update pkg-a", "", "", -1)).unwrap_err();
+        assert_eq!(err.reason, "update command timed out or failed to run");
     }
 
     #[test]

@@ -342,10 +342,15 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
                     Err(e) => Err(e.reason),
                 }
             }
-            // No check table for this key (`slmicro`, `YUM`): fall back to the
-            // exit code alone, exactly as `install_verdict` used to. Not "any
-            // stderr is a failure" — `transactional-update` and `yum` both
-            // write progress and warnings to stderr on a successful run.
+            // No *install/uninstall* check table for this key (`slmicro`,
+            // `YUM`): fall back to the exit code alone, exactly as
+            // `install_verdict` used to. Not "any stderr is a failure" —
+            // `transactional-update` and `yum` both write progress and
+            // warnings to stderr on a successful run.
+            //
+            // Only this adapter is meant: `update` does now have checks for
+            // both keys, but it resolves them through `CheckProvider`, not
+            // here.
             None if a.exitcode != 0 => Err(format!("{op} command failed")),
             None => Ok(()),
         })

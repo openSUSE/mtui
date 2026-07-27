@@ -1024,6 +1024,10 @@ impl Connection for MockConnection {
     }
 
     async fn sftp_append(&mut self, path: &Path, data: &[u8]) -> Result<()> {
+        // Record the attempt before anything can fail, so the op log keeps
+        // meaning "an append was tried" even when nothing is persisted — the
+        // oracle `add_history_swallows_append_failure` relies on.
+        self.record_sftp(MockSftpOp::Append(path.to_path_buf()));
         // Reconnect at entry if inactive, mirroring `sftp_session` and the ssh
         // impl (whose `sftp()` does exactly this). Without it the mock accepted
         // an append on a host that had gone away — so a host lost to its reboot
@@ -1032,7 +1036,6 @@ impl Connection for MockConnection {
         if !self.active {
             self.reconnect(0, false).await?;
         }
-        self.record_sftp(MockSftpOp::Append(path.to_path_buf()));
         if self.sftp_append_errors.contains(path) {
             return Err(HostError::Sftp {
                 host: self.hostname.clone(),
@@ -1400,6 +1403,49 @@ mod tests {
                 MockSftpOp::Append(PathBuf::from("/log")),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn sftp_append_on_a_dead_link_reconnects_first() {
+        // Mirrors `SshConnection::sftp()`, which reconnects when the link is
+        // inactive. Without this the mock accepts an append on a host that has
+        // gone away — which silently makes the "a host lost to its reboot
+        // still gets its history row" tests in `mtui-testreport` vacuous: they
+        // would pass with the write on either side of the reboot. This test
+        // exists so removing that guard fails *here*, visibly, rather than
+        // quietly disarming tests in another crate.
+        let mut conn = MockConnection::new("h1").failing_reconnect();
+        conn.fire_and_forget("systemctl reboot")
+            .await
+            .expect("dispatch succeeds and tears the link down");
+        assert!(!conn.is_active(), "the reboot dispatch closes the link");
+
+        let err = conn
+            .sftp_append(Path::new("/log"), b"x\n")
+            .await
+            .expect_err("an append on a dead link must not silently succeed");
+        assert!(matches!(err, HostError::ReconnectFailed { .. }), "{err:?}");
+        assert_eq!(conn.reconnect_count(), 1, "it must have tried to reconnect");
+        assert!(
+            conn.file_contents("/log").is_none(),
+            "nothing may be persisted through a dead link"
+        );
+        // The attempt is still recorded, so an "it tried" oracle stays honest.
+        assert_eq!(conn.sftp_ops(), [MockSftpOp::Append(PathBuf::from("/log"))]);
+    }
+
+    #[tokio::test]
+    async fn sftp_append_on_a_dead_link_succeeds_when_the_reconnect_does() {
+        // The complement: a link that comes back must not lose the write.
+        let mut conn = MockConnection::new("h1");
+        conn.fire_and_forget("systemctl reboot")
+            .await
+            .expect("dispatch ok");
+        conn.sftp_append(Path::new("/log"), b"x\n")
+            .await
+            .expect("a recoverable link still appends");
+        assert_eq!(conn.file_contents("/log").as_deref(), Some(&b"x\n"[..]));
+        assert!(conn.is_active(), "the reconnect reactivated the link");
     }
 
     #[tokio::test]
