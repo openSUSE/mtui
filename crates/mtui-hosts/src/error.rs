@@ -63,6 +63,36 @@ pub enum HostError {
         host: String,
     },
 
+    /// A reboot command could not be handed to the host at all.
+    ///
+    /// Distinct from [`ReconnectFailed`](Self::ReconnectFailed) because the
+    /// host is still **reachable**: `Connection::fire_and_forget` tears the
+    /// local link down only after the channel open *and* `exec` both succeed,
+    /// and `Connection::reconnect` returns early while the session is still
+    /// active. A failed dispatch therefore leaves a live session behind and the
+    /// reconnect that follows succeeds trivially — which is exactly how this
+    /// used to read as a successful reboot.
+    #[error("failed to dispatch the reboot to {host}: {reason}")]
+    RebootNotDispatched {
+        /// The host the reboot never reached.
+        host: String,
+        /// What went wrong, rendered from the underlying transport error.
+        reason: String,
+    },
+
+    /// The host answered after its reboot with an unchanged boot id.
+    ///
+    /// `/proc/sys/kernel/random/boot_id` is regenerated on every boot, so an
+    /// unchanged value means the machine never went down — the reboot was
+    /// accepted and silently did nothing (a masked `rebootmgr`, a systemd
+    /// inhibitor, a polkit denial). On a transactional host that leaves the
+    /// new snapshot **un-activated** while the host stays up on the old one.
+    #[error("{host} did not reboot: its boot id is unchanged")]
+    RebootDidNotHappen {
+        /// The host that never went down.
+        host: String,
+    },
+
     /// A channel/transport-level SSH error occurred while running a command
     /// (channel open/exec failure, unexpected EOF, protocol error).
     #[error("transport error on {host}: {reason}")]

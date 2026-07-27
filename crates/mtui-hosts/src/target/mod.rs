@@ -54,7 +54,7 @@ pub(crate) use locks::POOL_LOCK_PATH;
 pub use locks::{Clock, LockRow, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock};
 pub use operation::{
     Check, CheckArgs, Doer, HostOutput, HostPlan, InstallOperation, Operation, OperationGroup,
-    OperationReport, PlanProvider, UninstallOperation,
+    OperationReport, PlanProvider, RebootFailure, RebootFailureCause, UninstallOperation,
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::parse_system;
@@ -576,14 +576,21 @@ impl Target {
     /// connection, so callers follow up with [`reconnect`](Self::reconnect). A
     /// no-op (logged) when the target is not connected; a dispatch error is
     /// logged, not propagated, since a link dropped by the reboot is expected.
-    async fn reboot(&mut self, command: &str) {
+    async fn reboot(&mut self, command: &str) -> Result<()> {
         let Some(conn) = self.connection.as_mut() else {
             tracing::error!(host = %self.hostname, "reboot on unconnected target");
-            return;
+            return Err(HostError::RebootNotDispatched {
+                host: self.hostname.clone(),
+                reason: "the target has no live connection".to_owned(),
+            });
         };
-        if let Err(e) = conn.fire_and_forget(command).await {
+        conn.fire_and_forget(command).await.map_err(|e| {
             tracing::error!(host = %self.hostname, error = %e, "failed to dispatch reboot");
-        }
+            HostError::RebootNotDispatched {
+                host: self.hostname.clone(),
+                reason: e.to_string(),
+            }
+        })
     }
 
     /// The post-reboot reconnect attempt budget (`[connection]
@@ -648,14 +655,19 @@ impl Target {
             tracing::debug!(host = %self.hostname, "close: not connected");
         }
 
+        // Session teardown: the dispatch result is deliberately discarded here.
+        // `close` has already released the locks and there is no reconnect to
+        // follow, so there is nothing left to verify or to repair — unlike the
+        // operation paths, where a lost reboot silently invalidates the verdict.
+        // `reboot` logs the failure at ERROR either way.
         match action {
             Some("reboot") => {
                 tracing::info!(host = %self.hostname, "rebooting");
-                self.reboot("reboot").await;
+                let _ = self.reboot("reboot").await;
             }
             Some("poweroff") => {
                 tracing::info!(host = %self.hostname, "powering off");
-                self.reboot("halt").await;
+                let _ = self.reboot("halt").await;
             }
             _ => {
                 tracing::info!(host = %self.hostname, "closing connection");
@@ -1817,15 +1829,48 @@ mod tests {
         let conn = MockConnection::new("h1");
         let handle = conn.clone();
         let mut t = enabled_with(conn);
-        t.reboot("systemctl reboot").await;
+        t.reboot("systemctl reboot").await.expect("dispatch ok");
         assert_eq!(handle.fired_commands(), vec!["systemctl reboot".to_owned()]);
     }
 
     #[tokio::test]
-    async fn reboot_on_unconnected_is_noop() {
+    async fn reboot_on_unconnected_target_is_reported() {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
-        // Must not panic; nothing to assert beyond the no-op completing.
-        t.reboot("systemctl reboot").await;
+        // A silent no-op here is what let an undispatched reboot read as a
+        // successful one: the following reconnect short-circuits on the still
+        // "active" session and returns Ok.
+        let err = t
+            .reboot("systemctl reboot")
+            .await
+            .expect_err("an unconnected target cannot be rebooted");
+        assert!(
+            matches!(&err, HostError::RebootNotDispatched { host, .. } if host == "h1"),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reboot_reports_a_dispatch_failure() {
+        let conn = MockConnection::new("h1").failing_fire_and_forget();
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        let err = t
+            .reboot("systemctl reboot")
+            .await
+            .expect_err("a failed dispatch must be reported");
+        // Not `ReconnectFailed`: the two are routed differently downstream,
+        // because this host is still up and therefore still repairable.
+        assert!(
+            matches!(&err, HostError::RebootNotDispatched { .. }),
+            "{err:?}"
+        );
+        // The mock deliberately leaves the session active on a failed dispatch,
+        // exactly as the real connection does — which is what made the
+        // following reconnect succeed and hide this.
+        assert!(
+            handle.is_active(),
+            "a failed dispatch must not close the link"
+        );
     }
 
     #[tokio::test]

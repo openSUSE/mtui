@@ -129,6 +129,7 @@ pub struct MockConnection {
     reconnects: Arc<Mutex<usize>>,
     /// When `true`, [`reconnect`](Connection::reconnect) fails.
     reconnect_fails: bool,
+    fire_and_forget_fails: bool,
     /// The `(retry, backoff)` args of the most recent
     /// [`reconnect`](Connection::reconnect) call, so a test can assert the
     /// caller passed the expected budget (e.g. the reboot lifecycle's
@@ -247,6 +248,7 @@ impl MockConnection {
             close_fails: false,
             reconnects: Arc::new(Mutex::new(0)),
             reconnect_fails: false,
+            fire_and_forget_fails: false,
             last_reconnect_args: Arc::new(Mutex::new(None)),
             fired: Arc::new(Mutex::new(Vec::new())),
             sftp_ops: Arc::new(Mutex::new(Vec::new())),
@@ -452,6 +454,22 @@ impl MockConnection {
     #[must_use]
     pub fn failing_reconnect(mut self) -> Self {
         self.reconnect_fails = true;
+        self
+    }
+
+    /// Scripts [`fire_and_forget`](Connection::fire_and_forget) to fail,
+    /// **without** tearing the link down.
+    ///
+    /// That combination is the point: the real
+    /// `SshConnection::fire_and_forget` closes the local link only as its last
+    /// statement, after the channel open and `exec` have both succeeded, so a
+    /// failed dispatch leaves the session active — and the reconnect that
+    /// follows returns `Ok(())` immediately off `is_active()`. A double that
+    /// closed the link here would make the reconnect do real work and hide the
+    /// very bug this reproduces.
+    #[must_use]
+    pub fn failing_fire_and_forget(mut self) -> Self {
+        self.fire_and_forget_fails = true;
         self
     }
 
@@ -840,6 +858,13 @@ impl Connection for MockConnection {
     }
 
     async fn fire_and_forget(&mut self, command: &str) -> Result<()> {
+        if self.fire_and_forget_fails {
+            // Deliberately leaves `active` set — see `failing_fire_and_forget`.
+            return Err(HostError::Transport {
+                host: self.hostname.clone(),
+                reason: "channel open failed".to_owned(),
+            });
+        }
         self.fired
             .lock()
             .expect("mock fired lock")

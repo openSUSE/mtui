@@ -199,7 +199,7 @@ pub trait OperationGroup: Send {
     /// Returns `(hostname, reason)` for every host that did not reconnect —
     /// a transactional host that rebooted and never came back must fail the
     /// operation, not report success on a host it lost.
-    async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<(String, String)>;
+    async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<RebootFailure>;
 
     /// Releases the shared operation lock.
     async fn unlock(&mut self);
@@ -212,14 +212,57 @@ pub trait OperationGroup: Send {
 /// `Err` from [`Operation::run`] keeps meaning "never started" (no plans, or a
 /// foreign lock); `Ok(report)` means it ran, and the two failure lists name any
 /// host that failed its check or was left unreachable by its reboot.
+#[must_use = "the report names the hosts that failed; dropping it silently \
+              reports a failed operation as a clean one"]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct OperationReport {
     /// `(hostname, reason)` for every host whose post-run [`Check`] failed.
     pub check_failures: Vec<(String, String)>,
-    /// `(hostname, reason)` for every transactional host that rebooted and did
-    /// not reconnect. A host whose check already failed is excluded — its
-    /// reboot was skipped, not attempted and lost.
-    pub reboot_failures: Vec<(String, String)>,
+    /// Every transactional host whose reboot did not demonstrably take effect.
+    /// A host whose check already failed is excluded — its reboot was skipped,
+    /// not attempted and lost.
+    pub reboot_failures: Vec<RebootFailure>,
+}
+
+/// Why a transactional host's post-operation reboot did not take effect.
+///
+/// The distinction is load-bearing rather than cosmetic: it decides whether the
+/// host can still be repaired. Two of the three leave it **up**, running the
+/// old snapshot while the rest of the group moved on — which is the
+/// split-brain a rollback exists to undo. The third leaves nothing to talk to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebootFailureCause {
+    /// The reboot was dispatched, the host went away and never came back.
+    /// **Unreachable** — a rollback cannot run on it.
+    Unreachable,
+    /// The reboot command never reached the host. It is **still up**, on the
+    /// old snapshot.
+    NotDispatched,
+    /// The host answered with an unchanged boot id: it never went down. It is
+    /// **still up**, with the new snapshot inert.
+    NotRebooted,
+}
+
+impl RebootFailureCause {
+    /// Whether the host is still reachable, and so still repairable.
+    #[must_use]
+    pub fn host_still_reachable(self) -> bool {
+        match self {
+            Self::NotDispatched | Self::NotRebooted => true,
+            Self::Unreachable => false,
+        }
+    }
+}
+
+/// One transactional host whose reboot did not take effect, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebootFailure {
+    /// The host that did not come through its reboot.
+    pub host: String,
+    /// Which of the three ways it failed — see [`RebootFailureCause`].
+    pub cause: RebootFailureCause,
+    /// The rendered underlying error, for the operator-facing message.
+    pub reason: String,
 }
 
 /// The install/uninstall template method.
@@ -537,7 +580,7 @@ mod tests {
         fail_update_lock: bool,
         /// What `reboot` should report as failed, modelling a transactional
         /// host that rebooted and did not reconnect.
-        reboot_failures: Vec<(String, String)>,
+        reboot_failures: Vec<RebootFailure>,
     }
 
     impl MockGroup {
@@ -569,7 +612,7 @@ mod tests {
 
         /// Scripts `reboot` to report `failures`, modelling a transactional
         /// host whose post-reboot reconnect never came back.
-        fn with_reboot_failures(mut self, failures: Vec<(String, String)>) -> Self {
+        fn with_reboot_failures(mut self, failures: Vec<RebootFailure>) -> Self {
             self.reboot_failures = failures;
             self
         }
@@ -610,7 +653,7 @@ mod tests {
             Some(HostOutput::default())
         }
 
-        async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<(String, String)> {
+        async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<RebootFailure> {
             self.events.lock().unwrap().push(Event::Reboot(reboot));
             self.reboot_failures.clone()
         }
@@ -784,7 +827,8 @@ mod tests {
         let mut group = MockGroup::new(Ok(plans));
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
-        op.run(&mut group).await.expect("a clean run succeeds");
+        // This test asserts on the recorded events, not the report.
+        let _ = op.run(&mut group).await.expect("a clean run succeeds");
 
         let events = group.events();
         assert_eq!(events.first(), Some(&Event::UpdateLock));
@@ -837,7 +881,8 @@ mod tests {
         let mut group = MockGroup::new(Ok(plans));
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
-        op.run(&mut group).await.expect("a clean run succeeds");
+        // This test asserts on the recorded events, not the report.
+        let _ = op.run(&mut group).await.expect("a clean run succeeds");
 
         let checks: Vec<Event> = sink.lock().unwrap().clone();
         assert_eq!(
@@ -865,7 +910,7 @@ mod tests {
         )];
         let mut group = MockGroup::with_event_log(Ok(plans), log);
 
-        InstallOperation::new(strs(&["pkg-a"]))
+        let _ = InstallOperation::new(strs(&["pkg-a"]))
             .run(&mut group)
             .await
             .expect("a clean run succeeds");
@@ -894,8 +939,11 @@ mod tests {
             Doer::new("in $packages", "systemctl reboot"),
             sink,
         )];
-        let mut group = MockGroup::new(Ok(plans))
-            .with_reboot_failures(vec![("h1".to_owned(), "reconnect failed".to_owned())]);
+        let mut group = MockGroup::new(Ok(plans)).with_reboot_failures(vec![RebootFailure {
+            host: "h1".to_owned(),
+            cause: RebootFailureCause::Unreachable,
+            reason: "reconnect failed".to_owned(),
+        }]);
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
         let report = op
@@ -905,7 +953,11 @@ mod tests {
 
         assert_eq!(
             report.reboot_failures,
-            vec![("h1".to_owned(), "reconnect failed".to_owned())]
+            vec![RebootFailure {
+                host: "h1".to_owned(),
+                cause: RebootFailureCause::Unreachable,
+                reason: "reconnect failed".to_owned(),
+            }]
         );
         // Unlock must still be the last event: a lost host does not skip
         // releasing the operation lock.
@@ -1010,7 +1062,7 @@ mod tests {
         )];
         let mut group = MockGroup::new(Ok(plans));
 
-        UninstallOperation::new(strs(&["pkg"]))
+        let _ = UninstallOperation::new(strs(&["pkg"]))
             .run(&mut group)
             .await
             .expect("a clean run succeeds");
