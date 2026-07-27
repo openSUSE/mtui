@@ -1,5 +1,7 @@
 # mtui
 
+<img src="docs/assets/logo.svg" align="right" width="130" alt="mtui logo">
+
 An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
 **U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
 a request by RRID, install and test it on reference hosts over SSH in parallel,
