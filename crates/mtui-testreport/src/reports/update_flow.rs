@@ -21,7 +21,7 @@
 //! `PlanProvider` adapter uses — keyed on `(system.get_release(),
 //! transactional)`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use mtui_hosts::{
@@ -651,10 +651,44 @@ async fn prepare_body(
     // prepare check's own failures. The prepare check emits no diagnostics; the
     // sink is discarded.
     let mut failures = host_command_failures(targets, "prepare command failed");
-    for e in run_checks(targets, registry, Role::Prepare, &mut Vec::new()) {
+    let check_failures = run_checks(targets, registry, Role::Prepare, &mut Vec::new());
+
+    // A host whose prepare failed must not reboot into the failed transaction,
+    // mirroring the install/uninstall template's per-host gate: activating the
+    // snapshot would hide the failure behind a healthy-looking boot, while a
+    // healthy host in the same group still reboots so its own snapshot
+    // activates. The skip set is built from the check verdicts and non-zero
+    // exit codes only — never from the stderr rule `host_command_failures`
+    // also applies, because `transactional-update` writes progress to stderr
+    // on a *successful* run and skipping such a host's reboot would leave its
+    // healthy staged snapshot silently inert. Unlike update's multi-line
+    // script, the prepare templates are single commands, so the recorded exit
+    // code is genuinely the prepare command's own. (In the per-package
+    // `installed_only` loop the snapshot reflects the last package that ran —
+    // the same window `host_command_failures` reads.)
+    let mut inert: BTreeSet<String> = check_failures
+        .iter()
+        .filter_map(|e| e.host.clone())
+        .collect();
+    for target in targets.targets() {
+        if target.lastexit().is_some_and(|c| c != 0) {
+            inert.insert(target.hostname().to_owned());
+        }
+    }
+    for e in check_failures {
         error!(error = %e, "prepare check failed");
         failures.push(e);
     }
+    let reboot: BTreeMap<String, String> = reboot
+        .into_iter()
+        .filter(|(host, _)| {
+            let ok = !inert.contains(host);
+            if !ok {
+                warn!(host = %host, "prepare failed; skipping reboot");
+            }
+            ok
+        })
+        .collect();
     failures.extend(
         reboot_transactional(targets, reboot)
             .await
@@ -932,6 +966,7 @@ async fn downgrade_body(
             combined.insert(hn.clone(), rendered);
         }
     }
+    let mut failed_downgrade: BTreeSet<String> = BTreeSet::new();
     if !combined.is_empty() {
         targets.run(Command::PerHost(combined.clone())).await;
         // Same scoping as the per-package loop: only check the transactional
@@ -940,16 +975,42 @@ async fn downgrade_body(
             let host = e.host.as_deref().unwrap_or("");
             if combined.contains_key(host) && transactional_hosts.contains(host) {
                 error!(error = %e, "downgrade check failed");
+                failed_downgrade.insert(host.to_owned());
                 failures.push(e);
+            }
+        }
+        // The transactional check only gates "timed out or failed to run"; the
+        // downgrade template is a single command, so a non-zero exit is
+        // genuinely the downgrade's own status and the host must not reboot
+        // into the failed transaction. It is also pushed as a failure — a
+        // skipped reboot behind an `Ok` would be a quiet no-op — but only when
+        // the check did not already report this host (`insert` is `false` for
+        // the `-1` case the check covers). (Scoped to `combined`: hosts
+        // outside it carry a stale record.)
+        for hostname in combined.keys() {
+            let exit = targets.get(hostname).and_then(mtui_hosts::Target::lastexit);
+            if exit.is_some_and(|c| c != 0) && failed_downgrade.insert(hostname.clone()) {
+                failures.push(UpdateError::new(
+                    "downgrade command failed",
+                    hostname.clone(),
+                ));
             }
         }
     }
 
     // Reboot the healthy transactional hosts first (their staged snapshots must
     // still activate), then surface the dead probes as the command's failure.
+    // A host whose combined downgrade failed is skipped too: rebooting it would
+    // activate the snapshot of the failed transaction.
     let healthy_reboot: BTreeMap<String, String> = reboot
         .into_iter()
-        .filter(|(h, _)| !dead_probes.contains(h))
+        .filter(|(h, _)| {
+            if failed_downgrade.contains(h) {
+                warn!(host = %h, "downgrade failed; skipping reboot");
+                return false;
+            }
+            !dead_probes.contains(h)
+        })
         .collect();
     failures.extend(
         reboot_transactional(targets, healthy_reboot)
@@ -2745,6 +2806,122 @@ mod tests {
             cmds.iter()
                 .any(|c| c.contains("pkg-a=1.0-1") && c.contains("pkg-b=2.0-1")),
             "expected a single combined transactional downgrade: {cmds:?}"
+        );
+        // And a clean combined downgrade still reboots: the gate must not
+        // withhold the reboot from a host whose transaction succeeded.
+        let fired = handle.fired_commands();
+        assert!(
+            fired.iter().any(|c| c.contains("systemctl reboot")),
+            "a clean transactional downgrade must still reboot: {fired:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_skips_the_reboot_of_a_host_whose_prepare_failed() {
+        // The per-host reboot gate (mirrors the install/uninstall template):
+        // h1's prepare command exits non-zero, h2's succeeds. h1 must not be
+        // rebooted into the failed transaction, while h2 — a healthy host in
+        // the same group — still must, or its staged snapshot stays inert.
+        let (t1, h1) = slmicro_target("h1", "", 1);
+        let (t2, h2) = slmicro_target("h2", "", 0);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("a failed prepare must not report success");
+        assert!(err.to_string().contains("h1"), "err: {err}");
+
+        let fired1 = h1.fired_commands();
+        assert!(
+            !fired1.iter().any(|c| c.contains("systemctl reboot")),
+            "h1 failed its prepare and must not be rebooted: {fired1:?}"
+        );
+        let fired2 = h2.fired_commands();
+        assert!(
+            fired2.iter().any(|c| c.contains("systemctl reboot")),
+            "healthy h2 must still reboot so its snapshot activates: {fired2:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_still_reboots_a_host_that_only_wrote_to_stderr() {
+        // `transactional-update` writes progress and warnings to stderr on a
+        // *successful* run, so stderr alone must not gate the reboot — the
+        // staged snapshot is healthy and leaving it inert would reintroduce
+        // the quiet-no-op bug from the other direction. (The stderr rule still
+        // fails the verdict via `host_command_failures`; that is pre-existing
+        // and separate from the action taken here.)
+        let (t, handle) = slmicro_target_with_stderr("h1", "1 issue found. see the log");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await;
+        assert!(res.is_err(), "the stderr verdict is unchanged: {res:?}");
+        let fired = handle.fired_commands();
+        assert!(
+            fired.iter().any(|c| c.contains("systemctl reboot")),
+            "a stderr-only host keeps its reboot: {fired:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_downgrade_skips_the_reboot_of_a_failed_transactional_downgrade() {
+        // The combined transactional downgrade exits non-zero — which the
+        // `("slmicro", true)` check deliberately does not gate (it catches
+        // only `-1`) — so this exercises the exit-code half of the gate: no
+        // reboot into the failed transaction, and the failure is reported
+        // rather than leaving a skipped reboot behind an `Ok`.
+        let combined_cmd = format!(
+            "transactional-update -n pkg in --force-resolution --oldpackage -y {}",
+            quote_args(&["pkg-a=1.0-1"])
+        );
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(
+                combined_cmd.clone(),
+                CommandLog::new(&combined_cmd, "", "", 1, 0),
+            )
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None)
+            .await
+            .expect_err("a failed combined downgrade must not report success");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(
+            err.reason.contains("downgrade command failed"),
+            "reason: {}",
+            err.reason
+        );
+
+        let fired = handle.fired_commands();
+        assert!(
+            !fired.iter().any(|c| c.contains("systemctl reboot")),
+            "a host whose downgrade failed must not be rebooted: {fired:?}"
         );
     }
 

@@ -87,6 +87,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   equivalent of the downgrade check's "timed out or failed to run" gate, so a
   patch that never completed left an empty transcript that matched none of the
   failure markers and passed.
+- `prepare` and `downgrade` no longer reboot a transactional host whose
+  package transaction failed. Both flows collected the failure and then
+  rebooted every transactional host anyway, activating the very snapshot the
+  failure came from. The gate is per-host, matching `install`/`uninstall`: a
+  healthy host in the same group still reboots so its staged snapshot
+  activates, and every skipped host is named in the log. A failed combined
+  transactional downgrade is now also reported as a per-host failure rather
+  than relying solely on the post-rollback version verdict.
 - A post-operation reboot whose SSH link had gone idle during the (multi-
   minute) package transaction now reconnects before dispatching, as ordinary
   commands already did. Without it the reboot failed to dispatch against a
