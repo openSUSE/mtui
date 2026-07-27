@@ -83,7 +83,7 @@ crates/
   mtui-hosts/        SSH/SFTP (russh), Target/HostsGroup, locks, arbiter   [async]
   mtui-datasources/  shared HTTP, refhosts resolve/search/verify, openQA/QEM/Gitea/native-OBS-QAM/oqa-search  [async]
   mtui-testreport/   TestReport lifecycle, metadata parsers, SVN/Gitea checkout, update workflow (actions/checks/export)
-  mtui-core/         Command trait + registry + Session + engine + wiring (composition root)
+  mtui-core/         Command trait + registry + Session + engine + dispatch
   mtui-cli/          reedline REPL + `mtui` binary
   mtui-mcp/          rmcp server + `mtui-mcp` binary
 fuzz/                cargo-fuzz harness over the untrusted-input parsers.
@@ -159,10 +159,19 @@ next actionable task before working on a subsystem.
 - **Session state.** Commands operate on a `Session` (config, `HostsGroup`
   targets, loaded `TestReport`/metadata, display) passed explicitly. No hidden
   globals.
-- **Composition root.** `mtui-core::wiring` injects the update-workflow
-  Doer/Check registries (in `mtui-testreport`) into the host `Target` dispatch
-  (in `mtui-hosts`) via traits, so `mtui-hosts` never depends on
-  `mtui-testreport`. Do not create crate cycles — add a trait and inject.
+- **Trait injection instead of crate cycles.** `mtui-hosts` drives the
+  install/uninstall template through the `PlanProvider` trait, declared in
+  `mtui-hosts` in terms of its own types; `mtui-testreport`'s `WorkflowRegistry`
+  implements it, so the doer/check tables reach the host dispatch without
+  `mtui-hosts` depending on `mtui-testreport`. Do not create crate cycles — add
+  a trait and inject.
+  **Inject at the point of use, not at construction.** `update_flow::
+  perform_install` / `perform_uninstall` install the provider immediately before
+  driving the template. `OperationGroup::plans` has exactly one consumer, so
+  there is exactly one place that cannot forget to wire it. An earlier design
+  injected at a composition root instead; nothing ever called it, every
+  `HostsGroup` was built without a provider, and `install` reported success
+  while running no command on any host for the whole life of the Rust port.
 - **Config.** **TOML** file `mtui.toml`, resolved highest-precedence first from
   `--config` → `$MTUI_CONF` → `$XDG_CONFIG_HOME/mtui/mtui.toml` → `~/.mtui.toml`
   → `/etc/mtui.toml`; the default set is merged **lowest-precedence first** so
@@ -298,7 +307,7 @@ shells out to `osc`/`osc-plugin-qam` — it talks to the OBS/IBS API natively (s
 the native OBS backend and `[obs]` config), reading credentials from `oscrc`.
 
 ## Further reading
-- `docs/src/architecture.md` — architecture map (crate layout, composition root,
+- `docs/src/architecture.md` — architecture map (crate layout, trait injection,
   contracts) and the rest of the mdBook under `docs/src/` (installation,
   configuration, developer, invocation, mcp).
 - `CONTRIBUTING.md` — changelog policy; `docs/src/developer.md` — dev workflow.
