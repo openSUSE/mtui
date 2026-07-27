@@ -43,6 +43,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   to do — a cancelled package loop names which packages were applied and which
   were not attempted. A genuine host failure always outranks the cancellation,
   so a broken host is never buried behind a bare "cancelled".
+- `install` and `uninstall` now observe cancellation too: MCP `job_cancel`
+  stops either one cleanly if it lands before the shared install/uninstall
+  template dispatches any command, reporting a cancellation rather than
+  running to completion. Previously they had no checkpoint of their own.
 
 - MCP `job_cancel` is now truthful and two-stage. Cancelling a running job
   first signals the new cooperative cancellation seam — today the dispatch
