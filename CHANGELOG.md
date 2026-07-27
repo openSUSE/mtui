@@ -86,6 +86,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `update` specifically reports the new `UpdateFailure::Reboot` and — since
   the host is unreachable — skips the rollback downgrade it runs for a check
   failure.
+- `install`/`uninstall`/`downgrade`/`update` now write their
+  `/var/log/mtui.log` history row *after* dispatching a command on the host,
+  not before. A run that never starts (no doer resolves, the host is held by
+  another tester, or it is cancelled at the entry gate) leaves no row at all,
+  where it previously left one recording work that never happened; a run
+  that dispatched a command and then failed still leaves exactly one row, now
+  timestamped at the end of the operation rather than the start. A run hard-
+  aborted mid-flight (MCP `job_cancel`'s post-grace abort) now leaves no row
+  where it previously left one recorded before the work started.
 - A `-t <host>` subset operation no longer silently resets the `[connection]
   max_parallel` fan-out bound to its built-in default: splitting the host group
   for a subset op carried only the workflow provider, dropping the configured
