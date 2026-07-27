@@ -882,8 +882,8 @@ impl Target {
     /// does not swallow a `parse_system` failure. (This differs from
     /// [`reload_system`](Target::reload_system), which degrades to the sentinel
     /// because the host is already a live group member there.) The
-    /// reboot/reconnect/operation lifecycle is bound at the composition root —
-    /// see the module docs.
+    /// reboot/reconnect/operation lifecycle is bound in
+    /// `hostgroup` — see the module docs.
     ///
     /// # Errors
     ///

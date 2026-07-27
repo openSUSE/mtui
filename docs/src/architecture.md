@@ -44,13 +44,23 @@ loaded templates/metadata, the display) passed into each call — there are no
 hidden globals. This is the Rust replacement for MTUI's `CommandPrompt`
 god-object.
 
-## Composition root and the no-cycles rule
+## Trait injection and the no-cycles rule
 
-`mtui-core`'s wiring injects the update-workflow doer/check registries (which live
-in `mtui-testreport`) into the host `Target` dispatch (in `mtui-hosts`) **via
-traits**, so `mtui-hosts` never has to depend on `mtui-testreport`. The rule when
-two lower crates need to cooperate: **define a trait and inject it at the
-composition root — never introduce a crate cycle.**
+The update-workflow doer/check registries live in `mtui-testreport`, but the
+install/uninstall template that needs them lives in `mtui-hosts` — the lower
+crate. `mtui-hosts` therefore declares a `PlanProvider` trait in terms of its own
+types, and `mtui-testreport`'s `WorkflowRegistry` implements it. The rule when
+two crates need to cooperate across that boundary: **define a trait in the lower
+crate and inject an implementation from the higher one — never introduce a crate
+cycle.**
+
+**Inject at the point of use.** `update_flow::perform_install` /
+`perform_uninstall` install the provider on the `HostsGroup` immediately before
+driving the template. `OperationGroup::plans` has exactly one consumer, so there
+is exactly one site that cannot forget. Injecting where the group is *built*
+looks tidier but is not equivalent: an earlier design that wired one central
+spot was never called at all, leaving `install` and `uninstall` running no
+command while still reporting success.
 
 ## Contracts
 
