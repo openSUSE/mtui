@@ -1530,6 +1530,10 @@ impl OperationGroup for HostsGroup {
         HostsGroup::run(self, Command::PerHost(map)).await;
     }
 
+    async fn add_history(&mut self, fields: &[String]) {
+        HostsGroup::add_history(self, fields).await;
+    }
+
     fn last_output(&self, hostname: &str) -> Option<super::operation::HostOutput> {
         let target = self.data.get(hostname)?;
         Some(super::operation::HostOutput {

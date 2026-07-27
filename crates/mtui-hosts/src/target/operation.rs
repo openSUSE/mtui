@@ -13,8 +13,8 @@
 //!    transactional-only reboot map (early-return on the configured
 //!    `missing_error`),
 //! 2. `group.update_lock()`,
-//! 3. in a fallible section: `group.run(commands)` → per-host `check(...)` →
-//!    `group.reboot(reboot)`,
+//! 3. in a fallible section: `group.run(commands)` → `group.add_history(...)`
+//!    → per-host `check(...)` → `group.reboot(reboot)`,
 //! 4. **always** `group.unlock()` afterwards.
 //!
 //! ## Scope: template + seams
@@ -187,6 +187,16 @@ pub trait OperationGroup: Send {
     /// Runs the per-host command map.
     async fn run(&mut self, commands: HostCommandMap);
 
+    /// Appends one colon-joined row to every enabled host's remote history
+    /// file.
+    ///
+    /// Called by [`Operation::run`] between the command fan-out and the reboot.
+    /// It is on the group seam rather than left to the caller because the
+    /// reboot happens inside the template: a caller writing the row after
+    /// `run` returns would lose it on exactly the transactional hosts that
+    /// never came back.
+    async fn add_history(&mut self, fields: &[String]);
+
     /// Reads back `hostname`'s post-run output, for the [`Check`] call.
     ///
     /// Returns `None` for a host outside the group (should not happen for a
@@ -277,6 +287,16 @@ pub trait Operation: Send + Sync {
     /// The doer/check dispatch role: `"installer"` or `"uninstaller"`.
     fn role(&self) -> &'static str;
 
+    /// The operation's label in the remote history file: `"install"` or
+    /// `"uninstall"`.
+    ///
+    /// Deliberately **not** derived from [`role`](Self::role): that returns the
+    /// doer-table key (`"installer"`), and `/var/log/mtui.log` is a parsed
+    /// interop contract whose readers match the command verb. A substring
+    /// check for `"uninstall"` would also match `"uninstaller"`, so the wrong
+    /// value here is one a naive assertion cannot catch.
+    fn history_label(&self) -> &'static str;
+
     /// The packages to interpolate into each host's command template.
     fn packages(&self) -> &[String];
 
@@ -354,6 +374,15 @@ pub trait Operation: Send + Sync {
         // through to the unlock rather than returning early.
         group.run(commands).await;
 
+        // The command has now dispatched on every host, whatever the verdict:
+        // record the history row here — after the run started, but *before* the
+        // reboot. A transactional host that never comes back cannot be written
+        // to afterwards, and the row would be lost on exactly the host whose
+        // state an operator most needs to reconstruct.
+        group
+            .add_history(&[self.history_label().to_owned(), self.packages().join(" ")])
+            .await;
+
         let mut check_failures: Vec<(String, String)> = Vec::new();
         for plan in &mut plans {
             let output = group.last_output(&plan.hostname).unwrap_or_default();
@@ -415,6 +444,10 @@ impl Operation for InstallOperation {
         "installer"
     }
 
+    fn history_label(&self) -> &'static str {
+        "install"
+    }
+
     fn packages(&self) -> &[String] {
         &self.packages
     }
@@ -448,6 +481,10 @@ impl UninstallOperation {
 impl Operation for UninstallOperation {
     fn role(&self) -> &'static str {
         "uninstaller"
+    }
+
+    fn history_label(&self) -> &'static str {
+        "uninstall"
     }
 
     fn packages(&self) -> &[String] {
@@ -562,6 +599,8 @@ mod tests {
     enum Event {
         UpdateLock,
         Run(Vec<(String, String)>),
+        /// A remote-history append, carrying the colon-joined fields.
+        AddHistory(Vec<String>),
         Reboot(Vec<(String, String)>),
         Unlock,
         /// A per-host check invocation, carrying the host it ran on.
@@ -646,6 +685,13 @@ mod tests {
 
         async fn run(&mut self, commands: HostCommandMap) {
             self.events.lock().unwrap().push(Event::Run(commands));
+        }
+
+        async fn add_history(&mut self, fields: &[String]) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(Event::AddHistory(fields.to_vec()));
         }
 
         fn last_output(&self, _hostname: &str) -> Option<HostOutput> {
@@ -917,16 +963,57 @@ mod tests {
             .expect("a clean run succeeds");
 
         let events = group.events();
-        // lock → run → check → reboot → unlock.
+        // lock → run → history → check → reboot → unlock.
         assert!(matches!(events[0], Event::UpdateLock));
         assert!(matches!(events[1], Event::Run(_)));
-        assert!(matches!(events[2], Event::Check(..)));
-        assert!(matches!(events[3], Event::Reboot(_)));
-        assert!(matches!(events[4], Event::Unlock));
+        assert!(matches!(events[2], Event::AddHistory(_)));
+        assert!(matches!(events[3], Event::Check(..)));
+        assert!(matches!(events[4], Event::Reboot(_)));
+        assert!(matches!(events[5], Event::Unlock));
+        // The history row must land *after* the command dispatched and
+        // *before* the reboot: written earlier it would claim work that never
+        // started, written later it is lost on a host that never comes back.
+        // Asserting the index alone would not say which side of the reboot it
+        // fell on, so pin both neighbours.
+        if let Event::AddHistory(fields) = &events[2] {
+            // The label is the command verb, not the doer-table role key
+            // (`installer`) — `/var/log/mtui.log` is parsed by other tools.
+            assert_eq!(fields, &vec!["install".to_owned(), "pkg-a".to_owned()]);
+        }
         // The transactional host contributed to the reboot map.
-        if let Event::Reboot(map) = &events[3] {
+        if let Event::Reboot(map) = &events[4] {
             assert_eq!(map, &vec![("h1".to_owned(), "systemctl reboot".to_owned())]);
         }
+    }
+
+    #[tokio::test]
+    async fn uninstall_history_label_is_the_verb_not_the_role_key() {
+        // `role()` returns "uninstaller"; the history label must be
+        // "uninstall". A `contains("uninstall")` assertion cannot tell the two
+        // apart — "uninstaller" contains "uninstall" — so compare exactly.
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![plan_with_recording_check(
+            "h1",
+            false,
+            Doer::new("rm $packages", "systemctl reboot"),
+            log.clone(),
+        )];
+        let mut group = MockGroup::with_event_log(Ok(plans), log);
+
+        let _ = UninstallOperation::new(strs(&["pkg-a"]))
+            .run(&mut group)
+            .await
+            .expect("a clean run succeeds");
+
+        let fields = group
+            .events()
+            .into_iter()
+            .find_map(|e| match e {
+                Event::AddHistory(f) => Some(f),
+                _ => None,
+            })
+            .expect("the uninstall must write a history row");
+        assert_eq!(fields[0], "uninstall");
     }
 
     // --- run(): a reboot failure is reported, not swallowed -----------------
