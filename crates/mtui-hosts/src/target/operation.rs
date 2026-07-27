@@ -96,16 +96,41 @@ impl Doer {
 
 /// The post-run *check* callable for one target.
 ///
-/// Invoked once per target as `check(hostname)`. Boxed so it is object-safe
-/// and can be produced per
-/// target by the doer/check registry seam.
-pub type Check = Box<dyn FnMut(CheckArgs<'_>) + Send>;
+/// Invoked once per target with that host's post-run output, and returns
+/// `Err(reason)` when it recognises a failure. Boxed so it is object-safe and
+/// can be produced per target by the doer/check registry seam.
+pub type Check = Box<dyn FnMut(CheckArgs<'_>) -> Result<(), String> + Send>;
 
 /// The argument tuple passed to a [`Check`], keeping the call site readable.
 #[derive(Debug, Clone, Copy)]
 pub struct CheckArgs<'a> {
     /// The host the command ran on.
     pub hostname: &'a str,
+    /// The command's stdout.
+    pub stdout: &'a str,
+    /// The command that was run.
+    pub stdin: &'a str,
+    /// The command's stderr.
+    pub stderr: &'a str,
+    /// The command's exit code.
+    pub exitcode: i32,
+}
+
+/// One host's post-run output snapshot, read back by
+/// [`OperationGroup::last_output`] for the [`Check`] call.
+///
+/// Owned (not borrowed) so the read does not hold the group borrowed across
+/// the check call sandwiched between it and the reboot fan-out.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostOutput {
+    /// The command's stdout.
+    pub stdout: String,
+    /// The command that was run.
+    pub stdin: String,
+    /// The command's stderr.
+    pub stderr: String,
+    /// The command's exit code.
+    pub exitcode: i32,
 }
 
 /// One host's contribution to an [`Operation`], resolved during
@@ -162,6 +187,13 @@ pub trait OperationGroup: Send {
     /// Runs the per-host command map.
     async fn run(&mut self, commands: HostCommandMap);
 
+    /// Reads back `hostname`'s post-run output, for the [`Check`] call.
+    ///
+    /// Returns `None` for a host outside the group (should not happen for a
+    /// host with a [`HostPlan`]); the template treats that as an empty
+    /// snapshot rather than panicking.
+    fn last_output(&self, hostname: &str) -> Option<HostOutput>;
+
     /// Reboots the transactional hosts named in `reboot`.
     ///
     /// Returns `(hostname, reason)` for every host that did not reconnect —
@@ -174,16 +206,19 @@ pub trait OperationGroup: Send {
 }
 
 /// The outcome of a completed [`Operation::run`]: the run *started* (the
-/// template got past `plans()` and `update_lock()`), but a transactional
-/// host's post-reboot reconnect can still fail.
+/// template got past `plans()` and `update_lock()`), but a host's check can
+/// still fail and a transactional host's post-reboot reconnect can still fail.
 ///
 /// `Err` from [`Operation::run`] keeps meaning "never started" (no plans, or a
-/// foreign lock); `Ok(report)` means it ran, and `reboot_failures` names any
-/// host whose reboot left it unreachable.
+/// foreign lock); `Ok(report)` means it ran, and the two failure lists name any
+/// host that failed its check or was left unreachable by its reboot.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct OperationReport {
+    /// `(hostname, reason)` for every host whose post-run [`Check`] failed.
+    pub check_failures: Vec<(String, String)>,
     /// `(hostname, reason)` for every transactional host that rebooted and did
-    /// not reconnect.
+    /// not reconnect. A host whose check already failed is excluded — its
+    /// reboot was skipped, not attempted and lost.
     pub reboot_failures: Vec<(String, String)>,
 }
 
@@ -232,13 +267,18 @@ pub trait Operation: Send + Sync {
     /// * resolve per-host plans; on the configured `missing_error`, return
     ///   **without** taking any lock,
     /// * `update_lock()`,
-    /// * run the commands, invoke each host's check, then reboot the
-    ///   transactional hosts,
+    /// * run the commands, invoke each host's check over its post-run output,
+    ///   then reboot the transactional hosts whose check passed,
     /// * `unlock()` unconditionally afterwards.
     ///
-    /// Returns the started run's [`OperationReport`], which names any
-    /// transactional host that rebooted and did not reconnect — a caller that
-    /// discards it cannot tell that host apart from one that came back healthy.
+    /// A host whose check fails is excluded from the reboot map for that host
+    /// only — a healthy transactional host still reboots so its snapshot
+    /// activates; a host left inert by a failed check is named at WARN.
+    ///
+    /// Returns the started run's [`OperationReport`], which names any host
+    /// that failed its check and any transactional host that rebooted and did
+    /// not reconnect — a caller that discards it cannot tell either apart from
+    /// a host that came back healthy.
     ///
     /// # Errors
     ///
@@ -269,15 +309,44 @@ pub trait Operation: Send + Sync {
         // return `()`); a future fallible step must capture its error and fall
         // through to the unlock rather than returning early.
         group.run(commands).await;
+
+        let mut check_failures: Vec<(String, String)> = Vec::new();
         for plan in &mut plans {
-            (plan.check)(CheckArgs {
+            let output = group.last_output(&plan.hostname).unwrap_or_default();
+            let args = CheckArgs {
                 hostname: &plan.hostname,
-            });
+                stdout: &output.stdout,
+                stdin: &output.stdin,
+                stderr: &output.stderr,
+                exitcode: output.exitcode,
+            };
+            if let Err(reason) = (plan.check)(args) {
+                check_failures.push((plan.hostname.clone(), reason));
+            }
         }
+
+        // A failed check excludes its host from the reboot map: rebooting a
+        // host whose install/uninstall failed would activate a snapshot the
+        // operator has not yet seen the failure for.
+        let failed: std::collections::HashSet<&str> =
+            check_failures.iter().map(|(h, _)| h.as_str()).collect();
+        let reboot: HostCommandMap = reboot
+            .into_iter()
+            .filter(|(host, _)| {
+                let ok = !failed.contains(host.as_str());
+                if !ok {
+                    tracing::warn!(host = %host, "check failed; skipping reboot");
+                }
+                ok
+            })
+            .collect();
         let reboot_failures = group.reboot(reboot).await;
 
         group.unlock().await;
-        Ok(OperationReport { reboot_failures })
+        Ok(OperationReport {
+            check_failures,
+            reboot_failures,
+        })
     }
 }
 
@@ -360,11 +429,6 @@ impl Operation for UninstallOperation {
 /// a `Check`) and is injected by that crate's `update_flow::perform_install` /
 /// `perform_uninstall`, immediately before the template runs.
 ///
-/// Note the returned [`Check`] is a no-op in production: it receives only a
-/// hostname and returns `()`, so it cannot see a command's output or report a
-/// verdict. The real install/uninstall check runs in `mtui-testreport` after
-/// the template returns, over each target's `last*` snapshot.
-///
 /// Keys the
 /// registry lookup by `(self.system.get_release(), self.transactional)`.
 pub trait PlanProvider: Send + Sync {
@@ -408,7 +472,7 @@ mod plan_provider_tests {
             Ok(Doer::new("zypper -n in $packages", "systemctl reboot"))
         }
         fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
-            Box::new(|_a: CheckArgs<'_>| {})
+            Box::new(|_a: CheckArgs<'_>| Ok(()))
         }
     }
 
@@ -417,9 +481,18 @@ mod plan_provider_tests {
         let p = FakeProvider;
         let doer = p.doer("installer", "15", false).expect("doer");
         assert_eq!(doer.command("pkg"), "zypper -n in pkg");
-        // The no-op check does not panic and returns unit.
+        // The no-op check does not panic and returns Ok.
         let mut check = p.check("installer", "15", false);
-        check(CheckArgs { hostname: "h1" });
+        assert!(
+            check(CheckArgs {
+                hostname: "h1",
+                stdout: "",
+                stdin: "",
+                stderr: "",
+                exitcode: 0,
+            })
+            .is_ok()
+        );
     }
 
     #[test]
@@ -531,6 +604,12 @@ mod tests {
             self.events.lock().unwrap().push(Event::Run(commands));
         }
 
+        fn last_output(&self, _hostname: &str) -> Option<HostOutput> {
+            // The tests below assert on the Check event log, not the output
+            // snapshot, so an empty snapshot is enough here.
+            Some(HostOutput::default())
+        }
+
         async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<(String, String)> {
             self.events.lock().unwrap().push(Event::Reboot(reboot));
             self.reboot_failures.clone()
@@ -541,17 +620,31 @@ mod tests {
         }
     }
 
-    /// Builds a [`HostPlan`] whose check records a [`Event::Check`] into `sink`.
+    /// Builds a [`HostPlan`] whose check records a [`Event::Check`] into `sink`
+    /// and passes.
     fn plan_with_recording_check(
         hostname: &str,
         transactional: bool,
         doer: Doer,
         sink: Arc<Mutex<Vec<Event>>>,
     ) -> HostPlan {
+        plan_with_check(hostname, transactional, doer, sink, Ok(()))
+    }
+
+    /// Builds a [`HostPlan`] whose check records a [`Event::Check`] into `sink`
+    /// and returns `result`, so a failing check can be scripted per host.
+    fn plan_with_check(
+        hostname: &str,
+        transactional: bool,
+        doer: Doer,
+        sink: Arc<Mutex<Vec<Event>>>,
+        result: Result<(), String>,
+    ) -> HostPlan {
         let check: Check = Box::new(move |a: CheckArgs<'_>| {
             sink.lock()
                 .unwrap()
                 .push(Event::Check(a.hostname.to_owned()));
+            result.clone()
         });
         HostPlan {
             hostname: hostname.to_owned(),
@@ -817,6 +910,63 @@ mod tests {
         // Unlock must still be the last event: a lost host does not skip
         // releasing the operation lock.
         assert_eq!(group.events().last(), Some(&Event::Unlock));
+    }
+
+    // --- run(): a failed check excludes its host from the reboot map --------
+
+    #[tokio::test]
+    async fn failed_check_excludes_its_host_from_the_reboot_map() {
+        // Two transactional hosts; h1's check fails, h2's passes. Only h2 may
+        // be rebooted — activating a snapshot for a host whose install/
+        // uninstall failed would hide the failure behind a routine reboot.
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![
+            plan_with_check(
+                "h1",
+                true,
+                Doer::new("in $packages", "systemctl reboot"),
+                log.clone(),
+                Err("boom".to_owned()),
+            ),
+            plan_with_check(
+                "h2",
+                true,
+                Doer::new("in $packages", "systemctl reboot"),
+                log.clone(),
+                Ok(()),
+            ),
+        ];
+        let mut group = MockGroup::with_event_log(Ok(plans), log);
+
+        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let report = op.run(&mut group).await.expect("the run started");
+
+        assert_eq!(
+            report.check_failures,
+            vec![("h1".to_owned(), "boom".to_owned())]
+        );
+
+        let events = group.events();
+        // Both checks ran before the (single) reboot event.
+        let reboot_idx = events
+            .iter()
+            .position(|e| matches!(e, Event::Reboot(_)))
+            .expect("a reboot event was recorded");
+        let last_check_idx = events
+            .iter()
+            .rposition(|e| matches!(e, Event::Check(_)))
+            .expect("a check event was recorded");
+        assert!(
+            last_check_idx < reboot_idx,
+            "checks must run before the reboot: {events:?}"
+        );
+        if let Event::Reboot(map) = &events[reboot_idx] {
+            assert_eq!(
+                map,
+                &vec![("h2".to_owned(), "systemctl reboot".to_owned())],
+                "only the passing host's reboot may run: {map:?}"
+            );
+        }
     }
 
     // --- role strings + missing_error sentinels -----------------------------
