@@ -163,10 +163,28 @@ pub trait OperationGroup: Send {
     async fn run(&mut self, commands: HostCommandMap);
 
     /// Reboots the transactional hosts named in `reboot`.
-    async fn reboot(&mut self, reboot: HostCommandMap);
+    ///
+    /// Returns `(hostname, reason)` for every host that did not reconnect —
+    /// a transactional host that rebooted and never came back must fail the
+    /// operation, not report success on a host it lost.
+    async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<(String, String)>;
 
     /// Releases the shared operation lock.
     async fn unlock(&mut self);
+}
+
+/// The outcome of a completed [`Operation::run`]: the run *started* (the
+/// template got past `plans()` and `update_lock()`), but a transactional
+/// host's post-reboot reconnect can still fail.
+///
+/// `Err` from [`Operation::run`] keeps meaning "never started" (no plans, or a
+/// foreign lock); `Ok(report)` means it ran, and `reboot_failures` names any
+/// host whose reboot left it unreachable.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct OperationReport {
+    /// `(hostname, reason)` for every transactional host that rebooted and did
+    /// not reconnect.
+    pub reboot_failures: Vec<(String, String)>,
 }
 
 /// The install/uninstall template method.
@@ -218,6 +236,10 @@ pub trait Operation: Send + Sync {
     ///   transactional hosts,
     /// * `unlock()` unconditionally afterwards.
     ///
+    /// Returns the started run's [`OperationReport`], which names any
+    /// transactional host that rebooted and did not reconnect — a caller that
+    /// discards it cannot tell that host apart from one that came back healthy.
+    ///
     /// # Errors
     ///
     /// Returns the resolver's error when no host plan can be built (no
@@ -231,7 +253,7 @@ pub trait Operation: Send + Sync {
     /// from "could not even start" will print success for an update that never
     /// touched a host — the same reasoning that makes
     /// `UpdateFailure::MissingUpdater` a hard failure in the update flow.
-    async fn run(&self, group: &mut dyn OperationGroup) -> Result<(), HostError> {
+    async fn run(&self, group: &mut dyn OperationGroup) -> Result<OperationReport, HostError> {
         let plans = group.plans(self.role())?;
 
         let (commands, reboot, mut plans) = self.collect(plans);
@@ -252,10 +274,10 @@ pub trait Operation: Send + Sync {
                 hostname: &plan.hostname,
             });
         }
-        group.reboot(reboot).await;
+        let reboot_failures = group.reboot(reboot).await;
 
         group.unlock().await;
-        Ok(())
+        Ok(OperationReport { reboot_failures })
     }
 }
 
@@ -440,6 +462,9 @@ mod tests {
         /// When `true`, `update_lock` records its event then returns
         /// [`HostError::Update`] to model a foreign-locked host.
         fail_update_lock: bool,
+        /// What `reboot` should report as failed, modelling a transactional
+        /// host that rebooted and did not reconnect.
+        reboot_failures: Vec<(String, String)>,
     }
 
     impl MockGroup {
@@ -459,12 +484,20 @@ mod tests {
                 roles_seen: Arc::new(Mutex::new(Vec::new())),
                 events,
                 fail_update_lock: false,
+                reboot_failures: Vec::new(),
             }
         }
 
         /// Marks `update_lock` to fail, modelling a foreign-locked host.
         fn failing_update_lock(mut self) -> Self {
             self.fail_update_lock = true;
+            self
+        }
+
+        /// Scripts `reboot` to report `failures`, modelling a transactional
+        /// host whose post-reboot reconnect never came back.
+        fn with_reboot_failures(mut self, failures: Vec<(String, String)>) -> Self {
+            self.reboot_failures = failures;
             self
         }
 
@@ -498,8 +531,9 @@ mod tests {
             self.events.lock().unwrap().push(Event::Run(commands));
         }
 
-        async fn reboot(&mut self, reboot: HostCommandMap) {
+        async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<(String, String)> {
             self.events.lock().unwrap().push(Event::Reboot(reboot));
+            self.reboot_failures.clone()
         }
 
         async fn unlock(&mut self) {
@@ -754,6 +788,35 @@ mod tests {
         if let Event::Reboot(map) = &events[3] {
             assert_eq!(map, &vec![("h1".to_owned(), "systemctl reboot".to_owned())]);
         }
+    }
+
+    // --- run(): a reboot failure is reported, not swallowed -----------------
+
+    #[tokio::test]
+    async fn run_reports_a_transactional_reboot_failure_and_still_unlocks() {
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![plan_with_recording_check(
+            "h1",
+            true,
+            Doer::new("in $packages", "systemctl reboot"),
+            sink,
+        )];
+        let mut group = MockGroup::new(Ok(plans))
+            .with_reboot_failures(vec![("h1".to_owned(), "reconnect failed".to_owned())]);
+
+        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let report = op
+            .run(&mut group)
+            .await
+            .expect("the run started; the reboot failure is carried in the report, not Err");
+
+        assert_eq!(
+            report.reboot_failures,
+            vec![("h1".to_owned(), "reconnect failed".to_owned())]
+        );
+        // Unlock must still be the last event: a lost host does not skip
+        // releasing the operation lock.
+        assert_eq!(group.events().last(), Some(&Event::Unlock));
     }
 
     // --- role strings + missing_error sentinels -----------------------------

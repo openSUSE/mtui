@@ -1192,9 +1192,20 @@ impl HostsGroup {
     /// backoff. Unlike [`reboot`](Self::reboot) this path takes no boot-id
     /// snapshot / verification, and is a no-op
     /// when the map is empty.
-    async fn reboot_transactional(&mut self, reboot: &BTreeMap<String, String>) {
+    ///
+    /// Returns each named host's reconnect outcome, mirroring
+    /// [`reboot_where`](Self::reboot_where): `Ok(())` when the host reconnected,
+    /// `Err(HostError)` when it did not come back. A caller that discards this
+    /// map cannot tell a transactional host that rebooted into an unreachable
+    /// state from one that came back healthy.
+    async fn reboot_transactional(
+        &mut self,
+        reboot: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, Result<()>> {
+        use std::sync::Mutex;
+
         if reboot.is_empty() {
-            return;
+            return BTreeMap::new();
         }
         let mut names: Vec<&String> = reboot.keys().collect();
         names.sort();
@@ -1220,6 +1231,8 @@ impl HostsGroup {
             },
         )
         .await;
+
+        let outcomes: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -1227,17 +1240,26 @@ impl HostsGroup {
             Some("reconnect"),
             |t| reboot.contains_key(t.hostname()),
             |t| {
+                let outcomes = &outcomes;
                 Box::pin(async move {
+                    let hostname = t.hostname().to_owned();
                     let retry = t.reboot_retries();
-                    if let Err(e) = t.reconnect(retry, true).await {
-                        tracing::error!(host = %t.hostname(), error = %e, "reconnect after reboot failed");
-                    } else {
-                        tracing::info!(host = %t.hostname(), "is back up");
-                    }
+                    let outcome = match t.reconnect(retry, true).await {
+                        Ok(()) => {
+                            tracing::info!(host = %hostname, "is back up");
+                            Ok(())
+                        }
+                        Err(e) => {
+                            tracing::error!(host = %hostname, error = %e, "reconnect after reboot failed");
+                            Err(e)
+                        }
+                    };
+                    outcomes.lock().unwrap().insert(hostname, outcome);
                 }) as actions::BoxTargetFut<'_>
             },
         )
         .await;
+        outcomes.into_inner().unwrap()
     }
 
     /// Decides whether `hostname`'s boot id confirms a reboot, logging as before.
@@ -1348,12 +1370,16 @@ impl OperationGroup for HostsGroup {
         HostsGroup::run(self, Command::PerHost(map)).await;
     }
 
-    async fn reboot(&mut self, reboot: HostCommandMap) {
+    async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<(String, String)> {
         // Only transactional hosts contribute reboot entries; the reboot is
         // fired fire-and-forget on each, then each is reconnected
         // (sorted) with the connection's retry + backoff.
         let map: BTreeMap<String, String> = reboot.into_iter().collect();
-        HostsGroup::reboot_transactional(self, &map).await;
+        HostsGroup::reboot_transactional(self, &map)
+            .await
+            .into_iter()
+            .filter_map(|(host, outcome)| outcome.err().map(|e| (host, e.to_string())))
+            .collect()
     }
 
     async fn unlock(&mut self) {
@@ -2006,9 +2032,35 @@ mod tests {
             )],
             false,
         );
-        OperationGroup::reboot(&mut g, Vec::new()).await;
+        let failures = OperationGroup::reboot(&mut g, Vec::new()).await;
         assert!(h1.fired_commands().is_empty());
         assert_eq!(h1.reconnect_count(), 0);
+        assert!(failures.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reboot_transactional_records_reconnect_failure() {
+        // A transactional host that reboots and never reconnects must be named
+        // in the outcome map, not silently dropped: `Operation::run` (and every
+        // flow above it) relies on this to fail the operation instead of
+        // reporting success on a host it lost.
+        let m1 = reboot_mock("h1", "id-1").failing_reconnect();
+        let h1 = m1.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(m1),
+            )],
+            false,
+        );
+
+        let map: HostCommandMap = vec![("h1".to_owned(), "systemctl reboot".to_owned())];
+        let failures = OperationGroup::reboot(&mut g, map).await;
+
+        assert_eq!(h1.reconnect_count(), 1);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].0, "h1");
     }
 
     // --- update_lock / lock / unlock fan-out (P2.9) -------------------------

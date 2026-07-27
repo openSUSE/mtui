@@ -140,6 +140,38 @@ async fn install_drives_doer_and_reboots_only_transactional() {
 }
 
 #[tokio::test]
+async fn install_reports_a_transactional_host_that_never_reconnects() {
+    // A transactional host reboots into an unreachable state: the run still
+    // started (unlike a missing doer or a foreign lock), so it must not
+    // return `Err`, but the lost host must be named in the report rather
+    // than silently dropped.
+    let (provider, _lookups, _checked) = RecordingProvider::new();
+    let conn = mtui_hosts::MockConnection::new("h1")
+        .with_default(CommandLog::new("", "done", "", 0, 1))
+        .failing_reconnect();
+    let handle = conn.clone();
+    let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+    let system = System::new(
+        SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+        BTreeSet::new(),
+        false,
+    );
+    t.set_system(system, true);
+    let mut group = HostsGroup::new(vec![t], false).with_plan_provider(Arc::new(provider));
+
+    let report = InstallOperation::new(vec!["pkg-a".to_owned()])
+        .run(&mut group)
+        .await
+        .expect("the run started even though the reboot failed");
+
+    assert_eq!(
+        report.reboot_failures,
+        vec![("h1".to_owned(), "failed to reconnect to h1".to_owned())]
+    );
+    assert_eq!(handle.reconnect_count(), 1);
+}
+
+#[tokio::test]
 async fn install_shell_quotes_malicious_package_name_end_to_end() {
     // Trust-boundary regression: a package name carrying shell metacharacters,
     // driven through the real HostsGroup install path, must reach the host as a
