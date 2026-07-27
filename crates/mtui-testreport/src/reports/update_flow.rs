@@ -24,8 +24,12 @@
 //! transactional)`, mirroring upstream `Target.doer(role)` / `Target.check(role)`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
-use mtui_hosts::{Command, HostsGroup, OperationGroup, RepoOp, SetRepo};
+use mtui_hosts::{
+    Command, HostError, HostsGroup, InstallOperation, Operation, OperationGroup, RepoOp, SetRepo,
+    UninstallOperation,
+};
 use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
 
@@ -324,20 +328,209 @@ fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError>
     failures
 }
 
+/// Installs `packages` on every host in `targets`.
+///
+/// The shared body behind every report's `perform_install`. Injects the
+/// [`WorkflowRegistry`] as the group's
+/// [`PlanProvider`](mtui_hosts::PlanProvider) and drives the
+/// [`InstallOperation`](mtui_hosts::InstallOperation) template, then returns the
+/// verdict from [`install_verdict`].
+///
+/// Injecting here rather than where the group is built is deliberate:
+/// [`OperationGroup::plans`](mtui_hosts::OperationGroup::plans) has exactly one
+/// consumer — the template these two functions drive — so this is the one place
+/// that cannot forget. Construction sites can: for the whole life of the Rust
+/// port none of them injected a provider, so `plans()` failed with
+/// `NoPlanProvider`, the template logged and returned, and `install` reported
+/// success having run nothing.
+///
+/// # Errors
+///
+/// Returns [`UpdateError`] when the template could not start (no doer for a
+/// host's `(release, transactional)` key, or a host locked by another owner) or
+/// when a host's post-run check reports a failed install.
+pub async fn perform_install(
+    targets: &mut HostsGroup,
+    packages: &[String],
+) -> Result<(), UpdateError> {
+    perform_operation(targets, Role::Install, packages).await
+}
+
+/// Uninstalls `packages` from every host in `targets`.
+///
+/// See [`perform_install`]; the only differences are the role (and so the
+/// command table) and the label on the aggregated summary. Uninstall shares the
+/// *install* check table — a removal is judged by the same package-manager
+/// outcomes — which [`CheckProvider`] encodes.
+///
+/// # Errors
+///
+/// As [`perform_install`].
+pub async fn perform_uninstall(
+    targets: &mut HostsGroup,
+    packages: &[String],
+) -> Result<(), UpdateError> {
+    perform_operation(targets, Role::Uninstall, packages).await
+}
+
+/// The shared body of [`perform_install`] / [`perform_uninstall`].
+async fn perform_operation(
+    targets: &mut HostsGroup,
+    role: Role,
+    packages: &[String],
+) -> Result<(), UpdateError> {
+    targets.set_plan_provider(Arc::new(WorkflowRegistry::default()));
+
+    // Matched exhaustively on purpose: a `_ =>` arm defaulting to install would
+    // quietly run the wrong package-manager command if a role were ever added,
+    // which is the same shape of silent-wrong-default this function exists to
+    // fix. Only the two template roles reach here.
+    let (op, outcome) = match role {
+        Role::Install => (
+            "install",
+            InstallOperation::new(packages.to_vec()).run(targets).await,
+        ),
+        Role::Uninstall => (
+            "uninstall",
+            UninstallOperation::new(packages.to_vec())
+                .run(targets)
+                .await,
+        ),
+        Role::Update | Role::Prepare | Role::Downgrade => {
+            return Err(UpdateError::reason_only(format!(
+                "{} is not driven by the install/uninstall template",
+                role.as_operation_role()
+            )));
+        }
+    };
+
+    // The template ran nothing at all — a missing doer, or a host held by
+    // another tester. Report it instead of falling through to a verdict that
+    // would read stale `last*` values and call it success.
+    if let Err(e) = outcome {
+        return Err(UpdateError::reason_only(describe_start_failure(
+            &e, role, targets,
+        )));
+    }
+
+    install_verdict(op, role, targets)
+}
+
+/// Turns an [`Operation::run`](mtui_hosts::Operation::run) start failure into a
+/// message that names the hosts responsible.
+///
+/// `plans()` aborts on the first host it cannot resolve and reports only the
+/// role and release — and a host whose product never parsed has no release, so
+/// the bare error reads `Missing Installer for ` with nothing actionable in it.
+/// Since the whole group is aborted, re-resolve every host here and name each
+/// one that has no command, so the tester knows which refhost to fix rather than
+/// which of them to guess.
+fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> String {
+    if !matches!(
+        err,
+        HostError::MissingInstaller { .. } | HostError::MissingUninstaller { .. }
+    ) {
+        // A lock conflict already names the host and holder.
+        return err.to_string();
+    }
+
+    let registry = WorkflowRegistry::default();
+    let mut unresolved: Vec<String> = Vec::new();
+    for target in targets.targets() {
+        let resolved = host_key(target).is_some_and(|(release, transactional)| {
+            registry.doer(role, &release, transactional).is_ok()
+        });
+        if !resolved {
+            let base = target.system().get_base();
+            let product = if base.name.is_empty() || base.name == "unknown" {
+                "unrecognised product".to_owned()
+            } else {
+                format!("{} {}", base.name, base.version)
+            };
+            unresolved.push(format!("{} ({product})", target.hostname()));
+        }
+    }
+
+    if unresolved.is_empty() {
+        return err.to_string();
+    }
+    format!(
+        "{err}: no {} command for {}; no host was touched",
+        role.as_operation_role(),
+        unresolved.join(", ")
+    )
+}
+
 /// Reports whether a shared install/uninstall [`Operation`](mtui_hosts::Operation)
 /// fan-out succeeded on every host.
 ///
-/// The template's own per-host check lives in `mtui-hosts` and only logs; this
-/// gives the report-level `perform_install`/`perform_uninstall` a returned
-/// verdict by scanning each host's post-fan-out `lasterr()`/`lastexit()`
-/// snapshot (bead P3a-1's stable outcome accessors). `op` labels the aggregated
-/// summary. Public so the report impls (SL/PI/OBS) can call it after
-/// `Operation::run`.
-pub fn install_verdict(op: &str, targets: &HostsGroup) -> Result<(), UpdateError> {
-    aggregate_failures(
-        op,
-        host_command_failures(targets, &format!("{op} command failed")),
-    )
+/// The template's own per-host check hook cannot produce a verdict — it receives
+/// only a hostname and returns `()` — so the real check runs here, over each
+/// target's post-fan-out `last*` snapshot, reusing the same registry `CheckFn`
+/// that `perform_prepare` and `perform_update` drive through `run_checks`.
+/// Unlike those flows, this one runs the check *instead of* a raw exit-code
+/// scan rather than in addition to it, because the check already classifies
+/// every exit code it cares about. `op` labels the aggregated summary.
+///
+/// Where the registry has a check for a host's `(release, transactional)` key,
+/// it is authoritative: it knows that zypper's exit codes 100-103 and 106
+/// ("update needed", "reboot needed", "repo skipped") are *informational*, and
+/// classifies real failures as "package not found" / "update stack locked" /
+/// "RPM Error" / "Dependency Error". A bare `lastexit() != 0` scan would call a
+/// routine post-kernel-install "reboot needed" a failed install.
+///
+/// Keys with no registered check — `slmicro` (transactional) and `YUM` — fall
+/// back to that raw scan, which is better than no verdict at all.
+///
+/// # Errors
+///
+/// Returns the aggregated [`UpdateError`] when any host failed.
+pub fn install_verdict(op: &str, role: Role, targets: &HostsGroup) -> Result<(), UpdateError> {
+    let registry = WorkflowRegistry::default();
+    let reason = format!("{op} command failed");
+    let mut failures = Vec::new();
+
+    for target in targets.targets() {
+        let check = host_key(target)
+            .and_then(|(release, transactional)| registry.check(role, &release, transactional));
+
+        let Some(check) = check else {
+            // No check table for this key (`slmicro`, `YUM`): fall back to the
+            // exit code alone. Deliberately *not* "any stderr output is a
+            // failure" — `transactional-update` and `yum` both write progress
+            // and warnings to stderr on a successful run, and no check table in
+            // this crate treats bare stderr as a failure either; they all match
+            // specific markers.
+            if target.lastexit().is_some_and(|c| c != 0) {
+                failures.push(UpdateError::new(reason.clone(), target.hostname()));
+            }
+            continue;
+        };
+
+        // The install checks emit no diagnostics (only the update checks do),
+        // but drain the channel rather than assuming that stays true.
+        let mut diagnostics = Vec::new();
+        match check(CheckArgs {
+            hostname: target.hostname(),
+            stdout: target.lastout(),
+            stdin: target.lastin(),
+            stderr: target.lasterr(),
+            exitcode: target.lastexit().map_or(0, i32::from),
+        }) {
+            Ok(diags) => diagnostics.extend(diags),
+            Err(mut e) => {
+                if e.host.is_none() {
+                    e.host = Some(target.hostname().to_owned());
+                }
+                failures.push(e);
+            }
+        }
+        for d in diagnostics {
+            info!("{}", d.text);
+        }
+    }
+
+    aggregate_failures(op, failures)
 }
 
 /// Reboots the transactional hosts named in `reboot` (upstream `group._reboot`).
@@ -1312,6 +1505,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn perform_install_surfaces_a_missing_installer() {
+        // A host whose (release, transactional) key has no installer doer: the
+        // template runs nothing at all. Reporting Ok here is what made `install`
+        // print "install completed" for hosts it never touched.
+        let mut group = HostsGroup::new(vec![missing_doer_target("h1")], false);
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("a missing installer must not report success");
+        assert!(
+            err.reason.contains("Missing Installer"),
+            "reason: {}",
+            err.reason
+        );
+        // The bare error names only the role and release, and a host whose
+        // product never parsed has no release — so the message must name the
+        // host the tester has to go fix.
+        assert!(
+            err.reason.contains("h1"),
+            "the offending host must be named: {}",
+            err.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_install_names_the_unresolvable_host_and_product() {
+        // An unparsed system yields `MissingInstaller { release: "" }`, whose
+        // Display is "Missing Installer for " — nothing actionable. The whole
+        // group aborts, so the message must say which host caused it.
+        let conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
+        let t = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
+        let (ok, _h) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![ok, t], false);
+
+        let err = perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect_err("an unresolvable host aborts the group");
+
+        assert!(err.reason.contains("h2"), "reason: {}", err.reason);
+        assert!(
+            err.reason.contains("unrecognised product"),
+            "reason: {}",
+            err.reason
+        );
+        assert!(
+            err.reason.contains("no host was touched"),
+            "reason: {}",
+            err.reason
+        );
+        // h1 resolves fine, so it must not be blamed.
+        assert!(!err.reason.contains("h1 ("), "reason: {}", err.reason);
+    }
+
+    #[tokio::test]
+    async fn install_verdict_fallback_ignores_stderr_on_a_clean_exit() {
+        // `transactional-update` and `yum` write progress and warnings to stderr
+        // on a successful run. Treating any stderr as failure would fail every
+        // SL Micro install.
+        let conn = MockConnection::new("h1").with_default(CommandLog::new(
+            "t-u",
+            "",
+            "warning: chatty",
+            0,
+            0,
+        ));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        group.run(Command::All("t-u pkg install".to_owned())).await;
+
+        assert!(
+            install_verdict("install", Role::Install, &group).is_ok(),
+            "stderr alone on a zero exit is not a failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_install_runs_the_installer_command() {
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        perform_install(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect("a clean install");
+        assert_eq!(handle.commands(), vec!["zypper -n in -y -l pkg-a"]);
+    }
+
+    #[tokio::test]
+    async fn perform_uninstall_runs_the_uninstaller_command() {
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        perform_uninstall(&mut group, &["pkg-a".to_owned()])
+            .await
+            .expect("a clean uninstall");
+        assert_eq!(handle.commands(), vec!["zypper -n rm pkg-a"]);
+    }
+
+    #[tokio::test]
     async fn install_verdict_surfaces_per_host_command_failure() {
         // A host left with a non-zero lastexit after an install fan-out is
         // reported by install_verdict (the report-level install/uninstall hook).
@@ -1319,13 +1615,13 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
         // Run one command so the host records its (failing) last* snapshot.
         group.run(Command::All("zypper in".to_owned())).await;
-        let err = install_verdict("install", &group).expect_err("non-zero exit surfaces as Err");
+        let err = install_verdict("install", Role::Install, &group)
+            .expect_err("non-zero exit surfaces as Err");
         assert_eq!(err.host.as_deref(), Some("h1"));
-        assert!(
-            err.reason.contains("install command failed"),
-            "reason: {}",
-            err.reason
-        );
+        // 104 is zypper's ZYPPER_EXIT_INF_CAP_NOT_FOUND, which the install check
+        // table classifies. The verdict reports *what* went wrong, not just that
+        // the exit was non-zero.
+        assert_eq!(err.reason, "package not found");
     }
 
     #[tokio::test]
@@ -1333,7 +1629,61 @@ mod tests {
         let (t, _h) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
         group.run(Command::All("zypper in".to_owned())).await;
-        assert!(install_verdict("install", &group).is_ok());
+        assert!(install_verdict("install", Role::Install, &group).is_ok());
+    }
+
+    #[tokio::test]
+    async fn install_verdict_accepts_zyppers_informational_exit_codes() {
+        // zypper exits 100-103/106 to mean "update needed", "reboot needed",
+        // "restart needed", "repo skipped" — all *successful* installs. Exit 102
+        // (reboot needed) is routine after a kernel update, so a bare
+        // `lastexit() != 0` scan would report a false failure on a perfectly
+        // good install.
+        for exit in [100, 101, 102, 103, 106] {
+            let (t, _h) = sles_target_with_exit("h1", "", exit);
+            let mut group = HostsGroup::new(vec![t], false);
+            group.run(Command::All("zypper in".to_owned())).await;
+            let res = install_verdict("install", Role::Install, &group);
+            assert!(
+                res.is_ok(),
+                "exit {exit} is informational, not a failure: {res:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn install_verdict_falls_back_to_raw_scan_without_a_check_table() {
+        // slmicro/YUM keys have no install check registered. They must still get
+        // a verdict rather than an unconditional pass.
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("t-u", "", "", 1, 0));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        group.run(Command::All("t-u pkg install".to_owned())).await;
+
+        let key = host_key(group.targets().next().expect("one target"));
+        assert!(
+            WorkflowRegistry::default()
+                .check(
+                    Role::Install,
+                    &key.clone().expect("key").0,
+                    key.expect("key").1
+                )
+                .is_none(),
+            "this test is only meaningful while the key has no check table"
+        );
+
+        let err = install_verdict("install", Role::Install, &group)
+            .expect_err("a non-zero exit must still be reported");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert_eq!(err.reason, "install command failed");
     }
 
     #[test]

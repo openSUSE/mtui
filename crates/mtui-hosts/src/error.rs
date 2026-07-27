@@ -216,11 +216,14 @@ pub enum HostError {
     /// No update-workflow [`PlanProvider`](crate::PlanProvider) has been wired
     /// into the [`HostsGroup`](crate::HostsGroup).
     ///
-    /// This has no upstream analogue — upstream's `Target` always has the
-    /// registries imported at module load. In the Rust redesign the doer/check
-    /// resolver is injected by the composition root (`mtui-core::wiring`) to
-    /// keep the crate graph acyclic; an operation attempted on a group before
-    /// that injection surfaces this rather than silently doing nothing.
+    /// The doer/check resolver is injected by `mtui-testreport`'s
+    /// `update_flow::perform_install` / `perform_uninstall` (keeping the crate
+    /// graph acyclic), so reaching this means an [`Operation`](crate::Operation)
+    /// was driven directly against an un-injected group.
+    ///
+    /// [`Operation::run`](crate::Operation::run) returns it rather than logging
+    /// and carrying on. It used to log and return `()`, which is how the whole
+    /// install/uninstall path came to run nothing while reporting success.
     #[error("no update-workflow provider wired into the host group")]
     NoPlanProvider,
 

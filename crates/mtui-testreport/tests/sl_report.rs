@@ -167,30 +167,20 @@ fn list_update_commands_is_a_noop_stub() {
 // --- perform_install / perform_uninstall (OperationGroup seam) --------------
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
-use mtui_hosts::{Check, CheckArgs, Doer, HostError, MockConnection, PlanProvider, Target};
+use mtui_hosts::{MockConnection, Target};
 use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
 use mtui_types::system::{System, SystemProduct};
 
-/// A minimal provider yielding one fixed installer/uninstaller doer, so the
-/// report's `perform_*` drives a real command through the group.
-struct FixedProvider;
-
-impl PlanProvider for FixedProvider {
-    fn doer(&self, _role: &str, _release: &str, _transactional: bool) -> Result<Doer, HostError> {
-        Ok(Doer::new(
-            "zypper -n in -y -l $packages",
-            "systemctl reboot",
-        ))
-    }
-    fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
-        Box::new(|_a: CheckArgs<'_>| {})
-    }
-}
-
-fn sles_group() -> (HostsGroup, MockConnection) {
+/// An enabled SLES 15.5 host in a group built exactly the way production builds
+/// it — `HostsGroup::new` and nothing else.
+///
+/// There is deliberately no test-only `PlanProvider` here. An earlier stub
+/// provider returned the same doer for every role, which both hid that
+/// production injected no provider at all (so `install` ran nothing) and made
+/// `perform_uninstall` look correct while asserting an *install* command.
+fn production_sles_group() -> (HostsGroup, MockConnection) {
     let conn = MockConnection::new("h1").with_default(CommandLog::new("", "done", "", 0, 1));
     let handle = conn.clone();
     let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
@@ -202,14 +192,28 @@ fn sles_group() -> (HostsGroup, MockConnection) {
         ),
         false,
     );
-    let group = HostsGroup::new(vec![t], false).with_plan_provider(Arc::new(FixedProvider));
-    (group, handle)
+    (HostsGroup::new(vec![t], false), handle)
+}
+
+#[tokio::test]
+async fn perform_install_runs_a_command_on_a_production_built_group() {
+    let r = SlReport::new(config());
+    let (mut group, handle) = production_sles_group();
+
+    let res = r.perform_install(&mut group, &["pkg-a".to_owned()]).await;
+
+    assert_eq!(
+        handle.commands(),
+        vec!["zypper -n in -y -l pkg-a".to_owned()],
+        "install must reach the host when the group is built the production way"
+    );
+    assert!(res.is_ok(), "a clean install returns Ok: {res:?}");
 }
 
 #[tokio::test]
 async fn perform_install_drives_installer_doer() {
     let r = SlReport::new(config());
-    let (mut group, handle) = sles_group();
+    let (mut group, handle) = production_sles_group();
 
     let res = r
         .perform_install(&mut group, &["pkg-a".to_owned(), "pkg-b".to_owned()])
@@ -225,12 +229,13 @@ async fn perform_install_drives_installer_doer() {
 #[tokio::test]
 async fn perform_uninstall_drives_uninstaller_doer() {
     let r = SlReport::new(config());
-    let (mut group, handle) = sles_group();
+    let (mut group, handle) = production_sles_group();
 
     let res = r.perform_uninstall(&mut group, &["pkg".to_owned()]).await;
     assert!(res.is_ok(), "a clean uninstall returns Ok: {res:?}");
 
-    assert_eq!(handle.commands(), vec!["zypper -n in -y -l pkg".to_owned()]);
+    // The *uninstaller* table, not the installer: `rm`, not `in`.
+    assert_eq!(handle.commands(), vec!["zypper -n rm pkg".to_owned()]);
 }
 
 // --- set_repo (SetRepo impl -> RepoManager::run_zypper) ---------------------

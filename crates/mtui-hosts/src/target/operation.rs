@@ -217,44 +217,41 @@ pub trait Operation: Send + Sync {
 
     /// Executes the full `lock → run → check → reboot → unlock` skeleton.
     ///
-    /// Mirrors upstream `Operation.run`:
-    ///
-    /// * resolve per-host plans; on the configured `missing_error`, log and
-    ///   return **without** taking any lock,
+    /// * resolve per-host plans; on the configured `missing_error`, return
+    ///   **without** taking any lock,
     /// * `update_lock()`,
-    /// * run the commands, invoke each host's check with its `last*` values,
-    ///   then reboot the transactional hosts,
-    /// * `unlock()` unconditionally afterwards (upstream's `finally`).
+    /// * run the commands, invoke each host's check, then reboot the
+    ///   transactional hosts,
+    /// * `unlock()` unconditionally afterwards.
     ///
-    /// The per-host `last*` values are read from `group` *after* `run`, matching
-    /// upstream's `t.lastout()`/etc. call-time reads.
-    async fn run(&self, group: &mut dyn OperationGroup) {
-        let plans = match group.plans(self.role()) {
-            Ok(plans) => plans,
-            Err(e) => {
-                // Upstream: `logger.error("%s", e); return` — no lock is taken.
-                tracing::error!("{e}");
-                return;
-            }
-        };
+    /// # Errors
+    ///
+    /// Returns the resolver's error when no host plan can be built (no
+    /// [`PlanProvider`] injected, or no doer registered for a host's
+    /// `(release, transactional)` key), and [`HostError::Update`] when
+    /// `update_lock` finds a host held by another owner. In both cases nothing
+    /// ran on any host.
+    ///
+    /// Both were previously logged and swallowed, which is how upstream behaves.
+    /// mtui reports them instead: a caller that cannot distinguish "installed"
+    /// from "could not even start" will print success for an update that never
+    /// touched a host — the same reasoning that makes
+    /// `UpdateFailure::MissingUpdater` a hard failure in the update flow.
+    async fn run(&self, group: &mut dyn OperationGroup) -> Result<(), HostError> {
+        let plans = group.plans(self.role())?;
 
         let (commands, reboot, mut plans) = self.collect(plans);
 
-        // Upstream calls `update_lock()` *outside* the try/finally: if it raises
-        // `UpdateError` (a host is locked by another owner) it has already
-        // released the locks it took, so `run` aborts here without entering the
-        // run/unlock section — no separate unlock is issued.
-        if let Err(e) = group.update_lock().await {
-            tracing::error!("{e}");
-            return;
-        }
+        // `update_lock` runs *outside* the unlock-always section: when it fails
+        // (a host is locked by another owner) it has already released the locks
+        // it took, so `run` aborts here without entering the run/unlock section
+        // — no separate unlock is issued.
+        group.update_lock().await?;
 
-        // Upstream wraps run→check→reboot in `try` with `unlock` in `finally`.
-        // Rust has no `finally`; drive the fallible section in a nested async
-        // block and always unlock afterwards. The section itself never returns
-        // an error today (run/reboot are infallible over the group), but this
-        // structure preserves the "unlock always happens" contract for when it
-        // grows fallible steps.
+        // Everything past the lock must reach `unlock()`, so this section stays
+        // free of `?`. It is infallible over the group seam today (run/reboot
+        // return `()`); a future fallible step must capture its error and fall
+        // through to the unlock rather than returning early.
         group.run(commands).await;
         for plan in &mut plans {
             (plan.check)(CheckArgs {
@@ -264,6 +261,7 @@ pub trait Operation: Send + Sync {
         group.reboot(reboot).await;
 
         group.unlock().await;
+        Ok(())
     }
 }
 
@@ -337,13 +335,19 @@ impl Operation for UninstallOperation {
 /// The injectable seam that resolves one target's [`Doer`] + [`Check`] for a
 /// role, keyed on the target's `(release, transactional)` state.
 ///
-/// This is the `mtui-hosts`-local half of the composition-root injection: it is
-/// defined here (in terms of `mtui-hosts` types only — [`Doer`] / [`Check`]) so
+/// This is the `mtui-hosts`-local half of the injection: it is defined here (in
+/// terms of `mtui-hosts` types only — [`Doer`] / [`Check`]) so
 /// [`HostsGroup`](super::HostsGroup) can hold it and drive
 /// [`OperationGroup::plans`] **without** depending on `mtui-testreport`. The
 /// concrete implementation lives in `mtui-testreport` (its `WorkflowRegistry`
 /// adapts its own `Role` / `ActionCommands` / `CheckFn` tables into a `Doer` and
-/// a `Check`) and is bound in at the composition root (`mtui-core::wiring`).
+/// a `Check`) and is injected by that crate's `update_flow::perform_install` /
+/// `perform_uninstall`, immediately before the template runs.
+///
+/// Note the returned [`Check`] is a no-op in production: it receives only a
+/// hostname and returns `()`, so it cannot see a command's output or report a
+/// verdict. The real install/uninstall check runs in `mtui-testreport` after
+/// the template returns, over each target's `last*` snapshot.
 ///
 /// Mirrors upstream `Target.doer(role)` / `Target.check(role)`, which key the
 /// registry lookup by `(self.system.get_release(), self.transactional)`.
@@ -632,7 +636,11 @@ mod tests {
         }));
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
-        op.run(&mut group).await;
+        let err = op
+            .run(&mut group)
+            .await
+            .expect_err("a missing doer is reported");
+        assert!(matches!(err, HostError::MissingInstaller { .. }), "{err:?}");
 
         assert!(
             group.events().is_empty(),
@@ -659,7 +667,7 @@ mod tests {
         let mut group = MockGroup::new(Ok(plans));
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
-        op.run(&mut group).await;
+        op.run(&mut group).await.expect("a clean run succeeds");
 
         let events = group.events();
         assert_eq!(events.first(), Some(&Event::UpdateLock));
@@ -689,7 +697,11 @@ mod tests {
         let mut group = MockGroup::new(Ok(plans)).failing_update_lock();
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
-        op.run(&mut group).await;
+        let err = op
+            .run(&mut group)
+            .await
+            .expect_err("a foreign-held lock is reported, not swallowed");
+        assert!(matches!(err, HostError::Update(_)), "{err:?}");
 
         // update_lock was attempted, but no run / check / reboot / unlock
         // followed: the failing lock self-cleaned and aborted the operation.
@@ -708,7 +720,7 @@ mod tests {
         let mut group = MockGroup::new(Ok(plans));
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
-        op.run(&mut group).await;
+        op.run(&mut group).await.expect("a clean run succeeds");
 
         let checks: Vec<Event> = sink.lock().unwrap().clone();
         assert_eq!(
@@ -738,7 +750,8 @@ mod tests {
 
         InstallOperation::new(strs(&["pkg-a"]))
             .run(&mut group)
-            .await;
+            .await
+            .expect("a clean run succeeds");
 
         let events = group.events();
         // lock → run → check → reboot → unlock.
@@ -797,7 +810,8 @@ mod tests {
 
         UninstallOperation::new(strs(&["pkg"]))
             .run(&mut group)
-            .await;
+            .await
+            .expect("a clean run succeeds");
 
         assert_eq!(group.roles(), vec!["uninstaller".to_owned()]);
     }

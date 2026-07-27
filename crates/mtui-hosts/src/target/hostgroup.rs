@@ -98,13 +98,15 @@ pub struct HostsGroup {
     /// fan-out helpers as the (Phase 6) spinner/prompt seam; see
     /// [`actions`](super::actions).
     is_repl: bool,
-    /// The injected update-workflow doer/check resolver, or `None` before the
-    /// composition root wires one in.
+    /// The injected update-workflow doer/check resolver, or `None` until the
+    /// install/uninstall flow injects one.
     ///
     /// Held as `mtui-hosts`' own [`PlanProvider`] (not the `mtui-testreport`
-    /// registry directly) so the crate graph stays acyclic; `mtui-core::wiring`
-    /// supplies the concrete adapter. When absent, [`OperationGroup::plans`]
-    /// returns [`HostError::NoPlanProvider`] — the update workflow is unwired.
+    /// registry directly) so the crate graph stays acyclic; `mtui-testreport`'s
+    /// `WorkflowRegistry` is the concrete adapter, injected via
+    /// [`set_plan_provider`](Self::set_plan_provider). When absent,
+    /// [`OperationGroup::plans`] returns [`HostError::NoPlanProvider`] — the
+    /// update workflow is unwired.
     plan_provider: Option<Arc<dyn PlanProvider>>,
     /// The session-level serialised [`Prompter`](crate::Prompter), or `None`
     /// under headless callers (`mtui-mcp`).
@@ -207,13 +209,27 @@ impl HostsGroup {
     /// Injects the update-workflow [`PlanProvider`] (builder-style), enabling the
     /// [`OperationGroup`] surface (install / uninstall).
     ///
-    /// Called by the composition root (`mtui-core::wiring`) with the concrete
-    /// adapter over the `mtui-testreport` doer/check registries. Without it,
-    /// [`OperationGroup::plans`] returns [`HostError::NoPlanProvider`].
+    /// The builder form is for tests that own the group by value. Production
+    /// injects through [`set_plan_provider`](Self::set_plan_provider) at the
+    /// point of use, because that is the only place that cannot forget.
     #[must_use]
     pub fn with_plan_provider(mut self, provider: Arc<dyn PlanProvider>) -> Self {
         self.plan_provider = Some(provider);
         self
+    }
+
+    /// Injects the update-workflow [`PlanProvider`] in place.
+    ///
+    /// Called by `mtui-testreport`'s `perform_install` / `perform_uninstall`
+    /// immediately before driving the [`Operation`](super::operation::Operation)
+    /// template, which is the sole consumer of
+    /// [`OperationGroup::plans`]. Injecting there rather than at construction
+    /// is deliberate: a `HostsGroup` is built in a dozen places (the session,
+    /// each report, every test fixture), and wiring that any one of them can
+    /// omit is wiring that silently disables `install`. Without a provider,
+    /// [`OperationGroup::plans`] returns [`HostError::NoPlanProvider`].
+    pub fn set_plan_provider(&mut self, provider: Arc<dyn PlanProvider>) {
+        self.plan_provider = Some(provider);
     }
 
     /// Whether the surrounding session is the interactive REPL (spinner / prompt
@@ -751,9 +767,10 @@ impl HostsGroup {
     ///
     /// Ports upstream `HostsGroup._fanout_set_repo`, which runs
     /// `t.repo_manager.set(operation, testreport)` on every host. `report` is the
-    /// object-safe [`SetRepo`] hook the composition root supplies (the concrete
-    /// `SlReport`/`ObsReport`/… `set_repo` impl in `mtui-testreport`), so the
-    /// group never depends on the report crate.
+    /// object-safe [`SetRepo`] hook the caller passes in (the concrete
+    /// `SlReport`/`ObsReport`/… `set_repo` impl in `mtui-testreport`, handed over
+    /// by `update_flow::perform_prepare`), so the group never depends on the
+    /// report crate.
     ///
     /// Fans out concurrently via [`run_fanout`](super::actions::run_fanout)
     /// (upstream's `run_parallel`): every host runs its repo change in

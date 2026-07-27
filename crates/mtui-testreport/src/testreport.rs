@@ -607,7 +607,8 @@ pub trait TestReport {
     /// Drives the [`InstallOperation`](mtui_hosts::InstallOperation) template
     /// through the group's [`OperationGroup`](mtui_hosts::OperationGroup) impl,
     /// which resolves each host's installer doer/check via the injected
-    /// `PlanProvider` (wired at the composition root). The default is a no-op —
+    /// `PlanProvider` (injected by `update_flow::perform_install`, which is the
+    /// shared body behind this method). The default is a no-op —
     /// the null report has nothing to install — so only reports backed by real
     /// doer tables override it.
     ///
