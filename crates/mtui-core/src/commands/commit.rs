@@ -11,9 +11,9 @@ use crate::session::Session;
 
 /// Commits the testing template working copy to SVN.
 ///
-/// Ports upstream `mtui.commands.commit.Commit`. Run after testing to persist
+/// Run after testing to persist
 /// the final template. With `-m/--msg` the given message is used; without it a
-/// message is generated from the local system info (upstream reuses the export
+/// message is generated from the local system info (reusing the export
 /// footer via `system_info(..., prefix="committed from")`) so the commit is
 /// non-interactive rather than opening `svn`'s editor. Requires a loaded report.
 pub struct Commit;
@@ -57,7 +57,7 @@ impl Command for Commit {
         let install_logs = session.config.install_logs.clone();
 
         // -m tokens join into one message; without it, a generated system-info
-        // message keeps the commit non-interactive (upstream behaviour).
+        // message keeps the commit non-interactive.
         let msg: Vec<String> = match args
             .try_get_many::<String>("msg")
             .ok()

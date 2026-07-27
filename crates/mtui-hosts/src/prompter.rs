@@ -1,8 +1,7 @@
 //! Serialised interactive prompter for concurrent host fan-outs.
 //!
-//! Ported from upstream `mtui/cli/prompter.py`. When many targets run a command
-//! in parallel, a worker that needs to ask the user something (e.g. the
-//! command-timeout "keep waiting?" prompt in
+//! When many targets run a command in parallel, a worker that needs to ask
+//! the user something (e.g. the command-timeout "keep waiting?" prompt in
 //! [`SshConnection`](crate::connection::SshConnection)) must not race a sibling
 //! for `stdin`: with two workers reading at once the prompt text interleaves
 //! with other output and two workers can consume the same line.
@@ -13,10 +12,9 @@
 //! [`suspend_async`](crate::target::suspend_async) guard so a live TTY spinner
 //! erases its frame and stops repainting over the prompt until the user answers.
 //!
-//! ## Async, not threads
+//! ## Async lock
 //!
-//! Upstream uses a `threading.Lock` because its workers are OS threads. mtui
-//! fans out with `tokio` tasks, so the lock is a [`tokio::sync::Mutex`] and
+//! mtui fans out with `tokio` tasks, so the lock is a [`tokio::sync::Mutex`] and
 //! [`ask`](Prompter::ask) is async — held across the reader's `.await` soundly
 //! (unlike a `std::sync::Mutex`, which clippy's `await_holding_lock` rightly
 //! rejects and which would block the runtime).
@@ -28,7 +26,7 @@
 //! onto the runtime with [`spawn_blocking`](tokio::task::spawn_blocking); the
 //! composition root (`mtui-cli`) supplies it. Under `mtui-mcp` (no TTY) no
 //! prompter is constructed at all — the timeout branch degrades to a silent
-//! abort instead (upstream `prompter=None`).
+//! abort instead.
 
 use std::future::Future;
 use std::io;
@@ -109,17 +107,15 @@ impl Prompter {
 
     /// Asks a yes/no question, returning whether the user confirmed.
     ///
-    /// The Rust analogue of upstream `mtui.cli.term.prompt_user(text, ["yes",
-    /// "y"], interactive=True, default)`: reads a line via [`ask`](Prompter::ask),
-    /// lowercases it, and returns `true` for an empty response iff `default` is
-    /// `true`, or for a response in `{"yes", "y"}`; anything else (including an
-    /// I/O error, the analogue of upstream's Ctrl-C/Ctrl-D swallow) is `false`.
+    /// Reads a line via [`ask`](Prompter::ask), lowercases it, and returns
+    /// `true` for an empty response iff `default` is `true`, or for a
+    /// response in `{"yes", "y"}`; anything else (including an I/O error, e.g.
+    /// from Ctrl-C/Ctrl-D) is `false`.
     ///
-    /// Callers gate this behind an `interactive` check: upstream's
-    /// non-interactive mode never requests input and always returns `false` (so
-    /// a defaulted destructive prompt never auto-confirms unattended), so a
-    /// headless caller must not call `confirm` at all — see the load-time
-    /// stale-hash handling in `mtui-testreport`.
+    /// Callers gate this behind an `interactive` check: a headless caller
+    /// must not call `confirm` at all and must instead return `false` itself
+    /// (so a defaulted destructive prompt never auto-confirms unattended) —
+    /// see the load-time stale-hash handling in `mtui-testreport`.
     pub async fn confirm(&self, text: &str, default: bool) -> bool {
         match self.ask(text).await {
             Ok(response) => {
@@ -130,7 +126,7 @@ impl Prompter {
                     matches!(response.as_str(), "yes" | "y")
                 }
             }
-            // Upstream swallows KeyboardInterrupt / EOFError and returns False.
+            // Ctrl-C / EOF is swallowed and returns False.
             Err(_) => false,
         }
     }
@@ -142,8 +138,6 @@ impl Prompter {
     /// The single place the boxed-closure shape lives, so the composition root
     /// (`Session` → [`Target::set_timeout_prompt`]) wires the same serialised
     /// prompt (spinner-suspend + cross-task lock) instead of a bare closure.
-    /// Upstream `Target.connect` passes `self._prompter.ask`; this is the Rust
-    /// analogue.
     ///
     /// [`Target::set_timeout_prompt`]: crate::Target::set_timeout_prompt
     #[must_use]
@@ -328,7 +322,7 @@ mod tests {
             Box::pin(async move { Err(io::Error::other("eof")) })
                 as Pin<Box<dyn Future<Output = io::Result<String>> + Send>>
         }));
-        // Upstream swallows Ctrl-C / Ctrl-D and returns False, even with a
+        // Ctrl-C / Ctrl-D is swallowed and returns False, even with a
         // default of true.
         assert!(!p.confirm("go? ", true).await);
     }

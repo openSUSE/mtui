@@ -1,14 +1,14 @@
 //! Async concurrency primitives for the MCP session's per-template locking.
 //!
-//! Port of upstream `mtui.mcp.session._RWLock`: a minimal async readers-writer
-//! lock used as the **registry gate**. Many *shared* holders (per-RRID commands,
-//! each mutating only its own template) may run at once, but a *shared* holder
+//! A minimal async readers-writer lock used as the **registry gate**. Many
+//! *shared* holders (per-RRID commands, each mutating only its own template)
+//! may run at once, but a *shared* holder
 //! excludes every *exclusive* holder and vice-versa. Exclusive holders (registry
 //! mutators — `load_template` / `unload` — and unscoped fan-out) run one at a
 //! time with no shared holder present.
 //!
-//! **Writer-preference is intentional** (upstream `_writer_waiting`): while an
-//! exclusive waiter is pending, new shared acquisitions block, so a steady
+//! **Writer-preference is intentional**: while an exclusive waiter is pending,
+//! new shared acquisitions block, so a steady
 //! stream of per-RRID commands cannot starve a `load_template`. There is no
 //! fairness queue beyond that; the single-session workload (a handful of
 //! concurrent subagents) does not need one.

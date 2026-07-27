@@ -1,7 +1,6 @@
 //! Re-export idempotency tests for the export pipeline.
 //!
-//! Ports upstream `tests/test_export_idempotency.py` — regression tests for
-//! four related bugs (upstream `c870fe58`), each of which made a second
+//! Regression tests for four related bugs, each of which made a second
 //! `export` of the same testreport degrade the template instead of being a
 //! no-op refresh (duplicate headers/notices, over-deletion to end of file,
 //! dead stale-line cleanup).
@@ -13,8 +12,8 @@ use mtui_types::hostlog::HostLog;
 const FOOTER: &str = "## export MTUI:12.0, paramiko 3.5 on SLES-15 (kernel: 6.4) by tester\n";
 const RRID: &str = "SUSE:Maintenance:12358:199773";
 
-/// Mirrors upstream `_config`: a config with the fixed reports URL / install
-/// logs dir the fixtures assume.
+/// A config with the fixed reports URL / install logs dir the fixtures
+/// assume.
 fn config(tmp: &std::path::Path) -> Config {
     let mut cfg = Config::default();
     cfg.template_dir = tmp.to_path_buf();
@@ -25,8 +24,7 @@ fn config(tmp: &std::path::Path) -> Config {
 }
 
 /// Builds an `ExportContext` over `template` (the shared base the exporters
-/// embed; upstream drives these methods through a concrete exporter, but they
-/// all live on `BaseExport`).
+/// embed; these methods all live on `BaseExport`).
 fn ctx(tmp: &std::path::Path, template: &[&str]) -> ExportContext {
     let lines: Vec<String> = template.iter().map(|s| (*s).to_string()).collect();
     ExportContext::new(config(tmp), &lines, false, RRID.parse().unwrap())
@@ -167,7 +165,7 @@ fn kernel_install_notice_not_duplicated_on_reexport() {
 // 34: manual install_results stale-result cleanup must actually work
 // ---------------------------------------------------------------------------
 
-/// Mirrors upstream `_session_host`: a decoupled host view with no packages.
+/// A decoupled host view with no packages.
 fn session_host(hostname: &str, system: &str) -> ManualHost {
     ManualHost {
         hostname: hostname.to_string(),

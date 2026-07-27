@@ -1,7 +1,5 @@
 //! Compare a connected host's installed products against `refhosts.yml`.
 //!
-//! Ported from upstream `mtui/hosts/refhost/verify.py`.
-//!
 //! When mtui connects a reference host it can know two things about that host's
 //! products: what is *actually installed* (parsed from `/etc/products.d` into a
 //! [`System`]) and what the `refhosts.yml` metadata *says* should be there (a
@@ -16,18 +14,19 @@
 //! * Detected product *names* use the same identifiers as `refhosts.yml`
 //!   (`SLES`, `SLE_RT`, `SLES-LTSS`, `SL-Micro`, `sle-module-*` …); compared
 //!   case-insensitively for safety.
-//! * Detected *version strings* come from upstream `parse_product`: `"15-SP4"`
+//! * Detected *version strings* come from `parse_product`: `"15-SP4"`
 //!   (service packs), `"16.0"` / `"6.1"` (dotted). Both are normalized to a
 //!   refhosts [`Version`].
 //! * `qa` is dropped from the comparison on the refhosts side because the
 //!   detected-side parser intentionally skips `qa.prod` — keeping it would
 //!   report a phantom "missing qa" on every host whose metadata lists it.
 //!
-//! # Divergence from upstream
+//! # Version representation
 //!
-//! Upstream `Version` collapses `int | str` into one field; the mtui
+//! The mtui
 //! [`Version`] preserves the numeric-vs-textual distinction via
-//! [`VersionField`]. [`normalize_version`] therefore yields
+//! [`VersionField`], rather than collapsing it into one untyped field.
+//! [`normalize_version`] therefore yields
 //! [`VersionField::Text`] for a service-pack minor (`"SP4"`) and
 //! [`VersionField::Num`] for a dotted numeric minor (`"0"`), matching how
 //! `refhosts.yml` metadata deserializes so exact-match hosts compare equal.
@@ -50,8 +49,6 @@ fn is_ignored_addon(name: &str) -> bool {
 }
 
 /// Parse a single field value: numeric when it parses as `u64`, else textual.
-///
-/// Mirrors upstream `_int_or_str`.
 fn int_or_str(value: &str) -> VersionField {
     match value.parse::<u64>() {
         Ok(n) => VersionField::Num(n),
@@ -61,7 +58,7 @@ fn int_or_str(value: &str) -> VersionField {
 
 /// Convert a detected version string to a refhosts [`Version`].
 ///
-/// Handles the formats emitted by upstream `parse_product`:
+/// Handles the formats emitted by `parse_product`:
 ///
 /// * `"15-SP4"` → `Version { major: Num(15), minor: Text("SP4") }`
 /// * `"16.0"` / `"6.1"` → `Version { major: Num(16), minor: Num(0) }` /
@@ -70,8 +67,7 @@ fn int_or_str(value: &str) -> VersionField {
 /// * `""` / whitespace-only → `None`
 ///
 /// A leading numeric segment parses as [`VersionField::Num`]; anything else
-/// (e.g. an odd non-numeric major) is kept as [`VersionField::Text`], mirroring
-/// upstream `_int_or_str`.
+/// (e.g. an odd non-numeric major) is kept as [`VersionField::Text`].
 #[must_use]
 fn normalize_version(version: &str) -> Option<Version> {
     let version = version.trim();
@@ -108,7 +104,7 @@ fn normalize_version(version: &str) -> Option<Version> {
 fn parse_service_pack(version: &str) -> Option<(u64, u64)> {
     let (major, rest) = version.split_once("-SP")?;
     let major: u64 = major.parse().ok()?;
-    // The whole remainder must be digits (upstream `re.fullmatch`).
+    // The whole remainder must be digits.
     if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -118,7 +114,7 @@ fn parse_service_pack(version: &str) -> Option<(u64, u64)> {
 
 /// Render a [`Version`] for warning messages (`""` when `None`).
 ///
-/// Mirrors upstream `_fmt_version`: a numeric minor uses a `.` separator, a
+/// A numeric minor uses a `.` separator, a
 /// textual minor uses `-`, and an absent/empty-sentinel minor renders as major
 /// only.
 fn fmt_version(version: Option<&Version>) -> String {
@@ -134,8 +130,6 @@ fn fmt_version(version: Option<&Version>) -> String {
 }
 
 /// Render `"name x.y"` (or just `"name"` when the version renders empty).
-///
-/// Mirrors upstream `_named`.
 fn named(name: &str, version: Option<&Version>) -> String {
     let rendered = fmt_version(version);
     if rendered.is_empty() {
@@ -146,8 +140,6 @@ fn named(name: &str, version: Option<&Version>) -> String {
 }
 
 /// Outcome of comparing detected products against refhosts metadata.
-///
-/// Mirrors upstream `ProductDiff`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProductDiff {
     /// `/etc/products.d/baseproduct` is a dangling symlink.
@@ -175,8 +167,7 @@ impl ProductDiff {
 
     /// One warning line per drift class (empty when [`ok`](Self::ok)).
     ///
-    /// Addon lists are sorted for a stable, human-readable message, mirroring
-    /// upstream's `", ".join(sorted(...))`.
+    /// Addon lists are sorted for a stable, human-readable message.
     #[must_use]
     pub fn warnings(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -208,7 +199,7 @@ impl ProductDiff {
     }
 }
 
-/// Sort a clone of `items` and join with `", "` (upstream `", ".join(sorted)`).
+/// Sort a clone of `items` and join with `", "`.
 fn sorted_join(items: &[String]) -> String {
     let mut sorted = items.to_vec();
     sorted.sort();
@@ -321,7 +312,7 @@ mod tests {
     use mtui_types::{Product, SystemProduct};
     use std::collections::BTreeSet;
 
-    // --- builders mirroring the upstream test helpers ------------------------
+    // --- test-data builders ------------------------
 
     fn detected_product(name: &str, version: &str, arch: &str) -> SystemProduct {
         SystemProduct::new(name, version, arch)

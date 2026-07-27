@@ -39,7 +39,7 @@ owo-colors.workspace = true
 # `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).
 mtui-types.workspace = true
 # `UpdateKind` maps the `-a`/`-k` workflow onto `Session::load_update` in the
-# startup seeding path (upstream `run_mtui`'s pre-`cmdloop` `load_update`).
+# startup seeding path (before the REPL loop begins).
 mtui-testreport.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -50,8 +50,8 @@ notify-rust = { workspace = true, optional = true }
 
 [features]
 default = []
-# Desktop toast notifications on start/finish of long operations (upstream
-# `notify` extra). No-op when the process is headless (no TTY / no display).
+# Desktop toast notifications on start/finish of long operations. No-op when
+# the process is headless (no TTY / no display).
 notify = ["dep:notify-rust"]
 
 [dev-dependencies]

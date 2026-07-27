@@ -1,13 +1,12 @@
 //! Build-time capture of build-provenance metadata for `--version`.
 //!
-//! Upstream mtui's `--version` listed separately-installed *runtime* dependency
-//! versions (paramiko, openqa-client, …) because those could drift per operator
-//! environment. A statically-compiled Rust binary has no such drift — every dep
-//! is compiled in at a lockfile-pinned version — so that block would be
-//! redundant. What *does* vary for an out-of-tree build (someone building
-//! `mtui` outside a standard system package) is the build provenance: which
-//! commit, which profile, which target. This build script captures that into the
-//! `MTUI_LONG_VERSION` env var, which `args.rs` feeds to clap's `long_version`.
+//! A statically-compiled Rust binary has no runtime dependency-version drift —
+//! every dep is compiled in at a lockfile-pinned version — so `--version` has
+//! no need for a block reporting those. What *does* vary for an out-of-tree
+//! build (someone building `mtui` outside a standard system package) is the
+//! build provenance: which commit, which profile, which target. This build
+//! script captures that into the `MTUI_LONG_VERSION` env var, which `args.rs`
+//! feeds to clap's `long_version`.
 //!
 //! clap renders `mtui <long_version>`, so the captured value omits the leading
 //! `mtui ` and the final line reads `mtui <ver> (<ref>[-dirty], <profile>,

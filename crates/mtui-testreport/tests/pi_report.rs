@@ -1,15 +1,11 @@
-//! Ported from upstream `tests/test_pi_report.py`.
-//!
-//! Covers the `PITestReport` surface that lands in task nbv.12: `id`, `parser`,
+//! Covers the `PiReport` surface that lands in task nbv.12: `id`, `parser`,
 //! `update_repos_parser` (delegating to `reporepoparse`), and `check_hash` (the
 //! constant `(true, "", "")`).
 //!
 //! Not covered here (deferred by design, mirroring the `SlReport` boundary):
-//! * `list_update_commands` doer-rendering — awaits the `OperationGroup` seam
-//!   (upstream `test_pi_list_update_commands_invokes_display`); only the no-op
-//!   stub is smoke-checked.
-//! * `_show_yourself_data` — not on the trait skeleton yet
-//!   (upstream `test_pi_show_yourself_data_includes_repo_rows`).
+//! * `list_update_commands` doer-rendering — awaits the `OperationGroup` seam;
+//!   only the no-op stub is smoke-checked.
+//! * `_show_yourself_data` — not on the trait skeleton yet.
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
@@ -24,7 +20,6 @@ fn rrid(s: &str) -> RequestReviewID {
     RequestReviewID::parse(s).expect("valid rrid")
 }
 
-/// Upstream `test_pi_id_returns_rrid_str`.
 #[test]
 fn id_returns_rrid_string() {
     let mut r = PiReport::new(config());
@@ -38,7 +33,6 @@ fn id_empty_when_no_rrid() {
     assert_eq!(r.id(), "");
 }
 
-/// Upstream `test_pi_parser_returns_hosts_and_json`.
 #[test]
 fn parser_returns_hosts_and_json_keys() {
     let r = PiReport::new(config());
@@ -76,7 +70,6 @@ fn update_repos_parser_empty_when_no_repositories() {
     assert!(r.update_repos_parser().is_empty());
 }
 
-/// Upstream `test_pi_check_hash_always_true`.
 #[tokio::test]
 async fn check_hash_always_true() {
     let mut r = PiReport::new(config());

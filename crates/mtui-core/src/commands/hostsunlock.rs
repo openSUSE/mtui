@@ -11,7 +11,7 @@ use crate::session::Session;
 
 /// Unlocks hosts previously locked with `lock`.
 ///
-/// Ports upstream `mtui.commands.hostsunlock.HostsUnlock`. By default removes the
+/// By default removes the
 /// zypper/operation lock; `-f`/`--force` also removes locks set by other users
 /// or sessions.
 ///
@@ -166,9 +166,8 @@ mod tests {
     #[tokio::test]
     async fn pool_unlock_routes_to_pool_branch() {
         // `--pool` fans HostsGroup::pool_unlock out over the group. On an
-        // unclaimed host this is a clean no-op (upstream routes to
-        // `hosts.pool_unlock(force=False)`); the command must succeed rather than
-        // return the old deferred error.
+        // unclaimed host this is a clean no-op; the command must succeed
+        // rather than return the old deferred error.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &["-p"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();

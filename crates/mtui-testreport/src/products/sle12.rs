@@ -1,8 +1,8 @@
 //! Normalizer for the SLE 12 product family.
 //!
-//! Ported from `mtui/test_reports/products/sle12.py`. The if-chain order is
+//! The if-chain order is
 //! significant (more specific `LTSS-*` suffixes must be matched before the bare
-//! `LTSS`/`TERADATA` ones) and is preserved verbatim.
+//! `LTSS`/`TERADATA` ones).
 
 use mtui_types::SystemProduct;
 

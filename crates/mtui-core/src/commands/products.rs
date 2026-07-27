@@ -10,14 +10,13 @@ use crate::session::Session;
 
 /// Prints the installed products on the reference hosts.
 ///
-/// Ports upstream `mtui.commands.products.ListProducts`. Renders each selected
-/// host's parsed [`System`](mtui_types::system::System) through the display's
-/// `list_products` sink (base product + addons). Reflects whatever was last
-/// parsed; `reload_products` refreshes it.
+/// Renders each selected host's parsed [`System`](mtui_types::system::System)
+/// through the display's `list_products` sink (base product + addons).
+/// Reflects whatever was last parsed; `reload_products` refreshes it.
 ///
-/// A host-phase command that takes only `-t/--target` (upstream `_add_hosts_arg`
-/// without `_add_template_arg`), so it is [`Scope::Active`] to match upstream:
-/// it acts on the active template's host set, not once per loaded template.
+/// A host-phase command that takes only `-t/--target`, so it is
+/// [`Scope::Active`]: it acts on the active template's host set, not once per
+/// loaded template.
 pub struct ListProducts;
 
 #[async_trait]

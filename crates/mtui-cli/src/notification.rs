@@ -1,6 +1,5 @@
 //! Best-effort desktop notifications for the interactive REPL.
 //!
-//! Ported from upstream `mtui/cli/notification.py` (+ `repl.py::notify_user`).
 //! Desktop toasts are an opt-in courtesy compiled in behind the `notify`
 //! feature (which pulls in [`notify-rust`]). When the feature is absent, or the
 //! process is not attached to an interactive desktop session, [`display`]
@@ -89,8 +88,8 @@ fn display_backend(_summary: Option<&str>, _text: Option<&str>, _icon: Option<&s
     tracing::debug!("notify feature disabled; skipping desktop notification");
 }
 
-/// Maps upstream `repl.py::notify_user` onto [`display`]: a `"MTUI"`-titled
-/// toast, using the freedesktop `dialog-error` icon for error-class messages.
+/// Shows a `"MTUI"`-titled toast via [`display`], using the freedesktop
+/// `dialog-error` icon for error-class messages.
 ///
 /// A thin convenience for command code (e.g. the `update` start/finish toasts)
 /// so callers don't repeat the title/icon convention.

@@ -1,54 +1,45 @@
-//! Typed container for openQA results attached to a `TestReport`, ported from
-//! `mtui/types/oqaresults.py`.
+//! Typed container for openQA results attached to a `TestReport`.
 //!
-//! Upstream replaced an untyped `dict[str, Any]` (`{"auto": ..., "kernel":
-//! [...]}`) with a small dataclass so accessors are statically typed. This port
-//! keeps that intent: [`OpenQAResults`] is a typed record of the "auto" and
-//! "kernel" workflow results.
+//! [`OpenQAResults`] is a typed record of the "auto" and "kernel" workflow
+//! results, keeping accessors statically typed instead of an untyped map.
 //!
 //! ## The [`OpenQAResult`] trait
 //!
-//! Upstream models the shared surface of the concrete connectors
-//! (`AutoOpenQA`, `KernelOpenQA`, `DashboardAutoOpenQA`) as a `runtime_checkable`
-//! `Protocol` with a `kind` attribute and `__bool__`. This port expresses the
-//! same structural contract as the [`OpenQAResult`] trait: a `kind` and a
-//! truthiness predicate ([`OpenQAResult::has_results`], mirroring `__bool__`).
+//! The shared surface of the concrete connectors (auto, kernel, dashboard) is
+//! expressed as the [`OpenQAResult`] trait: a `kind` attribute and a
+//! truthiness predicate ([`OpenQAResult::has_results`]).
 //!
-//! ## Deviations from upstream
+//! ## Design notes
 //!
-//! * **Generic over the result types.** Python's `Protocol` uses `Any` for the
-//!   per-connector `pp`/`results` element types. Rust models this by making
-//!   [`OpenQAResults`] generic over the concrete auto (`A`) and kernel (`K`)
-//!   result types, each bounded by [`OpenQAResult`]. Call sites pick the
-//!   concrete connectors.
-//! * **`overview` generic.** The upstream `overview` field
-//!   (`OpenQAOverviewResult`) references the `oqa_search` result types, which
-//!   live in the higher `mtui-datasources` crate. Since `mtui-types` must not
-//!   depend upward, [`OpenQAResults`] is generic over the overview type `O`
-//!   bounded by the small [`OverviewResult`] trait (its truthiness predicate),
-//!   mirroring how `auto`/`kernel` are generic over [`OpenQAResult`]. Call sites
-//!   in `mtui-testreport` supply the concrete `OpenQAOverviewResult`.
+//! * **Generic over the result types.** [`OpenQAResults`] is generic over the
+//!   concrete auto (`A`) and kernel (`K`) result types, each bounded by
+//!   [`OpenQAResult`]. Call sites pick the concrete connectors.
+//! * **`overview` generic.** The `overview` field (`OpenQAOverviewResult`)
+//!   references the `oqa_search` result types, which live in the higher
+//!   `mtui-datasources` crate. Since `mtui-types` must not depend upward,
+//!   [`OpenQAResults`] is generic over the overview type `O` bounded by the
+//!   small [`OverviewResult`] trait (its truthiness predicate), the same
+//!   pattern used for `auto`/`kernel`. Call sites in `mtui-testreport` supply
+//!   the concrete `OpenQAOverviewResult`.
 
 /// The structural surface shared by all openQA result connectors.
 ///
-/// Mirrors the upstream `OpenQAResult` `Protocol`: every connector exposes a
-/// [`kind`](OpenQAResult::kind) discriminator and a truthiness predicate
-/// ([`has_results`](OpenQAResult::has_results), the port of `__bool__`).
+/// Every connector exposes a [`kind`](OpenQAResult::kind) discriminator and a
+/// truthiness predicate ([`has_results`](OpenQAResult::has_results)).
 pub trait OpenQAResult {
     /// The workflow discriminator (e.g. `"auto"`, `"kernel"`, `"base"`).
     fn kind(&self) -> &str;
 
     /// Whether this connector holds any results.
     ///
-    /// The port of upstream `__bool__`: `true` when the connector carries
-    /// results worth reporting.
+    /// `true` when the connector carries results worth reporting.
     fn has_results(&self) -> bool;
 }
 
 /// The truthiness surface of the `openqa_overview` payload.
 ///
-/// Mirrors the `__bool__` of upstream `OpenQAOverviewResult`: `true` when any of
-/// its sections has content. Defined here so [`OpenQAResults`] can stay in the
+/// `true` when any of its sections has content. Defined here so
+/// [`OpenQAResults`] can stay in the
 /// dependency-free `mtui-types` crate while the concrete overview type lives in
 /// `mtui-datasources`.
 pub trait OverviewResult {
@@ -57,8 +48,6 @@ pub trait OverviewResult {
 }
 
 /// A typed record of the openQA results attached to a `TestReport`.
-///
-/// Mirrors the upstream `OpenQAResults` dataclass:
 ///
 /// * `auto` — the "auto" workflow result, `None` until populated.
 /// * `kernel` — the list of "kernel" workflow results (typically a regular and
@@ -104,9 +93,8 @@ where
 {
     /// Creates an empty [`OpenQAResults`].
     ///
-    /// Equivalent to [`Default::default`]; every instance gets its own
-    /// `kernel` vector (guarding against the mutable-default footgun the
-    /// upstream `field(default_factory=list)` avoids).
+    /// Equivalent to [`Default::default`]; each call allocates its own
+    /// `kernel` vector, so instances never share mutable state.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -117,8 +105,7 @@ where
 mod tests {
     use super::*;
 
-    /// A connector-like stub with a controllable truthiness, mirroring the
-    /// `_truthy_result` / `_falsy_result` mocks in `test_oqaresults.py`.
+    /// A connector-like stub with a controllable truthiness.
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct StubResult {
         kind: String,

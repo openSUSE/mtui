@@ -11,11 +11,10 @@ use crate::session::Session;
 
 /// Prints the command protocol (issued commands + output) from the hosts.
 ///
-/// Ports upstream `mtui.commands.simplelists.ListLog` (`show_log`), which fans
-/// each host's log through `display.show_log` into an accumulator and pages the
-/// result. Useful for dumping the command history into a template's reproducer
-/// section. The per-host command log is snapshotted first so the report borrow
-/// does not overlap the display borrow.
+/// Fans each host's log through `display.show_log` into an accumulator and
+/// pages the result. Useful for dumping the command history into a
+/// template's reproducer section. The per-host command log is snapshotted
+/// first so the report borrow does not overlap the display borrow.
 pub struct ShowLog;
 
 #[async_trait]

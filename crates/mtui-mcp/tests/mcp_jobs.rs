@@ -1,5 +1,4 @@
-//! Port of the background-job (async slow-op) path from upstream
-//! `tests/test_mcp_jobs.py` (bead `mtui-rs-76e.12`).
+//! Tests for the background-job (async slow-op) path (bead `mtui-rs-76e.12`).
 //!
 //! A backgrounded command runs in a spawned worker that goes through the same
 //! [`McpSession::run_command`] primitive (so it takes the same per-RRID /

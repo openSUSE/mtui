@@ -11,10 +11,9 @@ use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// openQA results that count as "not a failure" for the `--failed` filter
-/// (upstream `_PASSING`).
+/// openQA results that count as "not a failure" for the `--failed` filter.
 const PASSING: &[&str] = &["passed", "softfailed"];
-/// openQA results that are neutral (neither pass nor fail; upstream `_NEUTRAL`).
+/// openQA results that are neutral (neither pass nor fail).
 const NEUTRAL: &[&str] = &["obsoleted", "skipped"];
 /// openQA job states that mean the job has finished; any other state
 /// (`scheduled`, `assigned`, `setup`, `running`, `uploading`, ...) is pending
@@ -29,10 +28,10 @@ fn is_pending(job: &oqa::JobResult) -> bool {
 
 /// Lists the individual openQA jobs for the loaded update's incident build.
 ///
-/// Ports upstream `mtui.commands.openqa_jobs.OpenQAJobs`. By default `obsoleted`
-/// jobs are dropped; `--all` keeps them, `--failed` shows only genuinely failed
-/// jobs (pending/unfinished jobs are excluded and reported as "N still
-/// pending"), and `--arch` filters by architecture. Requires a loaded update.
+/// By default `obsoleted` jobs are dropped; `--all` keeps them, `--failed`
+/// shows only genuinely failed jobs (pending/unfinished jobs are excluded and
+/// reported as "N still pending"), and `--arch` filters by architecture.
+/// Requires a loaded update.
 pub struct OpenQAJobs;
 
 #[async_trait]

@@ -1,20 +1,18 @@
 //! A line-buffer that can be loaded from and saved back to a file.
 //!
-//! Ports upstream `mtui.types.filelist.FileList`, a `UserList[str]` whose
-//! elements are the file's lines **with their trailing newline preserved**
-//! (Python `readlines()` semantics). The exporters mutate this buffer in place
-//! — inserting result blocks, links, and system info — then persist it.
+//! Its elements are the file's lines **with their trailing newline
+//! preserved**, matching Python's `readlines()` line-splitting. The
+//! exporters mutate this buffer in place — inserting result blocks, links,
+//! and system info — then persist it.
 //!
-//! Upstream tracks a hash of the content captured at load time and only writes
-//! on context-manager exit when the content changed. Rust has no `with`
-//! statement, so that behaviour is exposed explicitly:
+//! A hash of the content captured at load time is tracked so a write can be
+//! skipped when nothing changed:
 //!
 //! * [`FileList::is_dirty`] reports whether the buffer differs from what was
 //!   loaded, and
-//! * [`FileList::write_if_dirty`] performs the conditional atomic write,
-//!   mirroring `FileList.__exit__`.
+//! * [`FileList::write_if_dirty`] performs the conditional atomic write.
 //!
-//! [`FileList::write`] always writes (mirroring the eager `FileList.write`).
+//! [`FileList::write`] always writes unconditionally.
 
 use std::io;
 use std::ops::{Deref, DerefMut};
@@ -51,7 +49,8 @@ impl FileList {
     /// Loads a [`FileList`] from `path`, splitting into lines that each retain a
     /// trailing `\n` (matching Python `readlines()`).
     ///
-    /// Invalid UTF-8 is replaced (upstream opens with `errors="replace"`).
+    /// Invalid UTF-8 is replaced with the Unicode replacement character
+    /// (lossy decoding).
     ///
     /// # Errors
     ///
@@ -75,7 +74,7 @@ impl FileList {
         &self.lines
     }
 
-    /// The current content as a single string (upstream `"".join(self.data)`).
+    /// The current content as a single string (the joined lines).
     #[must_use]
     fn content(&self) -> String {
         self.lines.concat()
@@ -83,8 +82,8 @@ impl FileList {
 
     /// Atomically writes the current content to the bound path (always).
     ///
-    /// Mirrors the eager upstream `FileList.write`. After a successful write the
-    /// load snapshot is refreshed.
+    /// Always writes, regardless of whether the content changed. After a
+    /// successful write the load snapshot is refreshed.
     ///
     /// # Errors
     ///

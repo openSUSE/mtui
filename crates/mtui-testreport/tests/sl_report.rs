@@ -1,6 +1,4 @@
-//! Ported from upstream `tests/test_sl_report.py`.
-//!
-//! Covers the `SLTestReport` surface that lands in task nbv.4: `id`, `parser`,
+//! Covers the `SlReport` surface that lands in task nbv.4: `id`, `parser`,
 //! `update_repos_parser` (all three dispatch branches), and `check_hash` (the
 //! `1.1` fast path plus the Gitea match/mismatch compare via wiremock).
 //!
@@ -24,8 +22,7 @@ fn rrid(s: &str) -> RequestReviewID {
     RequestReviewID::parse(s).expect("valid rrid")
 }
 
-/// Build an RRID then override its `maintenance_id`, mirroring the upstream
-/// `_make_rrid_with_maint` helper (which patches the field directly).
+/// Build an RRID then override its `maintenance_id` directly.
 fn rrid_with_maint(maint: &str) -> RequestReviewID {
     let mut r = rrid("SUSE:SLFO:99:7");
     r.maintenance_id = maint.to_string();

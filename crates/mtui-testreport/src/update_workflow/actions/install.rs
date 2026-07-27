@@ -1,4 +1,4 @@
-//! Install command templates (upstream `actions/install.py`, role `installer`).
+//! Install command templates (role `installer`).
 //!
 //! Interpolates `$packages` (the space-joined package list). The `slmicro`
 //! entry is transactional and carries a `reboot`.
@@ -6,17 +6,17 @@
 use crate::update_workflow::WorkflowKey;
 use crate::update_workflow::actions::ActionCommands;
 
-/// zypper install (upstream `zypper_install`).
+/// zypper install.
 fn zypper() -> ActionCommands {
     ActionCommands::command_only("zypper -n in -y -l $packages")
 }
 
-/// yum install (upstream `yum_install`).
+/// yum install.
 fn yum() -> ActionCommands {
     ActionCommands::command_only("yum -y install $packages")
 }
 
-/// slmicro (transactional) install (upstream `slmicro_install`).
+/// slmicro (transactional) install.
 fn slmicro() -> ActionCommands {
     ActionCommands::with_reboot(
         "transactional-update -n pkg install $packages",
@@ -24,9 +24,8 @@ fn slmicro() -> ActionCommands {
     )
 }
 
-/// The install command for `(release, transactional)`, or `None` for an unknown
-/// key (upstream's `DictWithInjections` raises `MissingInstallerError`; the
-/// provider maps `None` to that error).
+/// The install command for `(release, transactional)`, or `None` for an
+/// unknown key; the provider maps `None` to a "missing installer" error.
 #[must_use]
 pub(crate) fn installer(release: &str, transactional: bool) -> Option<ActionCommands> {
     let key: WorkflowKey = (release.to_owned(), transactional);

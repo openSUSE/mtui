@@ -1,12 +1,12 @@
 //! The `Command` trait, its fan-out [`Scope`], and the template fan-out engine.
 //!
-//! Port of upstream `mtui.commands._command.Command`. Every command implements
-//! [`Command`] and is discovered through the registry (P5.2); the REPL, tab
-//! completion, and the MCP tool synthesiser all iterate that one registry.
+//! Every command implements [`Command`] and is discovered through the
+//! registry (P5.2); the REPL, tab completion, and the MCP tool synthesiser
+//! all iterate that one registry.
 //!
 //! A command supplies its abstract body in [`call`](Command::call); the provided
 //! [`run`](Command::run) drives that body across the templates the invocation
-//! resolves to, faithfully porting upstream `_resolve_templates` + `run`:
+//! resolves to:
 //!
 //! * `-T/--template RRID` scopes to exactly one loaded template.
 //! * `--all-templates` (or [`Scope::Fanout`]) fans out across every template.
@@ -62,11 +62,10 @@ pub trait Command: Send + Sync {
 
     /// A one-line description of the command, or `None` if undocumented.
     ///
-    /// The Rust replacement for upstream's docstring convention: `help` groups
-    /// commands returning `Some(..)` under "Documented commands" and those
-    /// returning `None` under "Undocumented commands". Defaults to `None`;
-    /// commands opt in by overriding it. (It also feeds MCP tool descriptions in
-    /// Phase 7.)
+    /// `help` groups commands returning `Some(..)` under "Documented commands"
+    /// and those returning `None` under "Undocumented commands". Defaults to
+    /// `None`; commands opt in by overriding it. (It also feeds MCP tool
+    /// descriptions in Phase 7.)
     fn about(&self) -> Option<&'static str> {
         None
     }
@@ -117,8 +116,8 @@ pub trait Command: Send + Sync {
     /// Tab-completion candidates for the current input. Empty by default.
     ///
     /// `text` is the token being completed and `line` the whole input line;
-    /// mirrors upstream `complete(state, text, line, begidx, endidx)` minus the
-    /// readline index args, which the reedline completer (Phase 6) supplies.
+    /// the readline-style index args (`begidx`/`endidx`) are not needed here —
+    /// the reedline completer (Phase 6) supplies them.
     fn complete(&self, _session: &Session, _text: &str, _line: &str) -> Vec<String> {
         Vec::new()
     }
@@ -174,9 +173,8 @@ pub trait Command: Send + Sync {
         // connected host has nothing to act on and is skipped so it can't fail
         // the fan-out. Explicitly named hosts must keep failing loudly.
         //
-        // Upstream keys this on `hasattr(args, "hosts")` (does the command
-        // *declare* `-t`?) and `not args.hosts` (were any named?). In clap,
-        // `try_get_many` distinguishes the two: `Err` = the arg was never
+        // `try_get_many` distinguishes whether the command declares `-t` at all
+        // from whether any hosts were actually named: `Err` = the arg was never
         // declared, `Ok(None)` = declared but unset, `Ok(Some)` = declared with
         // values.
         let hosts = args.try_get_many::<String>("hosts");
@@ -277,8 +275,7 @@ fn restore_active(session: &mut Session, restore: Option<String>) {
     }
 }
 
-/// Returns the ordered RRIDs this invocation should act on, porting upstream
-/// `_resolve_templates`.
+/// Returns the ordered RRIDs this invocation should act on.
 ///
 /// An empty session resolves to a single empty-RRID entry (the active null
 /// report), so `run` takes the single-call fast path exactly as the historical
@@ -326,8 +323,7 @@ fn resolve_templates(
 /// for out-of-crate callers that must know the target templates *before*
 /// dispatch (the MCP per-template lock gate, `mtui-rs-76e.11`).
 ///
-/// The public port of upstream `McpSession._resolve_job_rrids`: it builds the
-/// command's clap parser, parses `argv`, and runs the identical
+/// Builds the command's clap parser, parses `argv`, and runs the identical
 /// [`resolve_templates`] fan-out logic `run` uses, then drops the empty-RRID
 /// null-report sentinel so the caller sees only genuinely-loaded templates.
 ///
@@ -335,8 +331,8 @@ fn resolve_templates(
 /// * `Some(rrids)` — one or more loaded templates this call targets;
 /// * `None` — the argv does not parse here, or it resolves only to the null
 ///   report (nothing loaded / active is null). The caller treats `None` (and the
-///   multi-RRID case) as "take the registry gate exclusively", exactly as
-///   upstream falls back when resolution is not a single real template.
+///   multi-RRID case) as "take the registry gate exclusively" whenever
+///   resolution is not a single real template.
 ///
 /// This never errors: a `-T <unloaded-rrid>` (which [`resolve_templates`] would
 /// reject) yields `None` so the caller serialises conservatively rather than

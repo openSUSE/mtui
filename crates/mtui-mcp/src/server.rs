@@ -2,8 +2,8 @@
 //!
 //! A hand-written [`ServerHandler`] whose [`list_tools`](ServerHandler::list_tools)
 //! and [`call_tool`](ServerHandler::call_tool) are built at *runtime* from the
-//! command [`Registry`] — the Rust-idiomatic equivalent of upstream Python's
-//! dynamic FastMCP registration. This grew out of the P7.1 spike (which proved
+//! command [`Registry`], built dynamically rather than declared per tool. This
+//! grew out of the P7.1 spike (which proved
 //! the runtime-registration approach against rmcp 2.x with a single hard-coded
 //! `whoami` tool); it now synthesises the **full** tool surface via
 //! [`crate::tools`].
@@ -133,9 +133,9 @@ impl McpServer {
             .chain(testreport_descriptors)
             .collect();
 
-        // Token-budget passes, in upstream's order (main.py): slim every tool's
-        // JSON schema of redundant boilerplate, then narrow the surface to the
-        // configured profile. `full` with no allow/deny override is a no-op.
+        // Token-budget passes: slim every tool's JSON schema of redundant
+        // boilerplate, then narrow the surface to the configured profile. `full`
+        // with no allow/deny override is a no-op.
         for descriptor in &mut descriptors {
             descriptor.input_schema = crate::slim::slim_input_schema(&descriptor.input_schema);
         }
@@ -208,8 +208,8 @@ fn call_arguments(request: &CallToolRequestParams) -> Map<String, Value> {
 /// Built in [`call_tool`](ServerHandler::call_tool) from the request's
 /// [`RequestContext`] — the cloned [`Peer`] plus the client-supplied
 /// `progressToken`. It exists only when the client actually requested progress
-/// (upstream: `report_progress` is a no-op without a token, so we simply do not
-/// build the sink), and it swallows transport failures so a flaky client can
+/// (without a token there is nothing to notify, so we simply do not build the
+/// sink), and it swallows transport failures so a flaky client can
 /// never mask the command's result.
 struct PeerProgressSink {
     peer: Peer<RoleServer>,
@@ -257,9 +257,9 @@ impl ServerHandler for McpServer {
 
         // A slow foreground tool call emits `notifications/progress` heartbeats so
         // the client does not time out. Build the sink only when the client
-        // supplied a `progressToken` (upstream: no token → `report_progress` is a
-        // no-op, so the heartbeat costs nothing). Job-control tools are fast and
-        // stay unwrapped, matching upstream.
+        // supplied a `progressToken` (without one there is nothing to notify, so
+        // the heartbeat costs nothing). Job-control tools are fast and
+        // stay unwrapped.
         let sink: Option<PeerProgressSink> =
             context
                 .meta

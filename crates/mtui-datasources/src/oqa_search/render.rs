@@ -1,8 +1,7 @@
 //! Plain-text renderer for the openQA overview and its begin/end markers.
 //!
-//! Ported from the renderer half of `mtui/data_sources/oqa_search/search.py`
-//! (`render_overview`, `_render_version_row`, `_render_build_check`, the
-//! `_strip_obs_timestamp` helper, and the `OVERVIEW_*` markers). The output is
+//! Renders the overview (version rows and build-check lines, with OBS
+//! timestamps stripped) between `OVERVIEW_*` markers. The output is
 //! markdown-ish plain text (no ANSI): each section gets a `##`/`###` header so
 //! the block stays scannable when pasted into a testreport.
 //!
@@ -29,7 +28,7 @@ pub const OVERVIEW_BEGIN_MARKER: &str = "<!-- mtui openqa_overview begin -->";
 pub const OVERVIEW_END_MARKER: &str = "<!-- mtui openqa_overview end -->";
 
 /// OBS prepends each build-log line with `[ <seconds>s]`; strip it when
-/// rendering for human consumption (upstream `_OBS_TIMESTAMP_RE`).
+/// rendering for human consumption.
 static OBS_TIMESTAMP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[\s*\d+s\]\s*").expect("valid OBS timestamp regex"));
 
@@ -41,7 +40,7 @@ fn strip_obs_timestamp(line: &str) -> String {
 /// Renders the overview as a list of plain-text lines (no ANSI, no trailing
 /// newlines on individual entries — the caller joins them as needed).
 ///
-/// Mirrors upstream `render_overview`. The `skip_aggregated` flag suppresses the
+/// The `skip_aggregated` flag suppresses the
 /// aggregated-updates section entirely (the user passed `--no-aggregated`).
 #[must_use]
 pub fn render_overview(
@@ -64,7 +63,7 @@ pub fn render_overview(
         }
         lines.push(String::new());
     } else if skip_aggregated || aggregated_updates_rows.is_empty() {
-        // Nothing to show in the visible sections -> upstream's "No openQA
+        // Nothing to show in the visible sections -> the "No openQA
         // builds" hint. When --no-aggregated is in effect we cannot rely on the
         // aggregated section to convey emptiness, so the hint fires whenever
         // single incidents is empty.
@@ -109,8 +108,7 @@ pub fn render_overview(
     lines
 }
 
-/// Renders one PASSED/FAILED/RUNNING/MISSING line as 1-2 plain lines
-/// (upstream `_render_version_row`).
+/// Renders one PASSED/FAILED/RUNNING/MISSING line as 1-2 plain lines.
 fn render_version_row(row: &VersionResult) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if row.status == "missing" {
@@ -150,7 +148,7 @@ fn render_version_row(row: &VersionResult) -> Vec<String> {
     out
 }
 
-/// Renders one build-check log entry (upstream `_render_build_check`).
+/// Renders one build-check log entry.
 fn render_build_check(entry: &BuildCheckResult) -> Vec<String> {
     let mut out: Vec<String> = vec![format!("- {}", entry.url)];
     if entry.matches.is_empty() {

@@ -1,8 +1,6 @@
 //! The interactive `shell` REPL command and its raw-mode TTY bridge.
 //!
-//! Ports upstream `mtui.commands.shell.Shell` + the `shell`/`__invoke_shell`
-//! pair in `mtui.hosts.connection.connection` (the raw-`termios` `select()`
-//! loop). The host-library half — spawning the remote PTY and exposing it as an
+//! The host-library half — spawning the remote PTY and exposing it as an
 //! object-safe [`ShellChannel`] duplex — landed in P2.10 (`mtui-hosts` feature
 //! `shell`); this module is the **CLI consumer** that owns the local terminal.
 //!
@@ -49,38 +47,35 @@ pub enum InputEvent {
 /// the [`bridge`] pump can take `&mut dyn BridgeIo`.
 #[async_trait::async_trait]
 trait BridgeIo: Send {
-    /// Awaits the next local input event, or `None` on local EOF / stream end
-    /// (upstream `sys.stdin.read(1) == "" → break`).
+    /// Awaits the next local input event, or `None` on local EOF / stream end.
     async fn next_input(&mut self) -> Option<InputEvent>;
 
-    /// Writes remote shell output to the local terminal (upstream
-    /// `sys.stdout.write`).
+    /// Writes remote shell output to the local terminal.
     fn write_out(&mut self, bytes: &[u8]);
 
-    /// Flushes the local terminal (upstream `sys.stdout.flush`).
+    /// Flushes the local terminal.
     fn flush(&mut self);
 }
 
 /// Pumps bytes between a spawned [`ShellChannel`] and the local terminal until
 /// either side ends the session.
 ///
-/// Ports upstream's `while True: select([session, stdin]) …` loop:
+/// Each `select!` iteration:
 ///
 /// * remote output → [`BridgeIo::write_out`]; `read → Ok(0)` (remote shell
 ///   exited) or a channel error stops the loop;
 /// * local [`InputEvent::Bytes`] → [`ShellChannel::write`]; a local `None`
 ///   (stdin EOF) stops the loop;
 /// * local [`InputEvent::Resize`] → best-effort [`ShellChannel::resize`]
-///   (SIGWINCH forwarding — an improvement over upstream, which fixes size at
-///   spawn).
+///   (SIGWINCH forwarding, so the remote PTY tracks a local terminal resize
+///   mid-session).
 ///
 /// The channel is closed on the way out.
 ///
 /// # Errors
 ///
 /// Propagates a [`ShellChannel::write`] failure (a keystroke could not be sent).
-/// A read error is treated as a clean stop, not an error, matching upstream's
-/// `except TimeoutError: pass` / EOF handling.
+/// A read error is treated as a clean stop, not an error.
 async fn bridge(channel: &mut dyn ShellChannel, io: &mut dyn BridgeIo) -> anyhow::Result<()> {
     let mut buf = [0u8; 4096];
     loop {
@@ -106,15 +101,14 @@ async fn bridge(channel: &mut dyn ShellChannel, io: &mut dyn BridgeIo) -> anyhow
     Ok(())
 }
 
-/// Restores the terminal to cooked mode on drop — the RAII equivalent of
-/// upstream's `finally: termios.tcsetattr(..., oldtty)`.
+/// Restores the terminal to cooked mode on drop.
 ///
 /// Enabling raw mode in [`new`](Self::new) and disabling it in [`Drop`]
 /// guarantees restoration on normal return, `?`, or panic.
 struct RawModeGuard;
 
 impl RawModeGuard {
-    /// Puts the terminal into raw mode (upstream `tty.setraw`/`setcbreak`).
+    /// Puts the terminal into raw mode.
     ///
     /// # Errors
     ///
@@ -261,15 +255,14 @@ pub(crate) fn is_shell_line(line: &str) -> Option<Vec<String>> {
     (name == "shell").then(|| argv.to_vec())
 }
 
-/// Shlex-splits a line the same way the engine does (upstream `shlex.split`),
-/// returning `None` on unbalanced quotes.
+/// Shlex-splits a line the same way the engine does, returning `None` on
+/// unbalanced quotes.
 fn shlex_split(line: &str) -> Option<Vec<String>> {
     shlex::split(line)
 }
 
 /// Runs the `shell` command: parse `-t/--target`, resolve the host selection,
-/// then attach a shell on each selected host **sequentially** (upstream
-/// `for target in targets: targets[target].shell()`).
+/// then attach a shell on each selected host **sequentially**.
 ///
 /// A host with no attachable PTY (disabled / spawn failure →
 /// [`Target::shell`] `None`) is reported and skipped; the loop continues to the

@@ -14,7 +14,7 @@ use crate::session::Session;
 
 /// Regenerates a test-report template via the TeReGen API.
 ///
-/// Ports upstream `mtui.commands.regenerate.Regenerate`. Enqueues a regeneration
+/// Enqueues a regeneration
 /// job (`POST /reports/{id}/regenerate`); by default waits for the Minion job to
 /// finish and reports the outcome. `--force` overwrites an existing but unedited
 /// template, `--ignore-inconsistent` regenerates despite inconsistent metadata,
@@ -24,10 +24,10 @@ use crate::session::Session;
 /// that RRID is regenerated directly — *without* requiring it to be loaded first,
 /// which breaks the load/regenerate catch-22 for a never-generated report (a
 /// missing SLFO template cannot be loaded, and TeReGen is exactly what creates
-/// it). When omitted, the loaded/active template is used (upstream behaviour).
+/// it). When omitted, the loaded/active template is used.
 ///
-/// After a successful wait, the freshly built template is **loaded** in place
-/// (upstream `_reload`): any stale local checkout is dropped and the update is
+/// After a successful wait, the freshly built template is **loaded** in place:
+/// any stale local checkout is dropped and the update is
 /// loaded via [`Session::load_update`] without autoconnect. The workflow kind is
 /// inferred from the loaded report when one exists; for a standalone RRID it
 /// defaults to [`UpdateKind::Auto`], or [`UpdateKind::Kernel`] with `-k/--kernel`.
@@ -107,7 +107,7 @@ impl Command for Regenerate {
 
         // An explicit `RRID` positional regenerates that template without it
         // being loaded first (breaks the load/regenerate catch-22); otherwise
-        // fall back to the loaded/active template (upstream behaviour). Only the
+        // fall back to the loaded/active template. Only the
         // fallback goes through the "load first" guard.
         let rrid_str = match args.get_one::<String>("rrid") {
             Some(rrid) => rrid.clone(),
@@ -130,8 +130,7 @@ impl Command for Regenerate {
             return Ok(());
         }
 
-        // Drive a TTY spinner for the (long-polling) wait — upstream's
-        // `with spinner(f"Regenerating {rrid}")`. REPL-only (gated on
+        // Drive a TTY spinner for the (long-polling) wait. REPL-only (gated on
         // `interactive`, like the fan-out spinner); a no-op off a TTY / over
         // MCP. The guard's `is_stopped` predicate feeds `regenerate_and_wait`'s
         // cooperative-cancel hook so Ctrl-C during the wait bails out promptly
@@ -172,7 +171,7 @@ impl Command for Regenerate {
         }
 
         // Success. Drop any stale checkout and load the freshly built template
-        // in place (upstream `_reload`).
+        // in place.
         session
             .display
             .println(&format!("Template for {rrid_str} regenerated — reloading"));
@@ -181,13 +180,11 @@ impl Command for Regenerate {
     }
 }
 
-/// Drops any stale local checkout and loads the freshly built template
-/// (upstream `Regenerate._reload`).
+/// Drops any stale local checkout and loads the freshly built template.
 ///
 /// Picks the update kind by:
 /// * a loaded report whose RRID matches `rrid` → its workflow
-///   ([`Workflow::Kernel`] → [`UpdateKind::Kernel`], else [`UpdateKind::Auto`],
-///   mirroring the upstream `KernelOBSUpdateID`/`AutoOBSUpdateID` choice);
+///   ([`Workflow::Kernel`] → [`UpdateKind::Kernel`], else [`UpdateKind::Auto`]);
 /// * otherwise (a standalone RRID with nothing matching loaded) →
 ///   [`UpdateKind::Kernel`] when `kernel_hint` is set, else [`UpdateKind::Auto`].
 ///
@@ -238,7 +235,7 @@ async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
     session.load_update(&update, false, kind).await;
 }
 
-/// Reports the `--no-wait` enqueue outcome (upstream `_report_enqueue`).
+/// Reports the `--no-wait` enqueue outcome.
 fn report_enqueue(
     session: &mut Session,
     rrid: &str,
@@ -271,8 +268,7 @@ fn report_enqueue(
         .println("Not waiting (--no-wait); reload the template once it is built.");
 }
 
-/// Suggests the flags that might lift a refusal, skipping ones already set
-/// (upstream `_println_retry_hint`).
+/// Suggests the flags that might lift a refusal, skipping ones already set.
 fn println_retry_hint(session: &mut Session, force: bool, ignore_inconsistent: bool) {
     let mut flags = Vec::new();
     if !force {

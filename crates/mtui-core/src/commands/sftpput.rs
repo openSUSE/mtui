@@ -12,7 +12,7 @@ use crate::session::Session;
 
 /// Uploads a local file (or directory tree) to every enabled reference host.
 ///
-/// Ports upstream `mtui.commands.sftpcmd.SFTPPut`. Files are placed under the
+/// Files are placed under the
 /// report's remote working directory (`metadata.target_wd(<name>)`); a directory
 /// argument is walked and each contained file uploaded. Only enabled hosts are
 /// contacted. Shell-glob expansion of the argument is a Phase-6 REPL concern;
@@ -20,7 +20,7 @@ use crate::session::Session;
 pub struct SftpPut;
 
 /// Recursively collects the regular files under `path` (a single file returns
-/// itself). Mirrors upstream's `os.walk` traversal.
+/// itself).
 fn collect_files(path: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);

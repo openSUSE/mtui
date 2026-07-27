@@ -1,26 +1,25 @@
 //! Filesystem path resolution for `mtui-config`.
 //!
-//! Two flavours of paths live here, mirroring upstream `mtui/support/paths.py`:
+//! Two flavours of paths live here:
 //!
 //! * **Config search paths** ([`config_search_paths`]) — the ordered list of
 //!   candidate config files, later entries overriding earlier ones when merged.
 //! * **User data path** ([`data_dir`]) — the XDG data directory where mtui
-//!   persists per-user state (upstream `save_cache_path`).
+//!   persists per-user state.
 //!
-//! ## Deviation from upstream (intentional)
+//! ## Search order
 //!
-//! Upstream reads INI from `--config` → `$MTUI_CONF` → `/etc/mtui.cfg` +
-//! `~/.mtuirc`. mtui uses **TOML**; the config filename is always
-//! `mtui.toml`. Precedence, lowest → highest:
+//! mtui reads **TOML**; the config filename is always `mtui.toml`. Precedence,
+//! lowest → highest:
 //!
 //! ```text
 //! /etc/mtui.toml  →  ~/.mtui.toml  →  $XDG_CONFIG_HOME/mtui/mtui.toml
 //! ```
 //!
 //! with `--config <file>` and `$MTUI_CONF` each short-circuiting the chain to a
-//! single file. The home dotfile `~/.mtui.toml` echoes upstream's `~/.mtuirc`
-//! for operators who prefer a dotfile over the XDG directory; when both exist
-//! the XDG file wins on shared keys (it is merged last).
+//! single file. The home dotfile `~/.mtui.toml` is for operators who prefer a
+//! dotfile over the XDG directory; when both exist the XDG file wins on shared
+//! keys (it is merged last).
 //!
 //! This module is pure and I/O-free: it only computes paths, it never reads
 //! files (that is [`crate::Config::load`]'s job).
@@ -85,9 +84,9 @@ fn xdg_config_file() -> Option<PathBuf> {
 /// The home-directory dotfile config path `~/.mtui.toml`, if a home dir can be
 /// resolved.
 ///
-/// The mtui analogue of upstream's `~/.mtuirc`: a single dotfile in `$HOME`
-/// for operators who prefer it to the XDG config directory. Sits between `/etc`
-/// and the XDG file in precedence (see [`config_search_paths`]).
+/// A single dotfile in `$HOME` for operators who prefer it to the XDG config
+/// directory. Sits between `/etc` and the XDG file in precedence (see
+/// [`config_search_paths`]).
 #[must_use]
 fn home_config_file() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".mtui.toml"))
@@ -99,7 +98,6 @@ fn home_config_file() -> Option<PathBuf> {
 /// Distinct from the disposable cache dir and the config dir (user-authored):
 /// history is data the user grows and expects to survive a cache wipe.
 ///
-/// Deliberate deviation from upstream, which keeps history at `~/.mtui_history`;
 /// mtui is XDG-first for config/cache/data alike.
 #[must_use]
 pub fn data_dir() -> Option<PathBuf> {
@@ -118,12 +116,10 @@ pub fn data_dir() -> Option<PathBuf> {
 /// * Otherwise the default is `$XDG_DATA_HOME/mtui/terms` (consistent with
 ///   [`data_dir`]), where packaging may also install `term.*.sh`.
 ///
-/// Upstream equivalent: `mtui.support.paths.terms_path()`, which resolves the
-/// `terms/` directory shipped as package data inside the installed `mtui`
-/// package. Rust has no package-data concept, so mtui ships the scripts under
+/// Rust has no package-data concept, so mtui ships the scripts under
 /// `dist/terms/` and lets packaging install them to the datadir (or `MTUI_TERMS_DIR`
 /// point elsewhere). The `terms` command derives the available term names by
-/// globbing this directory, mirroring upstream's dynamic `_list_terms`.
+/// globbing this directory.
 #[must_use]
 pub fn terms_path() -> Option<PathBuf> {
     resolve_terms_path(std::env::var_os(ENV_TERMS).map(PathBuf::from), data_dir())
@@ -142,7 +138,7 @@ fn resolve_terms_path(env_terms: Option<PathBuf>, data: Option<PathBuf>) -> Opti
 
 /// Compute the ordered list of config files to load, lowest precedence first.
 ///
-/// Resolution rules (mirrors upstream's short-circuit for the explicit forms):
+/// Resolution rules (the explicit forms short-circuit the chain):
 ///
 /// * If `explicit` is `Some` (the `--config` flag), that single file is the
 ///   only candidate.

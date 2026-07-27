@@ -1,18 +1,16 @@
 //! The `edit` REPL command and its `$EDITOR` spawn.
 //!
-//! Ports upstream `mtui.commands.edit.Edit`. Spawning `$EDITOR` (default `vim`)
-//! on the file inherits the process stdio, so the child needs the controlling
-//! terminal — which only the `mtui` binary owns. `mtui-core`'s `edit` command is
-//! therefore a headless-error stub (mirroring `shell`); the REPL **intercepts**
-//! the `edit` line before dispatch (see [`is_edit_line`]) and spawns the editor
-//! here, where the local TTY is available. A host library / the headless MCP
-//! engine never runs this path.
+//! Spawning `$EDITOR` (default `vim`) on the file inherits the process stdio,
+//! so the child needs the controlling terminal — which only the `mtui` binary
+//! owns. `mtui-core`'s `edit` command is therefore a headless-error stub
+//! (mirroring `shell`); the REPL **intercepts** the `edit` line before
+//! dispatch (see [`is_edit_line`]) and spawns the editor here, where the local
+//! TTY is available. A host library / the headless MCP engine never runs this
+//! path.
 //!
-//! Deviation from upstream: upstream `edit.py` wraps the spawn in a bare
-//! `except` that logs and swallows every failure. Here [`run_edit`] returns a
-//! typed [`anyhow::Result`] and the REPL renders any failure in red (the same
-//! path `run_shell` uses), matching the project's "typed `Result` over
-//! log-and-swallow" preference.
+//! [`run_edit`] returns a typed [`anyhow::Result`] and the REPL renders any
+//! failure in red (the same path `run_shell` uses), matching the project's
+//! "typed `Result` over log-and-swallow" preference.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -36,9 +34,8 @@ pub(crate) fn is_edit_line(line: &str) -> Option<Vec<String>> {
 /// Resolves the edit target: the explicit `filename` argument, or — when none is
 /// given — the active report's template path.
 ///
-/// Mirrors upstream `edit.py`: `self.args.filename or self._template()`, where
-/// `_template` is `@requires_update` (errors when nothing is loaded). Returns
-/// the same "not loaded" message the engine's `require_update` would.
+/// Errors when nothing is loaded, with the same "not loaded" message the
+/// engine's `require_update` would give.
 fn resolve_path(session: &Session, filename: Option<&String>) -> anyhow::Result<PathBuf> {
     if let Some(name) = filename {
         return Ok(PathBuf::from(name));
@@ -56,10 +53,9 @@ fn resolve_path(session: &Session, filename: Option<&String>) -> anyhow::Result<
 /// Runs the `edit` command: parse the optional `filename`, resolve the path,
 /// then spawn `$EDITOR` (default `vim`) on it with inherited stdio.
 ///
-/// Upstream passes a two-element argv (`[editor, path]`) with no shell-word
-/// splitting; this mirrors that exactly (`Command::new(editor).arg(path)`), so
-/// `$EDITOR="code -w"` is treated as a single program name (a deliberate parity
-/// choice, not word-split).
+/// `$EDITOR` is passed straight to `Command::new(editor).arg(path)` with no
+/// shell-word splitting, so `$EDITOR="code -w"` is treated as a single program
+/// name (a deliberate choice, not word-split).
 ///
 /// # Errors
 ///

@@ -9,8 +9,7 @@ use crate::session::Session;
 
 /// Lists the commands mtui would invoke to apply the update on the hosts.
 ///
-/// Ports upstream `mtui.commands.simplelists.ListUpdateCommands`, which calls
-/// `metadata.list_update_commands(targets, println)`. The Rust
+/// The
 /// [`TestReport::list_update_commands`](mtui_testreport::TestReport) emits the
 /// per-host update commands itself (a no-op for the null report); concrete
 /// reports (SL/PI/OBS) render their updater command lines.

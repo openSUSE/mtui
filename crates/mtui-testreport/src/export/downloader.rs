@@ -1,11 +1,10 @@
 //! Download openQA logs for the auto/kernel exporters.
 //!
-//! Ports `mtui.update_workflow.export.downloader`. Each openQA test maps to a
-//! downloader by the first `_`-segment of its name (`install` → the zypper
-//! install log, `ltp` → the result-array JSON), with an empty-log fallback for
-//! everything else. Upstream fanned the downloads out over a thread pool; this
-//! port is async (tokio) with **bounded concurrency**, matching the crate's
-//! async-native mandate.
+//! Each openQA test maps to a downloader by the first `_`-segment of its
+//! name (`install` → the zypper install log, `ltp` → the result-array JSON),
+//! with an empty-log fallback for everything else. Downloads fan out async
+//! (tokio) with **bounded concurrency**, matching the crate's async-native
+//! mandate.
 //!
 //! ## Error modes
 //!
@@ -18,8 +17,7 @@
 //! ## Fetch seam
 //!
 //! HTTP is abstracted behind the [`BytesFetcher`] trait so the exporters inject
-//! an [`HttpClient`]-backed fetcher while tests inject a mock. This mirrors the
-//! way upstream patched `get_bytes` in `test_export_downloader.py`.
+//! an [`HttpClient`]-backed fetcher while tests inject a mock.
 
 use std::path::{Path, PathBuf};
 
@@ -29,7 +27,7 @@ use mtui_types::Test;
 
 use crate::support::fileops::atomic_write_file;
 
-/// Max concurrent downloads (bounded fan-out replacing the upstream pool).
+/// Max concurrent downloads.
 const DOWNLOAD_CONCURRENCY: usize = 8;
 
 /// The download error mode.
@@ -43,8 +41,7 @@ pub enum ErrorMode {
 
 /// A missing openQA result log under [`ErrorMode::Full`].
 ///
-/// Ports upstream `ResultsMissingError`; its `Display` matches the upstream
-/// message verbatim.
+/// Its `Display` string is a stable, user-facing message.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("Test: {test} on arch: {arch} missing results.json file. Please restart it.")]
 pub struct ResultsMissingError {
@@ -56,10 +53,10 @@ pub struct ResultsMissingError {
 
 /// A download failure surfaced under [`ErrorMode::Full`].
 ///
-/// Separates a *download* failure (the openQA log could not be fetched — upstream
-/// `ResultsMissingError`) from a *write* failure (the log was fetched but could
-/// not be persisted locally, or its off-thread write task failed to join). The
-/// latter is a robustness fix over upstream, which had no local-write signal.
+/// Separates a *download* failure (the openQA log could not be fetched) from
+/// a *write* failure (the log was fetched but could not be persisted
+/// locally, or its off-thread write task failed to join), giving callers a
+/// distinct local-write signal.
 ///
 /// Not `Clone`/`Eq`: the [`Write`](DownloadError::Write) variant carries a
 /// non-clonable [`std::io::Error`].
@@ -108,7 +105,7 @@ enum LogKind {
 }
 
 impl LogKind {
-    /// Dispatches on `name.split('_')[0]` (upstream `downloader.get(...)`).
+    /// Dispatches on `name.split('_')[0]`.
     fn for_name(name: &str) -> Self {
         match name.split('_').next().unwrap_or("") {
             "install" => Self::Install,
@@ -128,7 +125,7 @@ fn join_url(base: &str, parts: &[&str]) -> String {
     s
 }
 
-/// The last `/`-segment of `host` (upstream `host.split('/')[-1]`).
+/// The last `/`-segment of `host`.
 fn host_tail(host: &str) -> &str {
     host.rsplit('/').next().unwrap_or(host)
 }
@@ -229,7 +226,7 @@ fn plan(
     }
 }
 
-/// Downloads one log (upstream `_subdl`): fetch + atomic write.
+/// Downloads one log: fetch + atomic write.
 ///
 /// Under [`ErrorMode::Full`] a fetch failure returns [`ResultsMissingError`] and
 /// a local-write (or write-task join) failure returns [`DownloadError::Write`];
@@ -281,10 +278,9 @@ async fn subdl(
 
 /// Downloads all logs for a set of `(host, tests)` connectors.
 ///
-/// Ports upstream `download_logs`: builds the `(host, test)` matrix, dispatches
-/// each to its downloader, runs them with bounded concurrency, and — under
-/// [`ErrorMode::Full`] — returns the first [`DownloadError`] after the whole
-/// batch has finished.
+/// Builds the `(host, test)` matrix, dispatches each to its downloader, runs
+/// them with bounded concurrency, and — under [`ErrorMode::Full`] — returns
+/// the first [`DownloadError`] after the whole batch has finished.
 ///
 /// # Errors
 ///

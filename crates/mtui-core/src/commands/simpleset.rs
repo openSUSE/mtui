@@ -1,6 +1,6 @@
 //! Simple "set" commands (`set_log_level`, `set_workflow`).
 //!
-//! Ports upstream `mtui.commands.simpleset`. `set_timeout` already lives in
+//! `set_timeout` already lives in
 //! [`settimeout`](super::settimeout); the two "set" commands that remain here are
 //! [`SetLogLevel`] and [`SetWorkflow`] (the latter reconstructs the report's
 //! openQA results state when switching workflow).
@@ -16,14 +16,13 @@ use crate::commands::support::{
 use crate::error::{CommandError, CommandResult};
 use crate::session::{LogLevel, Session};
 
-/// The workflow choices offered for completion / validation (upstream
-/// `choices`).
+/// The workflow choices offered for completion / validation.
 const WORKFLOWS: &[&str] = &["auto", "manual", "kernel"];
 
-/// The log levels offered for completion / validation (upstream `choices`).
+/// The log levels offered for completion / validation.
 const LEVELS: &[&str] = &["info", "warning", "error", "debug"];
 
-/// Changes the current mtui log level (upstream `SetLogLevel`).
+/// Changes the current mtui log level.
 ///
 /// Sets the level on the session's installed log-level sink (the REPL wires this
 /// to a `tracing_subscriber::reload` handle; headless callers still log the
@@ -69,8 +68,7 @@ impl Command for SetLogLevel {
     }
 }
 
-/// Sets the workflow and reloads data from openQA (upstream
-/// `mtui.commands.simpleset.SetWorkflow`).
+/// Sets the workflow and reloads data from openQA.
 ///
 /// Reconstructs the report's openQA holder for the requested workflow:
 ///
@@ -382,7 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn auto_with_no_install_jobs_downgrades_to_manual() {
-        // Empty settings → no install results → upstream switches to manual.
+        // Empty settings → no install results → switches to manual.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Manual);
         let server = dashboard_server("1").await;
@@ -437,7 +435,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_same_workflow_refreshes_auto() {
-        // Same-workflow manual: upstream only refreshes `auto` and returns
+        // Same-workflow manual: only refreshes `auto` and returns
         // (kernel is left untouched). refresh_auto builds a fresh auto when the
         // holder was empty.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");

@@ -1,5 +1,4 @@
-//! Target-host system description, ported from `mtui/types/systems.py` and the
-//! flat product tuple in `mtui/types/product.py`.
+//! Target-host system description.
 //!
 //! A [`System`] captures the products installed on a reference host: a
 //! [`base`](System::get_base) product plus a set of add-on modules/extensions.
@@ -7,20 +6,18 @@
 //!
 //! ## The two `Product` types
 //!
-//! Upstream has *two* distinct `Product` types:
+//! There are two distinct `Product` types:
 //!
-//! * a rich refhost product whose `version` is structured — ported as
+//! * a rich refhost product whose `version` is structured:
 //!   [`crate::product::Product`]; and
-//! * a flat `NamedTuple` `(name, version: str, arch)` used by `System` — ported
-//!   here as [`SystemProduct`] to avoid a name clash with the refhost variant.
+//! * a flat `(name, version: str, arch)` tuple used by `System`:
+//!   [`SystemProduct`], named to avoid a clash with the refhost variant.
 //!
-//! ## Deviations from upstream
-//!
-//! Addons are stored in a [`BTreeSet`] (rather than an unordered `set`) so that
+//! Addons are stored in a [`BTreeSet`] (rather than an unordered set) so that
 //! [`pretty`](System::pretty), [`flatten`](System::flatten), hashing, and
-//! equality are all deterministic. `get_release` guards the upstream
-//! `version[:2]` slice against versions shorter than two characters instead of
-//! risking an out-of-bounds panic.
+//! equality are all deterministic. `get_release` guards its `version[:2]`-style
+//! slice against versions shorter than two characters instead of risking an
+//! out-of-bounds panic.
 
 use std::collections::BTreeSet;
 
@@ -28,8 +25,7 @@ use thiserror::Error;
 
 /// A flat product tuple: `(name, version, arch)`.
 ///
-/// Ported from the upstream `Product` `NamedTuple` in
-/// `mtui/types/product.py`; renamed to avoid clashing with the refhost
+/// Named `SystemProduct` to avoid clashing with the refhost
 /// [`Product`](crate::product::Product).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SystemProduct {
@@ -58,9 +54,6 @@ impl SystemProduct {
 }
 
 /// Error raised when a system's base product name maps to no known release.
-///
-/// Mirrors upstream `UnknownSystemError(ValueError)` raised by
-/// `System.get_release`.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error("unknown system: {name}")]
 pub struct UnknownSystemError {
@@ -92,8 +85,6 @@ impl System {
 
     /// Determines the release identifier for this system.
     ///
-    /// Mirrors the upstream `get_release` mapping exactly.
-    ///
     /// # Errors
     /// Returns [`UnknownSystemError`] when the base product name maps to no
     /// known release.
@@ -104,7 +95,7 @@ impl System {
             "rhel" => "YUM".to_owned(),
             "SLES" | "SLED" | "SUSE_SLES" | "SLES_SAP" | "SUSE_SLES_SAP" | "SLE_HPC"
             | "SLES_TERADATA" | "SLE_RT" => {
-                // Upstream `version[:2]`; guard short versions against a panic.
+                // Take the first two characters; guard short versions against a panic.
                 self.base.version.chars().take(2).collect()
             }
             "openSUSE" => "15".to_owned(),
@@ -141,8 +132,7 @@ impl System {
 
     /// Returns a pretty-printed, human-readable description of the system.
     ///
-    /// Mirrors the upstream `pretty` layout, including the 53-column left-padded
-    /// addon name field.
+    /// The addon name field is left-padded to 53 columns.
     #[must_use]
     pub fn pretty(&self) -> Vec<String> {
         let mut msg = vec![format!(
@@ -163,8 +153,7 @@ impl System {
 }
 
 impl std::fmt::Display for System {
-    /// Renders `{name-lowercase}{-modules?}-{version}-{arch}`, mirroring
-    /// upstream `__str__`.
+    /// Renders `{name-lowercase}{-modules?}-{version}-{arch}`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let modules = if self.addons.is_empty() {
             ""
@@ -183,7 +172,7 @@ impl std::fmt::Display for System {
 }
 
 impl PartialEq for System {
-    /// Equal by `(base, addons)`, mirroring upstream `__eq__`.
+    /// Equal by `(base, addons)`.
     fn eq(&self, other: &Self) -> bool {
         self.base == other.base && self.addons == other.addons
     }
@@ -192,7 +181,7 @@ impl PartialEq for System {
 impl Eq for System {}
 
 impl std::hash::Hash for System {
-    /// Hashes by `(base, addons)`, mirroring upstream `__hash__`.
+    /// Hashes by `(base, addons)`.
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.base.hash(state);
         self.addons.hash(state);
@@ -279,7 +268,7 @@ mod tests {
         let pretty = s.pretty();
         assert_eq!(pretty[0], "  Base product: SLES-15.5-x86_64");
         assert_eq!(pretty[1], "  Installed Extensions and Modules:");
-        // Addon name is left-padded to 53 columns (upstream `{x.name:<53}`).
+        // Addon name is left-padded to 53 columns.
         assert_eq!(
             pretty[2],
             format!(

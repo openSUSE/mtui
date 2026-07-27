@@ -1,4 +1,4 @@
-//! Ports `tests/test_svn_io.py`: the `svn` checkout/commit subprocess helpers.
+//! Tests for the `svn` checkout/commit subprocess helpers.
 //!
 //! The production runner spawns `svn`; here a [`StubSvnRunner`] records the argv
 //! **and** `cwd` it was asked to run and replays a scripted outcome, so the
@@ -233,7 +233,7 @@ async fn svn_commit_aborts_on_spawn_error() {
     assert!(matches!(err, CheckoutError::SvnCheckoutFailed { .. }));
 }
 
-/// `svn_commit_testreport` issues the exact upstream argv sequence, skipping the
+/// `svn_commit_testreport` issues the exact argv sequence, skipping the
 /// optional `results` / `checkers.log` adds when those paths are absent.
 #[tokio::test]
 async fn svn_commit_minimal_sequence() {

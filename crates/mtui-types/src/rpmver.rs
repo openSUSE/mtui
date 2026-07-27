@@ -1,15 +1,15 @@
-//! RPM version comparison, ported from `mtui/types/rpmver.py::RPMVersion`.
+//! RPM version comparison.
 //!
-//! Upstream delegates the actual comparison to the C `rpm` library's
+//! The canonical comparison is the C `rpm` library's
 //! `rpm.labelCompare(("1", ver, rel), …)`. To preserve the mtui
-//! single-static-binary / no-runtime-deps contract, this port uses the
+//! single-static-binary / no-runtime-deps contract, this uses the
 //! pure-Rust [`sandogasa_rpmvercmp`] crate, which reimplements the canonical
 //! `rpmvercmp` algorithm (segment/tilde/caret handling). It is verified against
-//! every upstream `test_rpm_version` golden vector (see `tests/rpmver.rs`).
+//! golden vectors of `rpmvercmp` behavior (see `tests/rpmver.rs`).
 //!
-//! ## Parsing rules (mirrored verbatim from upstream `__init__`)
-//! - An empty string is rejected with [`RpmVersionParseError::Empty`] — upstream
-//!   raised a bare `ValueError`; the Rust port makes construction fallible.
+//! ## Parsing rules
+//! - An empty string is rejected with [`RpmVersionParseError::Empty`];
+//!   construction is fallible rather than panicking.
 //! - The seven SLE-12-era architecture suffixes (`.noarch`, `.x86_64`, …) are
 //!   stripped wherever they appear, because refhost queriers occasionally append
 //!   the arch to the version.
@@ -19,7 +19,7 @@
 //!
 //! ## Comparison
 //! Two versions are compared by `ver` first, then `rel`, each via `rpmvercmp`.
-//! The epoch is fixed to `"1"` on both sides, exactly reproducing upstream's
+//! The epoch is fixed to `"1"` on both sides, exactly reproducing
 //! `labelCompare(("1", ver, rel), ("1", ver, rel))`.
 
 use std::cmp::Ordering;
@@ -30,8 +30,8 @@ use crate::error::RpmVersionParseError;
 
 /// Architecture suffixes that may be appended to a version on SLE 12.
 ///
-/// Mirrors upstream `RPMVersion._arch_suffixes`. Each is stripped (with its
-/// leading `.`) wherever it occurs in the raw version string.
+/// Each is stripped (with its leading `.`) wherever it occurs in the raw
+/// version string.
 const ARCH_SUFFIXES: [&str; 7] = [
     "noarch", "x86_64", "s390x", "ppc64le", "aarch64", "ia64", "ppc64",
 ];
@@ -39,8 +39,7 @@ const ARCH_SUFFIXES: [&str; 7] = [
 /// Holds an RPM version-release string for version arithmetic.
 ///
 /// Construct via [`RPMVersion::parse`]. Ordering follows the RPM `rpmvercmp`
-/// algorithm (version compared first, then release), matching upstream
-/// `RPMVersion`.
+/// algorithm (version compared first, then release).
 #[derive(Debug, Clone)]
 pub struct RPMVersion {
     /// The version component (everything before the last `-`).
@@ -91,7 +90,7 @@ impl RPMVersion {
 impl std::fmt::Display for RPMVersion {
     /// Renders `ver`, appending `-rel` only when a release is present.
     ///
-    /// Mirrors upstream `__str__`: the sentinel release `"0"` is omitted.
+    /// The sentinel release `"0"` is omitted.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.ver)?;
         if self.rel != "0" {
@@ -104,8 +103,8 @@ impl std::fmt::Display for RPMVersion {
 impl Ord for RPMVersion {
     /// Compares by `rpmvercmp(ver)`, falling back to `rpmvercmp(rel)` on a tie.
     ///
-    /// Reproduces upstream `labelCompare(("1", ver, rel), ("1", ver, rel))` with
-    /// a fixed, equal epoch.
+    /// Compares as `labelCompare(("1", ver, rel), ("1", ver, rel))` would,
+    /// with a fixed, equal epoch.
     fn cmp(&self, other: &Self) -> Ordering {
         match rpmvercmp(&self.ver, &other.ver) {
             Ordering::Equal => rpmvercmp(&self.rel, &other.rel),
@@ -129,7 +128,7 @@ impl PartialEq for RPMVersion {
 impl Eq for RPMVersion {}
 
 impl std::hash::Hash for RPMVersion {
-    /// Hashes by `(ver, rel)`, mirroring upstream `__hash__`.
+    /// Hashes by `(ver, rel)`.
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.ver.hash(state);
         self.rel.hash(state);

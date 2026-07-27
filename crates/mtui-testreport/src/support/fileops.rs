@@ -1,14 +1,10 @@
 //! File and time helpers shared by the exporters.
 //!
-//! Ports the pieces of upstream `mtui.support.fileops` that the export
-//! subsystem depends on:
-//!
-//! * [`timestamp`] — a whole-second Unix timestamp string (upstream
-//!   `str(int(time.time()))`), used as a filename suffix when the user declines
-//!   to overwrite an existing export.
+//! * [`timestamp`] — a whole-second Unix timestamp string, used as a
+//!   filename suffix when the user declines to overwrite an existing export.
 //! * [`atomic_write_file`] — a thin wrapper over [`mtui_config::atomic::write`],
 //!   the single secure temp-file + rename implementation shared across the
-//!   workspace (upstream `atomic_write_file`).
+//!   workspace.
 
 use std::io;
 use std::path::Path;
@@ -16,9 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The current time as a whole-second Unix timestamp string.
 ///
-/// Mirrors upstream `timestamp()` (`str(int(time.time()))`): the fractional
-/// part is dropped. Used to build a unique filename suffix for exports the user
-/// chose not to overwrite.
+/// A whole-second Unix timestamp: the fractional part is dropped. Used to
+/// build a unique filename suffix for exports the user chose not to
+/// overwrite.
 #[must_use]
 pub(crate) fn timestamp() -> String {
     let secs = SystemTime::now()

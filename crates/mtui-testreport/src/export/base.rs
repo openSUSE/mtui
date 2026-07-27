@@ -1,20 +1,17 @@
 //! Shared export state and template-mutation helpers.
 //!
-//! Ports upstream `mtui.update_workflow.export.base.BaseExport`. Rust has no
-//! class inheritance, so the shared state and common methods live in
-//! [`ExportContext`], which each concrete exporter (`auto`, `manual`, `kernel`)
-//! embeds.
+//! Rust has no class inheritance, so the shared state and common methods
+//! live in [`ExportContext`], which each concrete exporter (`auto`,
+//! `manual`, `kernel`) embeds.
 //!
 //! ## Interactive overwrite prompt
 //!
-//! Upstream `_writer` calls `prompt_user` to ask whether to overwrite a
-//! divergent existing file. Per the established crate-boundary pattern (see
-//! `mtui-hosts::target::actions`), the interactive prompt is a display concern
-//! owned by `mtui-cli` (Phase 6); here it is injected as the [`OverwritePrompt`]
-//! trait so the exporter stays testable and free of a CLI dependency. The
-//! default [`DenyOverwrite`] never overwrites (safe for non-interactive runs and
-//! the MCP surface), mirroring `prompt_user(..., interactive=False)` returning
-//! the default "no".
+//! Writing a divergent existing file asks whether to overwrite it. Per the
+//! established crate-boundary pattern (see `mtui-hosts::target::actions`),
+//! the interactive prompt is a display concern owned by `mtui-cli` (Phase 6);
+//! here it is injected as the [`OverwritePrompt`] trait so the exporter stays
+//! testable and free of a CLI dependency. The default [`DenyOverwrite`] never
+//! overwrites (safe for non-interactive runs and the MCP surface).
 
 use std::path::{Path, PathBuf};
 
@@ -27,9 +24,8 @@ use crate::support::sysinfo::{EXPORT_PREFIX, detect_system, system_info};
 /// The decision an exporter makes when an existing file differs from what it is
 /// about to write.
 ///
-/// The port of upstream `prompt_user(f"Should I overwrite {fn}", ...)`. `mtui`
-/// (Phase 6) supplies an interactive implementation; library and test callers
-/// use [`DenyOverwrite`].
+/// `mtui` (Phase 6) supplies an interactive implementation; library and test
+/// callers use [`DenyOverwrite`].
 ///
 /// The bound is `Send + Sync` because [`AutoExport::run`](crate::AutoExport) is
 /// `async` and holds the injected prompt across an `.await`, so a boxed prompt
@@ -42,7 +38,7 @@ pub trait OverwritePrompt: Send + Sync {
 
 /// The non-interactive default: never overwrite a divergent file.
 ///
-/// Mirrors `prompt_user(..., interactive=False)`, which returns the default
+/// Returns the default
 /// negative answer, so the exporter falls back to a timestamped filename.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DenyOverwrite;
@@ -53,11 +49,11 @@ impl OverwritePrompt for DenyOverwrite {
     }
 }
 
-/// Shared state and helpers for every exporter (upstream `BaseExport`).
+/// Shared state and helpers for every exporter.
 ///
 /// Holds the config, the working template, the force flag, and the RRID. The
 /// per-connector openQA results are held by the concrete exporters (their types
-/// differ), so unlike upstream they are not a field here.
+/// differ), so they are not a field here.
 pub struct ExportContext {
     /// The application configuration.
     pub(crate) config: Config,
@@ -70,8 +66,7 @@ pub struct ExportContext {
 }
 
 impl ExportContext {
-    /// Builds an export context over a copy of `template` (upstream copies with
-    /// `template[:]`).
+    /// Builds an export context over a copy of `template`.
     #[must_use]
     pub fn new(config: Config, template: &[String], force: bool, rrid: RequestReviewID) -> Self {
         Self {
@@ -82,13 +77,13 @@ impl ExportContext {
         }
     }
 
-    /// Writes `lines` (joined with `\n`) to `fn_path` (upstream `_writer`).
+    /// Writes `lines` (joined with `\n`) to `fn_path`.
     ///
     /// If the file exists and `force` is unset: an identical file is left
     /// untouched; a divergent file is overwritten only when `prompt` agrees,
     /// otherwise the write is redirected to a `.{timestamp}` sibling.
     ///
-    /// I/O failures are logged and swallowed (upstream logs and returns).
+    /// I/O failures are logged and swallowed.
     pub(crate) fn writer(&self, fn_path: &Path, lines: &[String], prompt: &dyn OverwritePrompt) {
         let to_write = lines.join("\n");
         let mut target = fn_path.to_path_buf();
@@ -114,13 +109,13 @@ impl ExportContext {
         }
     }
 
-    /// Adds install-log links to the template (upstream `installlogs_lines`).
+    /// Adds install-log links to the template.
     ///
     /// Links are deduplicated against the template from just past a
     /// `HAS_UNTRACKED` marker (or from the whole template if the marker is
     /// absent). An existing `Links for update logs:` header is reused rather
     /// than a fresh one being inserted on every call, so manual/kernel
-    /// re-exports do not stack empty duplicate sections (upstream `c870fe58`).
+    /// re-exports do not stack empty duplicate sections.
     pub fn installlogs_lines(&mut self, filenames: &[String]) {
         // Index just past the HAS_UNTRACKED marker; links are deduped from there.
         let mut o = 0usize;
@@ -188,8 +183,7 @@ impl ExportContext {
         }
     }
 
-    /// Removes empty duplicate `Links for update logs:` headers (upstream
-    /// `_drop_empty_link_sections`).
+    /// Removes empty duplicate `Links for update logs:` headers.
     ///
     /// Pre-fix exports stacked one fresh header per run while the links stayed
     /// under the original section, so damaged templates carry trailing header
@@ -230,7 +224,7 @@ impl ExportContext {
         }
     }
 
-    /// Collapses consecutive duplicate non-blank lines (upstream `dedup_lines`).
+    /// Collapses consecutive duplicate non-blank lines.
     pub(crate) fn dedup_lines(&mut self) {
         let mut lines: Vec<String> = Vec::with_capacity(self.template.len());
         let mut prev: Option<&String> = None;
@@ -244,8 +238,8 @@ impl ExportContext {
         self.template = lines;
     }
 
-    /// Appends the system-information footer, unless the last line already is it
-    /// (upstream `add_sysinfo`).
+    /// Appends the system-information footer, unless the last line already
+    /// is it.
     pub(crate) fn add_sysinfo(&mut self) {
         let (distro, verid, kernel) = detect_system();
         let info = system_info(
@@ -265,8 +259,7 @@ impl ExportContext {
         }
     }
 
-    /// Injects the openqa_overview block, if an overview payload is present
-    /// (upstream `inject_overview`).
+    /// Injects the openqa_overview block, if an overview payload is present.
     ///
     /// Idempotent via begin/end markers — a prior block is replaced in place.
     /// Returns `true` when the template was modified.
@@ -290,18 +283,18 @@ impl ExportContext {
         modified
     }
 
-    /// Inserts the pretty-printed openQA "auto" results block (upstream
-    /// `inject_openqa`), removing a previous results block first.
+    /// Inserts the pretty-printed openQA "auto" results block, removing a
+    /// previous results block first.
     ///
     /// `pp` is the connector's pretty-print lines (`self.openqa.auto.pp`). A
     /// no-op when `pp` is empty. Requires the template to contain the
-    /// `source code change review:` anchor; if absent this is a no-op (the
-    /// upstream `.index(...)` would raise, but a missing anchor means the file
-    /// is not mtui-shaped, matching how the injector guards on its header).
+    /// `source code change review:` anchor; if absent this is a no-op, since
+    /// a missing anchor means the file is not mtui-shaped, matching how the
+    /// injector guards on its header.
     ///
-    /// The block is inserted just before the anchor (upstream's Python
-    /// `insert(-1)`). When the anchor is the very first line, the position is
-    /// clamped to 0 rather than underflowing the `usize` index.
+    /// The block is inserted just before the anchor. When the anchor is the
+    /// very first line, the position is clamped to 0 rather than
+    /// underflowing the `usize` index.
     pub(crate) fn inject_openqa(&mut self, pp: &[String]) {
         if pp.is_empty() {
             return;
@@ -324,9 +317,9 @@ impl ExportContext {
                 end + 1
             } else {
                 match self.anchor_index() {
-                    // `anchor - 1` mirrors upstream's Python `insert(-1)`
-                    // position; clamp to 0 when the anchor is the first line so
-                    // the `usize` subtraction cannot underflow/panic.
+                    // `anchor - 1` is the removal-block position; clamp to 0
+                    // when the anchor is the first line so the `usize`
+                    // subtraction cannot underflow/panic.
                     Some(anchor) => anchor.saturating_sub(1),
                     None => return,
                 }
@@ -338,9 +331,9 @@ impl ExportContext {
         let Some(anchor) = self.anchor_index() else {
             return;
         };
-        // `anchor - 1` mirrors upstream's Python `insert(-1)`; clamp to 0 so the
-        // degenerate "anchor is the first line" case inserts before it instead
-        // of panicking on `usize` underflow.
+        // `anchor - 1` is the insertion position; clamp to 0 so the
+        // degenerate "anchor is the first line" case inserts before it
+        // instead of panicking on `usize` underflow.
         let mut index = anchor.saturating_sub(1);
         for line in pp.iter().rev() {
             self.template.insert(index, line.clone());
@@ -357,10 +350,10 @@ impl ExportContext {
     }
 
     /// Inserts the "installation tests done in openQA" note under the
-    /// `Test results by product-arch:` header (upstream `BaseExport.install_results`).
+    /// `Test results by product-arch:` header.
     ///
-    /// A no-op when that header is absent (the upstream `.index(...)` would
-    /// raise; a missing header means the file is not mtui-shaped).
+    /// A no-op when that header is absent — a missing header means the file
+    /// is not mtui-shaped.
     pub fn install_results(&mut self) {
         let Some(index) = self
             .template
@@ -374,8 +367,7 @@ impl ExportContext {
         // there, separated from a fresh insert by the blank line, so
         // dedup_lines() never collapsed them and the notice multiplied with
         // every export. Copies stacked by pre-fix exports are dropped so a
-        // damaged template converges back to a single notice (upstream
-        // `c870fe58`).
+        // damaged template converges back to a single notice.
         while self.template.iter().filter(|l| l.as_str() == line).count() > 1 {
             let extra = self.template.len()
                 - 1
@@ -524,9 +516,9 @@ mod tests {
     #[test]
     fn inject_openqa_anchor_at_index_zero_does_not_panic() {
         // Degenerate template: the `source code change review:` anchor is the
-        // very first line, so the upstream `anchor - 1` position is Python's
-        // `insert(-1)`. In Rust `0 - 1` on usize would panic; the port must
-        // clamp to 0 (insert before the anchor) instead of overflowing.
+        // very first line, so the `anchor - 1` insertion position would be
+        // -1. In Rust `0 - 1` on usize would panic; this must clamp to 0
+        // (insert before the anchor) instead of overflowing.
         let mut c = ctx_with(&["source code change review:\n"]);
         c.inject_openqa(&["job1 => PASSED\n".to_string()]);
         let body = c.template.concat();

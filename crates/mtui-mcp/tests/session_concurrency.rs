@@ -1,7 +1,6 @@
-//! Port of the per-template concurrency behaviours from upstream
-//! `tests/test_mcp_session.py` (bead `mtui-rs-76e.11`).
+//! Per-template concurrency behaviours of the MCP session registry.
 //!
-//! Four behaviours, matching upstream 1:1:
+//! Four behaviours:
 //!
 //! * `unscoped_serialises_via_exclusive_gate` — unscoped calls (no real
 //!   template) take the exclusive registry gate and never overlap.

@@ -1,24 +1,23 @@
-//! Post-update check (upstream `checks/update.py`).
+//! Post-update check.
 //!
-//! The most elaborate check: it surfaces diagnostic sections for "additional rpm
-//! output" and "not supported by its vendor" (upstream prints these to the
-//! terminal, one with `cli.colors.yellow` highlighting on the word `warning`).
-//! To reproduce that stdout parity without a crate cycle, the sections are
-//! returned as [`Diagnostic`]s on the `Ok` path and rendered by the command
-//! layer through `session.display`; the `logger.warning`/`logger.critical`
-//! breadcrumbs upstream emits alongside are reproduced with `tracing`. Lock /
-//! dependency / RPM failures still raise [`UpdateError`].
+//! The most elaborate check: it surfaces diagnostic sections for "additional
+//! rpm output" and "not supported by its vendor" (printed to the terminal,
+//! one with the word `warning` highlighted yellow). To reproduce that stdout
+//! parity without a crate cycle, the sections are returned as
+//! [`Diagnostic`]s on the `Ok` path and rendered by the command layer through
+//! `session.display`; a diagnostic breadcrumb is logged via `tracing`
+//! alongside. Lock / dependency / RPM failures still raise [`UpdateError`].
 
 use crate::update_workflow::UpdateError;
 use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
 
-/// The zypper update check (upstream `checks.update.zypper`).
+/// The zypper update check.
 ///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "package not found" (zypper exit
-/// `104`), "update stack locked", "Dependency Error", or "RPM Error" per
-/// upstream's branch logic. Warnings
+/// `104`), "update stack locked", "Dependency Error", or "RPM Error"
+/// depending on the exit code and stderr/stdout markers. Warnings
 /// (exit `106`, "Additional rpm output", "not supported by its vendor") do not
 /// fail the check; the two output sections are returned as [`Diagnostic`]s for
 /// the caller to render.
@@ -36,8 +35,8 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
         );
     }
     if let Some(section) = extract_between(args.stdout, "Additional rpm output:", "Retrieving") {
-        // Upstream: logs a breadcrumb, then prints the section with "warning"
-        // highlighted yellow (`replace("warning", yellow("warning"))`).
+        // Logs a breadcrumb, then prints the section with "warning"
+        // highlighted yellow.
         tracing::warn!(host = args.hostname, "There was additional rpm output");
         diagnostics.push(Diagnostic::highlighted(section));
     }
@@ -69,9 +68,9 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
         "The following package is not supported by its vendor:\n",
         "\n\n",
     ) {
-        // Upstream: logs `package support is uncertain`, then prints the section
-        // plain (no recoloring). Reconstruct the marker line upstream keeps in
-        // its `stdout[start:end]` slice (its `start` sits *at* the marker).
+        // Logs `package support is uncertain`, then prints the section plain
+        // (no recoloring). Reconstruct the marker line kept by the
+        // `stdout[start:end]` slice (`start` sits *at* the marker).
         tracing::warn!(host = args.hostname, "package support is uncertain");
         diagnostics.push(Diagnostic::plain(format!(
             "The following package is not supported by its vendor:\n{section}"
@@ -81,27 +80,27 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 }
 
 /// Returns the substring of `s` starting just after `marker` up to the next
-/// occurrence of `end` (searched from the marker), mirroring upstream's
-/// `stdout[start:end]` slice. `None` when `marker` is absent.
+/// occurrence of `end` (searched from the marker), as a `stdout[start:end]`
+/// slice. `None` when `marker` is absent.
 ///
-/// Matches upstream semantics: the section retained *includes* everything from
-/// just past `marker` to the first `end`; if `end` is not found, upstream's
-/// `str.find` returns `-1`, slicing `stdout[start:-1]` (all but the last char) —
-/// reproduced here by falling back to `len - 1`.
+/// The section retained *includes* everything from just past `marker` to the
+/// first `end`; if `end` is not found, this falls back to `len - 1` (all but
+/// the last character), matching a slice indexed by a `-1` "not found"
+/// sentinel.
 fn extract_between<'a>(s: &'a str, marker: &str, end: &str) -> Option<&'a str> {
     let m = s.find(marker)?;
     let start = m + marker.len();
     let rest = &s[start..];
     let stop = match rest.find(end) {
         Some(rel) => start + rel,
-        // Upstream `find` returns -1 → slice `[start:-1]`.
+        // `end` not found: fall back to slice `[start:-1]`.
         None => s.len().saturating_sub(1).max(start),
     };
     Some(&s[start..stop])
 }
 
 /// The update check for `(release, transactional)`, or `None` for an unknown
-/// key (upstream `update_checks.get(...)`).
+/// key.
 #[must_use]
 pub(crate) fn update_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {
@@ -126,8 +125,8 @@ mod tests {
 
     #[test]
     fn zypper_104_is_package_not_found() {
-        // Upstream `checks/update.py:34`: zypper + exit 104 is "package not
-        // found" (ZYPPER_EXIT_INF_CAP_NOT_FOUND), matching the install check.
+        // zypper + exit 104 is "package not found"
+        // (ZYPPER_EXIT_INF_CAP_NOT_FOUND), matching the install check.
         let err = zypper(args("zypper -n patch", "", "", 104)).unwrap_err();
         assert_eq!(err.reason, "package not found");
     }

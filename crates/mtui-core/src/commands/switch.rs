@@ -9,7 +9,7 @@ use crate::session::Session;
 
 /// Switches the active template to another loaded one.
 ///
-/// Ports upstream `mtui.commands.switch.Switch`. Plain action commands act on
+/// Plain action commands act on
 /// the active template; `switch` moves that pointer. It names its own target
 /// RRID, so it runs exactly once ([`Scope::Single`]) — never auto-fanned-out.
 ///

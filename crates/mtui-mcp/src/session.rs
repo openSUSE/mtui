@@ -1,9 +1,9 @@
 //! Per-client MCP session.
 //!
 //! [`McpSession`] is the headless mtui session that backs one `mtui-mcp` client.
-//! It is the Rust analogue of upstream `mtui.mcp.session.McpSession`: it owns the
-//! mutable [`Session`] state a command dispatches against plus the [`SharedBuf`]
-//! sink that captures the command's display output for the tool result, and
+//! It owns the mutable [`Session`] state a command dispatches against plus the
+//! [`SharedBuf`] sink that captures the command's display output for the tool
+//! result, and
 //! exposes [`run_command`](McpSession::run_command) — the central dispatch
 //! primitive the tool layer calls (drain → dispatch → capture → output-cap).
 //!
@@ -20,8 +20,8 @@
 //! already provided by [`capture::session`] passing `is_repl = false`.
 //!
 //! P7.3a (`mtui-rs-76e.11`) landed the per-template **lock discipline**: a
-//! shared/exclusive registry gate ([`crate::concurrency::RwGate`], upstream
-//! `_RWLock`) plus a lazily-created per-RRID lock map (upstream `_rrid_locks`).
+//! shared/exclusive registry gate ([`crate::concurrency::RwGate`]) plus a
+//! lazily-created per-RRID lock map.
 //! [`command_lock`](McpSession::command_lock) takes the gate *shared* + one
 //! per-RRID lock for a single-template call (so same-RRID calls serialise and
 //! different-RRID calls take distinct locks) and the gate *exclusive* for
@@ -73,11 +73,9 @@
 //! eviction. For **every** loaded template it releases the report's pool claims
 //! then disconnects its host group, best-effort + idempotent, under a bounded
 //! [`DISCONNECT_TIMEOUT`] so a wedged host close cannot block the idle-sweep.
-//! Unlike upstream it does not empty each `HostsGroup` (a closed `Target` is left
-//! in the group with a dead connection, dropped whole with the report) and it
-//! bounds the wait with [`tokio::time::timeout`] rather than a thread-pool
-//! `shutdown(wait=False)` — the Python machinery existed only to defeat
-//! `Executor.__exit__`'s blocking join, which Rust has no equivalent of.
+//! It does not empty each `HostsGroup` (a closed `Target` is left in the group
+//! with a dead connection, dropped whole with the report) and it bounds the
+//! wait with [`tokio::time::timeout`].
 //!
 use std::collections::HashMap;
 use std::future::Future;
@@ -101,7 +99,7 @@ use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
 use crate::slim::{cap_output, truncation_notice};
 
 /// Wall-clock budget for the whole [`close`](McpSession::close) host-disconnect
-/// fan-out (upstream `DISCONNECT_TIMEOUT_SECONDS = 45.0`).
+/// fan-out.
 ///
 /// A wedged host teardown (a dead peer with no RST whose close never returns)
 /// must not block the http registry's idle-sweep behind it; a close that
@@ -109,10 +107,9 @@ use crate::slim::{cap_output, truncation_notice};
 pub(crate) const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Default interval between `notifications/progress` heartbeat frames while a
-/// long-running foreground tool call runs (upstream
-/// `DEFAULT_PROGRESS_INTERVAL_SECONDS = 10.0`).
+/// long-running foreground tool call runs.
 ///
-/// Not a config key (upstream has none): it is the default the tool layer passes
+/// Not a config key: it is the default the tool layer passes
 /// to [`McpSession::run_command_with_progress`], overridable per call so tests
 /// can drive a sub-second interval.
 pub(crate) const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
@@ -125,7 +122,7 @@ pub(crate) const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 /// [`mtui_core::Session::cancel_requested`]) settles well inside this; a body
 /// blocked mid host-op never observes the token and burns the full grace
 /// before the hard abort. Kept short so `job_cancel` stays responsive; not a
-/// config key (no upstream counterpart — Python cancellation was thread-kill).
+/// config key.
 pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(1);
 
 /// A [`JoinHandle`] wrapper that aborts its task when dropped.
@@ -146,17 +143,16 @@ impl<T> Drop for AbortOnDrop<T> {
 
 /// A transport-free sink for heartbeat progress frames.
 ///
-/// The Rust analogue of the single `ctx.report_progress` coroutine upstream's
-/// `_run_with_heartbeat` consumes. Keeping it a trait (rather than importing the
-/// rmcp `Peer`) keeps this crate's session layer transport-free and unit-testable
+/// Models the single progress-reporting call the heartbeat loop consumes.
+/// Keeping it a trait (rather than importing the rmcp `Peer`) keeps this
+/// crate's session layer transport-free and unit-testable
 /// with a recording double; the rmcp-backed implementation
 /// (`crate::server::PeerProgressSink`) is built from the request context and sends
 /// a real `notifications/progress`.
 ///
 /// Implementors **must not** propagate transport failures: a send error is the
 /// concern of the sink (log at DEBUG and swallow) so a flaky client can never mask
-/// the command's actual outcome (upstream swallows `ctx.report_progress`
-/// exceptions in the loop).
+/// the command's actual outcome.
 ///
 /// [`report`](ProgressSink::report) returns a boxed future (rather than a native
 /// `async fn`) to keep the trait `dyn`-compatible without pulling `async-trait`
@@ -174,13 +170,11 @@ pub trait ProgressSink: Send + Sync {
 
 /// Drive `fut` to completion while emitting a heartbeat every `interval`.
 ///
-/// The Rust analogue of upstream `McpSession._run_with_heartbeat`: instead of a
-/// worker thread raced with `asyncio.wait`, `fut` is already async so we
-/// [`tokio::select!`] it against a ticker. Each tick reports the elapsed seconds
-/// and a `"<command> running (<n>s)…"` message — byte-for-byte the frame shape
-/// upstream emits. Progress values are monotonic (elapsed since start). When `fut`
-/// completes first its output is returned unchanged; a heartbeat is never emitted
-/// after completion.
+/// `fut` is already async, so this drives it via [`tokio::select!`] against a
+/// ticker. Each tick reports the elapsed seconds and a `"<command> running
+/// (<n>s)…"` message. Progress values are monotonic (elapsed since start).
+/// When `fut` completes first its output is returned unchanged; a heartbeat is
+/// never emitted after completion.
 ///
 /// The sink swallows its own transport errors (see [`ProgressSink`]), so this loop
 /// cannot mask `fut`'s result.
@@ -212,9 +206,8 @@ where
 
 /// A command dispatch that failed under the MCP transport.
 ///
-/// The Rust analogue of upstream `mtui.mcp.session.McpCommandError`: it carries
-/// the streams captured during the failed run so the server layer can surface
-/// them to the client:
+/// It carries the streams captured during the failed run so the server layer
+/// can surface them to the client:
 ///
 /// * `stdout` — everything the command printed before failing (already capped).
 /// * `stderr` — the parse/usage complaint or the command-error message.
@@ -222,8 +215,7 @@ where
 ///   an unknown command or a command-body failure.
 ///
 /// [`Display`](std::fmt::Display) renders a one-line summary plus the captured
-/// stderr so the default MCP error envelope is human-readable (mirrors
-/// upstream's `_render`).
+/// stderr so the default MCP error envelope is human-readable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpCommandError {
     /// Captured stdout up to the point of failure (already output-capped).
@@ -249,9 +241,8 @@ impl std::error::Error for McpCommandError {}
 
 /// The lifecycle state of a background job.
 ///
-/// The Rust analogue of upstream's `job["state"]` string
-/// (`running`/`done`/`failed`/`cancelled`); [`Display`](std::fmt::Display)
-/// renders the same lowercase token the job tools print.
+/// One of `running`/`done`/`failed`/`cancelled`; [`Display`](std::fmt::Display)
+/// renders the lowercase token the job tools print.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobState {
     /// The worker task is still executing (or queued behind its lock).
@@ -276,7 +267,7 @@ impl std::fmt::Display for JobState {
     }
 }
 
-/// One background-job record (upstream `_jobs[job_id]` dict).
+/// One background-job record.
 ///
 /// Shared between the spawned worker (which writes the terminal state/result)
 /// and the poll methods (which read it), so it lives behind an
@@ -286,7 +277,7 @@ impl std::fmt::Display for JobState {
 struct Job {
     /// The session-unique job id (`"<command>-<n>"` or `"<command>-<rrid>-<n>"`).
     id: String,
-    /// The command name (upstream `cmd_cls.command`).
+    /// The command name.
     command: String,
     /// The current lifecycle state.
     state: JobState,
@@ -312,8 +303,7 @@ struct Job {
 
 /// A public, poll-facing snapshot of a [`Job`] (no task handle).
 ///
-/// The Rust analogue of upstream `_job_view`; the job tools render it into the
-/// one-line status text.
+/// The job tools render it into the one-line status text.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JobView {
     /// The job id.
@@ -364,20 +354,20 @@ pub struct McpSession {
     tools_allow: Vec<String>,
     /// Tools to remove regardless of profile/allow (`config.mcp_tools_deny`).
     tools_deny: Vec<String>,
-    /// The registry shared/exclusive gate (upstream `_RWLock` `_registry`).
+    /// The registry shared/exclusive gate.
     ///
     /// A command scoped to exactly one template enters this in *shared* mode
     /// (so it cannot overlap a registry mutation); registry mutators
     /// (`load_template`/`unload`) and unscoped fan-out enter it *exclusive*,
     /// draining in-flight per-RRID work. See [`command_lock`](Self::command_lock).
     gate: RwGate,
-    /// Lazily-created per-RRID locks (upstream `_rrid_locks` + `_locks_guard`).
+    /// Lazily-created per-RRID locks.
     ///
     /// Same-RRID calls share one `Arc<Mutex<()>>` and serialise; different-RRID
     /// calls take different locks. The outer [`StdMutex`] guards the map's own
     /// lazy population (held only for the get-or-insert, never across an await).
     rrid_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
-    /// The background-job table (upstream `_jobs`), keyed by job id.
+    /// The background-job table, keyed by job id.
     ///
     /// A backgrounded slow command runs in a spawned worker that records its
     /// outcome on its `Arc<StdMutex<Job>>`; the poll methods
@@ -390,8 +380,8 @@ pub struct McpSession {
     /// `mtui-rs-th4o.8`). The outer [`StdMutex`] guards insert/lookup/eviction
     /// only (never held across an await).
     jobs: StdMutex<HashMap<String, Arc<StdMutex<Job>>>>,
-    /// Monotonic job-id counter (upstream `_job_counter`), pre-incremented per
-    /// minted job so ids are session-unique.
+    /// Monotonic job-id counter, pre-incremented per minted job so ids are
+    /// session-unique.
     job_counter: AtomicU64,
     /// Ceiling on concurrent *running* jobs (`config.mcp_max_active_jobs`); a
     /// spawn request that would exceed it is rejected before allocating the
@@ -524,8 +514,7 @@ impl McpSession {
     /// Returns (creating on first use) the per-template lock for `rrid`.
     ///
     /// Lazily populates [`rrid_locks`](Self::rrid_locks) under its guard so two
-    /// tasks racing to lock the same fresh RRID share one lock object. The Rust
-    /// analogue of upstream `_lock_for`.
+    /// tasks racing to lock the same fresh RRID share one lock object.
     fn lock_for(&self, rrid: &str) -> Arc<Mutex<()>> {
         let mut map = self.rrid_locks.lock().expect("rrid lock map poisoned");
         Arc::clone(
@@ -537,8 +526,8 @@ impl McpSession {
     /// Acquires the right lock(s) for a `name`/`argv` invocation and returns a
     /// guard holding them for the caller's critical section.
     ///
-    /// The Rust analogue of upstream `_command_lock`, resolving exactly as the
-    /// foreground dispatch does (via [`resolve_command_rrids`]):
+    /// Resolves exactly as the foreground dispatch does (via
+    /// [`resolve_command_rrids`]):
     ///
     /// * resolves to **exactly one** loaded template → the registry gate in
     ///   *shared* mode **plus** that template's per-RRID lock, so different-RRID
@@ -592,7 +581,7 @@ impl McpSession {
     /// body (no concurrent `load_template`/`unload`) while still letting tools on
     /// *other* templates run in parallel, and the per-RRID lock serialises
     /// against foreground dispatch for the *same* template (e.g. a concurrent
-    /// `commit`). The Rust analogue of upstream `scoped_lock`.
+    /// `commit`).
     ///
     /// `rrid` is the resolved target template id, or `None` to fall back to the
     /// active template (single-/zero-loaded case). Callers should resolve and
@@ -621,10 +610,9 @@ impl McpSession {
 
     /// Releases pool claims and disconnects every loaded template's hosts.
     ///
-    /// The Rust analogue of upstream `McpSession.close` /
-    /// `McpSession._disconnect_targets`. Owned by the http
-    /// `SessionRegistry` (P7.10 / `mtui-rs-odq8`), which calls it when it evicts
-    /// a session (idle-TTL sweep or explicit eviction). Mirrors the REPL `quit`
+    /// Owned by the http `SessionRegistry` (P7.10 / `mtui-rs-odq8`), which calls
+    /// it when it evicts a session (idle-TTL sweep or explicit eviction).
+    /// Mirrors the REPL `quit`
     /// disconnect path — [`HostsGroup::close`](mtui_hosts::HostsGroup::close) per
     /// template, its per-host `Target::close` fanning out concurrently — but
     /// **without** the exit-flag / history-flush tail, since the process keeps
@@ -643,22 +631,19 @@ impl McpSession {
     /// [`DISCONNECT_TIMEOUT`]: a wedged host close is logged and abandoned so
     /// `close()` — and the registry idle-sweep awaiting it — always returns.
     ///
-    /// ## Rust deviation
-    ///
-    /// Upstream clears `report.targets` after closing; the Rust `HostsGroup::close`
-    /// (like the REPL `quit`) closes each `Target` but leaves it in the group with
-    /// its now-dead connection — the report and its host group are dropped whole
-    /// when the session is evicted. So this does not empty the groups; a closed
-    /// target simply reports its connection inactive/closed.
+    /// `HostsGroup::close` (like the REPL `quit`) closes each `Target` but leaves
+    /// it in the group with its now-dead connection — the report and its host
+    /// group are dropped whole when the session is evicted. So this does not
+    /// empty the groups; a closed target simply reports its connection
+    /// inactive/closed.
     pub async fn close(&self) {
         self.close_with_timeout(DISCONNECT_TIMEOUT).await;
     }
 
     /// [`close`](Self::close) with an explicit fan-out budget.
     ///
-    /// The timeout seam upstream exposes as `_disconnect_targets(timeout=...)`,
-    /// kept `pub(crate)` so the wedged-close unit test can bound the wait to a
-    /// fraction of a second instead of 45s.
+    /// This timeout seam is kept `pub(crate)` so the wedged-close unit test can
+    /// bound the wait to a fraction of a second instead of 45s.
     async fn close_with_timeout(&self, timeout: Duration) {
         // Snapshot every loaded entry's lockable handle under the session lock,
         // then drop the session guard *before* the teardown awaits: holding the
@@ -701,9 +686,8 @@ impl McpSession {
 
     /// Runs a registered command and returns its captured, output-capped stdout.
     ///
-    /// The central MCP dispatch primitive (the Rust analogue of upstream
-    /// `McpSession.run_command`): it dispatches `name`/`argv` through the **same**
-    /// engine the REPL uses (a forked-session [`dispatch_command`] on the
+    /// The central MCP dispatch primitive: it dispatches `name`/`argv` through
+    /// the **same** engine the REPL uses (a forked-session [`dispatch_command`] on the
     /// concurrent path, [`dispatch_argv`] on the canonical session for the
     /// exclusive path), then returns what the command wrote to the call's own
     /// captured display — passed through [`cap_output`] so one large result cannot
@@ -900,12 +884,11 @@ impl McpSession {
 
     /// [`run_command`](Self::run_command) with optional progress heartbeats.
     ///
-    /// The Rust analogue of upstream `run_command(..., ctx=..., progress_interval)`:
-    /// when `sink` is `Some`, the whole dispatch (including the lock wait, exactly
-    /// as upstream wraps inside `_command_lock`) is raced against a heartbeat that
-    /// fires every `interval` via [`run_with_heartbeat`], so a slow foreground call
-    /// does not time the client out. A `None` sink takes the original zero-overhead
-    /// path — [`run_command`](Self::run_command) verbatim (upstream `ctx is None`).
+    /// When `sink` is `Some`, the whole dispatch (including the lock wait) is
+    /// raced against a heartbeat that fires every `interval` via
+    /// [`run_with_heartbeat`], so a slow foreground call does not time the client
+    /// out. A `None` sink takes the original zero-overhead
+    /// path — [`run_command`](Self::run_command) verbatim.
     ///
     /// # Errors
     ///
@@ -931,9 +914,8 @@ impl McpSession {
     /// Resolve the target RRIDs for a backgrounded fan-out, or `None` to keep
     /// the single-job path.
     ///
-    /// The Rust analogue of upstream `_resolve_job_rrids`: it resolves `argv`
-    /// exactly as the foreground dispatch does (via [`resolve_command_rrids`],
-    /// which parses the command's own clap parser and applies its
+    /// Resolves `argv` exactly as the foreground dispatch does (via
+    /// [`resolve_command_rrids`], which parses the command's own clap parser and applies its
     /// [`Scope`](mtui_core::Scope) against the loaded set), so the background
     /// fan-out matches the foreground one. Returns `None` when resolution is not
     /// meaningful (unparseable argv, or only the Null report resolves) — the
@@ -990,7 +972,7 @@ impl McpSession {
     /// Create, register and start one worker for `argv`, inserting it into the
     /// already-locked `jobs_guard` and returning its id.
     ///
-    /// The Rust analogue of upstream `_mint_job`. The worker runs through
+    /// The worker runs through
     /// [`run_command`](Self::run_command) (so it takes the same per-RRID /
     /// registry gate and output cap as a foreground call) and records the
     /// terminal state/result on the job's `Arc<StdMutex<Job>>`; on settling it
@@ -1101,7 +1083,7 @@ impl McpSession {
 
     /// Start `name`/`argv` in the background and return its job id.
     ///
-    /// The Rust analogue of upstream `start_job`: mints exactly **one** job
+    /// Mints exactly **one** job
     /// (id `"<command>-<n>"`) and returns immediately with a handle, so the
     /// client is not held for the minutes a `run`/`update`/`downgrade` can take.
     /// The tool layer calls [`start_jobs`](Self::start_jobs) instead so a
@@ -1128,7 +1110,7 @@ impl McpSession {
 
     /// Start `name`/`argv` in the background, fanning out one job per template.
     ///
-    /// The Rust analogue of upstream `start_jobs`: resolves the target templates
+    /// Resolves the target templates
     /// exactly as the foreground path does (via
     /// [`resolve_job_rrids`](Self::resolve_job_rrids)). When more than one
     /// template resolves, mints **one job per template** — each running `argv`
@@ -1174,7 +1156,7 @@ impl McpSession {
         }
     }
 
-    /// A poll-facing snapshot of one job record (upstream `_job_view`).
+    /// A poll-facing snapshot of one job record.
     ///
     /// `elapsed_s` is frozen at `finished` once terminal, else measured to now,
     /// rounded to 0.1s.
@@ -1189,7 +1171,7 @@ impl McpSession {
         }
     }
 
-    /// Return a view of every job started in this session (upstream `job_list`).
+    /// Return a view of every job started in this session.
     #[must_use]
     pub fn job_list(&self) -> Vec<JobView> {
         self.jobs
@@ -1200,8 +1182,7 @@ impl McpSession {
             .collect()
     }
 
-    /// Return `job_id`'s state view, or an error if unknown (upstream
-    /// `job_status`).
+    /// Return `job_id`'s state view, or an error if unknown.
     ///
     /// # Errors
     ///
@@ -1212,8 +1193,7 @@ impl McpSession {
         Ok(Self::view(&job.lock().expect("job record poisoned")))
     }
 
-    /// Return a finished job's stdout, or the right failure envelope (upstream
-    /// `job_result`).
+    /// Return a finished job's stdout, or the right failure envelope.
     ///
     /// # Errors
     ///
@@ -1254,7 +1234,7 @@ impl McpSession {
         }
     }
 
-    /// Cancel a running job; error if the id is unknown (upstream `job_cancel`).
+    /// Cancel a running job; error if the id is unknown.
     ///
     /// Truthful, two-stage cancel:
     ///
@@ -1362,12 +1342,11 @@ mod tests {
 
     /// A host whose `close()` never returns must not block `close_with_timeout`.
     ///
-    /// The Rust analogue of upstream
-    /// `test_disconnect_targets_bounded_wait_survives_a_wedged_close`: with a
+    /// With a
     /// small budget, teardown returns despite the stuck close, the healthy host
     /// is still closed, and the abandoned close is later released so its task
-    /// unwinds. Bounding via [`tokio::time::timeout`] (not a thread-pool
-    /// `shutdown(wait=False)`) is the whole point — see the module docs.
+    /// unwinds. Bounding via [`tokio::time::timeout`] is the whole point — see
+    /// the module docs.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn close_with_timeout_survives_a_wedged_close() {
         use mtui_hosts::{HostsGroup, MockConnection, Target};
@@ -1413,8 +1392,8 @@ mod tests {
     }
 
     /// A fresh session honours the non-interactive contract: no prompter is
-    /// wired (upstream `prompter = None`; `interactive = false` is provided by
-    /// `capture::session` passing `is_repl = false`).
+    /// wired; `interactive = false` is provided by
+    /// `capture::session` passing `is_repl = false`.
     #[tokio::test]
     async fn new_session_is_non_interactive() {
         let sess = session(Config::default());
@@ -1703,7 +1682,7 @@ mod tests {
     }
 
     /// An unknown command resolves to no RRID → `command_lock` takes the gate
-    /// exclusively (upstream unscoped fallback).
+    /// exclusively.
     #[tokio::test]
     async fn command_lock_unknown_is_exclusive() {
         let sess = session(Config::default());
@@ -1987,8 +1966,7 @@ mod tests {
 
     // ---- progress heartbeats (bead mtui-rs-76e.14) ------------------------ //
 
-    /// Records every frame `report` receives; the Rust analogue of upstream's
-    /// `_RecordingCtx`.
+    /// Records every frame `report` receives.
     #[derive(Default)]
     struct RecordingSink {
         calls: StdMutex<Vec<(f64, String)>>,
@@ -2015,7 +1993,7 @@ mod tests {
 
     /// Records the attempt then "fails" — but a `ProgressSink` swallows its own
     /// transport errors, so from the loop's view this is indistinguishable from a
-    /// working sink. The Rust analogue of upstream `_FailingCtx`: it lets us assert
+    /// working sink. This lets us assert
     /// the command result survives even when the sink's send would have failed.
     #[derive(Default)]
     struct FailingSink {
@@ -2037,7 +2015,7 @@ mod tests {
     }
 
     /// `sink = None` takes the zero-overhead path: no frames, same stdout as a
-    /// bare `run_command` (upstream `test_ctx_none_emits_no_progress...`).
+    /// bare `run_command`.
     #[tokio::test]
     async fn run_command_with_progress_none_emits_no_frames() {
         let mut config = Config::default();
@@ -2056,9 +2034,8 @@ mod tests {
     }
 
     /// A slow future with a small interval fires >= 1 monotonic frame, each
-    /// carrying the command name; the future's output is returned unchanged
-    /// (upstream `test_heartbeat_fires...` + `..._monotonic`). Driven directly
-    /// over a controlled sleep to keep the timing deterministic.
+    /// carrying the command name; the future's output is returned unchanged.
+    /// Driven directly over a controlled sleep to keep the timing deterministic.
     #[tokio::test]
     async fn run_with_heartbeat_fires_for_slow_future() {
         let sink = RecordingSink::default();
@@ -2086,8 +2063,7 @@ mod tests {
         assert_eq!(values, sorted, "progress monotonic: {values:?}");
     }
 
-    /// A future that finishes well inside the interval fires zero frames
-    /// (upstream `test_no_heartbeat_for_fast_command`).
+    /// A future that finishes well inside the interval fires zero frames.
     #[tokio::test]
     async fn run_with_heartbeat_no_frames_for_fast_future() {
         let sink = RecordingSink::default();
@@ -2097,7 +2073,7 @@ mod tests {
     }
 
     /// A failing command surfaces `McpCommandError` unchanged through the
-    /// heartbeat path (upstream `test_command_exception_propagates...`).
+    /// heartbeat path.
     #[tokio::test]
     async fn run_command_with_progress_propagates_command_error() {
         let sess = session(Config::default());
@@ -2118,8 +2094,7 @@ mod tests {
     }
 
     /// A sink whose send would fail must not mask the command result: the slow
-    /// future still returns its value and the sink's attempts are recorded
-    /// (upstream `test_progress_send_failure_is_swallowed`).
+    /// future still returns its value and the sink's attempts are recorded.
     #[tokio::test]
     async fn run_with_heartbeat_send_failure_does_not_mask_result() {
         let sink = FailingSink::default();

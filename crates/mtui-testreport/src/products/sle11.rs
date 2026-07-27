@@ -1,6 +1,6 @@
 //! Normalizer for the SLE 11 product family.
 //!
-//! Ported from `mtui/test_reports/products/sle11.py`. The if-chain is
+//! The if-chain is
 //! order-sensitive, and the `CORE` branch does not return — see the comment on
 //! that branch for why it is left that way.
 

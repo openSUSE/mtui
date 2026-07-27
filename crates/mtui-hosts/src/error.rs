@@ -1,9 +1,9 @@
 //! The host-layer error hierarchy.
 //!
 //! Lives in `mtui-hosts` (not `mtui-types`) so the foundation crate stays
-//! I/O-free per the workspace architecture. The variants mirror the failure
-//! modes of upstream `mtui/hosts/connection/connection.py` and
-//! `timeout.py`: authentication is public-key only (there is **no** password
+//! I/O-free per the workspace architecture. The variants cover the failure
+//! modes of the SSH connection and command-timeout layers: authentication is
+//! public-key only (there is **no** password
 //! fallback), a remote command may time out, and a reconnect loop may give up.
 //!
 //! Later Phase 2 tasks (the russh impl, SFTP transfers) extend this enum with
@@ -23,8 +23,8 @@ pub enum HostError {
     /// The TCP connect / SSH handshake to a host failed (host unreachable,
     /// banner/auth timeout, or a general SSH-level failure).
     ///
-    /// Mirrors upstream `Connection.connect` re-raising `OSError` /
-    /// `paramiko.SSHException` after logging a single user-facing line.
+    /// Raised when the connect / SSH handshake fails, after logging a single
+    /// user-facing line.
     #[error("no valid connection to {host}: {reason}")]
     Connect {
         /// The host that could not be reached.
@@ -35,8 +35,8 @@ pub enum HostError {
 
     /// Public-key authentication was rejected.
     ///
-    /// Mirrors upstream's `AuthenticationException` / `BadHostKeyException`
-    /// branch. MTUI is pubkey-only by design — there is no password fallback;
+    /// Raised when authentication or host-key verification fails.
+    /// MTUI is pubkey-only by design — there is no password fallback;
     /// the fix is to set up working SSH key auth to the target.
     #[error(
         "authentication failed on {host}: SSH key authentication did not succeed \
@@ -49,8 +49,7 @@ pub enum HostError {
 
     /// A remote command timed out with no output within the timeout window.
     ///
-    /// Mirrors upstream `CommandTimeoutError`, whose `str()` is the repr of the
-    /// timed-out command.
+    /// The message is the repr of the timed-out command.
     #[error("command timed out: {command:?}")]
     Timeout {
         /// The command that timed out.
@@ -58,8 +57,6 @@ pub enum HostError {
     },
 
     /// The reconnect loop exhausted its retries.
-    ///
-    /// Mirrors upstream `ReConnectFailed(hostname)`.
     #[error("failed to reconnect to {host}")]
     ReconnectFailed {
         /// The host that could not be reconnected.
@@ -68,9 +65,6 @@ pub enum HostError {
 
     /// A channel/transport-level SSH error occurred while running a command
     /// (channel open/exec failure, unexpected EOF, protocol error).
-    ///
-    /// Mirrors upstream re-raising `paramiko.ChannelException` /
-    /// `paramiko.SSHException` from the command path.
     #[error("transport error on {host}: {reason}")]
     Transport {
         /// The host the error occurred on.
@@ -79,10 +73,8 @@ pub enum HostError {
         reason: String,
     },
 
-    /// An SFTP operation failed.
-    ///
-    /// Mirrors upstream's `sftp_*` methods surfacing paramiko/`OSError`
-    /// failures (open/put/get/listdir/remove).
+    /// An SFTP operation failed
+    /// (open/put/get/listdir/remove).
     #[error("sftp error on {host}: {reason}")]
     Sftp {
         /// The host the error occurred on.
@@ -95,8 +87,7 @@ pub enum HostError {
     /// (`SSH_FX_NO_SUCH_FILE`).
     ///
     /// Distinguished from the catch-all [`Sftp`](Self::Sftp) variant because
-    /// the host-system parser branches on "not found" the way upstream branches
-    /// on Python's `FileNotFoundError` vs the broader `OSError`: a missing
+    /// the host-system parser branches on "not found": a missing
     /// `/etc/products.d` means "not a SUSE host", a missing `/etc/os-release`
     /// means "fall back to RHEL", and a missing product file behind
     /// `baseproduct` means "dangling symlink".
@@ -110,8 +101,8 @@ pub enum HostError {
 
     /// A host requested from a group is not a member of it.
     ///
-    /// Mirrors upstream `HostIsNotConnectedError`, raised by
-    /// `HostsGroup.select` when a caller names a host the group does not hold.
+    /// Raised by
+    /// `HostsGroup::select` when a caller names a host the group does not hold.
     #[error("host {host} is not connected")]
     NotConnected {
         /// The host that is not a member of the group.
@@ -121,8 +112,8 @@ pub enum HostError {
     /// An exclusive SFTP create ([`Connection::sftp_write`] with
     /// `exclusive = true`) lost the race: the remote file already exists.
     ///
-    /// This is the object-safe port of paramiko mode `"x"` mapping to
-    /// `O_CREAT | O_EXCL` and raising `FileExistsError`. The lock protocol
+    /// This is the object-safe signal that an `O_CREAT | O_EXCL` create found
+    /// the file already present. The lock protocol
     /// matches on this variant to reconcile a concurrent claim rather than
     /// clobbering the winner.
     ///
@@ -138,7 +129,7 @@ pub enum HostError {
     /// A remote target is locked by another owner and the lock could not be
     /// acquired (or force-released).
     ///
-    /// Mirrors upstream `TargetLockedError`; the message is the human-readable
+    /// The message is the human-readable
     /// "locked by" string (see `TargetLock::locked_by_msg`).
     #[error("{0}")]
     TargetLocked(String),
@@ -146,7 +137,7 @@ pub enum HostError {
     /// One or more hosts in the group were locked by another owner when the
     /// group operation lock was being acquired.
     ///
-    /// Mirrors upstream `UpdateError("Hosts locked")`, raised by
+    /// Raised by
     /// [`HostsGroup::update_lock`](crate::HostsGroup) after it has released the
     /// locks it did take, so a bespoke update/prepare/downgrade workflow aborts
     /// before running against a fleet it does not fully own.
@@ -155,8 +146,7 @@ pub enum HostError {
 
     /// No installer "doer" is defined for the given product release.
     ///
-    /// Mirrors upstream `MissingInstallerError` (a `MissingDoerError` with
-    /// `name = "Installer"`), whose message is `Missing Installer for
+    /// The message is `Missing Installer for
     /// {release}`. Raised by [`InstallOperation`](crate::InstallOperation) when
     /// a target's product has no configured installer, causing the operation to
     /// log and return before touching any locks.
@@ -168,8 +158,7 @@ pub enum HostError {
 
     /// No uninstaller "doer" is defined for the given product release.
     ///
-    /// Mirrors upstream `MissingUninstallerError` (a `MissingDoerError` with
-    /// `name = "Uninstaller"`), whose message is `Missing Uninstaller for
+    /// The message is `Missing Uninstaller for
     /// {release}`. Raised by [`UninstallOperation`](crate::UninstallOperation)
     /// under the same early-return contract as
     /// [`MissingInstaller`](Self::MissingInstaller).
@@ -181,8 +170,7 @@ pub enum HostError {
 
     /// No preparer "doer" is defined for the given product release.
     ///
-    /// Mirrors upstream `MissingPreparerError` (a `MissingDoerError` with
-    /// `name = "Preparer"`), whose message is `Missing Preparer for {release}`.
+    /// The message is `Missing Preparer for {release}`.
     /// Raised when a target's product has no configured prepare command.
     #[error("Missing Preparer for {release}")]
     MissingPreparer {
@@ -192,8 +180,7 @@ pub enum HostError {
 
     /// No updater "doer" is defined for the given product release.
     ///
-    /// Mirrors upstream `MissingUpdaterError` (a `MissingDoerError` with
-    /// `name = "Updater"`), whose message is `Missing Updater for {release}`.
+    /// The message is `Missing Updater for {release}`.
     /// Raised when a target's product has no configured update command.
     #[error("Missing Updater for {release}")]
     MissingUpdater {
@@ -203,8 +190,7 @@ pub enum HostError {
 
     /// No downgrader "doer" is defined for the given product release.
     ///
-    /// Mirrors upstream `MissingDowngraderError` (a `MissingDoerError` with
-    /// `name = "Downgrader"`), whose message is `Missing Downgrader for
+    /// The message is `Missing Downgrader for
     /// {release}`. Raised when a target's product has no configured downgrade
     /// command.
     #[error("Missing Downgrader for {release}")]
@@ -289,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_installer_display_matches_upstream_format() {
+    fn missing_installer_display_format() {
         let err = HostError::MissingInstaller {
             release: "opensuse-15.4".to_owned(),
         };
@@ -297,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_uninstaller_display_matches_upstream_format() {
+    fn missing_uninstaller_display_format() {
         let err = HostError::MissingUninstaller {
             release: "opensuse-15.4".to_owned(),
         };
@@ -305,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_preparer_display_matches_upstream_format() {
+    fn missing_preparer_display_format() {
         let err = HostError::MissingPreparer {
             release: "opensuse-15.4".to_owned(),
         };
@@ -313,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_updater_display_matches_upstream_format() {
+    fn missing_updater_display_format() {
         let err = HostError::MissingUpdater {
             release: "opensuse-15.4".to_owned(),
         };
@@ -321,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_downgrader_display_matches_upstream_format() {
+    fn missing_downgrader_display_format() {
         let err = HostError::MissingDowngrader {
             release: "opensuse-15.4".to_owned(),
         };

@@ -1,8 +1,7 @@
 //! Shared helpers for command bodies.
 //!
-//! Ports the two cross-cutting `_command.py` helpers every host-phase command
-//! reuses: the `-t/--target` argument (`_add_hosts_arg`) and the host selection
-//! it drives (`parse_hosts`).
+//! The two cross-cutting helpers every host-phase command reuses: the
+//! `-t/--target` argument and the host selection it drives.
 
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::openqa::base::OpenQABase;
@@ -20,8 +19,8 @@ use crate::session::Session;
 /// Builds the report's [`QemIncident`] (the shared handle both openQA connectors
 /// build on).
 ///
-/// Mirrors upstream, which constructs a single `QEMIncident(config, rrid)` and
-/// threads it into `DashboardAutoOpenQA` / `KernelOpenQA`. Takes an
+/// Built once and threaded into both `DashboardAutoOpenQA` and
+/// `KernelOpenQA`, so both connectors share the same incident state. Takes an
 /// already-built [`HttpClient`] (obtain it once from
 /// [`Session::http_client`](crate::session::Session::http_client)) so the QEM
 /// dashboard fetch reuses the session connection pool instead of building a
@@ -38,8 +37,7 @@ pub(crate) async fn build_incident(
 }
 
 /// Builds a fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow on
-/// the given openQA instance `host` (upstream `DashboardAutoOpenQA(config,
-/// config.openqa_instance, incident, rrid)`). `max_parallel` bounds the
+/// the given openQA instance `host`. `max_parallel` bounds the
 /// connector's concurrent per-setting job fetches. Call
 /// [`DashboardAutoOpenQA::run`] to populate it.
 #[must_use]
@@ -53,7 +51,7 @@ pub(crate) fn build_auto_openqa(
 }
 
 /// Builds a fresh, unpopulated [`KernelOpenQA`] connector for a given openQA
-/// instance `host` (upstream `KernelOpenQA(config, host, incident, rrid)`).
+/// instance `host`.
 ///
 /// Resolves openQA API credentials from the standard `client.conf` search
 /// paths, keyed on the instance host. Call [`KernelOpenQA::run`] to populate it.
@@ -79,10 +77,9 @@ pub(crate) fn build_kernel_openqa(
     KernelOpenQA::new(base)
 }
 
-/// Guards a command body that requires a loaded update (upstream
-/// `@requires_update`).
+/// Guards a command body that requires a loaded update.
 ///
-/// Returns [`CommandError::Other`] with the upstream message when no report is
+/// Returns [`CommandError::Other`] with a stable message when no report is
 /// loaded, so a data-source command errors cleanly instead of building a client
 /// for an empty RRID. On success returns the active report's
 /// [`RequestReviewID`](mtui_types::RequestReviewID).
@@ -104,12 +101,11 @@ pub(crate) fn require_update(
     })
 }
 
-/// Tab-completion candidates that offer every loaded template RRID (upstream
-/// `template_completion`).
+/// Tab-completion candidates that offer every loaded template RRID.
 ///
 /// Returned RRIDs that start with `text` are offered; the caller merges these
-/// with any flag candidates. Mirrors upstream, which lets `-T/--template` be
-/// completed with the loaded RRIDs.
+/// with any flag candidates, so `-T/--template` can be completed with the
+/// loaded RRIDs.
 #[must_use]
 pub(crate) fn template_completion(session: &Session, text: &str) -> Vec<String> {
     session
@@ -120,14 +116,14 @@ pub(crate) fn template_completion(session: &Session, text: &str) -> Vec<String> 
         .collect()
 }
 
-/// Filters flag/value choices for tab completion (upstream `complete_choices`).
+/// Filters flag/value choices for tab completion.
 ///
 /// `synonyms` groups interchangeable flags — e.g. `[["-t", "--target"]]`; `extra`
 /// carries the free-form candidates (host names, package names, template RRIDs).
 /// `line` is the command line typed so far and `text` the partial word under the
 /// cursor.
 ///
-/// Behaviour mirrors upstream exactly:
+/// Behaviour:
 /// * A synonym group already present on the line is dropped from the offered set
 ///   (once you type `-t`, neither `-t` nor `--target` is suggested again).
 /// * A bundled short-flag token (`-abc`, i.e. a single `-` followed by two or
@@ -136,9 +132,9 @@ pub(crate) fn template_completion(session: &Session, text: &str) -> Vec<String> 
 ///   completion is already satisfied).
 /// * Otherwise every candidate starting with `text` is returned.
 ///
-/// Unlike upstream — which derives the result from a `set` and so returns an
-/// unstable order — this preserves the input order (flags first in the order
-/// given, then `extra`), which keeps the menu deterministic and testable.
+/// Preserves the input order (flags first in the order given, then `extra`),
+/// which keeps the menu deterministic and testable, rather than deriving the
+/// result from an unordered set.
 #[must_use]
 pub(crate) fn complete_choices(
     synonyms: &[&[&str]],
@@ -167,7 +163,7 @@ pub(crate) fn complete_choices(
 
     // Walk the already-typed tokens (skip the command name) and remove any
     // synonym group the user has already committed to. Expand bundled short
-    // flags (`-abc` → `-a -b -c`) first, exactly like upstream.
+    // flags (`-abc` → `-a -b -c`) first.
     let mut tokens: Vec<String> = line.split(' ').map(str::to_owned).collect();
     if !tokens.is_empty() {
         tokens.remove(0);
@@ -193,7 +189,7 @@ pub(crate) fn complete_choices(
         i += 1;
     }
 
-    // Exact match short-circuits to just that candidate (upstream parity).
+    // Exact match short-circuits to just that candidate.
     if let Some(exact) = choices.iter().find(|c| c.as_str() == text) {
         return vec![exact.clone()];
     }
@@ -205,7 +201,7 @@ pub(crate) fn complete_choices(
 
 /// Completion for a command that offers its own flags plus the template synonym
 /// groups (`-T/--template`, `--all-templates`) and the loaded RRIDs, but **no**
-/// host names (upstream commands like `add_host`, `commit`, `checkout`,
+/// host names (commands like `add_host`, `commit`, `checkout`,
 /// `show_diff`, `put` that pass only `template_completion` to `complete_choices`).
 ///
 /// `extra` carries any command-specific free-form candidates.
@@ -226,7 +222,7 @@ pub(crate) fn complete_with_templates(
 }
 
 /// Completion for a host-phase (fan-out) command: `-t/--target`, the loaded
-/// template RRIDs (upstream `template_completion`), and the connected host names.
+/// template RRIDs, and the connected host names.
 ///
 /// `extra_flags` are prepended as additional synonym groups (e.g. a command's own
 /// `--force`/`--installed` options). This is the shared shape behind `run`,
@@ -241,7 +237,7 @@ pub(crate) fn complete_fanout(
     text: &str,
 ) -> Vec<String> {
     // `-t/--target`, the command's own flags, then the template synonym groups
-    // (`-T/--template`, `--all-templates`) — upstream `template_completion`.
+    // (`-T/--template`, `--all-templates`).
     let mut groups: Vec<&[&str]> = vec![&["-t", "--target"]];
     groups.extend_from_slice(extra_flags);
     groups.push(&["-T", "--template"]);
@@ -253,7 +249,7 @@ pub(crate) fn complete_fanout(
     complete_choices(&groups, candidates, line, text)
 }
 
-/// File-path variant of [`complete_choices`] (upstream `complete_choices_filelist`).
+/// File-path variant of [`complete_choices`].
 ///
 /// Offers directory entries under the directory part of `text` (basename-prefix
 /// filtered, directories carrying a trailing `/`) merged with the flag/value
@@ -332,7 +328,7 @@ fn resolve_user_home(_user: &str) -> Option<String> {
 pub(crate) fn complete_path(text: &str) -> Vec<String> {
     use std::path::Path;
 
-    // `~` / `~/…` / `~user` / `~user/…` → expand (upstream `expanduser`).
+    // `~` / `~/…` / `~user` / `~user/…` → expand.
     let expanded = expand_tilde(text);
 
     let (dir, prefix) = match expanded.rfind('/') {
@@ -366,9 +362,9 @@ pub(crate) fn complete_path(text: &str) -> Vec<String> {
     out
 }
 
-/// Adds the repeatable `-t/--target` host argument (upstream `_add_hosts_arg`).
+/// Adds the repeatable `-t/--target` host argument.
 ///
-/// `action="append"` upstream → [`ArgAction::Append`] here: the flag may be
+/// [`ArgAction::Append`]: the flag may be
 /// given more than once, each occurrence naming one host. When omitted, the
 /// command acts on every enabled host.
 pub fn add_hosts_arg(cmd: clap::Command) -> clap::Command {
@@ -388,8 +384,7 @@ pub fn add_hosts_arg(cmd: clap::Command) -> clap::Command {
 /// The parsed `-t/--target` hostnames, or `None` when the flag was omitted.
 ///
 /// `None` (no `-t`) is distinct from `Some([])` (which clap never produces for
-/// an `Append` arg) — callers use the `None` case to mean "all enabled hosts",
-/// matching upstream's `if self.args.hosts:` branch.
+/// an `Append` arg) — callers use the `None` case to mean "all enabled hosts".
 #[must_use]
 pub(crate) fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
     args.try_get_many::<String>("hosts")
@@ -400,7 +395,7 @@ pub(crate) fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
 
 /// Whether the invocation named explicit `-t` hosts.
 ///
-/// The fan-out skip rule (`_command.py`) keys on this: a host-phase command with
+/// The fan-out skip rule keys on this: a host-phase command with
 /// no explicit `-t` may be skipped on a template with no connected host, but a
 /// typo'd `-t` must fail loudly.
 #[must_use]
@@ -408,14 +403,14 @@ pub(crate) fn named_hosts(args: &ArgMatches) -> bool {
     hosts_arg(args).is_some_and(|v| !v.is_empty())
 }
 
-/// Resolves the hostnames a host-phase command acts on (upstream `parse_hosts`),
-/// **without** consuming the group.
+/// Resolves the hostnames a host-phase command acts on, **without** consuming
+/// the group.
 ///
 /// * `-t host …` → exactly those hosts (validated against membership; only the
 ///   enabled among them when `enabled`).
 /// * no `-t` → every enabled host.
-/// * the deprecated `-t all` → every enabled host, with a warning (upstream
-///   keeps the `all` escape hatch for backwards compatibility).
+/// * the deprecated `-t all` → every enabled host, with a warning (the `all`
+///   escape hatch is kept for backwards compatibility).
 ///
 /// Returns hostnames (sorted, as [`HostsGroup::names`] yields) rather than a new
 /// group: `HostsGroup::select` consumes the group and drops the unselected
@@ -425,9 +420,9 @@ pub(crate) fn named_hosts(args: &ArgMatches) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`HostError::NotConnected`](mtui_hosts::HostError) when a named host
-/// is not in the group (upstream `HostIsNotConnectedError`), except for the
-/// deprecated `all` sentinel which degrades to every enabled host.
+/// Returns [`HostError::NotConnected`](mtui_hosts::HostError) when a named
+/// host is not in the group, except for the deprecated `all` sentinel which
+/// degrades to every enabled host.
 pub fn select_names(
     group: &HostsGroup,
     args: &ArgMatches,
@@ -477,8 +472,7 @@ pub(crate) fn per_host(command: &str, hosts: &[String]) -> mtui_hosts::Command {
     )
 }
 
-/// Pages `output` through the session's display, matching upstream's
-/// `page(output, self.prompt.interactive, writer=self.display.println)`.
+/// Pages `output` through the session's display.
 ///
 /// In the interactive REPL (`session.is_repl`) it drives the async
 /// [`page_interactive`](crate::display::page_interactive) pager, reading the

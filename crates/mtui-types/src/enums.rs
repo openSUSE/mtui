@@ -1,15 +1,15 @@
-//! Domain enumerations, ported from upstream `mtui/types/enums.py`.
+//! Domain enumerations.
 //!
-//! Only the enums with existing behavioral coverage (`tests/test_enums.py`)
-//! or a refhost consumer are ported here. Upstream's `method` / `assignment`
-//! HTTP-layer enums are intentionally deferred until a caller lands, to keep
-//! this crate free of dead code under `-D warnings`.
+//! Only the enums with existing behavioral coverage or a refhost consumer are
+//! included here. The `method` / `assignment` HTTP-layer enums are
+//! intentionally deferred until a caller lands, to keep this crate free of
+//! dead code under `-D warnings`.
 //!
-//! Where upstream relies on Python's `StrEnum` for byte-identical string
-//! comparison (`target.state == "enabled"`), the Rust equivalent is
-//! `#[serde(rename = ...)]` on the wire form plus `Display`/`FromStr` that
-//! preserve the exact upstream strings — this keeps the CLI/config/serialized
-//! surface a stable contract without leaking a `str`-equality footgun.
+//! Wire values must be byte-identical strings for the CLI/config/serialized
+//! surface (e.g. `target.state == "enabled"`): `#[serde(rename = ...)]` on
+//! the wire form plus `Display`/`FromStr` that preserve those exact strings
+//! keep that surface a stable contract without leaking a `str`-equality
+//! footgun.
 
 use std::fmt;
 use std::str::FromStr;
@@ -20,8 +20,7 @@ use crate::error::RequestKindParseError;
 
 /// Per-host execution state.
 ///
-/// Mirrors upstream `TargetState` (a `StrEnum`). Wire values are the exact
-/// lowercase tokens `enabled` / `disabled`.
+/// Wire values are the exact lowercase tokens `enabled` / `disabled`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TargetState {
@@ -32,7 +31,7 @@ pub enum TargetState {
 }
 
 impl TargetState {
-    /// Returns the upstream wire string for this state.
+    /// Returns the wire string for this state.
     #[must_use]
     const fn as_str(self) -> &'static str {
         match self {
@@ -65,8 +64,8 @@ impl FromStr for TargetState {
 
 /// Per-report update workflow mode.
 ///
-/// Mirrors upstream `Workflow` (a `StrEnum`). Wire values match the
-/// `set_workflow` CLI choices `auto` / `manual` / `kernel`.
+/// Wire values match the `set_workflow` CLI choices `auto` / `manual` /
+/// `kernel`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Workflow {
@@ -79,7 +78,7 @@ pub enum Workflow {
 }
 
 impl Workflow {
-    /// Returns the upstream wire string for this workflow.
+    /// Returns the wire string for this workflow.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -114,9 +113,9 @@ impl FromStr for Workflow {
 
 /// Kind component of an OBS Request Review ID.
 ///
-/// Mirrors upstream `RequestKind` (a plain `Enum`). The canonical wire values
-/// are `SLFO` / `Maintenance` / `PI`; [`RequestKind::from_token`] also accepts
-/// the single-letter CLI aliases `S` / `M` / `P`.
+/// The canonical wire values are `SLFO` / `Maintenance` / `PI`;
+/// [`RequestKind::from_token`] also accepts the single-letter CLI aliases
+/// `S` / `M` / `P`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RequestKind {
     /// SUSE Linux Framework One.
@@ -149,8 +148,7 @@ impl RequestKind {
     ///
     /// # Errors
     ///
-    /// Returns [`RequestKindParseError`] if `raw` is not a recognised kind,
-    /// mirroring upstream `ValueError("unknown request kind: …")`.
+    /// Returns [`RequestKindParseError`] if `raw` is not a recognised kind.
     pub(crate) fn from_token(raw: &str) -> Result<Self, RequestKindParseError> {
         match raw {
             "S" | "SLFO" => Ok(Self::Slfo),
@@ -171,12 +169,11 @@ impl fmt::Display for RequestKind {
 
 /// Assignment state of a Gitea pull request for a review group.
 ///
-/// Mirrors upstream `assignment` (a plain `Enum` in `mtui/types/enums.py`).
 /// The Gitea connector derives this by replaying the group's assign/unassign
-/// marker comments; it is the discriminant of upstream's
-/// `GiteaAssignInvalidError` message. Not a `StrEnum` upstream (no wire-string
-/// contract), so no serde/`FromStr` is ported — it exists purely as an
-/// in-memory state signalled between the connector and its error type.
+/// marker comments; it is the discriminant of the Gitea-side assign-invalid
+/// error message. There is no wire-string contract for this type, so no
+/// serde/`FromStr` is implemented — it exists purely as an in-memory state
+/// signalled between the connector and its error type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Assignment {
     /// The PR's group is assigned to the user under consideration.
@@ -201,7 +198,7 @@ pub struct ParseEnumError {
 mod tests {
     use super::*;
 
-    // --- TargetState: upstream `StrEnum` string-value contract. ---
+    // --- TargetState: string-value contract. ---
 
     #[test]
     fn target_state_carries_legacy_string_values() {
@@ -247,7 +244,7 @@ mod tests {
         assert!("hybrid".parse::<Workflow>().is_err());
     }
 
-    // --- RequestKind: ported from tests/test_enums.py::TestRequestKind. ---
+    // --- RequestKind. ---
 
     #[test]
     fn request_kind_canonical_values_match_wire_format() {

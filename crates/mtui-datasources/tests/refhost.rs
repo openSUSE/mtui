@@ -1,5 +1,5 @@
 //! Integration coverage for the refhost search engine against the golden
-//! `refhosts.yml` fixture (ported from upstream `tests/fixtures/refhosts.yml`).
+//! `refhosts.yml` fixture.
 //!
 //! These exercise the full `Refhosts::from_path` → `search` / `host_by_name`
 //! path over the real fixture, complementing the unit tests that use in-memory

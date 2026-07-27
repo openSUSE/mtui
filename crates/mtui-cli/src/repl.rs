@@ -1,19 +1,17 @@
 //! The interactive REPL: read → dispatch → repeat.
 //!
-//! Ports upstream `mtui.cli.repl.CommandPrompt.cmdloop` onto the Phase-5 engine.
 //! Every line is handed to [`mtui_core::dispatch_line`] (the *same* engine the
 //! MCP surface dispatches through), whose typed [`EngineError`] the loop renders
-//! and then keeps going — a bad command never tears down the session, matching
-//! upstream's `logger.error(e)` + continue.
+//! and then keeps going — a bad command never tears down the session.
 //!
 //! Control keys map onto [`reedline::Signal`]:
 //!
 //! * `Signal::Success(line)` → dispatch the line (empty lines are a no-op in the
 //!   engine), render any error, then honour a pending `quit`
 //!   ([`Session::should_exit`]).
-//! * `Signal::CtrlC` → abort the current input and reprompt (upstream Ctrl-C on
+//! * `Signal::CtrlC` → abort the current input and reprompt (Ctrl-C on
 //!   a partial line clears it); never exits.
-//! * `Signal::CtrlD` → graceful session exit (upstream Ctrl-D → `EOF` alias of
+//! * `Signal::CtrlD` → graceful session exit (Ctrl-D → `EOF` alias of
 //!   `quit`): break the loop, process exit 0.
 //!
 //! The read loop and dispatch are independent of the editor's input features:
@@ -38,8 +36,7 @@ use crate::prompt::MtuiPrompt;
 /// The reedline menu name the Tab keybinding activates.
 const COMPLETION_MENU: &str = "completion_menu";
 
-/// The banner printed once before the first prompt (upstream
-/// `cmdloop(intro="Maintenance Test Update Installer")`).
+/// The banner printed once before the first prompt.
 const INTRO: &str = "Maintenance Test Update Installer";
 
 /// The interactive REPL, owning the line editor and the command registry.
@@ -66,7 +63,7 @@ impl Repl {
     /// [`file_backed_history`](crate::history::file_backed_history) persisting to
     /// `$XDG_DATA_HOME/mtui/history` (with Ctrl-R reverse-search from the default
     /// emacs bindings); and a [`DefaultHinter`] showing the greyed inline
-    /// suggestion (upstream `AutoSuggestFromHistory`). The dynamic prompt/toolbar
+    /// suggestion. The dynamic prompt/toolbar
     /// (P6.5) and the prompter (P6.6) slot into this builder later without
     /// changing the loop.
     #[must_use]
@@ -196,7 +193,7 @@ impl Repl {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     session.display.println("");
                 }
-                // Ctrl-D: graceful session exit (upstream `DEOF` → `Quit`).
+                // Ctrl-D: graceful session exit via the `EOF` alias of `Quit`.
                 // Dispatch the `EOF` command through the engine so the full quit
                 // teardown runs (pool-claim release + host close), then break —
                 // a bare `break` would skip that cleanup. reedline persists the
@@ -242,16 +239,15 @@ async fn step(registry: &Registry, session: &mut Session, line: &str) -> Control
 }
 
 /// Reports a dispatch error through `tracing::error!`, the single operator log
-/// channel (upstream `logger.error(e)`).
+/// channel.
 ///
 /// Errors, warnings, and info all flow through the *same* path here: the
 /// `tracing` subscriber installed by [`init_tracing`](crate::init_tracing), whose
 /// [`CompactLevelFormat`](crate::logfmt::CompactLevelFormat) renders every level
 /// as a lowercased, colorized token — `error: <message>` (red), `warn: …`
-/// (yellow), `info: …` (green) — with one shared `--color` decision, exactly
-/// like upstream's single `ColorFormatter`. The error message is the event's
-/// *message* (not a structured field), so no `err=` noise appears; the default
-/// format carries no timestamp/target either.
+/// (yellow), `info: …` (green) — with one shared `--color` decision. The error
+/// message is the event's *message* (not a structured field), so no `err=`
+/// noise appears; the default format carries no timestamp/target either.
 ///
 /// This deliberately differs from the headless
 /// [`run_once`](mtui_core::entrypoint::run_once) entrypoint (`mtui-mcp` /
@@ -466,7 +462,7 @@ mod tests {
         assert_eq!(out.lines().count(), 1, "rendered exactly once");
         assert!(
             out.starts_with("error: "),
-            "must carry the upstream `error: ` prefix, got: {out:?}"
+            "must carry the `error: ` prefix, got: {out:?}"
         );
         assert!(!out.contains("mtui_cli"), "no tracing target");
         assert!(!out.contains("err="), "no structured field noise");

@@ -1,8 +1,7 @@
 //! Golden-vector tests for [`UpdateID`].
 //!
-//! `UpdateID` is a thin value wrapper over [`RequestReviewID`] (upstream
-//! `OBSUpdateID(rrid)` does `id_ = RequestReviewID(rrid)`), so these tests lock
-//! that the wrapper delegates faithfully: every RRID that parses yields an
+//! `UpdateID` is a thin value wrapper over [`RequestReviewID`], so these tests
+//! lock that the wrapper delegates faithfully: every RRID that parses yields an
 //! `UpdateID` whose inner `id` equals the equivalent `RequestReviewID`, every
 //! malformed RRID fails with the same error category, and `Display` equals the
 //! inner RRID's canonical string (the value used downstream for the per-update

@@ -10,10 +10,10 @@ use crate::session::Session;
 
 /// Edits the active testing template or a local file in `$EDITOR`.
 ///
-/// Ports upstream `mtui.commands.edit.Edit`. Spawning `$EDITOR` (default `vim`)
+/// Spawning `$EDITOR` (default `vim`)
 /// on the controlling terminal needs the local TTY, which only the Phase-6
 /// `mtui` binary owns; the command surface (name, optional `filename`, file-path
-/// completion) is ported here so the registry and MCP synthesiser see it, but
+/// completion) is defined here so the registry and MCP synthesiser see it, but
 /// the runtime editor spawn is intercepted in `crates/mtui-cli/src/edit.rs`
 /// (like `shell`) — the shared engine, which the headless MCP also drives, has
 /// no controlling terminal. Invoked headlessly it errors cleanly rather than

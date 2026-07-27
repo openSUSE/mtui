@@ -9,7 +9,7 @@ use crate::session::Session;
 
 /// Unloads one loaded template, closing only its host connections.
 ///
-/// Ports upstream `mtui.commands.unload.Unload`. Other loaded templates are left
+/// Other loaded templates are left
 /// untouched; if the unloaded template was active, the registry promotes the
 /// next remaining one. It names its own target RRID and removes exactly that
 /// template, so it runs once ([`Scope::Single`]) regardless of how many

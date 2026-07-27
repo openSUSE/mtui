@@ -1,5 +1,3 @@
-//! Ported from upstream `tests/test_null_report.py`.
-//!
 //! Pins the null-object contract: falsy, empty ID, empty parser tables,
 //! `target_wd` rooted under `config.target_tempdir`, no-op update-command
 //! listing, and a trivially-valid hash.
@@ -10,9 +8,8 @@ use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
 use mtui_testreport::{HashCheck, NullReport, TestReport};
 
-/// Builds a config whose `template_dir`/`target_tempdir` point under a unique,
-/// deterministic base — the Rust analogue of the upstream `MagicMock` config
-/// (`template_dir = tmp_path`, `target_tempdir = tmp_path / "target"`).
+/// Builds a config whose `template_dir`/`target_tempdir` point under a
+/// unique, deterministic base.
 fn config_with_tmp(base: &str) -> (Config, PathBuf) {
     let tmp = std::env::temp_dir().join(format!("mtui-null-report-{base}"));
     let target = tmp.join("target");

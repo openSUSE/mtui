@@ -1,24 +1,17 @@
-//! Command-log storage, ported from `mtui/types/{commandlog,hostlog}.py`.
+//! Command-log storage.
 //!
 //! A [`CommandLog`] records one command executed on a target host and its
 //! outcome; a [`HostLog`] is an ordered list of them.
 //!
-//! ## Deviations from upstream
-//!
-//! Upstream's `HostLog` subclasses `list` and overrides `append`/`insert` with
-//! runtime `*args` unpacking, length checks (`"it need 5 args"`), and
-//! `str | bytes` coercion via `to_string`. In Rust the type system makes all of
-//! that unnecessary: [`push`](HostLog::push) takes a fully-typed
-//! [`CommandLog`], so the arity and type errors upstream
-//! guards against at runtime simply cannot occur. Read access is provided via
-//! [`Deref`] to a `[CommandLog]` slice, giving iteration, indexing, `len`, etc.
-//! for free.
+//! The Rust type system makes runtime argument-count and type checks
+//! unnecessary here: [`push`](HostLog::push) takes a fully-typed
+//! [`CommandLog`], so arity and type errors simply cannot occur. Read access is
+//! provided via [`Deref`] to a `[CommandLog]` slice, giving iteration,
+//! indexing, `len`, etc. for free.
 
 use std::ops::Deref;
 
 /// A single command-execution log entry.
-///
-/// Ported from the upstream `CommandLog` `NamedTuple`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CommandLog {
     /// The command that was run.
@@ -31,8 +24,8 @@ pub struct CommandLog {
     ///
     /// A genuine POSIX exit code is 0–255; negative values are sentinels for
     /// "no exit code" (e.g. the command was killed by a signal or timed out),
-    /// mirroring upstream mtui's use of `-1`. `i16` covers both ranges without
-    /// the width of a C `int`.
+    /// with `-1` as the convention. `i16` covers both ranges without the width
+    /// of a C `int`.
     pub exitcode: i16,
     /// The command's runtime, in seconds.
     pub runtime: i64,
@@ -93,8 +86,8 @@ impl CommandLog {
 
 /// An ordered list of [`CommandLog`] entries for a single host.
 ///
-/// Ported from upstream `HostLog(list[CommandLog])`. Dereferences to a
-/// `[CommandLog]` slice for read access (iteration, indexing, `len`, `iter`).
+/// Dereferences to a `[CommandLog]` slice for read access (iteration,
+/// indexing, `len`, `iter`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostLog {
     entries: Vec<CommandLog>,

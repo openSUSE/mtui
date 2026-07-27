@@ -1,7 +1,7 @@
 //! A tiny TTY spinner for long-running interactive fan-outs.
 //!
-//! Ported from upstream `mtui/support/spinner.py`. Repaints a `|/-\` frame on
-//! **stderr** while work is in flight, but only when stderr is a TTY. Off a TTY
+//! Repaints a `|/-\` frame on **stderr** while work is in flight, but only
+//! when stderr is a TTY. Off a TTY
 //! (tests, redirected output, log files, the `mtui-mcp` transport) it is a
 //! strict no-op, so test output and log files stay clean and the MCP layer can
 //! surface progress through its own channel instead.
@@ -14,10 +14,9 @@
 //! [`suspend`] guard for the whole read so a live spinner erases its frame and
 //! stops repainting over the prompt until the user has answered.
 //!
-//! ## Async, not threads
+//! ## Async task, not a thread
 //!
-//! Upstream drives the spinner from an OS thread because its workers are
-//! threads. mtui fans out with `tokio` tasks, so [`TtySpinner`] paints from a
+//! mtui fans out with `tokio` tasks, so [`TtySpinner`] paints from a
 //! spawned task on a `tokio::time` interval. The paint lock is a
 //! [`std::sync::Mutex`] guarding only the short erase/paint critical sections
 //! (never held across `.await`), so it is sound to acquire it from both the
@@ -37,9 +36,9 @@ use std::time::Duration;
 
 use tokio::task::JoinHandle;
 
-/// The animation frames, matching upstream's `|/-\`.
+/// The animation frames.
 const FRAMES: [char; 4] = ['|', '/', '-', '\\'];
-/// Repaint interval, matching upstream's 0.1s.
+/// Repaint interval.
 const INTERVAL: Duration = Duration::from_millis(100);
 /// Erase-current-line escape: carriage return + clear-to-end-of-line.
 const ERASE: &str = "\r\x1b[K";
@@ -455,9 +454,9 @@ impl Drop for TtySpinner {
 
 /// An RAII guard that runs a labelled [`TtySpinner`] for its lifetime.
 ///
-/// The Rust equivalent of upstream's `@contextmanager spinner(desc)`: build one
-/// with [`spinner`], hold it across a long-running (non-fan-out) operation, and
-/// dropping it stops the spinner and erases the frame. A strict no-op off a TTY
+/// Build one with [`spinner`], hold it across a long-running (non-fan-out)
+/// operation, and dropping it stops the spinner and erases the frame. A
+/// strict no-op off a TTY
 /// (tests, redirected output, `mtui-mcp`), like [`TtySpinner`] itself.
 #[must_use = "the spinner stops as soon as the guard is dropped"]
 pub struct SpinnerGuard {
@@ -467,9 +466,8 @@ pub struct SpinnerGuard {
 impl SpinnerGuard {
     /// True once the underlying spinner has been stopped (its guard dropped).
     ///
-    /// The cooperative-cancellation predicate mirroring upstream's `is_stopped`
-    /// yield: a long-running callee can poll this to bail out promptly when the
-    /// guard is being torn down.
+    /// The cooperative-cancellation predicate: a long-running callee can poll
+    /// this to bail out promptly when the guard is being torn down.
     #[must_use]
     pub fn is_stopped(&self) -> bool {
         self.inner.is_stopped()

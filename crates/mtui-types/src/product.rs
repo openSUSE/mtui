@@ -1,4 +1,4 @@
-//! Refhost product schema, ported from `mtui/hosts/refhost/models.py`.
+//! Refhost product schema.
 //!
 //! These are the value-types a `refhosts.yml` row deserializes into:
 //! [`Product`] (base product), [`Addon`] (module/extension), and [`Host`]
@@ -7,10 +7,10 @@
 //! module only defines the serde-derived types and verifies they round-trip an
 //! inline row.
 //!
-//! Note: upstream also has a separate flat `Product` NamedTuple in
-//! `mtui/types/product.py` used by `System` (name/version:str/arch). That one
-//! lands with `system.rs` in a later task; this `Product` is the refhost
-//! variant whose `version` is a structured [`Version`].
+//! Note: there is a separate flat `Product`-like type used by `System`
+//! (name/version:str/arch), defined in `system.rs` as
+//! [`SystemProduct`](crate::system::SystemProduct); this `Product` is the
+//! refhost variant whose `version` is a structured [`Version`].
 
 use serde::{Deserialize, Serialize};
 

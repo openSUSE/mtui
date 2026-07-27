@@ -2,11 +2,11 @@
 //!
 //! This crate holds every outbound integration (the shared HTTP policy layer,
 //! the `refhosts.yml` resolver/search/verify, and the external service
-//! clients). The first landed surface is the HTTP layer ported from upstream
-//! `mtui/support/http.py`, so [`HttpError`] is the first member of the
-//! hierarchy. Later Phase-3 tasks add their own `#[from]` sub-errors (openQA,
-//! QEM dashboard, Gitea, oqa-search) as those clients land, so each variant is
-//! exercised by real tests rather than sitting dead.
+//! clients). The first landed surface is the HTTP layer, so [`HttpError`] is
+//! the first member of the hierarchy. Later Phase-3 tasks add their own
+//! `#[from]` sub-errors (openQA, QEM dashboard, Gitea, oqa-search) as those
+//! clients land, so each variant is exercised by real tests rather than
+//! sitting dead.
 
 use mtui_types::Assignment;
 use thiserror::Error;
@@ -16,13 +16,11 @@ pub type Result<T> = std::result::Result<T, HttpError>;
 
 /// Errors from the shared outbound HTTP layer.
 ///
-/// Mirrors the failure surface upstream `get_bytes` exposes: any transport
-/// failure or non-2xx status propagates as a `requests.exceptions.*`. Here that
-/// collapses onto the underlying [`reqwest::Error`], but a dedicated
-/// [`CaBundle`](Self::CaBundle) variant is added for the Rust-specific step of
-/// reading a user-configured CA bundle from disk (upstream handed the path
-/// straight to `requests`; reqwest's rustls backend needs the PEM loaded
-/// eagerly at client-build time).
+/// Any transport failure or non-2xx status collapses onto the underlying
+/// [`reqwest::Error`], plus a dedicated [`CaBundle`](Self::CaBundle) variant
+/// for the Rust-specific step of reading a user-configured CA bundle from disk
+/// (reqwest's rustls backend needs the PEM loaded eagerly at client-build
+/// time).
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum HttpError {
@@ -62,8 +60,7 @@ pub enum HttpError {
 
 /// Errors from loading and parsing a local `refhosts.yml` database.
 ///
-/// Mirrors upstream `Refhosts._parse_refhosts`, which logs at ERROR and
-/// re-raises: a file that cannot be read surfaces as [`Io`](Self::Io) and a
+/// A file that cannot be read surfaces as [`Io`](Self::Io) and a
 /// document-level YAML failure as [`Parse`](Self::Parse). Per-row malformation
 /// is handled lower down (dropped + logged by
 /// [`mtui_types::load_refhosts`]), so it never reaches this hierarchy.
@@ -85,8 +82,7 @@ pub enum RefhostError {
 
     /// No configured resolver could produce a usable `refhosts.yml`.
     ///
-    /// Mirrors upstream `RefhostsResolveFailedError`: the
-    /// [`RefhostsFactory`](crate::refhost::RefhostsFactory) tried every resolver
+    /// The [`RefhostsFactory`](crate::refhost::RefhostsFactory) tried every resolver
     /// named in `config.refhosts_resolvers` (in order) and each one either was
     /// unknown or failed. The individual failures are logged at `warn` as they
     /// happen; this variant is the terminal "all strategies exhausted" signal.
@@ -109,8 +105,7 @@ pub enum RefhostError {
 /// Errors from building an openQA API request or fetching jobs.
 ///
 /// The connectors' best-effort helper [`OpenQABase::get_jobs`](crate::openqa)
-/// still folds all *fetch* failures into a "no jobs" [`None`] result (mirroring
-/// upstream). The fallible variant
+/// folds all *fetch* failures into a "no jobs" [`None`] result. The fallible variant
 /// [`OpenQABase::try_get_jobs`](crate::openqa) instead surfaces a fetch failure
 /// as [`Fetch`](Self::Fetch) so a caller (e.g. `KernelOpenQA::run`) can tell a
 /// genuinely-empty result apart from an unreachable openQA. This type also
@@ -136,19 +131,16 @@ pub enum OpenQAError {
 
 /// Errors from the Gitea PR review-workflow connector ([`crate::gitea`]).
 ///
-/// Mirrors the `GiteaError` exception family in upstream
-/// `mtui/support/exceptions.py`. Each variant maps to one upstream exception:
-///
-/// * [`MissingToken`](Self::MissingToken) → `MissingGiteaTokenError`;
-/// * [`FailedCall`](Self::FailedCall) → `FailedGiteaCallError` (any transport
-///   failure or non-2xx status from the API);
-/// * [`NoReview`](Self::NoReview) → `GiteaNoReviewError` (no review requested,
-///   or the PR was already approved/rejected);
-/// * [`AssignInvalid`](Self::AssignInvalid) → `GiteaAssignInvalidError`, whose
-///   message is chosen by the [`Assignment`] state exactly as upstream's
-///   `__str__` does;
-/// * [`InvalidPrUrl`](Self::InvalidPrUrl) → the `ValueError` raised by
-///   `pr_api_url` for a non-PR URL.
+/// * [`MissingToken`](Self::MissingToken) → the API token is empty;
+/// * [`FailedCall`](Self::FailedCall) → any transport failure or non-2xx
+///   status from the API;
+/// * [`NoReview`](Self::NoReview) → no review requested, or the PR was already
+///   approved/rejected;
+/// * [`AssignInvalid`](Self::AssignInvalid) → the PR is not in the assignment
+///   state the operation requires, with a message chosen by the
+///   [`Assignment`] state;
+/// * [`InvalidPrUrl`](Self::InvalidPrUrl) → the URL passed for PR-API
+///   conversion is not a recognisable Gitea PR URL.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum GiteaError {
@@ -157,7 +149,7 @@ pub enum GiteaError {
     MissingToken,
 
     /// An API call failed (transport error or non-2xx status). The payload is
-    /// the upstream `"{method} - {url}"` (optionally with the status) context.
+    /// a `"{method} - {url}"` (optionally with the status) context.
     #[error("Gitea API call failed: {0}")]
     FailedCall(String),
 
@@ -165,8 +157,7 @@ pub enum GiteaError {
     #[error("{0}")]
     NoReview(String),
 
-    /// The PR is not in the assignment state the operation requires. The
-    /// message reproduces upstream `GiteaAssignInvalidError.__str__`.
+    /// The PR is not in the assignment state the operation requires.
     #[error("{}", assign_invalid_message(*state, user))]
     AssignInvalid {
         /// The current assignment state that made the operation invalid.
@@ -227,8 +218,8 @@ pub enum SlackError {
     Disabled,
 
     /// A call failed at the transport level or returned a non-2xx status. The
-    /// payload is the upstream-style `"{method} - {url}"` context, always
-    /// sanitized — never the token.
+    /// payload is a `"{method} - {url}"` context, always sanitized — never
+    /// the token.
     #[error("Slack API call failed: {0}")]
     FailedCall(String),
 
@@ -263,20 +254,17 @@ pub enum SlackError {
 
 /// Errors from the openQA / QAM Dashboard overview search ([`crate::oqa_search`]).
 ///
-/// Mirrors upstream's single `_HTTPError` (raised by `_get_json` /
-/// `_fetch_url_content` on any transport or non-2xx / bad-JSON failure). The
-/// three high-level entry points (`single_incidents`, `aggregated_updates`,
-/// `build_checks`) catch it internally and fold it into a typed note / empty
-/// result, exactly as upstream does, so it never escapes them. It surfaces only
-/// from the lower-level fetch helpers that upstream also lets propagate —
+/// Covers any transport or non-2xx / bad-JSON failure. The three high-level
+/// entry points (`single_incidents`, `aggregated_updates`, `build_checks`)
+/// catch it internally and fold it into a typed note / empty result, so it
+/// never escapes them. It surfaces only from the lower-level fetch helpers —
 /// `get_incident_info` and `incident_jobs` — where the caller is expected to
 /// convert it into a user-facing message.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OqaSearchError {
     /// A transport failure, a non-2xx HTTP status, or a malformed JSON body
-    /// from an openQA / Dashboard / QAM endpoint. Corresponds to upstream
-    /// `_HTTPError`.
+    /// from an openQA / Dashboard / QAM endpoint.
     #[error("openQA/Dashboard request failed: {0}")]
     Http(String),
 }
@@ -289,10 +277,10 @@ impl From<HttpError> for OqaSearchError {
 
 /// Errors from the QEM Dashboard connector ([`crate::qem_dashboard`]).
 ///
-/// The dashboard client's default read helpers remain best-effort: like upstream
-/// `QEMDashboardClient._get`, every *fetch* failure (transport, non-2xx, bad
-/// JSON) is logged at `debug` and folded into a `None`/empty result, so a fetch
-/// error never escapes them. The fallible `try_*` variants instead surface a
+/// The dashboard client's default read helpers remain best-effort: every
+/// *fetch* failure (transport, non-2xx, bad JSON) is logged at `debug` and
+/// folded into a `None`/empty result, so a fetch error never escapes them. The
+/// fallible `try_*` variants instead surface a
 /// fetch failure as [`Fetch`](Self::Fetch), letting
 /// [`DashboardAutoOpenQA::run`](crate::qem_dashboard::DashboardAutoOpenQA)
 /// distinguish an unreachable dashboard from a genuinely-empty result. The
@@ -316,7 +304,7 @@ pub enum QemDashboardError {
 
 /// Errors from the TeReGen Report API client ([`crate::teregen`]).
 ///
-/// TeReGen reads are best-effort by default (like upstream `_get`): every fetch
+/// TeReGen reads are best-effort by default: every fetch
 /// failure folds to `None` so a hiccup never aborts a command. The fallible
 /// `try_*` reads instead surface a fetch failure as [`Fetch`](Self::Fetch), so a
 /// caller can distinguish a genuinely-empty successful response from a
@@ -340,8 +328,7 @@ fn retry_after_suffix(retry_after: Option<u64>) -> String {
     }
 }
 
-/// Render the [`GiteaError::AssignInvalid`] message for an assignment state,
-/// mirroring upstream `GiteaAssignInvalidError.__str__` verbatim.
+/// Render the [`GiteaError::AssignInvalid`] message for an assignment state.
 fn assign_invalid_message(state: Assignment, user: &str) -> String {
     match state {
         Assignment::AssignedOther => format!("Gitea PR has assigned different user than {user}"),
@@ -355,7 +342,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn assign_invalid_display_matches_upstream_messages() {
+    fn assign_invalid_display_messages_are_stable() {
         // Reproduces GiteaAssignInvalidError.__str__ for each assignment state.
         let other = GiteaError::AssignInvalid {
             state: Assignment::AssignedOther,

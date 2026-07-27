@@ -1,9 +1,5 @@
 //! Test-report checkout: SVN backend + the `UpdateID` checkout seam.
 //!
-//! Ports upstream `mtui/test_reports/svn_io.py` (the `svn` subprocess helpers
-//! and their exceptions) and the checkout-orchestration slice of
-//! `mtui/types/updateid.py` (`UpdateID._checkout`).
-//!
 //! Test reports live in **SVN** — this is the only checkout mechanism, shared by
 //! OBS/IBS and SLFO incidents alike. Gitea (SLFO) and the native OBS API
 //! (OBS/IBS) are review-workflow backends (assign/approve/reject/comment) and
@@ -11,8 +7,7 @@
 //! `svn` command runner.
 //!
 //! The checkout exceptions and their user-facing messages are colocated here
-//! (rather than in `mtui-types`) to mirror upstream, where they live in
-//! `svn_io.py` / `support/messages.py`, and to keep `mtui-types` thin.
+//! (rather than in `mtui-types`) to keep `mtui-types` thin.
 
 pub mod runner;
 pub mod svn;
@@ -28,14 +23,11 @@ pub use svn::{svn_commit_testreport, testreport_svn_checkout};
 
 /// Errors raised while checking out or committing a test report.
 ///
-/// Each `Display` string is reproduced byte-for-byte from upstream
-/// `support/messages.py` — these are user-facing contracts.
+/// Each `Display` string below is a stable, user-facing contract.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CheckoutError {
     /// The configured `template_dir` could not be created or used.
-    ///
-    /// Mirrors upstream `TemplateDirNotUsableError`.
     #[error(
         "Cannot create template directory {path}: {reason}\n\
          Please check the [mtui] template_dir option in your configuration."
@@ -47,10 +39,8 @@ pub enum CheckoutError {
         reason: String,
     },
 
-    /// The `svn co` was interrupted (e.g. Ctrl-C).
-    ///
-    /// Mirrors upstream `SvnCheckoutInterruptedError`, whose `{0!r}` renders the
-    /// URI single-quoted.
+    /// The `svn co` was interrupted (e.g. Ctrl-C). The URI is rendered
+    /// single-quoted.
     #[error("Svn checkout of '{uri}' interrupted")]
     SvnCheckoutInterrupted {
         /// The repository URI whose checkout was interrupted.
@@ -59,8 +49,8 @@ pub enum CheckoutError {
 
     /// The test report does not exist / `svn co` failed.
     ///
-    /// Mirrors upstream `SvnCheckoutFailed`. The cryptic `svn` error code is
-    /// intentionally **not** part of this message (it is logged at debug).
+    /// The cryptic `svn` error code is intentionally **not** part of this
+    /// message (it is logged at debug).
     #[error(
         "Test report for {rrid} does not exist.\nPlease check {report_url} for potential issues."
     )]
@@ -74,9 +64,9 @@ pub enum CheckoutError {
 
 /// A recoverable I/O error reading a template, carrying its `errno`.
 ///
-/// Mirrors upstream `TemplateIOError(IOError)`. The checkout seam branches on
-/// [`is_not_found`](Self::is_not_found) (upstream `e.errno != ENOENT`) to decide
-/// whether a missing template should trigger a fresh checkout.
+/// The checkout seam branches on [`is_not_found`](Self::is_not_found) (an
+/// `errno != ENOENT` check) to decide whether a missing template should
+/// trigger a fresh checkout.
 #[derive(Debug, Error)]
 #[error("{message}")]
 pub struct TemplateIoError {
@@ -106,8 +96,7 @@ impl TemplateIoError {
     /// Whether this error is a "not found" (`ENOENT`) condition.
     ///
     /// A missing template on disk is the one case that triggers a fresh
-    /// checkout; every other read error propagates unchanged (upstream
-    /// `if e.errno != ENOENT: raise`).
+    /// checkout; every other read error propagates unchanged.
     #[must_use]
     pub fn is_not_found(&self) -> bool {
         self.not_found
@@ -119,8 +108,7 @@ const ENOENT: i32 = 2;
 
 /// Raised when the checkout seam could not load a test report.
 ///
-/// Mirrors upstream `TestReportNotLoadedError`; its `Display` string is a
-/// user-facing contract.
+/// Its `Display` string is a user-facing contract.
 #[derive(Debug, Error)]
 #[error("TestReport not loaded")]
 pub struct TestReportNotLoaded;
@@ -128,9 +116,9 @@ pub struct TestReportNotLoaded;
 /// Outcome of a template read attempt inside the checkout seam.
 ///
 /// The seam is generic over how a report is read so it can be wired now, before
-/// the `TestReport::read` lifecycle method lands (a later Phase 4 task). Upstream
-/// `_checkout` calls `tr.read(trpath)`, catching `TemplateIOError` (missing
-/// template → checkout) and letting Gitea errors from the retry propagate.
+/// the `TestReport::read` lifecycle method lands (a later Phase 4 task). It
+/// catches a missing template (→ checkout) and lets other errors from the
+/// retry propagate.
 #[derive(Debug)]
 pub enum ReadOutcome {
     /// The template was read successfully.
@@ -139,15 +127,12 @@ pub enum ReadOutcome {
     Io(TemplateIoError),
 }
 
-/// Runs the `UpdateID._checkout` orchestration.
-///
-/// Ports the inner block of upstream `UpdateID._checkout`:
+/// Runs the [`UpdateID`](mtui_types::UpdateID) checkout-and-read orchestration:
 ///
 /// 1. `read` the template; if it exists, done.
 /// 2. On a **non-ENOENT** read error, propagate it unchanged.
 /// 3. On ENOENT, run `checkout`; any [`CheckoutError`] is logged and mapped to
-///    [`TestReportNotLoaded`] (matching upstream's `raise
-///    TestReportNotLoadedError from e`).
+///    [`TestReportNotLoaded`].
 /// 4. Retry `read` once the template is on disk; a residual read failure also
 ///    surfaces as [`TestReportNotLoaded`].
 ///
@@ -172,7 +157,7 @@ where
         ReadOutcome::Ok => Ok(()),
         ReadOutcome::Io(e) if !e.is_not_found() => {
             // A non-ENOENT read error is not a "needs checkout" signal; it
-            // propagates unchanged (upstream `if e.errno != ENOENT: raise`).
+            // propagates unchanged.
             Err(CheckoutRunError::Read(e))
         }
         ReadOutcome::Io(_missing) => {

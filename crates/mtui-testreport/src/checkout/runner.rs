@@ -10,8 +10,7 @@
 //! incident-review backends in `mtui-datasources`: those drive the OBS review
 //! API and have no `cwd` notion, and reusing one runner would couple testreport
 //! checkout to the review crate. A small, local trait keeps the crate boundary
-//! honest and lets tests inject a stub that records the `cwd` (which
-//! `test_svn_io.py` asserts).
+//! honest and lets tests inject a stub that records the `cwd`.
 
 use std::io;
 use std::path::Path;
@@ -28,8 +27,7 @@ pub struct SvnOutcome {
     /// The child's captured stderr, decoded lossily as UTF-8.
     ///
     /// Captured so `svn`'s cryptic `E170000: URL ... doesn't exist` line is
-    /// surfaced at debug rather than reaching the user's terminal (upstream
-    /// `svn_io.testreport_svn_checkout` passes `stderr=subprocess.PIPE`).
+    /// surfaced at debug rather than reaching the user's terminal.
     pub stderr: String,
 }
 
@@ -58,7 +56,7 @@ impl SvnRunner for TokioSvnRunner {
     async fn run(&self, args: &[String], cwd: &Path) -> io::Result<SvnOutcome> {
         // Detach stdin, capture stderr. `svn`'s absolute URI means we run with
         // an explicit `cwd` rather than mutating the process-global working
-        // directory (mirrors upstream `cwd=config.template_dir`).
+        // directory.
         let output = Command::new("svn")
             .args(args)
             .current_dir(cwd)

@@ -1,6 +1,6 @@
 //! Inject the `openqa_overview` block into a testreport's `log` file.
 //!
-//! Ported from `mtui/update_workflow/export/overview_inject.py`. The block lives
+//! The block lives
 //! under the existing `regression tests:` section. On first export it is
 //! appended after any existing content in that section; on subsequent exports a
 //! previously-inserted block is detected via the `OVERVIEW_*` markers and

@@ -1,11 +1,9 @@
 //! Per-target zypper repository manager.
 //!
-//! ## Reference
+//! ## Scope
 //!
-//! Ported from upstream `mtui/hosts/target/repo_manager.py` (`RepoManager`).
-//! Upstream extracts the two repository-shape methods that used to live directly
-//! on [`Target`] into one collaborator so [`Target`] can stay focused on the
-//! connection/lock skeleton:
+//! [`RepoManager`] collects the two repository-shape methods so [`Target`] can
+//! stay focused on the connection/lock skeleton:
 //!
 //! * [`set`](RepoManager::set) — the one-line forward into
 //!   `testreport.set_repo(target, operation)`; kept on the collaborator so
@@ -23,13 +21,12 @@
 //! *reads* the target and so borrows it immutably, `RepoManager` must **mutate**
 //! the target: it issues commands ([`Target::run`]) and, on the unknown-cmd
 //! safeguard path, force-unlocks it ([`Target::unlock`]). It therefore borrows
-//! `&mut Target`. Obtain one via [`Target::repo_manager`], which — like
-//! upstream's per-access `Target.repo_manager` property — hands out a fresh
-//! binding over the live target each time.
+//! `&mut Target`. Obtain one via [`Target::repo_manager`], which hands out a
+//! fresh binding over the live target each time.
 //!
 //! ## The [`SetRepo`] seam
 //!
-//! Upstream's `set` forwards into `testreport.set_repo(...)`, but the concrete
+//! `set` forwards into `testreport.set_repo(...)`, but the concrete
 //! test-report types live in `mtui-testreport` — a *higher* crate. A direct
 //! dependency here would make `mtui-hosts` depend on `mtui-testreport` and
 //! **break the acyclic crate graph**. So `set` dispatches through the
@@ -51,20 +48,19 @@ use super::Target;
 
 /// Which repository change a [`set`](RepoManager::set) forwards: add or remove.
 ///
-/// Upstream passes the bare strings `"add"` / `"remove"` into
-/// `testreport.set_repo`. Modelling them as a two-variant enum keeps the seam
-/// typed; [`as_str`](RepoOp::as_str) renders the exact upstream token for a
+/// Modelling them as a two-variant enum keeps the seam
+/// typed; [`as_str`](RepoOp::as_str) renders the wire token for a
 /// [`SetRepo`] implementer that wants it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoOp {
-    /// Add the update's repositories (upstream `"add"`).
+    /// Add the update's repositories (wire token `"add"`).
     Add,
-    /// Remove the update's repositories (upstream `"remove"`).
+    /// Remove the update's repositories (wire token `"remove"`).
     Remove,
 }
 
 impl RepoOp {
-    /// The upstream string token for this operation (`"add"` / `"remove"`).
+    /// The wire token for this operation (`"add"` / `"remove"`).
     #[must_use]
     const fn as_str(self) -> &'static str {
         match self {
@@ -87,8 +83,6 @@ impl RepoOp {
 #[async_trait::async_trait]
 pub trait SetRepo: Send + Sync {
     /// Add or remove this report's repositories on `target`.
-    ///
-    /// Mirrors upstream `testreport.set_repo(target, operation)`.
     async fn set_repo(&self, target: &mut Target, operation: RepoOp);
 }
 
@@ -111,8 +105,7 @@ impl<'a> RepoManager<'a> {
 
     /// Asks `report` to add or remove repos on the bound target.
     ///
-    /// Ports `RepoManager.set` (upstream the one-line forward that used to live
-    /// as `Target.set_repo`): logs at debug and forwards to
+    /// Logs at debug and forwards to
     /// [`SetRepo::set_repo`], the report-side hook implemented in
     /// `mtui-testreport`.
     pub(crate) async fn set(&mut self, operation: RepoOp, report: &dyn SetRepo) {
@@ -122,7 +115,7 @@ impl<'a> RepoManager<'a> {
 
     /// Runs a fan-out `zypper` command across the target's repos.
     ///
-    /// Ports `RepoManager.run_zypper`. Iterates `repos` filtered by what the
+    /// Iterates `repos` filtered by what the
     /// target's flattened system actually carries; for each matching
     /// product/repo pair, `cmd` drives one of:
     ///
@@ -137,8 +130,8 @@ impl<'a> RepoManager<'a> {
     /// boundary (they run as root), so a crafted value cannot inject a command;
     /// URLs are additionally validated at ingestion (see `repoparse`).
     /// * **anything else** → force-unlock the target ([`Target::unlock`] with
-    ///   `force = true`) and return [`false`], the Rust analogue of upstream's
-    ///   post-`unlock(True)` `ValueError` safeguard. (The typed error the caller
+    ///   `force = true`) and return [`false`] as a safeguard against an
+    ///   unrecognised command. (The typed error the caller
     ///   sees is out of scope for the safeguard itself; the boolean signals
     ///   "unknown command, bailed".)
     ///
@@ -157,8 +150,7 @@ impl<'a> RepoManager<'a> {
     ///
     /// Returns `true` on the normal path and `false` on the unknown-cmd
     /// safeguard (after force-unlocking via [`Target::unlock`], and *without*
-    /// running the refresh — matching upstream, which raises before reaching
-    /// it).
+    /// running the refresh).
     pub async fn run_zypper(
         &mut self,
         cmd: &str,
@@ -180,7 +172,7 @@ impl<'a> RepoManager<'a> {
         let hostname = self.target.hostname().to_owned();
 
         // Products the host actually carries, paired with their repo URL, in the
-        // deterministic order of the BTreeMap (upstream iterated a dict).
+        // deterministic order of the BTreeMap.
         let matched_repos: Vec<(SystemProduct, String)> = repos
             .iter()
             .filter(|(product, _)| flattened.contains(*product))
@@ -189,9 +181,8 @@ impl<'a> RepoManager<'a> {
 
         if matched_repos.is_empty() {
             // Unknown command still has to hit the force-unlock safeguard even
-            // when nothing matched (upstream reaches the branch only inside the
-            // loop, but an empty loop means the refresh runs; the safeguard is a
-            // per-pair concern). Preserve upstream: with no matches, no per-pair
+            // when nothing matched, but the safeguard is a per-pair concern
+            // reached only inside the loop; with no matches, no per-pair
             // branch is taken, so an unknown cmd is a silent no-op except for
             // the matched==0 warning + refresh. We therefore only warn here.
             let op = if is_ar {
@@ -241,12 +232,11 @@ impl<'a> RepoManager<'a> {
                 let args = quote_args(&[url.as_str()]);
                 self.target.run(&format!("zypper {cmd} {args}")).await;
             } else {
-                // Unknown sub-command: upstream force-unlocks the target
-                // (`self.target._lock.unlock(True)`) and raises `ValueError`.
-                // The `Target` now owns its `TargetLock` (built in
+                // Unknown sub-command: force-unlock the target and bail.
+                // The `Target` owns its `TargetLock` (built in
                 // `Target::connect`, or the test seam in `with_connection`), so
-                // we issue the force-unlock and bail with `false` — the Rust
-                // analogue of upstream's post-unlock `ValueError` safeguard.
+                // we issue the force-unlock and bail with `false` as the
+                // safeguard.
                 warn!(
                     host = %hostname, %cmd,
                     "unknown zypper sub-command; force-unlocking target and bailing"
@@ -285,8 +275,9 @@ impl<'a> RepoManager<'a> {
     }
 }
 
-/// Builds the `issue-<name>:<version>:p=<maintenance_id>:<review_id>` repo alias,
-/// byte-identical to upstream's `name(product, rrid)`.
+/// Builds the `issue-<name>:<version>:p=<maintenance_id>:<review_id>` repo
+/// alias — the format other tools on the fleet also produce, so a repo
+/// registered by one is recognised by another.
 fn issue_alias(product: &SystemProduct, rrid: &RequestReviewID) -> String {
     format!(
         "issue-{}:{}:p={}:{}",
@@ -294,22 +285,21 @@ fn issue_alias(product: &SystemProduct, rrid: &RequestReviewID) -> String {
     )
 }
 
-/// Renders a [`SystemProduct`] the way upstream's `str(product)` does for the
-/// matched==0 diagnostic — `name-version.arch` is *not* what upstream prints;
-/// upstream prints the `NamedTuple`'s repr. We surface the meaningful triple in
-/// a stable, sortable form so the warning is legible and deterministic.
+/// Renders a [`SystemProduct`] as a stable, sortable `name-version.arch`
+/// triple for the matched==0 diagnostic, so the warning is legible and
+/// deterministic.
 fn fmt_product(p: &SystemProduct) -> String {
     format!("{}-{}.{}", p.name, p.version, p.arch)
 }
 
 /// Formats the last exit code for a log line: the numeric code, or `?` when the
-/// log is empty (upstream printed `""`/`-1`; a missing entry is `?` here).
+/// log is empty.
 fn exit_display(code: Option<i16>) -> String {
     code.map_or_else(|| "?".to_owned(), |c| c.to_string())
 }
 
 /// Extracts the trailing "( <last stderr/stdout line> )" suffix for a failure
-/// warning, mirroring upstream's `f" ({err.splitlines()[-1]})"`. Prefers stderr,
+/// warning. Prefers stderr,
 /// falls back to stdout; empty output yields an empty suffix.
 fn last_error_line(target: &Target) -> String {
     let err = target.lasterr().trim();
@@ -326,8 +316,7 @@ fn last_error_line(target: &Target) -> String {
 
 #[cfg(test)]
 mod tests {
-    //! Ported from upstream `tests/test_repo_manager.py`. Upstream drives the
-    //! manager against `MagicMock` targets; the Rust analogue exercises a real
+    //! Exercises a real
     //! [`Target`] over a [`MockConnection`], asserting the exact `zypper`
     //! command strings, the alias format, the matched==0 warning, the
     //! unknown-cmd force-unlock safeguard, and the transactional refresh path.
@@ -399,7 +388,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ar_alias_is_byte_identical_to_upstream() {
+    async fn ar_alias_is_byte_identical_to_contract() {
         let sles = product("SLES", "15-SP5");
         let (mut t, conn) = target_with(system_of(sles.clone(), &[]), false);
         let mut repos = BTreeMap::new();
@@ -730,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn repo_op_as_str_matches_upstream_tokens() {
+    fn repo_op_as_str_tokens() {
         assert_eq!(RepoOp::Add.as_str(), "add");
         assert_eq!(RepoOp::Remove.as_str(), "remove");
     }

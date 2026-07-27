@@ -13,8 +13,8 @@ use crate::display::VersionGroup;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Builds the upstream zypper-search query for `packages` (verbatim so remote
-/// output matches upstream's parser).
+/// Builds the zypper-search query for `packages`. The exact `awk` formatting
+/// keeps remote output in the shape [`parse_version_line`] expects.
 fn versions_query(packages: &[String]) -> String {
     format!(
         "for p in {}; do zypper -n search -s --match-exact -t package $p; done \
@@ -23,8 +23,7 @@ fn versions_query(packages: &[String]) -> String {
     )
 }
 
-/// Parses one `name version` output line into `(package, version)` (upstream
-/// `re_ver = (\S+)\s+(\S+)`).
+/// Parses one `name version` output line into `(package, version)`.
 fn parse_version_line(line: &str) -> Option<(String, String)> {
     let mut parts = line.split_whitespace();
     match (parts.next(), parts.next()) {
@@ -35,12 +34,11 @@ fn parse_version_line(line: &str) -> Option<(String, String)> {
 
 /// Lists the available versions of packages in the enabled repositories.
 ///
-/// Ports upstream `mtui.commands.simplelists.ListVersions` +
-/// `TestReport.list_versions`. It runs `zypper search -s` per host, parses the
-/// `name version` lines, then aggregates hosts that share the same version set
-/// for a package into groups so the display renders each version ladder once per
-/// host-group (upstream's `by_hosts_pkg` grouping). Packages default to the
-/// report's package list when none are given via `-p/--package`.
+/// Runs `zypper search -s` per host, parses the `name version` lines, then
+/// aggregates hosts that share the same version set for a package into groups
+/// so the display renders each version ladder once per host-group. Packages
+/// default to the report's package list when none are given via
+/// `-p/--package`.
 pub struct ListVersions;
 
 #[async_trait]

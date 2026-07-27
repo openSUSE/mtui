@@ -1,20 +1,14 @@
 //! [`HostsGroup`] — a composite over many [`Target`]s.
 //!
-//! ## Reference
+//! ## Scope
 //!
-//! Ported from upstream `mtui/hosts/target/hostgroup.py` (`HostsGroup`, a
-//! `UserDict[str, Target]`). Upstream's class is a god-object that also owns the
-//! remote lock protocol, the reboot/reconnect lifecycle, package-version
-//! querying, the full `perform_{install,uninstall,prepare,downgrade,update}`
-//! update workflow, and a family of `report_*` methods.
-//!
-//! This module ports the **container + fan-out** surface (P2.5) and the
-//! **operation-lock + reboot lifecycle** (P2.9):
+//! This module owns the **container + fan-out** surface and the
+//! **operation-lock + reboot lifecycle**:
 //!
 //! * construction and [`select`](HostsGroup::select)ion of a host subset (plus
 //!   the non-consuming [`select_split`](HostsGroup::select_split) +
 //!   [`merge`](HostsGroup::merge) pair that lets a `-t` subset operation preserve
-//!   the unselected hosts, standing in for upstream's shared-reference dict),
+//!   the unselected hosts over a shared-reference set of hosts),
 //! * [`names`](HostsGroup::names) / iteration,
 //! * command fan-out via [`run`](HostsGroup::run) (delegating to
 //!   [`super::actions::RunCommand`]),
@@ -27,7 +21,7 @@
 //!   verification and optional relock, plus the transactional-only `_reboot`
 //!   path driven through the [`OperationGroup`] seam).
 //!
-//! The upstream responsibilities that reach into higher crates are routed
+//! The responsibilities that reach into higher crates are routed
 //! through object-safe seams so `mtui-hosts` never depends on `mtui-testreport`:
 //! the `perform_*` update workflow runs via the injected
 //! [`PlanProvider`] behind [`HostsGroup`]'s `impl OperationGroup`, and the repo
@@ -38,9 +32,8 @@
 //! ([`report_locks`](HostsGroup::report_locks)) are all bound here.
 //!
 //! The internal map is a [`BTreeMap`] so `names()` / iteration are
-//! deterministically ordered by hostname — upstream always iterates its dict via
-//! `sorted()` for anything order-sensitive, so this matches observable
-//! behaviour without adding an insertion-order dependency.
+//! deterministically ordered by hostname — order-sensitive operations always
+//! iterate in sorted order, without an insertion-order dependency.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -70,8 +63,8 @@ use super::{LockRow, Target};
 ///   the operation succeeded (or was a no-op: an unconnected host has no lock to
 ///   act on, treated as success so it is never reported as a failure).
 /// * [`Contended`](LockOutcome::Contended) — benign: the lock is held by another
-///   owner ([`HostError::TargetLocked`]); the fan-out skipped it, upstream's
-///   `suppress(TargetLockedError)`. A caller should **not** count this as a
+///   owner ([`HostError::TargetLocked`]); the fan-out skipped it. A caller
+///   should **not** count this as a
 ///   failure.
 /// * [`Failed`](LockOutcome::Failed) — a real transport/SFTP error acquiring or
 ///   releasing the lock; the caller may name the host.
@@ -90,7 +83,7 @@ pub enum LockOutcome {
 /// A composite over a group of [`Target`]s, keyed by hostname.
 ///
 /// All hosts in a group are expected to be enabled; the lifetime of the object
-/// should match the execution of a single user command (upstream note). See the
+/// should match the execution of a single user command. See the
 /// module docs for the seam layout that keeps `mtui-hosts` acyclic.
 pub struct HostsGroup {
     data: BTreeMap<String, Target>,
@@ -115,7 +108,7 @@ pub struct HostsGroup {
     /// [`set_prompter`](Self::set_prompter): it installs the derived
     /// command-timeout prompt on every member [`Target`] via
     /// [`Target::set_timeout_prompt`]. `None` keeps a command timeout an
-    /// immediate abort (upstream `prompter=None`).
+    /// immediate abort (`prompter=None`).
     prompter: Option<crate::Prompter>,
     /// Maximum hosts to fan out to concurrently in the parallel batch. Pushed
     /// down from the composition root (`mtui-core::Session`) via
@@ -138,7 +131,7 @@ pub struct HostsGroup {
 impl HostsGroup {
     /// Builds a group from `hosts`, keyed by [`Target::hostname`].
     ///
-    /// `interactive` mirrors upstream: `true` for the REPL (spinner/prompt seam
+    /// `interactive`: `true` for the REPL (spinner/prompt seam
     /// on), `false` for headless callers such as `mtui-mcp`.
     #[must_use]
     pub fn new(hosts: Vec<Target>, is_repl: bool) -> Self {
@@ -297,20 +290,15 @@ impl HostsGroup {
 
     /// Selects a subset of the group into a **new owned** group.
     ///
-    /// Ported from upstream `HostsGroup.select`:
-    ///
     /// * `hosts = None`, `enabled = false` → a clone of the whole group.
     /// * `hosts = None`, `enabled = true` → only non-disabled hosts.
     /// * `hosts = Some([..])` → exactly those hosts (and, when `enabled`, only
     ///   the non-disabled among them).
     ///
-    /// An unknown hostname is a [`HostError::NotConnected`] (upstream's
-    /// `HostIsNotConnectedError`).
+    /// An unknown hostname is a [`HostError::NotConnected`].
     ///
     /// Selection **moves** the chosen targets out of `self` (a `Target` owns a
-    /// live `Box<dyn Connection>` and is not `Clone`); `self` is consumed. This
-    /// is the honest Rust deviation from upstream, which shares `Target`
-    /// references across the parent and child dicts.
+    /// live `Box<dyn Connection>` and is not `Clone`); `self` is consumed.
     pub fn select(self, hosts: Option<&[String]>, enabled: bool) -> Result<HostsGroup> {
         let is_repl = self.is_repl;
         let provider = self.plan_provider.clone();
@@ -357,8 +345,7 @@ impl HostsGroup {
     /// connection and cannot be shared, a plain `select` moves the subset out and
     /// **drops** the rest. `select_split` instead partitions the group in one pass
     /// so the caller can run the operation over the selected subset and then
-    /// [`merge`](Self::merge) the remainder back — the Rust stand-in for
-    /// upstream's shared-reference parent dict, where the unselected hosts always
+    /// [`merge`](Self::merge) the remainder back, so the unselected hosts always
     /// survive the operation.
     ///
     /// Selection semantics match [`select`](Self::select):
@@ -436,9 +423,9 @@ impl HostsGroup {
 
     /// Adds (or replaces) a target in the group, keyed by its hostname.
     ///
-    /// Ports the container half of upstream `add_host`/`HostsGroup.__setitem__`:
+    /// The container mutation for adding a host:
     /// a target with a hostname already present replaces the existing entry
-    /// (upstream's dict assignment is last-writer-wins). The connection-building
+    /// (last-writer-wins). The connection-building
     /// and refhosts-from-testplatform autoconnect stay in the `add_host` command
     /// / composition root; this is purely the container mutation.
     ///
@@ -456,7 +443,7 @@ impl HostsGroup {
 
     /// Removes and returns the target named `hostname`, if present.
     ///
-    /// Ports the container half of upstream `remove_host`/`HostsGroup.__delitem__`.
+    /// The container mutation for removing a host.
     /// This only detaches the [`Target`] from the group; it does **not**
     /// disconnect it — dropping a `Target` closes its transport but never runs
     /// [`Target::close`], so it does not release the remote operation/pool
@@ -495,9 +482,9 @@ impl HostsGroup {
 
     /// Locks every host in the group for `comment`, best-effort.
     ///
-    /// Ports upstream `HostsGroup.lock`: each per-target [`Target::lock`] is
+    /// Each per-target [`Target::lock`] is
     /// attempted, and a [`HostError::TargetLocked`] from a foreign-owned host is
-    /// suppressed (upstream wraps each call in `suppress(TargetLockedError)`) so
+    /// suppressed so
     /// one contended host never aborts the fan-out. Other transport errors are
     /// logged, not propagated.
     ///
@@ -569,7 +556,7 @@ impl HostsGroup {
 
     /// Releases every host's operation lock, best-effort.
     ///
-    /// Ports upstream `HostsGroup.unlock`: delegates to the per-target
+    /// Delegates to the per-target
     /// [`Target::unlock`] (which already suppresses [`HostError::TargetLocked`]
     /// for a foreign lock), so a contended host never aborts the fan-out.
     ///
@@ -632,7 +619,7 @@ impl HostsGroup {
 
     /// Releases every host's pool claim, best-effort.
     ///
-    /// Ports upstream `HostsGroup.pool_unlock`: delegates to the per-target
+    /// Delegates to the per-target
     /// [`Target::pool_unlock`] (which suppresses [`HostError::TargetLocked`] for
     /// a claim owned by another template), so one contended host never aborts
     /// the fan-out. `force` removes claims owned by other templates too.
@@ -651,19 +638,19 @@ impl HostsGroup {
 
     /// Disconnects every host, optionally rebooting or powering them off.
     ///
-    /// Ports upstream `quit`'s per-host `Target.close(action)` fan-out:
+    /// The per-host `Target::close(action)` fan-out for `quit`:
     /// delegates to [`Target::close`], which best-effort unlocks the operation
     /// and pool locks, then reboots (`Some("reboot")`), powers off
     /// (`Some("poweroff")` → shell `halt`), or simply closes (`None`). Used on
     /// session exit; unlike [`reboot`](Self::reboot) it never reconnects.
     ///
     /// Fans out concurrently across the group via
-    /// [`run_fanout`](super::actions::run_fanout), mirroring upstream's
-    /// concurrent close. The overall wait budget is applied by the caller. A
+    /// [`run_fanout`](super::actions::run_fanout). The overall wait budget is
+    /// applied by the caller. A
     /// no-op when the group is empty.
     ///
     /// Returns each host's teardown outcome keyed by hostname so `quit` can name
-    /// a host that failed to disconnect (upstream `quit` logs
+    /// a host that failed to disconnect (`quit` logs
     /// `failed to disconnect from <host>: <err>` per future). Collected exactly
     /// like [`report_locks`](Self::report_locks): each host's
     /// [`Target::close`] result is inserted into a shared map inside the fan-out,
@@ -696,9 +683,8 @@ impl HostsGroup {
 
     /// Reports the lock state of every host in the group to `sink`.
     ///
-    /// Ports upstream `HostsGroup.report_locks`: for each host in sorted name
-    /// order (the [`BTreeMap`] iteration order matches upstream's
-    /// `sorted(self.data.keys())`), resolve the operation lock — or the
+    /// For each host in sorted name
+    /// order (the [`BTreeMap`] iteration order), resolve the operation lock — or the
     /// pool-claim lock when `pool` is `true` — via
     /// [`Target::lock_status`](Target::lock_status), then forward
     /// `(hostname, system, &row)` through the per-target
@@ -737,8 +723,7 @@ impl HostsGroup {
         )
         .await;
 
-        // Phase 2 (pure): forward each host to the sink in sorted hostname order
-        // (matching upstream's `sorted(self.data.keys())`).
+        // Phase 2 (pure): forward each host to the sink in sorted hostname order.
         for (hostname, (system, row)) in collected.into_inner().unwrap() {
             sink(&hostname, &system, &row);
         }
@@ -765,18 +750,17 @@ impl HostsGroup {
 
     /// Fans a repository add/remove out across every host in the group.
     ///
-    /// Ports upstream `HostsGroup._fanout_set_repo`, which runs
-    /// `t.repo_manager.set(operation, testreport)` on every host. `report` is the
+    /// Runs the per-host set-repo hook
+    /// (`repo_manager().set(operation, report)`) on every host. `report` is the
     /// object-safe [`SetRepo`] hook the caller passes in (the concrete
     /// `SlReport`/`ObsReport`/… `set_repo` impl in `mtui-testreport`, handed over
     /// by `update_flow::perform_prepare`), so the group never depends on the
     /// report crate.
     ///
-    /// Fans out concurrently via [`run_fanout`](super::actions::run_fanout)
-    /// (upstream's `run_parallel`): every host runs its repo change in
+    /// Fans out concurrently via [`run_fanout`](super::actions::run_fanout):
+    /// every host runs its repo change in
     /// parallel. The per-host `last*` state is left in place so a caller can
-    /// inspect `lasterr()` after the fan-out (upstream's prepare
-    /// abort-on-`lasterr`).
+    /// inspect `lasterr()` after the fan-out (prepare aborts on `lasterr`).
     pub async fn fanout_set_repo(&mut self, operation: RepoOp, report: &dyn SetRepo) {
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
@@ -796,8 +780,8 @@ impl HostsGroup {
     /// Queries every host's tracked package versions and logs update-sanity
     /// warnings.
     ///
-    /// Ports the `package_check` closure nested in upstream
-    /// `HostsGroup.perform_update`. Each host's [`Target::query_versions`] runs
+    /// The `package_check` step of the update workflow. Each host's
+    /// [`Target::query_versions`] runs
     /// first, populating each package's `current` version; then, per package:
     ///
     /// * **pre** (`post == false`): record `current` as the package's `before`
@@ -805,7 +789,7 @@ impl HostsGroup {
     /// * **post** (`post == true`): record `current` as the package's `after`
     ///   version (leaving `before` as captured on the pre-pass).
     ///
-    /// and emit the four upstream warnings:
+    /// and emit the four warnings:
     ///
     /// * *too recent* — pre-update installed version is already `>=` the required
     ///   version,
@@ -818,7 +802,7 @@ impl HostsGroup {
     /// `required` versions.
     /// Appends a history entry to every member target's remote history file.
     ///
-    /// Ports upstream `HostsGroup.add_history`: fans [`Target::add_history`] out
+    /// Fans [`Target::add_history`] out
     /// across the group (enabled hosts only, best-effort per host).
     pub async fn add_history(&mut self, fields: &[String]) {
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
@@ -923,7 +907,7 @@ impl HostsGroup {
 
     /// Acquires the shared operation lock across every host in the group.
     ///
-    /// Ports upstream `HostsGroup.update_lock`: for each host, if it is already
+    /// For each host, if it is already
     /// locked by another owner, log a warning (with the lock's timestamp, owner
     /// and any comment) and mark the group as partially contended; otherwise
     /// take the lock. If any host was skipped, release the locks we did take
@@ -1021,8 +1005,6 @@ impl HostsGroup {
     }
 
     /// Reboots only the named hosts and reconnects each, verifying the reboot.
-    ///
-    /// Ports upstream `HostsGroup.reboot`:
     ///
     /// * capture each host's [`boot_id`](Target::boot_id) *before* rebooting,
     /// * dispatch `command` fire-and-forget on every host (the reboot drops the
@@ -1204,11 +1186,11 @@ impl HostsGroup {
 
     /// Reboots the *transactional* hosts named in `reboot` and reconnects each.
     ///
-    /// Ports upstream `HostsGroup._reboot`: transactional hosts contribute a
+    /// Transactional hosts contribute a
     /// per-host reboot command from the operation's doer. Each is dispatched
     /// fire-and-forget, then reconnected (sorted) with the connection's retry +
     /// backoff. Unlike [`reboot`](Self::reboot) this path takes no boot-id
-    /// snapshot / verification (upstream's `_reboot` does not), and is a no-op
+    /// snapshot / verification, and is a no-op
     /// when the map is empty.
     async fn reboot_transactional(&mut self, reboot: &BTreeMap<String, String>) {
         if reboot.is_empty() {
@@ -1260,7 +1242,7 @@ impl HostsGroup {
 
     /// Decides whether `hostname`'s boot id confirms a reboot, logging as before.
     ///
-    /// Ports upstream `HostsGroup._verify_reboot`, factored to a pure
+    /// A pure
     /// (I/O-free) comparison so the boot-id read can fan out concurrently in
     /// [`reboot`](Self::reboot) and this just decides on the two values.
     /// `/proc/sys/kernel/random/boot_id` is regenerated on every boot, so an
@@ -1323,10 +1305,10 @@ impl OperationGroup for HostsGroup {
 
         let mut plans = Vec::with_capacity(self.data.len());
         for target in self.data.values() {
-            // Upstream keys the registry lookup on
+            // The registry lookup is keyed on
             // `(self.system.get_release(), self.transactional)`. An unknown /
-            // unparsed system has no release, which upstream surfaces as the
-            // role's Missing*Error (no doer for an empty key) — reproduce that.
+            // unparsed system has no release, which surfaces as the
+            // role's Missing*Error (no doer for an empty key).
             let release = target.system().get_release().map_err(|_| match role {
                 "uninstaller" => HostError::MissingUninstaller {
                     release: String::new(),
@@ -1367,9 +1349,9 @@ impl OperationGroup for HostsGroup {
     }
 
     async fn reboot(&mut self, reboot: HostCommandMap) {
-        // Only transactional hosts contribute reboot entries; upstream's
-        // `_reboot` fires the reboot fire-and-forget on each, then reconnects
-        // each (sorted) with the connection's retry + backoff.
+        // Only transactional hosts contribute reboot entries; the reboot is
+        // fired fire-and-forget on each, then each is reconnected
+        // (sorted) with the connection's retry + backoff.
         let map: BTreeMap<String, String> = reboot.into_iter().collect();
         HostsGroup::reboot_transactional(self, &map).await;
     }

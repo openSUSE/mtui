@@ -1,6 +1,6 @@
 //! A client for managing Gitea pull requests via a comment-based workflow.
 //!
-//! Ported from upstream `mtui/data_sources/gitea.py`. The [`Gitea`] client
+//! The [`Gitea`] client
 //! assigns, unassigns, approves, and rejects a PR by posting specially
 //! formatted comments; there is no dedicated state field. It derives the
 //! current state by replaying the PR's comment history:
@@ -14,15 +14,14 @@
 //!   stale decision, so [`Gitea`] only treats the PR as decided when a decision
 //!   comment exists **and** the group is not currently a requested reviewer.
 //!
-//! Deviations from upstream, all faithful to behaviour:
+//! Notable design points:
 //!
-//! * The Python `method` typing-shim enum is dropped in favour of
-//!   [`reqwest::Method`].
-//! * Comment timestamps are parsed with `chrono` (RFC3339 with offset), matching
-//!   Python's `datetime.fromisoformat`, and comments sort by that timestamp.
+//! * HTTP methods are represented with [`reqwest::Method`].
+//! * Comment timestamps are parsed with `chrono` as RFC3339 with offset, and
+//!   comments sort by that timestamp.
 //! * TLS posture is fixed when the shared [`HttpClient`] is built (reqwest
-//!   fixes it per-client), so [`Gitea::new`] resolves the verify policy up front
-//!   via [`resolve_verify`] exactly as upstream did per-request.
+//!   fixes it per-client), so [`Gitea::new`] resolves the verify policy up
+//!   front via [`resolve_verify`] before any request is made.
 
 use std::cmp::Ordering;
 
@@ -40,8 +39,7 @@ use crate::http::{
     resolve_verify, sanitize_url, ssl_verification_hint,
 };
 
-/// The default review group a [`Gitea`] client operates on behalf of, matching
-/// upstream `Gitea.__init__(..., group="qam-sle")`.
+/// The default review group a [`Gitea`] client operates on behalf of.
 const DEFAULT_GROUP: &str = "qam-sle";
 
 /// Template for an assignment marker comment (`user`, `group`).
@@ -187,8 +185,7 @@ fn decision_present(comments: &[Comment], group: &str) -> bool {
 
 /// A Gitea comment, sortable by its `updated_at` timestamp.
 ///
-/// Mirrors upstream `Comment`: ordering and equality are **by date** (upstream
-/// used `@total_ordering` with a date-based `__eq__`), so [`sort`](slice::sort)
+/// Ordering and equality are **by date**, so [`sort`](slice::sort)
 /// over a comment slice reproduces the chronological replay order the state
 /// machine depends on.
 #[derive(Debug, Clone)]
@@ -205,8 +202,8 @@ impl Comment {
     /// # Errors
     ///
     /// Returns [`GiteaError::FailedCall`] if `updated_at` is not a parseable
-    /// RFC3339 timestamp (folded into the fetch failure surface, matching
-    /// upstream where a malformed comment payload aborts the API call).
+    /// RFC3339 timestamp (folded into the fetch failure surface, since a
+    /// malformed comment payload aborts the API call).
     fn parse(body: String, updated_at: &str) -> Result<Self, GiteaError> {
         let date = DateTime::parse_from_rfc3339(updated_at).map_err(|e| {
             GiteaError::FailedCall(format!("unparseable comment timestamp {updated_at:?}: {e}"))
@@ -276,7 +273,7 @@ pub struct Gitea {
 impl Gitea {
     /// Build a Gitea client for the PR at `giteaprapi` (a REST API URL).
     ///
-    /// Mirrors upstream `Gitea.__init__`: reads the token/session user/TLS
+    /// Reads the token/session user/TLS
     /// posture from `config`, defaults the group to [`DEFAULT_GROUP`], and
     /// derives the issue-comments endpoint from the PR URL.
     ///
@@ -329,11 +326,9 @@ impl Gitea {
         group: Option<&str>,
     ) -> Result<Self, GiteaError> {
         let trusted_origin = parse_trusted_origin(trusted_gitea_url)?;
-        // `.../pulls/<n>` -> `.../issues/<n>/comments`, matching upstream's
-        // `giteaprapi.replace("pulls", "issues") + "/comments"`.
+        // `.../pulls/<n>` -> `.../issues/<n>/comments`.
         let prissues = format!("{}/comments", giteaprapi.replace("pulls", "issues"));
-        // The API root for endpoints not tied to the PR, matching upstream's
-        // `giteaprapi.split("/api/v1/", 1)[0] + "/api/v1"`.
+        // The API root for endpoints not tied to the PR.
         let api_root = giteaprapi
             .split_once("/api/v1/")
             .map_or(giteaprapi, |(root, _)| root);
@@ -364,7 +359,7 @@ impl Gitea {
     ///
     /// Folds every failure onto [`GiteaError::FailedCall`], surfacing a concise
     /// actionable hint at ERROR for a TLS certificate failure (detail at DEBUG)
-    /// rather than a raw transport error — mirroring upstream `__request`.
+    /// rather than a raw transport error.
     async fn request(
         &self,
         method: Method,

@@ -2,8 +2,7 @@
 //!
 //! Parsing is **lenient** by design (see [`crate::Config::load`]): a missing or
 //! malformed config file is logged and skipped, and defaults are applied — a
-//! bad option never hard-fails startup. This mirrors upstream mtui, which logs
-//! the `configparser` error and carries on.
+//! bad option never hard-fails startup.
 //!
 //! [`ConfigError`] therefore surfaces only from the *internal* single-file read
 //! helper; the public loader converts it into a `tracing::error!` and continues.

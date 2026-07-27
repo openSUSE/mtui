@@ -1,12 +1,11 @@
 //! The `mtui-types` error hierarchy.
 //!
-//! This is the foundation error module every later crate imports. It mirrors
-//! the semantics of upstream `mtui/support/exceptions.py`, but scoped to what
-//! Phase 1 (the domain types) actually needs.
+//! This is the foundation error module every later crate imports, scoped to
+//! what Phase 1 (the domain types) actually needs.
 //!
 //! Only the RRID / Request-Review-ID parse errors live here for now — they are
-//! consumed by the RRID parser (see the `rrid` task) and are covered by ported
-//! upstream test vectors. The upstream `UpdateError` and `GiteaError` families
+//! consumed by the RRID parser (see the `rrid` task) and are covered by golden
+//! test vectors. The `UpdateError` and `GiteaError` families
 //! belong to later phases (`mtui-hosts` / `mtui-datasources`) and will be added
 //! as `#[from]` sub-errors when those crates land, so they can be exercised by
 //! real tests rather than sitting dead here.
@@ -141,11 +140,9 @@ pub enum PackageSpecParseError {
 
 /// Error produced when a `refhosts.yml` document cannot be parsed.
 ///
-/// Mirrors upstream `Refhosts._parse_refhosts`, which lets a YAML parse
-/// failure propagate (`logger.error("failed to parse refhosts.yml"); raise`).
-/// The Rust port turns that into a typed error wrapping the underlying
-/// `serde_yaml` failure. Note: individual *malformed rows* do not surface here
-/// — like upstream `_host_from_dict`, they are dropped (logged) so one bad row
+/// A document-level YAML parse failure propagates as this typed error wrapping
+/// the underlying `serde_yaml` failure. Note: individual *malformed rows* do not
+/// surface here — they are dropped (logged) so one bad row
 /// never aborts the whole load. Only a document-level YAML failure is fatal.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -157,10 +154,9 @@ pub enum RefhostsParseError {
 
 /// Error produced when an RPM version string cannot be parsed.
 ///
-/// Mirrors upstream `RPMVersion.__init__` raising a bare `ValueError` for an
-/// empty (or `None`) version string. The Rust port turns this into a typed,
-/// fallible parse error rather than a panic, following the crate's
-/// fallible-constructor convention (see [`RridParseError`]).
+/// An empty version string is a typed, fallible parse error rather than a
+/// panic, following the crate's fallible-constructor convention (see
+/// [`RridParseError`]).
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RpmVersionParseError {
@@ -171,9 +167,7 @@ pub enum RpmVersionParseError {
 
 /// Error produced when a request-kind token is not recognised.
 ///
-/// Mirrors upstream `RequestKind.from_token` raising
-/// `ValueError(f"unknown request kind: {raw!r}")`. The `{raw:?}` debug
-/// formatting reproduces the Python `!r` repr (quoted token).
+/// The `{raw:?}` debug formatting renders the offending token quoted.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error("unknown request kind: {raw:?}")]
 pub struct RequestKindParseError {
@@ -190,8 +184,6 @@ pub struct RequestKindParseError {
 #[non_exhaustive]
 pub enum RridParseError {
     /// The RRID had more `:`-separated components than allowed.
-    ///
-    /// Mirrors upstream `TooManyComponentsError`.
     #[error("OBS Request Review ID: Too many components (> {limit})")]
     TooManyComponents {
         /// The maximum number of components allowed.
@@ -199,8 +191,6 @@ pub enum RridParseError {
     },
 
     /// A required component was absent.
-    ///
-    /// Mirrors upstream `MissingComponentError`.
     #[error("OBS Request Review ID: Missing {index}. component. Expected: {expected}")]
     MissingComponent {
         /// 1-based index of the missing component.
@@ -210,8 +200,6 @@ pub enum RridParseError {
     },
 
     /// A component was present but could not be parsed.
-    ///
-    /// Mirrors upstream `ComponentParseError`.
     #[error(
         "OBS Request Review ID: Failed to parse {index}. component. Expected {expected}. Got: {got:?}"
     )]
@@ -225,8 +213,6 @@ pub enum RridParseError {
     },
 
     /// An internal invariant was violated while parsing.
-    ///
-    /// Mirrors upstream `InternalParseError`.
     #[error("OBS Request Review ID: Internal error: f: {func:?} cnt: {count:?}")]
     Internal {
         /// The parsing step / function where the error occurred.
@@ -241,7 +227,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn too_many_components_matches_upstream_message() {
+    fn too_many_components_message_is_stable() {
         let err = RridParseError::TooManyComponents { limit: 4 };
         assert_eq!(
             err.to_string(),
@@ -250,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_component_matches_upstream_message() {
+    fn missing_component_message_is_stable() {
         let err = RridParseError::MissingComponent {
             index: 2,
             expected: "maintenance_id".to_owned(),
@@ -262,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn component_parse_matches_upstream_message() {
+    fn component_parse_message_is_stable() {
         let err = RridParseError::ComponentParse {
             index: 3,
             expected: "an integer".to_owned(),
@@ -275,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_matches_upstream_message() {
+    fn internal_message_is_stable() {
         let err = RridParseError::Internal {
             func: "split".to_owned(),
             count: "0".to_owned(),

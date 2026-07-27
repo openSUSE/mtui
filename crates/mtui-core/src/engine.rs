@@ -1,23 +1,21 @@
 //! Line → dispatch engine.
 //!
-//! Ports the dispatch half of upstream `mtui.commands.Command.parse_args` +
-//! `run`: split a raw input line into argv, resolve the command by name (or
-//! alias) against the [`Registry`], parse its arguments, and await
+//! Splits a raw input line into argv, resolves the command by name (or
+//! alias) against the [`Registry`], parses its arguments, and awaits
 //! [`Command::run`] (which drives the template fan-out landed in P5.1).
 //!
 //! Two entry points share one core so both driving surfaces reuse the same
 //! engine (`AGENTS.md`: MCP dispatches through the *same engine* as the REPL):
 //!
-//! * [`dispatch_line`] — the REPL path: takes a raw line, `shlex`-splits it
-//!   (upstream `shlex.split`), and treats the first token as the command name.
+//! * [`dispatch_line`] — the REPL path: takes a raw line, `shlex`-splits it,
+//!   and treats the first token as the command name.
 //! * [`dispatch_argv`] — the MCP path: takes an already-structured command name
 //!   and argv, so a client that already has parsed kwargs need not serialise
 //!   them back into a string just to re-split them.
 //!
-//! Errors never abort the process. Upstream `argparse` calls `sys.exit` on a
-//! usage error or `--help`; clap defaults to the same. The engine instead uses
-//! clap's non-exiting parse API and returns a typed [`EngineError`], which the
-//! REPL renders and the MCP surface maps to a tool error.
+//! Errors never abort the process: the engine uses clap's non-exiting parse
+//! API and returns a typed [`EngineError`], which the REPL renders and the MCP
+//! surface maps to a tool error.
 
 use clap::ArgMatches;
 
@@ -29,19 +27,17 @@ use crate::session::Session;
 /// A failure raised while dispatching an input line or argv.
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
-    /// The first token named no registered command or alias (upstream prints
-    /// `*** Unknown syntax: <line>`; we name the command).
+    /// The first token named no registered command or alias.
     #[error("Unknown command: {0}")]
     UnknownCommand(String),
 
-    /// The line could not be split into argv — unbalanced quotes (upstream
-    /// `p.error(f"invalid syntax: {e}")`).
+    /// The line could not be split into argv — unbalanced quotes.
     #[error("invalid syntax: {0}")]
     Syntax(String),
 
     /// The command's arguments failed to parse or `--help`/`--version` was
     /// requested. Carries clap's already-rendered message so the caller can
-    /// present it verbatim, exactly as argparse's usage text was shown.
+    /// present it verbatim.
     ///
     /// `help_or_version` records whether the "error" was actually clap emitting
     /// `--help`/`--version` text (a success in argparse terms, exit 0) rather
@@ -138,8 +134,7 @@ pub async fn dispatch_command(
     command.run(session, &matches).await.map_err(Into::into)
 }
 
-/// Column layout for the no-arg `help` listing (mirrors upstream
-/// `help.py:_COLUMN_WIDTH`/`_COLUMNS_PER_ROW`).
+/// Column layout for the no-arg `help` listing.
 const HELP_COLUMN_WIDTH: usize = 22;
 const HELP_COLUMNS_PER_ROW: usize = 4;
 
@@ -149,8 +144,8 @@ const HELP_COLUMNS_PER_ROW: usize = 4;
 /// ([`Command::about`] is `Some`) and undocumented buckets in fixed-width
 /// columns. With a command name, prints that command's `--help` (the same text
 /// `<cmd> --help` produces) — its [`Command::about`] one-liner is fed in as the
-/// parser description so it heads the output (upstream: docstring → argparse
-/// `description`) — or an error if the name is unknown.
+/// parser description so it heads the output — or an error if the name is
+/// unknown.
 fn render_help(
     registry: &Registry,
     session: &mut Session,
@@ -207,8 +202,7 @@ fn render_help_listing(registry: &Registry, session: &mut Session) {
     }
 }
 
-/// Prints `names` in a fixed-width column grid, trailing spaces stripped
-/// (mirrors upstream `help.py:_print_columns`).
+/// Prints `names` in a fixed-width column grid, trailing spaces stripped.
 fn print_help_columns(session: &mut Session, names: &[&str]) {
     for row in names.chunks(HELP_COLUMNS_PER_ROW) {
         let line: String = row
@@ -504,8 +498,7 @@ mod tests {
         assert!(out.contains("doc"));
         assert!(out.contains("--all-templates"));
         // The command's `about` is fed into the parser, so `help <cmd>` shows
-        // the one-line description at the top (upstream: docstring → argparse
-        // `description`).
+        // the one-line description at the top.
         assert!(out.contains("a documented command"));
     }
 

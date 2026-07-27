@@ -11,7 +11,6 @@ use crate::session::Session;
 
 /// Downloads a remote file from every enabled reference host.
 ///
-/// Ports upstream `mtui.commands.sftpcmd.SFTPGet` (`metadata.perform_get`).
 /// Files are saved under `{report_wd}/downloads/` with the hostname appended as
 /// a file extension (the per-host suffixing is applied by
 /// [`HostsGroup::sftp_get`](mtui_hosts)). Only enabled hosts are contacted.
@@ -46,7 +45,7 @@ impl Command for SftpGet {
             .expect("filename is required")
             .clone();
 
-        // Local target: {report_wd}/downloads/<name> (upstream `perform_get`).
+        // Local target: {report_wd}/downloads/<name>.
         let wd = session
             .metadata()
             .base()

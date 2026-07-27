@@ -1,12 +1,11 @@
-//! Downgrade command templates (upstream `actions/downgrade.py`, role
-//! `downgrader`).
+//! Downgrade command templates (role `downgrader`).
 //!
 //! Downgrade carries a `list_command` (enumerate installed/available versions)
 //! and a `command`. The zypper list probes every package in a **single** zypper
 //! invocation (the real `$packages`) and pipes it through awk (`$2`/`$4` field
 //! refs survive `SubstMode::Safe`), and the command interpolates `$package` /
-//! `$version`; the call sites use `.safe_substitute`
-//! (see `hostgroup.py::perform_downgrade`) so the shell/awk `$`-tokens survive.
+//! `$version`; the call sites use safe substitution so the shell/awk `$`-tokens
+//! survive.
 //! The `slmicro` entry is transactional with a reboot.
 //!
 //! `LIST_COMMAND`'s leading newline keeps the first command off the prompt line
@@ -14,11 +13,9 @@
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
 
-/// zypper/slmicro downgrade list command (upstream `list_command_template`),
-/// shared by both.
+/// zypper/slmicro downgrade list command, shared by both.
 ///
-/// One `zypper -n se -s` invocation for the whole package list (upstream
-/// PR #336): a per-package `for p in $packages; do zypper ... $$p; done` loop
+/// One `zypper -n se -s` invocation for the whole package list: a per-package `for p in $packages; do zypper ... $$p; done` loop
 /// loads the repo metadata once per package and, piped through a block-buffered
 /// awk with no PTY, emits nothing until the last iteration — on a slow host a
 /// long package list blows the SSH no-output timeout (`connection_timeout`,
@@ -31,16 +28,16 @@ zypper -n se -s --match-exact -t package $packages \
 | awk -F "|" '{ print $2,"=",$4 }'
 "#;
 
-/// zypper downgrade command (upstream `zypper()["command"]`), verbatim.
+/// zypper downgrade command, verbatim.
 const ZYPPER_CMD: &str = "rpm -q $package &>/dev/null  && zypper -n in -C --force-resolution --oldpackage -y $package=$version";
 
-/// slmicro downgrade command (upstream `slmicro()["command"]`), verbatim.
+/// slmicro downgrade command, verbatim.
 const SLM_CMD: &str = "transactional-update -n pkg in --force-resolution --oldpackage -y $package";
 
-/// yum downgrade command (upstream `yum["command"]`), verbatim.
+/// yum downgrade command, verbatim.
 const YUM_CMD: &str = "yum -y downgrade $package";
 
-/// zypper downgrade (upstream `zypper()`).
+/// zypper downgrade.
 fn zypper() -> ActionCommands {
     ActionCommands {
         command: ZYPPER_CMD.to_owned(),
@@ -51,7 +48,7 @@ fn zypper() -> ActionCommands {
     }
 }
 
-/// slmicro (transactional) downgrade (upstream `slmicro()`).
+/// slmicro (transactional) downgrade.
 fn slmicro() -> ActionCommands {
     ActionCommands {
         command: SLM_CMD.to_owned(),
@@ -62,7 +59,7 @@ fn slmicro() -> ActionCommands {
     }
 }
 
-/// yum downgrade (upstream `yum`).
+/// yum downgrade.
 fn yum() -> ActionCommands {
     ActionCommands {
         command: YUM_CMD.to_owned(),
@@ -105,8 +102,8 @@ mod tests {
 
     #[test]
     fn list_command_probes_all_packages_in_one_call() {
-        // The version probe runs ONE zypper invocation for the whole list
-        // (upstream PR #336). The old per-package `for` loop, piped through a
+        // The version probe runs ONE zypper invocation for the whole list.
+        // A per-package `for` loop, piped through a
         // block-buffered awk, produced no output until the last iteration and
         // blew the SSH no-output timeout on slow hosts.
         let cmds = downgrader("15", false).unwrap();

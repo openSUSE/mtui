@@ -1,22 +1,21 @@
-//! Uninstall command templates (upstream `actions/uninstall.py`, role
-//! `uninstaller`).
+//! Uninstall command templates (role `uninstaller`).
 //!
 //! Interpolates `$packages`. The `slmicro` entry is transactional and carries a
 //! `reboot`.
 
 use crate::update_workflow::actions::ActionCommands;
 
-/// zypper uninstall (upstream `zypper_uninstall`).
+/// zypper uninstall.
 fn zypper() -> ActionCommands {
     ActionCommands::command_only("zypper -n rm $packages")
 }
 
-/// yum uninstall (upstream `yum_uninstall`).
+/// yum uninstall.
 fn yum() -> ActionCommands {
     ActionCommands::command_only("yum -y remove $packages")
 }
 
-/// slmicro (transactional) uninstall (upstream `slmicro_uninstall`).
+/// slmicro (transactional) uninstall.
 fn slmicro() -> ActionCommands {
     ActionCommands::with_reboot(
         "transactional-update -n pkg remove $packages",

@@ -1,34 +1,22 @@
 //! Parallel fan-out primitives over a group of [`Target`]s.
 //!
-//! ## Reference
-//!
-//! Ported from upstream `mtui/hosts/target/actions.py`. Upstream models each
-//! fan-out action as a `ThreadedTargetGroup` subclass that builds
-//! `(callable, args)` pairs and submits them to a thread pool via
-//! `run_parallel`, plus a `RunCommand` class that dispatches a command to
-//! every host.
-//!
-//! This port keeps the same behavioural surface but is async and idiomatic:
-//!
 //! * [`run_parallel`] drives a set of caller-supplied futures to completion
-//!   concurrently (the async replacement for the thread pool).
+//!   concurrently.
 //! * [`RunCommand`] dispatches a command (one string for all hosts, or a
 //!   per-host map) to every host in parallel.
-//! * [`sftp_put_all`] / [`sftp_get_all`] are the async equivalents of
-//!   upstream's `FileUpload` / `FileDownload`.
+//! * [`sftp_put_all`] / [`sftp_get_all`] fan the corresponding transfer out
+//!   across the group.
 //!
 //! ### Why no output lock
 //!
-//! Upstream passes a `threading.Lock` into `Target.run(cmd, lock)` to serialize
-//! writes to a shared per-worker output stream. In this port each [`Target`]
+//! Each [`Target`]
 //! owns its own [`HostLog`](mtui_types::hostlog::HostLog) behind `&mut self`, so
 //! concurrent tasks hold **disjoint** mutable borrows — there is no shared
-//! output to guard and the lock is unnecessary.
+//! output to guard and no lock is needed.
 //!
 //! ### The TTY spinner
 //!
-//! Upstream's `run_parallel` optionally drives a `|/-\` TTY spinner labelled
-//! with a `desc`. [`run_parallel`] starts a [`TtySpinner`](super::spinner) for
+//! [`run_parallel`] starts a [`TtySpinner`](super::spinner) for
 //! the duration of the fan-out when a `desc` is given; it is a strict no-op off
 //! a TTY (tests, redirected output, `mtui-mcp`), so behaviour with `desc=None`
 //! (or off a terminal) is identical to the plain `join_all`. The spinner erases
@@ -59,16 +47,15 @@ const SHARED_UPLOAD_CAP: u64 = 8 * 1024 * 1024;
 
 /// Drives every future in `futures` to completion concurrently.
 ///
-/// The async replacement for upstream's `run_parallel` thread pool. An empty
+/// Drives futures concurrently. An empty
 /// input returns immediately. When `desc` is `Some`, a labelled
 /// [`TtySpinner`](super::spinner::TtySpinner) paints for the duration of the
 /// fan-out (a no-op off a TTY, so tests and `mtui-mcp` stay clean) and is
 /// stopped — erasing its frame — when the batch completes.
 ///
-/// Unlike upstream — whose first worker exception re-raises and cancels the rest
-/// — the per-target futures built by [`RunCommand`] and the `sftp_*_all`
+/// The per-target futures built by [`RunCommand`] and the `sftp_*_all`
 /// helpers never fail: [`Target::run`] and the SFTP methods swallow and log
-/// their own errors (the upstream `-1`-sentinel / log-not-propagate contract),
+/// their own errors (the `-1`-sentinel / log-not-propagate contract),
 /// so one bad host can never abort the fan-out. `run_parallel` therefore has no
 /// error to propagate and returns `()`.
 ///
@@ -193,11 +180,10 @@ pub(crate) async fn run_fanout<'t, S, F>(
 /// A command to run across a group: one string for every host, or a per-host
 /// map keyed by hostname.
 ///
-/// Mirrors upstream `RunCommand`'s `command: str | dict[str, Any]`. The
+/// The
 /// [`PerHost`](Command::PerHost) form lets a caller build a command for only a
 /// subset of the group (e.g. a rollback that targets only hosts with a recorded
-/// previous version); hosts not present in the map are simply skipped, matching
-/// upstream's dict-subset filter.
+/// previous version); hosts not present in the map are simply skipped.
 #[derive(Debug, Clone)]
 pub enum Command {
     /// The same command string is run on every (non-skipped) host.
@@ -237,7 +223,7 @@ impl From<BTreeMap<String, String>> for Command {
 
 /// Runs a [`Command`] across a group of targets in parallel.
 ///
-/// Ported from upstream `RunCommand`. When a [`PerHost`](Command::PerHost) map
+/// When a [`PerHost`](Command::PerHost) map
 /// is given, hosts it does not cover are skipped entirely.
 pub(crate) struct RunCommand<'a> {
     targets: &'a mut BTreeMap<String, Target>,
@@ -292,7 +278,7 @@ impl<'a> RunCommand<'a> {
             is_repl,
             max_parallel,
             Some("run"),
-            // `for_host` returning None means "skip" (upstream dict subset).
+            // `for_host` returning None means "skip".
             |t: &Target| command.for_host(t.hostname()).is_some(),
             |t: &mut Target| {
                 // Resolve before the async block so `command` isn't borrowed
@@ -310,7 +296,7 @@ impl<'a> RunCommand<'a> {
 
 /// Uploads `local` to `remote` on every target in parallel.
 ///
-/// Async equivalent of upstream `FileUpload`. Errors are swallowed and logged by
+/// Errors are swallowed and logged by
 /// [`Target::sftp_put`]; this helper never fails.
 pub(crate) async fn sftp_put_all(
     targets: &mut BTreeMap<String, Target>,
@@ -359,7 +345,7 @@ pub(crate) async fn sftp_put_all(
 /// Downloads `remote` into `local` (per-host suffixed) from every target in
 /// parallel.
 ///
-/// Async equivalent of upstream `FileDownload`. Errors are swallowed and logged
+/// Errors are swallowed and logged
 /// by [`Target::sftp_get`]; this helper never fails.
 pub(crate) async fn sftp_get_all(
     targets: &mut BTreeMap<String, Target>,

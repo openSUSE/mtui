@@ -1,9 +1,8 @@
 //! The test-report construction lifecycle (`make_testreport`).
 //!
-//! Ports the report-construction slice of upstream `mtui/types/updateid.py`:
-//! `UpdateID.tr_factory` (report class by RRID kind), `_checkout` (checkout +
-//! read), and `AutoOBSUpdateID.make_testreport` / `KernelOBSUpdateID.make_testreport`
-//! (workflow selection + deferred-autoconnect flag).
+//! Selects the report class by RRID kind (`tr_factory`), runs the checkout +
+//! read cycle, and applies workflow selection + the deferred-autoconnect
+//! flag for the auto/kernel update kinds.
 //!
 //! The Rust split keeps this crate free of the host-connect layer:
 //! * The actual host connect is **deferred to the caller** (the composition
@@ -11,11 +10,11 @@
 //!   the refhosts-from-testplatform resolution. `make_testreport` only records
 //!   the intent via [`TestReportBase::autoconnect_pending`].
 //! * The QEM Dashboard / auto-openQA enrichment runs inside `make_testreport`
-//!   for the `-a` (auto) kind, mirroring upstream `AutoOBSUpdateID.make_testreport`:
-//!   it builds the [`QemIncident`], runs [`DashboardAutoOpenQA`], and — when the
-//!   auto result has no install jobs (or they failed) — **downgrades the workflow
-//!   to [`Workflow::Manual`]** and defers the reference-host connect (upstream
-//!   only autoconnects on that manual-downgrade path).
+//!   for the `-a` (auto) kind: it builds the [`QemIncident`], runs
+//!   [`DashboardAutoOpenQA`], and — when the auto result has no install jobs
+//!   (or they failed) — **downgrades the workflow to [`Workflow::Manual`]**
+//!   and defers the reference-host connect (autoconnect only fires on that
+//!   manual-downgrade path).
 
 use mtui_config::options::Config;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
@@ -30,13 +29,13 @@ use crate::checkout::{ReadOutcome, TokioSvnRunner};
 use crate::reports::{NullReport, ObsReport, PiReport, SlReport};
 use crate::testreport::{HashCheck, ReadError, TestReport};
 
-/// Which upstream `UpdateID` subclass produced the report — selects the workflow
-/// and whether autoconnect defaults on.
+/// Which update kind produced the report — selects the workflow and whether
+/// autoconnect defaults on.
 ///
-/// Ports the distinction between `AutoOBSUpdateID` (`-a`) and `KernelOBSUpdateID`
-/// (`-k`): the concrete `TestReport` class is chosen by RRID kind
-/// ([`tr_factory`]), but the *workflow* and *autoconnect default* come from the
-/// update kind the operator named on the command line.
+/// The distinction between the `-a` (auto) and `-k` (kernel) update kinds:
+/// the concrete `TestReport` class is chosen by RRID kind ([`tr_factory`]),
+/// but the *workflow* and *autoconnect default* come from the update kind
+/// the operator named on the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateKind {
     /// An automatic OBS update (`load_template -a`). Workflow starts
@@ -48,7 +47,7 @@ pub enum UpdateKind {
 }
 
 impl UpdateKind {
-    /// The workflow this update kind starts in (upstream `tr.workflow = …`).
+    /// The workflow this update kind starts in.
     #[must_use]
     fn workflow(self) -> Workflow {
         match self {
@@ -60,8 +59,8 @@ impl UpdateKind {
 
 /// Selects the concrete [`TestReport`] implementation for an RRID kind.
 ///
-/// Port of upstream `UpdateID.tr_factory`: SLFO → [`SlReport`], PI →
-/// [`PiReport`], everything else (Maintenance) → [`ObsReport`].
+/// SLFO → [`SlReport`], PI → [`PiReport`], everything else (Maintenance) →
+/// [`ObsReport`].
 #[must_use]
 fn tr_factory(update: &UpdateID, config: Config) -> Box<dyn TestReport + Send + Sync> {
     match update.id.kind {
@@ -83,33 +82,29 @@ fn null_with_error(config: Config, reason: String) -> NullReport {
     report
 }
 
-/// Builds and populates a [`TestReport`] for `update` (upstream
-/// `UpdateID.make_testreport` → `_checkout`).
+/// Builds and populates a [`TestReport`] for `update`.
 ///
 /// 1. Selects the report class by RRID kind ([`tr_factory`]).
 /// 2. Drives [`checkout_and_read`]: reads `template_dir/<rrid>/log`; a missing
-///    template triggers a `svn` checkout and one retry (upstream `_checkout`).
-/// 3. On a load failure returns a [`NullReport`] (upstream returns
-///    `NullTestReport`), so the caller can add a benign inactive template rather
-///    than propagate an error.
+///    template triggers a `svn` checkout and one retry.
+/// 3. On a load failure returns a [`NullReport`], so the caller can add a
+///    benign inactive template rather than propagate an error.
 /// 4. Runs the Gitea token + template-hash verification
-///    ([`TestReport::check_hash`], upstream's `check_hash` at the tail of `read`
-///    inside `_checkout`). A missing token, a failed Gitea call, or a stale
-///    template hash logs the upstream message and abandons the load (a
+///    ([`TestReport::check_hash`]). A missing token, a failed Gitea call, or
+///    a stale template hash logs a message and abandons the load (a
 ///    [`NullReport`]). The interactive TeReGen regenerate / force-continue /
 ///    delete-checkout handling for a stale hash lands in Phase C.
 /// 5. Sets the workflow from `kind`. For the `-a` (auto) kind, builds the
-///    [`QemIncident`] and runs [`DashboardAutoOpenQA`]; when the auto result has
-///    no install jobs (or the dashboard is unreachable) the workflow is
-///    **downgraded to [`Workflow::Manual`]** (upstream's auto→manual fallback).
+///    [`QemIncident`] and runs [`DashboardAutoOpenQA`]; when the auto result
+///    has no install jobs (or the dashboard is unreachable) the workflow is
+///    **downgraded to [`Workflow::Manual`]**.
 ///
-/// `autoconnect` is the caller's explicit choice (upstream's `make_testreport`
-/// argument). A reference-host connect is deferred (via
-/// [`TestReportBase::autoconnect_pending`], honoured by the composition root
-/// *after* wiring the host arbiter) **only** when `autoconnect` is `true` **and**
-/// the auto load downgraded to `MANUAL` — matching upstream, which sets
-/// `_autoconnect_pending` only on that path. The auto happy-path (workflow stays
-/// `AUTO`) and the kernel kind never autoconnect on load.
+/// `autoconnect` is the caller's explicit choice. A reference-host connect is
+/// deferred (via [`TestReportBase::autoconnect_pending`], honoured by the
+/// composition root *after* wiring the host arbiter) **only** when
+/// `autoconnect` is `true` **and** the auto load downgraded to `MANUAL`. The
+/// auto happy-path (workflow stays `AUTO`) and the kernel kind never
+/// autoconnect on load.
 pub async fn make_testreport(
     update: &UpdateID,
     config: Config,
@@ -172,18 +167,16 @@ pub async fn make_testreport(
         return Box::new(null_with_error(checkout_config, reason));
     }
 
-    // Upstream runs `check_hash` at the tail of `TestReport.read`; because
-    // `read` is sync and `check_hash` is async, the check fires here instead —
-    // right after a successful read, before the report is handed back. This is
-    // the Gitea token + template-hash verification that `UpdateID._checkout`
-    // wraps (missing token / failed call / stale hash). See
+    // `read` is sync and `check_hash` is async, so the check fires here
+    // instead — right after a successful read, before the report is handed
+    // back. This is the Gitea token + template-hash verification (missing
+    // token / failed call / stale hash). See
     // `plans/gitea-hash-check-on-load.md`.
     match report.check_hash().await {
         HashCheck::Ok => {}
         HashCheck::MissingToken => {
-            // Upstream `MissingGiteaTokenError`: the exact operator-facing
-            // message, then the load is abandoned (a null report here mirrors
-            // `make_testreport` catching the re-raised error into a null).
+            // The exact operator-facing message, then the load is abandoned
+            // (a null report here signals the failed load).
             let msg = "Gitea API token is not configured. Pass -g/--gitea_token, \
                  set GITEA_TOKEN in your environment, or add a [gitea] token \
                  entry to ~/.mtuirc.";
@@ -191,7 +184,6 @@ pub async fn make_testreport(
             return Box::new(null_with_error(checkout_config, msg.to_owned()));
         }
         HashCheck::Failed(e) => {
-            // Upstream `FailedGiteaCallError`.
             error!("Gitea API call failed");
             info!(error = %e, "TestReport isn't loaded");
             return Box::new(null_with_error(
@@ -200,10 +192,10 @@ pub async fn make_testreport(
             ));
         }
         HashCheck::Mismatch { .. } => {
-            // Upstream `InvalidGiteaHashError` handling in `_checkout`: offer a
-            // TeReGen regeneration, then fall back to the manual force-continue
-            // / delete-checkout prompts. Returns `Some(report)` when a report
-            // (fresh or force-kept-stale) should load, `None` for the null path.
+            // Offer a TeReGen regeneration, then fall back to the manual
+            // force-continue / delete-checkout prompts. Returns `Some(report)`
+            // when a report (fresh or force-kept-stale) should load, `None`
+            // for the null path.
             match handle_stale_hash(
                 update,
                 &checkout_config,
@@ -237,10 +229,10 @@ pub async fn make_testreport(
 
     report.base_mut().workflow = kind.workflow();
 
-    // Upstream `AutoOBSUpdateID.make_testreport`: the `-a` (auto) kind fetches
-    // the QEM-dashboard auto-openQA result at load time and downgrades the
-    // working mode to MANUAL when there are no install jobs (or they failed).
-    // The `-k` (kernel) kind keeps its KERNEL workflow and never autoconnects.
+    // The `-a` (auto) kind fetches the QEM-dashboard auto-openQA result at
+    // load time and downgrades the working mode to MANUAL when there are no
+    // install jobs (or they failed). The `-k` (kernel) kind keeps its KERNEL
+    // workflow and never autoconnects.
     if kind == UpdateKind::Auto {
         // Snapshot config primitives before the awaits (no `&report`/borrow
         // crosses `.await`).
@@ -283,15 +275,16 @@ pub async fn make_testreport(
                     if autoconnect {
                         // Defer the connect to the composition root, which wires
                         // the arbiter first so refhosts_from_tp draws one host
-                        // per slot. Upstream connects only on this manual path.
+                        // per slot. This connects only on this manual path.
                         report.base_mut().autoconnect_pending = true;
                     }
                 }
             }
             Err(e) => {
                 // Could not even build the dashboard client: treat as no
-                // results (downgrade to manual), mirroring the best-effort
-                // upstream behaviour where a missing auto result flips to manual.
+                // results (downgrade to manual) — a best-effort fallback so a
+                // missing auto result flips to manual rather than aborting
+                // the load.
                 warn!(error = %e, "QEM Dashboard unavailable; switching mode to manual");
                 report.base_mut().workflow = Workflow::Manual;
                 if autoconnect {
@@ -314,9 +307,8 @@ pub async fn make_testreport(
     report
 }
 
-/// Handles a stale template hash (upstream `_checkout`'s `InvalidGiteaHashError`
-/// branch): log, offer TeReGen regeneration, then the manual force-continue /
-/// delete-checkout fallback.
+/// Handles a stale template hash: log, offer TeReGen regeneration, then the
+/// manual force-continue / delete-checkout fallback.
 ///
 /// Returns:
 /// * `Some(Some(fresh))` — TeReGen regenerated a fresh, verified report to use;
@@ -324,10 +316,10 @@ pub async fn make_testreport(
 ///   (the caller keeps its existing `report`);
 /// * `None` — abandon the load (the caller substitutes a [`NullReport`]).
 ///
-/// `prompter` is `Some` only in interactive mode; upstream's non-interactive
-/// `prompt_user` never requests input and returns `false`, so every prompt here
-/// is gated on `interactive && prompter.is_some()` and defaults to the
-/// non-interactive answer otherwise.
+/// `prompter` is `Some` only in interactive mode; a non-interactive run never
+/// requests input, so every prompt here is gated on
+/// `interactive && prompter.is_some()` and defaults to the non-interactive
+/// answer otherwise.
 #[allow(clippy::too_many_arguments)]
 async fn handle_stale_hash(
     update: &UpdateID,
@@ -401,13 +393,13 @@ async fn handle_stale_hash(
     None
 }
 
-/// Regenerates a stale template via TeReGen, then re-checks-out and re-reads it
-/// (upstream `_regenerate`).
+/// Regenerates a stale template via TeReGen, then re-checks-out and re-reads
+/// it.
 ///
 /// Returns the freshly loaded, hash-verified report on success, or `None` so the
 /// caller falls back to the manual force/decline handling. Any TeReGen failure,
 /// checkout/read failure, or a *still*-failing hash on the fresh template is a
-/// `None` (upstream "Reload after regeneration failed").
+/// `None` (logged as "Reload after regeneration failed").
 async fn regenerate_via_teregen(
     update: &UpdateID,
     config: &Config,
@@ -459,8 +451,8 @@ async fn regenerate_via_teregen(
         return None;
     }
 
-    // Fresh checkout + read of the regenerated template (upstream re-runs
-    // `_vcs_checkout` + `read`; a still-failing hash here is a reload failure).
+    // Fresh checkout + read of the regenerated template; a still-failing
+    // hash here is a reload failure.
     let mut fresh = tr_factory(update, config.clone());
     let runner = TokioSvnRunner;
     if let Err(e) = crate::checkout::testreport_svn_checkout(&runner, config, svn_path, &rrid).await

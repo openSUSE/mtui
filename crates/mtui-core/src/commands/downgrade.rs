@@ -11,15 +11,15 @@ use crate::session::Session;
 
 /// Downgrades all related packages to the last released version.
 ///
-/// Ports upstream `mtui.commands.downgrade.Downgrade` (including PR #336). Drives
+/// Drives
 /// [`TestReport::perform_downgrade`](mtui_testreport::TestReport::perform_downgrade),
 /// which removes the issue repos, probes each package's available downgrade
 /// version in a single `zypper se -s` invocation, downgrades (per-package for
 /// non-transactional hosts, combined for transactional), runs the check, and
 /// reboots transactional hosts.
 ///
-/// The post-downgrade verdict upstream performs (upstream `commands/downgrade.py`)
-/// is done by the workflow itself: `perform_downgrade` re-queries versions,
+/// The post-downgrade verdict is done by the workflow itself:
+/// `perform_downgrade` re-queries versions,
 /// rotates `before = after; after = current` per package, and — crucially —
 /// **aborts loudly** rather than half-rolling back silently. A dead version
 /// probe (an SSH no-output timeout records exit `-1`) or a dead downgrade command
@@ -119,8 +119,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_template_loaded_errors() {
-        // No report loaded → requires_update guard fires first, mirroring
-        // upstream @requires_update.
+        // No report loaded → requires_update guard fires first.
         let (mut session, _buf) = empty_session();
         let args = matches(&Downgrade, &[]);
         let err = Downgrade.call(&mut session, &args).await.unwrap_err();

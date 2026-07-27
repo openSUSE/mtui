@@ -1,10 +1,11 @@
 //! Integration + golden-fixture tests for the openQA / QAM Dashboard overview
-//! search, ported from upstream `tests/test_oqa_search_connector.py`.
+//! search.
 //!
-//! The HTTP-facing tests use `wiremock` (upstream used `responses`); the
+//! The HTTP-facing tests use `wiremock`; the
 //! heuristic tests replay the vendored `.log` / `.matches` fixture pairs. The
 //! `.matches` files are the byte-for-byte parity signal for the `TESTSUITE_*`
-//! constants the connector copies verbatim from upstream — any drift fails here.
+//! constants the connector copies verbatim from the oqa-search tool — any
+//! drift fails here.
 
 use std::path::{Path, PathBuf};
 
@@ -24,7 +25,7 @@ fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/oqa_search")
 }
 
-// A job-group JSON object matching upstream's `_job_group` helper.
+// A job-group JSON object.
 fn job_group(id: i64, name: &str) -> serde_json::Value {
     serde_json::json!({"id": id, "name": name, "template": "tpl"})
 }

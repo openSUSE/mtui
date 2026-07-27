@@ -1,8 +1,5 @@
 //! Strategies for producing a [`Refhosts`] from a YAML source.
 //!
-//! Ported from upstream `mtui/hosts/refhost/resolvers.py` +
-//! `mtui/hosts/refhost/__init__.py` (the `_RefhostsFactory` binding).
-//!
 //! Each [`Resolver`] knows one way to obtain `refhosts.yml`:
 //! - [`PathResolver`] builds a [`Refhosts`] from a local file
 //!   (`config.refhosts_path`);
@@ -15,9 +12,9 @@
 //! success and logging every failure along the way.
 //!
 //! # Testability seams
-//! Upstream injects the clock, the `stat` call, the URL opener, the file writer,
-//! and the `Refhosts` factory as collaborators so the cache-refresh logic can be
-//! driven offline. This port mirrors that with small object-safe traits
+//! The clock, the `stat` call, the URL opener, the file writer,
+//! and the `Refhosts` factory are injected as collaborators so the
+//! cache-refresh logic can be driven offline, via small object-safe traits
 //! ([`Clock`], [`FileStat`], [`Fetcher`], [`FileWriter`], [`RefhostsBuilder`]);
 //! production wiring uses [`SystemClock`], [`FsStat`], [`HttpFetcher`],
 //! [`AtomicFileWriter`], and [`PathRefhostsBuilder`].
@@ -39,7 +36,7 @@ use crate::http::{HttpClient, VerifyPolicy, resolve_verify};
 ///
 /// Resolvers take this borrowed view rather than the whole `mtui_config::Config`
 /// so they stay decoupled from the full config surface and are trivial to
-/// construct in tests (mirroring upstream's `SimpleNamespace` test config).
+/// construct in tests.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolveConfig<'a> {
     /// Comma-separated, ordered list of resolver names to try.
@@ -55,25 +52,24 @@ pub struct ResolveConfig<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Seams (upstream: time_now_getter / statter / urlopener / file_writer /
-// refhosts_factory)
+// Seams: clock / stat / URL fetch / file write / refhosts factory
 // ---------------------------------------------------------------------------
 
-/// A source of the current wall-clock time (upstream `time_now_getter`).
+/// A source of the current wall-clock time.
 pub trait Clock: Send + Sync {
     /// Current time as seconds since the Unix epoch.
     fn now_unix(&self) -> u64;
 }
 
-/// The result of stat-ing the cache file (upstream `statter`).
+/// The result of stat-ing the cache file.
 ///
 /// A typed three-state so tests can drive every `_is_refresh_needed` branch
-/// deterministically without real filesystem timing: the upstream code
+/// deterministically without real filesystem timing: it
 /// distinguishes "missing → refresh" (`ENOENT`) from "other OSError →
 /// propagate" and "present → compare mtime".
 #[derive(Debug)]
 pub enum StatResult {
-    /// The cache file does not exist (upstream `ENOENT`) → force a refresh.
+    /// The cache file does not exist (`ENOENT`) → force a refresh.
     NotFound,
     /// The cache file exists with this mtime (seconds since the Unix epoch).
     Mtime(u64),
@@ -82,14 +78,13 @@ pub enum StatResult {
     Err(std::io::Error),
 }
 
-/// A `stat`-like probe of the cache file's freshness (upstream `statter`).
+/// A `stat`-like probe of the cache file's freshness.
 pub trait FileStat: Send + Sync {
     /// Stat `path`, mapping the outcome onto a [`StatResult`].
     fn stat(&self, path: &Path) -> StatResult;
 }
 
-/// Fetches the raw bytes of a URL under a [`VerifyPolicy`] (upstream
-/// `urlopener` + `.read()`).
+/// Fetches the raw bytes of a URL under a [`VerifyPolicy`].
 #[async_trait]
 pub trait Fetcher: Send + Sync {
     /// GET `uri` and return the body bytes.
@@ -99,7 +94,7 @@ pub trait Fetcher: Send + Sync {
     async fn fetch(&self, uri: &str, verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError>;
 }
 
-/// Persists downloaded payload bytes to the cache path (upstream `file_writer`).
+/// Persists downloaded payload bytes to the cache path.
 pub trait FileWriter: Send + Sync {
     /// Write `bytes` to `path`.
     ///
@@ -108,7 +103,7 @@ pub trait FileWriter: Send + Sync {
     fn write(&self, bytes: &[u8], path: &Path) -> Result<(), RefhostError>;
 }
 
-/// Builds a [`Refhosts`] from a local path (upstream `refhosts_factory`).
+/// Builds a [`Refhosts`] from a local path.
 ///
 /// Seam over [`Refhosts::from_path`] so [`HttpsResolver::resolve`] and
 /// [`PathResolver::resolve`] can be tested without a real `refhosts.yml`.
@@ -352,7 +347,7 @@ impl HttpsResolver {
 
     /// Whether the cache should be re-downloaded.
     ///
-    /// Missing cache → always refresh (upstream `ENOENT` branch). A non-"not
+    /// Missing cache → always refresh (the `ENOENT` branch). A non-"not
     /// found" stat error propagates. Otherwise refresh iff the cache is older
     /// than `expiration` seconds.
     ///
@@ -477,7 +472,7 @@ fn policy_override(ssl_verify: &SslVerify) -> Option<VerifyPolicy> {
 
 /// Best-effort check whether `refhosts_path`'s parent directory looks
 /// writable, so a caller can forewarn that the https mirror write is likely
-/// to fail (upstream bug: a read-only, package-managed `refhosts.path`).
+/// to fail — e.g. a read-only, package-managed `refhosts.path`.
 ///
 /// [`AtomicFileWriter`] creates its temp file in that same directory, so the
 /// directory — not the target file itself — is what must be writable. A
@@ -500,7 +495,7 @@ fn refhosts_mirror_dir_writable(refhosts_path: &Path) -> bool {
 
 /// Dispatches to a configured [`Resolver`] to build a [`Refhosts`].
 ///
-/// Ported from upstream `_RefhostsFactory`: `config.refhosts_resolvers` is a
+/// `config.refhosts_resolvers` is a
 /// comma-separated, ordered list of resolver names; each is tried in turn.
 /// Unknown names are logged and skipped; a resolver error is logged (with its
 /// cause) and the next resolver is tried. If every resolver is exhausted,
@@ -575,13 +570,11 @@ impl RefhostsFactory {
 
 #[cfg(test)]
 mod tests {
-    //! Ported from upstream `tests/test_refhost.py:405-600` (the "Resolvers and
-    //! _RefhostsFactory" block). Upstream drives each collaborator with a
-    //! `MagicMock`; the Rust analogues are the mock seams below, which record
+    //! The mock seams below drive each collaborator and record
     //! their calls for assertion.
     //!
-    //! The refresh single-flight tests are original (not ported): upstream is
-    //! single-threaded and has no locking to port.
+    //! The refresh single-flight tests exercise Rust-specific concurrent-access
+    //! locking that has no single-threaded equivalent.
 
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1071,7 +1064,7 @@ default:
         );
     }
 
-    /// A writer that always fails (upstream: a read-only mirror location).
+    /// A writer that always fails (e.g. a read-only mirror location).
     #[derive(Clone, Default)]
     struct FailingWriter;
     impl FileWriter for FailingWriter {

@@ -1,14 +1,13 @@
 //! The update-workflow export subsystem.
 //!
-//! Ports upstream `mtui.update_workflow.export`: a shared [`base`] with the
-//! common template-mutation helpers, three concrete exporters
-//! ([`auto`], [`manual`], [`kernel`]), a log [`downloader`], and the idempotent
-//! [`overview_inject`] block writer.
+//! A shared [`base`] with the common template-mutation helpers, three
+//! concrete exporters ([`auto`], [`manual`], [`kernel`]), a log
+//! [`downloader`], and the idempotent [`overview_inject`] block writer.
 //!
 //! ## Exporter selection
 //!
-//! Upstream picks the exporter by [`Workflow`](mtui_types::Workflow)
-//! (`AUTO`/`MANUAL`/`KERNEL` in `enums.py`). The three concrete types here have
+//! The exporter is picked by [`Workflow`](mtui_types::Workflow)
+//! (`AUTO`/`MANUAL`/`KERNEL`). The three concrete types here have
 //! deliberately different constructors — [`ManualExport`] needs the connected
 //! hosts, [`KernelExport`] needs the kernel connectors — so a single boxed
 //! factory would flatten inputs that legitimately differ. The composition root

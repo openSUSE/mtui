@@ -14,12 +14,11 @@ const STATES: [&str; 2] = ["disabled", "enabled"];
 
 /// Sets the state of a host.
 ///
-/// Ports upstream `mtui.commands.hoststate.HostState`. A host can be:
+/// A host can be:
 /// * `enabled` — runs all issued commands,
 /// * `disabled` — runs nothing.
 ///
-/// Selection acts on named hosts (or all, disabled included) exactly like
-/// upstream's `parse_hosts(enabled=False)`.
+/// Selection acts on named hosts (or all, disabled included).
 pub struct HostState;
 
 #[async_trait]

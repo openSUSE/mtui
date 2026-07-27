@@ -2,9 +2,8 @@
 //!
 //! Every outbound integration lives here; consumers (commands, MCP) get typed
 //! clients. The first landed surface is the shared HTTP policy layer
-//! ([`mod@http`]) ported from upstream `mtui/support/http.py`: one client with a
-//! unified timeout and TLS-verify posture that every later Phase-3 client
-//! builds on.
+//! ([`mod@http`]): one client with a unified timeout and TLS-verify posture
+//! that every later Phase-3 client builds on.
 
 pub mod error;
 pub mod gitea;

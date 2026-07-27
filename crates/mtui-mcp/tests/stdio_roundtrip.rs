@@ -1,8 +1,8 @@
 //! P7.7 gate: the MCP round-trip contract test.
 //!
-//! The Rust analogue of upstream `test_mcp_stdio_roundtrip.py`. It connects an
-//! rmcp client to the production [`McpServer`] over an in-memory duplex transport
-//! (no subprocess, no socket) and proves the runtime-synthesis wiring end to end:
+//! It connects an rmcp client to the production [`McpServer`] over an in-memory
+//! duplex transport (no subprocess, no socket) and proves the runtime-synthesis
+//! wiring end to end:
 //!
 //! 1. `tools/list` reflects the full synthesised surface (command tools + job
 //!    tools + the hand-written testreport tools) and **omits** every deny-listed

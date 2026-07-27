@@ -115,7 +115,7 @@ async fn add_history_creates_missing_log() {
 }
 
 /// An append failure is swallowed: bookkeeping never aborts the operation it
-/// records, matching upstream's best-effort history write.
+/// records — a best-effort history write.
 #[tokio::test]
 async fn add_history_swallows_append_failure() {
     let conn = MockConnection::new("h1").with_sftp_append_error(LOG);

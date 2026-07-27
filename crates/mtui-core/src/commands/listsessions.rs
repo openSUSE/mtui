@@ -9,15 +9,13 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// The upstream `ss`-based session probe (verbatim, so remote output matches).
+/// The `ss`-based session probe.
 const SESSION_CMD: &str = r"ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\1/p' | sort -u";
 
 /// Lists the active SSH sessions connected to each reference host.
 ///
-/// Ports upstream `mtui.commands.simplelists.ListSessions`, which runs the
-/// `ss`/`sed` probe on the selected hosts and then reports each host's last
-/// stdout through `display.list_sessions`. The probe command is reproduced
-/// verbatim so remote output matches upstream.
+/// Runs the `ss`/`sed` probe on the selected hosts and then reports each
+/// host's last stdout through `display.list_sessions`.
 pub struct ListSessions;
 
 #[async_trait]

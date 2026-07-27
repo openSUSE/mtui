@@ -14,7 +14,7 @@ use crate::session::Session;
 /// Approves the loaded update, dispatching to OSC or Gitea like the other
 /// backend-API commands.
 ///
-/// Ports upstream `mtui.commands.approve.Approve`. With `-r/--reviewer` the
+/// With `-r/--reviewer` the
 /// reviewer is recorded in the testreport and the template is committed to SVN
 /// *before* the approval; if either step fails the approval is aborted. On the
 /// Gitea path a checkout-hash mismatch aborts the approval in non-interactive
@@ -213,9 +213,9 @@ async fn slack_review_gate(
     Ok(())
 }
 
-/// Records the reviewer and commits the testreport to SVN (upstream
-/// `_record_reviewer`). Returns `Err` when the record/commit fails so the
-/// approval is aborted and the failure is surfaced (not swallowed).
+/// Records the reviewer and commits the testreport to SVN. Returns `Err` when
+/// the record/commit fails so the approval is aborted and the failure is
+/// surfaced (not swallowed).
 async fn record_reviewer(session: &mut Session, name: &str) -> Result<(), CommandError> {
     let name = name.trim();
     if name.is_empty() {

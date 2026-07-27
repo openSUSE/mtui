@@ -4,15 +4,14 @@
 //! (the correction that shaped P5.10 — do not conflate them):
 //!
 //! 1. **App invocation** — the top-level `mtui`/`mtui-mcp` process arguments,
-//!    [`Args`](crate::args::Args) (port of upstream `mtui.cli.args.get_parser`).
-//!    The real binary parses these with `Args::parse`, which exits the process
-//!    on `--help`/`--version`/error exactly like upstream. This module takes an
+//!    [`Args`](crate::args::Args). The real binary parses these with
+//!    `Args::parse`, which exits the process on `--help`/`--version`/error, the
+//!    standard clap convention. This module takes an
 //!    *already-parsed* `&Args`, so Layer 1 is the caller's responsibility (the
 //!    binary is Phase 6).
 //! 2. **REPL commands** — the per-command parsers the [`engine`](crate::engine)
-//!    synthesises from the [`Registry`], run inside the REPL `cmdloop` and reused
-//!    as MCP tools (port of upstream `mtui.commands._command.Command.parse_args`
-//!    on the no-exit `ArgumentParser`). These never exit the process; they return
+//!    synthesises from the [`Registry`], run inside the REPL `cmdloop` and
+//!    reused as MCP tools. These never exit the process; they return
 //!    a typed [`EngineError`].
 //! 3. **MCP tool schema** — `mtui-mcp` translating each command's parser into
 //!    JSON parameters (Phase 7). Not touched here.
@@ -23,22 +22,21 @@
 //! single command with no interactive loop. It is the headless single-command
 //! primitive for `mtui-mcp` (Phase 7) and embedding callers.
 //!
-//! It is **not** a CLI mode: upstream `mtui` — and the mtui `mtui` binary —
-//! has only two surfaces, the interactive REPL and `mtui-mcp`, and neither takes
-//! a positional command. The interactive binary seeds the session and enters the
-//! REPL (`mtui-cli::seed_session` + `Repl`); it never calls `run_once`.
+//! It is **not** a CLI mode: the `mtui` binary has only two surfaces, the
+//! interactive REPL and `mtui-mcp`, and neither takes a positional command.
+//! The interactive binary seeds the session and enters the REPL
+//! (`mtui-cli::seed_session` + `Repl`); it never calls `run_once`.
 //!
 //! ## Exit-code contract
 //!
-//! Upstream `run_mtui` collapses everything to `Literal[0, 1]`. mtui
-//! **intentionally deviates**: it distinguishes clap/argparse's usage-error
-//! convention (exit `2`) from a runtime failure (exit `1`), while keeping
-//! `--help`/`--version` a success (exit `0`). See [`ExitStatus`].
+//! mtui distinguishes clap/argparse's usage-error convention (exit `2`) from a
+//! runtime failure (exit `1`), while keeping `--help`/`--version` a success
+//! (exit `0`). See [`ExitStatus`].
 
 /// The process exit status a single non-interactive command run yields.
 ///
-/// mtui deviates from upstream's collapsed `Literal[0, 1]` to preserve the
-/// argparse/clap distinction between a *usage* error and a *runtime* failure:
+/// mtui distinguishes exit codes to preserve the argparse/clap distinction
+/// between a *usage* error and a *runtime* failure:
 ///
 /// * [`Ok`](ExitStatus::Ok) → `0` — the command ran, or clap printed
 ///   `--help`/`--version` (a success in argparse terms).

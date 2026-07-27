@@ -1,19 +1,17 @@
 //! The batched SFTP session primitive (mtui-rs-0mop.3).
 //!
-//! Ported from upstream `mtui/hosts/connection/connection.py` — the
-//! `sftp_session()` context manager, which opens **one** `open_sftp()` client
-//! and yields it for several reads against the same host, so a multi-step probe
-//! pays the SFTP channel+subsystem handshake **once** instead of per operation.
+//! Opens **one** SFTP client and yields it for several reads against the same
+//! host, so a multi-step probe pays the SFTP channel+subsystem handshake
+//! **once** instead of per operation.
 //!
 //! ## Scope split
 //!
 //! The per-op `sftp_*` methods on [`Connection`](super::Connection) each open
-//! and close their own SFTP session (mirroring upstream's individual `sftp_*`
-//! helpers). [`SftpSession`] is the object-safe batching counterpart: a caller
-//! that runs several reads in a row (e.g. [`parse_system`] on a host with many
-//! product files) opens one session via
+//! and close their own SFTP session. [`SftpSession`] is the object-safe
+//! batching counterpart: a caller that runs several reads in a row (e.g.
+//! [`parse_system`] on a host with many product files) opens one session via
 //! [`Connection::sftp_session`](super::Connection::sftp_session), issues its
-//! reads, then closes it — restoring upstream's single-handshake shape.
+//! reads, then closes it — a single-handshake shape.
 //!
 //! Only the **read verbs the discovery parser uses** live here
 //! ([`open`](SftpSession::open) / [`listdir`](SftpSession::listdir) /
@@ -35,9 +33,9 @@ use crate::error::Result;
 /// Returned by [`Connection::sftp_session`](super::Connection::sftp_session).
 /// The session is opened once (reconnecting the transport first if it has
 /// dropped, like the per-op path) and closed once via [`close`](Self::close) or
-/// on drop. **Mid-session errors propagate** — this handle does not auto-retry
-/// (matching upstream `sftp_session`); a caller that wants retry wraps the whole
-/// batch (as [`Target::connect`](crate::Target) does around `parse_system`).
+/// on drop. **Mid-session errors propagate** — this handle does not auto-retry;
+/// a caller that wants retry wraps the whole batch (as
+/// [`Target::connect`](crate::Target) does around `parse_system`).
 ///
 /// Object-safe by construction (`Box<dyn SftpSession>`), so the russh-backed
 /// session and the test double are interchangeable.

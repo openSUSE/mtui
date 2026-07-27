@@ -13,7 +13,7 @@ use crate::session::Session;
 
 /// Runs a command on a specified host or on all enabled targets.
 ///
-/// Ports upstream `mtui.commands.run.Run`. The command is dispatched in
+/// The command is dispatched in
 /// parallel across every selected target; after it returns, each host's input
 /// line, exit code, stdout, and any stderr are collected and paged to the
 /// display.
@@ -68,9 +68,8 @@ impl Command for Run {
             return Err(CommandError::NoRefhostsDefined);
         }
 
-        // The operation lock guards the serialized remote transaction, mirroring
-        // upstream's `with LockedTargets(...)` around the run. Lock exactly the
-        // selected hosts (not the whole group) and require every one to be
+        // The operation lock guards the serialized remote transaction. Lock
+        // exactly the selected hosts (not the whole group) and require every one to be
         // `Acquired` before running: unlike `hostslock`, a `Contended` host is a
         // blocker here, because the operation lock exists to serialize this
         // remote transaction — running while another owner holds it would break
@@ -122,8 +121,8 @@ impl Command for Run {
         targets.unlock_selected(&selected).await;
 
         let mut output: Vec<String> = Vec::new();
-        // A non-zero remote exit is often expected (this stays `Ok`, matching
-        // upstream), but is collected here — while `targets` is still borrowed —
+        // A non-zero remote exit is often expected (this stays `Ok`),
+        // but is collected here — while `targets` is still borrowed —
         // to append one explicit summary line naming each failed host so the
         // LLM/user gets an unambiguous signal. Hosts with no command run
         // (`lastexit() == None`) are skipped.
@@ -149,9 +148,8 @@ impl Command for Run {
             }
         }
 
-        // Page the aggregated per-host output, matching upstream `run.py`'s
-        // `page(output, ...)`. Interactive → screen-at-a-time; headless → every
-        // line forwarded unpaged (byte-identical to before).
+        // Page the aggregated per-host output. Interactive → screen-at-a-time;
+        // headless → every line forwarded unpaged.
         page_output(session, &output).await;
 
         if !failed.is_empty() {
@@ -168,7 +166,7 @@ impl Command for Run {
     }
 }
 
-/// Renders an optional exit code the way upstream `lastexit()` stringifies it.
+/// Renders an optional exit code, printing `None` when absent.
 fn fmt_exit(code: Option<i16>) -> String {
     match code {
         Some(c) => c.to_string(),

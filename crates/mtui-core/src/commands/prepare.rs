@@ -11,7 +11,7 @@ use crate::session::Session;
 
 /// Installs missing packages and updates existing packages.
 ///
-/// Ports upstream `mtui.commands.prepare.Prepare`. Drives
+/// Drives
 /// [`TestReport::perform_prepare`](mtui_testreport::TestReport::perform_prepare).
 /// It is also run by the update procedure before applying the updates.
 ///
@@ -156,7 +156,7 @@ mod tests {
     #[tokio::test]
     async fn no_template_loaded_errors() {
         // No report loaded (even with the empty session) → requires_update guard
-        // fires first, mirroring upstream @requires_update.
+        // fires first.
         let (mut session, _buf) = empty_session();
         let args = matches(&Prepare, &[]);
         let err = Prepare.call(&mut session, &args).await.unwrap_err();

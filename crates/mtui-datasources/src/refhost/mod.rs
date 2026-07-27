@@ -1,16 +1,15 @@
 //! Refhost query model and search engine.
 //!
-//! Ported from upstream `mtui/hosts/refhost/`:
 //! - [`models`] — the [`Attributes`] search query + its `testplatform` grammar
-//!   parser (upstream `models.py::Attributes`).
+//!   parser.
 //! - [`store`] — the [`Refhosts`] search engine over a loaded `refhosts.yml`
-//!   (upstream `store.py::Refhosts`, search surface only).
+//!   (search surface only).
 //! - [`resolvers`] — the resolver chain ([`PathResolver`]/[`HttpsResolver`]) and
 //!   the config-driven [`RefhostsFactory`] that decides *where* `refhosts.yml`
-//!   comes from (upstream `resolvers.py` + the `_RefhostsFactory` binding).
+//!   comes from.
 //! - [`verify`] — advisory product-drift comparison between a detected
 //!   [`System`](mtui_types::System) and a `refhosts.yml` [`Host`](mtui_types::Host)
-//!   row, yielding a [`ProductDiff`] (upstream `verify.py`).
+//!   row, yielding a [`ProductDiff`].
 //!
 //! The `refhosts.yml` *row* schema ([`mtui_types::Host`] etc.) and the pure
 //! document loader ([`mtui_types::load_refhosts`]) live in `mtui-types`; this

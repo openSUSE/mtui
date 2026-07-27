@@ -1,5 +1,4 @@
-//! The kernel openQA connector, ported from
-//! `mtui/data_sources/openqa/kernel.py`.
+//! The kernel openQA connector.
 //!
 //! `KernelOpenQA` filters jobs to the kernel flavor, parses each into a
 //! [`Test`], and renders a result matrix restricted to LTP (`ltp_`-prefixed)
@@ -66,15 +65,13 @@ impl KernelOpenQA {
     /// The openQA instance host this connector targets.
     ///
     /// Exposes the shared-base host so the export downloader can build the
-    /// per-instance log URLs (upstream reads `host.host`).
+    /// per-instance log URLs.
     #[must_use]
     pub fn host(&self) -> &str {
         self.base.host()
     }
 
     /// Fetch jobs, filter to kernel jobs, parse, and render.
-    ///
-    /// Mirrors upstream `run`.
     ///
     /// # Errors
     ///
@@ -92,7 +89,7 @@ impl KernelOpenQA {
 
     /// Keep only kernel-flavor jobs.
     ///
-    /// Mirrors upstream `_filter_jobs`: `None` → `None`; else jobs whose
+    /// `None` → `None`; else jobs whose
     /// `FLAVOR` (lowercased, split on `-`) contains the segment `kernel`.
     #[must_use]
     fn filter_jobs(jobs: Option<&[Job]>) -> Option<Vec<Job>> {
@@ -112,7 +109,7 @@ impl KernelOpenQA {
 
     /// Parse kernel jobs into [`Test`] objects.
     ///
-    /// Mirrors upstream `_parse_jobs`: `None` → `None`; else one [`Test`] per
+    /// `None` → `None`; else one [`Test`] per
     /// non-cloned job (dropping [`EXCLUDED_MODULES`] from each module map),
     /// excluding any whose result is in [`EXCLUDED_RESULTS`].
     #[must_use]
@@ -137,8 +134,7 @@ impl KernelOpenQA {
 
     /// Render the pretty-printed report (host header + result matrix).
     ///
-    /// Mirrors upstream `_pretty_print`: empty when the connector has no
-    /// results.
+    /// Empty when the connector has no results.
     #[must_use]
     fn pretty_print(&self) -> Vec<String> {
         if !self.has_results() {
@@ -156,9 +152,9 @@ impl KernelOpenQA {
 
     /// Format the LTP test results into a sorted matrix.
     ///
-    /// Mirrors upstream `_result_matrix`: only `ltp_`-prefixed tests produce a
+    /// Only `ltp_`-prefixed tests produce a
     /// line; a failed LTP test appends a `<module>: ...` line per failed
-    /// module. Column widths match the upstream `str.format` field specs
+    /// module. Column widths match fixed field specs
     /// (`{0:36}`, `{1:<3}`, `{2:8}`). The result is sorted.
     #[must_use]
     fn result_matrix(testresults: &[Test]) -> Vec<String> {
@@ -192,7 +188,7 @@ impl OpenQAResult for KernelOpenQA {
         Self::KIND
     }
 
-    /// The port of upstream `KernelOpenQA.__bool__`: truthy when `pp` or
+    /// Truthy when `pp` or
     /// `results` is non-empty. Called during `pretty_print`, where `pp` is not
     /// yet populated, so it effectively keys on `results`.
     fn has_results(&self) -> bool {

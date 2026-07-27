@@ -7,15 +7,14 @@
 //! * [`Command`] — the trait every command implements, with the template
 //!   fan-out engine ([`Command::run`]) and its [`Scope`] policy.
 //! * [`CommandError`] / [`CommandResult`] — the command-layer error hierarchy.
-//! * [`Session`] — the explicitly-passed command state (the Rust replacement for
-//!   upstream's `CommandPrompt`), holding the [`TemplateRegistry`] and
-//!   [`CommandPromptDisplay`].
+//! * [`Session`] — the explicitly-passed command state, holding the
+//!   [`TemplateRegistry`] and [`CommandPromptDisplay`].
 //!
 //! P5.2 adds the explicit command [`Registry`] and the line-dispatch
 //! [`engine`], the single machinery both the REPL and MCP dispatch through. P5.4
-//! adds [`args`] — the top-level process argument parser (`clap`) that mirrors
-//! upstream `mtui.cli.args`, distinct from the per-command parsers the engine
-//! synthesises. P5.3 rounds out the [`display`] surface: the full `list_*`
+//! adds [`args`] — the top-level process argument parser (`clap`), distinct
+//! from the per-command parsers the engine synthesises. P5.3 rounds out the
+//! [`display`] surface: the full `list_*`
 //! family, [`show_log`](CommandPromptDisplay::show_log), the three-way
 //! [`ColorMode`], and the [`page`](display::page) pager.
 //!
@@ -25,8 +24,7 @@
 //! and the per-command engine (Layer 2), distinct from both and from the MCP
 //! schema synthesis (Layer 3, Phase 7). It is consumed by `mtui-mcp` and
 //! embedding callers that dispatch a single command headlessly; the interactive
-//! `mtui` binary (Phase 6) is REPL-only — like upstream, the CLI has no
-//! single-command mode.
+//! `mtui` binary (Phase 6) is REPL-only — the CLI has no single-command mode.
 
 pub mod args;
 pub mod command;

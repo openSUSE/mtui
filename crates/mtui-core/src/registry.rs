@@ -1,19 +1,15 @@
 //! The explicit command registry.
 //!
-//! Port of upstream `mtui.commands.Command.registry`, which is auto-populated by
-//! the `Command.__init_subclass__` hook at class-creation time. This is a
-//! redesign, not a 1:1 port: per `AGENTS.md`, the implicit registration magic is
-//! replaced by an **explicit** [`register_all`] composition point. The REPL
-//! dispatch, tab-completion, and the MCP tool synthesiser all iterate this one
-//! [`Registry`] — it is the single source of the command surface.
+//! Every command is wired through an **explicit** [`register_all`] composition
+//! point (per `AGENTS.md`). The REPL dispatch, tab-completion, and the MCP
+//! tool synthesiser all iterate this one [`Registry`] — it is the single
+//! source of the command surface.
 //!
 //! A command answers to its [`name`](crate::Command::name) and any
 //! [`aliases`](crate::Command::aliases); every one of those strings maps to the
 //! same command instance. Two commands claiming the same name (or alias) is a
-//! programming error, caught the way upstream catches it — at wiring time.
-//! Upstream raises `CommandAlreadyBoundError` when the duplicate class is
-//! created; here [`Registry::register`] **panics** when it is wired, so the
-//! composition root ([`register_all`]) fails fast at boot.
+//! programming error: [`Registry::register`] **panics** when it is wired, so
+//! the composition root ([`register_all`]) fails fast at boot.
 
 use std::sync::Arc;
 
@@ -51,9 +47,9 @@ impl Registry {
     /// # Panics
     ///
     /// Panics if the command's name or any alias is already claimed by another
-    /// command. This mirrors upstream `CommandAlreadyBoundError`: a duplicate
-    /// command string is a static programming error, so the composition root
-    /// fails fast at boot rather than silently shadowing a command.
+    /// command: a duplicate command string is a static programming error, so
+    /// the composition root fails fast at boot rather than silently shadowing
+    /// a command.
     pub fn register(&mut self, command: Arc<dyn Command>) {
         let name = command.name();
         assert!(
@@ -91,10 +87,9 @@ impl Registry {
     /// Every command key — canonical names **and** aliases — in insertion
     /// order (a command's own name precedes its aliases).
     ///
-    /// This mirrors upstream `_completer.py`, whose first-token completion
-    /// iterates `prompt.commands` (which carries aliases as distinct keys). Use
-    /// this for alias-aware first-token completion; contrast with [`names`],
-    /// which is canonical-only and drives the REPL/MCP command listing.
+    /// Use this for alias-aware first-token completion; contrast with
+    /// [`names`], which is canonical-only and drives the REPL/MCP command
+    /// listing.
     ///
     /// [`names`]: Registry::names
     pub fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
@@ -104,7 +99,7 @@ impl Registry {
 
 /// Commands that must not be synthesised into MCP tools.
 ///
-/// Ports and hardens upstream's MCP deny-list (`AGENTS.md`): these commands drive
+/// The MCP deny-list (`AGENTS.md`): these commands drive
 /// the interactive shell or require a controlling terminal. (Local process
 /// execution used to be the third category; its `lrun` command was removed
 /// outright rather than merely denied.) The Phase-7 `mtui-mcp` tool
@@ -127,7 +122,7 @@ pub const MCP_DENYLIST: &[&str] = &[
 ];
 
 /// Builds the process-wide command registry — the single, explicit place every
-/// command is wired (replacing upstream's `__init_subclass__` auto-discovery).
+/// command is wired.
 ///
 /// Both the REPL (`mtui`) and MCP (`mtui-mcp`) build their command surface from
 /// the [`Registry`] this returns, so a command added here becomes a REPL command
@@ -454,9 +449,8 @@ mod tests {
         r.register(stub("run", &["r"]));
         r.register(stub("list", &[]));
         r.register(stub("add", &["a"]));
-        // Each command's canonical name precedes its own aliases (upstream
-        // `prompt.commands` dict-iteration order); commands stay in
-        // registration order.
+        // Each command's canonical name precedes its own aliases; commands
+        // stay in registration order.
         let keys: Vec<&str> = r.keys().collect();
         assert_eq!(keys, vec!["run", "r", "list", "add", "a"]);
     }

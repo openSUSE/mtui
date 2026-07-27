@@ -1,20 +1,21 @@
-//! Post-install check (upstream `checks/install.py`).
+//! Post-install check.
 //!
 //! Classifies a zypper install result by exit code and stderr/stdout markers.
 //! Unlike the other checks, install treats *any* unrecognised non-success as an
-//! `UpdateError("Unknown Error")` (upstream's final fall-through raise).
+//! `UpdateError("Unknown Error")`.
 
 use crate::update_workflow::UpdateError;
 use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
 
-/// The zypper install check (upstream `checks.install.zypper`).
+/// The zypper install check.
 ///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "package not found", "update stack
-/// locked", "RPM Error", "Dependency Error", or "Unknown Error" per upstream's
-/// branch logic. Exit codes `0, 100, 101, 102, 103, 106` are success. This
-/// check surfaces no [`Diagnostic`]s (only `update` does).
+/// locked", "RPM Error", "Dependency Error", or "Unknown Error" depending on
+/// the exit code and stderr/stdout markers. Exit codes `0, 100, 101, 102,
+/// 103, 106` are success. This check surfaces no [`Diagnostic`]s (only
+/// `update` does).
 fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if matches!(args.exitcode, 0 | 100 | 101 | 102 | 103 | 106) {
         return Ok(Vec::new());
@@ -48,7 +49,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 }
 
 /// The install check for `(release, transactional)`, or `None` for an unknown
-/// key (upstream `install_checks.get(...)`).
+/// key.
 #[must_use]
 pub(crate) fn install_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {

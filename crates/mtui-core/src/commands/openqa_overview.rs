@@ -10,19 +10,16 @@ use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// The aggregated-update job groups offered for tab completion (upstream
-/// `_AGGREGATED_GROUP_CHOICES`).
+/// The aggregated-update job groups offered for tab completion.
 const AGGREGATED_GROUP_CHOICES: &[&str] = &["core", "containers", "yast", "security"];
 
 /// Prints an openQA / QAM Dashboard / build-checks overview for the loaded MU.
 ///
-/// Ports upstream `mtui.commands.openqa_overview.OpenQAOverview` (the `oqa-search`
-/// helper). Fetches three sections — single incidents, aggregated updates, build
+/// Fetches three sections — single incidents, aggregated updates, build
 /// checks — and prints them to the REPL; `--export` also injects the plain-text
 /// block into the loaded testreport's `log` under `regression tests:`.
 ///
-/// Deviation from upstream: the `--no-fetch` cache reuse (upstream reads
-/// `metadata.openqa.overview`) is deferred with the openQA state holder
+/// The `--no-fetch` cache reuse is deferred with the openQA state holder
 /// (`mtui-rs-zs4`); passing `--no-fetch` here logs and fetches anyway.
 pub struct OpenQAOverview;
 
@@ -297,8 +294,7 @@ impl Command for OpenQAOverview {
     }
 }
 
-/// Injects the overview block into the loaded testreport `log` (upstream
-/// `_export_to_testreport`).
+/// Injects the overview block into the loaded testreport `log`.
 fn export_to_testreport(
     session: &mut Session,
     single_incidents: &[oqa::VersionResult],
@@ -343,8 +339,7 @@ fn export_to_testreport(
     Ok(())
 }
 
-/// Drops a trailing `/api` to recover the Dashboard base URL (upstream
-/// `_derive_dashboard_url`).
+/// Drops a trailing `/api` to recover the Dashboard base URL.
 fn derive_dashboard_url(qem_dashboard_api: &str) -> String {
     qem_dashboard_api
         .trim_end_matches('/')
@@ -353,8 +348,7 @@ fn derive_dashboard_url(qem_dashboard_api: &str) -> String {
         .to_owned()
 }
 
-/// Drops a trailing `/testreports` to recover the QAM base URL (upstream
-/// `_derive_qam_url`).
+/// Drops a trailing `/testreports` to recover the QAM base URL.
 fn derive_qam_url(reports_url: &str) -> String {
     reports_url
         .trim_end_matches('/')
@@ -363,8 +357,8 @@ fn derive_qam_url(reports_url: &str) -> String {
         .to_owned()
 }
 
-/// Title-cases each whitespace-separated word (upstream `str.title()`, scoped to
-/// the simple group names used here).
+/// Title-cases each whitespace-separated word, scoped to
+/// the simple group names used here.
 fn title_case(s: &str) -> String {
     s.split(' ')
         .map(|w| {
@@ -378,11 +372,10 @@ fn title_case(s: &str) -> String {
         .join(" ")
 }
 
-/// Prints one PASSED/FAILED/RUNNING/MISSING row (upstream `_print_version_row`).
-///
-/// Mirrors upstream: the `version -> url` (or bare `version`) line, then the
-/// status label colored by state — `FAILED (n jobs)` red, `RUNNING/SCHEDULED
-/// (n jobs)` yellow, `PASSED` green — then the optional note in yellow.
+/// Prints one PASSED/FAILED/RUNNING/MISSING row: the `version -> url` (or bare
+/// `version`) line, then the status label colored by state — `FAILED (n jobs)`
+/// red, `RUNNING/SCHEDULED (n jobs)` yellow, `PASSED` green — then the
+/// optional note in yellow.
 fn print_version_row(session: &mut Session, row: &oqa::VersionResult) {
     if row.status == "missing" {
         let msg = session
@@ -426,7 +419,7 @@ fn print_version_row(session: &mut Session, row: &oqa::VersionResult) {
     }
 }
 
-/// Prints one build-check entry (upstream `_print_build_check`).
+/// Prints one build-check entry.
 fn print_build_check(session: &mut Session, entry: &oqa::BuildCheckResult) {
     session.display.println(&entry.url);
     for line in &entry.matches {
@@ -501,7 +494,7 @@ mod tests {
         let (mut session, buf) = empty_session();
         print_version_row(&mut session, &version_row("failed", "", 0, 0, ""));
         let out = buf.contents();
-        // No url -> bare version line (upstream parity, not "version -> note").
+        // No url -> bare version line, not "version -> note".
         assert!(out.contains("15-SP5\n"));
         assert!(out.contains("FAILED\n"));
         assert!(!out.contains("FAILED ("));

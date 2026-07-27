@@ -1,22 +1,18 @@
 //! Persistent REPL command history.
 //!
-//! Ports upstream `mtui.cli._history` + the `PromptSession(history=…,
-//! enable_history_search=True, auto_suggest=AutoSuggestFromHistory())` wiring in
-//! `mtui.cli.repl` onto reedline. Three behaviours come together here:
+//! Three behaviours come together here:
 //!
 //! * **Persistence** — a [`FileBackedHistory`] keeps the up-arrow stack across
-//!   sessions, the equivalent of upstream's `FileHistory`.
-//! * **Reverse-search** — Ctrl-R, provided by reedline's default emacs edit mode
-//!   (upstream `enable_history_search=True`); it needs no wiring here, only a
-//!   populated history to search.
+//!   sessions.
+//! * **Reverse-search** — Ctrl-R, provided by reedline's default emacs edit
+//!   mode; it needs no wiring here, only a populated history to search.
 //! * **Inline suggestion** — the greyed hint shown by [`DefaultHinter`] is
-//!   reedline's analogue of upstream `AutoSuggestFromHistory`; it is wired in
-//!   [`crate::repl::Repl::new`] alongside [`file_backed_history`].
+//!   wired in [`crate::repl::Repl::new`] alongside [`file_backed_history`].
 //!
-//! ## Location (deliberate deviation from upstream)
+//! ## Location
 //!
-//! Upstream persists to `~/.mtui_history`. mtui is XDG-first, so the file
-//! lives at `$XDG_DATA_HOME/mtui/history` ([`mtui_config::data_dir`]). This keeps
+//! mtui is XDG-first, so the history file lives at
+//! `$XDG_DATA_HOME/mtui/history` ([`mtui_config::data_dir`]). This keeps
 //! durable per-user state out of the config and cache trees.
 //!
 //! ## Degradation contract

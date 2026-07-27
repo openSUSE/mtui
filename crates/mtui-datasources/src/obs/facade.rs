@@ -1,6 +1,6 @@
 //! The `OSC(config, rrid)` never-raise review seam (native OBS API, no `osc`).
 //!
-//! Ported from upstream `mtui/data_sources/oscqam.py`'s `OSC` class. This is the
+//! This is the
 //! final cutover of the native OBS backend: the [`Osc`] seam binds the resolved
 //! [`Config`] and target [`RequestReviewID`] to the five QAM operations
 //! ([`crate::obs::qam`]), reading credentials from the user's oscrc — located
@@ -11,14 +11,13 @@
 //!
 //! ## Never-raise contract
 //!
-//! Upstream folds *every* failure — reading oscrc, loading the key, building the
-//! session, the authenticated calls, XML parsing — into a logged `False`,
-//! because callers (`apicall` / `approve`) invoke the seam bare with no guard of
-//! their own. This port keeps the same **no-panic** contract but returns the
+//! Callers (`apicall` / `approve`) invoke the seam bare with no guard of
+//! their own, so this seam folds *every* failure — reading oscrc, loading the
+//! key, building the session, the authenticated calls, XML parsing — into a
 //! typed [`ObsError`] instead of a bare bool (the workspace's typed-`Result`
 //! house rule): the seam never `panic!`s / `unwrap`s / `expect`s — every
 //! transport/config/parse fault becomes an `Err(ObsError)` the caller logs.
-//! The escape hatches upstream PR#323 hardened are covered:
+//! The escape hatches are covered:
 //!
 //! * a non-PEM key file → [`ObsError::Config`] from the auth layer (never a
 //!   panic), surfaced when the first authenticated call is challenged;
@@ -58,8 +57,8 @@ type ClientFactory = Arc<dyn Fn(&Config) -> Result<Built, ObsError> + Send + Syn
 /// The native OBS review backend (approve / assign / unassign / comment /
 /// reject).
 ///
-/// Construct with [`Osc::new`]; construction cannot fail (mirroring upstream
-/// `OSC.__init__`). Each operation reads credentials, builds an authenticated
+/// Construct with [`Osc::new`]; construction cannot fail. Each operation reads
+/// credentials, builds an authenticated
 /// client, and runs the corresponding [`crate::obs::qam`] op — folding any
 /// failure into a logged `Err(ObsError)` rather than panicking.
 #[derive(Clone)]

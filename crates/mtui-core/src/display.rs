@@ -1,25 +1,22 @@
 //! Formatted command output (`CommandPromptDisplay`) + color mode + pager.
 //!
-//! Port of upstream `mtui.cli.display.CommandPromptDisplay`, its color helpers
-//! (`mtui.cli.colors`), and the pager (`mtui.cli.term.page`). The full `list_*`
+//! The `list_*`
 //! family (bugs, history, host status, locks, sessions, timeout, versions,
-//! products, update repos) plus [`show_log`](CommandPromptDisplay::show_log) is
-//! ported here so the Phase-5 command bodies have their output seam.
+//! products, update repos) plus [`show_log`](CommandPromptDisplay::show_log)
+//! gives the command bodies their output seam.
 //!
 //! Output is captured through a boxed [`std::io::Write`] sink so tests can
 //! snapshot it and the REPL/MCP can point it at stdout or a buffer.
 //!
 //! **Color** is a three-way [`ColorMode`] (`Auto`/`Always`/`Never`) resolved at
-//! call time via [`ColorMode::resolve`], honouring the same precedence as
-//! upstream `mtui.cli.colors.mode`: `Always` → `Never` → `NO_COLOR` →
-//! `COLOR=never|always` → `stderr.is_terminal()`.
+//! call time via [`ColorMode::resolve`], with the precedence: `Always` →
+//! `Never` → `NO_COLOR` → `COLOR=never|always` → `stderr.is_terminal()`.
 //!
-//! **Deviation from upstream:** [`list_history`](CommandPromptDisplay::list_history)
-//! formats timestamps in **UTC** rather than local time. Upstream uses
-//! `datetime.fromtimestamp` (local), but that requires chrono's `clock` feature
-//! (pulling `iana-time-zone`, against the no-runtime-deps goal) and makes
-//! snapshot output timezone-dependent. UTC keeps the crate std-only and tests
-//! deterministic; the upstream test only asserts substrings, not the exact date.
+//! **Timestamps:** [`list_history`](CommandPromptDisplay::list_history)
+//! formats timestamps in **UTC** rather than local time. Local time would
+//! require chrono's `clock` feature (pulling `iana-time-zone`, against the
+//! no-runtime-deps goal) and make snapshot output timezone-dependent. UTC
+//! keeps the crate std-only and tests deterministic.
 
 use std::io::{IsTerminal, Write};
 
@@ -41,7 +38,7 @@ pub(crate) type VersionGroup = (Vec<HostSystem>, Vec<PackageVersions>);
 /// Already-resolved lock state for a host, as displayed by
 /// [`list_locks`](CommandPromptDisplay::list_locks).
 ///
-/// The upstream lock accessors are async `&mut self` in `mtui-hosts`; callers do
+/// The lock accessors are async `&mut self` in `mtui-hosts`; callers do
 /// that I/O and hand the resolved values here so display stays sync and
 /// snapshot-testable.
 #[derive(Debug, Clone, Default)]
@@ -60,12 +57,12 @@ pub struct LockStatus {
 
 /// Whether ANSI color escapes are emitted.
 ///
-/// Mirrors upstream `mtui.cli.colors.mode.ColorMode` (`"auto" | "always" |
+/// A three-way color choice (`"auto" | "always" |
 /// "never"`). The active decision is made by [`resolve`](ColorMode::resolve).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorMode {
     /// Emit color iff `stderr` is a TTY, unless overridden by `NO_COLOR` /
-    /// `COLOR`. Upstream default.
+    /// `COLOR`. The default.
     Auto,
     /// Always emit color escapes.
     Always,
@@ -78,7 +75,7 @@ pub enum ColorMode {
 impl ColorMode {
     /// Resolves whether color escapes should be emitted right now.
     ///
-    /// Precedence (highest first), mirroring upstream `colors_enabled`:
+    /// Precedence (highest first):
     /// 1. `Always` → `true`
     /// 2. `Never` → `false`
     /// 3. `NO_COLOR` set (any non-empty value) → `false` (per no-color.org)
@@ -153,15 +150,12 @@ impl CommandPromptDisplay {
         self.color = color;
     }
 
-    /// Writes `msg` followed by a newline to the output sink.
-    ///
-    /// Mirrors upstream `println(msg, eol="\n")`. Write errors are swallowed to
-    /// match the Python surface, which never surfaces stdout write failures from
-    /// display helpers.
+    /// Writes `msg` followed by a newline to the output sink. Write errors are
+    /// swallowed: display helpers never surface stdout write failures.
     ///
     /// The write holds a [`mtui_hosts::suspend`] guard so a live TTY spinner
-    /// erases its current frame first and the output lands on a clean line
-    /// (upstream's `SpinnerAwareStreamHandler`). A strict no-op beyond taking the
+    /// erases its current frame first and the output lands on a clean line.
+    /// A strict no-op beyond taking the
     /// paint lock when no spinner is active (off a TTY, tests), so buffered /
     /// snapshot output is unaffected.
     pub fn println(&mut self, msg: &str) {
@@ -228,7 +222,7 @@ impl CommandPromptDisplay {
 
     /// Displays a list of bugs and Jira issues.
     ///
-    /// Mirrors upstream `list_bugs`: sorted ids, the `[""]` empty-sentinel
+    /// Formats: sorted ids, the `[""]` empty-sentinel
     /// ("No bugs…"/"No Jira issues…"), the `Buglist:` query URL, and per-item
     /// `Bug #{id}: {summary}` / `Jira #{id}: {summary}` blocks with tracker URLs.
     pub(crate) fn list_bugs(
@@ -270,10 +264,10 @@ impl CommandPromptDisplay {
 
     /// Displays the command history for a host.
     ///
-    /// Mirrors upstream `list_history`: reverses `lines`, splits each on the
+    /// Reverses `lines`, splits each on the
     /// first two colons (`when:who:event`, colons preserved in `event`), skips
     /// malformed lines, and formats `when` (epoch seconds) as
-    /// `%A, %d.%m.%Y %H:%M`. See the module doc for the UTC deviation.
+    /// `%A, %d.%m.%Y %H:%M`. See the module doc for the UTC note.
     pub(crate) fn list_history(&mut self, hostname: &str, system: &System, lines: &[String]) {
         self.println(&format!("history from {hostname} ({system}):"));
         for line in lines.iter().rev() {
@@ -301,7 +295,7 @@ impl CommandPromptDisplay {
 
     /// Displays the status of a host.
     ///
-    /// Mirrors upstream `list_host`: colored `state` label (green/red),
+    /// Formats: colored `state` label (green/red),
     /// `transactional`/`standard` label, and the fixed-width layout line.
     pub(crate) fn list_host(
         &mut self,
@@ -327,8 +321,8 @@ impl CommandPromptDisplay {
 
     /// Displays the lock status of a host.
     ///
-    /// Mirrors upstream `list_locks`, taking an already-resolved [`LockStatus`]
-    /// (the upstream lock accessors are async `&mut self` in `mtui-hosts`;
+    /// Takes an already-resolved [`LockStatus`]
+    /// (the lock accessors are async `&mut self` in `mtui-hosts`;
     /// callers do the I/O and pass the resolved values in). When
     /// [`LockStatus::is_mine`] is set, "me" is shown in place of `locked_by`.
     pub(crate) fn list_locks(&mut self, hostname: &str, system: &System, lock: &LockStatus) {
@@ -349,16 +343,12 @@ impl CommandPromptDisplay {
     }
 
     /// Displays the active sessions on a host.
-    ///
-    /// Mirrors upstream `list_sessions`.
     pub(crate) fn list_sessions(&mut self, hostname: &str, system: &System, stdout: &str) {
         self.println(&format!("sessions on {hostname} ({system}):"));
         self.println(stdout);
     }
 
     /// Displays the command timeout for a host.
-    ///
-    /// Mirrors upstream `list_timeout`.
     pub(crate) fn list_timeout(&mut self, hostname: &str, system: &System, timeout: u64) {
         let sys = format!("({system})");
         self.println(&format!("{hostname:20} {sys:20}: {timeout}s"));
@@ -366,7 +356,7 @@ impl CommandPromptDisplay {
 
     /// Displays the version history of packages.
     ///
-    /// Mirrors upstream `list_versions`. `hosts_pvs` maps a group of hostnames
+    /// `hosts_pvs` maps a group of hostnames
     /// (with their systems) to `(package, versions)` pairs; when more than one
     /// group is present, each is prefixed with a "version history from:" header.
     /// Versions are shown newest-first as an indented ladder.
@@ -392,10 +382,7 @@ impl CommandPromptDisplay {
         }
     }
 
-    /// Displays the products of a reference host.
-    ///
-    /// Mirrors upstream `list_products`, except for the label: upstream printed
-    /// "Referenece host" (sic), a typo with no consumer, corrected here.
+    /// Displays the products of a reference host, labelled "Reference host".
     pub(crate) fn list_products(&mut self, hostname: &str, system: &System) {
         let label = Self::green(self, "Reference host");
         let host = Self::yellow(self, hostname);
@@ -408,7 +395,7 @@ impl CommandPromptDisplay {
 
     /// Displays the update repositories.
     ///
-    /// Mirrors upstream `list_update_repos`. `repos` pairs a product with its
+    /// `repos` pairs a product with its
     /// repo URL/path string.
     pub(crate) fn list_update_repos(&mut self, repos: &[(SystemProduct, String)]) {
         for (p, r) in repos {
@@ -427,9 +414,9 @@ impl CommandPromptDisplay {
 
     /// Displays the command log for a host through an arbitrary `sink`.
     ///
-    /// Mirrors upstream `show_log` (a `@staticmethod`). Each log entry is
+    /// Each log entry is
     /// `(cmdline, stdout, stderr, exitcode)`; the sink is called once per output
-    /// line (it appends its own newline, matching the upstream `Callable`).
+    /// line (it appends its own newline).
     pub(crate) fn show_log(
         hostname: &str,
         hostlog: &[(String, String, String, i32)],
@@ -458,9 +445,9 @@ impl Default for CommandPromptDisplay {
 
 /// Displays long text, non-interactively.
 ///
-/// Port of upstream `mtui.cli.term.page`'s non-interactive contract:
-/// * `interactive == false` and `writer` is `None` → no-op (historical
-///   behaviour: no output, no error).
+/// The non-interactive paging contract:
+/// * `interactive == false` and `writer` is `None` → no-op (no output, no
+///   error).
 /// * `interactive == false` and `writer` is `Some` → each line is forwarded to
 ///   the writer with trailing `\r`/`\n` stripped (the MCP / headless path).
 ///
@@ -479,9 +466,9 @@ pub(crate) fn page(text: &[String], interactive: bool, writer: Option<&mut dyn F
     }
 }
 
-/// Removes the ANSI escape codes upstream `mtui.cli.term.filter_ansi` strips.
+/// Removes ANSI escape codes from `text`.
 ///
-/// Verbatim port of the upstream substitutions: a bare `ESC` (`\x1b`), the
+/// Strips a bare `ESC` (`\x1b`), the
 /// `[<params>m` / `[<params>A` SGR/cursor sequences, and the `[K` erase-line
 /// sequence. Applied to each line before it is width-wrapped in the interactive
 /// pager so escape bytes do not inflate the visible column count.
@@ -503,15 +490,13 @@ fn filter_ansi(text: &str) -> String {
 
 /// Returns the terminal size as `(cols, rows)`.
 ///
-/// Port of upstream `mtui.cli.term.termsize`: reads `TIOCGWINSZ` via `ioctl`,
+/// Reads `TIOCGWINSZ` via `ioctl`,
 /// falling back to the `ACCTEST_COLS`/`ACCTEST_ROWS` environment pair (used by
 /// the acceptance harness and by unit tests, which have no controlling TTY).
 ///
-/// The tuple order is **`(cols, rows)`** on every path — upstream once had a
-/// transpose bug on the env fallback that swapped the geometry, so the order is
-/// pinned by test.
-// `ioctl(TIOCGWINSZ)` is the only portable way to read the tty geometry, mirroring
-// upstream `mtui.cli.term.termsize`; the block below is the sole `unsafe` use.
+/// The tuple order is **`(cols, rows)`** on every path, pinned by test.
+// `ioctl(TIOCGWINSZ)` is the only portable way to read the tty geometry;
+// the block below is the sole `unsafe` use.
 #[allow(unsafe_code)]
 #[must_use]
 fn termsize() -> (usize, usize) {
@@ -553,7 +538,7 @@ enum PageStep {
 /// Prints up to `height - 1` display rows (ANSI-filtered, wrapped to `width`
 /// columns) from `text` via `emit`, and returns the unconsumed remainder.
 ///
-/// Mirrors upstream `term.py`'s inner loop: each logical line is `filter_ansi`'d
+/// Each logical line is `filter_ansi`'d
 /// then hard-wrapped into `width`-column chunks; an empty line still occupies one
 /// row; the screen holds `height - 1` rows (one reserved for the prompt).
 fn page_screen(
@@ -613,7 +598,6 @@ fn page_screen(
 /// Interactive TTY pager: prints `text` a screen at a time, blocking on
 /// `Press Enter to continue... (q to quit)` between screens.
 ///
-/// The async analogue of upstream `mtui.cli.term.page(..., interactive=True)`.
 /// Reads the continue/quit answer through the session's serialised
 /// [`Prompter`](mtui_hosts::Prompter) (so a live spinner is suspended and
 /// concurrent host prompts stay serialised); typing `q` stops early. When no
@@ -699,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn template_banner_matches_upstream() {
+    fn template_banner_has_stable_format() {
         let (mut d, buf) = buffered(ColorMode::Never);
         d.template_banner("SUSE:Maintenance:1:1");
         assert_eq!(rendered(&buf), "=== SUSE:Maintenance:1:1 ===\n");
@@ -994,7 +978,7 @@ mod tests {
 
     #[test]
     fn filter_ansi_strips_color_and_control_sequences() {
-        // A colored string round-trips to its bare text (upstream test_filter_ansi).
+        // A colored string round-trips to its bare text.
         let colored = "err".red().to_string();
         assert!(colored.contains('\u{1b}'));
         assert_eq!(filter_ansi(&colored), "err");

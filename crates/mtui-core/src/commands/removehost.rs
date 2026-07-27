@@ -10,7 +10,7 @@ use crate::session::Session;
 
 /// Disconnects from a host and removes it from the list.
 ///
-/// Ports upstream `mtui.commands.removehost.RemoveHost._remove_target`: for each
+/// For each
 /// selected host it [`close`](mtui_hosts::Target::close)s the target (dropping
 /// the remote operation and pool-claim lock files), releases the in-process
 /// arbiter claim via
@@ -49,22 +49,21 @@ impl Command for RemoveHost {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // enabled=false: remove disabled hosts too (upstream parse_hosts(enabled=False)).
+        // enabled=false: remove disabled hosts too.
         let hosts = select_names(session.targets_mut(), args, false)
             .map_err(|e| CommandError::Other(e.to_string()))?;
         for name in &hosts {
             // Take the target out and close it so the remote operation + pool
-            // lock files drop (upstream `target.close()`); dropping the target
-            // alone never runs `close`.
+            // lock files drop; dropping the target alone never runs `close`.
             if let Some(mut target) = session.targets_mut().remove(name) {
                 // Best-effort teardown; a failed shutdown is irrelevant since the
                 // target is being dropped anyway.
                 let _ = target.close(None).await;
             }
-            // Release the in-process arbiter claim + prune slot candidates
-            // (upstream `metadata.release_pool_claim`); no-op when unpooled.
+            // Release the in-process arbiter claim + prune slot candidates;
+            // no-op when unpooled.
             session.metadata_mut().release_pool_claim(name);
-            // Drop the per-host system entry (upstream `del metadata.systems`).
+            // Drop the per-host system entry.
             session
                 .metadata_mut()
                 .base_mut()

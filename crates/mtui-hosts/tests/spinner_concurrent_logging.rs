@@ -3,9 +3,9 @@
 //! The visible symptom this guards against (mtui-rs-wbo): the spinner is
 //! started by `run_parallel`/`run_fanout`, but during a fan-out the worker log
 //! lines and command output were written straight to the terminal, clobbering
-//! the `\r[|] desc` frame so it never rendered cleanly. Upstream wraps every log
-//! record in `spinner_suspended()` (`SpinnerAwareStreamHandler`); the Rust port
-//! wires the same `mtui_hosts::suspend()` guard into the tracing writer and the
+//! the `\r[|] desc` frame so it never rendered cleanly. Every log
+//! record is wrapped in a spinner-suspend guard: the
+//! `mtui_hosts::suspend()` guard is wired into the tracing writer and the
 //! command display.
 //!
 //! This test drives an enabled [`TtySpinner`] into an in-memory sink (so no real

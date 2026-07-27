@@ -1,8 +1,8 @@
 //! Remote lock management for target hosts.
 //!
-//! ## Reference
+//! ## Overview
 //!
-//! Ported from upstream `mtui/hosts/target/locks.py`. There are **two remote
+//! There are **two remote
 //! locks** with the same wire format but different scope and ownership rules:
 //!
 //! * [`TargetLock`] — the *operation* lock at `/var/lock/mtui.lock`. It guards
@@ -30,19 +30,19 @@
 //! ## Atomicity
 //!
 //! [`TargetLock::lock`] first attempts an **atomic exclusive create**
-//! ([`Connection::sftp_write`] with `exclusive = true`, paramiko mode `"x"` →
+//! ([`Connection::sftp_write`] with `exclusive = true` →
 //! `O_CREAT | O_EXCL`): exactly one of two racing processes wins, and the loser
 //! reconciles (re-stamp if it's ours, reap if stale, wait if configured, else
 //! refuse). This closes the read-then-write TOCTOU the old "stat then write"
 //! sequence had.
 //!
-//! ## Deviations from upstream
+//! ## Design choices
 //!
 //! * All I/O is `async` (the connection layer is async-native).
-//! * The wait queue takes an injected [`Clock`] instead of monkeypatching
-//!   `time.sleep`, so the polling loop is unit-testable without real sleeps.
-//! * `TargetLockedError` is folded into [`HostError::TargetLocked`] rather than
-//!   being a distinct exception type.
+//! * The wait queue takes an injected [`Clock`] instead of a real timer,
+//!   so the polling loop is unit-testable without real sleeps.
+//! * A contended lock surfaces as [`HostError::TargetLocked`] rather than a
+//!   distinct error type.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -117,10 +117,10 @@ pub struct RemoteLock {
 /// [`Reporter`](crate::Reporter)/[`HostsGroup`](crate::HostsGroup) lock sinks to
 /// the display layer.
 ///
-/// The upstream lock accessors are async `&mut self`; the resolving code does
+/// The lock accessors are async `&mut self`; the resolving code does
 /// that I/O once and hands these already-resolved (sync) values downstream so
-/// the display stays sync and snapshot-testable. Mirrors the fields the upstream
-/// `display.list_locks` reads off the lock object.
+/// the display stays sync and snapshot-testable. Carries the fields the
+/// lock listing reads off the lock object.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LockRow {
     /// Whether the host is currently locked/claimed.
@@ -158,7 +158,7 @@ pub struct LockSnapshot {
 impl RemoteLock {
     /// Serializes to a lockfile line: `timestamp:user:pid[:comment]`.
     ///
-    /// The comment field is only appended when non-empty, matching upstream.
+    /// The comment field is only appended when non-empty.
     #[must_use]
     pub fn to_lockfile(&self) -> String {
         let mut xs = vec![
@@ -181,8 +181,7 @@ impl RemoteLock {
     /// # Errors
     ///
     /// Returns [`HostError::Sftp`] with a "weird format" reason when the line
-    /// has fewer than three colon-separated fields, mirroring upstream's
-    /// `ValueError("got weird format in lockfile")`.
+    /// has fewer than three colon-separated fields.
     pub fn from_lockfile(line: &str) -> Result<Self> {
         if line.is_empty() {
             return Ok(Self::default());
@@ -255,8 +254,7 @@ pub struct TargetLock<C: Clock = SystemClock> {
     /// The remote lockfile this instance manages. Defaults to
     /// [`TARGET_LOCK_PATH`]; [`PoolLock`] builds its inner lock over
     /// [`POOL_LOCK_PATH`] instead, so the shared lock/unlock/load machinery
-    /// touches the correct file (upstream expresses this via `PoolLock`
-    /// overriding `filename()`).
+    /// touches the correct file.
     path: PathBuf,
 }
 
@@ -322,12 +320,11 @@ impl<C: Clock> TargetLock<C> {
     /// Loads the lock state from the remote host into [`Self::lock`].
     ///
     /// **Fails closed**: only a genuinely *missing* lockfile
-    /// ([`HostError::SftpNotFound`]) resets to the empty (unlocked) state,
-    /// mirroring upstream's `errno.ENOENT` branch. Every other error — a
+    /// ([`HostError::SftpNotFound`]) resets to the empty (unlocked) state.
+    /// Every other error — a
     /// permission-denied read, a transport blip, a truncated/garbled read — is
     /// propagated, because reporting "unlocked" for an *unknown* state would let
-    /// us claim a host another owner already holds. (Upstream re-raises any
-    /// non-`ENOENT` `OSError` for the same reason.)
+    /// us claim a host another owner already holds.
     async fn load(&mut self) -> Result<()> {
         self.lock = RemoteLock::default();
         let path = self.filename();
@@ -339,7 +336,7 @@ impl<C: Clock> TargetLock<C> {
                 Ok(())
             }
             Err(HostError::SftpNotFound { .. }) => {
-                // A truly absent lockfile means "unlocked" (upstream ENOENT).
+                // A truly absent lockfile means "unlocked".
                 Ok(())
             }
             Err(e) => Err(e),
@@ -569,7 +566,7 @@ impl<C: Clock> TargetLock<C> {
     /// owner's lock is removed. A no-op on an unlocked host.
     ///
     /// **Fails closed on removal**: an already-missing lockfile
-    /// ([`HostError::SftpNotFound`], upstream `ENOENT`) counts as released, but
+    /// ([`HostError::SftpNotFound`]) counts as released, but
     /// any other remove failure (permission, transport) propagates and leaves
     /// the in-memory lock state intact — the caller must not believe it released
     /// a lock it did not.
@@ -589,7 +586,7 @@ impl<C: Clock> TargetLock<C> {
         match self.connection.sftp_remove(&path).await {
             Ok(()) => {}
             Err(HostError::SftpNotFound { .. }) => {
-                // Already gone — treat as released (upstream ENOENT branch).
+                // Already gone — treat as released.
                 tracing::debug!(host = %self.hostname(), "lockfile already gone");
             }
             Err(e) => {
@@ -609,7 +606,7 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] with a "not locked" reason when no
-    /// lock is loaded (mirrors upstream's `RuntimeError("not locked")`).
+    /// lock is loaded.
     pub(crate) fn is_mine(&self) -> Result<bool> {
         if self.lock.user.is_empty() {
             return Err(HostError::TargetLocked("not locked".to_owned()));

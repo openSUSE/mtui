@@ -25,16 +25,15 @@ use crate::testreport::TestReportBase;
 
 /// Shared `set_repo` body for every concrete report.
 ///
-/// Ports the three near-identical `set_repo` methods upstream (`sl_report.py`,
-/// `pi_report.py`, `obs_report.py`): they differ *only* in the `zypper ar` flag
-/// string (`add_flags`), so this helper takes it as a parameter and otherwise
-/// forwards `base.update_repos` + `base.rrid` into
+/// The three concrete reports' `set_repo` methods differ *only* in the
+/// `zypper ar` flag string (`add_flags`), so this helper takes it as a
+/// parameter and otherwise forwards `base.update_repos` + `base.rrid` into
 /// [`RepoManager::run_zypper`](mtui_hosts::RepoManager::run_zypper).
 ///
 /// `run_zypper` wants a [`BTreeMap`] (deterministic order); the report stores an
 /// unordered [`HashMap`](std::collections::HashMap), so we convert here. When no
-/// RRID is loaded the report is not usable for a repo change (upstream assumes a
-/// loaded report), so we log and return without touching the host.
+/// RRID is loaded the report is not usable for a repo change, so we log and
+/// return without touching the host.
 async fn set_repo_with_add_flags(
     base: &TestReportBase,
     target: &mut Target,

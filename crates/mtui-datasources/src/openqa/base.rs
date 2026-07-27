@@ -1,7 +1,6 @@
-//! The shared base for openQA connectors, ported from
-//! `mtui/data_sources/openqa/base.py`.
+//! The shared base for openQA connectors.
 //!
-//! Upstream's `OpenQA` ABC builds the job-query parameters from the incident's
+//! Builds the job-query parameters from the incident's
 //! [`RequestReviewID`] and incident name, fetches jobs from the openQA instance,
 //! and folds every transport/HTTP failure into a `None` result so a command
 //! never aborts on a flaky openQA. This module provides that shared machinery;
@@ -88,8 +87,8 @@ pub struct JobModule {
 }
 
 impl Job {
-    /// A settings value, or `""` if absent (mirrors upstream dict access on
-    /// keys the connectors always expect to be present).
+    /// A settings value, or `""` if absent (the connectors always expect these
+    /// keys to be present).
     #[must_use]
     pub(crate) fn setting(&self, key: &str) -> &str {
         self.settings.get(key).map_or("", String::as_str)
@@ -105,7 +104,7 @@ pub(crate) struct JobsResponse {
 
 /// The shared connector state: the API client plus the resolved query params.
 ///
-/// Ported from the `OpenQA.__init__` body: it computes the `distri`/`scope`/
+/// Computes the `distri`/`scope`/
 /// `latest`/`build` parameters once, from the [`RequestReviewID`] and incident
 /// name, and holds the [`OpenQAClient`] used to fetch jobs.
 #[derive(Debug, Clone)]
@@ -121,7 +120,7 @@ pub struct OpenQABase {
 impl OpenQABase {
     /// Build the shared connector state.
     ///
-    /// Mirrors `OpenQA.__init__`: the `build` parameter is
+    /// The `build` parameter is
     /// `:{git|smelt}:{maintenance_id}:{incident_name}`, keyed on whether the
     /// request is [`RequestKind::Slfo`] (`git`) or otherwise (`smelt`).
     pub fn new(client: OpenQAClient, rrid: &RequestReviewID, incident: &impl IncidentName) -> Self {
@@ -160,9 +159,9 @@ impl OpenQABase {
     /// Fetch jobs from the openQA instance (best-effort).
     ///
     /// Returns `None` on *any* failure — request-build, transport, non-2xx
-    /// status, or a malformed body — after logging at `error`/`debug`, matching
-    /// upstream's "no URL/transport failure shape may escape as a traceback"
-    /// contract. `Some(vec![])` is possible for a valid-but-empty response.
+    /// status, or a malformed body — after logging at `error`/`debug`, so no
+    /// URL/transport failure shape ever escapes as a panic.
+    /// `Some(vec![])` is possible for a valid-but-empty response.
     ///
     /// Prefer [`try_get_jobs`](Self::try_get_jobs) when the caller needs to tell
     /// a fetch failure apart from a genuinely-empty result.
@@ -334,7 +333,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn default_params_match_upstream() {
+    fn default_params_are_stable() {
         let base = OpenQABase::new(
             dummy_client(),
             &rrid("Maintenance"),

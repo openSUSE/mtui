@@ -1,10 +1,8 @@
-//! Resolution of openQA install-test job names to their log filenames, ported
-//! from `mtui/data_sources/openqa_install.py`.
+//! Resolution of openQA install-test job names to their log filenames.
 //!
 //! Different install-test scenarios publish their zypper install log under
 //! different filenames. The classic `qam-incidentinstall` (and the HA variant
-//! `qam-incidentinstall-ha`) jobs publish `update_install-zypper.log` — the
-//! value carried by the upstream `[openqa] install_logfile` config option. SLFO
+//! `qam-incidentinstall-ha`) jobs publish `update_install-zypper.log`. SLFO
 //! jobs (`qam-incidentinstall-SLFO`) instead publish
 //! `SLFO_update_install-zypper.log`.
 //!
@@ -21,10 +19,8 @@ const INSTALL_LOGFILES: &[(&str, &str)] = &[("-SLFO", "SLFO_update_install-zyppe
 
 /// The classic install-log filename.
 ///
-/// Upstream sources this from the `[openqa] install_logfile` config option.
-/// That option is effectively obsolete (its value has not meaningfully changed
-/// in practice), so it is pinned here as a constant rather than adding an
-/// `[openqa]` config surface.
+/// This value has not meaningfully changed in practice, so it is pinned here
+/// as a constant rather than adding an `[openqa]` config surface.
 const DEFAULT_INSTALL_LOGFILE: &str = "update_install-zypper.log";
 
 /// Return the install-log filename for an openQA install-test job.
@@ -32,8 +28,7 @@ const DEFAULT_INSTALL_LOGFILE: &str = "update_install-zypper.log";
 /// Matching is by marker substring so name variants resolve to the same log;
 /// unknown or empty names return [`DEFAULT_INSTALL_LOGFILE`].
 ///
-/// Mirrors upstream `install_logfile_for(test_name, default)`, with the
-/// `default` pinned to [`DEFAULT_INSTALL_LOGFILE`] (see the constant docs).
+/// The default is pinned to [`DEFAULT_INSTALL_LOGFILE`] (see the constant docs).
 #[must_use]
 pub(crate) fn install_logfile_for(test_name: &str) -> &'static str {
     for (marker, logfile) in INSTALL_LOGFILES {
@@ -47,8 +42,6 @@ pub(crate) fn install_logfile_for(test_name: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Ported from tests/test_openqa_install_map.py.
 
     #[test]
     fn classic_job_uses_default() {

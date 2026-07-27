@@ -1,31 +1,27 @@
 //! System-information footer for exports and commits.
 //!
-//! Ports upstream `mtui.support.systemcheck`:
-//!
 //! * [`detect_system`] reads `/etc/os-release` and `/proc/version` to discover
 //!   the distro, version id, and kernel of the machine running mtui.
 //! * [`system_info`] formats a one-line footer appended to a testreport on
 //!   export (`## export`) and reused by `commit` (`committed from`).
 //!
-//! **Deviation from upstream:** the upstream footer embeds
-//! `paramiko {version}`. This port intentionally drops that SSH-library token —
-//! it carries no useful information about the run — and instead reports real
-//! mtui + system facts: the mtui version, the detected distro/version, kernel,
-//! and the session user.
+//! The footer omits any SSH-library token — it carries no useful information
+//! about the run — and instead reports real mtui + system facts: the mtui
+//! version, the detected distro/version, kernel, and the session user.
 
 /// The mtui version string, taken from the crate version at build time.
 const MTUI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The default export footer prefix (upstream default).
+/// The default export footer prefix.
 pub(crate) const EXPORT_PREFIX: &str = "## export";
 
 /// Detects `(distro, version_id, kernel)` of the current machine.
 ///
-/// Mirrors upstream `detect_system`: parses `NAME=` / `VERSION_ID=` from
-/// `/etc/os-release` and the third whitespace-separated token of the first line
-/// of `/proc/version`. On failure the fields fall back to upstream's sentinels
-/// (`Unknown` / `None` for the os-release pair, `Unknown` for the kernel), so
-/// the footer is always well-formed even off a Linux host.
+/// Parses `NAME=` / `VERSION_ID=` from `/etc/os-release` and the third
+/// whitespace-separated token of the first line of `/proc/version`. On
+/// failure the fields fall back to sentinels (`Unknown` / `None` for the
+/// os-release pair, `Unknown` for the kernel), so the footer is always
+/// well-formed even off a Linux host.
 #[must_use]
 pub fn detect_system() -> (String, String, String) {
     let (distro, verid) = match std::fs::read_to_string("/etc/os-release") {
@@ -49,12 +45,10 @@ pub fn detect_system() -> (String, String, String) {
 /// Finds the first line beginning with `key` and returns its value with a
 /// single surrounding pair of `"` or `'` stripped.
 ///
-/// Mirrors upstream's post-`d72769d5` "quoted-or-bare" parse: an os-release
-/// value may be double-quoted, single-quoted, or bare (`NAME=Fedora` and
-/// `VERSION_ID=15.6` are spec-legal). A matching leading/trailing `"` or `'`
-/// pair is stripped; any other value (bare, or with mismatched delimiters) is
-/// returned verbatim. (The earlier port reproduced the original Python bug: it
-/// treated a literal `|` as a quote character and never stripped single quotes.)
+/// An os-release value may be double-quoted, single-quoted, or bare
+/// (`NAME=Fedora` and `VERSION_ID=15.6` are spec-legal). A matching
+/// leading/trailing `"` or `'` pair is stripped; any other value (bare, or
+/// with mismatched delimiters) is returned verbatim.
 fn extract_quoted(content: &str, key: &str) -> Option<String> {
     let line = content.lines().find(|l| l.starts_with(key))?;
     let raw = &line[key.len()..];
@@ -93,8 +87,8 @@ mod tests {
 
     #[test]
     fn extract_strips_single_quotes() {
-        // Regression for the ported bug: single-quoted values (spec-legal, e.g.
-        // NAME='openSUSE') must not leak their quotes into the footer.
+        // Regression: single-quoted values (spec-legal, e.g. NAME='openSUSE')
+        // must not leak their quotes into the footer.
         let osr = "NAME='openSUSE'\nVERSION_ID='15.6'\n";
         assert_eq!(extract_quoted(osr, "NAME=").as_deref(), Some("openSUSE"));
         assert_eq!(extract_quoted(osr, "VERSION_ID=").as_deref(), Some("15.6"));

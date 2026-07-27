@@ -1,7 +1,7 @@
 //! Integration tests for the never-raise `OSC(config, rrid)` facade
 //! (`mtui_datasources::obs::facade`).
 //!
-//! Covers the DoD escape hatches upstream PR#323 hardened: a non-PEM key file, a
+//! Covers the DoD escape hatches: a non-PEM key file, a
 //! no-home `expanduser`, and a lone-surrogate MCP body must each yield a *logged
 //! failure* (a typed `ObsError`), never a panic. Also exercises the happy path
 //! (a comment through a wiremock-backed OBS server via the injectable factory)

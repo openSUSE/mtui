@@ -1,7 +1,7 @@
 //! Integration tests for OBS SSH-signature auth
 //! (`mtui_datasources::obs::auth`).
 //!
-//! Ports the behavioral core of upstream `tests/test_obs_auth.py`: the
+//! Covers the
 //! retry-once 401 Signature flow through the real transport (`wiremock`), the
 //! "no Signature scheme → no retry" / "non-401 passes through" branches, and
 //! the ssh-agent selection paths (by SHA256 fingerprint, by `.pub`-matched
@@ -457,7 +457,7 @@ async fn unusable_key_file_fails_closed() {
 #[tokio::test]
 async fn unreadable_key_dir_fails_closed() {
     // A key path that cannot be read (here a directory) fails closed with a
-    // typed error rather than a panic (upstream `test_unreadable_key_fails_closed`).
+    // typed error rather than a panic.
     let dir = tempfile::tempdir().unwrap();
     let keydir = dir.path().join("keydir");
     std::fs::create_dir(&keydir).unwrap();

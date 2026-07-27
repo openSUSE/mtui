@@ -1,12 +1,9 @@
-//! A single openQA test result, ported from the `Test` `NamedTuple` in
-//! `mtui/types/test.py`.
+//! A single openQA test result.
 //!
 //! Produced by the kernel openQA connector to describe one job: its name,
 //! overall result, job id, architecture, and the per-module results.
 //!
-//! ## Deviation from upstream
-//!
-//! `modules` is a [`BTreeMap`] (rather than an unordered `dict`) so iteration
+//! `modules` is a [`BTreeMap`] (rather than an unordered map) so iteration
 //! order, equality, and hashing are deterministic — matching the crate-wide
 //! convention (see [`crate::system::System`]).
 
@@ -14,8 +11,7 @@ use std::collections::BTreeMap;
 
 /// One openQA test/job result with its per-module breakdown.
 ///
-/// Mirrors the upstream `Test` `NamedTuple`
-/// `(name, result, test_id, arch, modules)`.
+/// The tuple is `(name, result, test_id, arch, modules)`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Test {
     /// The name of the test (e.g. `qam-kernel`).

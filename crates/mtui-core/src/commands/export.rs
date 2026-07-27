@@ -20,18 +20,18 @@ use crate::session::Session;
 
 /// Exports the gathered update data to the testing template.
 ///
-/// Ports upstream `mtui.commands.export.Export`. Picks the exporter by the
+/// Picks the exporter by the
 /// report's [`Workflow`] and writes the pre/post package versions and update log
 /// into the template (or `filename` when given). Requires a loaded report.
 ///
 /// ## openQA enrichment (Manual)
 ///
 /// The `Manual` exporter folds openQA results into the template via the report's
-/// openQA holder (`metadata.openqa`). When the holder's "auto" result is absent,
-/// it is lazily built and run from the QEM Dashboard (upstream
-/// `DashboardAutoOpenQA(...)`), then the connected-host results
-/// (`report_results`) and any `openqa_overview` payload are folded into
-/// [`ManualExport`]. `Auto`/`Kernel` render their full local template.
+/// openQA holder (`metadata.openqa`). When the holder's "auto" result is
+/// absent, it is lazily built and run from the QEM Dashboard, then the
+/// connected-host results (`report_results`) and any `openqa_overview`
+/// payload are folded into [`ManualExport`]. `Auto`/`Kernel` render their
+/// full local template.
 pub struct Export;
 
 #[async_trait]
@@ -105,8 +105,8 @@ impl Command for Export {
         };
 
         // For Manual exports, ensure the report's openQA "auto" result exists
-        // (lazily built + run from the QEM Dashboard, upstream export.py:58-64)
-        // and select the connected-host results to fold in (report_results).
+        // (lazily built + run from the QEM Dashboard) and select the
+        // connected-host results to fold in (report_results).
         let (manual_results, manual_overview) = if workflow == Workflow::Manual {
             if session.metadata().openqa().auto.is_none() {
                 let http = build_http(session)?;
@@ -119,7 +119,7 @@ impl Command for Export {
                     rrid.clone(),
                     session.config.max_parallel as usize,
                 );
-                // Best-effort, matching upstream export: a failed dashboard fetch
+                // Best-effort: a failed dashboard fetch
                 // is folded to "no results" so the export still renders the rest
                 // of the report rather than aborting.
                 if let Err(e) = auto.run().await {
@@ -186,8 +186,9 @@ fn build_http(session: &Session) -> Result<HttpClient, CommandError> {
         .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))
 }
 
-/// Builds the decoupled [`ManualHost`] views the manual exporter reads, from the
-/// named connected targets (upstream reads the live `Target`s directly).
+/// Builds the decoupled [`ManualHost`] views the manual exporter reads, from
+/// the named connected targets — decoupled so the exporter never reads the
+/// live `Target`s directly.
 fn manual_hosts(session: &Session, hosts: &[String]) -> Vec<ManualHost> {
     hosts
         .iter()
@@ -547,8 +548,7 @@ mod tests {
     #[tokio::test]
     async fn manual_with_named_missing_host_still_fails_loudly() {
         // The host-less skip only applies when no `-t` is named. A typo'd `-t`
-        // on a Manual template must still fail (upstream HostIsNotConnectedError),
-        // not be silently skipped.
+        // on a Manual template must still fail, not be silently skipped.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
         let dir = tempfile::tempdir().unwrap();

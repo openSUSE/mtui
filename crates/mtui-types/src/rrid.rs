@@ -1,4 +1,4 @@
-//! OBS Request Review ID (RRID), ported from `mtui/types/rrid.py`.
+//! OBS Request Review ID (RRID).
 //!
 //! An RRID is the `project:kind:maintenance_id:review_id` identifier that names
 //! a maintenance request across the SUSE ecosystem. Its grammar and parse errors
@@ -9,7 +9,7 @@
 //! checkouts already on disk. Either way it is a breaking change, not a local
 //! refactor.
 //!
-//! ## Grammar (upstream `rrid.py`)
+//! ## Grammar
 //!
 //! The string is split on `:` with empty tokens dropped, then exactly four
 //! components are parsed positionally (more than four is rejected as too many;
@@ -18,10 +18,10 @@
 //! 1. **project** — one of `SUSE` / `S`; the short form `S` normalises to `SUSE`.
 //! 2. **kind** — one of `SLFO` / `S` / `Maintenance` / `M` / `PI` / `P`, mapped
 //!    to a [`RequestKind`] via [`RequestKind::from_token`].
-//! 3. **maintenance_id** — any non-empty token (upstream `check_type(int, str)`
-//!    accepts an integer or, failing that, a string; every non-empty token
-//!    therefore parses). Stored as the raw token string.
-//! 4. **review_id** — must parse as an integer (upstream `check_type(int)`).
+//! 3. **maintenance_id** — any non-empty token (an integer, or a string
+//!    fallback, so every non-empty token parses). Stored as the raw token
+//!    string.
+//! 4. **review_id** — must parse as an integer.
 //!
 //! A missing component yields [`RridParseError::MissingComponent`]; a component
 //! that fails its parser yields [`RridParseError::ComponentParse`]; more than
@@ -29,8 +29,7 @@
 //!
 //! Equality and hashing are structural: the parser normalises `project`
 //! (`S` → `SUSE`) and canonicalises `kind` (`M` → `Maintenance`), so
-//! `S:M:1:1` compares equal to `SUSE:Maintenance:1:1` — matching upstream's
-//! string-identity `__eq__` / `__hash__`.
+//! `S:M:1:1` compares equal to `SUSE:Maintenance:1:1`.
 
 use std::fmt;
 use std::str::FromStr;
@@ -41,16 +40,16 @@ use crate::error::RridParseError;
 /// The exact number of components a well-formed RRID must have
 /// (`project:kind:maintenance_id:review_id`).
 ///
-/// Upstream enforces this as two bounds: more than this many tokens raises
-/// `TooManyComponentsError`, and fewer than this many leaves trailing parsers
-/// with no token (via `zip_longest`), each raising `MissingComponentError`.
+/// This is enforced as two bounds: more than this many tokens is rejected as
+/// too many components, and fewer than this many leaves trailing parsers with
+/// no token, each raising a missing-component error.
 const REQUIRED_COMPONENTS: usize = 4;
 
 /// A parsed OBS Request Review ID.
 ///
 /// Construct one with [`RequestReviewID::parse`] or via [`FromStr`]. Fields are
 /// normalised on parse (`project` short form expanded, `kind` canonicalised),
-/// so structural equality matches upstream's string-identity semantics.
+/// so structural equality has string-identity semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RequestReviewID {
     /// The project, always the canonical long form (`SUSE`).
@@ -69,21 +68,19 @@ impl RequestReviewID {
     ///
     /// # Errors
     ///
-    /// Returns a [`RridParseError`] mirroring upstream's parse failures:
+    /// Returns a [`RridParseError`] for a parse failure:
     /// [`TooManyComponents`](RridParseError::TooManyComponents) for more than
     /// four components, [`MissingComponent`](RridParseError::MissingComponent)
     /// for an absent component, and
     /// [`ComponentParse`](RridParseError::ComponentParse) for a component that
     /// fails its parser (unknown project/kind, or a non-integer review ID).
     pub fn parse(rrid: &str) -> Result<Self, RridParseError> {
-        // Upstream: `[x for x in rrid.split(":") if x]` — split on ':' and drop
-        // empty tokens (so leading/trailing/doubled colons are ignored).
+        // Split on ':' and drop empty tokens (so leading/trailing/doubled
+        // colons are ignored).
         let tokens: Vec<&str> = rrid.split(':').filter(|t| !t.is_empty()).collect();
 
-        // Upstream: `TooManyComponentsError.raise_if(xs, 4)`. Fewer than the
-        // required count is not rejected here — the trailing components come
-        // back absent below and each raises `MissingComponent`, mirroring
-        // upstream's `zip_longest` padding.
+        // Fewer than the required count is not rejected here — the trailing
+        // components come back absent below and each raises `MissingComponent`.
         if tokens.len() > REQUIRED_COMPONENTS {
             return Err(RridParseError::TooManyComponents {
                 limit: REQUIRED_COMPONENTS,
@@ -105,13 +102,12 @@ impl RequestReviewID {
 }
 
 /// Returns the token at `idx`, or `None` when it is absent (a missing
-/// component). Upstream models this via `zip_longest`, where a short input
-/// yields `None` for the trailing parsers.
+/// component): a short input yields `None` for the trailing parsers.
 fn component<'a>(tokens: &[&'a str], idx: usize) -> Option<&'a str> {
     tokens.get(idx).copied()
 }
 
-/// Component 1 — project. Upstream `check_eq("SUSE", "S")` with `S` → `SUSE`.
+/// Component 1 — project. Accepts `SUSE` or `S`, with `S` → `SUSE`.
 fn parse_project(token: Option<&str>, index: usize) -> Result<String, RridParseError> {
     let raw = require(token, index, "one of SUSE, S")?;
     match raw {
@@ -125,7 +121,7 @@ fn parse_project(token: Option<&str>, index: usize) -> Result<String, RridParseE
     }
 }
 
-/// Component 2 — kind. Upstream `check_eq(...)` then `RequestKind.from_token`.
+/// Component 2 — kind. Mapped to a [`RequestKind`] via [`RequestKind::from_token`].
 fn parse_kind(token: Option<&str>, index: usize) -> Result<RequestKind, RridParseError> {
     let raw = require(token, index, "one of SLFO, S, Maintenance, M, PI, P")?;
     RequestKind::from_token(raw).map_err(|_| RridParseError::ComponentParse {
@@ -135,16 +131,16 @@ fn parse_kind(token: Option<&str>, index: usize) -> Result<RequestKind, RridPars
     })
 }
 
-/// Component 3 — maintenance ID. Upstream `check_type(int, str)` accepts any
-/// non-empty token (an integer, or a string fallback), so the only failure is
-/// absence. Stored as the raw token to preserve the int-vs-string distinction
-/// downstream code depends on (`1` vs `1.1`).
+/// Component 3 — maintenance ID. Accepts any non-empty token (an integer, or a
+/// string fallback), so the only failure is absence. Stored as the raw token to
+/// preserve the int-vs-string distinction downstream code depends on (`1` vs
+/// `1.1`).
 fn parse_maintenance_id(token: Option<&str>, index: usize) -> Result<String, RridParseError> {
     let raw = require(token, index, "an integer or string")?;
     Ok(raw.to_owned())
 }
 
-/// Component 4 — review ID. Upstream `check_type(int)` requires an integer.
+/// Component 4 — review ID. Requires an integer.
 fn parse_review_id(token: Option<&str>, index: usize) -> Result<u64, RridParseError> {
     let raw = require(token, index, "an integer")?;
     raw.parse::<u64>()
@@ -155,8 +151,7 @@ fn parse_review_id(token: Option<&str>, index: usize) -> Result<u64, RridParseEr
         })
 }
 
-/// Mirrors upstream `apply_parser`'s missing-value guard: an absent component
-/// (`not x`) raises `MissingComponentError(cnt, f)`.
+/// Missing-value guard: an absent component raises a missing-component error.
 fn require<'a>(
     token: Option<&'a str>,
     index: usize,
@@ -177,8 +172,8 @@ impl FromStr for RequestReviewID {
 }
 
 impl fmt::Display for RequestReviewID {
-    /// Renders `project:kind:maintenance_id:review_id`, matching upstream
-    /// `__str__` (which uses `kind.value`, the canonical long form).
+    /// Renders `project:kind:maintenance_id:review_id`, using the kind's
+    /// canonical long form.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,

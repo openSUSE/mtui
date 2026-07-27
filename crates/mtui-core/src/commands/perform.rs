@@ -23,16 +23,15 @@ use mtui_testreport::UpdateError;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Renders update-check [`Diagnostic`] sections through the session display,
-/// mirroring upstream `checks/update.py`'s two `print(...)` blocks: the
-/// "Additional rpm output" section is printed with the word `warning` recolored
-/// yellow (`replace("warning", yellow("warning"))`), while the "not supported by
-/// its vendor" section is printed plain.
+/// Renders update-check [`Diagnostic`] sections through the session display:
+/// the "Additional rpm output" section is printed with the word `warning`
+/// recolored yellow, while the "not supported by its vendor" section is
+/// printed plain.
 fn render_diagnostics(session: &mut Session, diagnostics: &[Diagnostic]) {
     for diag in diagnostics {
         let line = if diag.highlight_warning {
-            // Recolor every "warning" occurrence yellow, matching upstream's
-            // `str.replace`. `yellow` is a no-op under `ColorMode::Never`.
+            // Recolor every "warning" occurrence yellow. `yellow` is a no-op
+            // under `ColorMode::Never`.
             let yellow_warning = session.display.yellow("warning");
             diag.text.replace("warning", &yellow_warning)
         } else {
@@ -90,8 +89,7 @@ fn map_flow_error(e: &UpdateError) -> CommandError {
 ///
 /// # Errors
 ///
-/// * [`CommandError::Other`] when no report is loaded (upstream
-///   `@requires_update` → `TestReportNotLoadedError`), checked before host
+/// * [`CommandError::Other`] when no report is loaded, checked before host
 ///   selection so a no-op `NullReport` flow never silently "succeeds".
 /// * [`CommandError::NoRefhostsDefined`] when the selection is empty.
 /// * [`CommandError::Other`] when a named `-t` host is not connected.
@@ -173,8 +171,7 @@ pub(super) async fn drive(
             // back, then map the update error onto CommandError.
             //
             // The update check also surfaces recognised-but-non-fatal
-            // diagnostic sections (upstream `checks/update.py`'s two
-            // `print(...)` blocks). Collect them into a sink here — the one
+            // diagnostic sections. Collect them into a sink here — the one
             // place the session's display is in scope — and render them after
             // the fan-out, on both the success and failure paths.
             let mut diagnostics = Vec::new();
@@ -224,7 +221,7 @@ mod tests {
         );
         let out = buf.contents();
         // The section text is present and the word `warning` carries an ANSI
-        // escape (yellow), matching upstream's `replace("warning", yellow(...))`.
+        // escape (yellow).
         assert!(out.contains("extra rpm output"), "got: {out:?}");
         assert!(
             out.contains("\u{1b}["),

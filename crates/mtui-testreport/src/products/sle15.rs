@@ -1,13 +1,12 @@
 //! Normalizer for the SLE 15 product family.
 //!
-//! Ported from `mtui/template/products/sle15.py`. The if-chain order is
-//! significant — the compound `LTSS-TERADATA` is matched before the bare
-//! `LTSS`/`ERICSSON`/`TERADATA` tokens — and every unmatched name falls through
-//! to a lowercase rewrite.
+//! The if-chain order is significant — the compound `LTSS-TERADATA` is
+//! matched before the bare `LTSS`/`ERICSSON`/`TERADATA` tokens — and every
+//! unmatched name falls through to a lowercase rewrite.
 //!
-//! Deviation from upstream: the `LTSS-ERICSSON` compound branch is intentionally
-//! omitted because no SLE 15 product combines both tokens; such a version would
-//! match the bare `LTSS` branch.
+//! The `LTSS-ERICSSON` compound branch is intentionally omitted because no
+//! SLE 15 product combines both tokens; such a version would match the bare
+//! `LTSS` branch.
 
 use mtui_types::SystemProduct;
 

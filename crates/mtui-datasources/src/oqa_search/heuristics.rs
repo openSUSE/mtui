@@ -1,10 +1,9 @@
-//! Heuristics shared with upstream oqa-search.
-//!
-//! Ported verbatim from `mtui/data_sources/oqa_search/heuristics.py` to avoid
-//! behavioural drift when comparing output against the upstream tool. These
+//! Heuristics shared with the oqa-search tool
+//! (<https://github.com/mjdonis/oqa-search>), preserved verbatim to avoid
+//! behavioural drift when comparing output against it. These
 //! constants drive job-group filtering and the build-check log line extraction;
 //! the golden `.matches` fixtures are the regression signal that they stay in
-//! sync with upstream.
+//! sync with it.
 
 use std::sync::LazyLock;
 
@@ -39,7 +38,7 @@ const OQA_QUERY_ALL: &str = "";
 
 /// Resolve an openQA job-state name to its query-string suffix.
 ///
-/// Returns `None` for an unknown state (upstream raised `ValueError`).
+/// Returns `None` for an unknown state.
 #[must_use]
 pub(crate) fn oqa_query_string(state: &str) -> Option<&'static str> {
     match state {
@@ -51,13 +50,12 @@ pub(crate) fn oqa_query_string(state: &str) -> Option<&'static str> {
 }
 
 /// A number surrounded by whitespace / parens / line ends, gating the
-/// build-check line extractor (upstream `TESTSUITE_NUMBERS_PATTERN`).
+/// build-check line extractor.
 pub(crate) static TESTSUITE_NUMBERS_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:^|\s|\()\d+(?:$|\s|\))").expect("valid regex"));
 
-/// Substrings that disqualify a build-check line (upstream
-/// `TESTSUITE_WORDS_BLOCKLIST`). Matched case-insensitively against the
-/// lower-cased line.
+/// Substrings that disqualify a build-check line. Matched case-insensitively
+/// against the lower-cased line.
 pub(crate) const TESTSUITE_WORDS_BLOCKLIST: &[&str] = &[
     "syntax", "--", "meson", "gcc", "clang", "make", "cmake", "/usr/bin", ".tap", ".sh", "t/",
     "todo", " - ", "duration", " + ", "group", "value", "doc", "stack", "errno", "tests in",
@@ -65,13 +63,12 @@ pub(crate) const TESTSUITE_WORDS_BLOCKLIST: &[&str] = &[
     "object", "issue", "line", "set", "test_", "example", "flag", "print", "extra",
 ];
 
-/// Visual separators that qualify a build-check line (upstream
-/// `TESTSUITE_VISUAL_SEPARATORS`). Matched against the *cleaned* (not
-/// lower-cased) line.
+/// Visual separators that qualify a build-check line. Matched against the
+/// *cleaned* (not lower-cased) line.
 pub(crate) const TESTSUITE_VISUAL_SEPARATORS: &[&str] = &["===", "---"];
 
-/// Summary keywords that qualify a build-check line (upstream
-/// `TESTSUITE_SUMMARY_KEYWORDS`). Matched against the lower-cased line.
+/// Summary keywords that qualify a build-check line. Matched against the
+/// lower-cased line.
 pub(crate) const TESTSUITE_SUMMARY_KEYWORDS: &[&str] = &[
     "result:",
     "summary",
@@ -80,8 +77,8 @@ pub(crate) const TESTSUITE_SUMMARY_KEYWORDS: &[&str] = &[
     "tests failed",
 ];
 
-/// Canned summary patterns that qualify a build-check line (upstream
-/// `TESTSUITE_SUMMARY_PATTERNS`). Matched against the lower-cased line.
+/// Canned summary patterns that qualify a build-check line. Matched against
+/// the lower-cased line.
 pub(crate) static TESTSUITE_SUMMARY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
         r"\bok\s*\(",
@@ -96,7 +93,7 @@ pub(crate) static TESTSUITE_SUMMARY_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::n
 });
 
 /// Normalises a flavored Python binary package name (`pythonNNN-foo`) to its
-/// source form (`python-foo`), upstream `PYTHON_FLAVOR_RE` + `python-` sub.
+/// source form (`python-foo`) via a `python-` substitution.
 pub(crate) static PYTHON_FLAVOR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^python\d+-").expect("valid regex"));
 

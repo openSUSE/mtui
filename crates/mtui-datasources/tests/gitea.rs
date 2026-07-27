@@ -1,8 +1,7 @@
 //! Integration tests for the Gitea PR review-workflow connector against a real
 //! HTTP transport (`wiremock`).
 //!
-//! Ports the behavioral core of upstream `tests/test_gitea.py`'s
-//! `TestGiteaOperations`, `TestAssignmentStateMachine`, and `TestAssignee`: the
+//! Covers the
 //! comment-driven assign/approve/reject state machine, the "re-requested review
 //! supersedes a stale decision" rule, the assignment guards, and the request
 //! failure / auth-header contract.
@@ -10,7 +9,7 @@
 //! wiremock matches by request shape rather than call order, so an operation
 //! that issues several GETs to the same endpoint (each returning the same
 //! comment snapshot) is modelled by one mounted GET plus one mounted POST —
-//! exactly the states the ported Python cases set up.
+//! exactly the states each case sets up.
 
 use mtui_datasources::gitea::{Gitea, assign_marker};
 use mtui_datasources::{HttpClient, VerifyPolicy};
@@ -502,7 +501,7 @@ async fn assignee_returns_current_user() {
     );
 }
 
-// --- token-owner login resolution (ported from test_gitea.py TestUser) -------
+// --- token-owner login resolution -------
 
 /// With no explicit user, the assignment marker records the *token owner's*
 /// Gitea login (from `GET /api/v1/user`), not the local session user.

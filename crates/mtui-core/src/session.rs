@@ -1,16 +1,15 @@
 //! Shared, explicitly-passed command state (`Session`).
 //!
-//! The Rust replacement for upstream's `CommandPrompt` god-object. Commands
-//! receive `&mut Session` and read/mutate its state through methods — there are
-//! no hidden globals. It owns the [`Config`], the [`TemplateRegistry`] (loaded
-//! templates + active pointer), the [`CommandPromptDisplay`] output sink, and
-//! the `interactive` flag that distinguishes the REPL (`true`) from headless
-//! callers such as `mtui-mcp` (`false`).
+//! Commands receive `&mut Session` and read/mutate its state through methods —
+//! there are no hidden globals. It owns the [`Config`], the [`TemplateRegistry`]
+//! (loaded templates + active pointer), the [`CommandPromptDisplay`] output
+//! sink, and the `interactive` flag that distinguishes the REPL (`true`) from
+//! headless callers such as `mtui-mcp` (`false`).
 //!
-//! The scalar `metadata` / `targets` accessors upstream exposes as read-only
-//! properties are provided here as [`metadata`](Session::metadata) /
-//! [`targets`](Session::targets), delegating to the active report so command
-//! bodies and tests keep working as the registry grows past one entry.
+//! The scalar `metadata` / `targets` state is exposed as read-only accessors,
+//! [`metadata`](Session::metadata) / [`targets`](Session::targets), delegating
+//! to the active report so command bodies and tests keep working as the
+//! registry grows past one entry.
 
 use std::sync::Mutex;
 
@@ -64,22 +63,19 @@ pub struct Session {
     /// Set by the `quit` command to ask the interactive REPL loop to exit after
     /// the current dispatch returns.
     ///
-    /// The Rust replacement for upstream `Quit` raising `SystemExit`/returning a
-    /// truthy value from `onecmd`: rather than routing process-exit through the
-    /// command error channel, `quit` flips this flag and returns `Ok(())`; the
-    /// Phase-6 REPL checks [`should_exit`](Self::should_exit) after each line and
-    /// breaks its loop. Headless callers (MCP) ignore it.
+    /// Rather than routing process-exit through the command error channel,
+    /// `quit` flips this flag and returns `Ok(())`; the Phase-6 REPL checks
+    /// [`should_exit`](Self::should_exit) after each line and breaks its loop.
+    /// Headless callers (MCP) ignore it.
     should_exit: bool,
-    /// Optional sink for runtime log-level changes (upstream
-    /// `prompt.log.setLevel`).
+    /// Optional sink for runtime log-level changes.
     ///
     /// `set_log_level` calls this with the requested [`LogLevel`] when present.
     /// The Phase-6 REPL installs a callback backed by a
     /// `tracing_subscriber::reload` handle; headless callers and tests leave it
     /// `None`, so the command still logs the change but mutates nothing.
     log_level_sink: Option<LogLevelSink>,
-    /// Optional sink for best-effort desktop notifications (upstream
-    /// `prompt.notify_user`).
+    /// Optional sink for best-effort desktop notifications.
     ///
     /// [`notify_user`](Self::notify_user) calls this with the message and an
     /// error flag when present. The Phase-6 REPL installs a callback backed by
@@ -93,7 +89,7 @@ pub struct Session {
     ///
     /// The composition root (`mtui-cli`'s `main.rs`) installs a
     /// [`Prompter::stdin`]-backed prompter via [`set_prompter`](Self::set_prompter)
-    /// for the REPL; `mtui-mcp` leaves it unset (upstream `prompter=None`). It is
+    /// for the REPL; `mtui-mcp` leaves it unset. It is
     /// pushed down two ways: the command-timeout prompt onto each freshly-built
     /// [`Target`] in [`connect_and_add_hosts`](Self::connect_and_add_hosts), and
     /// onto the active report's [`HostsGroup`] via [`HostsGroup::set_prompter`].
@@ -106,7 +102,7 @@ pub struct Session {
     /// posture change rebuilds exactly once.
     #[cfg(test)]
     http_builds: std::sync::atomic::AtomicUsize,
-    /// Per-slot candidate shuffle (upstream `random.shuffle`), so pool selection
+    /// Per-slot candidate shuffle, so pool selection
     /// spreads load across interchangeable refhosts instead of always taking the
     /// first in `refhosts.yml` order. Defaults to a real random shuffle; tests
     /// override it with the identity ([`ShuffleFn`]) for deterministic
@@ -142,11 +138,11 @@ pub struct Session {
     http_client: Mutex<Option<(VerifyPolicy, HttpClient)>>,
 }
 
-/// A candidate-order shuffle seam (upstream `random.shuffle`). Mutates the slot's
+/// A candidate-order shuffle seam. Mutates the slot's
 /// candidate list in place before the arbiter picks one.
 pub type ShuffleFn = fn(&mut [String]);
 
-/// The default [`ShuffleFn`]: a real random shuffle (upstream `random.shuffle`).
+/// The default [`ShuffleFn`]: a real random shuffle.
 fn random_shuffle(candidates: &mut [String]) {
     use rand::seq::SliceRandom;
     candidates.shuffle(&mut rand::rng());
@@ -163,7 +159,7 @@ fn slot_key(slot: &mtui_datasources::refhost::Slot) -> String {
     format!("{product}|{version}|{arch}|{}", addons.join(","))
 }
 
-/// The log levels `set_log_level` accepts (upstream `info`/`warning`/`error`/
+/// The log levels `set_log_level` accepts (`info`/`warning`/`error`/
 /// `debug`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -178,7 +174,7 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    /// Parses the upstream level name, or `None` if unrecognised.
+    /// Parses the level name, or `None` if unrecognised.
     #[must_use]
     pub(crate) fn parse(name: &str) -> Option<Self> {
         match name {
@@ -206,14 +202,14 @@ impl LogLevel {
 pub type LogLevelSink = Box<dyn FnMut(LogLevel) + Send>;
 
 /// A callback the REPL installs to surface a desktop notification. Called with
-/// the message and `true` for error-class toasts (upstream's
+/// the message and `true` for error-class toasts (rendered with a
 /// `stock_dialog-error` icon). Headless callers leave it unset.
 pub type NotifySink = Box<dyn FnMut(&str, bool) + Send>;
 
 impl Session {
     /// Builds a session for `config`, defaulting the display to stdout.
     ///
-    /// `interactive` mirrors upstream: `true` for the REPL, `false` for MCP.
+    /// `interactive` is `true` for the REPL, `false` for MCP.
     #[must_use]
     pub fn new(config: Config, is_repl: bool) -> Self {
         let templates = TemplateRegistry::new(config.clone());
@@ -511,7 +507,7 @@ impl Session {
         }
     }
 
-    /// The active report (upstream `prompt.metadata`). Never `None` — falls back
+    /// The active report. Never `None` — falls back
     /// to the null object when nothing is loaded.
     #[must_use]
     pub fn metadata(&self) -> &(dyn TestReport + Send + Sync) {
@@ -521,7 +517,7 @@ impl Session {
         }
     }
 
-    /// Mutably borrows the active report (upstream `prompt.metadata`, mutated).
+    /// Mutably borrows the active report.
     ///
     /// The mutable counterpart of [`metadata`](Self::metadata). The
     /// `reload_openqa` / `set_workflow` commands populate the report's openQA
@@ -534,19 +530,17 @@ impl Session {
         }
     }
 
-    /// Sets the active report's [`Workflow`] mode (upstream
-    /// `metadata.workflow = …`).
+    /// Sets the active report's [`Workflow`] mode.
     ///
     /// The one mutable window onto the active report's workflow. `add_host`
     /// (and later `set_workflow`) uses it to move an automatic session to
-    /// manual. Upstream additionally calls `prompt.set_prompt()` to refresh the
-    /// REPL prompt string; that prompt refresh is a Phase-6 REPL concern, so the
-    /// command only mutates the report here.
+    /// manual. Refreshing the REPL prompt string is a separate, Phase-6 REPL
+    /// concern, so the command only mutates the report here.
     pub(crate) fn set_workflow(&mut self, workflow: Workflow) {
         self.metadata_mut().base_mut().workflow = workflow;
     }
 
-    /// The active report's connected targets (upstream `prompt.targets`).
+    /// The active report's connected targets.
     #[must_use]
     pub fn targets(&self) -> &HostsGroup {
         &self.metadata().base().targets
@@ -571,9 +565,6 @@ impl Session {
     /// `HostsGroup` (no borrow of `self`) and can freely re-borrow the report via
     /// [`metadata`](Self::metadata) to drive `perform_*`, restoring the group
     /// afterwards.
-    ///
-    /// Mirrors upstream, where a command reads `self.metadata` and `self.targets`
-    /// as two views of the same active report.
     #[must_use]
     fn take_targets(&mut self) -> HostsGroup {
         let is_repl = self.is_repl;
@@ -594,9 +585,9 @@ impl Session {
     /// The lossless replacement for `take_targets()` + `HostsGroup::select` in
     /// the `perform_*` / `set_repo` drivers. A `-t` subset operation must run over
     /// only the selected hosts, yet the unselected hosts must survive in the live
-    /// report — upstream gets this for free because its child group shares
-    /// `Target` references with the parent dict, but a Rust `Target` owns its
-    /// connection and cannot be shared. This hands back both halves so the driver
+    /// report — a `Target` owns its connection and cannot be shared between two
+    /// groups, so a child group can't simply borrow references into the parent's.
+    /// This hands back both halves so the driver
     /// can drive the op over `selected`, then hand both back to
     /// [`restore_split_targets`](Self::restore_split_targets), which merges the
     /// remainder back in.
@@ -636,9 +627,9 @@ impl Session {
     }
 
     /// Loads a template into the registry and, when requested, connects its
-    /// reference hosts (upstream `prompt.load_update`).
+    /// reference hosts.
     ///
-    /// Mirrors upstream `CommandPrompt.load_update`:
+    /// The flow:
     ///
     /// 1. [`make_testreport`] checks out and reads the report (or returns a null
     ///    report on failure, which [`TemplateRegistry::add`] silently ignores).
@@ -651,8 +642,8 @@ impl Session {
     ///    root) rather than inside `mtui-testreport`, so that crate never depends
     ///    on `mtui-hosts`/`mtui-datasources` — no crate cycle.
     ///
-    /// The connect resolves hosts from two sources, matching upstream
-    /// `TestReport.autoconnect`: the template's own `reference host:` lines
+    /// The connect resolves hosts from two sources:
+    /// the template's own `reference host:` lines
     /// (already parsed into `hostnames`) plus one host per matching slot resolved
     /// from each testplatform through the refhosts inventory. Every connect is
     /// best-effort: an unreachable host is logged and skipped so one dead host
@@ -751,7 +742,7 @@ impl Session {
     /// slot resolved from each testplatform — then builds and connects a
     /// [`Target`] for each, stamping the report's RRID as the pool-claim
     /// ownership identity. Connect failures are logged and the host dropped
-    /// (best-effort, upstream `connect_targets`).
+    /// (best-effort).
     ///
     /// The offline host-selection is factored into the pure, unit-tested
     /// [`autoconnect_hosts`](Self::autoconnect_hosts); this thin connect loop
@@ -779,8 +770,8 @@ impl Session {
         ref_hosts.dedup();
 
         // Testplatform hosts go through pool selection (one host per requested
-        // slot) when the arbiter + owner are wired (upstream
-        // `_pool_selection_active`); this is the composition-root default.
+        // slot) when the arbiter + owner are wired; this is the
+        // composition-root default.
         let wanted = self
             .resolve_and_record_pool(&config, ref_hosts, testplatforms, arbiter, owner, shuffle)
             .await
@@ -796,54 +787,51 @@ impl Session {
     /// logged and skipped so one bad host never aborts the batch.
     ///
     /// The shared connect loop behind [`autoconnect_active`](Self::autoconnect_active)
-    /// and the `add_host` command. Each target is stamped with `rrid` (the
-    /// pool-claim ownership identity) before connecting, mirroring upstream's
-    /// `Target(..., _rrid=...)`. A target built via [`Target::new`] is
-    /// unconnected, so [`Target::connect`] performs the live SSH connect; a
-    /// caller that pre-builds connected targets (tests over a mock connection)
-    /// sees `connect` short-circuit as a no-op.
+    /// and the `add_host` command. Each target is stamped with `rrid` as its
+    /// pool-claim ownership identity before connecting. A target built via
+    /// [`Target::new`] is unconnected, so [`Target::connect`] performs the live
+    /// SSH connect; a caller that pre-builds connected targets (tests over a
+    /// mock connection) sees `connect` short-circuit as a no-op.
     ///
     /// After a successful connect, a freshly added host is autolocked with the
     /// active report's `lock_comment` when a PI assignment is in progress
-    /// (upstream `_autolock_new_target`, called from both `add_target` and
-    /// `connect_targets`): a host already locked by another owner is left as-is
-    /// ([`HostError::TargetLocked`] suppressed), and a failed autolock never
-    /// drops an otherwise-good host.
+    /// (called from both `add_target` and `connect_targets`): a host already
+    /// locked by another owner is left as-is ([`HostError::TargetLocked`]
+    /// suppressed), and a failed autolock never drops an otherwise-good host.
     ///
     /// Each connected host is also checked for product drift against its
-    /// `refhosts.yml` row ([`verify_target_products`](Self::verify_target_products),
-    /// upstream `_verify_target_products`): mismatches are surfaced to the user,
-    /// recorded in the report's `product_warnings`, and WARN-logged, but never
-    /// drop the host. The refhosts inventory is built once for the batch; if it
-    /// is unavailable the check is silently skipped (upstream store `None`).
+    /// `refhosts.yml` row ([`verify_target_products`](Self::verify_target_products)):
+    /// mismatches are surfaced to the user, recorded in the report's
+    /// `product_warnings`, and WARN-logged, but never drop the host. The
+    /// refhosts inventory is built once for the batch; if it is unavailable the
+    /// check is silently skipped.
     async fn connect_and_add_hosts(&mut self, hosts: Vec<String>, rrid: &str) {
         let config = self.config.clone();
         // Snapshot the active report's PI-lock comment before the connect loop:
         // a `base()` borrow held across the connect `.await` would make this
         // future non-`Send` (the `Command::call` bound), exactly the constraint
         // the `config`/`timeout_prompt` snapshots below exist for. Empty when no
-        // PI assignment is active (upstream `lock_comment == ""`).
+        // PI assignment is active.
         let lock_comment = self.metadata().base().lock_comment.clone();
         // Snapshot the active report's package metadata (`product -> { name ->
         // required-version }`) before the `targets_mut()` borrow below. Cloning
         // it up front keeps the connect future `Send` (a `base()` borrow held
-        // across the connect `.await` would not be) and is the port of upstream
-        // `Target._parse_packages`, which seeds each host's tracked packages —
-        // with their required versions — right after connect(). Empty when no
-        // report (or a report with no packages) is loaded, in which case seeding
-        // is a no-op, matching upstream's empty `self.packages` pre-load.
+        // across the connect `.await` would not be); it seeds each host's
+        // tracked packages — with their required versions — right after
+        // connect(). Empty when no report (or a report with no packages) is
+        // loaded, in which case seeding is a no-op.
         let package_meta = self.metadata().base().packages.clone();
         // Snapshot the command-timeout prompt (a `Clone`-able closure) before the
         // connect loop: a `&Session`/`&Prompter` borrow held across the connect
         // `.await` would make this future non-`Send`, which `Command::call`
         // requires. `None` (headless / `mtui-mcp`) leaves the timeout an
-        // immediate abort (upstream `prompter=None`).
+        // immediate abort.
         let timeout_prompt = self.prompter.as_ref().map(Prompter::as_timeout_prompt);
         let prompter = self.prompter.clone();
-        // Build the refhosts inventory once for the batch (upstream's memoized
-        // `_get_refhosts_store`). `None` on any failure disables the drift check
-        // for every host — best-effort, never fatal. Built before the
-        // `targets_mut()` borrow so this await does not straddle it.
+        // Build the refhosts inventory once for the batch. `None` on any
+        // failure disables the drift check for every host — best-effort, never
+        // fatal. Built before the `targets_mut()` borrow so this await does
+        // not straddle it.
         let store = Self::build_refhosts_store(&config).await;
         // Drift results collected during the loop (a `base_mut()`/`self.display`
         // borrow held across the connect `.await` would make the future
@@ -856,8 +844,8 @@ impl Session {
         // `&store` / `&package_meta` (all plain data), so no per-host clone of
         // those is needed; each produces its own owned `Target` + drift entry.
         // Snapshot the pool claims so each host knows whether to take the remote
-        // pool lock (upstream `host in self._pool_claims`) vs. the normal
-        // autolock. Empty on the legacy `add_host --target` path.
+        // pool lock vs. the normal autolock. Empty on the legacy
+        // `add_host --target` path.
         let pool_claims = self.metadata().base().pool_claims.clone();
         let store_ref = store.as_ref();
         let package_meta = &package_meta;
@@ -914,8 +902,8 @@ impl Session {
             drift.push(drift_entry);
         }
 
-        // Backup-refhost fallback (upstream `_connect_pool_backups`): for any
-        // pool slot whose chosen host failed to connect, sequentially try the
+        // Backup-refhost fallback: for any pool slot whose chosen host failed
+        // to connect, sequentially try the
         // remaining free siblings until one connects or the slot is exhausted.
         let backup_drift = self
             .connect_pool_backups(&config, rrid, &hosts, &live, timeout_prompt.clone())
@@ -955,8 +943,7 @@ impl Session {
         match target.connect().await {
             Ok(()) => {
                 if is_pool_claim {
-                    // Take the remote pool lock (upstream `try_claim` in
-                    // `connect_target`): the `mtui pool <RRID> [<RRID>]` stamp.
+                    // Take the remote pool lock: the `mtui pool <RRID> [<RRID>]` stamp.
                     // Losing the remote race means another process holds this
                     // host — drop it so a sibling in the slot can be tried (the
                     // in-process claim is released by `connect_pool_backups`).
@@ -976,8 +963,8 @@ impl Session {
                     Self::autolock_target(&mut target, lock_comment).await;
                 }
                 // Seed the host's tracked packages with their metadata
-                // `required` versions (upstream `_parse_packages`), keyed by the
-                // just-parsed base product version, then query current versions
+                // `required` versions, keyed by the just-parsed base product
+                // version, then query current versions
                 // so `list_packages` / `package_check` / `downgrade` all see a
                 // populated list. `connect()` already parsed the system, so
                 // `get_base().version` is authoritative here.
@@ -999,7 +986,7 @@ impl Session {
     }
 
     /// Retries failed pool slots against their remaining free candidates
-    /// (upstream `_connect_pool_backups`, RFC §5.7 backup-refhost).
+    /// (RFC §5.7 backup-refhost).
     ///
     /// For each slot in the active report's `slot_candidates` whose chosen host
     /// is not among the just-connected `live` hosts: drop the dead claim(s),
@@ -1118,8 +1105,8 @@ impl Session {
     /// Compares a freshly connected `target`'s detected products against its
     /// `refhosts.yml` row, returning the per-host warning lines to record.
     ///
-    /// Ports upstream `_verify_target_products`: looks the host up in `store`
-    /// ([`compare`] against its [`Host`](mtui_types::Product) row) and returns
+    /// Looks the host up in `store` ([`compare`] against its
+    /// [`Host`](mtui_types::Product) row) and returns
     /// `Some(lines)` when [`ProductDiff`](mtui_datasources::ProductDiff) reports
     /// drift (base/arch/addon/dangling-symlink; the `qa` addon is always
     /// ignored, handled inside `compare`). Returns `None` — meaning "no drift,
@@ -1149,8 +1136,8 @@ impl Session {
         Some(lines)
     }
 
-    /// Applies collected product-drift results to the active report and surfaces
-    /// them to the user (upstream stores `product_warnings` and logs each line).
+    /// Applies collected product-drift results to the active report and
+    /// surfaces them to the user.
     ///
     /// `Some(lines)` records drift under the hostname and prints a yellow warning
     /// block so the mismatch is visible while adding the host; `None` clears any
@@ -1185,12 +1172,12 @@ impl Session {
 
     /// Autolocks a freshly connected `target` with the PI `lock_comment`.
     ///
-    /// Ports upstream `_autolock_new_target`: a no-op when `lock_comment` is empty
+    /// A no-op when `lock_comment` is empty
     /// (no PI assignment active). A host already locked by another owner is left
     /// as-is ([`HostError::TargetLocked`] suppressed, logged at debug, mirroring
     /// `Target::unlock`); any other lock error is logged at `warn` but never
     /// propagated, so a failed autolock never drops an otherwise-good host from
-    /// the batch (best-effort, matching upstream `suppress(TargetLockedError)`).
+    /// the batch (best-effort).
     async fn autolock_target(target: &mut Target, lock_comment: &str) {
         if lock_comment.is_empty() {
             return;
@@ -1209,10 +1196,9 @@ impl Session {
     /// Resolves the active report's testplatforms to candidate hosts (offline)
     /// and connects+adds them to the active group.
     ///
-    /// The `add_host`-without-`-t` path (upstream `for tp in
-    /// metadata.testplatforms: refhosts_from_tp(tp)` then `connect_targets()`):
-    /// each testplatform contributes one candidate host per matching slot,
-    /// deduplicated against the hosts already in the group, then connected.
+    /// The `add_host`-without-`-t` path: each testplatform contributes one
+    /// candidate host per matching slot, deduplicated against the hosts already
+    /// in the group, then connected.
     pub(crate) async fn add_testplatform_hosts(&mut self) {
         let config = self.config.clone();
         let shuffle = self.shuffle;
@@ -1242,12 +1228,12 @@ impl Session {
 
     /// Connects+adds the explicitly-named `hosts` to the active report's group.
     ///
-    /// The `add_host`-with-`-t` path (upstream `add_target(hostname)` per host):
-    /// each host is stamped with the active report's RRID and connected.
+    /// The `add_host`-with-`-t` path: each host is stamped with the active
+    /// report's RRID and connected.
     ///
-    /// A host already in the active group is warned about and skipped (upstream
-    /// `add_target`: `"already connected to <h>, skipping."` then early return),
-    /// matching the silent dedup the no-`-t` path already does in
+    /// A host already in the active group is warned about and skipped
+    /// (`"already connected to <h>, skipping."` then early return), matching
+    /// the silent dedup the no-`-t` path already does in
     /// [`add_testplatform_hosts`](Self::add_testplatform_hosts). The membership
     /// snapshot is taken before any `.await` so the connect future stays `Send`.
     pub(crate) async fn add_named_hosts(&mut self, hosts: Vec<String>) {
@@ -1271,8 +1257,7 @@ impl Session {
     /// selection) and [`verify_target_products`](Self::verify_target_products)
     /// (post-connect product-drift check) — the same on-demand pattern
     /// `list_refhosts`/`add_host` use, with no cached Session state. A `None`
-    /// result degrades both callers to a no-op (upstream `except
-    /// RefhostsResolveFailedError: return` / `_get_refhosts_store() is None`).
+    /// result degrades both callers to a no-op.
     ///
     /// Takes `&Config` (not `&Session`) so the caller's connect future stays
     /// `Send` across this await.
@@ -1311,9 +1296,8 @@ impl Session {
     /// Builds the refhosts factory on demand from `config` (the same pattern
     /// `list_refhosts`/`add_host` use — no cached Session state), resolves the
     /// inventory, and for each testplatform searches for matching host names. A
-    /// resolver failure degrades to an empty result (upstream `except
-    /// RefhostsResolveFailedError: return`), so autoconnect still connects the
-    /// template's own reference hosts.
+    /// resolver failure degrades to an empty result, so autoconnect still
+    /// connects the template's own reference hosts.
     ///
     /// Takes owned/borrowed plain data (not `&Session`) so the caller's connect
     /// future stays `Send` across this await.
@@ -1342,15 +1326,15 @@ impl Session {
         hosts
     }
 
-    /// Pick one distinct free host per test-target slot via the arbiter
-    /// (upstream `_pool_select_from_tp`, run per testplatform).
+    /// Pick one distinct free host per test-target slot via the arbiter, run
+    /// per testplatform.
     ///
     /// For each testplatform: [`search_pool_by_query`](Refhosts::search_pool_by_query)
     /// groups candidates by their *requested* slot (product+version+arch+requested
     /// addons), so hosts interchangeable for the update collapse to one slot. Each
-    /// slot's candidates are shuffled (via the [`ShuffleFn`] seam, upstream
-    /// `random.shuffle`) and recorded so a failed connect can fall
-    /// back to a sibling; a slot this owner already holds a host for (across
+    /// slot's candidates are shuffled (via the [`ShuffleFn`] seam) and recorded
+    /// so a failed connect can fall back to a sibling; a slot this owner
+    /// already holds a host for (across
     /// testplatforms) is skipped; otherwise one free host is claimed through the
     /// arbiter (waiting up to `[lock] wait` seconds when all candidates are busy).
     ///
@@ -1390,8 +1374,8 @@ impl Session {
             }
 
             for (slot, mut candidates) in by_slot {
-                // Spread load across interchangeable hosts (upstream shuffle),
-                // then remember the order for backup-refhost fallback.
+                // Spread load across interchangeable hosts, then remember the
+                // order for backup-refhost fallback.
                 shuffle(&mut candidates);
                 slot_candidates.insert(slot.clone(), candidates.clone());
 
@@ -1439,7 +1423,7 @@ impl Session {
         let mut wanted = ref_hosts;
 
         let tp_hosts = match (arbiter, owner) {
-            // Pool-selection path (upstream `_pool_select_from_tp`).
+            // Pool-selection path.
             (Some(arbiter), Some(owner)) if !testplatforms.is_empty() => {
                 if let Some(store) = Self::build_refhosts_store(config).await {
                     let (chosen, slot_candidates) = Self::pool_select(
@@ -1500,8 +1484,7 @@ impl Session {
         self.log_level_sink = Some(sink);
     }
 
-    /// Applies `level` through the installed sink, if any (upstream
-    /// `prompt.log.setLevel`).
+    /// Applies `level` through the installed sink, if any.
     ///
     /// Returns `true` when a sink was present and invoked; `false` when none is
     /// installed (headless/tests), so the caller can still log the change.
@@ -1525,9 +1508,10 @@ impl Session {
     }
 
     /// Surfaces a best-effort desktop notification through the installed sink, if
-    /// any (upstream `prompt.notify_user`).
+    /// any.
     ///
-    /// `error` selects the error-class toast (upstream's `stock_dialog-error`).
+    /// `error` selects the error-class toast (rendered with a
+    /// `stock_dialog-error` icon).
     /// Returns `true` when a sink was present and invoked; `false` when none is
     /// installed (headless/tests).
     pub(crate) fn notify_user(&mut self, msg: &str, error: bool) -> bool {
@@ -1697,7 +1681,7 @@ mod tests {
     );
 
     /// A config whose refhosts resolver is the offline file-backed `path`
-    /// resolver pointed at the ported fixture (no network).
+    /// resolver pointed at the fixture above (no network).
     fn config_with_path_refhosts() -> Config {
         let mut c = Config::default();
         c.refhosts_resolvers = "path".to_owned();
@@ -1884,8 +1868,7 @@ mod tests {
     }
 
     /// A host already in the active group is skipped, not re-added: `add_named_hosts`
-    /// warns and drops it before the connect loop (upstream `add_target`'s
-    /// `"already connected … skipping"` early return). The group size is unchanged.
+    /// warns and drops it before the connect loop. The group size is unchanged.
     #[tokio::test]
     async fn add_named_hosts_skips_already_connected() {
         let mut s = Session::new(config_with_path_refhosts(), false);
@@ -1969,7 +1952,7 @@ mod tests {
     }
 
     /// `autolock_target` locks a freshly connected host with the PI comment when
-    /// a `lock_comment` is active (upstream `_autolock_new_target`).
+    /// a `lock_comment` is active.
     #[tokio::test]
     async fn autolock_target_locks_when_comment_set() {
         let mut t = mock_target("refhost.example");
@@ -1995,7 +1978,7 @@ mod tests {
 
     /// A host already locked by another owner is left as-is: the foreign
     /// [`HostError::TargetLocked`] is suppressed and `autolock_target` returns
-    /// without error (upstream `suppress(TargetLockedError)`).
+    /// without error.
     #[tokio::test]
     async fn autolock_target_suppresses_foreign_lock() {
         // Pre-seed a fresh foreign lock file so the mock's lock read sees another
@@ -2010,7 +1993,7 @@ mod tests {
         Session::autolock_target(&mut t, "mtui pool SUSE:Maintenance:1:1 alice").await;
     }
 
-    // --- product-drift verification (upstream `_verify_target_products`) -----
+    // --- product-drift verification -----
 
     use mtui_types::system::{System, SystemProduct};
     use mtui_types::{Host, Product};

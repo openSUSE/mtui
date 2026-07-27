@@ -1,15 +1,15 @@
-//! Post-prepare check (upstream `checks/prepare.py`).
+//! Post-prepare check.
 
 use crate::update_workflow::UpdateError;
 use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
 
-/// The zypper prepare check (upstream `checks.prepare.zypper`).
+/// The zypper prepare check.
 ///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "update stack locked",
-/// "Dependency Error", or "RPM Error" per upstream's branch logic. This check
-/// surfaces no [`Diagnostic`]s (only `update` does).
+/// "Dependency Error", or "RPM Error" depending on the stderr/stdout markers.
+/// This check surfaces no [`Diagnostic`]s (only `update` does).
 fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if args
         .stderr
@@ -38,7 +38,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 }
 
 /// The prepare check for `(release, transactional)`, or `None` for an unknown
-/// key (upstream `prepare_checks.get(...)`).
+/// key.
 #[must_use]
 pub(crate) fn prepare_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {

@@ -1,4 +1,4 @@
-//! Software package version tracking, ported from `mtui/types/package.py`.
+//! Software package version tracking.
 //!
 //! A [`Package`] names a single RPM and tracks up to four versions relevant to
 //! an update workflow: the version [`before`](Package::before) an update, the
@@ -6,27 +6,20 @@
 //! by the update metadata, and the [`current`](Package::current) version actually
 //! installed on a target.
 //!
-//! ## Deviations from upstream
+//! Each version field is stored as a single typed representation —
+//! `Option<`[`RPMVersion`]`>` — with fallible setters that parse a `&str`.
+//! Passing an empty string or `None` clears the field, rather than silently
+//! storing an unparsed string.
 //!
-//! Upstream stores each version as `str | RPMVersion | None` and uses property
-//! setters that coerce a `str` into an [`RPMVersion`] (leaving anything else as
-//! `None`). The Rust port keeps a single typed representation —
-//! `Option<`[`RPMVersion`]`>` — and exposes fallible setters that parse a
-//! `&str`. Passing an empty string (upstream's `""`, which `RPMVersion`
-//! rejected) or `None` clears the field, matching upstream's "non-str ⇒ None"
-//! behaviour without silently storing an unparsed string.
-//!
-//! Upstream hashes and compares a `Package` **by name only**
-//! (`__hash__ = hash(self.name)`); the port preserves that exactly so a
-//! `Package` can live in a name-keyed set regardless of its version fields.
+//! A `Package` hashes and compares **by name only**, so it can live in a
+//! name-keyed set regardless of its version fields.
 
 use crate::rpmver::RPMVersion;
 
 /// A software package and the versions relevant to an update.
 ///
-/// Equality and hashing are **by [`name`](Package::name) only**, mirroring
-/// upstream. Two packages with the same name but different versions are
-/// considered equal.
+/// Equality and hashing are **by [`name`](Package::name) only**. Two packages
+/// with the same name but different versions are considered equal.
 #[derive(Debug, Clone)]
 pub struct Package {
     /// The package name.
@@ -76,8 +69,7 @@ impl Package {
 
     /// Sets the [`before`](Package::before) version from an optional string.
     ///
-    /// `None` (or an empty string) clears the field, mirroring upstream's
-    /// "non-`str` ⇒ `None`" setter semantics.
+    /// `None` (or an empty string) clears the field.
     ///
     /// # Errors
     /// Returns [`RpmVersionParseError`](crate::error::RpmVersionParseError) only
@@ -131,14 +123,14 @@ fn parse_opt(ver: Option<&str>) -> crate::error::Result<Option<RPMVersion>> {
 }
 
 impl std::fmt::Display for Package {
-    /// Returns the package name, mirroring upstream `__str__`.
+    /// Returns the package name.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.name)
     }
 }
 
 impl PartialEq for Package {
-    /// Equal by [`name`](Package::name) only, mirroring upstream `__hash__`.
+    /// Equal by [`name`](Package::name) only.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
     }
@@ -147,7 +139,7 @@ impl PartialEq for Package {
 impl Eq for Package {}
 
 impl std::hash::Hash for Package {
-    /// Hashes by [`name`](Package::name) only, mirroring upstream `__hash__`.
+    /// Hashes by [`name`](Package::name) only.
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.name.hash(state);
     }

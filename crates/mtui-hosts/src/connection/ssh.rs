@@ -1,26 +1,21 @@
-//! The russh-backed [`SshConnection`] — the production [`Connection`] impl.
+//! The russh-backed [`SshConnection`] — the production [`Connection`] impl,
+//! built on [`russh`] (SSH transport) and [`russh_sftp`] (SFTP subsystem).
 //!
-//! Ported from upstream `mtui/hosts/connection/connection.py` (paramiko). This
-//! is the async-native re-expression of that blocking wrapper on top of
-//! [`russh`] (SSH transport) and [`russh_sftp`] (SFTP subsystem).
-//!
-//! ## Behavioural parity with upstream
+//! ## Behaviour
 //!
 //! * **Pubkey/agent only.** Authentication tries SSH-agent keys (via
 //!   `SSH_AUTH_SOCK`) first, then any identity files from `~/.ssh/config`, then
-//!   the default `~/.ssh/id_*` keys — mirroring paramiko, which tries agent
-//!   then key files. There is deliberately **no password fallback** (MTUI is
-//!   pubkey-only by design); a failed auth surfaces [`HostError::Auth`].
+//!   the default `~/.ssh/id_*` keys. There is deliberately **no password
+//!   fallback** (MTUI is pubkey-only by design); a failed auth surfaces
+//!   [`HostError::Auth`].
 //! * **`~/.ssh/config`.** hostname / user (default `root`) / port (default 22)
-//!   / identityfile are honoured via [`russh_config`], matching upstream's
-//!   `paramiko.SSHConfig` lookup.
+//!   / identityfile are honoured via [`russh_config`].
 //! * **`run` timeout.** The per-command timeout bounds the *no-output* window,
 //!   not total runtime — a command that keeps producing output runs as long as
 //!   it likes, but one that goes silent for the whole window is treated as
 //!   stuck and aborted with [`HostError::Timeout`]. This is the non-interactive
-//!   contract (upstream's `interactive=False` branch); the async model has no
-//!   TTY prompt to loop on.
-//! * **`run` output/lifetime bounds (th4o.6, no upstream port target).** Beyond
+//!   contract; the async model has no TTY prompt to loop on.
+//! * **`run` output/lifetime bounds (th4o.6).** Beyond
 //!   the inactivity window, `run` additionally (a) caps the captured
 //!   stdout/stderr at [`MAX_STREAM_BYTES`] per stream / [`MAX_TOTAL_BYTES`]
 //!   combined, discarding the overflow instead of buffering it and flagging the
@@ -28,21 +23,19 @@
 //!   enforces an *absolute* execution deadline
 //!   (`connection_timeout * COMMAND_DEADLINE_FACTOR`) so a command that trickles
 //!   output forever — which never trips the inactivity window — cannot hang a
-//!   headless / `mtui-mcp` run. Upstream's blocking loop has neither bound (it
-//!   appends `recv(1024)` chunks unbounded and only guards inactivity), so these
-//!   are deliberate DoS hardening, not parity. In the REPL a human may answer
-//!   the keep-waiting prompt indefinitely, so no absolute deadline is imposed
-//!   there. An aborted/deadlined command's channel is closed before returning so
-//!   no orphaned remote process/channel leaks (upstream's `close_session`).
+//!   headless / `mtui-mcp` run. These are deliberate DoS hardening. In the REPL
+//!   a human may answer the keep-waiting prompt indefinitely, so no absolute
+//!   deadline is imposed there. An aborted/deadlined command's channel is
+//!   closed before returning so no orphaned remote process/channel leaks.
 //! * **`fire_and_forget`.** Dispatches on a fresh channel and closes the local
 //!   link without awaiting completion — for reboot-style commands that tear
 //!   down the transport; callers follow up with [`reconnect`](SshConnection).
 //!
-//! ## Deviations
+//! ## Known limitations
 //!
 //! * **ProxyCommand** is not yet executed (russh needs a spawned-process
 //!   stream); a host that relies on it degrades to a direct connect and is a
-//!   documented follow-up. Upstream supports it via `paramiko.ProxyCommand`.
+//!   documented follow-up.
 //! * **`sftp_open`** returns the file's bytes rather than a live file handle
 //!   (the object-safe trait surface); this covers every current caller.
 //! * The interactive PTY `shell` (feature `shell`, P2.10) returns an
@@ -72,8 +65,7 @@ use super::timeout::{CommandTimeout, HostKeyPolicy};
 use super::{Connection, DEFAULT_USER};
 use crate::error::{HostError, Result};
 
-/// Number of reconnect+retry attempts before giving up, matching upstream
-/// `RETRIES`.
+/// Number of reconnect+retry attempts before giving up.
 const RETRIES: usize = 5;
 
 /// Modest bound on concurrent per-entry transfers within a single folder
@@ -82,7 +74,7 @@ const RETRIES: usize = 5;
 /// directory with many entries streams a few at a time rather than all at once.
 const FOLDER_DOWNLOAD_CONCURRENCY: usize = 4;
 
-/// The exit-code sentinel upstream uses when a command produced no exit status
+/// The exit-code sentinel used when a command produced no exit status
 /// (killed / channel lost). Kept in sync with [`CommandLog`]'s `-1` convention.
 const NO_EXIT_CODE: i16 = -1;
 
@@ -91,8 +83,8 @@ const NO_EXIT_CODE: i16 = -1;
 /// A command that emits more has its excess for that stream discarded (not
 /// buffered) and the resulting [`CommandLog`] is flagged
 /// [`truncated`](CommandLog::truncated). Bounds the memory a single hostile or
-/// runaway command (`yes`, `cat /dev/urandom`) can force mtui to hold — a DoS
-/// vector upstream's unbounded `recv` loop leaves open. 16 MiB is generous for
+/// runaway command (`yes`, `cat /dev/urandom`) can force mtui to hold, closing
+/// off a DoS vector an unbounded output loop would leave open. 16 MiB is generous for
 /// legitimate `zypper`/`rpm` output while capping the blast radius under
 /// host/template fan-out.
 pub const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
@@ -113,7 +105,7 @@ pub const MAX_TOTAL_BYTES: usize = 2 * MAX_STREAM_BYTES;
 /// trickles output (`while true; do echo .; sleep 1; done`). The deadline is
 /// `connection_timeout * COMMAND_DEADLINE_FACTOR`; it is enforced **only** when
 /// there is no interactive user to answer the keep-waiting prompt (a REPL user
-/// who chooses to keep waiting is never force-aborted — upstream parity). The
+/// who chooses to keep waiting is never force-aborted). The
 /// factor keeps the ceiling well above the inactivity window so legitimately
 /// long, chatty commands (large `zypper` transactions) still complete.
 const COMMAND_DEADLINE_FACTOR: u32 = 12;
@@ -123,8 +115,8 @@ const COMMAND_DEADLINE_FACTOR: u32 = 12;
 ///
 /// Each `push_*` copies only up to the remaining per-stream **and** remaining
 /// combined budget; once either is reached the rest of the chunk is dropped and
-/// [`truncated`](Self::truncated) latches `true`. This is the bounded
-/// re-expression of upstream's unbounded `stdout += recv(1024)` accumulation.
+/// [`truncated`](Self::truncated) latches `true`. This keeps memory bounded
+/// regardless of how much output a command produces.
 #[derive(Debug, Default)]
 struct CaptureBuf {
     stdout: Vec<u8>,
@@ -169,8 +161,7 @@ impl CaptureBuf {
 /// keep waiting, `n` to abort). The composition root (`mtui-cli`) wires a
 /// [`Prompter::ask`](crate::prompter::Prompter::ask) here so the prompt is
 /// serialised across parallel host tasks and suspends any live spinner. `None`
-/// (headless / `mtui-mcp`) leaves the timeout an immediate abort (upstream's
-/// `timeout_prompt=None`).
+/// (headless / `mtui-mcp`) leaves the timeout an immediate abort.
 pub type TimeoutPrompt = Arc<
     dyn Fn(String) -> Pin<Box<dyn Future<Output = std::io::Result<String>> + Send>> + Send + Sync,
 >;
@@ -187,10 +178,9 @@ enum TimeoutDecision {
 /// Decides what to do when a command hits its no-output timeout window.
 ///
 /// Extracted from [`SshConnection::run`] so the wait/abort/headless-WARN policy
-/// is unit-testable without a live SSH channel. Mirrors upstream
-/// `connection.py`'s timeout branch: interactive + a prompt → ask (empty / `y`
-/// keep waiting, `n` abort); otherwise abort immediately and emit one WARN so
-/// the non-interactive silence is observable.
+/// is unit-testable without a live SSH channel. Interactive + a prompt → ask
+/// (empty / `y` keep waiting, `n` abort); otherwise abort immediately and emit
+/// one WARN so the non-interactive silence is observable.
 async fn on_command_timeout(
     hostname: &str,
     command: &str,
@@ -203,7 +193,7 @@ async fn on_command_timeout(
         if answer.trim().eq_ignore_ascii_case("n") {
             return TimeoutDecision::Abort;
         }
-        // Empty / `y` / anything else: keep waiting (upstream Enter/Y default).
+        // Empty / `y` / anything else: keep waiting (Enter/Y default).
         return TimeoutDecision::KeepWaiting;
     }
     tracing::warn!(
@@ -216,12 +206,11 @@ async fn on_command_timeout(
 
 /// The russh client handler: it verifies the server's host key against
 /// `known_hosts` first, then applies the [`HostKeyPolicy`] only to keys that
-/// are *not already recorded* — mirroring paramiko's `load_system_host_keys()`
-/// + `MissingHostKeyPolicy` layering.
+/// are *not already recorded*.
 ///
 /// A key that matches an existing `known_hosts` entry is accepted regardless of
-/// policy; a key that *differs* from a recorded one (`BadHostKeyException` in
-/// paramiko) is rejected under every policy and reported distinctly. Only an
+/// policy; a key that *differs* from a recorded one is rejected under every
+/// policy and reported distinctly. Only an
 /// unknown host falls through to the policy: `auto_add` accepts and persists the
 /// key atomically, `warn` accepts without persisting, and `reject` refuses.
 struct ClientHandler {
@@ -270,9 +259,9 @@ impl ClientHandler {
                 );
                 true
             }
-            // Recorded but *different*: a changed key (paramiko
-            // BadHostKeyException). Reject under every policy and report it
-            // distinctly — never silently auto-add over a changed key.
+            // Recorded but *different*: a changed key. Reject under every
+            // policy and report it distinctly — never silently auto-add over
+            // a changed key.
             Err(KeyError::KeyChanged { line }) => {
                 tracing::error!(
                     host = %self.hostname,
@@ -288,8 +277,7 @@ impl ClientHandler {
             Ok(false) => self.apply_policy(server_public_key, &fingerprint, &path),
             // Any other lookup failure (no home dir, parse error, I/O): the key
             // is *not verified*. Under `reject` refuse; otherwise fall through
-            // to the unknown-host policy (matching paramiko's empty-store
-            // behaviour when known_hosts is missing/unreadable).
+            // to the unknown-host policy.
             Err(e) => {
                 tracing::warn!(
                     host = %self.hostname,
@@ -370,7 +358,7 @@ pub struct SshConnection {
     handle: Option<Handle<ClientHandler>>,
     /// Whether a TTY-backed user can answer the command-timeout prompt. `false`
     /// (the default, and always under `mtui-mcp`) makes a no-output timeout
-    /// abort instead of asking. Mirrors upstream `Connection.interactive`.
+    /// abort instead of asking.
     is_repl: bool,
     /// Optional serialised prompt for the command-timeout branch. Wired from the
     /// composition root; `None` keeps the timeout an immediate abort.
@@ -487,7 +475,7 @@ impl SshConnection {
     }
 
     /// Opens the SFTP subsystem on a fresh channel, reconnecting first if the
-    /// link has dropped. Mirrors upstream `_sftp` (open per operation).
+    /// link has dropped.
     async fn sftp(&mut self) -> Result<RusshSftpSession> {
         if !self.is_active() {
             self.reconnect(0, false).await?;
@@ -513,7 +501,7 @@ impl SshConnection {
     /// Maps a russh-sftp client error to [`HostError`], routing the
     /// `SSH_FX_NO_SUCH_FILE` status to the dedicated
     /// [`HostError::SftpNotFound`] variant so the host-system parser can branch
-    /// on "not found" the way upstream branches on `FileNotFoundError`.
+    /// distinctly on "not found".
     fn sftp_err_at(&self, e: russh_sftp::client::error::Error, path: &Path) -> HostError {
         sftp_err_at_for(&self.hostname, e, path)
     }
@@ -677,8 +665,8 @@ fn resolve(hostname: &str, port: u16) -> Resolved {
     }
 }
 
-/// The default private keys to try when config names none, mirroring the common
-/// paramiko/ssh defaults.
+/// The default private keys to try when config names none, the common
+/// OpenSSH defaults.
 fn default_identity_files() -> Vec<PathBuf> {
     let Some(home) = dirs_home() else {
         return Vec::new();
@@ -704,9 +692,8 @@ fn dirs_home() -> Option<PathBuf> {
 /// concurrent reader never sees a half-written file and no predictable-name temp
 /// can be pre-created by an attacker.
 ///
-/// This is advisory, mirroring paramiko's `save_host_keys`: any failure is
-/// logged and swallowed so a fresh host still connects under `auto_add`. Never
-/// logs raw key material.
+/// This is advisory: any failure is logged and swallowed so a fresh host
+/// still connects under `auto_add`. Never logs raw key material.
 fn persist_host_key(host: &str, port: u16, pubkey: &PublicKey, path: &Path) {
     if let Err(e) = persist_host_key_inner(host, port, pubkey, path) {
         tracing::warn!(host, "failed to persist host key to known_hosts: {e}");
@@ -743,8 +730,8 @@ fn persist_host_key_inner(
     mtui_config::atomic::write(&contents, path)
 }
 
-/// The next `reconnect` backoff sleep after `count` attempts, mirroring
-/// upstream `2 * (timeout + 5 * count)`.
+/// The next `reconnect` backoff sleep after `count` attempts:
+/// `2 * (timeout + 5 * count)`.
 fn reconnect_delay(count: usize, base: Duration) -> Duration {
     (base + Duration::from_secs(5 * count as u64)) * 2
 }
@@ -810,8 +797,7 @@ async fn authenticate(
     {
         for identity in identities {
             // russh 0.62 yields `AgentIdentity` (plain key or certificate);
-            // pubkey auth only takes a bare `PublicKey`, so skip certificates
-            // (paramiko parity: agent pubkey auth only).
+            // pubkey auth only takes a bare `PublicKey`, so skip certificates.
             let AgentIdentity::PublicKey { key, .. } = identity else {
                 continue;
             };
@@ -982,8 +968,8 @@ impl Connection for SshConnection {
     async fn run(&mut self, command: &str) -> Result<CommandLog> {
         let started = Instant::now();
 
-        // Open a channel, reconnecting + retrying on a lost link (upstream
-        // loops open->reconnect up to RETRIES then raises ReConnectFailed).
+        // Open a channel, reconnecting + retrying on a lost link, up to
+        // RETRIES attempts before giving up.
         let mut attempt = 0;
         let mut channel = loop {
             if !self.is_active() {
@@ -1009,7 +995,7 @@ impl Connection for SshConnection {
             .await
             .map_err(|e| self.transport_err(e))?;
         // run() never feeds stdin: send EOF so a command that reads input gets
-        // it and proceeds instead of blocking (upstream shutdown_write).
+        // it and proceeds instead of blocking.
         let _ = channel.eof().await;
 
         let mut capture = CaptureBuf::default();
@@ -1020,7 +1006,7 @@ impl Connection for SshConnection {
         // command trickling output forever never trips the inactivity window, so
         // without this it would hang the run indefinitely. In the REPL there is a
         // human who may legitimately choose to keep waiting, so no absolute
-        // deadline is imposed there (upstream parity).
+        // deadline is imposed there.
         let deadline = (!self.is_repl)
             .then(|| Instant::now() + window.saturating_mul(COMMAND_DEADLINE_FACTOR));
 
@@ -1071,10 +1057,9 @@ impl Connection for SshConnection {
                         });
                     }
                     // Inactivity window. Interactive: ask the user whether to keep
-                    // waiting. Empty / `y` resumes the wait loop (upstream's
-                    // Enter/Y default); `n` aborts. Headless: abort immediately,
-                    // emitting one WARN so the silence is observable (upstream's
-                    // `timeout_prompt=None` branch).
+                    // waiting. Empty / `y` resumes the wait loop (Enter/Y
+                    // default); `n` aborts. Headless: abort immediately,
+                    // emitting one WARN so the silence is observable.
                     let decision = on_command_timeout(
                         &self.hostname,
                         command,
@@ -1086,8 +1071,7 @@ impl Connection for SshConnection {
                         TimeoutDecision::KeepWaiting => continue,
                         TimeoutDecision::Abort => {
                             // Close the channel so the abandoned command's remote
-                            // process/channel is reclaimed (upstream close_session
-                            // on BaseException).
+                            // process/channel is reclaimed.
                             let _ = channel.close().await;
                             return Err(HostError::Timeout {
                                 command: command.to_owned(),
@@ -1150,8 +1134,7 @@ impl Connection for SshConnection {
         let mut last_err = None;
         while !self.is_active() && count <= retry {
             count += 1;
-            // Ported from upstream `Connection.reconnect`: sleep before each
-            // probe, growing the wait when `backoff`. Unlike upstream, the
+            // Sleep before each probe, growing the wait when `backoff`. The
             // pre-sleep itself is gated on `backoff` — non-reboot callers pass
             // `(0, false)` and must fail fast (no multi-second pause) on a
             // genuinely dead link mid-command; only the reboot-recovery budget
@@ -1242,7 +1225,7 @@ impl Connection for SshConnection {
             .map_err(|e| self.sftp_err_at(e, remote))?;
         file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
         file.shutdown().await.map_err(|e| self.sftp_err(e))?;
-        // Make executable (0770), matching upstream chmod after put.
+        // Make executable (0770) after the transfer.
         if let Ok(mut meta) = sftp.metadata(remote_str.to_string()).await {
             meta.permissions = Some(0o770);
             let _ = sftp.set_metadata(remote_str.to_string(), meta).await;
@@ -1377,7 +1360,7 @@ impl Connection for SshConnection {
         let path_str = path.to_string_lossy().to_string();
 
         if exclusive {
-            // Atomic exclusive create (paramiko mode "x" -> O_CREAT | O_EXCL).
+            // Atomic exclusive create (O_CREAT | O_EXCL).
             // SFTPv3 has no dedicated "file exists" status, so an O_EXCL
             // collision surfaces as the generic `Failure` status — that (and
             // only that) is mapped to `AlreadyExists` so the lock protocol
@@ -1399,7 +1382,7 @@ impl Connection for SshConnection {
             file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
             file.shutdown().await.map_err(|e| self.sftp_err(e))?;
         } else {
-            // Truncating overwrite (paramiko mode "w+"). Open explicitly with
+            // Truncating overwrite. Open explicitly with
             // CREATE so a fresh path is created; the `write` convenience opens
             // WRITE-only and fails with NO_SUCH_FILE on a missing file.
             let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
@@ -1421,8 +1404,8 @@ impl Connection for SshConnection {
         let sftp = self.sftp().await?;
         let path_str = path.to_string_lossy().to_string();
 
-        // Open at end-of-file (paramiko mode "a+"), creating the file if it is
-        // missing. O_APPEND makes each write land at the current EOF, so
+        // Open at end-of-file (O_APPEND), creating the file if it is
+        // missing. Each write lands at the current EOF, so
         // concurrent appenders extend the file without a read-modify-write race.
         let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND;
         let mut file = match sftp.open_with_flags(path_str, flags).await {
@@ -1476,8 +1459,8 @@ impl Connection for SshConnection {
 
     async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>> {
         // One channel+subsystem handshake, reused across the returned handle's
-        // reads (upstream `sftp_session()`). `sftp()` already reconnects at
-        // entry if the link dropped; mid-session errors then propagate.
+        // reads. `sftp()` already reconnects at entry if the link dropped;
+        // mid-session errors then propagate.
         let sftp = self.sftp().await?;
         Ok(Box::new(SshSftpSession {
             sftp,
@@ -1488,8 +1471,7 @@ impl Connection for SshConnection {
     #[cfg(feature = "shell")]
     async fn shell(&mut self, cols: u32, rows: u32) -> Result<Box<dyn ShellChannel>> {
         // Open a channel, reconnecting + retrying on a lost link, mirroring the
-        // open->reconnect loop in `run` (and upstream's `while not session:
-        // reconnect()` in `shell`).
+        // open->reconnect loop in `run`.
         let mut attempt = 0;
         let channel = loop {
             if !self.is_active() {
@@ -1511,10 +1493,9 @@ impl Connection for SshConnection {
         };
 
         // Request an `xterm` PTY sized cols x rows (no pixel dims, no special
-        // terminal modes) then invoke the remote shell — upstream
-        // `get_pty("xterm", width, height)` + `invoke_shell()`. On failure,
-        // explicitly close the half-initialised channel (upstream's
-        // `close_session` in the `except` arm) rather than relying on drop.
+        // terminal modes) then invoke the remote shell. On failure,
+        // explicitly close the half-initialised channel rather than relying
+        // on drop.
         if let Err(e) = channel
             .request_pty(true, "xterm", cols, rows, 0, 0, &[])
             .await
@@ -1546,10 +1527,9 @@ struct SshShellChannel {
     host: String,
     channel: russh::Channel<russh::client::Msg>,
     /// Payload bytes received in excess of a previous `read`'s buffer, served
-    /// before the next `wait()`. Mirrors paramiko's `recv(n)`, which leaves
-    /// unconsumed bytes buffered in the transport rather than dropping them —
-    /// without this, a server frame larger than the caller's buffer would lose
-    /// its tail and corrupt interactive output.
+    /// before the next `wait()`. Unconsumed bytes are buffered rather than
+    /// dropped — without this, a server frame larger than the caller's buffer
+    /// would lose its tail and corrupt interactive output.
     leftover: Vec<u8>,
 }
 
@@ -1612,9 +1592,9 @@ impl ShellChannel for SshShellChannel {
     }
 
     async fn close(&mut self) -> Result<()> {
-        // Best-effort, idempotent close (upstream `close_session`): a channel
-        // the remote already tore down is treated as success per the trait
-        // contract, so a double-close never surfaces an error.
+        // Best-effort, idempotent close: a channel the remote already tore
+        // down is treated as success per the trait contract, so a
+        // double-close never surfaces an error.
         if let Err(e) = self.channel.close().await {
             tracing::debug!(host = %self.host, error = %e, "shell channel already closed");
         }
@@ -1913,8 +1893,8 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_delay_matches_upstream_formula() {
-        // Upstream `2 * (timeout + 5 * count)`.
+    fn reconnect_delay_matches_formula() {
+        // Backoff formula: `2 * (timeout + 5 * count)`.
         let base = Duration::from_secs(10);
         assert_eq!(reconnect_delay(1, base), Duration::from_secs(2 * (10 + 5)));
         assert_eq!(reconnect_delay(2, base), Duration::from_secs(2 * (10 + 10)));

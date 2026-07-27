@@ -1,7 +1,7 @@
 //! Integration tests for the native QAM operations (`mtui_datasources::obs::qam`).
 //!
-//! Ported 1:1 from upstream `tests/test_obs_qam.py`. Python mocks HTTP with
-//! `responses`; this port uses `wiremock` — the OBS API base backs the
+//! HTTP is mocked with
+//! `wiremock` — the OBS API base backs the
 //! `ObsClient` calls and a second `wiremock` server backs the `qam.suse.de`
 //! reports host that `preconditions` fetches (with no OBS auth). Pinned query
 //! params and bodies are asserted from `received_requests()`.
@@ -68,7 +68,7 @@ fn group_review(group: &str, state: &str, events: &[(&str, &str, &str)]) -> Stri
 
 const ACCEPT: &str = "Review got accepted";
 // The testreport log path is `{reports_url}/{rrid}/log` where `{rrid}` is the
-// full RRID string (upstream `_log_url` uses the RRID's `__str__`).
+// full RRID string.
 const LOG_PATH: &str = "/SUSE:Maintenance:1:56789/log";
 
 // A GET testreport log mock on the reports server.

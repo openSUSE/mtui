@@ -1,8 +1,8 @@
 //! Exporter for the automatic workflow.
 //!
-//! Ports `mtui.update_workflow.export.auto.AutoExport`. It renders the openQA
-//! install-test job lines, computes the install status, downloads each passing
-//! job's install log, and runs the shared base sequence.
+//! Renders the openQA install-test job lines, computes the install status,
+//! downloads each passing job's install log, and runs the shared base
+//! sequence.
 //!
 //! The per-log HTTP download goes through the [`BytesFetcher`] seam (an
 //! [`HttpClient`](mtui_datasources::http::HttpClient) in production, a mock in
@@ -40,7 +40,7 @@ impl AutoExport {
         }
     }
 
-    /// Renders one install-job line (upstream `_install_job_line`).
+    /// Renders one install-job line.
     ///
     /// `"{distri}_{version}_{arch} => {STATUS}: {job_url}\n"`, where `job_url`
     /// is the log URL truncated at `/file/` and `STATUS` is the uppercased
@@ -62,7 +62,7 @@ impl AutoExport {
         )
     }
 
-    /// The overall install status (upstream `_install_status`).
+    /// The overall install status.
     ///
     /// `UNKNOWN` when there are no results (not run / running / unfetchable);
     /// `PASSED` when every result is `passed`/`softfailed`; else `FAILED`.
@@ -85,7 +85,7 @@ impl AutoExport {
         }
     }
 
-    /// Inserts/replaces the `Install tests:` block (upstream `install_results`).
+    /// Inserts/replaces the `Install tests:` block.
     pub fn install_results(&mut self) {
         let status_line = format!(
             "Installation tests done in openQA with following results: {}\n",
@@ -162,8 +162,7 @@ impl AutoExport {
         template.splice(start..end, block);
     }
 
-    /// Downloads each passing job's install log and returns their filenames
-    /// (upstream `get_logs` + `_openqa_installog_to_template`).
+    /// Downloads each passing job's install log and returns their filenames.
     ///
     /// Returns the written `<distri>_<version>_<arch>.log` filenames.
     async fn get_logs(
@@ -186,7 +185,7 @@ impl AutoExport {
 
         // Fan the downloads out concurrently (order-preserving), then write
         // serially in input order — the write step touches the filesystem and
-        // may prompt on overwrite, so it must not run in parallel (upstream #331).
+        // may prompt on overwrite, so it must not run in parallel.
         let downloads = results.iter().map(|url| self.installog_lines(fetcher, url));
         let all_lines = futures::future::join_all(downloads).await;
 
@@ -207,8 +206,8 @@ impl AutoExport {
         filenames
     }
 
-    /// Downloads one install log and returns its lines (with trailing newlines),
-    /// or an empty vec on failure (upstream `_openqa_installog_to_template`).
+    /// Downloads one install log and returns its lines (with trailing
+    /// newlines), or an empty vec on failure.
     async fn installog_lines(&self, fetcher: &dyn BytesFetcher, url: &URLs) -> Vec<String> {
         match fetcher.get_bytes(&url.url).await {
             Ok(bytes) => {
@@ -222,7 +221,7 @@ impl AutoExport {
         }
     }
 
-    /// Runs the exporter (upstream `run`).
+    /// Runs the exporter.
     ///
     /// Returns the finished template lines.
     pub async fn run(
@@ -547,7 +546,7 @@ mod tests {
             vec!["Results from openQA jobs\n".to_string()],
         );
         // A realistic template: the `source code change review:` anchor is not
-        // the first line (upstream templates always have a header above it), so
+        // the first line (a real template always has a header above it), so
         // the `inject_openqa` insertion point (anchor - 1) is in range.
         let ctx = ctx_in(
             dir.path(),

@@ -1,7 +1,7 @@
 //! Hand-written MCP tools for editing the loaded testreport checkout file(s).
 //!
-//! Port of upstream `mtui/mcp/testreport_tools.py`. The auto-generated command
-//! tools ([`crate::tools`]) cover every `Command`, but the REPL `edit` command
+//! The auto-generated command tools ([`crate::tools`]) cover every `Command`,
+//! but the REPL `edit` command
 //! spawns `$EDITOR` on `metadata.path` — meaningless under MCP (and hence
 //! deny-listed). This module replaces it with five explicit tools that operate
 //! directly on the file path tracked by the loaded [`TestReport`]:
@@ -17,13 +17,13 @@
 //!
 //! ## Locking
 //!
-//! Each tool takes the per-RRID [`McpSession::scoped_lock`] for its `template`
-//! (the Rust analogue of upstream `scoped_lock(template)`): entering the registry
-//! gate in *shared* mode keeps the loaded set stable for the call (no concurrent
-//! `load_template`/`unload`) while tools on *other* templates run in parallel,
-//! and the per-RRID lock serialises the file op against same-template foreground
-//! dispatch (e.g. a concurrent `commit`). The inner `Mutex<Session>` is still
-//! taken briefly for the actual state read/write.
+//! Each tool takes the per-RRID [`McpSession::scoped_lock`] for its `template`:
+//! entering the registry gate in *shared* mode keeps the loaded set stable for
+//! the call (no concurrent `load_template`/`unload`) while tools on *other*
+//! templates run in parallel, and the per-RRID lock serialises the file op
+//! against same-template foreground dispatch (e.g. a concurrent `commit`). The
+//! inner `Mutex<Session>` is still taken briefly for the actual state
+//! read/write.
 //!
 //! ## Multi-template resolution
 //!
@@ -89,7 +89,6 @@ fn refuse(msg: impl Into<String>) -> McpCommandError {
 
 /// Resolve the on-disk path of the report a tool call should act on.
 ///
-/// Mirrors upstream `_resolve_report` + `_resolve_testreport_path`:
 /// * `template` given → that loaded template (`templates.get`); unknown → refuse
 ///   `"template not loaded: <rrid>"`.
 /// * `template` omitted with >1 loaded → refuse `"multiple templates loaded (…)"`.
@@ -160,8 +159,8 @@ fn resolve_dir(session: &Session, template: Option<&str>) -> Result<PathBuf, Mcp
 
 /// Resolve `relpath` under `base`, refusing anything that escapes it.
 ///
-/// Guards against `..` traversal and absolute paths. Mirrors upstream
-/// `_safe_template_file`: the target must be `base` itself or a descendant of it.
+/// Guards against `..` traversal and absolute paths: the target must be
+/// `base` itself or a descendant of it.
 ///
 /// Two-stage containment: a cheap lexical `.`/`..` collapse first (so a
 /// not-yet-existing file still resolves — `canonicalize` would fail on a missing
@@ -242,8 +241,8 @@ fn count_lines(text: &str) -> usize {
     text.lines().count()
 }
 
-/// Split `text` into lines *keeping* the trailing `\n` on each (upstream
-/// `splitlines(keepends=True)`), so a splice preserves the newline invariant.
+/// Split `text` into lines *keeping* the trailing `\n` on each, so a splice
+/// preserves the newline invariant.
 fn split_keepends(text: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut start = 0;
@@ -680,7 +679,7 @@ async fn testreport_fill(
 }
 
 /// If `body` is exactly `<ws>LABEL<ws>VALUE` for one of `values`, return the
-/// leading `label + padding` (the upstream `pre` group) so the replacement keeps
+/// leading `label + padding` so the replacement keeps
 /// the template's column alignment. Only the exact placeholder value matches, so
 /// an already-filled line is never touched (idempotent).
 fn match_placeholder<'a>(body: &'a str, label: &str, values: &[&str]) -> Option<&'a str> {

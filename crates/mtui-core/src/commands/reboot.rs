@@ -10,7 +10,7 @@ use crate::session::Session;
 
 /// Reboots reference hosts and reconnects once they are back up.
 ///
-/// Ports upstream `mtui.commands.reboot.Reboot`. Reboots every connected host
+/// Reboots every connected host
 /// (or only those given with `-t`), dispatching the reboot without waiting (the
 /// SSH connection is expected to drop), then reconnecting each with retries and
 /// backoff. Works for transactional and non-transactional hosts.
@@ -45,7 +45,7 @@ impl Command for Reboot {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         // Honour `-t`: reboot only the selected hosts of the active template.
-        // Reject an explicit host that is not connected (upstream `parse_hosts`);
+        // Reject an explicit host that is not connected;
         // the deprecated `all` sentinel means every connected host. Without `-t`
         // (or with `all`) every connected host of the fan-out–selected template
         // is rebooted. An empty group is `NoRefhostsDefined`.

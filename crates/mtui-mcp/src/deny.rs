@@ -1,10 +1,9 @@
 //! Commands the MCP server must not expose as tools.
 //!
-//! Hardening of upstream `mtui/mcp/deny.py`. Each entry cannot meaningfully run
-//! outside an interactive terminal session, and is filtered out when
-//! [`crate::tools`] synthesises tools from the command [`Registry`]. (Upstream's
-//! third category — local process execution via `lrun` — no longer needs
-//! denying: the command was removed from mtui entirely.)
+//! Each entry cannot meaningfully run outside an interactive terminal session,
+//! and is filtered out when [`crate::tools`] synthesises tools from the command
+//! [`Registry`]. (Local process execution via `lrun` needs no denying: the
+//! command was removed from mtui entirely.)
 //!
 //! The deny surface is **not** re-declared here: it is the single
 //! [`mtui_core::MCP_DENYLIST`], which sits beside `register_all` so the list and
@@ -12,7 +11,7 @@
 //! consistency-checks it against the registry at test time). This module is the
 //! thin MCP-side accessor.
 //!
-//! Per-entry rationale (mirrors upstream):
+//! Per-entry rationale:
 //!
 //! - `quit`, `exit`, `EOF`: exit the process and would tear down the MCP server
 //!   along with the client connection.

@@ -1,29 +1,23 @@
 //! Translate a command's `clap` arg spec into a JSON-Schema `object`.
 //!
-//! Port of upstream `mtui/mcp/_schema.py`. Where upstream introspects
-//! **argparse actions** to build a `pydantic`/`inspect.Signature` the FastMCP
-//! SDK then derives a schema from, this module introspects a **built
-//! [`clap::Command`]** directly and emits the JSON Schema `rmcp` wants — a
-//! `serde_json::Map<String, Value>` shaped like
-//! `{"type":"object","properties":{…},"required":[…]}`.
+//! This module introspects a **built [`clap::Command`]** directly and emits
+//! the JSON Schema `rmcp` wants — a `serde_json::Map<String, Value>` shaped
+//! like `{"type":"object","properties":{…},"required":[…]}`.
 //!
 //! It is intentionally pure: the single entry point [`command_input_schema`]
 //! takes a `&clap::Command` and returns plain data. Tool registration, argv
 //! reconstruction, and schema slimming live in the sibling P7.6/P7.5/P7.9
 //! modules.
 //!
-//! # Deliberate deviations from upstream
+//! # Design notes
 //!
-//! * **No shared-`dest` collapse.** Upstream's `_scan_shared_dest_groups`
-//!   (~200 lines) exists because several argparse actions in a mutually
-//!   exclusive group can share one `dest` (`load_template -a/-k`, `set_repo
-//!   -A/-R`). In `clap` every group member carries a *distinct* arg id
-//!   (`auto`/`kernel`, `add`/`remove`), so each maps to its own schema property
-//!   naturally and the "exactly one required" constraint is enforced by
-//!   `clap::ArgGroup` at parse time — nothing for the schema to reconstruct.
-//! * **Ranged integers stay `{"type":"integer"}` without bounds.** Upstream
-//!   renders argparse `choices=range(1,31)` (`--days`) as a 30-element `enum`.
-//!   The Rust `--days` uses a `value_parser!(u32).range(1..=30)` parser; `clap`
+//! * **No shared-`dest` collapse needed.** In `clap` every member of a
+//!   mutually exclusive group carries a *distinct* arg id (`auto`/`kernel`,
+//!   `add`/`remove`), so each maps to its own schema property naturally and
+//!   the "exactly one required" constraint is enforced by `clap::ArgGroup` at
+//!   parse time — nothing for the schema to reconstruct.
+//! * **Ranged integers stay `{"type":"integer"}` without bounds.** The Rust
+//!   `--days` uses a `value_parser!(u32).range(1..=30)` parser; `clap`
 //!   erases the parser behind [`clap::builder::ValueParser`] and does not expose
 //!   the numeric bounds, so we emit a plain `integer` (the parser still enforces
 //!   the range at call time). The `clap` arg spec is the source of truth for the
@@ -390,7 +384,7 @@ mod tests {
 
     #[test]
     fn ranged_integer_emits_no_bounds_documented_deviation() {
-        // Intentional divergence from upstream's `enum: 1..30`: clap erases the
+        // A ranged integer parser: clap erases the
         // range parser, so we emit a plain integer with no minimum/maximum/enum.
         let days = props(&schema_for("openqa_overview"))["days"].clone();
         assert!(days.get("minimum").is_none());

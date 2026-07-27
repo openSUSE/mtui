@@ -1,10 +1,8 @@
 //! The collection of loaded templates plus an active pointer.
 //!
-//! Port of upstream `mtui.template_registry.TemplateRegistry`. It replaces the
-//! historical scalar `metadata` / `targets` state with a keyed collection of
-//! [`TestReport`] instances and an "active" pointer, keyed by RRID
-//! (`report.id()`). Each entry is an individually lockable [`ReportEntry`], and
-//! a dispatch acquires exactly the entry it acts on via
+//! A keyed collection of [`TestReport`] instances plus an "active" pointer,
+//! keyed by RRID (`report.id()`). Each entry is an individually lockable
+//! [`ReportEntry`], and a dispatch acquires exactly the entry it acts on via
 //! [`handle`](TemplateRegistry::handle) (the per-call active handle). The
 //! null-object fallback (returned when nothing is loaded) lives on
 //! [`Session`](crate::Session), which reads through its per-call active guard.
@@ -13,10 +11,9 @@
 //! the owner-key seed the host-arbitration work keys on as `(registry.id, RRID)`
 //! (RFC §5.7). One registry per REPL process, one per MCP session.
 //!
-//! ## Rust deviation: teardown
+//! ## Teardown
 //!
-//! Upstream `remove()` calls `target.close()` on each host, suppressing
-//! exceptions. Dropping a removed report drops its
+//! Dropping a removed report drops its
 //! [`HostsGroup`](mtui_hosts::HostsGroup) and every `Target`, which closes the
 //! transport on `Drop` — but that cannot release the report's *async* ownership:
 //! the in-process arbiter claim, the remote pool-claim lock
@@ -48,9 +45,9 @@ use tokio::sync::Mutex;
 /// different-RRID dispatch overlap is step 5, out of scope here.
 pub type ReportEntry = Arc<Mutex<Box<dyn TestReport + Send + Sync>>>;
 
-/// Wall-clock budget for one removed report's host-close fan-out (upstream
-/// `DISCONNECT_TIMEOUT_SECONDS = 45.0` / `quit`'s `CLOSE_TIMEOUT`); removal must
-/// still complete if a host hangs during teardown.
+/// Wall-clock budget for one removed report's host-close fan-out (matches
+/// `quit`'s `CLOSE_TIMEOUT`); removal must still complete if a host hangs
+/// during teardown.
 const REMOVE_CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Resolves the per-report close budget. Overridable in tests (via
@@ -71,11 +68,9 @@ fn remove_close_timeout() -> Duration {
 /// regardless of what is reported here (mirroring `quit`'s per-host logging).
 #[derive(Debug, Default)]
 pub struct RemoveReport {
-    /// Hosts that failed to disconnect, as `(hostname, error)` pairs (upstream
-    /// `failed to disconnect from <host>: <err>`).
+    /// Hosts that failed to disconnect, as `(hostname, error)` pairs.
     pub(crate) failed: Vec<(String, String)>,
-    /// Hosts still disconnecting when the close budget expired (upstream
-    /// `still disconnecting from <host> after <secs> seconds`).
+    /// Hosts still disconnecting when the close budget expired.
     pub(crate) stragglers: Vec<String>,
 }
 
@@ -123,11 +118,9 @@ impl TemplateRegistry {
             return;
         }
         // Wire the process-global host arbiter and this report's `(registry_id,
-        // RRID)` owner key before it is stored, mirroring upstream
-        // `TemplateRegistry.add` (`report._arbiter = self.arbiter`, `_owner =
-        // (self.id, rrid)`). With both set, `refhosts_from_tp`/autoconnect take
-        // the pool-selection path (one host per slot) instead of connecting
-        // every candidate.
+        // RRID)` owner key before it is stored. With both set, autoconnect
+        // takes the pool-selection path (one host per slot) instead of
+        // connecting every candidate.
         {
             let base = report.base_mut();
             base.arbiter = Some(get_arbiter());
@@ -144,8 +137,8 @@ impl TemplateRegistry {
     /// Inserts `report`, first tearing down any report already loaded under the
     /// same RRID.
     ///
-    /// The same-RRID replacement path (upstream `load` overwriting a template):
-    /// re-adding an existing RRID must release the *old* report's async ownership
+    /// The same-RRID replacement path: re-adding an existing RRID must
+    /// release the *old* report's async ownership
     /// (arbiter claim + remote pool/operation locks) and close its hosts before
     /// the new report is stored, otherwise the replaced report leaks its locks
     /// and connections. A brand-new RRID is a plain [`add`](Self::add) with no
@@ -181,10 +174,9 @@ impl TemplateRegistry {
     /// lock + graceful disconnect) under [`remove_close_timeout`]. Only after the
     /// teardown returns is the entry dropped and — if it was active — the active
     /// pointer repointed to the next remaining entry (insertion order), so a
-    /// reader never observes a half-torn-down active report. A no-op if `rrid` is
-    /// absent (upstream raises `KeyError`; the callers already gate on
-    /// membership). Returns per-host teardown failures and any straggler names
-    /// for best-effort logging.
+    /// reader never observes a half-torn-down active report. A no-op if `rrid`
+    /// is absent (the callers already gate on membership). Returns per-host
+    /// teardown failures and any straggler names for best-effort logging.
     pub async fn remove(&mut self, rrid: &str) -> RemoveReport {
         if !self.entries.contains_key(rrid) {
             return RemoveReport::default();
@@ -275,8 +267,8 @@ impl TemplateRegistry {
         self.active.as_deref()
     }
 
-    /// Makes `rrid` the active template. Returns `false` if `rrid` is not loaded
-    /// (upstream raises `KeyError`).
+    /// Makes `rrid` the active template. Returns `false` if `rrid` is not
+    /// loaded.
     pub fn set_active(&mut self, rrid: &str) -> bool {
         if self.entries.contains_key(rrid) {
             self.active = Some(rrid.to_owned());

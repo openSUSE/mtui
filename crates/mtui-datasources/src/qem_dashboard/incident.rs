@@ -1,5 +1,4 @@
-//! QEM Dashboard incident metadata, ported from
-//! `mtui/data_sources/qem_dashboard/incident.py`.
+//! QEM Dashboard incident metadata.
 //!
 //! [`QemIncident`] resolves the dashboard *incident number* from an
 //! [`RequestReviewID`] and fetches the incident record via
@@ -20,11 +19,11 @@ use super::client::QemDashboardClient;
 
 /// Incident metadata from the QEM Dashboard.
 ///
-/// Mirrors upstream `QEMIncident`: on construction it resolves the incident
+/// On construction it resolves the incident
 /// number (SLFO 1.2 requests key on the review id; everything else keys on the
 /// maintenance id) and fetches the incident record. A missing/failed fetch
 /// leaves [`data`](Self::data) as `None` — the [`is_present`](Self::is_present)
-/// predicate mirrors upstream `__bool__`.
+/// predicate reflects that.
 #[derive(Debug, Clone)]
 pub struct QemIncident {
     /// The request/review id of the incident.
@@ -43,8 +42,7 @@ impl QemIncident {
     /// # Errors
     ///
     /// Returns [`QemDashboardError::Http`] if the shared HTTP client cannot be
-    /// built (a fetch failure is *not* an error — it folds into `data = None`,
-    /// matching upstream).
+    /// built (a fetch failure is *not* an error — it folds into `data = None`).
     pub async fn new(
         rrid: RequestReviewID,
         apiurl: impl Into<String>,
@@ -55,7 +53,7 @@ impl QemIncident {
     }
 
     /// Build the incident metadata from an existing client (test/composition
-    /// seam), fetching the incident record eagerly as upstream `__init__` does.
+    /// seam), fetching the incident record eagerly on construction.
     #[must_use = "the fetched incident metadata should be used"]
     pub async fn with_client(rrid: RequestReviewID, client: QemDashboardClient) -> Self {
         let incident_number = Self::incident_number(&rrid);
@@ -70,7 +68,7 @@ impl QemIncident {
 
     /// Resolve the dashboard incident number from an [`RequestReviewID`].
     ///
-    /// Mirrors upstream `_incident_number`: an SLFO request with a `1.2`
+    /// An SLFO request with a `1.2`
     /// maintenance id keys on the review id; every other request keys on the
     /// maintenance id.
     ///
@@ -86,9 +84,9 @@ impl QemIncident {
 
     /// Return the shortest package name, for build-query compatibility.
     ///
-    /// Mirrors upstream `get_incident_name`: `None` when there is no incident
-    /// record or no packages, else the shortest package name (ties broken by the
-    /// stable sort, matching Python's `sorted(..., key=len)`).
+    /// `None` when there is no incident
+    /// record or no packages, else the shortest package name (ties broken by a
+    /// stable sort by length).
     #[must_use]
     pub fn get_incident_name(&self) -> Option<String> {
         let packages = self.data.as_ref()?.get("packages")?.as_array()?;
@@ -100,8 +98,6 @@ impl QemIncident {
     }
 
     /// Whether the incident record was successfully fetched.
-    ///
-    /// Mirrors upstream `__bool__`.
     #[must_use]
     pub fn is_present(&self) -> bool {
         self.data.is_some()
@@ -113,9 +109,8 @@ impl IncidentName for QemIncident {
     ///
     /// Delegates to the inherent [`get_incident_name`](Self::get_incident_name),
     /// falling back to an empty string when no incident record / package is
-    /// available (upstream passes the raw `get_incident_name()` value straight
-    /// into the build string; an empty name yields the same `:prefix:mid:` shape
-    /// the connectors already tolerate).
+    /// available; an empty name yields the same `:prefix:mid:` shape
+    /// the connectors already tolerate.
     fn get_incident_name(&self) -> String {
         Self::get_incident_name(self).unwrap_or_default()
     }
@@ -179,7 +174,6 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_and_shortest_package_name() {
-        // Ported from test_qem_incident_metadata.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incidents/12358"))

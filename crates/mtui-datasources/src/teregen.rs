@@ -1,5 +1,5 @@
 //! A read-only-plus-one-write client for the TeReGen Report API
-//! (`qam.suse.de/api/v1`), ported from `mtui/data_sources/teregen.py`.
+//! (`qam.suse.de/api/v1`).
 //!
 //! TeReGen serves the generated test-report data over HTTP: the decoded
 //! `metadata.json` plus template status. mtui prefers it as the **source of
@@ -12,7 +12,7 @@
 //! [`updates`](TeReGen::updates), which returns a `Result` so its caller can tell
 //! a genuinely-empty queue apart from an unreachable TeReGen. The base URL comes
 //! from the
-//! `[teregen] api` option (upstream default `https://qam.suse.de/api/v1`);
+//! `[teregen] api` option (default `https://qam.suse.de/api/v1`);
 //! wiring that config field is deferred to a later phase, so [`TeReGen::new`]
 //! takes the base URL explicitly for now (mirroring the [`Gitea`](crate::gitea)
 //! client's constructor).
@@ -21,13 +21,12 @@
 //! write): it returns `None` only when TeReGen is *unreachable*, and
 //! `{"error": …}` when the server *refuses*, so callers can tell the two apart.
 //!
-//! ## Deviation from upstream
+//! ## Interruptible waiting
 //!
-//! Upstream's [`wait_for_template`](TeReGen::wait_for_template) uses a blocking
-//! `threading.Event`-based interruptible sleep. Here it is `async` and the
+//! [`wait_for_template`](TeReGen::wait_for_template) is `async`, and the
 //! inter-poll wait uses [`tokio::time::sleep`], polling `should_stop` in small
 //! steps so cancellation takes effect promptly rather than after a full
-//! interval — behaviorally equivalent to upstream.
+//! interval.
 
 use std::time::Duration;
 
@@ -79,7 +78,7 @@ impl TeReGen {
     /// Build a client targeting `apiurl`, deriving the TLS posture from
     /// `config.ssl_verify`.
     ///
-    /// Mirrors upstream `TeReGen.__init__`, except the base URL is passed
+    /// The base URL is passed
     /// explicitly (the `[teregen] api` config field is deferred to a later
     /// phase) rather than read from `config.teregen_api`.
     ///
@@ -112,7 +111,7 @@ impl TeReGen {
     /// GET `path` and return the decoded JSON body, or `None` on any transport
     /// failure, non-2xx status, or invalid JSON.
     ///
-    /// Mirrors upstream `_get`: best-effort, so callers never see an error.
+    /// Best-effort, so callers never see an error.
     async fn get(&self, path: &str, query: &[(&str, String)]) -> Option<Value> {
         let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         // Encode the query ourselves: reqwest's `.query()` needs the `query`
@@ -447,16 +446,14 @@ fn build_query_string(params: &[(&str, String)]) -> String {
         .join("&")
 }
 
-/// Default poll interval for [`TeReGen::wait_for_template`], mirroring upstream
-/// `interval=5.0`.
+/// Default poll interval for [`TeReGen::wait_for_template`].
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(5);
-/// Default overall wait for [`TeReGen::wait_for_template`], mirroring upstream
-/// `timeout=600.0`.
+/// Default overall wait for [`TeReGen::wait_for_template`].
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Optional filters for [`TeReGen::updates`].
 ///
-/// Mirrors the keyword arguments of upstream `TeReGen.updates`. All fields
+/// All fields
 /// default to unset; empty string filters and `false` flags are omitted from
 /// the request query.
 #[derive(Debug, Clone, Default)]
@@ -850,7 +847,7 @@ mod tests {
     #[tokio::test]
     async fn regenerate_none_when_unreachable() {
         // No server: point the client at a closed port so the POST fails to
-        // connect, mirroring upstream's ConnectionError -> None.
+        // connect, mapping a connection error to None.
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
         let c = TeReGen::with_client(http, "http://127.0.0.1:1");
         assert_eq!(c.regenerate(RRID, false, false).await, None);

@@ -4,10 +4,9 @@
 //! `--help`/`--version` — the latter carrying the build-provenance block baked
 //! into `mtui-core` — and usage errors, exiting the process itself), initialises
 //! `tracing` from `-d/--debug` + `RUST_LOG`, seeds the session from `-a`/`-k`
-//! and `--sut` ([`seed_session`], the pre-`cmdloop` half of upstream
-//! `run_mtui`), then enters the interactive REPL (P6.2).
+//! and `--sut` ([`seed_session`]), then enters the interactive REPL (P6.2).
 //!
-//! Like upstream `mtui`, this binary has exactly **one** driving surface: the
+//! This binary has exactly **one** driving surface: the
 //! REPL. There is no positional command / single-command mode — headless
 //! single-command dispatch is an `mtui-mcp`/embedding concern
 //! ([`mtui_core::run_once`]), not a CLI mode. Full config loading + `Args` merge
@@ -27,12 +26,11 @@ fn main() -> anyhow::Result<()> {
 
     // The `--color` choice resolves once into a `ColorMode`. In the REPL every
     // operator-facing level — `error`/`warn`/`info` — flows through this one
-    // `tracing` subscriber, so a single color decision drives them all
-    // (upstream's single `ColorFormatter`).
+    // `tracing` subscriber, so a single color decision drives them all.
     let color = ColorMode::from(args.color);
     // `init_tracing` installs the subscriber behind a reload layer and hands back
     // the sink that flips the level at runtime; it is wired onto the session below
-    // so `set_log_level` actually changes the live filter (upstream `log.setLevel`).
+    // so `set_log_level` actually changes the live filter.
     let log_level_sink = init_tracing(args.debug, color);
     tracing::debug!(debug = args.debug, "mtui starting");
 
@@ -52,37 +50,35 @@ fn main() -> anyhow::Result<()> {
     // Apply the resolved `--color` to the display. `Session::new` defaults the
     // display to `ColorMode::Never`; without this the message-content color
     // helpers (`display.green/red/yellow/blue`) never emit ANSI in the live REPL.
-    // `Auto` (the default) then re-checks TTY / `NO_COLOR` / `COLOR` at each call,
-    // matching upstream `colors_enabled`.
+    // `Auto` (the default) then re-checks TTY / `NO_COLOR` / `COLOR` at each call.
     session.display.set_color(color);
 
     // Composition root: wire the REPL-only desktop-notification sink to the
     // headless-safe `notification::notify_user`. `mtui-mcp` never installs it, so
-    // toasts stay a REPL courtesy (upstream `prompt.notify_user`). The backend is
-    // itself a no-op off a TTY / without the `notify` feature, so this is safe
-    // even when the REPL runs piped.
+    // toasts stay a REPL courtesy. The backend is itself a no-op off a TTY /
+    // without the `notify` feature, so this is safe even when the REPL runs
+    // piped.
     session.set_notify_sink(Box::new(|msg: &str, error: bool| {
         mtui_cli::notify_user(msg, error);
     }));
 
-    // Composition root: install the REPL-only log-level sink (upstream
-    // `log.setLevel`). `set_log_level` calls this to reload the `tracing`
-    // subscriber's `EnvFilter` to the chosen level at runtime. `mtui-mcp` never
-    // installs one, so there the command stays a log-only no-op.
+    // Composition root: install the REPL-only log-level sink. `set_log_level`
+    // calls this to reload the `tracing` subscriber's `EnvFilter` to the chosen
+    // level at runtime. `mtui-mcp` never installs one, so there the command
+    // stays a log-only no-op.
     session.set_log_level_sink(log_level_sink);
 
-    // Composition root: install the REPL-only serialised interactive prompter
-    // (upstream `main.py`'s `prompter = Prompter()`). It backs the SSH
-    // command-timeout question ("keep waiting? [Y/n]"), serialised across
-    // parallel host tasks and suspending any live spinner. Installed *before*
-    // `seed_session` so hosts connected during `-a` seeding already carry the
-    // timeout prompt. `mtui-mcp` never installs one (headless → immediate
-    // abort, upstream `prompter=None`).
+    // Composition root: install the REPL-only serialised interactive prompter.
+    // It backs the SSH command-timeout question ("keep waiting? [Y/n]"),
+    // serialised across parallel host tasks and suspending any live spinner.
+    // Installed *before* `seed_session` so hosts connected during `-a` seeding
+    // already carry the timeout prompt. `mtui-mcp` never installs one
+    // (headless → immediate abort).
     session.set_prompter(mtui_hosts::Prompter::stdin());
 
     // Seed the session from `-a`/`-k` (load the update) and `--sut` (add hosts)
-    // before the loop — the pre-`cmdloop` half of upstream `run_mtui`. A failed
-    // explicit update exits here rather than entering an empty REPL.
+    // before the loop. A failed explicit update exits here rather than
+    // entering an empty REPL.
     if let ControlFlow::Break(code) = runtime.block_on(seed_session(&registry, &mut session, &args))
     {
         std::process::exit(code);

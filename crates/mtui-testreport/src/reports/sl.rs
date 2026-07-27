@@ -1,20 +1,19 @@
 //! The SUSE Linux [`TestReport`] implementation ([`SlReport`]).
 //!
-//! Port of upstream `mtui.test_reports.sl_report.SLTestReport`. It keys its
-//! identity on the parsed [`RequestReviewID`], derives its update-repo map by
-//! dispatching among the [`repoparse`](super::repoparse) helpers, and verifies
-//! its git commit hash against Gitea (bypassed for the legacy `1.1` maintenance
-//! id, which is still served from IBS).
+//! Keys its identity on the parsed [`RequestReviewID`], derives its
+//! update-repo map by dispatching among the [`repoparse`](super::repoparse)
+//! helpers, and verifies its git commit hash against Gitea (bypassed for the
+//! legacy `1.1` maintenance id, which is still served from IBS).
 //!
 //! ## Scope
 //!
 //! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`]) is
-//!   implemented here (task nbv.fly): add uses upstream's `-n ar -cfGkn`, remove
+//!   implemented here (task nbv.fly): add uses `-n ar -cfGkn`, remove
 //!   uses `-n rr`, both fanned out over [`TestReportBase::update_repos`].
-//! * `list_update_commands` renders per-host commands via `target.doer('updater')`
-//!   upstream, but the `OperationGroup`/doer seam on `Target` is deferred (see the
-//!   `TODO(Phase 4)` in `mtui-hosts::target::operation`). Until it is wired this
-//!   is a documented no-op stub.
+//! * `list_update_commands` would render per-host commands via
+//!   `target.doer('updater')`, but the `OperationGroup`/doer seam on `Target`
+//!   is deferred (see the `TODO(Phase 4)` in `mtui-hosts::target::operation`).
+//!   Until it is wired this is a documented no-op stub.
 
 use std::collections::HashMap;
 
@@ -30,7 +29,7 @@ use super::set_repo_with_add_flags;
 use super::update_flow;
 use crate::testreport::{HashCheck, TestReport, TestReportBase};
 
-/// A [`TestReport`] for SUSE Linux updates (upstream `SLTestReport`).
+/// A [`TestReport`] for SUSE Linux updates.
 pub struct SlReport {
     base: TestReportBase,
 }
@@ -38,8 +37,8 @@ pub struct SlReport {
 impl SlReport {
     /// Builds an [`SlReport`] from `config`.
     ///
-    /// Upstream's `__init__` seeds the git/rating envelope fields to empty and
-    /// `repositories` to an empty set; [`TestReportBase::new`] already applies
+    /// The git/rating envelope fields default to empty and `repositories` to an
+    /// empty set; [`TestReportBase::new`] already applies
     /// those defaults, so this simply wraps a fresh base.
     #[must_use]
     pub fn new(config: Config) -> Self {
@@ -65,7 +64,7 @@ impl TestReport for SlReport {
     }
 
     fn id(&self) -> String {
-        // Upstream `str(self.rrid)`. Empty when nothing is loaded.
+        // Empty when nothing is loaded.
         self.base
             .rrid
             .as_ref()
@@ -74,10 +73,9 @@ impl TestReport for SlReport {
     }
 
     fn parser(&self) -> HashMap<String, String> {
-        // Upstream registers `{"hosts": ReducedMetadataParser, "json": JSONParser}`.
         // The skeleton trait models the table's *keys* as strings; the concrete
         // parser dispatch lives in the loader (a later task). Values are the
-        // upstream parser names so callers can branch on them.
+        // parser names so callers can branch on them.
         HashMap::from([
             ("hosts".to_string(), "ReducedMetadataParser".to_string()),
             ("json".to_string(), "JSONParser".to_string()),
@@ -85,7 +83,7 @@ impl TestReport for SlReport {
     }
 
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
-        // Upstream dispatch order:
+        // Dispatch order:
         //   repositories set        -> reporepoparse(repositories, products)
         //   maintenance_id == "1.1" -> slrepoparse(repository, products)
         //   otherwise               -> gitrepoparse(repository, products)
@@ -182,9 +180,9 @@ impl TestReport for SlReport {
         let giteaprapi = self.base.giteaprapi.clone().unwrap_or_default();
         let gitea = match Gitea::new(&self.base.config, &giteaprapi, None) {
             Ok(g) => g,
-            // A missing token is a distinct, actionable failure upstream
-            // surfaces as `MissingGiteaTokenError`; anything else building the
-            // client is a failed call.
+            // A missing token is a distinct, actionable failure
+            // (`HashCheck::MissingToken`); anything else building the client
+            // is a failed call.
             Err(GiteaError::MissingToken) => return HashCheck::MissingToken,
             Err(e) => {
                 debug!(error = %e, "check_hash: could not build Gitea client");
@@ -207,7 +205,7 @@ impl TestReport for SlReport {
 
 #[async_trait::async_trait]
 impl SetRepo for SlReport {
-    /// Ports `SLTestReport.set_repo`: add uses `-n ar -cfGkn`, remove uses
+    /// Adds a repo with `-n ar -cfGkn`, removes with
     /// `-n rr`, fanned out over [`TestReportBase::update_repos`].
     async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
         set_repo_with_add_flags(&self.base, target, operation, "-n ar -cfGkn").await;

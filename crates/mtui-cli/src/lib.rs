@@ -32,9 +32,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// A spinner-aware stderr writer for the `tracing` subscriber.
 ///
-/// The Rust port of upstream's `SpinnerAwareStreamHandler`
-/// (`mtui.cli.colors.formatter`): every log record is written while holding a
-/// [`mtui_hosts::suspend`] guard, so a live TTY spinner erases its current frame
+/// Every log record is written while holding a [`mtui_hosts::suspend`] guard,
+/// so a live TTY spinner erases its current frame
 /// (`\r` + clear-to-EOL, homing the cursor to column 0), the record lands on a
 /// clean line, and the spinner repaints on its next tick. A strict no-op beyond
 /// taking the paint lock when no spinner is active — notably off a TTY, where
@@ -67,11 +66,10 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// Initialises the `tracing` subscriber.
 ///
 /// Honours `RUST_LOG` (mtui logging contract); `-d/--debug` raises the
-/// default level to `DEBUG` when `RUST_LOG` is unset, mirroring upstream's
-/// `if args.debug: logger.setLevel(DEBUG)`.
+/// default level to `DEBUG` when `RUST_LOG` is unset.
 ///
-/// Format mirrors upstream's `ColorFormatter`. At the **default** level the
-/// output is compact and colorized like the command display: a lowercased,
+/// At the **default** level the output is compact and colorized like the
+/// command display: a lowercased,
 /// colored level token (green `info` / yellow `warn` / red `error`) then
 /// `": "` then the message — no timestamp, no module target (see
 /// [`logfmt::CompactLevelFormat`]). Whether escapes are emitted is resolved from
@@ -83,9 +81,9 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// target, e.g. `2026-07-10T09:41:39.891821Z DEBUG mtui_cli::repl: …`) for
 /// diagnostics; the compact colored layer is not applied there.
 ///
-/// **Deviation from upstream:** the DEBUG-only `" [module:function]"` suffix is
-/// not reproduced — under `-d` the verbose format restores the module `target`,
-/// which covers the diagnostic need.
+/// The DEBUG-only `" [module:function]"` suffix is not reproduced — under `-d`
+/// the verbose format restores the module `target`, which covers the
+/// diagnostic need.
 ///
 /// The user-facing *command error* is rendered by the session display, not this
 /// subscriber (see `repl::render_error`), so a failing command never prints
@@ -93,14 +91,14 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 ///
 /// **Runtime reload.** The `EnvFilter` is installed behind a
 /// [`tracing_subscriber::reload`] layer, and the returned [`LogLevelSink`]
-/// closure flips it at runtime — this is what backs the `set_log_level` command
-/// (upstream `log.setLevel`). Install it on the session with
+/// closure flips it at runtime — this is what backs the `set_log_level`
+/// command. Install it on the session with
 /// [`set_log_level_sink`](mtui_core::Session::set_log_level_sink). The closure
 /// keeps the reload [`Handle`](tracing_subscriber::reload::Handle) inside
 /// `mtui-cli`, so the `tracing_subscriber` types never leak into the lower
 /// crates. A runtime `set_log_level` **replaces the whole filter** with the new
-/// level (matching upstream's global `setLevel`), discarding any per-target
-/// `RUST_LOG` directives the process started with. It changes the *level filter
+/// level, discarding any per-target `RUST_LOG` directives the process started
+/// with. It changes the *level filter
 /// only*, not the event format — a runtime switch to `debug` does not
 /// retroactively add the verbose timestamp/target layout selected by `-d` at
 /// startup (deliberate, consistent with [`logfmt`]).
@@ -114,7 +112,7 @@ pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
     if debug {
         // Verbose diagnostics: keep timestamp + level + target (stock format).
         // The writer stays spinner-aware so a mid-fan-out DEBUG line still
-        // erases the live frame before printing (upstream SpinnerAwareStreamHandler).
+        // erases the live frame before printing.
         registry
             .with(tracing_subscriber::fmt::layer().with_writer(SpinnerAwareStderr))
             .init();
@@ -136,8 +134,8 @@ pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
     }
 
     // The sink `set_log_level` drives: reload the whole `EnvFilter` to the new
-    // level. Best-effort — if the subscriber was already dropped, upstream
-    // likewise just logs and moves on.
+    // level. Best-effort — if the subscriber was already dropped, the reload is
+    // silently ignored.
     Box::new(move |level: LogLevel| {
         let _ = handle.reload(EnvFilter::new(level_directive(level)));
     })

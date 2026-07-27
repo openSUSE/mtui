@@ -1,21 +1,18 @@
 //! The error family for the native OBS/IBS backend.
 //!
-//! Ported from upstream `mtui/data_sources/obs/errors.py` (the internal
-//! transport/timeout subtypes) plus the caller-facing `ObsError` /
-//! `ObsConfigError` base from `mtui/support/exceptions.py`. Upstream splits
-//! these across a class hierarchy so the `OSC` facade can catch the *whole*
-//! family with one `except ObsError` and fold it into a logged `False`. This
-//! port collapses that hierarchy into a single [`ObsError`] enum: one type the
-//! facade matches exhaustively, mirroring the crate's other typed error
-//! families ([`crate::error::GiteaError`], [`crate::error::OscError`]).
+//! One [`ObsError`] enum covers every failure in the backend — transport,
+//! timeout, config/credential, XML parse, and workflow-precondition — so the
+//! `OSC` facade can match it exhaustively with a single `Err(_)` arm and fold
+//! it into a logged `false`, mirroring the crate's other typed error families
+//! ([`crate::error::GiteaError`], [`crate::error::OscError`]).
 //!
 //! The transport foundation (G1a) landed [`Api`](ObsError::Api),
 //! [`Timeout`](ObsError::Timeout) and the [`Http`](ObsError::Http) transport
-//! passthrough; the oscrc reader (G1b) added [`Config`](ObsError::Config)
-//! (upstream `ObsConfigError`); the XML models (G1d) added
-//! [`Parse`](ObsError::Parse) (malformed OBS XML and the DTD/XXE refusal); the
-//! QAM operations (G1f) added [`Op`](ObsError::Op) (workflow-precondition
-//! refusals). `#[non_exhaustive]` keeps further additions additive.
+//! passthrough; the oscrc reader (G1b) added [`Config`](ObsError::Config); the
+//! XML models (G1d) added [`Parse`](ObsError::Parse) (malformed OBS XML and
+//! the DTD/XXE refusal); the QAM operations (G1f) added [`Op`](ObsError::Op)
+//! (workflow-precondition refusals). `#[non_exhaustive]` keeps further
+//! additions additive.
 
 use thiserror::Error;
 
@@ -31,7 +28,7 @@ use crate::error::HttpError;
 pub enum ObsError {
     /// An OBS API call returned a non-2xx HTTP response.
     ///
-    /// Reproduces upstream `ObsApiError`: the message is
+    /// The message is
     /// `OBS API returned {status} for {url}` with a `": {summary}"` suffix only
     /// when the `<status><summary>` error envelope carried a non-empty summary.
     /// The `status`/`url`/`summary` are kept as inspectable fields so callers
@@ -48,7 +45,7 @@ pub enum ObsError {
 
     /// A native OBS operation exceeded its coarse between-calls time budget.
     ///
-    /// Reproduces upstream `ObsTimeoutError`. A whole operation makes a few
+    /// A whole operation makes a few
     /// calls; the deadline is checked *before* each one (there is no safe
     /// in-process mid-call hard kill), so the payload names the URL the budget
     /// was exhausted before.
@@ -58,7 +55,7 @@ pub enum ObsError {
     /// A configuration/credential fault while reading the oscrc (or, later, the
     /// SSH-signature signer, G1c).
     ///
-    /// Reproduces upstream `ObsConfigError`: a fail-closed, secret-safe message
+    /// A fail-closed, secret-safe message
     /// that names the real failing oscrc file/section. The native oscrc reader
     /// ([`crate::obs::oscrc`]) never interpolates a parser error's own text into
     /// this message, so a malformed oscrc's offending source line (possibly a
@@ -68,18 +65,16 @@ pub enum ObsError {
 
     /// A malformed OBS XML payload, or a payload refused by the DTD/XXE guard.
     ///
-    /// Reproduces upstream `models.py`'s bare `ObsError(msg)`: both a reader
-    /// failure and the pre-parse `<!DOCTYPE`/`<!ENTITY` refusal raise the same
-    /// base exception, so the `OSC` facade folds either into a logged `false`
-    /// with one `Err(_)` arm. The DTD-refusal message contains `"DTD"`,
-    /// matching upstream's `pytest.raises(ObsError, match="DTD")`.
+    /// Both a reader failure and the pre-parse `<!DOCTYPE`/`<!ENTITY` refusal
+    /// map onto this same variant, so the `OSC` facade folds either into a
+    /// logged `false` with one `Err(_)` arm. The DTD-refusal message contains
+    /// `"DTD"`.
     #[error("{0}")]
     Parse(String),
 
     /// A QAM operation refused a workflow precondition (G1f).
     ///
-    /// Reproduces upstream `qam.py`'s bare `ObsError(msg)` raised for the
-    /// operation-level refusals — an empty comment, an ambiguous auto-inferred
+    /// Covers the operation-level refusals — an empty comment, an ambiguous auto-inferred
     /// group, a request not open for review, a missing/wrong-`SUMMARY`
     /// testreport, a previous-decline guard, and the group-approve refusal.
     /// Kept distinct from [`Parse`](ObsError::Parse) (which means malformed XML)
@@ -95,8 +90,7 @@ pub enum ObsError {
 }
 
 /// Render the `": {summary}"` suffix for [`ObsError::Api`], empty when the
-/// summary is empty — matching upstream `ObsApiError.__init__`'s
-/// `detail = f": {summary}" if summary else ""`.
+/// summary is empty.
 fn summary_suffix(summary: &str) -> String {
     if summary.is_empty() {
         String::new()
@@ -111,7 +105,7 @@ mod tests {
 
     #[test]
     fn api_error_display_includes_summary_suffix() {
-        // Mirrors upstream ObsApiError message with a non-empty summary.
+        // A non-empty summary.
         let e = ObsError::Api {
             status: 404,
             url: "https://api.suse.de/request/9".to_owned(),
@@ -153,14 +147,14 @@ mod tests {
 
     #[test]
     fn config_error_display_is_verbatim_message() {
-        // Mirrors upstream ObsConfigError: a plain, fail-closed message.
+        // A plain, fail-closed message.
         let e = ObsError::Config("oscrc [https://api.suse.de] has no 'user'".to_owned());
         assert_eq!(e.to_string(), "oscrc [https://api.suse.de] has no 'user'");
     }
 
     #[test]
     fn parse_error_display_is_verbatim_message() {
-        // Mirrors upstream models.py's bare ObsError(msg): plain, verbatim.
+        // Plain, verbatim message.
         let e = ObsError::Parse("refusing to parse an OBS document that carries a DTD".to_owned());
         assert_eq!(
             e.to_string(),
@@ -170,7 +164,7 @@ mod tests {
 
     #[test]
     fn op_error_display_is_verbatim_message() {
-        // Mirrors upstream qam.py's bare ObsError(msg): plain, verbatim.
+        // Plain, verbatim message.
         let e =
             ObsError::Op("group approval is not supported by the native OBS backend".to_owned());
         assert_eq!(

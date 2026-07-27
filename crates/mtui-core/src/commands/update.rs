@@ -11,7 +11,7 @@ use crate::session::Session;
 
 /// Applies the testing update to the target hosts.
 ///
-/// Ports upstream `mtui.commands.update.Update`. Drives
+/// Drives
 /// [`TestReport::perform_update`](mtui_testreport::TestReport::perform_update),
 /// which runs the full bespoke update flow (optional prepare, pre/post package
 /// checks, repo add, per-host update + check, transactional reboot, two-phase
@@ -188,8 +188,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_template_loaded_errors() {
-        // No report loaded → requires_update guard fires first, mirroring
-        // upstream @requires_update.
+        // No report loaded → requires_update guard fires first.
         let (mut session, _buf) = empty_session();
         let args = matches(&Update, &[]);
         let err = Update.call(&mut session, &args).await.unwrap_err();

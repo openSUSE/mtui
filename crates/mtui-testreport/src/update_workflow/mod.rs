@@ -1,15 +1,14 @@
 //! The update-workflow engine: action command tables, post-run check tables,
 //! and the `${}` command-template helper.
 //!
-//! ## Reference
+//! ## Model
 //!
-//! Ports upstream `mtui/update_workflow/{actions,checks}/` plus the
-//! `string.Template` usage those tables depend on. Upstream models the workflow
-//! as two families of tables keyed by a `(release, transactional)` tuple:
+//! The workflow is modelled as two families of tables keyed by a
+//! `(release, transactional)` tuple:
 //!
-//! * **actions** ([`actions`]) map a key to a set of `string.Template` command
+//! * **actions** ([`actions`]) map a key to a set of `${}` command-template
 //!   strings (`command`, and — depending on the action — `reboot`,
-//!   `installed_only`, `list_command`). They are stored in a `DictWithInjections`
+//!   `installed_only`, `list_command`). They are stored in a table
 //!   that raises a role-specific `MissingDoerError` on an unknown key.
 //! * **checks** ([`checks`]) map the same key to a function
 //!   `(hostname, stdout, stdin, stderr, exitcode) -> None` that raises
@@ -36,7 +35,7 @@ pub use checks::Diagnostic;
 
 /// The lookup key shared by every action and check table.
 ///
-/// Mirrors upstream's `(str, bool)` dict key: a *release* token — a product
+/// The key is a `(str, bool)` pair: a *release* token — a product
 /// major version (`"11"`, `"12"`, `"15"`, `"16"`), the package-manager family
 /// `"YUM"`, or `"slmicro"` — paired with a *transactional* flag (read-only-root
 /// hosts, e.g. SL Micro). The `Vec`-free `(String, bool)` here keeps ownership
@@ -45,15 +44,15 @@ pub(crate) type WorkflowKey = (String, bool);
 
 /// A failure recognised by a post-run [`checks`] function.
 ///
-/// Ports upstream `mtui.support.exceptions.UpdateError(reason, host)`. Its
-/// `Display` matches upstream `__str__`: `"{host}: {reason}"` when a host is
+/// Its
+/// `Display` renders `"{host}: {reason}"` when a host is
 /// present, otherwise just `"{reason}"`. The `reason` strings are stable
 /// contract values consumed by callers ("package not found", "update stack
 /// locked", "RPM Error", "Dependency Error", "Unknown Error", "Unspecified
 /// Error").
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub struct UpdateError {
-    /// The failure reason (a stable, upstream-matching short string).
+    /// The failure reason (a stable, contract short string).
     pub(crate) reason: String,
     /// The host the command ran on, if known.
     pub(crate) host: Option<String>,
@@ -93,7 +92,7 @@ impl UpdateError {
         self.cancelled
     }
 
-    /// Builds a host-less [`UpdateError`] (upstream `UpdateError(reason)`).
+    /// Builds a host-less [`UpdateError`].
     #[must_use]
     pub(crate) fn reason_only(reason: impl Into<String>) -> Self {
         Self {
@@ -115,7 +114,7 @@ impl std::fmt::Display for UpdateError {
 
 /// The five update-workflow *action* roles.
 ///
-/// Each maps to one upstream action module and its `MissingDoerError` subclass.
+/// Each maps to one action module and its `MissingDoerError` variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     /// `install` — `installer` / `MissingInstallerError`.
@@ -164,8 +163,8 @@ impl Role {
 
     /// Builds the role's "missing doer" [`HostError`] for `release`.
     ///
-    /// Mirrors the per-module `key_error=Missing*Error` on upstream's
-    /// `DictWithInjections`.
+    /// The per-role `Missing*Error` for an unknown `(release, transactional)`
+    /// key.
     #[must_use]
     fn missing_error(self, release: &str) -> HostError {
         let release = release.to_owned();
@@ -192,7 +191,7 @@ pub trait DoerProvider: Send + Sync {
     /// # Errors
     ///
     /// Returns the role's [`HostError::MissingInstaller`] / etc. when no entry
-    /// exists for the key, matching upstream's `Missing*Error`.
+    /// exists for the key.
     fn doer(
         &self,
         role: Role,
@@ -213,13 +212,13 @@ pub trait CheckProvider: Send + Sync {
     fn check(&self, role: Role, release: &str, transactional: bool) -> Option<checks::CheckFn>;
 }
 
-/// The default [`DoerProvider`] / [`CheckProvider`], backed by the ported
+/// The default [`DoerProvider`] / [`CheckProvider`], backed by the
 /// [`actions`] and [`checks`] tables.
 ///
 /// The concrete registry every flow builds and, for install/uninstall, injects
 /// into the `HostsGroup` as a `mtui_hosts::PlanProvider`. It carries the
 /// prepare-only `force` / `testing` flags (the other actions ignore them),
-/// mirroring how upstream threads them into `t.doer("preparer", force, testing)`.
+/// threading them into the `prepare` doers.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WorkflowRegistry {
     /// The `--force-resolution` flag threaded into `prepare` doers.
@@ -301,7 +300,7 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
         // The raw templates go across the seam, not rendered strings: the
         // package list is only known inside `mtui-hosts`, at
         // `Operation::collect` time. `Doer` substitutes `$packages` with a plain
-        // `replace`, which agrees with this crate's `string.Template`
+        // `replace`, which agrees with this crate's [`substitute`]
         // semantics for every install/uninstall template (each holds exactly one
         // `$packages` and no `$$` or `${}`); `doer_templates_render_like_the_action_tables`
         // pins that agreement.
@@ -331,7 +330,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn update_error_display_with_host_matches_upstream() {
+    fn update_error_display_with_host_is_stable() {
         let e = UpdateError::new("package not found", "host.example");
         assert_eq!(e.to_string(), "host.example: package not found");
     }
@@ -422,7 +421,7 @@ mod tests {
     #[test]
     fn registry_uninstall_uses_install_check_table() {
         let reg = WorkflowRegistry::default();
-        // uninstall shares the install check table (upstream behaviour).
+        // uninstall shares the install check table.
         assert!(reg.check(Role::Uninstall, "15", false).is_some());
     }
 
@@ -511,7 +510,7 @@ mod tests {
     }
 
     /// `mtui_hosts::Doer` substitutes `$packages` with a plain `str::replace`,
-    /// while this crate renders the same templates through `string.Template`
+    /// while this crate renders the same templates through [`substitute`]
     /// semantics. They agree for every install/uninstall entry today; this
     /// fails if a future template gains `$$` or `${}`, which `replace` would
     /// mangle.
