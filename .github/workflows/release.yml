@@ -102,13 +102,53 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # Needed only for the tag list that picks the release-notes base below.
+      # `fetch-depth: 0` because a shallow clone carries no tags.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          path: repo
+          persist-credentials: false
+
+      # Pick the previous release tag explicitly.
+      #
+      # `--generate-notes` alone asks GitHub to guess the base, and it guesses
+      # wrong here: releases are cut on per-minor branches (26.0.x, 26.1.x)
+      # that fork from main and are never merged back, so consecutive release
+      # tags are *siblings* rather than ancestors. Finding no previous release
+      # in the tag's own ancestry, GitHub falls back to the start of the
+      # repository — which is why 26.1.1's notes re-listed the entire Python
+      # era back to PR #72.
+      #
+      # Ordering by version rather than by ancestry is what makes this work
+      # across sibling branches. An empty result means this is the first
+      # release, and generating from the repository root is then correct.
+      - name: Resolve the release-notes base tag
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          # An explicit walk rather than `grep -B1`: the step runs under
+          # `bash -e`, where a grep that matches nothing exits 1 and would fail
+          # the release. This cannot fail, and yields an empty base for the
+          # oldest tag — the first-release case, where generating from the
+          # repository root is correct.
+          prev=""
+          while read -r tag; do
+            [ "$tag" = "$GITHUB_REF_NAME" ] && break
+            prev="$tag"
+          done < <(git tag --list '[0-9]*.[0-9]*.[0-9]*' | sort -V)
+          echo "NOTES_START_TAG=$prev" >> "$GITHUB_ENV"
+          echo "release-notes base: ${prev:-<repository root: first release>}"
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          # No checkout in this job, so tell gh which repo to act on.
           GH_REPO: ${{ github.repository }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          --title "$GITHUB_REF_NAME"
-          --generate-notes
-          dist/*
+        run: |
+          args=(--title "$GITHUB_REF_NAME" --generate-notes)
+          if [ -n "$NOTES_START_TAG" ]; then
+            args+=(--notes-start-tag "$NOTES_START_TAG")
+          fi
+          gh release create "$GITHUB_REF_NAME" "${args[@]}" dist/*
