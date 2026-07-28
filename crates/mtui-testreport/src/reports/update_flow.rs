@@ -81,13 +81,28 @@ pub enum UpdateFailure {
     /// The update command never ran to completion on any host that failed —
     /// it timed out, or the connection dropped part-way (`Target::run`'s `-1`).
     ///
-    /// Like [`Reboot`](Self::Reboot) this skips the rollback, and for the same
-    /// reason: `-1` says the flow could not talk to the host, so a group-wide
-    /// downgrade would revert the *healthy* hosts on behalf of one it cannot
-    /// reach either way. It is a distinct variant rather than a
-    /// [`Check`](Self::Check) because a check failure means "the patch ran and
-    /// went wrong" — a half-applied state the rollback repairs — whereas this
-    /// means the patch may never have started.
+    /// Like [`Reboot`](Self::Reboot) this skips the rollback — but not by the
+    /// reboot arm's reachability argument, because `-1` is a sentinel, not a
+    /// liveness verdict. It covers two situations, and each vetoes the
+    /// rollback on its own:
+    ///
+    /// * **The flow lost the host** (connection dropped mid-command, or never
+    ///   connected). A group-wide downgrade would revert the *healthy* hosts
+    ///   on behalf of one it cannot reach either way.
+    /// * **The command outlived its timeout on a host that is up.** The
+    ///   timeout closes the SSH channel, which asks the remote side to
+    ///   reclaim the process — but rpm masks signals inside its transaction,
+    ///   so the patch may have died, finished after the flow stopped
+    ///   watching, or still be holding the package-manager lock. Dispatching
+    ///   the group-wide downgrade now fires a second transaction at the one
+    ///   host whose first was never observed to end, and reverts every
+    ///   healthy host to do it.
+    ///
+    /// Both stay distinct from [`Check`](Self::Check) for the same reason: a
+    /// check failure means "the patch ran and produced a bad verdict" — a
+    /// half-applied state the rollback repairs — whereas `-1` is the absence
+    /// of a verdict. The host's state is unknown, not known-bad; it needs
+    /// eyes on it, not an automated second transaction.
     ///
     /// Only used when **every** failed host is in that state; a run mixing a
     /// real check failure with a lost host still rolls back, on behalf of the
@@ -465,8 +480,9 @@ async fn perform_operation(
         Ok(report) => report,
     };
 
-    // The history row is written inside `Operation::run`, between the command
-    // fan-out and the reboot — writing it here would lose it on exactly the
+    // Deliberately no history write here: `Operation::run` writes the row
+    // itself, between the command fan-out and the reboot, because a row
+    // written after this call returns would be lost on exactly the
     // transactional hosts that never came back.
 
     // A host whose post-run check failed, and any transactional host that
@@ -1389,7 +1405,9 @@ pub async fn perform_update(
 /// host's reboot took effect — reconnecting is not sufficient, since a host can
 /// answer without ever having gone down. Otherwise `Err` with the aggregated
 /// failure: a check failure (packages may be half-applied) is
-/// [`UpdateFailure::Check`] and **suppresses the reboot entirely**; a reboot
+/// [`UpdateFailure::Check`] and **suppresses the reboot entirely** — unless
+/// every failed host's command never completed (`lastexit()` of `-1`), which
+/// is [`UpdateFailure::NotRun`] and skips the rollback; a reboot
 /// failure is [`UpdateFailure::Reboot`] when the host is unreachable and
 /// [`UpdateFailure::RebootNotTaken`] when every failed host is still reachable,
 /// which is what decides whether the group-wide rollback runs. A single failure is returned verbatim; more than
@@ -1430,12 +1448,16 @@ async fn update_run_phase(
     // A check failure keeps precedence and suppresses the reboot entirely: a
     // transactional host whose patch failed must not be rebooted into it.
     let result = if !failures.is_empty() {
-        // Route on *why* the check failed, exactly as the reboot arm below
-        // routes on why the reboot failed. `Target::run` records `-1` when a
-        // command timed out, lost its connection, or was dispatched to an
-        // unconnected target — i.e. the flow could not talk to the host, so it
-        // does not know whether the patch ran. A group-wide rollback cannot
-        // repair such a host and would revert every healthy one on its behalf.
+        // Route on *why* the check failed, as the reboot arm below routes on
+        // why the reboot failed — though not by its reachability probe: `-1`
+        // is a sentinel, not a liveness verdict. `Target::run` records it for
+        // a dropped connection, an unconnected target, *and* a timeout on a
+        // host that is up the whole time. The first two are hosts a group-wide
+        // rollback cannot repair, so it would only revert the healthy ones on
+        // their behalf; the third is a host whose transaction was never
+        // observed to end, where a downgrade dispatched now races whatever is
+        // left of it for the package-manager lock. All three veto the
+        // rollback — `UpdateFailure::NotRun` carries the full argument.
         //
         // `all`, not `any`, for the same reason as the reboot arm: a run that
         // mixes a lost host with a genuine check failure still rolls back, on

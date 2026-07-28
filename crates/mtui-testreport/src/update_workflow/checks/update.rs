@@ -63,6 +63,16 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// whole fleet over a no-op. The stdout/stderr markers below are unaffected by
 /// the masking and are what this key is judged on.
 ///
+/// The markers carry one residual exposure, accepted as a decision rather
+/// than an oversight: the `Error:` rule reads stderr from the whole `exec`,
+/// and the template's sibling commands (`zypper -n lr -puU`, the `zypper -n
+/// rr` cleanup loop) can emit `Error:` too — the same objection that rules
+/// the markers out for [`yum`]. The difference is the transcript: every
+/// command in this template is zypper, whose `Error:` lines are the
+/// vocabulary [`markers`] was written against, and the exposure is exactly
+/// the one the plain zypper keys have always carried. On [`yum`] the same
+/// rule would be a new one, judging a transcript it was never written for.
+///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "update command timed out or
