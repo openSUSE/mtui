@@ -82,41 +82,41 @@ mod tests {
     #[test]
     fn numeric_minor_round_trips_as_num() {
         let yaml = "major: 15\nminor: 5\n";
-        let v: Version = serde_yaml::from_str(yaml).unwrap();
+        let v: Version = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(v.major, VersionField::Num(15));
         assert_eq!(v.minor, Some(VersionField::Num(5)));
         // Re-serializing preserves the numeric shape.
-        let round = serde_yaml::to_string(&v).unwrap();
-        let back: Version = serde_yaml::from_str(&round).unwrap();
+        let round = serde_saphyr::to_string(&v).unwrap();
+        let back: Version = serde_saphyr::from_str(&round).unwrap();
         assert_eq!(back, v);
     }
 
     #[test]
     fn textual_minor_round_trips_as_text() {
         let yaml = "major: 12\nminor: sp4\n";
-        let v: Version = serde_yaml::from_str(yaml).unwrap();
+        let v: Version = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(v.major, VersionField::Num(12));
         assert_eq!(v.minor, Some(VersionField::Text("sp4".to_owned())));
-        let round = serde_yaml::to_string(&v).unwrap();
-        let back: Version = serde_yaml::from_str(&round).unwrap();
+        let round = serde_saphyr::to_string(&v).unwrap();
+        let back: Version = serde_saphyr::from_str(&round).unwrap();
         assert_eq!(back, v);
     }
 
     #[test]
     fn omitted_minor_deserializes_to_none() {
         let yaml = "major: 15\n";
-        let v: Version = serde_yaml::from_str(yaml).unwrap();
+        let v: Version = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(v.major, VersionField::Num(15));
         assert_eq!(v.minor, None);
         // With minor None, it is skipped on serialize.
-        let round = serde_yaml::to_string(&v).unwrap();
+        let round = serde_saphyr::to_string(&v).unwrap();
         assert!(!round.contains("minor"));
     }
 
     #[test]
     fn numeric_and_textual_minor_are_distinct() {
-        let num: Version = serde_yaml::from_str("major: 12\nminor: 4\n").unwrap();
-        let text: Version = serde_yaml::from_str("major: 12\nminor: sp4\n").unwrap();
+        let num: Version = serde_saphyr::from_str("major: 12\nminor: 4\n").unwrap();
+        let text: Version = serde_saphyr::from_str("major: 12\nminor: sp4\n").unwrap();
         assert_ne!(num.minor, text.minor);
     }
 

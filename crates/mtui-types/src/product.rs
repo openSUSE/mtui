@@ -74,7 +74,7 @@ addons:
       major: 15
       minor: 5
 ";
-        let host: Host = serde_yaml::from_str(yaml).unwrap();
+        let host: Host = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(host.name, "host-default-x86");
         assert_eq!(host.arch, "x86_64");
         assert_eq!(host.product.name, "sles");
@@ -86,8 +86,8 @@ addons:
         assert_eq!(host.addons[0].name, "sdk");
 
         // Round-trip preserves the row.
-        let round = serde_yaml::to_string(&host).unwrap();
-        let back: Host = serde_yaml::from_str(&round).unwrap();
+        let round = serde_saphyr::to_string(&host).unwrap();
+        let back: Host = serde_saphyr::from_str(&round).unwrap();
         assert_eq!(back, host);
     }
 
@@ -102,7 +102,7 @@ product:
     major: 12
     minor: sp4
 ";
-        let host: Host = serde_yaml::from_str(yaml).unwrap();
+        let host: Host = serde_saphyr::from_str(yaml).unwrap();
         assert!(host.addons.is_empty());
         assert_eq!(
             host.product.version,
@@ -116,7 +116,7 @@ product:
     #[test]
     fn product_without_version_deserializes() {
         let yaml = "name: rhel\n";
-        let product: Product = serde_yaml::from_str(yaml).unwrap();
+        let product: Product = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(product.name, "rhel");
         assert_eq!(product.version, None);
     }
