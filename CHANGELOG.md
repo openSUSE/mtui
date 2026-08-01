@@ -20,6 +20,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `approve` no longer approves a Gitea update whose PR head differs from the
+  checked-out testreport without saying so. Interactively it now logs the
+  expected/actual hash pair and asks for confirmation (default no); a missing
+  Gitea token or a failed Gitea call refuses on both surfaces instead of
+  rendering an empty `( -> )` pair headlessly.
 - `update` now reaches a verdict on SL Micro and RHEL/YUM hosts. Both have had
   an update command since the port but no post-update *check*, so the flow
   skipped them silently and reported success however the patch went — a locked
