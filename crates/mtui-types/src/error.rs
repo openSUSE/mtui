@@ -141,7 +141,7 @@ pub enum PackageSpecParseError {
 /// Error produced when a `refhosts.yml` document cannot be parsed.
 ///
 /// A document-level YAML parse failure propagates as this typed error wrapping
-/// the underlying `serde_yaml` failure. Note: individual *malformed rows* do not
+/// the underlying `serde-saphyr` failure. Note: individual *malformed rows* do not
 /// surface here — they are dropped (logged) so one bad row
 /// never aborts the whole load. Only a document-level YAML failure is fatal.
 #[derive(Debug, Error)]
@@ -149,7 +149,7 @@ pub enum PackageSpecParseError {
 pub enum RefhostsParseError {
     /// The YAML document itself was malformed.
     #[error("failed to parse refhosts.yml: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    Yaml(#[from] serde_saphyr::Error),
 }
 
 /// Error produced when an RPM version string cannot be parsed.

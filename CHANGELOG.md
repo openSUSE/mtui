@@ -8,6 +8,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- `refhosts.yml` rows now resolve YAML merge keys (`<<: *anchor`) instead of
+  ignoring them. This is a side effect of retiring the archived `serde_yaml`
+  crate in favour of `serde-saphyr`, which expands merge keys by default;
+  refusing them was an artefact of the previous parser, not a deliberate
+  schema rule, and merge keys are valid YAML. A `refhosts.yml` document that
+  relies on `<<` for shared fields across hosts now loads every host the
+  merge expands to, where it previously loaded only the literal rows.
+
 ### Fixed
 
 - `update` now reaches a verdict on SL Micro and RHEL/YUM hosts. Both have had

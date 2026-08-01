@@ -34,7 +34,10 @@ shlex = "2"
 # ser/de + config
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+# serde_yaml is archived (0.9.34+deprecated, no in-crate upgrade path);
+# serde-saphyr is the maintained, serde-native replacement. It streams and
+# builds no DOM, so rows go through serde_json::Value instead.
+serde-saphyr = "1"
 toml = "1"
 # INI parsing for the native oscrc credential reader (obs backend, G1b).
 # osc writes genuine INI (`[https://api.suse.de]` headers, bare `key = value`),
