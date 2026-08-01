@@ -123,9 +123,10 @@ end.
 MCP sessions run with no interactive prompter installed, so a command that would
 prompt at the REPL never blocks waiting for input:
 
-- **`approve`** refuses non-interactively when it would otherwise ask for
-  confirmation (e.g. a Gitea hash mismatch or a missing token) rather than
-  proceeding — pass the explicit flags so the intent is unambiguous.
+- **`approve`** refuses non-interactively on a Gitea checkout-hash mismatch
+  (at the REPL it prompts for confirmation, default no) rather than proceeding;
+  a missing Gitea token or a failed Gitea call refuses on every surface, since
+  the check never produced a verdict to confirm.
 - A **command timeout** aborts immediately instead of offering the REPL's
   wait/retry prompt.
 - **`comment`** and **`commit`** take their text/message as a required argument

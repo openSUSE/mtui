@@ -17,8 +17,9 @@ use crate::session::Session;
 /// With `-r/--reviewer` the
 /// reviewer is recorded in the testreport and the template is committed to SVN
 /// *before* the approval; if either step fails the approval is aborted. On the
-/// Gitea path a checkout-hash mismatch aborts the approval in non-interactive
-/// mode (the interactive confirm prompt lands in Phase 6). Unlocks PI reference
+/// Gitea path a checkout-hash mismatch prompts for confirmation in the REPL
+/// (default no) and refuses non-interactively; a missing Gitea token or a
+/// failed Gitea call always refuses, on both surfaces. Unlocks PI reference
 /// hosts afterwards.
 pub struct Approve;
 
@@ -98,23 +99,7 @@ impl Command for Approve {
 
         if is_gitea_workflow(&rrid) {
             let gitea = gitea_client(session)?;
-            // Any non-matching hash (a real mismatch, a missing token, or a
-            // failed Gitea call) refuses a non-interactive approval, matching
-            // the previous `!ok` guard.
-            if let check @ (HashCheck::Mismatch { .. }
-            | HashCheck::MissingToken
-            | HashCheck::Failed(_)) = session.metadata().check_hash().await
-                && !session.is_repl
-            {
-                let (expected, actual) = match check {
-                    HashCheck::Mismatch { expected, actual } => (expected, actual),
-                    _ => (String::new(), String::new()),
-                };
-                return Err(CommandError::Other(format!(
-                    "GiteaPR hash differs from testreport ({expected} -> {actual}); \
-                     refusing to approve non-interactively"
-                )));
-            }
+            hash_gate(session).await?;
             gitea
                 .approve(user.as_deref())
                 .await
@@ -211,6 +196,53 @@ async fn slack_review_gate(
         acked.join(", ")
     ));
     Ok(())
+}
+
+/// Verifies the checked-out template's hash against the Gitea PR head before
+/// approving.
+///
+/// A [`HashCheck::Mismatch`] is the only verdict an operator can act on: in
+/// the REPL, with a prompter installed, it asks for confirmation (default
+/// no); anywhere else it refuses. [`HashCheck::MissingToken`] and
+/// [`HashCheck::Failed`] mean the check never produced a verdict, so there is
+/// nothing to confirm — both refuse on every surface.
+async fn hash_gate(session: &mut Session) -> Result<(), CommandError> {
+    match session.metadata().check_hash().await {
+        HashCheck::Ok => Ok(()),
+        HashCheck::Mismatch { expected, actual } => {
+            tracing::error!(%expected, %actual, "GiteaPR hash differs from testreport");
+            if session.is_repl
+                && let Some(p) = session.prompter()
+            {
+                let confirmed = p
+                    .confirm(
+                        &format!(
+                            "GiteaPR hash differs from testreport ({expected} -> {actual}); \
+                             approve anyway? [y/N]: "
+                        ),
+                        false,
+                    )
+                    .await;
+                if confirmed {
+                    return Ok(());
+                }
+                return Err(CommandError::Other(format!(
+                    "GiteaPR hash differs from testreport ({expected} -> {actual}); \
+                     not approving"
+                )));
+            }
+            Err(CommandError::Other(format!(
+                "GiteaPR hash differs from testreport ({expected} -> {actual}); \
+                 refusing to approve non-interactively"
+            )))
+        }
+        HashCheck::MissingToken => Err(CommandError::Other(
+            "no Gitea token configured; cannot verify the PR hash, not approving".to_owned(),
+        )),
+        HashCheck::Failed(e) => Err(CommandError::Other(format!(
+            "Gitea call failed: {e}; cannot verify the PR hash, not approving"
+        ))),
+    }
 }
 
 /// Records the reviewer and commits the testreport to SVN. Returns `Err` when
@@ -555,55 +587,214 @@ mod tests {
         assert!(matches!(err, CommandError::Other(m) if m.contains("gitea approve failed")));
     }
 
-    #[tokio::test]
-    async fn gitea_hash_mismatch_aborts_headless() {
-        // A SLFO report routes to Gitea; the fake report's check_hash reports a
-        // match by default, so force a mismatch by giving no PR API URL path
-        // that would error earlier. Instead we assert the non-interactive guard
-        // via a report whose check_hash returns false.
-        use async_trait::async_trait;
-        use mtui_testreport::{TestReport, TestReportBase};
-        use std::collections::HashMap;
+    // A report whose `check_hash` returns a fixed, injected verdict, so the
+    // hash-gate branches can be driven without a real Gitea PR head. Shared by
+    // the tests below.
+    use async_trait::async_trait;
+    use mtui_testreport::{TestReport, TestReportBase};
+    use std::collections::HashMap;
 
-        struct MismatchReport {
-            base: TestReportBase,
+    struct FixedHashReport {
+        base: TestReportBase,
+        verdict: HashCheck,
+    }
+    #[async_trait]
+    impl TestReport for FixedHashReport {
+        fn base(&self) -> &TestReportBase {
+            &self.base
         }
-        #[async_trait]
-        impl TestReport for MismatchReport {
-            fn base(&self) -> &TestReportBase {
-                &self.base
-            }
-            fn base_mut(&mut self) -> &mut TestReportBase {
-                &mut self.base
-            }
-            fn id(&self) -> String {
-                "SUSE:SLFO:1.2:5".to_owned()
-            }
-            fn parser(&self) -> HashMap<String, String> {
-                HashMap::new()
-            }
-            fn update_repos_parser(&self) -> HashMap<mtui_types::SystemProduct, String> {
-                HashMap::new()
-            }
-            fn list_update_commands(&self, _t: &mtui_hosts::HostsGroup) {}
-            async fn check_hash(&self) -> HashCheck {
-                HashCheck::Mismatch {
-                    expected: "old".to_owned(),
-                    actual: "new".to_owned(),
-                }
-            }
+        fn base_mut(&mut self) -> &mut TestReportBase {
+            &mut self.base
         }
+        fn id(&self) -> String {
+            "SUSE:SLFO:1.2:5".to_owned()
+        }
+        fn parser(&self) -> HashMap<String, String> {
+            HashMap::new()
+        }
+        fn update_repos_parser(&self) -> HashMap<mtui_types::SystemProduct, String> {
+            HashMap::new()
+        }
+        fn list_update_commands(&self, _t: &mtui_hosts::HostsGroup) {}
+        async fn check_hash(&self) -> HashCheck {
+            self.verdict.clone()
+        }
+    }
 
-        let (mut session, _buf) = empty_session();
+    /// A session with an active Gitea-workflow report whose `check_hash`
+    /// returns `verdict`, pointed at `giteaprapi`.
+    fn fixed_hash_session(
+        verdict: HashCheck,
+        giteaprapi: &str,
+    ) -> (Session, crate::commands::testkit::Buffer) {
+        let (mut session, buf) = empty_session();
         let mut base = TestReportBase::new(mtui_config::Config::default());
         base.rrid = "SUSE:SLFO:1.2:5".parse().ok();
-        base.giteaprapi = Some("http://gitea.invalid/api".to_owned());
+        base.giteaprapi = Some(giteaprapi.to_owned());
         session.config.gitea_token = "tok".to_owned();
-        session.templates.add(Box::new(MismatchReport { base }));
+        session.config.session_user = "tester".to_owned();
+        session
+            .templates
+            .add(Box::new(FixedHashReport { base, verdict }));
         session.activate("SUSE:SLFO:1.2:5");
+        (session, buf)
+    }
+
+    /// A prompter that always answers `answer`, ignoring the prompt text.
+    fn fixed_prompter(answer: &'static str) -> mtui_hosts::Prompter {
+        mtui_hosts::Prompter::new(std::sync::Arc::new(move |_t: String| {
+            Box::pin(async move { Ok(answer.to_owned()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        }))
+    }
+
+    #[tokio::test]
+    async fn gitea_hash_mismatch_aborts_headless() {
+        // A SLFO report routes to Gitea; check_hash is forced to Mismatch, and
+        // is_repl is false (the default), so the guard refuses without ever
+        // consulting a prompter.
+        let (mut session, _buf) = fixed_hash_session(
+            HashCheck::Mismatch {
+                expected: "old".to_owned(),
+                actual: "new".to_owned(),
+            },
+            "http://gitea.invalid/api",
+        );
 
         let args = matches(&Approve, &[]);
         let err = Approve.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("hash differs")));
+    }
+
+    #[tokio::test]
+    async fn gitea_hash_mismatch_declined_in_repl_never_approves() {
+        // A declining prompter must refuse, and gitea.approve must never be
+        // reached: the mock server has no mounts, so any request would 404 —
+        // an empty request log is positive proof it was never called.
+        let server = wiremock::MockServer::start().await;
+        let (mut session, _buf) = fixed_hash_session(
+            HashCheck::Mismatch {
+                expected: "old".to_owned(),
+                actual: "new".to_owned(),
+            },
+            &server.uri(),
+        );
+        session.config.gitea_url = server.uri();
+        session.is_repl = true;
+        session.set_prompter(fixed_prompter("n"));
+
+        let args = matches(&Approve, &[]);
+        let err = Approve.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("not approving")));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn gitea_hash_mismatch_confirmed_in_repl_approves() {
+        use mtui_datasources::assign_marker;
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/comments$"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "id": 1,
+                    "body": assign_marker("tester", "qam-sle"),
+                    "updated_at": "2026-01-01T00:00:00Z"
+                }])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requested_reviewers": [], "state": "open", "head": {"sha": "abc"}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = fixed_hash_session(
+            HashCheck::Mismatch {
+                expected: "old".to_owned(),
+                actual: "new".to_owned(),
+            },
+            &server.uri(),
+        );
+        session.config.gitea_url = server.uri();
+        session.is_repl = true;
+        session.set_prompter(fixed_prompter("y"));
+
+        let args = matches(&Approve, &[]);
+        Approve.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("approved SUSE:SLFO:1.2:5"),
+            "expected success confirmation, got: {}",
+            buf.contents()
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests
+                .iter()
+                .any(|r| r.method == wiremock::http::Method::POST),
+            "expected a POST, got: {requests:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn gitea_hash_mismatch_in_repl_without_prompter_refuses() {
+        // is_repl is true but no prompter is installed (the `mtui-mcp`
+        // posture): the guard must still refuse, without ever calling Gitea.
+        let server = wiremock::MockServer::start().await;
+        let (mut session, _buf) = fixed_hash_session(
+            HashCheck::Mismatch {
+                expected: "old".to_owned(),
+                actual: "new".to_owned(),
+            },
+            &server.uri(),
+        );
+        session.config.gitea_url = server.uri();
+        session.is_repl = true;
+
+        let args = matches(&Approve, &[]);
+        let err = Approve.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(err, CommandError::Other(m) if m.contains("refusing to approve non-interactively"))
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn gitea_hash_check_failure_refuses_in_repl() {
+        // `Failed` never produced a verdict, so there is nothing to confirm:
+        // it must refuse without consulting the prompter at all, even though
+        // this one would answer yes.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_clone = calls.clone();
+        let prompter = mtui_hosts::Prompter::new(std::sync::Arc::new(move |_t: String| {
+            calls_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move { Ok("y".to_owned()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        }));
+
+        let (mut session, _buf) = fixed_hash_session(
+            HashCheck::Failed("boom".to_owned()),
+            "http://gitea.invalid/api",
+        );
+        session.is_repl = true;
+        session.set_prompter(prompter);
+
+        let args = matches(&Approve, &[]);
+        let err = Approve.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("boom")));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
