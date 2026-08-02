@@ -94,6 +94,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `set_repo --remove`. Previously only a failure to lock the hosts was
   reported, so a removal command that failed after a successful lock left the
   test update repos configured with no warning at all.
+- `install`/`uninstall` now name a host whose operation lock did not release,
+  instead of dropping the verdict. A stranded `/var/lock/mtui.lock` blocks
+  every other tester on that host; mtui now warns with the host and the lock
+  error, pointing at `unlock --force` as the manual remedy. A benign
+  foreign-owned lock is still not reported, and the operation's own verdict is
+  unaffected either way.
+- `prepare`, `downgrade`, and `update` now name a host whose operation lock did
+  not release, matching the `install`/`uninstall` warning above. Previously
+  only `install`/`uninstall` reported a stranded `/var/lock/mtui.lock`; the
+  other flows silently dropped the same outcome.
 
 ## [26.1.1] - 2026-07-27
 

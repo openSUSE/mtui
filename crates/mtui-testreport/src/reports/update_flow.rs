@@ -25,8 +25,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use mtui_hosts::{
-    Command, HostError, HostsGroup, InstallOperation, Operation, OperationGroup, RebootFailure,
-    RebootFailureCause, RepoOp, SetRepo, UninstallOperation,
+    Command, HostError, HostsGroup, InstallOperation, LockOutcome, Operation, OperationGroup,
+    RebootFailure, RebootFailureCause, RepoOp, SetRepo, UninstallOperation,
 };
 use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
@@ -527,6 +527,13 @@ async fn perform_operation(
     // written after this call returns would be lost on exactly the
     // transactional hosts that never came back.
 
+    // A stranded operation lock does not turn a good install/uninstall into a
+    // failed one — it warns, naming the hosts and the manual remedy, rather
+    // than joining `failures` below.
+    if !report.unlock_failures.is_empty() {
+        warn!("{}", unlock_failure_message(op, &report.unlock_failures));
+    }
+
     // A host whose post-run check failed, and any transactional host that
     // rebooted and never reconnected, both fail the operation by name. A
     // failed check already excluded its host from the reboot map (see
@@ -538,6 +545,42 @@ async fn perform_operation(
         .collect();
     failures.extend(report.reboot_failures.into_iter().map(reboot_error));
     aggregate_failures(op, failures)
+}
+
+/// Renders the WARN for an `install`/`uninstall` operation lock that did not
+/// release, naming the affected hosts and the manual remedy.
+///
+/// A pure helper so the message is unit-testable without driving the whole
+/// [`Operation`] template.
+fn unlock_failure_message(op: &str, unlock_failures: &[(String, String)]) -> String {
+    let detail: Vec<String> = unlock_failures
+        .iter()
+        .map(|(h, reason)| format!("{h}: {reason}"))
+        .collect();
+    format!(
+        "the {op} operation lock did not release on {} (release it with `unlock --force`)",
+        detail.join("; ")
+    )
+}
+
+/// Warns about any [`LockOutcome::Failed`] host in a [`HostsGroup::unlock`]
+/// outcome map, via the same message builder [`perform_operation`] uses for
+/// `install`/`uninstall`.
+///
+/// [`LockOutcome::Contended`] is excluded — benign, another tester owns the
+/// lock — so this only warns on a real transport/SFTP error, the same bar fix
+/// 3 already set for `install`/`uninstall`.
+fn warn_on_unlock_failures(op: &str, outcomes: &BTreeMap<String, LockOutcome>) {
+    let failures: Vec<(String, String)> = outcomes
+        .iter()
+        .filter_map(|(host, outcome)| match outcome {
+            LockOutcome::Failed(reason) => Some((host.clone(), reason.clone())),
+            _ => None,
+        })
+        .collect();
+    if !failures.is_empty() {
+        warn!("{}", unlock_failure_message(op, &failures));
+    }
 }
 
 /// Renders a [`RebootFailure`] as the operator-facing per-host error.
@@ -695,7 +738,7 @@ async fn perform_prepare_classified(
         reboot,
     )
     .await;
-    targets.unlock().await;
+    warn_on_unlock_failures("prepare", &targets.unlock().await);
     result
 }
 
@@ -946,7 +989,7 @@ pub async fn perform_downgrade(
     }
 
     let result = downgrade_body(targets, &registry, report, packages, reboot, id).await;
-    targets.unlock().await;
+    warn_on_unlock_failures("downgrade", &targets.unlock().await);
     result
 }
 
@@ -1416,7 +1459,7 @@ pub async fn perform_update(
             // Treated as a hard failure (rather than logged and returned as
             // success) so it never reports "finished".
             targets.fanout_set_repo(RepoOp::Remove, report).await;
-            targets.unlock().await;
+            warn_on_unlock_failures("update", &targets.unlock().await);
             return Err(UpdateFailure::MissingUpdater(e));
         }
     };
@@ -1432,7 +1475,7 @@ pub async fn perform_update(
         // part-way, so this genuinely removes the repo and releases the lock
         // on every host (the same undo the MissingUpdater abort performs).
         targets.fanout_set_repo(RepoOp::Remove, report).await;
-        targets.unlock().await;
+        warn_on_unlock_failures("update", &targets.unlock().await);
         return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
             "cancelled before the update command was dispatched",
         )));
@@ -1502,7 +1545,7 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
              remove it manually with `set_repo --remove`"
         );
     }
-    targets.unlock().await;
+    warn_on_unlock_failures("update", &targets.unlock().await);
 }
 
 /// Runs the update commands, checks every host (collecting failures), reboots on
@@ -1614,7 +1657,7 @@ async fn update_run_phase(
         .map_err(wrap)
     };
 
-    targets.unlock().await;
+    warn_on_unlock_failures("update", &targets.unlock().await);
     result
 }
 
@@ -1989,6 +2032,48 @@ mod tests {
             perform_install(&mut group, &["pkg-a".to_owned()])
                 .await
                 .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_install_warns_but_still_succeeds_when_unlock_fails() {
+        // The install itself must succeed even though the lock never released:
+        // a stranded lock does not turn a good install into a failed one.
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .failing_sftp_remove();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let (res, logs) = capture_logs(perform_install(&mut group, &["pkg-a".to_owned()])).await;
+
+        assert!(
+            res.is_ok(),
+            "a stranded lock must not turn a good install into a failure: {res:?}"
+        );
+        // `Target::unlock_reporting` already emits its own "unlock failed" WARN
+        // naming `host="h1"` on this exact path, so a bare `logs.contains("h1")`
+        // would pass even if `unlock_failure_message` were never reached — find
+        // this warn's own line and assert on it.
+        let unlock_line = logs
+            .lines()
+            .find(|l| l.contains("operation lock did not release"))
+            .unwrap_or_else(|| panic!("no unlock-failure warning found: {logs}"));
+        assert!(
+            unlock_line.contains("h1"),
+            "the WARN must name the stranded host: {unlock_line}"
+        );
+        assert!(
+            unlock_line.contains("unlock --force"),
+            "the WARN must name the manual remedy: {unlock_line}"
         );
     }
 
@@ -3230,13 +3315,62 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn perform_update_warns_when_the_operation_lock_does_not_release() {
+        // A stranded operation lock does not turn a good update into a
+        // failure — but the fan-out's own `LockOutcome` map must still reach a
+        // warn, the same swallow fix 3 closed for install/uninstall.
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("zypper", "", "", 0, 0))
+            .failing_sftp_remove();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let (res, logs) = capture_logs(perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        ))
+        .await;
+
+        assert!(
+            res.is_ok(),
+            "a stranded lock must not turn a good update into a failure: {res:?}"
+        );
+        let unlock_line = logs
+            .lines()
+            .find(|l| l.contains("operation lock did not release"))
+            .unwrap_or_else(|| panic!("no unlock-failure warning found: {logs}"));
+        assert!(
+            unlock_line.contains("h1"),
+            "the WARN must name the stranded host: {unlock_line}"
+        );
+    }
+
     /// Runs `fut` under a scoped tracing subscriber that captures each
-    /// event's message synchronously into an in-memory buffer, returning the
-    /// joined records. Mirrors `mtui-datasources/tests/obs_oscrc.rs`'s
-    /// `capture_logs`, adapted for an async body: `set_default`'s guard stays
-    /// live across the awaited future on the single-threaded `#[tokio::test]`
-    /// runtime these tests run under.
-    async fn capture_logs(fut: impl std::future::Future<Output = ()>) -> String {
+    /// event's message synchronously into an in-memory buffer, returning
+    /// `fut`'s output paired with the joined records. Mirrors
+    /// `mtui-datasources/tests/obs_oscrc.rs`'s `capture_logs`, adapted for an
+    /// async body: `set_default`'s guard stays live across the awaited future
+    /// on the single-threaded `#[tokio::test]` runtime these tests run under.
+    async fn capture_logs<T>(fut: impl std::future::Future<Output = T>) -> (T, String) {
         use std::fmt::Write as _;
         use std::sync::{Arc, Mutex};
         use tracing::field::{Field, Visit};
@@ -3268,8 +3402,8 @@ mod tests {
         let records = Arc::new(Mutex::new(Vec::new()));
         let sub = Registry::default().with(CaptureLayer(records.clone()));
         let _guard = tracing::subscriber::set_default(sub);
-        fut.await;
-        records.lock().unwrap().join("\n")
+        let out = fut.await;
+        (out, records.lock().unwrap().join("\n"))
     }
 
     #[tokio::test]
@@ -3287,7 +3421,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
         let repo = RecordingRepo::default();
 
-        let logs = capture_logs(remove_test_repos(&mut group, &repo)).await;
+        let ((), logs) = capture_logs(remove_test_repos(&mut group, &repo)).await;
 
         let ops = repo.ops.lock().unwrap().clone();
         assert!(
@@ -3338,7 +3472,7 @@ mod tests {
             "https://example/repo".to_owned(),
         );
 
-        let logs = capture_logs(remove_test_repos(&mut group, &report)).await;
+        let ((), logs) = capture_logs(remove_test_repos(&mut group, &report)).await;
 
         let warn_line = logs
             .lines()
@@ -3479,6 +3613,25 @@ mod tests {
             !cmds.iter().any(|c| c.contains(":p=42:7")),
             "no patch command must be dispatched when prepare could not run: {cmds:?}"
         );
+    }
+
+    #[test]
+    fn unlock_failure_message_names_hosts_reasons_and_remedy() {
+        // Full-string, not a substring match: pins the shape (no "succeeded",
+        // each host named exactly once) rather than just its presence.
+        let msg = unlock_failure_message(
+            "install",
+            &[
+                ("h1".to_owned(), "boom".to_owned()),
+                ("h2".to_owned(), "bang".to_owned()),
+            ],
+        );
+        assert_eq!(
+            msg,
+            "the install operation lock did not release on h1: boom; h2: bang \
+             (release it with `unlock --force`)"
+        );
+        assert!(!msg.contains("succeeded"));
     }
 
     #[tokio::test]
