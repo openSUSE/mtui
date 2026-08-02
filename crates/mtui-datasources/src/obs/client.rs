@@ -2,7 +2,7 @@
 //!
 //! Mirrors the crate's
 //! [`Gitea`](crate::gitea::Gitea) request wrapper: one shared
-//! [`HttpClient`](crate::http::HttpClient) (built with a fixed timeout + TLS
+//! [`HttpClient`] (built with a fixed timeout + TLS
 //! posture) carries the handful of calls one QAM operation makes. SSH-signature
 //! auth is injected through the [`ObsAuth`] seam so this transport foundation
 //! (G1a) is testable now with [`NoAuth`]; the real signer lands in G1c.

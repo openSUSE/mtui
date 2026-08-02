@@ -197,7 +197,7 @@ impl Refhosts {
     /// An unset filter (empty/`None`) imposes no constraint: `name` is a shell
     /// glob, `arch` is membership in a list,
     /// `product` is a case-insensitive substring of the base product name,
-    /// `version` is the loose form matched by [`version_str_match`], and each
+    /// `version` is the loose form matched by [`version_str_match`](Self::version_str_match), and each
     /// `addon` term is a case-insensitive substring of some installed addon.
     #[must_use]
     fn field_match(
@@ -316,7 +316,7 @@ impl Refhosts {
     /// Return pool candidates `(host, slot)` keyed on the query slot.
     ///
     /// Each host matching any of `attributes` is returned once, tagged with the
-    /// [`slot_for_query`](Self::slot_for_query) of the **first** attribute it
+    /// `slot_for_query` of the **first** attribute it
     /// matches — the testplatform's requested identity rather than the host's
     /// full installed-module identity — so host-arbitration draws one host per
     /// *requested* test-target slot.

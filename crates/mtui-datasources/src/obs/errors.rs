@@ -4,7 +4,7 @@
 //! timeout, config/credential, XML parse, and workflow-precondition — so the
 //! `OSC` facade can match it exhaustively with a single `Err(_)` arm and fold
 //! it into a logged `false`, mirroring the crate's other typed error families
-//! ([`crate::error::GiteaError`], [`crate::error::OscError`]).
+//! ([`crate::error::GiteaError`], `crate::error::OscError`).
 //!
 //! The transport foundation (G1a) landed [`Api`](ObsError::Api),
 //! [`Timeout`](ObsError::Timeout) and the [`Http`](ObsError::Http) transport

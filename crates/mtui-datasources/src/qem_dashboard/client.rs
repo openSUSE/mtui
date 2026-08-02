@@ -1,9 +1,9 @@
 //! Low-level read-only HTTP client for the QEM Dashboard API.
 //!
 //! Every endpoint is a thin GET-to-JSON wrapper over the shared
-//! [`HttpClient`](crate::http::HttpClient). Any transport, non-2xx, or
+//! [`HttpClient`]. Any transport, non-2xx, or
 //! JSON-parse failure is logged at `debug` and folded into a `None` (for
-//! [`incident`](Self::incident))
+//! `incident`)
 //! or an empty `Vec` (for the list endpoints), so a fetch failure never escapes
 //! the client — the caller sees the same "no data" shape whether the dashboard
 //! was unreachable or genuinely empty.
@@ -151,7 +151,7 @@ impl QemDashboardClient {
             .await
     }
 
-    /// Fallible sibling of [`incident_settings`](Self::incident_settings): a
+    /// Fallible sibling of `incident_settings`: a
     /// fetch failure returns [`QemDashboardError::Fetch`] instead of `[]`.
     ///
     /// # Errors
@@ -166,7 +166,7 @@ impl QemDashboardClient {
             .await
     }
 
-    /// Fallible sibling of [`update_settings`](Self::update_settings): a fetch
+    /// Fallible sibling of `update_settings`: a fetch
     /// failure returns [`QemDashboardError::Fetch`] instead of `[]`.
     ///
     /// # Errors

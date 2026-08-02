@@ -8,7 +8,7 @@
 //! * **assignment** — magic marker comments
 //!   (`<MTUI: PR - UV assigned to user: X - group: Y >` and its unassign twin)
 //!   are replayed as a state machine scoped to the review group, "last marker
-//!   wins" (see [`Gitea::assignee_from_comments`]);
+//!   wins" (see `Gitea::assignee_from_comments`);
 //! * **decision** — a `@<group>-review: LGTM|approve|decline` comment records a
 //!   decision, but a *re-requested* review (e.g. after a rebuild) supersedes a
 //!   stale decision, so [`Gitea`] only treats the PR as decided when a decision
@@ -274,7 +274,7 @@ impl Gitea {
     /// Build a Gitea client for the PR at `giteaprapi` (a REST API URL).
     ///
     /// Reads the token/session user/TLS
-    /// posture from `config`, defaults the group to [`DEFAULT_GROUP`], and
+    /// posture from `config`, defaults the group to `DEFAULT_GROUP`, and
     /// derives the issue-comments endpoint from the PR URL.
     ///
     /// # Errors
