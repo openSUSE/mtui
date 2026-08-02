@@ -147,6 +147,20 @@ testing**. Widen or filter it:
 
 ```
 updates --review-group qam-sle --limit 5
+updates -G qam-sle -G qam-teradata                           # groups OR together
 updates --mine                # updates assigned to you
 updates --status all          # every status and assignee
+updates -F Rating -F 'Assigned Roles' -F 'Unassigned Roles'  # osc-qam field names
+updates --json                # the raw TeReGen rows, for scripting
 ```
+
+`-F` accepts the field names `osc qam list -F` uses — case-insensitively, with
+spaces, hyphens and underscores treated as equivalent: `ReviewRequestID`,
+`Incident Priority`, `Rating`, `Category`, `Status`, `Kind`, `Deadline`,
+`Assignee`, `Assigned Roles`, `Unassigned Roles`, `Title`, `URL`. Fields the
+TeReGen queue listing does not carry (`Products`, `SRCRPMs`, `Bugs`,
+`Package-Streams`, `Creator`, `Issues`, `Comments`) are named in the error
+rather than silently absent. On SLFO rows `Unassigned Roles` renders `n/a` —
+TeReGen does not expose review groups on them. `--json` and `-F` are mutually
+exclusive, and `Assignee`/`Assigned Roles` are refused under `--status all`,
+where TeReGen omits the assignment data they would render.

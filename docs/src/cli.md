@@ -689,8 +689,14 @@ Lists the update queue (unassigned + in-testing by default), fetched live from t
 Usage: updates [OPTIONS]
 
 Options:
-      --review-group <GROUP>
-          filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack)
+  -G, --review-group <GROUP>
+          filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)
+
+  -F, --field <FIELD>
+          select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names are case-insensitive and treat spaces, hyphens and underscores as equivalent
+
+      --json
+          print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit; not combinable with -F); an empty queue prints []
 
       --status <STATUS>
           filter by status (default: testing); use 'all' for every status

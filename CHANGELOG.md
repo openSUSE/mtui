@@ -8,6 +8,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- `updates` gained osc-qam-style field selection and a scripting output
+  (#415): `-F/--field` (repeatable) selects output fields by the names
+  `osc qam list -F` uses (`Rating`, `Assigned Roles`, `Unassigned Roles`,
+  `Incident Priority`, … — case-insensitive, with spaces/hyphens/underscores
+  equivalent), and `--json` (not combinable with `-F`) prints the raw TeReGen
+  rows as a JSON array. Fields the TeReGen queue listing does not carry
+  (`Products`, `SRCRPMs`, `Bugs`, `Package-Streams`, `Creator`, `Issues`,
+  `Comments`) are named in an error instead of rendering empty, and
+  `Assignee`/`Assigned Roles` are refused under `--status all`, where TeReGen
+  omits the assignment data they would render.
+- `updates --review-group` gained the short form `-G` and is now repeatable;
+  multiple groups are OR-ed via one TeReGen query per group, merged
+  priority-descending with duplicates collapsed. **MCP schema note:** the
+  `review_group` property of the `updates` tool changed from a string to an
+  array of strings.
+
 ### Changed
 
 - `refhosts.yml` rows now resolve YAML merge keys (`<<: *anchor`) instead of

@@ -1,8 +1,12 @@
 //! The `updates` command — list the update queue via the TeReGen API.
 
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
+use futures::future::join_all;
 use mtui_datasources::UpdatesQuery;
+use serde_json::Value;
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_client;
@@ -19,8 +23,9 @@ const STATUS_ALL: &str = "all";
 /// that are **in testing**.
 /// `--assignee`/`--mine`/`--all-assignees` pick another assignment view (and
 /// drop the unassigned default); `--status all` widens to every status. This is
-/// a session-global query, so it runs exactly once ([`Scope::Single`]) rather
-/// than fanning out per template.
+/// a session-global query, so it runs once per invocation ([`Scope::Single`])
+/// rather than fanning out per template — though it may issue one TeReGen
+/// query per `--review-group`.
 pub struct Updates;
 
 #[async_trait]
@@ -42,11 +47,38 @@ impl Command for Updates {
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("review_group")
+                .short('G')
                 .long("review-group")
                 .value_name("GROUP")
+                .action(ArgAction::Append)
                 .help(
                     "filter by review group as the bare group name, e.g. qam-sle \
-                     (not the '<group>-review' login form, which classic rows lack)",
+                     (not the '<group>-review' login form, which classic rows lack); \
+                     repeatable — groups are OR-ed (one server query per group)",
+                ),
+        )
+        .arg(
+            Arg::new("field")
+                .short('F')
+                .long("field")
+                .value_name("FIELD")
+                .action(ArgAction::Append)
+                .help(
+                    "select output fields by osc-qam name (e.g. -F Rating \
+                     -F 'Assigned Roles'); repeatable, rendered as one block per \
+                     update; names are case-insensitive and treat spaces, \
+                     hyphens and underscores as equivalent",
+                ),
+        )
+        .arg(
+            Arg::new("json")
+                .long("json")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("field")
+                .help(
+                    "print the raw TeReGen rows as a JSON array (each row \
+                     emitted whole, unlike -F; honours --limit; not combinable \
+                     with -F); an empty queue prints []",
                 ),
         )
         .arg(
@@ -100,6 +132,8 @@ impl Command for Updates {
                 &["--assignee"],
                 &["--mine"],
                 &["--all-assignees"],
+                &["--field"],
+                &["--json"],
             ],
             Vec::new(),
             line,
@@ -108,7 +142,21 @@ impl Command for Updates {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        let review_group = args.get_one::<String>("review_group").cloned();
+        // Dedup repeated identical groups (order-preserving) so `-G a -G a`
+        // takes the single-query path instead of firing two identical queries.
+        let review_groups: Vec<String> = {
+            let mut seen = HashSet::new();
+            args.get_many::<String>("review_group")
+                .map(|v| v.filter(|g| seen.insert((*g).clone())).cloned().collect())
+                .unwrap_or_default()
+        };
+        // Resolve every -F name up front so a typo errors before any query.
+        let specs = args
+            .get_many::<String>("field")
+            .map(|v| v.map(|f| resolve_field(f)).collect::<Result<Vec<_>, _>>())
+            .transpose()?
+            .unwrap_or_default();
+        let as_json = args.get_flag("json");
         let status_arg = args
             .get_one::<String>("status")
             .cloned()
@@ -135,51 +183,408 @@ impl Command for Updates {
         // Show the assignee column whenever assignment is part of the view.
         let want_assignment = assignee.is_some() || unassigned || all_assignees;
 
+        // Refuse assignment-derived fields in a view that cannot carry
+        // assignment data (`--status all` with no assignment flag): without
+        // `with_assignment` TeReGen omits assignee/assignees on SLFO rows, so
+        // rendering would show a false "unassigned" for an assigned row. And
+        // forcing the parameter is no fix — it implies status=testing
+        // server-side, contradicting `--status all`.
+        if !want_assignment && let Some(spec) = specs.iter().find(|s| s.needs_assignment) {
+            return Err(CommandError::Other(format!(
+                "field '{}' needs assignment data, which TeReGen omits under \
+                 '--status all'; drop --status all or pick an assignment view \
+                 (--assignee/--mine/--all-assignees)",
+                spec.canonical
+            )));
+        }
+
         let teregen = teregen_client(session)?;
-        let query = UpdatesQuery {
-            review_group: review_group.as_deref(),
-            status: status.as_deref(),
-            assignee: assignee.as_deref(),
-            unassigned,
-            with_assignment: want_assignment,
-            no_cache: false,
-        };
-        // `teregen.updates` now returns a Result: `Err` on any transport/API
+        // A closure cannot tie its return's lifetime to its argument's, so
+        // this is a named fn: one query shape, group varying per call.
+        fn query_for<'a>(
+            group: Option<&'a str>,
+            status: Option<&'a str>,
+            assignee: Option<&'a str>,
+            unassigned: bool,
+            with_assignment: bool,
+        ) -> UpdatesQuery<'a> {
+            UpdatesQuery {
+                review_group: group,
+                status,
+                assignee,
+                unassigned,
+                with_assignment,
+                no_cache: false,
+            }
+        }
+
+        // `teregen.updates` returns a Result: `Err` on any transport/API
         // failure (surfaced to the caller), `Ok(None)` on a successful response
         // missing the `updates` key, and `Ok(Some(json))` on success. Only a
-        // genuinely-empty *successful* result is "No updates in the queue"; a
-        // fetch failure is no longer conflated with an empty queue.
-        let updates = teregen.updates(&query).await.map_err(|e| {
-            CommandError::Other(format!(
-                "Update queue query failed (TeReGen unreachable): {e}"
-            ))
-        })?;
-        let Some(updates) = updates else {
-            session.display.println("No updates in the queue");
-            return Ok(());
+        // genuinely-empty *successful* result is an empty queue; a fetch
+        // failure is never conflated with one.
+        let rows: Vec<Value> = if review_groups.len() > 1 {
+            // One server query per group: TeReGen has no OR semantics for a
+            // repeated `review_group` param (the last one wins), and the
+            // filter cannot be replicated client-side — the server matches
+            // SLFO rows against a group without ever serialising
+            // `review_groups` on them.
+            let queries: Vec<UpdatesQuery<'_>> = review_groups
+                .iter()
+                .map(|g| {
+                    query_for(
+                        Some(g.as_str()),
+                        status.as_deref(),
+                        assignee.as_deref(),
+                        unassigned,
+                        want_assignment,
+                    )
+                })
+                .collect();
+            let results = join_all(queries.iter().map(|q| teregen.updates(q))).await;
+            let mut merged: Vec<Value> = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            for result in results {
+                let batch = result.map_err(|e| {
+                    CommandError::Other(format!(
+                        "Update queue query failed (TeReGen unreachable): {e}"
+                    ))
+                })?;
+                let Some(batch) = batch else { continue };
+                let batch = batch.as_array().ok_or_else(|| {
+                    CommandError::Other(
+                        "Update queue query returned a malformed response".to_owned(),
+                    )
+                })?;
+                for row in batch {
+                    // Dedup by id (a row can sit in several groups). A row
+                    // without an id is kept, never silently dropped.
+                    let fresh = match row.get("id").and_then(Value::as_str) {
+                        Some(id) => seen.insert(id.to_owned()),
+                        None => true,
+                    };
+                    if fresh {
+                        merged.push(row.clone());
+                    }
+                }
+            }
+            // The server returns each group priority-descending; restore that
+            // order across the merged set (stable, so ties keep server order).
+            merged.sort_by_key(|r| {
+                std::cmp::Reverse(
+                    r.get("priority")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(i64::MIN),
+                )
+            });
+            merged
+        } else {
+            let query = query_for(
+                review_groups.first().map(String::as_str),
+                status.as_deref(),
+                assignee.as_deref(),
+                unassigned,
+                want_assignment,
+            );
+            let updates = teregen.updates(&query).await.map_err(|e| {
+                CommandError::Other(format!(
+                    "Update queue query failed (TeReGen unreachable): {e}"
+                ))
+            })?;
+            match updates {
+                None => Vec::new(),
+                Some(v) => v
+                    .as_array()
+                    .ok_or_else(|| {
+                        CommandError::Other(
+                            "Update queue query returned a malformed response".to_owned(),
+                        )
+                    })?
+                    .clone(),
+            }
         };
-        let rows = updates.as_array().ok_or_else(|| {
-            CommandError::Other("Update queue query returned a malformed response".to_owned())
-        })?;
+
         if rows.is_empty() {
-            session.display.println("No updates in the queue");
+            // Keep --json output parseable even for an empty queue.
+            session.display.println(if as_json {
+                "[]"
+            } else {
+                "No updates in the queue"
+            });
             return Ok(());
         }
 
-        let shown: &[serde_json::Value] = if limit > 0 && limit < rows.len() {
+        let shown: &[Value] = if limit > 0 && limit < rows.len() {
             &rows[..limit]
         } else {
-            rows
+            &rows
         };
+
+        if as_json {
+            // The raw rows, nothing discarded — the scripting path. No count
+            // header: stdout is the JSON document.
+            let doc = Value::Array(shown.to_vec());
+            session.display.println(
+                &serde_json::to_string_pretty(&doc)
+                    .expect("serialising a serde_json::Value is infallible"),
+            );
+            return Ok(());
+        }
 
         session
             .display
             .println(&format!("Update queue ({}):", shown.len()));
-        for u in shown {
-            session.display.println(&render_row(u, want_assignment));
+        if specs.is_empty() {
+            for u in shown {
+                session.display.println(&render_row(u, want_assignment));
+            }
+        } else {
+            for (i, u) in shown.iter().enumerate() {
+                if i > 0 {
+                    session.display.println("");
+                }
+                session.display.println(&render_fields(u, &specs));
+            }
         }
         Ok(())
     }
+}
+
+/// One selectable `-F` output field: the canonical osc-qam spelling plus its
+/// extraction from a TeReGen queue row.
+struct FieldSpec {
+    /// Canonical display name, as `osc qam list -F` spells it.
+    canonical: &'static str,
+    /// Extra accepted spellings (pre-normalized), beyond the canonical name.
+    aliases: &'static [&'static str],
+    /// Whether the value only exists when the query sends `with_assignment`.
+    /// Without it TeReGen omits `assignee`/`assignees` on SLFO rows, so the
+    /// field would render a false "unassigned" for a genuinely assigned row —
+    /// requesting such a field in a view that cannot carry assignment
+    /// (`--status all` without an assignment flag) is refused, not blanked.
+    needs_assignment: bool,
+    extract: fn(&serde_json::Map<String, Value>) -> String,
+}
+
+/// The fields the TeReGen queue listing can serve today. osc-qam names are
+/// canonical so existing `osc qam list -F` muscle memory transfers; the raw
+/// TeReGen key is an alias where it differs.
+static FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        canonical: "ReviewRequestID",
+        aliases: &["id"],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "id"),
+    },
+    FieldSpec {
+        canonical: "Incident Priority",
+        aliases: &["priority", "prio"],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "priority"),
+    },
+    FieldSpec {
+        canonical: "Rating",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "rating"),
+    },
+    FieldSpec {
+        canonical: "Category",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "category"),
+    },
+    FieldSpec {
+        canonical: "Status",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "status"),
+    },
+    FieldSpec {
+        canonical: "Kind",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "kind"),
+    },
+    FieldSpec {
+        canonical: "Deadline",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "deadline"),
+    },
+    FieldSpec {
+        canonical: "Assignee",
+        aliases: &[],
+        needs_assignment: true,
+        extract: |o| {
+            o.get("assignee")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unassigned")
+                .to_owned()
+        },
+    },
+    FieldSpec {
+        canonical: "Assigned Roles",
+        aliases: &[],
+        needs_assignment: true,
+        extract: extract_assigned_roles,
+    },
+    FieldSpec {
+        canonical: "Unassigned Roles",
+        aliases: &[],
+        needs_assignment: false,
+        extract: extract_unassigned_roles,
+    },
+    FieldSpec {
+        canonical: "Title",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "title"),
+    },
+    FieldSpec {
+        canonical: "URL",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "url"),
+    },
+];
+
+/// osc-qam fields the TeReGen queue listing does not carry (yet) — named so
+/// the error can say "known, but not available here" instead of "unknown".
+/// Tracked in #415.
+static UNAVAILABLE_FIELDS: &[&str] = &[
+    "Products",
+    "SRCRPMs",
+    "Bugs",
+    "Package-Streams",
+    "Creator",
+    "Issues",
+    "Comments",
+];
+
+/// Normalizes a field name for matching: lowercase, separators dropped, so
+/// `Incident Priority`, `incident-priority` and `incident_priority` coincide.
+fn normalize_field(name: &str) -> String {
+    name.chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Resolves a `-F` name to its spec, or a self-explanatory error: a known
+/// osc-qam field the listing cannot serve names the gap (#415); anything else
+/// lists what is available.
+fn resolve_field(name: &str) -> Result<&'static FieldSpec, CommandError> {
+    let norm = normalize_field(name);
+    if let Some(spec) = FIELDS
+        .iter()
+        .find(|s| normalize_field(s.canonical) == norm || s.aliases.iter().any(|a| *a == norm))
+    {
+        return Ok(spec);
+    }
+    if let Some(known) = UNAVAILABLE_FIELDS
+        .iter()
+        .find(|f| normalize_field(f) == norm)
+    {
+        return Err(CommandError::Other(format!(
+            "field '{known}' is not in TeReGen's queue listing yet \
+             (tracked in #415); available fields: {}",
+            available_field_names()
+        )));
+    }
+    Err(CommandError::Other(format!(
+        "unknown field '{name}'; available fields: {}",
+        available_field_names()
+    )))
+}
+
+/// The canonical names of every servable field, comma-joined for error text.
+fn available_field_names() -> String {
+    FIELDS
+        .iter()
+        .map(|s| s.canonical)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A scalar row key as display text: missing/null → `-`.
+fn scalar_field(obj: &serde_json::Map<String, Value>, key: &str) -> String {
+    match obj.get(key) {
+        None | Some(Value::Null) => "-".to_owned(),
+        Some(v) => json_scalar(v),
+    }
+}
+
+/// `Assigned Roles`: flattens TeReGen's `assignees` map
+/// (`{group: [{state, user}]}`) to `group:user` pairs; a non-`assigned` state
+/// is kept visible as `group:user(state)`.
+fn extract_assigned_roles(obj: &serde_json::Map<String, Value>) -> String {
+    let Some(map) = obj.get("assignees").and_then(Value::as_object) else {
+        return "-".to_owned();
+    };
+    let mut parts = Vec::new();
+    for (group, entries) in map {
+        for entry in entries.as_array().into_iter().flatten() {
+            let user = entry.get("user").and_then(Value::as_str).unwrap_or("?");
+            match entry.get("state").and_then(Value::as_str) {
+                Some("assigned") | None => parts.push(format!("{group}:{user}")),
+                Some(state) => parts.push(format!("{group}:{user}({state})")),
+            }
+        }
+    }
+    if parts.is_empty() {
+        "-".to_owned()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// `Unassigned Roles`: `review_groups` minus the groups present in
+/// `assignees`. TeReGen serialises `review_groups` only on classic
+/// Maintenance rows — SLFO rows omit it (while still matching a
+/// `review_group` filter server-side), so there the honest answer is `n/a`,
+/// not an empty list.
+fn extract_unassigned_roles(obj: &serde_json::Map<String, Value>) -> String {
+    let Some(groups) = obj.get("review_groups").and_then(Value::as_array) else {
+        return "n/a".to_owned();
+    };
+    // A group only counts as assigned when it has at least one entry — a
+    // `{"qam-sle": []}` group has nobody on it and must stay unassigned, not
+    // vanish from both role lists.
+    let assigned: HashSet<&str> = obj
+        .get("assignees")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .filter(|(_, entries)| entries.as_array().is_some_and(|a| !a.is_empty()))
+                .map(|(group, _)| group.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    let open: Vec<&str> = groups
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|g| !assigned.contains(g))
+        .collect();
+    if open.is_empty() {
+        "-".to_owned()
+    } else {
+        open.join(", ")
+    }
+}
+
+/// Renders one queue row as a `-F` block: one `  Name: value` line per
+/// requested field, in the order requested.
+fn render_fields(u: &Value, specs: &[&'static FieldSpec]) -> String {
+    let Some(obj) = u.as_object() else {
+        return format!("  {u}");
+    };
+    specs
+        .iter()
+        .map(|s| format!("  {}: {}", s.canonical, (s.extract)(obj)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Renders one queue row in a fixed-width layout.
@@ -419,5 +824,550 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("Update queue (1):"), "{out}");
         assert!(out.contains("assignee=tester"), "{out}");
+    }
+
+    // ------------------------------------------------ repeatable review-group
+
+    /// Builds a session pointed at `server`.
+    fn teregen_session(server: &MockServer) -> (Session, crate::commands::testkit::Buffer) {
+        let (mut session, buf) = empty_session();
+        let mut config = Config::default();
+        config.teregen_api = server.uri();
+        session.config = config;
+        (session, buf)
+    }
+
+    #[tokio::test]
+    async fn multi_group_queries_each_group_merges_and_dedups() {
+        // Two -G values → exactly one server query per group (TeReGen has no
+        // OR for a repeated param); rows merged priority-descending and the
+        // row present in both groups appears once.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "qam-sle"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 10, "status": "testing", "kind": "Maintenance", "id": "row-a"},
+                    {"priority": 5, "status": "testing", "kind": "Maintenance", "id": "row-both"},
+                ]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "qam-teradata"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 7, "status": "testing", "kind": "Maintenance", "id": "row-c"},
+                    {"priority": 5, "status": "testing", "kind": "Maintenance", "id": "row-both"},
+                ]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(
+            &Updates,
+            &[
+                "--review-group",
+                "qam-sle",
+                "--review-group",
+                "qam-teradata",
+            ],
+        );
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        // Three unique rows, not four.
+        assert!(out.contains("Update queue (3):"), "{out}");
+        assert_eq!(out.matches("row-both").count(), 1, "{out}");
+        // Merged order is priority-descending across groups: a(10), c(7), both(5).
+        let (pa, pc, pb) = (
+            out.find("row-a").unwrap(),
+            out.find("row-c").unwrap(),
+            out.find("row-both").unwrap(),
+        );
+        assert!(pa < pc && pc < pb, "order wrong: {out}");
+        // wiremock verifies the .expect(1) counts on drop.
+    }
+
+    #[tokio::test]
+    async fn multi_group_partial_failure_is_an_error_not_partial_output() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "good"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 1, "status": "testing", "kind": "Maintenance", "id": "ok-row"},
+                ]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "bad"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(
+            &Updates,
+            &["--review-group", "good", "--review-group", "bad"],
+        );
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+        // No partial listing was printed.
+        assert!(!buf.contents().contains("ok-row"), "{}", buf.contents());
+    }
+
+    // ------------------------------------------------------- field selection
+
+    /// A row with a distinct value in every servable field, so a swapped
+    /// extractor mapping cannot pass.
+    fn distinct_row() -> serde_json::Value {
+        serde_json::json!({
+            "id": "SUSE:Maintenance:77:707",
+            "priority": 421,
+            "rating": "important",
+            "category": "security",
+            "status": "testing",
+            "kind": "Maintenance",
+            "deadline": "2026-08-09T10:00:00Z",
+            "assignee": "alice",
+            "assignees": {"qam-sle": [{"state": "assigned", "user": "alice"}]},
+            "review_groups": ["qam-sle", "qam-openqa", "qam-manager"],
+            "title": "Security update for demo",
+            "url": "/request/707/",
+        })
+    }
+
+    #[tokio::test]
+    async fn field_selection_renders_each_field_under_its_canonical_name() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": [distinct_row()]})),
+            )
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = teregen_session(&server);
+        // Names in mixed spellings: canonical, raw-key alias, separator/case
+        // variants — all must resolve.
+        let args = matches(
+            &Updates,
+            &[
+                "-F",
+                "id",
+                "-F",
+                "incident-priority",
+                "-F",
+                "Rating",
+                "-F",
+                "CATEGORY",
+                "-F",
+                "Assigned Roles",
+                "-F",
+                "unassigned_roles",
+                "-F",
+                "Title",
+                "-F",
+                "URL",
+                "-F",
+                "Deadline",
+                "-F",
+                "Assignee",
+                "-F",
+                "Status",
+                "-F",
+                "Kind",
+            ],
+        );
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        // Each value sits on its canonical field's line — a swapped mapping
+        // would pair a value with the wrong name.
+        for line in [
+            "ReviewRequestID: SUSE:Maintenance:77:707",
+            "Incident Priority: 421",
+            "Rating: important",
+            "Category: security",
+            "Assigned Roles: qam-sle:alice",
+            // review_groups order is the server's, preserved verbatim.
+            "Unassigned Roles: qam-openqa, qam-manager",
+            "Title: Security update for demo",
+            "URL: /request/707/",
+            "Deadline: 2026-08-09T10:00:00Z",
+            "Assignee: alice",
+            "Status: testing",
+            "Kind: Maintenance",
+        ] {
+            assert!(out.contains(line), "missing '{line}' in:\n{out}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unassigned_roles_on_slfo_row_is_na_not_empty() {
+        // SLFO rows never serialise review_groups; the honest render is n/a.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 9, "status": "testing", "kind": "SLFO",
+                     "id": "SUSE:SLFO:1.2:9",
+                     "assignees": {"qam-sle": [{"state": "assigned", "user": "bob"}]}},
+                ]})),
+            )
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(
+            &Updates,
+            &["-F", "Unassigned Roles", "-F", "Assigned Roles"],
+        );
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Unassigned Roles: n/a"), "{out}");
+        assert!(out.contains("Assigned Roles: qam-sle:bob"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn non_assigned_review_state_stays_visible() {
+        let obj = serde_json::json!({
+            "assignees": {"qam-sle": [{"state": "review", "user": "carol"}]}
+        });
+        let rendered = extract_assigned_roles(obj.as_object().unwrap());
+        assert_eq!(rendered, "qam-sle:carol(review)");
+    }
+
+    #[tokio::test]
+    async fn unknown_field_errors_before_any_query() {
+        // The expect(0) mock pins "before any query" independently of the
+        // error text (a resolve-after-fetch refactor would trip it).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": []})),
+            )
+            .expect(0)
+            .mount(&server)
+            .await;
+        let (mut session, _buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-F", "Bogus"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unknown field 'Bogus'"), "{msg}");
+        assert!(msg.contains("ReviewRequestID"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn subset_selection_renders_only_requested_fields_in_request_order() {
+        // The mutation this kills: iterating the full FIELDS registry instead
+        // of the requested specs (render-everything passes the all-12 test).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": [distinct_row()]})),
+            )
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = teregen_session(&server);
+        // Deliberately not in FIELDS declaration order: Status before Rating.
+        let args = matches(&Updates, &["-F", "Status", "-F", "Rating"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Status: testing"), "{out}");
+        assert!(out.contains("Rating: important"), "{out}");
+        // Unselected fields must be absent.
+        for absent in ["ReviewRequestID:", "Category:", "Title:", "URL:"] {
+            assert!(!out.contains(absent), "'{absent}' leaked into:\n{out}");
+        }
+        // Order follows the request, not the registry.
+        assert!(
+            out.find("Status:").unwrap() < out.find("Rating:").unwrap(),
+            "requested order not honoured: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn assignment_fields_with_status_all_are_refused() {
+        // Without with_assignment TeReGen omits assignee/assignees on SLFO
+        // rows; printing "unassigned" there would be false data. The expect(0)
+        // mock pins that the refusal happens before any query.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": []})),
+            )
+            .expect(0)
+            .mount(&server)
+            .await;
+        let (mut session, _buf) = teregen_session(&server);
+        let args = matches(&Updates, &["--status", "all", "-F", "Assigned Roles"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("'Assigned Roles' needs assignment data"),
+            "{msg}"
+        );
+        assert!(msg.contains("--all-assignees"), "{msg}");
+
+        // The same field in an assignment view is fine (--all-assignees).
+        let server2 = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("with_assignment", "1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": [distinct_row()]})),
+            )
+            .mount(&server2)
+            .await;
+        let (mut session2, buf2) = teregen_session(&server2);
+        let args2 = matches(&Updates, &["--all-assignees", "-F", "Assigned Roles"]);
+        Updates.call(&mut session2, &args2).await.unwrap();
+        assert!(
+            buf2.contents().contains("Assigned Roles: qam-sle:alice"),
+            "{}",
+            buf2.contents()
+        );
+        // Non-assignment fields under --status all stay allowed.
+        let server3 = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": [distinct_row()]})),
+            )
+            .mount(&server3)
+            .await;
+        let (mut session3, buf3) = teregen_session(&server3);
+        let args3 = matches(&Updates, &["--status", "all", "-F", "Rating"]);
+        Updates.call(&mut session3, &args3).await.unwrap();
+        assert!(buf3.contents().contains("Rating: important"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_group_input_collapses_to_one_query() {
+        // `-G a -G a` must fire exactly one query (input dedup routes it onto
+        // the single-group path), not two identical ones.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "qam-sle"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 3, "status": "testing", "kind": "Maintenance", "id": "solo"},
+                ]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-G", "qam-sle", "-G", "qam-sle"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("Update queue (1):"));
+    }
+
+    #[tokio::test]
+    async fn malformed_updates_value_errors_on_both_paths() {
+        // `{"updates": 5}` (not an array) must error, not read as empty.
+        for extra_group in [None, Some(["-G", "a", "-G", "b"])] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/updates"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": 5})),
+                )
+                .mount(&server)
+                .await;
+            let (mut session, buf) = teregen_session(&server);
+            let argv: Vec<&str> = extra_group.into_iter().flatten().collect();
+            let args = matches(&Updates, &argv);
+            let err = Updates.call(&mut session, &args).await.unwrap_err();
+            assert!(
+                err.to_string().contains("malformed response"),
+                "path {argv:?}: {err}"
+            );
+            assert!(!buf.contents().contains("No updates in the queue"));
+        }
+    }
+
+    #[tokio::test]
+    async fn merge_keeps_idless_rows_and_skips_missing_updates_key() {
+        // Two branches in one fixture: a group whose body has no `updates` key
+        // (Ok(None) → skipped, not fatal) and a row without an `id` (kept, not
+        // silently dropped).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "has-rows"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 9, "status": "testing", "kind": "Maintenance", "id": "with-id"},
+                    {"priority": 8, "status": "testing", "kind": "Maintenance"},
+                ]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "no-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"other": 1})))
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-G", "has-rows", "-G", "no-key"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        // Both rows survive: the id-less one is not dropped.
+        assert!(out.contains("Update queue (2):"), "{out}");
+        assert!(out.contains("with-id"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn multi_group_limit_slices_after_merge_sort() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "g1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 1, "status": "testing", "kind": "Maintenance", "id": "low"},
+                ]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .and(query_param("review_group", "g2"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [
+                    {"priority": 100, "status": "testing", "kind": "Maintenance", "id": "high"},
+                ]})),
+            )
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-G", "g1", "-G", "g2", "--limit", "1"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        // The limit keeps the highest-priority row across BOTH groups — a
+        // slice taken before the merge-sort would keep "low".
+        assert!(out.contains("Update queue (1):"), "{out}");
+        assert!(out.contains("high"), "{out}");
+        assert!(!out.contains("low"), "{out}");
+    }
+
+    #[test]
+    fn non_object_rows_render_without_panicking() {
+        let scalar = serde_json::json!("stray-string");
+        assert_eq!(render_row(&scalar, true), "  \"stray-string\"");
+        let spec = resolve_field("Rating").unwrap();
+        assert_eq!(render_fields(&scalar, &[spec]), "  \"stray-string\"");
+    }
+
+    #[tokio::test]
+    async fn known_but_unserved_field_names_the_gap() {
+        let server = MockServer::start().await;
+        let (mut session, _buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-F", "bugs"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("'Bugs' is not in TeReGen's queue listing"),
+            "{msg}"
+        );
+        assert!(msg.contains("#415"), "{msg}");
+    }
+
+    // ------------------------------------------------------------------ json
+
+    #[tokio::test]
+    async fn json_dumps_full_rows_untouched() {
+        // A key the renderer knows nothing about must survive into --json:
+        // the flag is the everything-the-server-sent path.
+        let mut row = distinct_row();
+        row.as_object_mut()
+            .unwrap()
+            .insert("zz_future_field".to_owned(), serde_json::json!("kept"));
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [row]})),
+            )
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["--json"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        // No prose header — stdout is the JSON document.
+        assert!(!out.contains("Update queue"), "{out}");
+        let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+        let rows = parsed.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["zz_future_field"], "kept");
+        // Types survive too: a stringified 421 would betray a re-render.
+        assert_eq!(rows[0]["priority"], serde_json::json!(421));
+    }
+
+    #[test]
+    fn empty_assignee_entry_list_counts_as_unassigned() {
+        // {"qam-sle": []} has nobody on it: it must appear in Unassigned
+        // Roles, not vanish from both role lists.
+        let obj = serde_json::json!({
+            "assignees": {"qam-sle": []},
+            "review_groups": ["qam-sle", "qam-openqa"],
+        });
+        let o = obj.as_object().unwrap();
+        assert_eq!(extract_assigned_roles(o), "-");
+        assert_eq!(extract_unassigned_roles(o), "qam-sle, qam-openqa");
+    }
+
+    #[tokio::test]
+    async fn json_empty_queue_prints_empty_array() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": []})),
+            )
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["--json"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert_eq!(out.trim(), "[]");
+        assert!(!out.contains("No updates in the queue"), "{out}");
+    }
+
+    #[test]
+    fn json_conflicts_with_field_selection() {
+        let base = clap::Command::new("updates").no_binary_name(true);
+        let cmd = Updates.configure(base);
+        assert!(
+            cmd.clone()
+                .try_get_matches_from(["--json", "-F", "Rating"])
+                .is_err()
+        );
+        assert!(cmd.try_get_matches_from(["--json"]).is_ok());
     }
 }

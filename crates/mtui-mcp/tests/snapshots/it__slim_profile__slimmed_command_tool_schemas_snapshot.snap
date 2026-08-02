@@ -1,6 +1,5 @@
 ---
 source: crates/mtui-mcp/tests/slim_profile.rs
-assertion_line: 40
 expression: pretty
 ---
 [
@@ -1714,6 +1713,18 @@ expression: pretty
           "description": "filter to updates assigned to this user (any qam group)",
           "type": "string"
         },
+        "field": {
+          "items": {
+            "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names are case-insensitive and treat spaces, hyphens and underscores as equivalent",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "json": {
+          "default": false,
+          "description": "print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit; not combinable with -F); an empty queue prints []",
+          "type": "boolean"
+        },
         "limit": {
           "default": 0,
           "description": "cap the number of rows (0 = all)",
@@ -1725,8 +1736,11 @@ expression: pretty
           "type": "boolean"
         },
         "review_group": {
-          "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack)",
-          "type": "string"
+          "items": {
+            "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)",
+            "type": "string"
+          },
+          "type": "array"
         },
         "status": {
           "default": "testing",
