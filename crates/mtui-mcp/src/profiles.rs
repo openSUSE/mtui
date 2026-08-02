@@ -10,7 +10,7 @@
 //! (every synthesised tool stays). The `core` profile keeps only the curated
 //! everyday subset in [`CORE`], removing the rest so they never reach the wire.
 //! An operator selects a profile with `[mcp] profile` and can fine-tune with
-//! `[mcp] tools_allow` / `[mcp] tools_deny` (see [`apply_profile`]).
+//! `[mcp] tools_allow` / `[mcp] tools_deny` (see `apply_profile`).
 //! Profiles only filter the surface remaining after the permanent MCP deny-list;
 //! `tools_allow` cannot restore a command such as `shell` that was never
 //! synthesised.
@@ -19,7 +19,7 @@
 //! surface is strictly opt-in.
 //!
 //! The tool surface is built from a plain
-//! `Vec<`[`ToolDescriptor`]`>`, so [`apply_profile`] simply filters that vec
+//! `Vec<`[`ToolDescriptor`]`>`, so `apply_profile` simply filters that vec
 //! before it is converted to `rmcp::model::Tool`s.
 
 use std::collections::BTreeSet;

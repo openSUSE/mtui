@@ -6,7 +6,7 @@
 //! * **name** is the command name (e.g. `run`);
 //! * **description** is the command's [`about`](mtui_core::Command::about);
 //! * **`input_schema`** is derived from the command's built `clap` parser via
-//!   [`crate::schema::command_input_schema`];
+//!   `crate::schema::command_input_schema`;
 //! * **`read_only`** hint is set conservatively from a name allow-list.
 //!
 //! The subparser command (`config` today) is fanned out into one tool per
@@ -16,9 +16,9 @@
 //!
 //! This layer is intentionally **transport-free**: it returns plain descriptors
 //! and routes, not `rmcp` types. P7.7 converts a [`ToolDescriptor`] into an
-//! `rmcp::model::Tool` and wires [`dispatch_tool`] into the `ServerHandler`.
+//! `rmcp::model::Tool` and wires `dispatch_tool` into the `ServerHandler`.
 //!
-//! The background-job path ([`dispatch_tool`] with `background = true`, and the
+//! The background-job path (`dispatch_tool` with `background = true`, and the
 //! four job tools from [`job_tool_descriptors`]) drives the session's `_jobs`
 //! table (bead `mtui-rs-76e.12`): a `background=true` slow call fans out one job
 //! per resolved template and returns their ids immediately, and the four job
@@ -86,7 +86,7 @@ pub struct ToolDescriptor {
 /// How a tool name routes back to the engine when called.
 ///
 /// Built in the same pass as the descriptors so a tool's schema and its dispatch
-/// can never diverge. [`dispatch_tool`] consumes it.
+/// can never diverge. `dispatch_tool` consumes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRoute {
     /// The registry command name to dispatch (`config` for `config_show`).
@@ -380,7 +380,7 @@ fn started_jobs_reply(command: &str, job_ids: &[String]) -> String {
 /// Their names and schemas are a downstream contract (see `AGENTS.md`) and are
 /// snapshot-tested; the schemas are strict (`additionalProperties: false`) so a
 /// misspelled field is a clean error rather than a silently ignored argument.
-/// [`dispatch_job_tool`] routes them onto the session's job table.
+/// `dispatch_job_tool` routes them onto the session's job table.
 #[must_use]
 pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
     let job_id_schema = || {

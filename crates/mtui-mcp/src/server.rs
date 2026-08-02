@@ -12,7 +12,7 @@
 //!
 //! * the `rmcp::model::Tool` list (command tools from [`build_tools`] + the four
 //!   job tools from [`job_tool_descriptors`]), each carrying a `readOnlyHint`;
-//! * the tool-name → [`ToolRoute`] map from [`tool_routes`], so a call dispatches
+//! * the tool-name → [`ToolRoute`] map from `tool_routes`, so a call dispatches
 //!   through the *same* engine entry the REPL uses.
 //!
 //! Deny-listed commands never enter the surface — [`build_tools`]

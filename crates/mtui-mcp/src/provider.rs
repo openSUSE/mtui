@@ -330,7 +330,7 @@ impl SessionRegistry {
     /// mid-sweep is spared) and removed from the live set under the lock, then the
     /// confirmed-stale set is [`McpSession::close`]d (best-effort, idempotent) to
     /// reclaim its SSH host connections. The closes run **concurrently under
-    /// [`sweep_parallel`](Self::sweep_parallel)** with a single per-cycle deadline,
+    /// `sweep_parallel`** with a single per-cycle deadline,
     /// so one wedged host teardown cannot serialize reclamation of the rest. Runs
     /// until `cancel` fires.
     ///

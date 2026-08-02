@@ -3,7 +3,7 @@
 //! Commands write human-readable output to [`Session`]'s
 //! [`CommandPromptDisplay`]. The REPL points that at stdout; an MCP tool must
 //! instead *capture* it so it can be returned as the tool result. This module
-//! provides a shared in-memory sink and a [`session`] constructor that wires it
+//! provides a shared in-memory sink and a `session` constructor that wires it
 //! in via the public [`Session::with_display`] seam.
 //!
 //! ## Write-time cap (bead `mtui-rs-th4o.8`)
@@ -12,9 +12,9 @@
 //! overflow at write time, recording the dropped-byte count. A command that
 //! emits gigabytes (a huge fan-out `run` log) therefore never buffers more than
 //! `limit` bytes of it in memory — the cap applies before allocation, not after.
-//! [`SharedBuf::take_with_dropped`] returns the captured bytes plus the overflow
+//! `SharedBuf::take_with_dropped` returns the captured bytes plus the overflow
 //! count so [`crate::session::McpSession::run_command`] can append the same
-//! truncation notice [`crate::slim::cap_output`] would (exactly once, with a
+//! truncation notice `crate::slim::cap_output` would (exactly once, with a
 //! correct count). `limit == 0` disables the cap (the buffer is unbounded, the
 //! prior behaviour).
 
@@ -39,7 +39,7 @@ struct Inner {
 /// A cloneable handle to a command's captured output.
 ///
 /// Backed by an `Arc<Mutex<Inner>>` shared with the [`Session`]'s display sink.
-/// [`take`](SharedBuf::take) / [`take_with_dropped`](SharedBuf::take_with_dropped)
+/// [`take`](SharedBuf::take) / `take_with_dropped`
 /// atomically read and clear it, which is how each `call_tool` isolates its own
 /// output. Writes beyond `limit` are discarded and counted (see the module docs).
 #[derive(Clone, Default)]

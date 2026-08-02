@@ -4,15 +4,15 @@
 //! but the REPL `edit` command
 //! spawns `$EDITOR` on `metadata.path` — meaningless under MCP (and hence
 //! deny-listed). This module replaces it with five explicit tools that operate
-//! directly on the file path tracked by the loaded [`TestReport`]:
+//! directly on the file path tracked by the loaded [`mtui_testreport::TestReport`]:
 //!
-//! * [`testreport_read`] — return a checkout file's content plus a line count
+//! * `testreport_read` — return a checkout file's content plus a line count
 //!   (defaults to the `log` file; `relpath` reads any other checkout file,
 //!   traversal-guarded; `offset`/`limit` page a 1-indexed line window).
-//! * [`testreport_logs`] — list the `build_checks/` and `install_logs/` files.
-//! * [`testreport_patch`] — splice an inclusive 1-indexed line range, atomically.
-//! * [`testreport_write`] — full-file atomic overwrite.
-//! * [`testreport_fill`] — bulk-set the repetitive per-bug placeholder tokens an
+//! * `testreport_logs` — list the `build_checks/` and `install_logs/` files.
+//! * `testreport_patch` — splice an inclusive 1-indexed line range, atomically.
+//! * `testreport_write` — full-file atomic overwrite.
+//! * `testreport_fill` — bulk-set the repetitive per-bug placeholder tokens an
 //!   exported testreport ships with, idempotently.
 //!
 //! ## Locking
@@ -35,7 +35,7 @@
 //! ## Progress heartbeats (bead `mtui-rs-76e.14`)
 //!
 //! [`dispatch_testreport_tool`] races the tool body against the same heartbeat as
-//! the auto-generated command tools (via [`run_with_heartbeat`]) when the client
+//! the auto-generated command tools (via `run_with_heartbeat`) when the client
 //! supplied a `progressToken`, so a slow file op (a large `testreport_read`/
 //! `testreport_write`) does not time the client out. The frames carry the tool
 //! name; a `None` sink takes the zero-overhead path.
