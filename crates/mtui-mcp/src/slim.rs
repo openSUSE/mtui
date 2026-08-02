@@ -2,16 +2,16 @@
 //!
 //! Two token-budget concerns live here, co-located:
 //!
-//! * [`cap_output`] — the per-tool-result byte bound.
-//! * [`slim_tool_schema`] — the JSON-Schema slimming pass (P7.9) that drops
+//! * `cap_output` — the per-tool-result byte bound.
+//! * `slim_tool_schema` — the JSON-Schema slimming pass (P7.9) that drops
 //!   redundant `title` keys, flattens `anyOf: [{type: X}, {type: null}]` unions,
 //!   and terse-rewrites the long shared `help` strings before the tool list goes
 //!   on the wire.
 //!
-//! The schema is built directly from `clap` by [`crate::schema`], so it never
+//! The schema is built directly from `clap` by `crate::schema`, so it never
 //! emits a `title` key and renders a nullable scalar as the
 //! `anyOf: [{type: X}, {type: null}]` shape via
-//! [`crate::schema::command_input_schema`]'s `wrap_nullable`. The `title`-drop is
+//! `crate::schema::command_input_schema`'s `wrap_nullable`. The `title`-drop is
 //! therefore mostly defensive here; the substantive wins are the nullable
 //! flatten and the terse descriptions. The transforms run on the plain
 //! [`ToolDescriptor`](crate::tools::ToolDescriptor) schema `Value`s in

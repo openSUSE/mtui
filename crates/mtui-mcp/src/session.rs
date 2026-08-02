@@ -17,12 +17,12 @@
 //! P7.3 landed the dispatch primitive: `run_command`, the [`McpCommandError`]
 //! failure envelope, and the per-result output cap (`[mcp] max_output_bytes`).
 //! The non-interactive contract (`interactive = false`, unset prompter) is
-//! already provided by [`capture::session`] passing `is_repl = false`.
+//! already provided by `capture::session` passing `is_repl = false`.
 //!
 //! P7.3a (`mtui-rs-76e.11`) landed the per-template **lock discipline**: a
 //! shared/exclusive registry gate ([`crate::concurrency::RwGate`]) plus a
 //! lazily-created per-RRID lock map.
-//! [`command_lock`](McpSession::command_lock) takes the gate *shared* + one
+//! `command_lock` takes the gate *shared* + one
 //! per-RRID lock for a single-template call (so same-RRID calls serialise and
 //! different-RRID calls take distinct locks) and the gate *exclusive* for
 //! fan-out / registry mutators; [`scoped_lock`](McpSession::scoped_lock) is the
@@ -60,9 +60,9 @@
 //! `[mcp] max_output_bytes` before the cap applies.
 //!
 //! P7.3d (`mtui-rs-76e.14`) landed the `notifications/progress` **heartbeats**:
-//! a long-running foreground tool call ([`run_command_with_progress`]) races the
+//! a long-running foreground tool call (`run_command_with_progress`) races the
 //! dispatch against a ticker that emits a progress frame every
-//! [`DEFAULT_PROGRESS_INTERVAL`] against a transport-free [`ProgressSink`], so an
+//! `DEFAULT_PROGRESS_INTERVAL` against a transport-free [`ProgressSink`], so an
 //! MCP client that honours the protocol's progress contract does not time out on
 //! `run`/`update`/`set_repo`/`commit`. The rmcp-backed sink (peer +
 //! `progressToken`) is built in [`crate::server`] from the request context; this
@@ -72,7 +72,7 @@
 //! teardown the http `SessionRegistry` (P7.10 / `mtui-rs-odq8`) calls on
 //! eviction. For **every** loaded template it releases the report's pool claims
 //! then disconnects its host group, best-effort + idempotent, under a bounded
-//! [`DISCONNECT_TIMEOUT`] so a wedged host close cannot block the idle-sweep.
+//! `DISCONNECT_TIMEOUT` so a wedged host close cannot block the idle-sweep.
 //! It does not empty each `HostsGroup` (a closed `Target` is left in the group
 //! with a dead connection, dropped whole with the report) and it bounds the
 //! wait with [`tokio::time::timeout`].
@@ -247,9 +247,9 @@ impl std::error::Error for McpCommandError {}
 pub enum JobState {
     /// The worker task is still executing (or queued behind its lock).
     Running,
-    /// The command finished successfully; its stdout is in [`Job::result`].
+    /// The command finished successfully; its stdout is in `Job::result`.
     Done,
-    /// The command failed; [`Job::error`]/[`Job::exit_code`] carry the envelope.
+    /// The command failed; `Job::error`/`Job::exit_code` carry the envelope.
     Failed,
     /// The job was cancelled via [`McpSession::job_cancel`].
     Cancelled,
@@ -301,7 +301,7 @@ struct Job {
     cancel: CancellationToken,
 }
 
-/// A public, poll-facing snapshot of a [`Job`] (no task handle).
+/// A public, poll-facing snapshot of a `Job` (no task handle).
 ///
 /// The job tools render it into the one-line status text.
 #[derive(Debug, Clone, PartialEq)]
@@ -395,7 +395,7 @@ pub struct McpSession {
 
 /// An acquired hold on the concurrency gate for one command/tool invocation.
 ///
-/// Returned by [`McpSession::command_lock`] / [`McpSession::scoped_lock`] and
+/// Returned by `McpSession::command_lock` / [`McpSession::scoped_lock`] and
 /// kept alive for the duration of the critical section; dropping it releases the
 /// gate (and any per-RRID lock) in the right order. The fields are never read —
 /// they exist to own the guards — hence the leading underscores.
@@ -420,7 +420,7 @@ impl McpSession {
     /// out).
     ///
     /// The session is non-interactive with color disabled — see
-    /// [`capture::session`].
+    /// `capture::session`.
     #[must_use]
     pub fn new(config: Config) -> Arc<Self> {
         let max_output_bytes = config.mcp_max_output_bytes;
@@ -475,7 +475,7 @@ impl McpSession {
     ///
     /// Exposed for the hand-written testreport tools ([`crate::testreport_tools`]),
     /// which cap their file-content payloads with the same
-    /// [`cap_output`](crate::slim::cap_output) budget `run_command` applies.
+    /// [`cap_output`] budget `run_command` applies.
     #[must_use]
     pub(crate) fn max_output_bytes(&self) -> usize {
         self.max_output_bytes
@@ -613,7 +613,7 @@ impl McpSession {
     /// Owned by the http `SessionRegistry` (P7.10 / `mtui-rs-odq8`), which calls
     /// it when it evicts a session (idle-TTL sweep or explicit eviction).
     /// Mirrors the REPL `quit`
-    /// disconnect path — [`HostsGroup::close`](mtui_hosts::HostsGroup::close) per
+    /// disconnect path — `HostsGroup::close` per
     /// template, its per-host `Target::close` fanning out concurrently — but
     /// **without** the exit-flag / history-flush tail, since the process keeps
     /// serving other clients.
@@ -628,7 +628,7 @@ impl McpSession {
     /// remote pool locks; a no-op when pool selection was never used) then closes
     /// its host group. A second call re-runs both over already-released claims and
     /// already-closed targets, both no-ops. The fan-out is bounded by
-    /// [`DISCONNECT_TIMEOUT`]: a wedged host close is logged and abandoned so
+    /// `DISCONNECT_TIMEOUT`: a wedged host close is logged and abandoned so
     /// `close()` — and the registry idle-sweep awaiting it — always returns.
     ///
     /// `HostsGroup::close` (like the REPL `quit`) closes each `Target` but leaves
@@ -690,10 +690,10 @@ impl McpSession {
     /// the **same** engine the REPL uses (a forked-session [`dispatch_command`] on the
     /// concurrent path, [`dispatch_argv`] on the canonical session for the
     /// exclusive path), then returns what the command wrote to the call's own
-    /// captured display — passed through [`cap_output`] so one large result cannot
+    /// captured display — passed through `cap_output` so one large result cannot
     /// dwarf the client's context.
     ///
-    /// Before dispatch the call takes its [`command_lock`](Self::command_lock):
+    /// Before dispatch the call takes its `command_lock`:
     /// a single-template call holds the registry gate *shared* plus its per-RRID
     /// lock (so same-RRID calls serialise, different-RRID calls take distinct
     /// locks), while fan-out / mutators take the gate *exclusive*. A single-RRID
@@ -1093,7 +1093,7 @@ impl McpSession {
     /// # Errors
     ///
     /// [`McpCommandError`] (exit 1) when the session is already at
-    /// [`max_active_jobs`](Self::max_active_jobs) running jobs; no worker is
+    /// `max_active_jobs` running jobs; no worker is
     /// spawned in that case.
     pub fn start_job(
         self: &Arc<Self>,
@@ -1112,7 +1112,7 @@ impl McpSession {
     ///
     /// Resolves the target templates
     /// exactly as the foreground path does (via
-    /// [`resolve_job_rrids`](Self::resolve_job_rrids)). When more than one
+    /// `resolve_job_rrids`). When more than one
     /// template resolves, mints **one job per template** — each running `argv`
     /// scoped to that template with `-T <rrid>` **prepended** (a positional
     /// `REMAINDER` command like `run` would otherwise swallow a trailing
@@ -1124,7 +1124,7 @@ impl McpSession {
     /// # Errors
     ///
     /// [`McpCommandError`] (exit 1) when spawning the resolved jobs would breach
-    /// [`max_active_jobs`](Self::max_active_jobs); the whole fan-out is rejected
+    /// `max_active_jobs`; the whole fan-out is rejected
     /// atomically (no partial spawn).
     pub async fn start_jobs(
         self: &Arc<Self>,
@@ -1242,7 +1242,7 @@ impl McpSession {
     ///    so a dispatch parked at a seam checkpoint (the `Command::run` driver's
     ///    pre-flight / between-templates checks, or a body observing
     ///    [`mtui_core::Session::cancel_requested`]) unwinds cleanly. The worker
-    ///    gets [`CANCEL_GRACE`] to settle.
+    ///    gets `CANCEL_GRACE` to settle.
     /// 2. **Forced:** if the grace elapses (the body never checks the seam —
     ///    e.g. it is blocked mid host-op), the worker task is aborted. The
     ///    underlying SSH/subprocess operation may still run to completion on

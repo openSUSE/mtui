@@ -1,7 +1,7 @@
 //! The `mtui-mcp` boot sequence: parse args → resolve config → serve.
 //!
 //! It parses [`McpArgs`], initialises a stderr `tracing` subscriber (under
-//! stdio, stdout is the JSON-RPC transport), resolves the [`Config`] the way
+//! stdio, stdout is the JSON-RPC transport), resolves the [`mtui_config::Config`] the way
 //! the REPL does, and
 //! serves the runtime-synthesised tool surface on the chosen transport:
 //!

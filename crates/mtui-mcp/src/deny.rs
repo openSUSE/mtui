@@ -2,7 +2,7 @@
 //!
 //! Each entry cannot meaningfully run outside an interactive terminal session,
 //! and is filtered out when [`crate::tools`] synthesises tools from the command
-//! [`Registry`]. (Local process execution via `lrun` needs no denying: the
+//! [`mtui_core::Registry`]. (Local process execution via `lrun` needs no denying: the
 //! command was removed from mtui entirely.)
 //!
 //! The deny surface is **not** re-declared here: it is the single
