@@ -102,6 +102,8 @@ next actionable task before working on a subsystem.
 - Run the MCP server: `cargo run -p mtui-mcp --features mcp -- --help`
 - Format: `cargo fmt --all`
 - Lint (warnings are errors): `cargo clippy --workspace --all-targets -- -D warnings`
+- Docs (broken/private links are errors): `RUSTDOCFLAGS="-D warnings" cargo doc
+  --workspace --no-deps --all-features --document-private-items`
 - Test: `cargo test --workspace` — **the cost is compilation, not test
   execution.** A cold `cargo build --workspace --tests` is ~80s; the actual test
   *run*, once compiled, is only ~20-25s. The default 120s timeout is exceeded
@@ -128,7 +130,9 @@ next actionable task before working on a subsystem.
 - Run the **full gate on the whole workspace** before claiming done, mirroring
   CI: `cargo fmt --all --check` **and**
   `cargo clippy --workspace --all-targets -- -D warnings` **and**
-  `cargo test --workspace` (default features) **and** `cargo test -p mtui-mcp -F
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+  --document-private-items` **and** `cargo test --workspace` (default features)
+  **and** `cargo test -p mtui-mcp -F
   mcp` (the mcp server/transport tests are `-F mcp`-gated, so the default
   workspace run never exercises them) **and** the compile-only feature matrix
   `cargo build --workspace --no-default-features` +

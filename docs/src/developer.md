@@ -19,6 +19,7 @@ dev box runs a Homebrew `rustc`). Edition 2024, **MSRV 1.96**, pinned via
 | Run the MCP server | `cargo run -p mtui-mcp --features mcp -- --help` |
 | Format | `cargo fmt --all` |
 | Lint (warnings are errors) | `cargo clippy --workspace --all-targets -- -D warnings` |
+| Docs (broken/private links are errors) | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items` |
 | Test | `cargo test --workspace` |
 | Coverage | `cargo llvm-cov --workspace --lcov --output-path lcov.info` |
 
@@ -39,6 +40,7 @@ claiming done:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items
 cargo test --workspace                       # default features only
 cargo build --workspace --no-default-features # feature matrix (compile-only)
 cargo build --workspace --all-features        # feature matrix (compile-only)
