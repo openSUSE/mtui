@@ -39,7 +39,7 @@ impl Config {
     /// Load configuration from the resolved search paths.
     ///
     /// `explicit` is the optional `--config` path. Files are merged
-    /// **lowest-precedence first** (see [`config_search_paths`]): `/etc` →
+    /// **lowest-precedence first** (see `config_search_paths`): `/etc` →
     /// `~/.mtui.toml` → the XDG file, so a per-user file overrides `/etc` on
     /// shared keys and the XDG file wins over the home dotfile. A file that does not exist is
     /// silently skipped; a file that fails to read or parse is logged at ERROR

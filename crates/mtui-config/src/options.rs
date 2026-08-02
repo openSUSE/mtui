@@ -620,7 +620,7 @@ impl RawConfig {
 ///
 /// Construct via [`Config::load`](crate::Config::load) (file/env/defaults) or
 /// [`Config::default`] (all defaults). Path-typed options have `~`
-/// expanded to the user's home directory via [`expanduser`].
+/// expanded to the user's home directory via `expanduser`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Config {
@@ -655,7 +655,7 @@ pub struct Config {
     pub max_parallel: u64,
     /// Maximum number of independent openQA/QAM HTTP requests to run
     /// concurrently in the oqa-search overview (per-version, group×version, and
-    /// per-log fan-out). Kept lower than [`max_parallel`] to stay polite toward
+    /// per-log fan-out). Kept lower than [`Self::max_parallel`] to stay polite toward
     /// the shared openQA/QAM hosts. A non-positive value falls back to the
     /// default.
     pub max_oqa_parallel: u64,

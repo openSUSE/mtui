@@ -2,7 +2,7 @@
 //!
 //! Two flavours of paths live here:
 //!
-//! * **Config search paths** ([`config_search_paths`]) — the ordered list of
+//! * **Config search paths** (`config_search_paths`) — the ordered list of
 //!   candidate config files, later entries overriding earlier ones when merged.
 //! * **User data path** ([`data_dir`]) — the XDG data directory where mtui
 //!   persists per-user state.
