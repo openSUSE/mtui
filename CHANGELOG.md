@@ -80,6 +80,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   state; it now aborts before taking the lock or adding the repo, since
   nothing has been dispatched yet at that point. Use `--noprepare` to skip
   prepare and patch anyway.
+- `update`'s post-success repo cleanup now says why it could not run. When the
+  hosts could not be locked to remove the test update repositories, mtui
+  silently skipped the cleanup; it now warns with the lock error and that the
+  repos are left configured on every host, pointing at `set_repo --remove` as
+  the manual remedy. The update itself still reports success either way.
 
 ## [26.1.1] - 2026-07-27
 

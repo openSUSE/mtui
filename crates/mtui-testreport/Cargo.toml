@@ -44,3 +44,5 @@ tempfile = "3"
 wiremock.workspace = true
 # Perf baseline bench (mtui-rs-0mop.1): metadata JSON parse hot path.
 criterion.workspace = true
+# Scoped subscriber to capture WARN output in tests.
+tracing-subscriber.workspace = true
