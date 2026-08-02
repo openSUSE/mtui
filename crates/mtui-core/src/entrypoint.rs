@@ -1,31 +1,25 @@
-//! Headless single-command dispatch entrypoint (`mtui-mcp` / embedding).
+//! The process exit-code contract shared by mtui's two process entrypoints
+//! (`mtui`, `mtui-mcp`).
 //!
-//! This is the glue between the **three distinct argparse layers** mtui carries
+//! This distinguishes the **three distinct argparse layers** mtui carries
 //! (the correction that shaped P5.10 — do not conflate them):
 //!
 //! 1. **App invocation** — the top-level `mtui`/`mtui-mcp` process arguments,
 //!    [`Args`](crate::args::Args). The real binary parses these with
 //!    `Args::parse`, which exits the process on `--help`/`--version`/error, the
-//!    standard clap convention. This module takes an
-//!    *already-parsed* `&Args`, so Layer 1 is the caller's responsibility (the
-//!    binary is Phase 6).
+//!    standard clap convention.
 //! 2. **REPL commands** — the per-command parsers the [`engine`](crate::engine)
-//!    synthesises from the [`Registry`], run inside the REPL `cmdloop` and
-//!    reused as MCP tools. These never exit the process; they return
-//!    a typed [`EngineError`].
+//!    synthesises from the [`Registry`](crate::registry::Registry), run inside
+//!    the REPL `cmdloop` and reused as MCP tools. These never exit the
+//!    process; they return a typed
+//!    [`EngineError`](crate::engine::EngineError).
 //! 3. **MCP tool schema** — `mtui-mcp` translating each command's parser into
 //!    JSON parameters (Phase 7). Not touched here.
 //!
-//! The headless single-command driver dispatches exactly one Layer-2 command
-//! against a session and yields a process [`ExitStatus`]: given the parsed
-//! top-level `Args` and one command line, it resolves, parses, and runs a
-//! single command with no interactive loop. It is the headless single-command
-//! primitive for `mtui-mcp` (Phase 7) and embedding callers.
-//!
-//! It is **not** a CLI mode: the `mtui` binary has only two surfaces, the
-//! interactive REPL and `mtui-mcp`, and neither takes a positional command.
-//! The interactive binary seeds the session and enters the REPL
-//! (`mtui-cli::seed_session` + `Repl`); it never calls `run_once`.
+//! Neither entrypoint has a headless single-command CLI mode: the `mtui`
+//! binary has only two surfaces, the interactive REPL and `mtui-mcp`, and
+//! neither takes a positional command. The interactive binary seeds the
+//! session and enters the REPL (`mtui-cli::seed_session` + `Repl`).
 //!
 //! ## Exit-code contract
 //!

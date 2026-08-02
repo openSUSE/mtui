@@ -25,5 +25,5 @@ fn main() -> anyhow::Result<()> {
         "mtui-mcp was built without the `mcp` feature; rebuild with \
          `cargo build -p mtui-mcp --features mcp`."
     );
-    std::process::exit(2);
+    std::process::exit(mtui_core::ExitStatus::Usage.into());
 }

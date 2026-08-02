@@ -13,8 +13,7 @@
 //! There is **no single-command / non-interactive mode**: mtui has only two
 //! surfaces — the REPL and `mtui-mcp` — and neither takes a positional
 //! command. This module therefore only *seeds* the session; the binary always
-//! enters the REPL afterwards. (The `run_once`/`ExitStatus` primitive in
-//! `mtui-core` exists for `mtui-mcp`/embedding, not a CLI headless mode.)
+//! enters the REPL afterwards.
 //!
 //! [`seed_session`] is the testable seam: it takes an already-built [`Session`]
 //! and the parsed [`Args`], performs the seeding, and returns [`ControlFlow`] so
@@ -23,7 +22,7 @@
 
 use std::ops::ControlFlow;
 
-use mtui_core::{Args, Registry, Session, dispatch_line};
+use mtui_core::{Args, ExitStatus, Registry, Session, dispatch_line};
 use mtui_testreport::UpdateKind;
 use mtui_types::Workflow;
 
@@ -33,19 +32,20 @@ use mtui_types::Workflow;
 ///   [`Session::load_update`]. Autoconnect is requested iff no `--sut` override
 ///   was given. If the load yields an empty RRID — a null report for an
 ///   *explicitly requested* update — the user-facing "does not exist" message
-///   has already been logged, so this returns [`ControlFlow::Break`] with exit
-///   code `1` rather than entering an empty REPL.
+///   has already been logged, so this returns [`ControlFlow::Break`] with
+///   [`ExitStatus::Failure`] rather than entering an empty REPL.
 /// * For each `--sut` entry, dispatches `add_host <fragment>` through the shared
 ///   engine, logging any failure and continuing — one bad host never aborts
 ///   startup.
 ///
 /// Returns [`ControlFlow::Continue`] when the session is ready for the REPL, or
-/// [`ControlFlow::Break(code)`] when the process should exit with `code` instead.
+/// [`ControlFlow::Break`] with the [`ExitStatus`] the process should exit with
+/// instead.
 pub async fn seed_session(
     registry: &Registry,
     session: &mut Session,
     args: &Args,
-) -> ControlFlow<i32> {
+) -> ControlFlow<ExitStatus> {
     if let Some(update) = args.update() {
         let autoconnect = args.sut.is_empty();
         let kind = match update.workflow {
@@ -60,7 +60,7 @@ pub async fn seed_session(
             // exist" message was already logged by the load path. Exit rather
             // than drop into an empty interactive session.
             tracing::error!(update = %update.id, "requested update could not be loaded");
-            return ControlFlow::Break(1);
+            return ControlFlow::Break(ExitStatus::Failure);
         }
     }
 
@@ -154,7 +154,7 @@ mod tests {
         let mut a = args();
         a.auto_review_id = Some("SUSE:Maintenance:99999:99999".parse().unwrap());
         let flow = seed_session(&registry, &mut session, &a).await;
-        assert_eq!(flow, ControlFlow::Break(1));
+        assert_eq!(flow, ControlFlow::Break(ExitStatus::Failure));
     }
 
     /// A `--sut` host that cannot connect is logged and skipped; seeding still
