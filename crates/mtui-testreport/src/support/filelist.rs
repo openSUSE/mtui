@@ -8,9 +8,9 @@
 //! A hash of the content captured at load time is tracked so a write can be
 //! skipped when nothing changed:
 //!
-//! * [`FileList::is_dirty`] reports whether the buffer differs from what was
+//! * `FileList::is_dirty` reports whether the buffer differs from what was
 //!   loaded, and
-//! * [`FileList::write_if_dirty`] performs the conditional atomic write.
+//! * `FileList::write_if_dirty` performs the conditional atomic write.
 //!
 //! [`FileList::write`] always writes unconditionally.
 

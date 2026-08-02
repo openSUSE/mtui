@@ -1,6 +1,6 @@
 //! File and time helpers shared by the exporters.
 //!
-//! * [`timestamp`] — a whole-second Unix timestamp string, used as a
+//! * `timestamp` — a whole-second Unix timestamp string, used as a
 //!   filename suffix when the user declines to overwrite an existing export.
 //! * [`atomic_write_file`] — a thin wrapper over [`mtui_config::atomic::write`],
 //!   the single secure temp-file + rename implementation shared across the

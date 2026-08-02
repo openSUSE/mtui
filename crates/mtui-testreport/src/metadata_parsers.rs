@@ -151,14 +151,14 @@ pub struct MetadataEnvelope {
 
 /// A parser for the JSON metadata envelope.
 ///
-/// Stateless; [`parse`](JSONParser::parse) mutates the supplied
+/// Stateless; `parse` mutates the supplied
 /// [`TestReportBase`] in place.
 pub struct JSONParser;
 
 impl JSONParser {
     /// Parses a raw JSON string into a [`MetadataEnvelope`] and applies it.
     ///
-    /// Convenience wrapper over [`parse`](JSONParser::parse) for the common case
+    /// Convenience wrapper over `parse` for the common case
     /// of loading straight from a `metadata.json`.
     ///
     /// # Errors
@@ -240,7 +240,7 @@ impl JSONParser {
 /// Maps `issue id -> title` from a checkout's `patchinfo.xml`.
 ///
 /// The JSON metadata envelope carries only bare bug/jira *ids* (their
-/// descriptions are the [`NO_DESCRIPTION`] placeholder); the human-readable
+/// descriptions are the `NO_DESCRIPTION` placeholder); the human-readable
 /// titles live in the checkout's `patchinfo.xml` as
 /// `<issue tracker="bnc" id="123">title</issue>` elements.
 ///
