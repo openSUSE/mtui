@@ -282,9 +282,8 @@ impl MockConnection {
     /// [`HostError::Sftp`] so a caller's directory-removal fallback path, or the
     /// fail-closed unlock path (a non-gone removal error must propagate), can be
     /// exercised.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn failing_sftp_remove(mut self) -> Self {
+    pub fn failing_sftp_remove(mut self) -> Self {
         self.sftp_remove_fails = true;
         self
     }

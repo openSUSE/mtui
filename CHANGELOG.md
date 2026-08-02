@@ -85,6 +85,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   silently skipped the cleanup; it now warns with the lock error and that the
   repos are left configured on every host, pointing at `set_repo --remove` as
   the manual remedy. The update itself still reports success either way.
+- `install`/`uninstall` now name a host whose operation lock did not release,
+  instead of dropping the verdict. A stranded `/var/lock/mtui.lock` blocks
+  every other tester on that host; mtui now warns with the host and the lock
+  error, pointing at `unlock --force` as the manual remedy. A benign
+  foreign-owned lock is still not reported, and the operation's own verdict is
+  unaffected either way.
 
 ## [26.1.1] - 2026-07-27
 

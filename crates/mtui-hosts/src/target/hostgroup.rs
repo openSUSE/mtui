@@ -1563,8 +1563,8 @@ impl OperationGroup for HostsGroup {
             .collect()
     }
 
-    async fn unlock(&mut self) {
-        let _ = HostsGroup::unlock(self).await;
+    async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
+        HostsGroup::unlock(self).await
     }
 }
 
@@ -2576,6 +2576,31 @@ mod tests {
         let outcomes = g.unlock().await;
         assert_eq!(outcomes["h1"], LockOutcome::Released);
         assert_eq!(outcomes["h2"], LockOutcome::Contended);
+    }
+
+    #[tokio::test]
+    async fn operation_group_unlock_forwards_a_failed_release() {
+        // Pins that the `impl OperationGroup for HostsGroup` binding forwards
+        // the inherent `unlock`'s outcome map rather than re-swallowing it
+        // (as the pre-fix `let _ = HostsGroup::unlock(self).await;` did).
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .failing_sftp_remove();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn),
+            )],
+            false,
+        );
+        let _ = g.lock("session").await;
+
+        let outcomes = OperationGroup::unlock(&mut g).await;
+        assert!(
+            matches!(&outcomes["h1"], LockOutcome::Failed(_)),
+            "outcomes: {outcomes:?}"
+        );
     }
 
     #[tokio::test]

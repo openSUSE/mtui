@@ -37,8 +37,11 @@
 //! [`hostgroup`](super::hostgroup). The template is driven against fully mocked
 //! targets and a mocked group, so it is unit-testable offline.
 
+use std::collections::BTreeMap;
+
 use mtui_types::shellquote::quote_args;
 
+use super::hostgroup::LockOutcome;
 use crate::error::HostError;
 
 /// A per-host command (or reboot) map as ordered `(hostname, command)` pairs.
@@ -213,7 +216,12 @@ pub trait OperationGroup: Send {
     async fn reboot(&mut self, reboot: HostCommandMap) -> Vec<RebootFailure>;
 
     /// Releases the shared operation lock.
-    async fn unlock(&mut self);
+    ///
+    /// Returns each host's [`LockOutcome`], keyed by hostname, so the caller
+    /// can tell a benign [`Contended`](LockOutcome::Contended) lock apart from
+    /// a real [`Failed`](LockOutcome::Failed) one — a stranded lock the
+    /// operator needs to know about — rather than losing the verdict.
+    async fn unlock(&mut self) -> BTreeMap<String, LockOutcome>;
 }
 
 /// The outcome of a completed [`Operation::run`]: the run *started* (the
@@ -233,6 +241,18 @@ pub struct OperationReport {
     /// A host whose check already failed is excluded — its reboot was skipped,
     /// not attempted and lost.
     pub reboot_failures: Vec<RebootFailure>,
+    /// `(hostname, reason)` for every host whose operation-lock release
+    /// failed with [`LockOutcome::Failed`] — a benign
+    /// [`Contended`](LockOutcome::Contended) release is excluded.
+    ///
+    /// A stranded lock does not turn a good install into a failed one, so
+    /// `Operation::run`'s verdict never depends on this field; it exists so
+    /// the caller can warn and name the host. `Operation::run` itself stays
+    /// silent about it — the per-host WARN already fires inside
+    /// `Target::unlock_reporting` — the aggregate warning belongs at the one
+    /// layer that knows the operation name (`perform_operation`, in
+    /// `mtui-testreport`).
+    pub unlock_failures: Vec<(String, String)>,
 }
 
 /// Why a transactional host's post-operation reboot did not take effect.
@@ -415,10 +435,19 @@ pub trait Operation: Send + Sync {
             .collect();
         let reboot_failures = group.reboot(reboot).await;
 
-        group.unlock().await;
+        let unlock_failures = group
+            .unlock()
+            .await
+            .into_iter()
+            .filter_map(|(host, outcome)| match outcome {
+                LockOutcome::Failed(reason) => Some((host, reason)),
+                LockOutcome::Acquired | LockOutcome::Released | LockOutcome::Contended => None,
+            })
+            .collect();
         Ok(OperationReport {
             check_failures,
             reboot_failures,
+            unlock_failures,
         })
     }
 }
@@ -621,6 +650,8 @@ mod tests {
         /// What `reboot` should report as failed, modelling a transactional
         /// host that rebooted and did not reconnect.
         reboot_failures: Vec<RebootFailure>,
+        /// What `unlock` should report per host.
+        unlock_outcomes: BTreeMap<String, LockOutcome>,
     }
 
     impl MockGroup {
@@ -641,6 +672,7 @@ mod tests {
                 events,
                 fail_update_lock: false,
                 reboot_failures: Vec::new(),
+                unlock_outcomes: BTreeMap::new(),
             }
         }
 
@@ -654,6 +686,13 @@ mod tests {
         /// host whose post-reboot reconnect never came back.
         fn with_reboot_failures(mut self, failures: Vec<RebootFailure>) -> Self {
             self.reboot_failures = failures;
+            self
+        }
+
+        /// Scripts `unlock` to report `outcomes`, modelling a host whose lock
+        /// release failed or was contended.
+        fn with_unlock_outcomes(mut self, outcomes: BTreeMap<String, LockOutcome>) -> Self {
+            self.unlock_outcomes = outcomes;
             self
         }
 
@@ -705,8 +744,9 @@ mod tests {
             self.reboot_failures.clone()
         }
 
-        async fn unlock(&mut self) {
+        async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
             self.events.lock().unwrap().push(Event::Unlock);
+            self.unlock_outcomes.clone()
         }
     }
 
@@ -1107,6 +1147,35 @@ mod tests {
                 "only the passing host's reboot may run: {map:?}"
             );
         }
+    }
+
+    // --- run(): unlock_failures names a Failed host, not a Contended one ----
+
+    #[tokio::test]
+    async fn run_reports_a_failed_unlock_but_not_a_contended_one() {
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![
+            plan_with_recording_check("h1", false, Doer::new("in $packages", "r"), sink.clone()),
+            plan_with_recording_check("h2", false, Doer::new("in $packages", "r"), sink),
+        ];
+        let mut group = MockGroup::new(Ok(plans)).with_unlock_outcomes(
+            [
+                ("h1".to_owned(), LockOutcome::Failed("boom".to_owned())),
+                ("h2".to_owned(), LockOutcome::Contended),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let report = op.run(&mut group).await.expect("the run started");
+
+        assert_eq!(
+            report.unlock_failures,
+            vec![("h1".to_owned(), "boom".to_owned())],
+            "a Contended unlock is benign and must not be reported: {:?}",
+            report.unlock_failures
+        );
     }
 
     // --- role strings + missing_error sentinels -----------------------------
