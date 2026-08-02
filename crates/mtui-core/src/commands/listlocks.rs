@@ -19,7 +19,7 @@ use crate::session::Session;
 ///
 /// The enabled hosts (honouring the `-t` sub-selection) are resolved via
 /// [`Target::lock_status`](mtui_hosts::Target::lock_status) and forwarded through
-/// the per-host [`Reporter::locks`](mtui_hosts::Reporter) sink into
+/// the per-host [`Reporter::locks`](mtui_hosts) sink into
 /// `display.list_locks`. The lock accessors are async `&mut self`; the resolved
 /// (sync) [`LockStatus`] values are collected first so `display` — which borrows
 /// the session mutably — is driven afterwards.

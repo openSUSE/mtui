@@ -16,7 +16,7 @@ use crate::session::Session;
 /// or sessions.
 ///
 /// `-p`/`--pool` removes the host *pool* claim (RRID-based ownership) instead of
-/// the zypper/operation lock, fanning [`HostsGroup::pool_unlock`] out across the
+/// the zypper/operation lock, fanning [`HostsGroup::pool_unlock`](mtui_hosts::HostsGroup::pool_unlock) out across the
 /// active group. With `--force` a claim owned by another template is removed too.
 ///
 /// Like `lock`, host sub-selection via `-t` is not yet honoured for the fan-out

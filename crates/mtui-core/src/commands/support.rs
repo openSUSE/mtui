@@ -82,7 +82,7 @@ pub(crate) fn build_kernel_openqa(
 /// Returns [`CommandError::Other`] with a stable message when no report is
 /// loaded, so a data-source command errors cleanly instead of building a client
 /// for an empty RRID. On success returns the active report's
-/// [`RequestReviewID`](mtui_types::RequestReviewID).
+/// [`RequestReviewID`].
 ///
 /// # Errors
 ///

@@ -149,7 +149,7 @@ fn random_shuffle(candidates: &mut [String]) {
 }
 
 /// Render a refhosts [`Slot`](mtui_datasources::refhost::Slot) tuple as a stable
-/// string key for [`TestReportBase::slot_candidates`]
+/// string key for [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates)
 /// (`product|version|arch|addon,addon`).
 ///
 /// The tuple already sorts its addons, so this is a deterministic 1:1 encoding
@@ -264,7 +264,7 @@ impl Session {
     /// single-RRID tool call needs a `&mut Session` to dispatch, but holding the
     /// canonical session behind one mutex across dispatch serialises *all* calls.
     /// Instead the caller forks a per-call session — its
-    /// [`TemplateRegistry::snapshot`] shares the same per-entry report locks, so a
+    /// `TemplateRegistry::snapshot` shares the same per-entry report locks, so a
     /// command acting on RRID `X` locks only `X`'s entry (letting a concurrent
     /// call on `Y` proceed), and the report content it mutates is visible to the
     /// canonical session (same `Arc<Mutex<..>>`).
@@ -398,7 +398,7 @@ impl Session {
     }
 
     /// Makes `rrid` the active template *and* installs its per-call active
-    /// handle ([`active_guard`](Self::active_guard)).
+    /// handle (`active_guard`).
     ///
     /// The unified activation seam: it re-points the registry's active pointer
     /// and acquires the entry's lock so [`metadata`](Self::metadata) /
@@ -636,7 +636,7 @@ impl Session {
     /// 2. The report is added to the registry and — when it carries a real RRID —
     ///    made active. Re-loading an already-loaded RRID replaces its stored
     ///    report and makes it active; sibling templates are untouched.
-    /// 3. If the report asked for autoconnect ([`TestReportBase::autoconnect_pending`],
+    /// 3. If the report asked for autoconnect ([`TestReportBase::autoconnect_pending`](mtui_testreport::TestReportBase::autoconnect_pending),
     ///    set by `make_testreport` for `-a` with `autoconnect`), its reference
     ///    hosts are connected. The connect is driven **here** (the composition
     ///    root) rather than inside `mtui-testreport`, so that crate never depends
@@ -652,7 +652,7 @@ impl Session {
     /// Returns the loaded report's RRID (empty when the load failed and the null
     /// report was substituted).
     ///
-    /// A thin wrapper over [`load_update_reported`](Self::load_update_reported)
+    /// A thin wrapper over `load_update_reported`
     /// that discards the failure reason, for callers that only branch on
     /// success/failure (REPL startup, `regenerate`).
     pub async fn load_update(
@@ -668,7 +668,7 @@ impl Session {
     ///
     /// Returns `(rrid, load_error)`: on success the RRID and `None`; on failure
     /// an empty RRID and `Some(reason)` — the diagnostic
-    /// [`make_testreport`](make_testreport) stashed on the substituted null
+    /// [`make_testreport`] stashed on the substituted null
     /// report (svn checkout / gitea / hash / read failure). Lets `load_template`
     /// surface the real cause to the operator (and, via MCP, the LLM) instead of
     /// a bare "could not load".
@@ -737,7 +737,7 @@ impl Session {
     /// Connects the active report's reference hosts (the deferred half of
     /// [`load_update`](Self::load_update)).
     ///
-    /// Computes the wanted host list via [`autoconnect_hosts`](Self::autoconnect_hosts)
+    /// Computes the wanted host list via `autoconnect_hosts`
     /// — the template's parsed `reference host:` names plus one host per matching
     /// slot resolved from each testplatform — then builds and connects a
     /// [`Target`] for each, stamping the report's RRID as the pool-claim
@@ -745,7 +745,7 @@ impl Session {
     /// (best-effort).
     ///
     /// The offline host-selection is factored into the pure, unit-tested
-    /// [`autoconnect_hosts`](Self::autoconnect_hosts); this thin connect loop
+    /// `autoconnect_hosts`; this thin connect loop
     /// builds real [`Target`]s and is exercised by the gated sshd integration
     /// path (the same seam `list_refhosts --free` uses for its live probe).
     async fn autoconnect_active(&mut self, rrid: &str) {
@@ -1253,7 +1253,7 @@ impl Session {
     /// Builds the refhosts inventory on demand from `config`, or `None` on any
     /// resolver/resolve failure.
     ///
-    /// The shared store-builder behind [`resolve_testplatform_hosts`] (host
+    /// The shared store-builder behind `resolve_testplatform_hosts` (host
     /// selection) and [`verify_target_products`](Self::verify_target_products)
     /// (post-connect product-drift check) — the same on-demand pattern
     /// `list_refhosts`/`add_host` use, with no cached Session state. A `None`
@@ -1340,7 +1340,7 @@ impl Session {
     ///
     /// Returns `(chosen_hosts, slot_candidates)`: the claimed hosts (this batch's
     /// `pool_claims`) and the per-slot ordered candidate lists (keyed by the slot
-    /// rendered as a stable string, matching [`TestReportBase::slot_candidates`]).
+    /// rendered as a stable string, matching [`TestReportBase::slot_candidates`](mtui_testreport::TestReportBase::slot_candidates)).
     /// The caller writes both onto the active report before connecting.
     ///
     /// Static (owned/borrowed plain data, `&'static` arbiter) so the caller's
@@ -1497,7 +1497,7 @@ impl Session {
         }
     }
 
-    /// Installs the callback [`notify_user`](Self::notify_user) uses to surface a
+    /// Installs the callback `notify_user` uses to surface a
     /// desktop notification.
     ///
     /// The Phase-6 REPL wires this to `mtui-cli`'s `notification::notify_user`;
@@ -1530,7 +1530,7 @@ impl Session {
     /// the REPL; `mtui-mcp` leaves it unset. Also pushes the prompter onto the
     /// active report's [`HostsGroup`] so any already-connected hosts pick up the
     /// derived command-timeout prompt immediately; freshly-connected hosts
-    /// inherit it via [`connect_and_add_hosts`](Self::connect_and_add_hosts).
+    /// inherit it via `connect_and_add_hosts`.
     pub fn set_prompter(&mut self, prompter: Prompter) {
         // Push onto the active report's group first (already-connected hosts),
         // then retain a clone for future connects.

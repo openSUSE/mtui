@@ -113,7 +113,7 @@ pub async fn dispatch_argv(
 ///
 /// The registry-free tail of [`dispatch_argv`]: parse `argv` through the
 /// command's own clap parser (no-exit-on-error), then drive
-/// [`Command::run`](crate::Command::run). Exposed so the headless MCP concurrent
+/// [`Command::run`]. Exposed so the headless MCP concurrent
 /// path (`mtui-rs-f36r`, steps 4-5) can `tokio::spawn` a dispatch holding an
 /// owned `Arc<dyn Command>` + forked [`Session`] — neither borrows the
 /// [`Registry`], so the spawned future is `'static`. `help` is *not* intercepted

@@ -18,7 +18,7 @@ const BOOT_ACTIONS: [&str; 2] = ["reboot", "poweroff"];
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Resolves the per-template close budget. In tests it is overridable (via
-/// [`tests::set_close_timeout`]) so the straggler path can be exercised without
+/// `tests::set_close_timeout`) so the straggler path can be exercised without
 /// waiting the full 45s; in production it is always [`CLOSE_TIMEOUT`].
 #[cfg(not(test))]
 fn close_timeout() -> Duration {
