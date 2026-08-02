@@ -114,7 +114,7 @@ impl FromStr for Workflow {
 /// Kind component of an OBS Request Review ID.
 ///
 /// The canonical wire values are `SLFO` / `Maintenance` / `PI`;
-/// [`RequestKind::from_token`] also accepts the single-letter CLI aliases
+/// `RequestKind::from_token` also accepts the single-letter CLI aliases
 /// `S` / `M` / `P`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RequestKind {
