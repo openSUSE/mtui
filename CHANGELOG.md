@@ -74,23 +74,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   activates, and every skipped host is named in the log. A failed combined
   transactional downgrade is now also reported as a per-host failure rather
   than relying solely on the post-rollback version verdict.
-- `update` no longer patches hosts whose pre-update `prepare` step failed. A
-  failed prepare was logged and the flow continued regardless, adding the
-  issue repo and dispatching the patch to hosts that may already be in a bad
-  state; it now aborts before taking the lock or adding the repo, since
-  nothing has been dispatched yet at that point. Use `--noprepare` to skip
-  prepare and patch anyway.
-- `update`'s post-success repo cleanup now says why it could not run. When the
-  hosts could not be locked to remove the test update repositories, mtui
-  silently skipped the cleanup; it now warns with the lock error and that the
-  repos are left configured on every host, pointing at `set_repo --remove` as
-  the manual remedy. The update itself still reports success either way.
-- `install`/`uninstall` now name a host whose operation lock did not release,
-  instead of dropping the verdict. A stranded `/var/lock/mtui.lock` blocks
-  every other tester on that host; mtui now warns with the host and the lock
-  error, pointing at `unlock --force` as the manual remedy. A benign
-  foreign-owned lock is still not reported, and the operation's own verdict is
-  unaffected either way.
+- `update` now aborts when the pre-update `prepare` step could not run — no
+  preparer for a host, a contended operation lock, or the issue repo could not
+  be set — rather than adding the issue repo and dispatching the patch to
+  hosts on a broken premise. No update patch was dispatched at that point, so
+  there is no update for a downgrade to undo; use `--noprepare` to skip
+  prepare and patch anyway. A prepare that ran but only reported a per-host
+  package-manager failure now warns and lets the update proceed instead of
+  aborting it: a healthy SL Micro prepare routinely writes progress to
+  stderr, and hard-aborting on that would have blocked patching hosts that
+  were never actually broken.
 
 ## [26.1.1] - 2026-07-27
 

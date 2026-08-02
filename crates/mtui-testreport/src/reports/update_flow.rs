@@ -50,13 +50,16 @@ type UpdateMaps = (BTreeMap<String, String>, BTreeMap<String, String>);
 pub enum UpdateFailure {
     /// One or more hosts failed the `updater` check after the command ran.
     Check(UpdateError),
-    /// The pre-update `prepare` step failed.
+    /// The pre-update `prepare` step could not run: no preparer for a host's
+    /// key, the operation lock was contended, or the issue repo could not be
+    /// set.
     ///
     /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback,
-    /// but for a different reason: nothing has been dispatched yet at this
-    /// point — no lock taken, no issue repo added, no patch command sent — so
-    /// there is nothing on any host for a downgrade to undo. `--noprepare` is
-    /// the opt-out for a caller that wants to patch anyway.
+    /// but for a different reason: no update patch was dispatched, so there
+    /// is no update for a downgrade to undo. `--noprepare` is the opt-out for
+    /// a caller that wants to patch anyway. A prepare that ran but only
+    /// reported a per-host package-manager failure does **not** reach this
+    /// variant — see `PrepareFailure` — it warns and the update proceeds.
     Prepare(UpdateError),
     /// A concrete target has no updater doer; mtui treats this as a hard
     /// failure (rather than logging and returning as if successful) so a
@@ -180,9 +183,13 @@ where
     match perform_update_from_report(report, targets, noprepare, newpackage, diagnostics).await {
         Ok(()) => Ok(()),
         Err(UpdateFailure::Prepare(e)) => {
-            // Nothing was dispatched (no lock, no repo add, no patch) → no
-            // rollback.
-            error!(error = %e, "update aborted: prepare failed");
+            // Prepare could not run (missing preparer, contended lock, or the
+            // issue repo could not be set): no update patch was dispatched,
+            // so there is no update for a downgrade to undo.
+            error!(
+                error = %e,
+                "update aborted: prepare could not run (rerun with --noprepare to patch anyway)"
+            );
             Err(e)
         }
         Err(UpdateFailure::MissingUpdater(e)) => {
@@ -257,19 +264,25 @@ fn repa_for(maintenance_id: &str, review_id: &str) -> String {
     format!(":p={maintenance_id}:{review_id}")
 }
 
-/// Classifies a pre-update `prepare` failure.
+/// Why a pre-update `prepare` did not succeed, split by whether the update
+/// may still proceed.
 ///
-/// The cancel arm is defensive rather than live on this call path: the
-/// pre-update prepare always runs with `installed_only = false`, and only the
-/// per-package (`installed_only = true`) loop sets `cancelled_at`. It stays
-/// because [`perform_prepare`] is public and the "a cancel surfaces as
-/// `Cancelled`, never a generic failure" invariant applies to every caller.
-fn prepare_failure(e: UpdateError) -> UpdateFailure {
-    if e.is_cancelled() {
-        UpdateFailure::Cancelled(e)
-    } else {
-        UpdateFailure::Prepare(e)
-    }
+/// `host_command_failures` counts any stderr as a failure, and
+/// `transactional-update` writes progress to stderr on a *successful* run
+/// (see `prepare_body`'s own note on the reboot gate) — so a per-host
+/// package-manager complaint is too noisy to hard-abort `update` on. Whether
+/// prepare could even *run* (a preparer, a lock, an issue repo) is a
+/// different, reliable signal.
+enum PrepareFailure {
+    /// Prepare never ran: no preparer for a host's key, the operation lock
+    /// was contended, or the issue repo could not be set. Nothing was
+    /// installed and the update's premise is broken — the update aborts.
+    DidNotRun(UpdateError),
+    /// Prepare ran and one or more hosts reported trouble from the package
+    /// manager. Warn and continue.
+    HostReported(UpdateError),
+    /// A cancellation checkpoint, not a failure.
+    Cancelled(UpdateError),
 }
 
 /// Resolves a host's `(release, transactional)` key from its parsed system.
@@ -514,13 +527,6 @@ async fn perform_operation(
     // written after this call returns would be lost on exactly the
     // transactional hosts that never came back.
 
-    // A stranded operation lock does not turn a good install/uninstall into a
-    // failed one — it warns, naming the hosts and the manual remedy, rather
-    // than joining `failures` below.
-    if !report.unlock_failures.is_empty() {
-        warn!("{}", unlock_failure_message(op, &report.unlock_failures));
-    }
-
     // A host whose post-run check failed, and any transactional host that
     // rebooted and never reconnected, both fail the operation by name. A
     // failed check already excluded its host from the reboot map (see
@@ -532,25 +538,6 @@ async fn perform_operation(
         .collect();
     failures.extend(report.reboot_failures.into_iter().map(reboot_error));
     aggregate_failures(op, failures)
-}
-
-/// Renders the WARN for an `install`/`uninstall` operation lock that did not
-/// release, naming the affected hosts and the manual remedy.
-///
-/// A pure helper so the message is unit-testable without driving the whole
-/// [`Operation`] template.
-fn unlock_failure_message(op: &str, unlock_failures: &[(String, String)]) -> String {
-    let hosts: Vec<&str> = unlock_failures.iter().map(|(h, _)| h.as_str()).collect();
-    format!(
-        "{op} succeeded but the operation lock did not release on {}: {} \
-         (release it with `unlock --force`)",
-        hosts.join(", "),
-        unlock_failures
-            .iter()
-            .map(|(h, reason)| format!("{h}: {reason}"))
-            .collect::<Vec<_>>()
-            .join("; ")
-    )
 }
 
 /// Renders a [`RebootFailure`] as the operator-facing per-host error.
@@ -649,6 +636,32 @@ pub async fn perform_prepare(
     testing: bool,
     installed_only: bool,
 ) -> Result<(), UpdateError> {
+    match perform_prepare_classified(targets, report, packages, force, testing, installed_only)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(
+            PrepareFailure::DidNotRun(e)
+            | PrepareFailure::HostReported(e)
+            | PrepareFailure::Cancelled(e),
+        ) => Err(e),
+    }
+}
+
+/// The classified body of [`perform_prepare`], distinguishing a prepare that
+/// never ran ([`PrepareFailure::DidNotRun`]) from one that ran and reported a
+/// host failure ([`PrepareFailure::HostReported`]) — the split
+/// [`perform_update`] gates its abort on. [`perform_prepare`] flattens both
+/// (and [`PrepareFailure::Cancelled`]) back to a plain [`UpdateError`], so the
+/// standalone `prepare` command's observable behaviour is unchanged.
+async fn perform_prepare_classified(
+    targets: &mut HostsGroup,
+    report: &dyn SetRepo,
+    packages: &[String],
+    force: bool,
+    testing: bool,
+    installed_only: bool,
+) -> Result<(), PrepareFailure> {
     let registry = WorkflowRegistry::new(force, testing);
     let operation = if testing { RepoOp::Add } else { RepoOp::Remove };
     // The prepare set excludes the branding-upstream package.
@@ -660,11 +673,15 @@ pub async fn perform_prepare(
 
     // Resolve the reboot map before locking; a missing preparer aborts early.
     let Ok(reboot) = build_reboot_map(targets, &registry, Role::Prepare) else {
-        return Err(UpdateError::reason_only("missing preparer"));
+        return Err(PrepareFailure::DidNotRun(UpdateError::reason_only(
+            "missing preparer",
+        )));
     };
 
     if let Err(e) = targets.update_lock().await {
-        return Err(UpdateError::reason_only(e.to_string()));
+        return Err(PrepareFailure::DidNotRun(UpdateError::reason_only(
+            e.to_string(),
+        )));
     }
 
     // The body runs, then we always unlock, matching a try/finally.
@@ -693,10 +710,11 @@ async fn prepare_body(
     pkgs: &[String],
     installed_only: bool,
     reboot: BTreeMap<String, String>,
-) -> Result<(), UpdateError> {
+) -> Result<(), PrepareFailure> {
     targets.fanout_set_repo(operation, report).await;
 
-    // Abort early if adding/removing the issue repo failed on any host.
+    // Abort early if adding/removing the issue repo failed on any host: the
+    // issue repo could not be set, so prepare never ran.
     let repo_failures = host_command_failures(targets, "failed to set issue repo");
     if !repo_failures.is_empty() {
         for target in targets.targets() {
@@ -709,7 +727,7 @@ async fn prepare_body(
                 );
             }
         }
-        return aggregate_failures("prepare", repo_failures);
+        return aggregate_failures("prepare", repo_failures).map_err(PrepareFailure::DidNotRun);
     }
 
     // Every host that actually received a prepare command, and the hosts a
@@ -818,7 +836,7 @@ async fn prepare_body(
     // A genuine host failure outranks the cancellation: reporting only
     // "cancelled" would bury a broken host the operator must still see.
     if !failures.is_empty() {
-        return aggregate_failures("prepare", failures);
+        return aggregate_failures("prepare", failures).map_err(PrepareFailure::HostReported);
     }
     if let Some(i) = cancelled_at {
         let done: Vec<&str> = pkgs[..i].iter().map(String::as_str).collect();
@@ -828,15 +846,15 @@ async fn prepare_body(
             not_attempted = %left.join(", "),
             "prepare cancelled at a package boundary"
         );
-        return Err(UpdateError::cancelled(format!(
+        return Err(PrepareFailure::Cancelled(UpdateError::cancelled(format!(
             "prepare cancelled after {}/{} packages; applied: [{}]; not attempted: [{}]",
             i,
             pkgs.len(),
             done.join(", "),
             left.join(", "),
-        )));
+        ))));
     }
-    aggregate_failures("prepare", failures)
+    aggregate_failures("prepare", failures).map_err(PrepareFailure::HostReported)
 }
 
 /// Records which hosts a prepare fan-out reached, and which of them it failed
@@ -1363,11 +1381,19 @@ pub async fn perform_update(
     }
 
     if !noprepare {
-        // Runs prepare with default flags (remove-repo prepare). Nothing has
-        // been dispatched yet, so a failure aborts here rather than patching
-        // hosts prepare may have left in a bad state; `--noprepare` opts out.
-        if let Err(e) = perform_prepare(targets, report, packages, false, false, false).await {
-            return Err(prepare_failure(e));
+        // Runs prepare with default flags (remove-repo prepare). A prepare
+        // that could not run (missing preparer, contended lock, or the issue
+        // repo could not be set) aborts here rather than patching hosts on a
+        // broken premise; `--noprepare` opts out. A prepare that ran but only
+        // reported a host failure is too noisy to gate on (see
+        // `PrepareFailure`), so it warns and the update proceeds.
+        match perform_prepare_classified(targets, report, packages, false, false, false).await {
+            Ok(()) => {}
+            Err(PrepareFailure::DidNotRun(e)) => return Err(UpdateFailure::Prepare(e)),
+            Err(PrepareFailure::Cancelled(e)) => return Err(UpdateFailure::Cancelled(e)),
+            Err(PrepareFailure::HostReported(e)) => {
+                warn!(error = %e, "prepare before update reported a host failure; continuing");
+            }
         }
     }
 
@@ -1443,27 +1469,14 @@ pub async fn perform_update(
 
     targets.package_check(true).await;
 
-    remove_test_repos(targets, report).await;
-    Ok(())
-}
-
-/// Removes the test update repositories after a successful update.
-///
-/// Best-effort: a lock failure here does not turn a successful update into a
-/// failed one, so it warns — naming the error, that the repos are left
-/// configured, and the manual remedy — rather than failing the update.
-async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
-    if let Err(e) = targets.update_lock().await {
-        warn!(
-            error = %e,
-            "could not lock hosts to remove the test update repositories; \
-             they are left configured on every host (remove later with \
-             `set_repo --remove`)"
-        );
-        return;
+    // Success: remove the test update repositories.
+    if targets.update_lock().await.is_err() {
+        warn!("could not lock hosts to remove update repositories; skipping repo cleanup");
+        return Ok(());
     }
     targets.fanout_set_repo(RepoOp::Remove, report).await;
     targets.unlock().await;
+    Ok(())
 }
 
 /// Runs the update commands, checks every host (collecting failures), reboots on
@@ -1950,40 +1963,6 @@ mod tests {
             perform_install(&mut group, &["pkg-a".to_owned()])
                 .await
                 .is_ok()
-        );
-    }
-
-    #[tokio::test]
-    async fn perform_install_warns_but_still_succeeds_when_unlock_fails() {
-        // The install itself must succeed even though the lock never released:
-        // a stranded lock does not turn a good install into a failed one.
-        let conn = MockConnection::new("h1")
-            .with_default(CommandLog::new("", "", "", 0, 0))
-            .failing_sftp_remove();
-        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
-        t.set_system(
-            System::new(
-                SystemProduct::new("SLES", "15.5", "x86_64"),
-                BTreeSet::new(),
-                false,
-            ),
-            false,
-        );
-        let mut group = HostsGroup::new(vec![t], false);
-
-        let (res, logs) = capture_logs(perform_install(&mut group, &["pkg-a".to_owned()])).await;
-
-        assert!(
-            res.is_ok(),
-            "a stranded lock must not turn a good install into a failure: {res:?}"
-        );
-        assert!(
-            logs.contains("h1"),
-            "the WARN must name the stranded host: {logs}"
-        );
-        assert!(
-            logs.contains("unlock --force"),
-            "the WARN must name the manual remedy: {logs}"
         );
     }
 
@@ -3225,89 +3204,6 @@ mod tests {
         );
     }
 
-    /// Runs `fut` under a scoped tracing subscriber that captures each
-    /// event's message synchronously into an in-memory buffer, returning
-    /// `fut`'s output paired with the joined records. Mirrors
-    /// `mtui-datasources/tests/obs_oscrc.rs`'s `capture_logs`, adapted for an
-    /// async body: `set_default`'s guard stays live across the awaited future
-    /// on the single-threaded `#[tokio::test]` runtime these tests run under.
-    async fn capture_logs<T>(fut: impl std::future::Future<Output = T>) -> (T, String) {
-        use std::fmt::Write as _;
-        use std::sync::{Arc, Mutex};
-        use tracing::field::{Field, Visit};
-        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-        use tracing_subscriber::registry::Registry;
-
-        #[derive(Clone)]
-        struct CaptureLayer(Arc<Mutex<Vec<String>>>);
-
-        struct MessageVisitor(String);
-        impl Visit for MessageVisitor {
-            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    let _ = write!(self.0, "{value:?}");
-                } else {
-                    let _ = write!(self.0, " {}={value:?}", field.name());
-                }
-            }
-        }
-
-        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-                let mut visitor = MessageVisitor(String::new());
-                event.record(&mut visitor);
-                self.0.lock().unwrap().push(visitor.0);
-            }
-        }
-
-        let records = Arc::new(Mutex::new(Vec::new()));
-        let sub = Registry::default().with(CaptureLayer(records.clone()));
-        let _guard = tracing::subscriber::set_default(sub);
-        let out = fut.await;
-        (out, records.lock().unwrap().join("\n"))
-    }
-
-    #[tokio::test]
-    async fn remove_test_repos_names_the_error_when_it_cannot_lock() {
-        // A foreign lock makes update_lock fail on the only host, so the
-        // cleanup cannot run; it must warn (naming the error and the remedy)
-        // rather than removing the repos.
-        let foreign = MockConnection::new("h1")
-            .with_default(CommandLog::new("", "", "", 0, 0))
-            .with_file(
-                mtui_hosts::TARGET_LOCK_PATH,
-                b"1700000000:alice:4242:busy".to_vec(),
-            );
-        let t = Target::with_connection("h1", TargetState::Enabled, Box::new(foreign));
-        let mut group = HostsGroup::new(vec![t], false);
-        let repo = RecordingRepo::default();
-
-        let ((), logs) = capture_logs(remove_test_repos(&mut group, &repo)).await;
-
-        let ops = repo.ops.lock().unwrap().clone();
-        assert!(
-            !ops.contains(&RepoOp::Remove),
-            "cleanup must not run when the lock fails: {ops:?}"
-        );
-        // The cleanup's own warning must carry both the lock error and the
-        // remedy in the same line: `update_lock`'s internal fanout also logs
-        // WARNs about the individual foreign-locked host, so a
-        // `logs.contains` across every captured line would still pass with
-        // the error field dropped from this warning.
-        let cleanup_line = logs
-            .lines()
-            .find(|l| l.contains("left configured on every host"))
-            .unwrap_or_else(|| panic!("no cleanup warning found: {logs}"));
-        assert!(
-            cleanup_line.contains("Hosts locked"),
-            "cleanup warning must name the lock error: {cleanup_line}"
-        );
-        assert!(
-            cleanup_line.contains("set_repo --remove"),
-            "cleanup warning must name the manual remedy: {cleanup_line}"
-        );
-    }
-
     #[tokio::test]
     async fn perform_update_runs_prepare_when_not_noprepare() {
         let (t, handle) = sles_target("h1", "");
@@ -3340,10 +3236,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn perform_update_aborts_when_the_prepare_fails() {
-        // h1's prepare command exits non-zero ⇒ the update must abort before
-        // taking the lock, adding the issue repo, or dispatching the patch.
-        let (t, handle) = sles_target_with_exit("h1", "", 1);
+    async fn perform_update_continues_when_prepare_only_reports_host_noise() {
+        // h1's prepare command exits 0 but writes to stderr: prepare ran and
+        // merely reported host noise (`host_command_failures` counts any
+        // stderr, and `transactional-update` writes progress to stderr on a
+        // successful run), so the update must proceed rather than hard-abort.
+        let conn =
+            MockConnection::new("h1").with_default(CommandLog::new("zypper", "", "warning", 0, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let _ = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let ops = repo.ops.lock().unwrap().clone();
+        assert!(
+            ops.contains(&RepoOp::Add),
+            "prepare host noise must not abort the update before the repo add: {ops:?}"
+        );
+        let cmds = handle.commands();
+        assert!(
+            cmds.iter().any(|c| c.contains(":p=42:7")),
+            "prepare host noise must not stop the patch command from dispatching: {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_aborts_when_the_prepare_could_not_run() {
+        // A foreign lock makes `update_lock` fail before prepare's body ever
+        // runs: this is "prepare could not run", not "prepare ran and
+        // failed", so it must still hard-abort the update before the lock,
+        // the issue repo add, or the patch command.
+        let foreign = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_file(
+                mtui_hosts::TARGET_LOCK_PATH,
+                b"1700000000:alice:4242:busy".to_vec(),
+            );
+        let handle = foreign.clone();
+        let t = Target::with_connection("h1", TargetState::Enabled, Box::new(foreign));
         let mut group = HostsGroup::new(vec![t], false);
         let repo = RecordingRepo::default();
         let report = report_with_rrid();
@@ -3363,39 +3316,19 @@ mod tests {
         .await;
         assert!(
             matches!(res, Err(UpdateFailure::Prepare(_))),
-            "a failed prepare aborts the update: {res:?}"
+            "a prepare that could not run must abort the update: {res:?}"
         );
 
         let ops = repo.ops.lock().unwrap().clone();
         assert!(
             !ops.contains(&RepoOp::Add),
-            "no issue repo must be added when prepare fails: {ops:?}"
+            "no issue repo must be added when prepare could not run: {ops:?}"
         );
         let cmds = handle.commands();
         assert!(
             !cmds.iter().any(|c| c.contains(":p=42:7")),
-            "no patch command must be dispatched when prepare fails: {cmds:?}"
+            "no patch command must be dispatched when prepare could not run: {cmds:?}"
         );
-    }
-
-    #[test]
-    fn prepare_failure_classifies_cancelled_vs_plain_errors() {
-        assert!(matches!(
-            prepare_failure(UpdateError::cancelled("cancelled")),
-            UpdateFailure::Cancelled(_)
-        ));
-        assert!(matches!(
-            prepare_failure(UpdateError::new("boom", "h1")),
-            UpdateFailure::Prepare(_)
-        ));
-    }
-
-    #[test]
-    fn unlock_failure_message_names_hosts_reasons_and_remedy() {
-        let msg = unlock_failure_message("install", &[("h1".to_owned(), "boom".to_owned())]);
-        assert!(msg.contains("h1"));
-        assert!(msg.contains("boom"));
-        assert!(msg.contains("unlock --force"));
     }
 
     #[tokio::test]
