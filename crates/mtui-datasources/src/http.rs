@@ -6,13 +6,13 @@
 //! `(connect, read)` timeout and one TLS-verification policy instead of each
 //! making its own, inconsistent decision. This module centralises both:
 //!
-//! - [`HTTP_TIMEOUT`] is the one `(connect, read)` timeout shared by all
+//! - `HTTP_TIMEOUT` is the one `(connect, read)` timeout shared by all
 //!   callers. It bounds a stuck socket so a broken network cannot hang mtui.
 //! - [`resolve_verify`] turns a per-call default plus the user's global
 //!   preference into the effective [`VerifyPolicy`].
 //! - [`HttpClient`] builds one `reqwest::Client` with a fixed timeout + verify
 //!   posture. Verification is **on by default for every call site.**
-//! - [`is_ssl_verification_error`] / [`ssl_verification_hint`] give a short,
+//! - `is_ssl_verification_error` / `ssl_verification_hint` give a short,
 //!   actionable message for the internal-CA hosts (openqa.suse.de,
 //!   dashboard.qam.suse.de, ...) instead of a raw transport error.
 //!
@@ -30,11 +30,11 @@
 //!
 //! ## Bounded response bodies
 //!
-//! Every body is read through [`read_body_capped`], which rejects an oversized advertised
+//! Every body is read through `read_body_capped`, which rejects an oversized advertised
 //! `Content-Length` before reading and enforces the same ceiling while streaming
 //! chunked/unknown-length bodies — a hostile or misconfigured datasource cannot
 //! OOM mtui. Callers pick [`MAX_API_BODY`] (small JSON/text) or
-//! [`MAX_DOWNLOAD_BODY`] (bulk downloads); overflow surfaces as
+//! `MAX_DOWNLOAD_BODY` (bulk downloads); overflow surfaces as
 //! [`HttpError::BodyTooLarge`], which carries no URL so it cannot leak a
 //! credential embedded in a datasource URL.
 
@@ -108,7 +108,7 @@ impl VerifyPolicy {
     /// Bridge a typed [`mtui_config::SslVerify`] into this layer's posture.
     ///
     /// - [`SslVerify::Enabled`] → verify, preferring the system CA bundle
-    ///   ([`system_ca_bundle`]) when one is found (the distribution bundle
+    ///   (`system_ca_bundle`) when one is found (the distribution bundle
     ///   takes precedence over any bundled default), else `Default(true)`.
     /// - [`SslVerify::Disabled`] → `Default(false)`.
     /// - [`SslVerify::CaBundle`] → the configured path verbatim.
@@ -169,12 +169,12 @@ pub struct HttpClient {
 impl HttpClient {
     /// Build a client with the given [`VerifyPolicy`].
     ///
-    /// Applies [`HTTP_TIMEOUT`] (connect + read), sizes the per-host idle pool
-    /// to [`default_pool_size`], and derives the TLS posture:
+    /// Applies `HTTP_TIMEOUT` (connect + read), sizes the per-host idle pool
+    /// to `default_pool_size`, and derives the TLS posture:
     ///
     /// - `Default(true)` → verify against the built-in trust store;
     /// - `Default(false)` → accept invalid certs (and warn once via
-    ///   [`disable_insecure_warnings`]);
+    ///   `disable_insecure_warnings`);
     /// - `CaBundle(path)` → verify against *only* that PEM bundle (replacing,
     ///   not augmenting, the trust store).
     ///
@@ -213,7 +213,7 @@ impl HttpClient {
     }
 
     /// GET `url` and return the raw response body as bytes, capped at
-    /// [`MAX_DOWNLOAD_BODY`].
+    /// `MAX_DOWNLOAD_BODY`.
     ///
     /// The single GET-to-bytes path for callers that just want a payload (a log
     /// file, a YAML document). Errors on any non-2xx status. Use
@@ -345,7 +345,7 @@ pub(crate) fn ssl_verification_hint(host: Option<&str>) -> String {
 /// (`scheme://user:pass@host/…`); those must never reach the log stream. This
 /// preserves the scheme, host, port, path and query so a log line stays useful,
 /// and touches only the authority's userinfo. Parsing is deliberately
-/// dependency-free and mirrors [`host_of`]-style string splitting; on any
+/// dependency-free and mirrors `host_of`-style string splitting; on any
 /// unexpected shape it fails closed by stripping an entire `…@` authority prefix
 /// rather than risk echoing a credential.
 #[must_use]

@@ -86,7 +86,7 @@ impl ClientConf {
         paths
     }
 
-    /// Read and merge the [`default_paths`](Self::default_paths).
+    /// Read and merge the `default_paths`.
     ///
     /// Missing files are skipped; an unreadable or malformed file is logged at
     /// `warn` and skipped, so a bad config never hard-fails a lookup.

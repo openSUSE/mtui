@@ -26,7 +26,7 @@
 //! The mtui
 //! [`Version`] preserves the numeric-vs-textual distinction via
 //! [`VersionField`], rather than collapsing it into one untyped field.
-//! [`normalize_version`] therefore yields
+//! `normalize_version` therefore yields
 //! [`VersionField::Text`] for a service-pack minor (`"SP4"`) and
 //! [`VersionField::Num`] for a dotted numeric minor (`"0"`), matching how
 //! `refhosts.yml` metadata deserializes so exact-match hosts compare equal.

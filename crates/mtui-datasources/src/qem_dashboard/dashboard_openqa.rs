@@ -171,7 +171,7 @@ impl NormalizedJob {
     /// dashboard keeps the older run but marks it superseded — either with an
     /// `obsolete` flag or an `"obsoleted"` result. Both must be dropped so a
     /// stale failure does not poison the install verdict
-    /// ([`has_passed_install_jobs`](Self::has_passed_install_jobs)) or surface as
+    /// (`has_passed_install_jobs`) or surface as
     /// a phantom entry in the failed-jobs listing. Matches `oqa_search`'s
     /// `incident_jobs`, which filters `result == "obsoleted"`; only the current
     /// run matters.
@@ -258,11 +258,11 @@ pub struct DashboardAutoOpenQA {
     client: QemDashboardClient,
     /// The resolved dashboard incident number.
     incident_number: String,
-    /// The rendered `Results from openQA jobs` block (empty until [`run`]).
+    /// The rendered `Results from openQA jobs` block (empty until [`run`](Self::run)).
     pub pp: Vec<String>,
     /// The install-log URLs, or `None` when the install jobs did not all pass.
     pub results: Option<Vec<URLs>>,
-    /// The normalized jobs (populated by [`run`]).
+    /// The normalized jobs (populated by [`run`](Self::run)).
     jobs: Vec<NormalizedJob>,
     /// Upper bound on concurrent per-setting job fetches (clamped to `>=1`).
     max_parallel: usize,
@@ -275,7 +275,7 @@ impl DashboardAutoOpenQA {
     /// Build the provider for an incident on a given openQA `host`.
     ///
     /// `max_parallel` bounds how many per-setting job fetches run concurrently
-    /// in [`load_jobs`](Self::load_jobs) (clamped to `>=1`).
+    /// in `load_jobs` (clamped to `>=1`).
     #[must_use]
     pub fn new(
         host: impl Into<String>,

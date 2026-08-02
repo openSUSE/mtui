@@ -168,7 +168,7 @@ impl FileStat for FsStat {
 /// The client's TLS posture is fixed at build time (see [`HttpClient::new`]), so
 /// this fetcher ignores the per-call `verify` argument beyond recording that the
 /// resolver already resolved it — the client it holds was constructed with that
-/// same policy. It is created via [`HttpFetcher::new`], which builds the client
+/// same policy. It is created via `HttpFetcher::new`, which builds the client
 /// from the effective [`VerifyPolicy`].
 #[derive(Debug)]
 pub struct HttpFetcher {

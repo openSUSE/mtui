@@ -11,7 +11,7 @@
 //!
 //! * **Application errors arrive as HTTP 200.** A refused call still returns
 //!   `200 OK`, carrying `{"ok": false, "error": "channel_not_found"}`. Checking
-//!   the status is therefore *not* enough — [`Slack::request`] inspects the
+//!   the status is therefore *not* enough — `Slack::request` inspects the
 //!   `ok` field on every response and converts a false one into
 //!   [`SlackError::Api`].
 //! * **Rate limiting is routine, not exceptional.** Tier-3 methods allow
@@ -454,7 +454,7 @@ impl Slack {
 
     /// Read the threaded replies to the message identified by `channel`/`ts`.
     ///
-    /// Follows Slack's cursor pagination, bounded by [`MAX_REPLY_PAGES`]. The
+    /// Follows Slack's cursor pagination, bounded by `MAX_REPLY_PAGES`. The
     /// parent message is excluded: Slack returns it as the first element of
     /// the first page, and it is the request itself, not a reply to it.
     ///

@@ -19,14 +19,14 @@
 //! * **Native async fan-out.** Jobs are fanned out
 //!   concurrently with `tokio`, each fetch guarded by
 //!   [`tokio::time::timeout`] with a 60s per-future wall-clock cap
-//!   ([`FUTURE_TIMEOUT`](dashboard_openqa::FUTURE_TIMEOUT)), preserving a
+//!   (`FUTURE_TIMEOUT`), preserving a
 //!   fixed ordering (incident settings first, then update settings; jobs in
 //!   submission order) and a warn-and-skip-on-timeout behaviour, without a
 //!   thread pool.
 //! * **No `config` dependency.** [`DashboardAutoOpenQA`]'s
 //!   `openqa_install_distri` / `openqa_install_logs` are pinned Rust
-//!   constants ([`OPENQA_INSTALL_DISTRI`](crate::openqa::OPENQA_INSTALL_DISTRI),
-//!   [`install_logfile_for`](crate::openqa::install_logfile_for)), so the
+//!   constants (`OPENQA_INSTALL_DISTRI`,
+//!   `install_logfile_for`), so the
 //!   constructor takes no config.
 //!
 //! [`RequestReviewID`]: mtui_types::RequestReviewID

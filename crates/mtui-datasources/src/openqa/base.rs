@@ -5,7 +5,7 @@
 //! and folds every transport/HTTP failure into a `None` result so a command
 //! never aborts on a flaky openQA. This module provides that shared machinery;
 //! the concrete `auto` and `kernel` workflows live in
-//! [`standard`](crate::openqa::standard) and [`kernel`](crate::openqa::kernel).
+//! `standard` and [`kernel`](crate::openqa::kernel).
 
 use mtui_types::{RequestKind, RequestReviewID};
 use serde::Deserialize;

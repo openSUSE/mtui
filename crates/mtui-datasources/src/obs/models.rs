@@ -14,7 +14,7 @@
 //! third-party XML parser. Defence in depth: `quick-xml` does not expand general
 //! entities anyway (it surfaces them as distinct events), so a DTD-free body
 //! with an entity reference never expands either. This mirrors the guard in
-//! [`crate::obs::client::error_summary`].
+//! `crate::obs::client::error_summary`.
 //!
 //! The four `parse_*` entry points are `pub` (not `pub(crate)`) solely so the
 //! detached cargo-fuzz harness in `fuzz/` can drive them with arbitrary bytes;

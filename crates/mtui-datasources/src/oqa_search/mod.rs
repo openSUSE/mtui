@@ -19,7 +19,7 @@
 //!
 //! The module is split along these submodule seams:
 //!
-//! * [`heuristics`] — the constants / blocklists that drive
+//! * `heuristics` — the constants / blocklists that drive
 //!   group filtering and log-line extraction.
 //! * [`results`] — the public result shapes.
 //! * [`search`] — the fetch layer, the pure helpers, and the entry points.

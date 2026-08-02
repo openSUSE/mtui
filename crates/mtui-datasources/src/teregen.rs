@@ -23,7 +23,7 @@
 //!
 //! ## Interruptible waiting
 //!
-//! [`wait_for_template`](TeReGen::wait_for_template) is `async`, and the
+//! `wait_for_template` is `async`, and the
 //! inter-poll wait uses [`tokio::time::sleep`], polling `should_stop` in small
 //! steps so cancellation takes effect promptly rather than after a full
 //! interval.
@@ -363,7 +363,7 @@ impl TeReGen {
     /// Enqueue a regeneration and wait for the job to finish.
     ///
     /// Bundles [`regenerate`](Self::regenerate) +
-    /// [`wait_for_template`](Self::wait_for_template) into the single protocol
+    /// `wait_for_template` into the single protocol
     /// both the `regenerate` command and the stale-template loader share,
     /// returning a [`RegenOutcome`] the caller maps to its own messaging and
     /// reload strategy. `should_stop` is forwarded so the wait stays

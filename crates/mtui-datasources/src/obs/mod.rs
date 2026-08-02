@@ -1,7 +1,7 @@
 //! The native OBS/IBS review backend (direct OBS API, no `osc` subprocess).
 //!
 //! This backend replaces the `osc qam` subprocess wrapper
-//! ([`crate::oscqam`]) with a native Rust OBS API client. The transport
+//! (`oscqam`) with a native Rust OBS API client. The transport
 //! foundation ([`client`], [`errors`]), the native oscrc
 //! credential reader ([`oscrc`]), the XML models ([`models`]), the
 //! assignment-inference state machine ([`inference`]) and the SSH-signature

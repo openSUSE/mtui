@@ -1,6 +1,6 @@
 //! Refhost **search query** model.
 //!
-//! The `refhosts.yml` *row* schema ([`Host`], [`Product`], [`Addon`],
+//! The `refhosts.yml` *row* schema ([`Host`](mtui_types::Host), [`Product`], [`Addon`],
 //! [`Version`]) lives in `mtui-types` (it is pure, I/O-free wire data). This
 //! module adds the **query side**: [`Attributes`], the mutable search filter,
 //! and [`Attributes::from_testplatform`], which parses a SMELT `testplatform`

@@ -11,7 +11,7 @@
 //!   (INI `client.conf`, `X-API-Key`, HMAC-SHA1 `X-API-Hash`) over this crate's
 //!   shared [`HttpClient`](crate::http::HttpClient).
 //! * [`kernel`] — the "kernel" workflow ([`KernelOpenQA`]): the LTP test matrix.
-//! * [`install`] — the install-job → log-filename map ([`install_logfile_for`]).
+//! * `install` — the install-job → log-filename map (`install_logfile_for`).
 
 pub mod base;
 pub mod client;
