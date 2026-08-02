@@ -90,7 +90,7 @@ pub enum MockSftpOp {
 /// Construct with [`MockConnection::new`], script responses with
 /// [`with_response`](MockConnection::with_response) /
 /// [`with_default`](MockConnection::with_default) /
-/// [`with_timeout`](MockConnection::with_timeout), then inspect issued commands
+/// `with_timeout`, then inspect issued commands
 /// via [`commands`](MockConnection::commands).
 #[derive(Debug, Clone)]
 pub struct MockConnection {
@@ -110,7 +110,7 @@ pub struct MockConnection {
     issued: Arc<Mutex<Vec<String>>>,
     /// Set once [`close`](Connection::close) has been called.
     closed: Arc<Mutex<bool>>,
-    /// When set, [`close`](Connection::close) blocks until the [`Notify`] is
+    /// When set, [`close`](Connection::close) blocks until the [`Notify`](tokio::sync::Notify) is
     /// fired before completing — models a wedged teardown (a dead peer
     /// with no RST) so a caller's bounded close budget can be exercised. Shared
     /// across `Clone`d handles so the test fires the same notify. Never set by
@@ -302,7 +302,7 @@ impl MockConnection {
     /// Makes [`sftp_get`](Connection::sftp_get) /
     /// [`sftp_get_folder`](Connection::sftp_get_folder) fail with a generic
     /// [`HostError::Sftp`], so a caller's per-host download outcome tracking
-    /// ([`Target::sftp_get`]) can be exercised. The op is still recorded before
+    /// ([`Target::sftp_get`](crate::Target::sftp_get)) can be exercised. The op is still recorded before
     /// failing.
     #[must_use]
     pub fn failing_sftp_get(mut self) -> Self {
@@ -630,7 +630,7 @@ impl MockConnection {
     }
 
     /// Scripts one chunk of shell output served by
-    /// [`ShellChannel::read`](crate::connection::ShellChannel::read) on a
+    /// [`ShellChannel::read`] on a
     /// spawned shell. Chunks are drained in order, one per `read`, then `read`
     /// returns `0` (EOF) — the bridge loop's stop condition.
     #[cfg(feature = "shell")]

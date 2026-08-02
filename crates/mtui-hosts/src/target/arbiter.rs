@@ -216,7 +216,7 @@ impl<C: Clock> HostArbiter<C> {
 /// The process-global [`HostArbiter`] (created on first use).
 ///
 /// A double-checked singleton, pinned to [`SystemClock`]; tests construct their
-/// own [`HostArbiter::with_clock`] instead of touching the global.
+/// own `HostArbiter::with_clock` instead of touching the global.
 #[must_use]
 pub fn get_arbiter() -> &'static HostArbiter<SystemClock> {
     static ARBITER: OnceLock<HostArbiter<SystemClock>> = OnceLock::new();

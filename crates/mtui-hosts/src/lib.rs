@@ -8,7 +8,7 @@
 //! [`HostsGroup`] composite with its parallel/serial command + SFTP fan-out,
 //! the remote-lock protocol ([`TargetLock`] / [`PoolLock`] / [`RemoteLock`],
 //! P2.6), the in-process [`HostArbiter`] (P2.7), and the host-output parsers —
-//! [`parse_system`] / [`parse_product`] / [`parse_os_release`] plus the
+//! [`parse_system`] / [`parse_product`](target::parsers::product::parse_product) / [`parse_os_release`](target::parsers::product::parse_os_release) plus the
 //! [`PackageQuerier`] (P2.8), and the install/uninstall [`Operation`] template
 //! (skeleton + trait, P2.9) — the `lock → run → check → reboot → unlock`
 //! flow driven over the object-safe [`OperationGroup`] seam — and, behind the

@@ -5,7 +5,7 @@
 //! [`RepoManager`] collects the two repository-shape methods so [`Target`] can
 //! stay focused on the connection/lock skeleton:
 //!
-//! * [`set`](RepoManager::set) — the one-line forward into
+//! * `set` — the one-line forward into
 //!   `testreport.set_repo(target, operation)`; kept on the collaborator so
 //!   callers reach for `target.repo_manager().set(...)` instead of
 //!   `target.set_repo(...)`.
@@ -15,11 +15,11 @@
 //!   hosts). The unknown-cmd safeguard (force-unlock followed by an error) is
 //!   preserved.
 //!
-//! ## `&mut Target` vs the immutable [`Reporter`]
+//! ## `&mut Target` vs the immutable `Reporter`
 //!
-//! Unlike the sibling [`Reporter`](super::reporter::Reporter), which only
+//! Unlike the sibling `Reporter`, which only
 //! *reads* the target and so borrows it immutably, `RepoManager` must **mutate**
-//! the target: it issues commands ([`Target::run`]) and, on the unknown-cmd
+//! the target: it issues commands (`Target::run`) and, on the unknown-cmd
 //! safeguard path, force-unlocks it ([`Target::unlock`]). It therefore borrows
 //! `&mut Target`. Obtain one via [`Target::repo_manager`], which hands out a
 //! fresh binding over the live target each time.
@@ -46,10 +46,10 @@ use tracing::{debug, info, warn};
 
 use super::Target;
 
-/// Which repository change a [`set`](RepoManager::set) forwards: add or remove.
+/// Which repository change a `set` forwards: add or remove.
 ///
 /// Modelling them as a two-variant enum keeps the seam
-/// typed; [`as_str`](RepoOp::as_str) renders the wire token for a
+/// typed; `as_str` renders the wire token for a
 /// [`SetRepo`] implementer that wants it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepoOp {
@@ -70,7 +70,7 @@ impl RepoOp {
     }
 }
 
-/// The report-side hook a [`RepoManager::set`] forwards into — the injection
+/// The report-side hook a `RepoManager::set` forwards into — the injection
 /// point for `testreport.set_repo(target, operation)`.
 ///
 /// Object-safe (`&dyn SetRepo`) and `async` (the report's `set_repo` ultimately

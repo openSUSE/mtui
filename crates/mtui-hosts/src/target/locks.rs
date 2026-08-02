@@ -114,7 +114,7 @@ pub struct RemoteLock {
 
 /// A resolved snapshot of a host's lock ownership, produced by
 /// [`Target::lock_status`](crate::Target::lock_status) and forwarded by the
-/// [`Reporter`](crate::Reporter)/[`HostsGroup`](crate::HostsGroup) lock sinks to
+/// `Reporter`/[`HostsGroup`](crate::HostsGroup) lock sinks to
 /// the display layer.
 ///
 /// The lock accessors are async `&mut self`; the resolving code does
@@ -140,7 +140,7 @@ pub struct LockRow {
 
 /// A single-read view of a lock's on-disk state plus derived ownership.
 ///
-/// Produced by [`TargetLock::snapshot`] / [`PoolLock::snapshot`] with **exactly
+/// Produced by `TargetLock::snapshot` / `PoolLock::snapshot` with **exactly
 /// one** remote read, so [`Target::lock_status`](crate::Target::lock_status) can
 /// derive every displayed field without re-reading the lockfile per field.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -219,7 +219,7 @@ impl RemoteLock {
         }
     }
 
-    /// Human-readable "locked by <user> (<comment>)." string.
+    /// Human-readable "locked by `<user>` (`<comment>`)." string.
     #[must_use]
     fn describe(&self) -> String {
         if self.comment.is_empty() {
@@ -346,7 +346,7 @@ impl<C: Clock> TargetLock<C> {
     /// Whether the host is currently locked (by anyone).
     ///
     /// # Errors
-    /// Propagates an SFTP error from [`load`](Self::load).
+    /// Propagates an SFTP error from `load`.
     pub async fn is_locked(&mut self) -> Result<bool> {
         self.load().await?;
         Ok(!self.lock.user.is_empty())

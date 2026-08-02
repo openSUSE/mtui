@@ -11,9 +11,9 @@
 //!   the unselected hosts over a shared-reference set of hosts),
 //! * [`names`](HostsGroup::names) / iteration,
 //! * command fan-out via [`run`](HostsGroup::run) (delegating to
-//!   [`super::actions::RunCommand`]),
+//!   `super::actions::RunCommand`),
 //! * SFTP fan-out ([`sftp_put`](HostsGroup::sftp_put) /
-//!   [`sftp_get`](HostsGroup::sftp_get) / [`sftp_remove`](HostsGroup::sftp_remove)),
+//!   [`sftp_get`](HostsGroup::sftp_get) / `sftp_remove`),
 //! * the operation-lock fan-out ([`lock`](HostsGroup::lock) /
 //!   [`unlock`](HostsGroup::unlock) / [`update_lock`](HostsGroup::update_lock)),
 //!   over the per-[`Target`] [`TargetLock`](super::TargetLock),
@@ -91,7 +91,7 @@ pub struct HostsGroup {
     data: BTreeMap<String, Target>,
     /// Whether the surrounding session is interactive. Threaded through to the
     /// fan-out helpers as the (Phase 6) spinner/prompt seam; see
-    /// [`actions`](super::actions).
+    /// [`actions`].
     is_repl: bool,
     /// The injected update-workflow doer/check resolver, or `None` until the
     /// install/uninstall flow injects one.
@@ -237,7 +237,7 @@ impl HostsGroup {
     /// Reconciles the group's session mode to `is_repl` at **load time**.
     ///
     /// The report's targets group is default-built headless
-    /// ([`TestReportBase`](mtui_testreport docs)); the load site applies the real
+    /// (`TestReportBase` in `mtui-testreport`'s docs); the load site applies the real
     /// session mode once, before any host is added or fan-out runs, so the
     /// spinner/prompt seam matches the session. The session is the single source
     /// of truth; this is not a runtime toggle.
@@ -460,7 +460,7 @@ impl HostsGroup {
     ///
     /// `cmd` accepts a single string (run on every host) or a per-host
     /// [`Command::PerHost`] map (hosts absent from the map are skipped). See
-    /// [`RunCommand`].
+    /// `RunCommand`.
     pub async fn run(&mut self, cmd: impl Into<Command>) {
         let max_parallel = self.max_parallel;
         RunCommand::new(&mut self.data, cmd, self.is_repl)
@@ -647,7 +647,7 @@ impl HostsGroup {
     /// session exit; unlike [`reboot`](Self::reboot) it never reconnects.
     ///
     /// Fans out concurrently across the group via
-    /// [`run_fanout`](super::actions::run_fanout). The overall wait budget is
+    /// `run_fanout`. The overall wait budget is
     /// applied by the caller. A
     /// no-op when the group is empty.
     ///
@@ -690,7 +690,7 @@ impl HostsGroup {
     /// pool-claim lock when `pool` is `true` — via
     /// [`Target::lock_status`](Target::lock_status), then forward
     /// `(hostname, system, &row)` through the per-target
-    /// [`Reporter::locks`](crate::Reporter::locks) sink. `sink` is `FnMut` so it
+    /// `Reporter::locks` sink. `sink` is `FnMut` so it
     /// is invoked once per host. Async because each host's lock is read over
     /// SFTP; best-effort per host (a read failure resolves to the unlocked row
     /// rather than aborting the fan-out).
@@ -759,7 +759,7 @@ impl HostsGroup {
     /// by `update_flow::perform_prepare`), so the group never depends on the
     /// report crate.
     ///
-    /// Fans out concurrently via [`run_fanout`](super::actions::run_fanout):
+    /// Fans out concurrently via `run_fanout`:
     /// every host runs its repo change in
     /// parallel. The per-host `last*` state is left in place so a caller can
     /// inspect `lasterr()` after the fan-out (prepare aborts on `lasterr`).
@@ -826,7 +826,7 @@ impl HostsGroup {
     ///
     /// The I/O phase shared by [`package_check`](Self::package_check) and the
     /// downgrade verdict: fans [`Target::query_versions`] out through the shared
-    /// [`run_fanout`](super::actions::run_fanout) primitive in parallel, so the
+    /// `run_fanout` primitive in parallel, so the
     /// pure per-package bookkeeping that follows never blocks on I/O.
     pub async fn query_versions(&mut self) {
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
@@ -1008,12 +1008,12 @@ impl HostsGroup {
 
     /// Reboots only the named hosts and reconnects each, verifying the reboot.
     ///
-    /// * capture each host's [`boot_id`](Target::boot_id) *before* rebooting,
+    /// * capture each host's `boot_id` *before* rebooting,
     /// * dispatch `command` fire-and-forget on every host (the reboot drops the
     ///   connection),
     /// * reconnect each host (sorted) with the connection's retry + backoff,
     /// * verify each host's boot id changed (see
-    ///   [`verify_reboot`](Self::verify_reboot)),
+    ///   `verify_reboot`),
     /// * if `relock_comment` is non-empty, re-apply the lock across the group —
     ///   a reboot clears `/var/lock` (tmpfs), so an active lock (e.g. a Product
     ///   Increment testing lock) must be re-asserted to survive.

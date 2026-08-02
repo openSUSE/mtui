@@ -171,7 +171,7 @@ pub fn suspend() -> Suspend {
 /// A `Send` guard that pauses spinner painting across an `.await` (e.g. an
 /// interactive stdin read) without holding a non-`Send` [`std::sync::MutexGuard`].
 ///
-/// [`suspend_async`] erases any active frame and sets a paused flag the paint
+/// `suspend_async` erases any active frame and sets a paused flag the paint
 /// tasks honour; dropping this guard clears the flag so painting resumes on the
 /// next tick. Unlike [`Suspend`], nothing lock-guard-shaped is held for the
 /// guard's lifetime, so it is safe to keep alive across the await points of an
@@ -240,9 +240,9 @@ pub struct TtySpinner {
 static TEST_SINK: Mutex<Option<Sink>> = Mutex::new(None);
 
 /// Installs (or clears with `None`) the global test sink used by
-/// [`TtySpinner::new`]. When set, every default spinner is forced enabled and
+/// `TtySpinner::new`. When set, every default spinner is forced enabled and
 /// paints into `sink` instead of stderr. Test-only; guard concurrent use with
-/// [`TEST_SERIAL`](crate::target::spinner::TEST_SERIAL) in unit tests, or a
+/// `TEST_SERIAL` in unit tests, or a
 /// per-file convention in integration tests.
 pub fn set_test_sink(sink: Option<Sink>) {
     *TEST_SINK
@@ -483,7 +483,7 @@ impl Drop for SpinnerGuard {
 /// Runs a TTY spinner labelled `desc` for the returned guard's lifetime.
 ///
 /// The high-level counterpart to the fan-out spinner in
-/// [`run_parallel`](super::actions::run_parallel): wrap a long-running
+/// `run_parallel`: wrap a long-running
 /// *non-fan-out* operation (e.g. `regenerate`) by holding the returned
 /// [`SpinnerGuard`] across it. A strict no-op off a TTY, so it is safe in tests
 /// and over `mtui-mcp`. Dropping the guard stops the spinner and erases its

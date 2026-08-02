@@ -53,8 +53,8 @@ pub type HostCommandMap = Vec<(String, String)>;
 ///
 /// The templates store values interpolated via variable substitution. The
 /// only variable the install/uninstall command templates interpolate is
-/// `$packages`; the reboot template takes none. [`Doer::command`] performs that
-/// single substitution and [`Doer::reboot`] returns the reboot command verbatim.
+/// `$packages`; the reboot template takes none. `Doer::command` performs that
+/// single substitution and `Doer::reboot` returns the reboot command verbatim.
 /// Full `string.Template` parity (`$$`, `${name}`) is unnecessary here; the
 /// real doers are constructed by the [`PlanProvider`] implementation in
 /// `mtui-testreport`.
