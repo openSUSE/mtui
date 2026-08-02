@@ -84,6 +84,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   aborting it: a healthy SL Micro prepare routinely writes progress to
   stderr, and hard-aborting on that would have blocked patching hosts that
   were never actually broken.
+- `update`'s post-success repo cleanup now says why it could not run. When the
+  hosts could not be locked to remove the test update repositories, mtui
+  silently skipped the cleanup; it now warns with the lock error and that the
+  repos are left configured on every host, pointing at `set_repo --remove` as
+  the manual remedy. The update itself still reports success either way.
+- `update`'s post-success repo cleanup now also warns when the repo-removal
+  command itself fails on a host, naming the host and pointing at
+  `set_repo --remove`. Previously only a failure to lock the hosts was
+  reported, so a removal command that failed after a successful lock left the
+  test update repos configured with no warning at all.
 
 ## [26.1.1] - 2026-07-27
 
