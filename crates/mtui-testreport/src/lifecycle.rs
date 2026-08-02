@@ -8,7 +8,7 @@
 //! * The actual host connect is **deferred to the caller** (the composition
 //!   root, `mtui-core::Session::load_update`), which owns the arbiter wiring and
 //!   the refhosts-from-testplatform resolution. `make_testreport` only records
-//!   the intent via [`TestReportBase::autoconnect_pending`].
+//!   the intent via [`TestReportBase::autoconnect_pending`](crate::testreport::TestReportBase::autoconnect_pending).
 //! * The QEM Dashboard / auto-openQA enrichment runs inside `make_testreport`
 //!   for the `-a` (auto) kind: it builds the [`QemIncident`], runs
 //!   [`DashboardAutoOpenQA`], and — when the auto result has no install jobs
@@ -33,7 +33,7 @@ use crate::testreport::{HashCheck, ReadError, TestReport};
 /// autoconnect defaults on.
 ///
 /// The distinction between the `-a` (auto) and `-k` (kernel) update kinds:
-/// the concrete `TestReport` class is chosen by RRID kind ([`tr_factory`]),
+/// the concrete `TestReport` class is chosen by RRID kind (`tr_factory`),
 /// but the *workflow* and *autoconnect default* come from the update kind
 /// the operator named on the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +73,7 @@ fn tr_factory(update: &UpdateID, config: Config) -> Box<dyn TestReport + Send + 
 /// A [`NullReport`] carrying the reason its load failed.
 ///
 /// The load-failure substitute [`make_testreport`] returns instead of a real
-/// report. The reason is stashed on [`TestReportBase::load_error`] so the caller
+/// report. The reason is stashed on [`TestReportBase::load_error`](crate::testreport::TestReportBase::load_error) so the caller
 /// (`Session::load_update` → `load_template`) can surface *why* the load failed
 /// rather than a bare "could not load".
 fn null_with_error(config: Config, reason: String) -> NullReport {
@@ -84,8 +84,8 @@ fn null_with_error(config: Config, reason: String) -> NullReport {
 
 /// Builds and populates a [`TestReport`] for `update`.
 ///
-/// 1. Selects the report class by RRID kind ([`tr_factory`]).
-/// 2. Drives [`checkout_and_read`]: reads `template_dir/<rrid>/log`; a missing
+/// 1. Selects the report class by RRID kind (`tr_factory`).
+/// 2. Drives [`checkout_and_read`](crate::checkout::checkout_and_read): reads `template_dir/<rrid>/log`; a missing
 ///    template triggers a `svn` checkout and one retry.
 /// 3. On a load failure returns a [`NullReport`], so the caller can add a
 ///    benign inactive template rather than propagate an error.
@@ -100,7 +100,7 @@ fn null_with_error(config: Config, reason: String) -> NullReport {
 ///    **downgraded to [`Workflow::Manual`]**.
 ///
 /// `autoconnect` is the caller's explicit choice. A reference-host connect is
-/// deferred (via [`TestReportBase::autoconnect_pending`], honoured by the
+/// deferred (via [`TestReportBase::autoconnect_pending`](crate::testreport::TestReportBase::autoconnect_pending), honoured by the
 /// composition root *after* wiring the host arbiter) **only** when
 /// `autoconnect` is `true` **and** the auto load downgraded to `MANUAL`. The
 /// auto happy-path (workflow stays `AUTO`) and the kernel kind never

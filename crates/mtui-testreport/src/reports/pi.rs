@@ -2,7 +2,7 @@
 //!
 //! Keys its identity on the parsed [`RequestReviewID`] and derives its
 //! update-repo map by delegating unconditionally to
-//! [`reporepoparse`](super::repoparse::reporepoparse) — the simplest of the
+//! [`reporepoparse`] — the simplest of the
 //! concrete reports, reusing the same helper as
 //! [`SlReport`](super::sl::SlReport). PI has no git commit to verify, so
 //! [`check_hash`](TestReport::check_hash) is a constant `(true, "", "")`.
@@ -10,7 +10,7 @@
 //! ## Scope (task nbv.12)
 //!
 //! Mirrors the `SlReport` boundaries:
-//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`]) is
+//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`](mtui_hosts::RepoManager::run_zypper)) is
 //!   implemented here (task nbv.fly): add uses `-n ar -cfGkn` (same as
 //!   SL), remove uses `-n rr`.
 //! * `list_update_commands` would render per-host commands via

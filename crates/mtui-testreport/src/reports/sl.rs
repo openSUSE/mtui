@@ -7,7 +7,7 @@
 //!
 //! ## Scope
 //!
-//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`]) is
+//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`](mtui_hosts::RepoManager::run_zypper)) is
 //!   implemented here (task nbv.fly): add uses `-n ar -cfGkn`, remove
 //!   uses `-n rr`, both fanned out over [`TestReportBase::update_repos`].
 //! * `list_update_commands` would render per-host commands via

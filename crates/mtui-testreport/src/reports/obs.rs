@@ -2,7 +2,7 @@
 //!
 //! Keys its identity on the parsed [`RequestReviewID`] and derives its
 //! update-repo map by parsing the OBS/IBS checkout's `project.xml` via
-//! [`obsrepoparse`](super::repoparse::obsrepoparse), reading the checkout under
+//! [`obsrepoparse`], reading the checkout under
 //! [`report_wd`](TestReportBase::report_wd). OBS is checked out with
 //! `osc qam` / SVN (not Gitea), so there is no git commit to verify —
 //! [`check_hash`](TestReport::check_hash) is the constant `(true, "", "")`.
@@ -10,7 +10,7 @@
 //! ## Scope (task nbv.11)
 //!
 //! Mirrors the `SlReport`/`PiReport` boundaries:
-//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`]) is
+//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`](mtui_hosts::RepoManager::run_zypper)) is
 //!   implemented here (task nbv.fly): add uses the OBS-specific
 //!   `-n ar -ckn` (note: no `fG`, unlike SL/PI), remove uses `-n rr`.
 //! * `list_update_commands` would render per-host commands via

@@ -4,7 +4,7 @@
 //! ## Design
 //!
 //! Unlike install/uninstall (which route through the shared
-//! [`Operation`](mtui_hosts::Operation) template), these three are deliberately
+//! [`Operation`] template), these three are deliberately
 //! open-coded — they have per-package loops, `set_repo` add/remove
 //! fan-outs, package-version comparison, and (for `update`) a two-phase
 //! try/finally that guarantees repo cleanup on success while **keeping** the
@@ -384,12 +384,12 @@ fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError>
 /// The shared body behind every report's `perform_install`. Injects the
 /// [`WorkflowRegistry`] as the group's
 /// [`PlanProvider`](mtui_hosts::PlanProvider) and drives the
-/// [`InstallOperation`](mtui_hosts::InstallOperation) template, whose own
+/// [`InstallOperation`] template, whose own
 /// per-host [`Check`](mtui_hosts::Check) — also adapted from this registry —
 /// now produces the verdict, before the (possible) reboot.
 ///
 /// Injecting here rather than where the group is built is deliberate:
-/// [`OperationGroup::plans`](mtui_hosts::OperationGroup::plans) has exactly one
+/// [`OperationGroup::plans`] has exactly one
 /// consumer — the template these two functions drive — so this is the one place
 /// that cannot forget. Construction sites can: for the whole life of the Rust
 /// port none of them injected a provider, so `plans()` failed with
@@ -514,7 +514,7 @@ fn reboot_error(failure: RebootFailure) -> UpdateError {
     UpdateError::new(format!("{what} ({})", failure.reason), failure.host)
 }
 
-/// Turns an [`Operation::run`](mtui_hosts::Operation::run) start failure into a
+/// Turns an [`Operation::run`] start failure into a
 /// message that names the hosts responsible.
 ///
 /// `plans()` aborts on the first host it cannot resolve and reports only the

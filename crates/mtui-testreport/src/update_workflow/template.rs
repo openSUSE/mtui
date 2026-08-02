@@ -11,25 +11,25 @@
 //! * `$$`            → a single literal `$`,
 //! * `$name`         → the value of `name` (identifier = `[A-Za-z_][A-Za-z0-9_]*`),
 //! * `${name}`       → the value of `name`,
-//! * a missing key   → [`TemplateError::MissingKey`] ([`substitute`] only,
-//!   not [`safe_substitute`]),
+//! * a missing key   → [`TemplateError::MissingKey`] (`substitute` only,
+//!   not `safe_substitute`),
 //! * a malformed `$` (e.g. `$` at end of string, `$1`, `${}`, unterminated
 //!   `${`) → [`TemplateError::Invalid`].
 //!
-//! [`substitute`] and [`safe_substitute`] serve different call sites: the
-//! `install`, `uninstall`, and `prepare` call sites use [`substitute`] (raise
+//! `substitute` and `safe_substitute` serve different call sites: the
+//! `install`, `uninstall`, and `prepare` call sites use `substitute` (raise
 //! on a missing key / malformed `$`), while `update` and `downgrade` use
-//! [`safe_substitute`] (leave a missing key or malformed `$` untouched). The
+//! `safe_substitute` (leave a missing key or malformed `$` untouched). The
 //! distinction matters: the `update`/`downgrade` templates embed shell/awk
 //! `$`-tokens — `$2` awk fields and `$$r`-style escapes — that only
-//! [`safe_substitute`] tolerates alongside the real `$repa` / `$package`
+//! `safe_substitute` tolerates alongside the real `$repa` / `$package`
 //! placeholders.
 
 use std::collections::HashMap;
 
 use thiserror::Error;
 
-/// Errors raised by [`substitute`].
+/// Errors raised by `substitute`.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum TemplateError {
     /// A `$name` / `${name}` referenced a key not present in the mapping.

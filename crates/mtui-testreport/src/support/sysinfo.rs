@@ -66,7 +66,7 @@ fn extract_quoted(content: &str, key: &str) -> Option<String> {
 /// Formats the system-information footer line (trailing `\n` included).
 ///
 /// Shape: `"{prefix} MTUI:{mtui_version} on {distro}-{verid} (kernel: {kernel})
-/// by {user}\n"`. The `prefix` defaults to [`EXPORT_PREFIX`] for the export
+/// by {user}\n"`. The `prefix` defaults to `EXPORT_PREFIX` for the export
 /// footer; the `commit` command passes `"committed from"`.
 #[must_use]
 pub fn system_info(distro: &str, verid: &str, kernel: &str, user: &str, prefix: &str) -> String {

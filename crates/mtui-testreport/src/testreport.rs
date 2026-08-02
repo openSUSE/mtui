@@ -155,7 +155,7 @@ impl TestReportBase {
     /// The
     /// targets [`HostsGroup`] starts headless (`is_repl = false`); the load site
     /// ([`make_testreport`](crate::make_testreport)) reconciles it to the
-    /// session mode once, via [`set_is_repl`](Self::set_is_repl), before the
+    /// session mode once, via [`set_is_repl`](HostsGroup::set_is_repl), before the
     /// report is handed to the session — the session is the single source of
     /// truth and the flag is never mutated afterwards.
     #[must_use]
@@ -204,7 +204,7 @@ impl TestReportBase {
     /// [`obsrepoparse`](crate::reports::repoparse::obsrepoparse), which reads
     /// `project.xml` from it.
     ///
-    /// Returns [`io::ErrorKind::NotFound`] when no report is loaded, and
+    /// Returns [`std::io::ErrorKind::NotFound`] when no report is loaded, and
     /// propagates any directory-creation error, so callers can degrade
     /// explicitly rather than panic.
     ///
@@ -418,7 +418,7 @@ pub trait TestReport {
     /// The per-host analogue of
     /// [`release_pool_claims`](Self::release_pool_claims), called from
     /// `remove_host` so a disconnected refhost does not stay claimed in the
-    /// process-global [`HostArbiter`](mtui_hosts::HostArbiter) for the rest of
+    /// process-global [`HostArbiter`] for the rest of
     /// the server's lifetime (there is no `unload` over MCP, so the template
     /// stays loaded). [`Target::close`](mtui_hosts::Target::close) already drops
     /// the remote operation/pool-lock files; this clears the in-process

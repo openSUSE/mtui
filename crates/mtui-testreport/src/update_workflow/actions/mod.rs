@@ -4,7 +4,7 @@
 //! ## Reference
 //!
 //! Each action's templates are keyed by `(release, transactional)` and
-//! resolved through [`crate::update_workflow::substitute`], preserving `$$`
+//! resolved through `substitute`, preserving `$$`
 //! escaping and `${}` bracing (see [`template`] docs).
 //!
 //! The value type is [`ActionCommands`]: an owning bundle of the command
@@ -26,8 +26,8 @@ use std::collections::HashMap;
 
 use crate::update_workflow::template::{TemplateError, safe_substitute, substitute};
 
-/// Whether a template is rendered with strict [`substitute`] or lenient
-/// [`safe_substitute`] semantics.
+/// Whether a template is rendered with strict `substitute` or lenient
+/// `safe_substitute` semantics.
 ///
 /// `install` / `uninstall` / `prepare` use [`Strict`](SubstMode::Strict);
 /// `update` / `downgrade` use [`Safe`](SubstMode::Safe) because their templates
@@ -53,7 +53,7 @@ impl SubstMode {
 /// The command templates for one resolved action.
 ///
 /// `command` is always present; the remaining fields are optional and used
-/// only by specific actions. [`mode`](Self::mode) records whether the
+/// only by specific actions. `mode` records whether the
 /// action's call site uses [`Strict`](SubstMode::Strict) or
 /// [`Safe`](SubstMode::Safe) substitution.
 #[derive(Debug, Clone, PartialEq, Eq)]

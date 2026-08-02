@@ -17,7 +17,7 @@
 //! ## Fetch seam
 //!
 //! HTTP is abstracted behind the [`BytesFetcher`] trait so the exporters inject
-//! an [`HttpClient`]-backed fetcher while tests inject a mock.
+//! an [`HttpClient`](mtui_datasources::http::HttpClient)-backed fetcher while tests inject a mock.
 
 use std::path::{Path, PathBuf};
 
