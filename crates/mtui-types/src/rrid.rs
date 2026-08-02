@@ -17,7 +17,7 @@
 //!
 //! 1. **project** — one of `SUSE` / `S`; the short form `S` normalises to `SUSE`.
 //! 2. **kind** — one of `SLFO` / `S` / `Maintenance` / `M` / `PI` / `P`, mapped
-//!    to a [`RequestKind`] via [`RequestKind::from_token`].
+//!    to a [`RequestKind`] via `RequestKind::from_token`.
 //! 3. **maintenance_id** — any non-empty token (an integer, or a string
 //!    fallback, so every non-empty token parses). Stored as the raw token
 //!    string.
