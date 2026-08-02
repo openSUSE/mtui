@@ -60,7 +60,7 @@ impl Repl {
     ///
     /// The line editor is given an [`MtuiCompleter`] sharing `registry`/`session`
     /// plus a columnar completion menu bound to <kbd>Tab</kbd>; a
-    /// [`file_backed_history`](crate::history::file_backed_history) persisting to
+    /// `file_backed_history` persisting to
     /// `$XDG_DATA_HOME/mtui/history` (with Ctrl-R reverse-search from the default
     /// emacs bindings); and a [`DefaultHinter`] showing the greyed inline
     /// suggestion. The dynamic prompt/toolbar

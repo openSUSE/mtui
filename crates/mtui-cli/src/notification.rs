@@ -1,16 +1,16 @@
 //! Best-effort desktop notifications for the interactive REPL.
 //!
 //! Desktop toasts are an opt-in courtesy compiled in behind the `notify`
-//! feature (which pulls in [`notify-rust`]). When the feature is absent, or the
-//! process is not attached to an interactive desktop session, [`display`]
+//! feature (which pulls in `notify-rust`). When the feature is absent, or the
+//! process is not attached to an interactive desktop session, `display`
 //! degrades to a quiet no-op so headless, piped, cron, and `mtui-mcp` runs never
 //! attempt to pop a toast.
 //!
 //! ## Headless guard
 //!
 //! A toast only makes sense when a user is sitting at an interactive terminal
-//! with a graphical session, so [`display`] first checks
-//! [`desktop_available`]: `stdin` must be a TTY, and on Linux/BSD a graphical
+//! with a graphical session, so `display` first checks
+//! `desktop_available`: `stdin` must be a TTY, and on Linux/BSD a graphical
 //! session (`DISPLAY` / `WAYLAND_DISPLAY`) must be present; macOS always
 //! qualifies once the TTY check passes. The predicate is factored out and
 //! parameterised (`desktop_available_with`) so it is unit-testable without a
@@ -46,7 +46,7 @@ fn desktop_available_with(stdin_is_tty: bool, os: &str, has_env: impl Fn(&str) -
 
 /// Displays a best-effort desktop notification.
 ///
-/// A no-op when [`desktop_available`] is false, and (without the `notify`
+/// A no-op when `desktop_available` is false, and (without the `notify`
 /// feature) always a no-op beyond the guard + a debug log. Failures from the
 /// backend are swallowed and debug-logged — a notification must never break the
 /// REPL.
@@ -88,7 +88,7 @@ fn display_backend(_summary: Option<&str>, _text: Option<&str>, _icon: Option<&s
     tracing::debug!("notify feature disabled; skipping desktop notification");
 }
 
-/// Shows a `"MTUI"`-titled toast via [`display`], using the freedesktop
+/// Shows a `"MTUI"`-titled toast via `display`, using the freedesktop
 /// `dialog-error` icon for error-class messages.
 ///
 /// A thin convenience for command code (e.g. the `update` start/finish toasts)

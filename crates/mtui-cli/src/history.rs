@@ -6,7 +6,7 @@
 //!   sessions.
 //! * **Reverse-search** — Ctrl-R, provided by reedline's default emacs edit
 //!   mode; it needs no wiring here, only a populated history to search.
-//! * **Inline suggestion** — the greyed hint shown by [`DefaultHinter`] is
+//! * **Inline suggestion** — the greyed hint shown by [`DefaultHinter`](reedline::DefaultHinter) is
 //!   wired in [`crate::repl::Repl::new`] alongside [`file_backed_history`].
 //!
 //! ## Location

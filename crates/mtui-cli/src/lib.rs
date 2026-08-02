@@ -4,7 +4,7 @@
 //! top-level args, builds the [`Session`](mtui_core::Session) and command
 //! [`Registry`](mtui_core::Registry), and drives [`Repl::run`]. Exposing the
 //! REPL as a library lets the `tests/**` suite (and the P6.8 test task) exercise
-//! the loop's [`step`](repl::step) seam without a TTY.
+//! the loop's `repl::step` seam without a TTY.
 
 pub mod completer;
 pub(crate) mod edit;

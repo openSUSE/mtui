@@ -1,6 +1,6 @@
 //! `mtui` — the interactive REPL entry point.
 //!
-//! Parses the top-level [`Args`](mtui_core::Args) (clap handles
+//! Parses the top-level [`Args`] (clap handles
 //! `--help`/`--version` — the latter carrying the build-provenance block baked
 //! into `mtui-core` — and usage errors, exiting the process itself), initialises
 //! `tracing` from `-d/--debug` + `RUST_LOG`, seeds the session from `-a`/`-k`
