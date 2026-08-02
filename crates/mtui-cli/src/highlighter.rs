@@ -70,7 +70,7 @@ impl MtuiHighlighter {
         Self { registry, session }
     }
 
-    /// Whether colored output is currently enabled (live [`ColorMode`] resolve).
+    /// Whether colored output is currently enabled (live [`ColorMode`](mtui_core::ColorMode) resolve).
     fn color_enabled(&self) -> bool {
         self.session
             .lock()

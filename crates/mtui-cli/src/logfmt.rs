@@ -38,7 +38,7 @@ pub(crate) const CLAP_PREFIXED_TARGET: &str = "mtui::clap_prefixed";
 /// A [`FormatEvent`] that renders `"{level}: {message}"` with a lowercased,
 /// optionally colorized level token and no timestamp/target.
 ///
-/// Construct via [`CompactLevelFormat::new`], passing whether ANSI escapes
+/// Construct via `CompactLevelFormat::new`, passing whether ANSI escapes
 /// should be emitted (already resolved from the process `ColorMode`).
 #[derive(Debug, Clone, Copy)]
 pub struct CompactLevelFormat {

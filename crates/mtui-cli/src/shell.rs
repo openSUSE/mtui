@@ -9,17 +9,17 @@
 //! Attaching an interactive PTY needs a controlling terminal, which only the
 //! `mtui` binary owns. `mtui-core`'s `shell` command therefore stays a
 //! headless-error stub (correct for MCP / non-interactive), and the REPL
-//! **intercepts** the `shell` line before dispatch (see [`is_shell_line`]) and
+//! **intercepts** the `shell` line before dispatch (see `is_shell_line`) and
 //! drives the bridge here. A host library has no business toggling the local TTY
 //! into raw mode, so the raw-mode bridge is a terminal concern by construction.
 //!
 //! ## Testability
 //!
-//! The pump loop [`bridge`] is generic over a [`BridgeIo`] trait abstracting the
+//! The pump loop `bridge` is generic over a `BridgeIo` trait abstracting the
 //! three terminal touch-points (async input, stdout write, flush), so it runs
 //! entirely offline against `MockConnection`'s scriptable [`ShellChannel`] — the
 //! same mocking doctrine as the rest of the host layer. The only untested sliver
-//! is the thin [`TerminalIo`] / [`RawModeGuard`] wiring around a real TTY.
+//! is the thin `TerminalIo` / `RawModeGuard` wiring around a real TTY.
 
 use std::io::Write as _;
 
