@@ -50,6 +50,14 @@ type UpdateMaps = (BTreeMap<String, String>, BTreeMap<String, String>);
 pub enum UpdateFailure {
     /// One or more hosts failed the `updater` check after the command ran.
     Check(UpdateError),
+    /// The pre-update `prepare` step failed.
+    ///
+    /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback,
+    /// but for a different reason: nothing has been dispatched yet at this
+    /// point — no lock taken, no issue repo added, no patch command sent — so
+    /// there is nothing on any host for a downgrade to undo. `--noprepare` is
+    /// the opt-out for a caller that wants to patch anyway.
+    Prepare(UpdateError),
     /// A concrete target has no updater doer; mtui treats this as a hard
     /// failure (rather than logging and returning as if successful) so a
     /// target that cannot be updated never reports "finished".
@@ -171,6 +179,12 @@ where
 {
     match perform_update_from_report(report, targets, noprepare, newpackage, diagnostics).await {
         Ok(()) => Ok(()),
+        Err(UpdateFailure::Prepare(e)) => {
+            // Nothing was dispatched (no lock, no repo add, no patch) → no
+            // rollback.
+            error!(error = %e, "update aborted: prepare failed");
+            Err(e)
+        }
         Err(UpdateFailure::MissingUpdater(e)) => {
             // Hard fail, but nothing was installed → no rollback.
             error!(error = %e, "update failed");
@@ -241,6 +255,21 @@ pub async fn add_op_history(
 /// The `$repa` maintenance-selector for an update.
 fn repa_for(maintenance_id: &str, review_id: &str) -> String {
     format!(":p={maintenance_id}:{review_id}")
+}
+
+/// Classifies a pre-update `prepare` failure.
+///
+/// The cancel arm is defensive rather than live on this call path: the
+/// pre-update prepare always runs with `installed_only = false`, and only the
+/// per-package (`installed_only = true`) loop sets `cancelled_at`. It stays
+/// because [`perform_prepare`] is public and the "a cancel surfaces as
+/// `Cancelled`, never a generic failure" invariant applies to every caller.
+fn prepare_failure(e: UpdateError) -> UpdateFailure {
+    if e.is_cancelled() {
+        UpdateFailure::Cancelled(e)
+    } else {
+        UpdateFailure::Prepare(e)
+    }
 }
 
 /// Resolves a host's `(release, transactional)` key from its parsed system.
@@ -1308,11 +1337,11 @@ pub async fn perform_update(
     }
 
     if !noprepare {
-        // Runs prepare with default flags (remove-repo prepare). Prepare is
-        // best-effort within the update flow, so a failure is logged, not
-        // returned.
+        // Runs prepare with default flags (remove-repo prepare). Nothing has
+        // been dispatched yet, so a failure aborts here rather than patching
+        // hosts prepare may have left in a bad state; `--noprepare` opts out.
         if let Err(e) = perform_prepare(targets, report, packages, false, false, false).await {
-            warn!(error = %e, "prepare before update failed");
+            return Err(prepare_failure(e));
         }
     }
 
@@ -3152,6 +3181,57 @@ mod tests {
             "expected the initial prepare install: {cmds:?}"
         );
         assert!(cmds.iter().any(|c| c.contains(":p=42:7")));
+    }
+
+    #[tokio::test]
+    async fn perform_update_aborts_when_the_prepare_fails() {
+        // h1's prepare command exits non-zero ⇒ the update must abort before
+        // taking the lock, adding the issue repo, or dispatching the patch.
+        let (t, handle) = sles_target_with_exit("h1", "", 1);
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        assert!(
+            matches!(res, Err(UpdateFailure::Prepare(_))),
+            "a failed prepare aborts the update: {res:?}"
+        );
+
+        let ops = repo.ops.lock().unwrap().clone();
+        assert!(
+            !ops.contains(&RepoOp::Add),
+            "no issue repo must be added when prepare fails: {ops:?}"
+        );
+        let cmds = handle.commands();
+        assert!(
+            !cmds.iter().any(|c| c.contains(":p=42:7")),
+            "no patch command must be dispatched when prepare fails: {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn prepare_failure_classifies_cancelled_vs_plain_errors() {
+        assert!(matches!(
+            prepare_failure(UpdateError::cancelled("cancelled")),
+            UpdateFailure::Cancelled(_)
+        ));
+        assert!(matches!(
+            prepare_failure(UpdateError::new("boom", "h1")),
+            UpdateFailure::Prepare(_)
+        ));
     }
 
     #[tokio::test]
