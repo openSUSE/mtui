@@ -22,7 +22,7 @@
 //!   same [`UpdateID`] value type (all this crate has today)
 //!   paired with the [`Workflow`] the flag selects, surfaced as [`Args::update`].
 //!
-//! Config merging lives here as [`Args::apply_to`] / [`Args::resolve_config`]:
+//! Config merging lives here as `Args::apply_to` / [`Args::resolve_config`]:
 //! the CLI overrides are the highest-precedence config layer, overlaid on top of
 //! the loaded file chain. (It lives in `mtui-core`, not `mtui-config`, because it
 //! needs [`Args`]; `mtui-config` must not depend on `mtui-core`.) The `auto` →
@@ -203,7 +203,7 @@ impl Args {
     /// CLI overrides, returning the fully-resolved [`Config`].
     ///
     /// The one-call composition both binaries use: [`Config::load`] for the file
-    /// layers followed by [`apply_to`](Self::apply_to) for the CLI layer.
+    /// layers followed by `apply_to` for the CLI layer.
     #[must_use]
     pub fn resolve_config(&self) -> Config {
         let mut config = Config::load(self.config.clone());

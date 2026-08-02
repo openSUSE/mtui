@@ -20,7 +20,7 @@
 //! (`/var/lock/mtui-pool.lock`), and the remote operation lock
 //! (`/var/lock/mtui.lock`) all need an `await`, and a wedged host must not hang
 //! removal. So [`remove`](TemplateRegistry::remove) and the same-RRID
-//! replacement path in [`add_or_replace`](TemplateRegistry::add_or_replace) are
+//! replacement path in `add_or_replace` are
 //! **async** and run the same bounded teardown as the REPL `quit` command
 //! (release pool claims, then `targets.close(None)` under a per-report budget)
 //! before the entry is dropped and the active pointer is repointed.
@@ -51,7 +51,7 @@ pub type ReportEntry = Arc<Mutex<Box<dyn TestReport + Send + Sync>>>;
 const REMOVE_CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Resolves the per-report close budget. Overridable in tests (via
-/// [`tests::set_close_timeout`]) so the wedged-host path can be exercised without
+/// `tests::set_close_timeout`) so the wedged-host path can be exercised without
 /// waiting the full 45s; always [`REMOVE_CLOSE_TIMEOUT`] in production.
 #[cfg(not(test))]
 fn remove_close_timeout() -> Duration {
@@ -110,7 +110,7 @@ impl TemplateRegistry {
     ///
     /// The first template added becomes active; re-adding an existing RRID
     /// replaces the stored report but leaves the active pointer alone. A report
-    /// with an empty RRID is the failed-load sentinel ([`NullReport`]) and is
+    /// with an empty RRID is the failed-load sentinel ([`NullReport`](mtui_testreport::NullReport)) and is
     /// silently ignored so it never becomes a phantom entry that breaks fan-out.
     pub fn add(&mut self, mut report: Box<dyn TestReport + Send + Sync>) {
         let rrid = report.id();
@@ -171,7 +171,7 @@ impl TemplateRegistry {
     /// report: [`release_pool_claims`](mtui_testreport::TestReport::release_pool_claims)
     /// (in-process arbiter ownership + remote pool-claim lock) then
     /// [`HostsGroup::close`](mtui_hosts::HostsGroup)`(None)` (per-host operation
-    /// lock + graceful disconnect) under [`remove_close_timeout`]. Only after the
+    /// lock + graceful disconnect) under `remove_close_timeout`. Only after the
     /// teardown returns is the entry dropped and — if it was active — the active
     /// pointer repointed to the next remaining entry (insertion order), so a
     /// reader never observes a half-torn-down active report. A no-op if `rrid`
@@ -315,7 +315,7 @@ impl TemplateRegistry {
     /// lockable report — a per-RRID command acting through a snapshot mutates the
     /// report content visible to the canonical registry too. Used by
     /// [`Session::fork_for_call`](crate::Session::fork_for_call) to let a headless
-    /// MCP dispatch run on its own [`Session`] without a session-wide lock, while
+    /// MCP dispatch run on its own [`Session`](crate::Session) without a session-wide lock, while
     /// different-RRID calls still act on distinct entry locks and same-RRID calls
     /// share one (`mtui-rs-f36r`, steps 4-5).
     ///

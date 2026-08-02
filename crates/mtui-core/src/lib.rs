@@ -15,8 +15,8 @@
 //! adds [`args`] — the top-level process argument parser (`clap`), distinct
 //! from the per-command parsers the engine synthesises. P5.3 rounds out the
 //! [`display`] surface: the full `list_*`
-//! family, [`show_log`](CommandPromptDisplay::show_log), the three-way
-//! [`ColorMode`], and the [`page`](display::page) pager.
+//! family, `show_log`, the three-way
+//! [`ColorMode`], and the `page` pager.
 //!
 //! P5.10 adds [`entrypoint`] — the process [`ExitStatus`] contract distinct
 //! from the top-level [`Args`] parser (Layer 1) and the per-command engine

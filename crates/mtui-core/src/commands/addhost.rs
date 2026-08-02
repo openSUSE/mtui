@@ -17,10 +17,10 @@ use crate::session::Session;
 /// manual (unless `-k`/`--keep-mode`). Then:
 ///
 /// * **with `-t`/`--target`:** each named host is connected and added to the
-///   active report's group ([`Session::add_named_hosts`]).
+///   active report's group (`Session::add_named_hosts`).
 /// * **without `-t`:** the report's testplatforms are resolved through the
 ///   refhosts factory and the resulting hosts are connected and added
-///   ([`Session::add_testplatform_hosts`]).
+///   (`Session::add_testplatform_hosts`).
 ///
 /// Refreshing the REPL prompt string after the workflow switch is a separate,
 /// Phase-6 REPL concern, so this command only mutates the report's workflow.

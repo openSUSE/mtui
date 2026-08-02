@@ -2,7 +2,7 @@
 //!
 //! The `list_*`
 //! family (bugs, history, host status, locks, sessions, timeout, versions,
-//! products, update repos) plus [`show_log`](CommandPromptDisplay::show_log)
+//! products, update repos) plus `show_log`
 //! gives the command bodies their output seam.
 //!
 //! Output is captured through a boxed [`std::io::Write`] sink so tests can
@@ -12,7 +12,7 @@
 //! call time via [`ColorMode::resolve`], with the precedence: `Always` →
 //! `Never` → `NO_COLOR` → `COLOR=never|always` → `stderr.is_terminal()`.
 //!
-//! **Timestamps:** [`list_history`](CommandPromptDisplay::list_history)
+//! **Timestamps:** `list_history`
 //! formats timestamps in **UTC** rather than local time. Local time would
 //! require chrono's `clock` feature (pulling `iana-time-zone`, against the
 //! no-runtime-deps goal) and make snapshot output timezone-dependent. UTC
@@ -36,7 +36,7 @@ pub(crate) type PackageVersions = (String, Vec<RPMVersion>);
 pub(crate) type VersionGroup = (Vec<HostSystem>, Vec<PackageVersions>);
 
 /// Already-resolved lock state for a host, as displayed by
-/// [`list_locks`](CommandPromptDisplay::list_locks).
+/// `list_locks`.
 ///
 /// The lock accessors are async `&mut self` in `mtui-hosts`; callers do
 /// that I/O and hand the resolved values here so display stays sync and
@@ -113,7 +113,7 @@ impl ColorMode {
 /// Handles the display of formatted output in the command prompt.
 ///
 /// Owns its output sink; construct with [`with_sink`](Self::with_sink) for tests
-/// (a `Vec<u8>` buffer) or [`stdout`](Self::stdout) for the interactive REPL.
+/// (a `Vec<u8>` buffer) or `stdout` for the interactive REPL.
 pub struct CommandPromptDisplay {
     output: Box<dyn Write + Send>,
     color: ColorMode,

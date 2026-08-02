@@ -75,7 +75,7 @@ pub trait Command: Send + Sync {
         Scope::Active
     }
 
-    /// Whether this command's body mutates the [`TemplateRegistry`] *structure*
+    /// Whether this command's body mutates the [`TemplateRegistry`](crate::TemplateRegistry) *structure*
     /// (loads/replaces/removes an entry or re-points the active template), as
     /// opposed to only mutating an already-loaded report's *content*.
     ///
@@ -324,7 +324,7 @@ fn resolve_templates(
 /// dispatch (the MCP per-template lock gate, `mtui-rs-76e.11`).
 ///
 /// Builds the command's clap parser, parses `argv`, and runs the identical
-/// [`resolve_templates`] fan-out logic `run` uses, then drops the empty-RRID
+/// `resolve_templates` fan-out logic `run` uses, then drops the empty-RRID
 /// null-report sentinel so the caller sees only genuinely-loaded templates.
 ///
 /// Returns:
@@ -334,7 +334,7 @@ fn resolve_templates(
 ///   multi-RRID case) as "take the registry gate exclusively" whenever
 ///   resolution is not a single real template.
 ///
-/// This never errors: a `-T <unloaded-rrid>` (which [`resolve_templates`] would
+/// This never errors: a `-T <unloaded-rrid>` (which `resolve_templates` would
 /// reject) yields `None` so the caller serialises conservatively rather than
 /// surfacing a lock-layer parse error; the real error surfaces later at dispatch.
 #[must_use]
