@@ -83,7 +83,7 @@ pub const CLI_REFERENCE_FILE: &str = "cli.md";
 /// long help of the *exact* per-command clap parser [`mtui_core::command_parser`]
 /// builds (the same parser real REPL/MCP dispatch uses), so the reference never
 /// drifts from the actual arg surface. Deterministic: help is rendered at a
-/// fixed [`CLI_TERM_WIDTH`] and the parser version is pinned to the crate
+/// fixed `CLI_TERM_WIDTH` and the parser version is pinned to the crate
 /// version, so the output is stable and committable.
 #[must_use]
 pub fn render_cli_reference() -> String {
@@ -162,9 +162,9 @@ pub const INVOCATION_REFERENCE_FILE: &str = "invocation.md";
 /// this documents how the *binaries* are launched: their flags, and the fact that
 /// `mtui` is REPL-only (there is no positional single-command mode — headless
 /// single-command dispatch is `mtui-mcp`'s job). Deterministic: help is rendered
-/// at a fixed [`CLI_TERM_WIDTH`] and the version is pinned to the crate version
+/// at a fixed `CLI_TERM_WIDTH` and the version is pinned to the crate version
 /// (the live parsers carry the build-provenance `MTUI_LONG_VERSION`, which would
-/// churn the committed file), mirroring the man-page pin in [`gen_binary`].
+/// churn the committed file), mirroring the man-page pin in `gen_binary`.
 #[must_use]
 pub fn render_invocation_reference() -> String {
     let mut out = String::new();
