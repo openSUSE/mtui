@@ -448,7 +448,7 @@ impl SshConnection {
     /// SSH handshake and the per-command wait; this builder lets a caller keep a
     /// normal handshake timeout while setting a different command timeout — the
     /// two concerns are otherwise conflated. Builder-style for the same reason as
-    /// [`with_timeout_prompt`](Self::with_timeout_prompt): it stays off the
+    /// `with_timeout_prompt`: it stays off the
     /// object-safe [`Connection`] trait.
     #[must_use]
     pub fn with_command_timeout(mut self, timeout: CommandTimeout) -> Self {
@@ -520,6 +520,9 @@ impl SshConnection {
     /// * every other status (`PermissionDenied`, `OpUnsupported`,
     ///   `NoConnection`, `ConnectionLost`, …) → [`HostError::Sftp`],
     /// * a non-status (transport/IO) error → [`HostError::Transport`].
+    ///
+    /// [`StatusCode::Failure`]: russh_sftp::protocol::StatusCode::Failure
+    /// [`StatusCode::NoSuchFile`]: russh_sftp::protocol::StatusCode::NoSuchFile
     fn exclusive_create_err(
         &self,
         e: russh_sftp::client::error::Error,
@@ -572,7 +575,7 @@ fn sftp_err_at_for(host: &str, e: russh_sftp::client::error::Error, path: &Path)
 }
 
 /// Categorizes the error from an **atomic exclusive create**
-/// ([`Connection::sftp_write`](crate::Connection::sftp_write) with
+/// ([`Connection::sftp_write`] with
 /// `exclusive = true`).
 ///
 /// SFTPv3 has no dedicated "file exists" status, so an `O_EXCL` collision

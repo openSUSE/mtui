@@ -9,7 +9,7 @@
 //! [`Prompter`] serialises those reads behind a single lock — only one worker
 //! reads `stdin` at a time; the others queue on the lock until the current
 //! prompt returns. During the read it holds a
-//! [`suspend_async`](crate::target::suspend_async) guard so a live TTY spinner
+//! `suspend_async` guard so a live TTY spinner
 //! erases its frame and stops repainting over the prompt until the user answers.
 //!
 //! ## Async lock
@@ -93,7 +93,7 @@ impl Prompter {
     /// Prompts the user with `text` and returns the typed response.
     ///
     /// Acquires the prompter's lock for the whole read so sibling tasks cannot
-    /// race for `stdin`, and holds a [`suspend_async`] guard so a live spinner
+    /// race for `stdin`, and holds a `suspend_async` guard so a live spinner
     /// erases its frame and stays quiet until the user answers.
     ///
     /// # Errors

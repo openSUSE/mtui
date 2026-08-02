@@ -6,13 +6,13 @@
 //! This module owns only the **state machine over `Connection`**:
 //!
 //! * the per-host execution [`TargetState`] gate (enabled / disabled),
-//! * command execution via [`Target::run`] with the `-1` exit-code
+//! * command execution via `Target::run` with the `-1` exit-code
 //!   sentinel and never-propagate error handling,
 //! * the `last*` output accessors,
-//! * state-gated SFTP delegation ([`Target::sftp_put`] / [`Target::sftp_get`]),
+//! * state-gated SFTP delegation (`Target::sftp_put` / [`Target::sftp_get`]),
 //! * and [`Target::connect`], which establishes the transport and then applies
 //!   the post-connect ordering: system/product parse
-//!   ([`parse_system`](parsers::parse_system)) and package version query
+//!   ([`parse_system`]) and package version query
 //!   ([`Target::query_versions`]).
 //!
 //! The remaining responsibilities that this module does *not* own are
@@ -22,7 +22,7 @@
 //!   ([`TargetLock`]) and the pool-claim lock ([`PoolLock`]);
 //!   [`Target::connect`] builds both objects over the live connection and runs
 //!   the connect-time op-lock check + stale-reap
-//!   ([`check_stale_lock`](Target::check_stale_lock)),
+//!   (`check_stale_lock`),
 //! * reboot / reconnect lifecycle and the install/uninstall
 //!   [`Operation`] template drive their group through the object-safe
 //!   [`OperationGroup`] seam; the concrete `impl OperationGroup for HostsGroup`
@@ -111,7 +111,7 @@ pub struct Target {
     /// test injection) supplies one.
     connection: Option<Box<dyn Connection>>,
     /// The parsed host system (base product + addons). Defaults to an unknown
-    /// system until [`parse_system`](parsers::parse_system) populates it via
+    /// system until [`parse_system`] populates it via
     /// [`set_system`](Target::set_system); [`PackageQuerier`] reads it to choose
     /// the rpm-vs-dpkg query path.
     system: System,
@@ -392,7 +392,7 @@ impl Target {
     /// Sets the owning template's RRID, the [`PoolLock`] ownership identity.
     ///
     /// The report layer pushes the RRID down onto each target (see
-    /// [`HostsGroup::set_rrid`]) so a pool claim already built for a connected
+    /// `HostsGroup::set_rrid`) so a pool claim already built for a connected
     /// target adopts the identity too. The RRID is pushed down after the fact
     /// because the target is
     /// built before the report that owns it is known.
@@ -405,7 +405,7 @@ impl Target {
 
     /// Releases this target's pool claim, best-effort.
     ///
-    /// Delegates to [`PoolLock::unlock`]
+    /// Delegates to `PoolLock::unlock`
     /// (RRID-based ownership), swallowing a [`HostError::TargetLocked`] (the
     /// claim is owned by another template and `force` was not set) so a cleanup
     /// path never fails. A no-op when the target is not connected (no pool lock
@@ -429,7 +429,7 @@ impl Target {
     /// Claims this target's remote pool lock with `comment` (the
     /// `mtui pool <RRID> [<owner>]` stamp), returning whether the claim was won.
     ///
-    /// Delegates to [`PoolLock::try_claim`]
+    /// Delegates to `PoolLock::try_claim`
     /// (RRID-based ownership). `true` when this session now holds the remote
     /// claim (freshly won or already ours); `false` when another process holds
     /// it — the caller then drops the host so a sibling can be tried. A
@@ -692,7 +692,7 @@ impl Target {
     /// Records the parsed host system and its transactional flag.
     ///
     /// Called with the pair returned by
-    /// [`parse_system`](parsers::parse_system) once a connection is live; the
+    /// [`parse_system`] once a connection is live; the
     /// two values always move together (they are set in the same parse step).
     pub fn set_system(&mut self, system: System, transactional: bool) {
         self.system = system;
@@ -703,7 +703,7 @@ impl Target {
     /// the result.
     ///
     /// Driven by the `reload_products`
-    /// command: re-runs [`parse_system`](parsers::parse_system) and stores the
+    /// command: re-runs [`parse_system`] and stores the
     /// `(System, transactional)` pair via [`set_system`](Self::set_system). A
     /// no-op (logged) when the target is not connected; a parse failure is
     /// logged and the previously recorded system is left untouched, matching the
@@ -869,9 +869,9 @@ impl Target {
     /// Builds an [`SshConnection`] from the
     /// host/port/timeout/policy resolved at construction, builds the two
     /// remote locks over it, runs the connect-time lock check + stale-reap
-    /// ([`check_stale_lock`](Target::check_stale_lock)), then — in
+    /// (`check_stale_lock`), then — in
     /// post-dial ordering — parses the system/product
-    /// ([`parse_system`](parsers::parse_system)) and queries installed package
+    /// ([`parse_system`]) and queries installed package
     /// versions ([`Target::query_versions`]). If a connection is already
     /// attached (e.g. a test-injected
     /// [`MockConnection`](crate::MockConnection)), the dial + lock-building
@@ -893,7 +893,7 @@ impl Target {
     ///
     /// Propagates [`HostError::Connect`] / [`HostError::Auth`] from
     /// [`SshConnection::connect`] when the host is unreachable or auth fails, and
-    /// the last [`parse_system`](parsers::parse_system) error when the system
+    /// the last [`parse_system`] error when the system
     /// cannot be parsed after the retry budget is exhausted.
     pub async fn connect(&mut self) -> Result<()> {
         if self.connection.is_none() {

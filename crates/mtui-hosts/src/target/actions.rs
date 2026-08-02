@@ -1,10 +1,10 @@
 //! Parallel fan-out primitives over a group of [`Target`]s.
 //!
-//! * [`run_parallel`] drives a set of caller-supplied futures to completion
+//! * `run_parallel` drives a set of caller-supplied futures to completion
 //!   concurrently.
-//! * [`RunCommand`] dispatches a command (one string for all hosts, or a
+//! * `RunCommand` dispatches a command (one string for all hosts, or a
 //!   per-host map) to every host in parallel.
-//! * [`sftp_put_all`] / [`sftp_get_all`] fan the corresponding transfer out
+//! * `sftp_put_all` / `sftp_get_all` fan the corresponding transfer out
 //!   across the group.
 //!
 //! ### Why no output lock
@@ -16,7 +16,7 @@
 //!
 //! ### The TTY spinner
 //!
-//! [`run_parallel`] starts a [`TtySpinner`](super::spinner) for
+//! `run_parallel` starts a [`TtySpinner`](mod@super::spinner) for
 //! the duration of the fan-out when a `desc` is given; it is a strict no-op off
 //! a TTY (tests, redirected output, `mtui-mcp`), so behaviour with `desc=None`
 //! (or off a terminal) is identical to the plain `join_all`. The spinner erases
