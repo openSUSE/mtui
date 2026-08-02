@@ -37,6 +37,17 @@ jobs:
         run: rustup component add clippy
       - name: Clippy (warnings as errors)
         run: cargo clippy --workspace --all-targets -- -D warnings
+  docs:
+    runs-on: ubuntu-latest
+    name: MTUI docs
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check rustdoc (warnings as errors)
+        run: cargo doc --workspace --no-deps --all-features --document-private-items
   feature-matrix:
     runs-on: ubuntu-latest
     name: MTUI feature matrix (compile-only)
