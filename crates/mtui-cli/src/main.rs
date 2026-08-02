@@ -8,9 +8,8 @@
 //!
 //! This binary has exactly **one** driving surface: the
 //! REPL. There is no positional command / single-command mode — headless
-//! single-command dispatch is an `mtui-mcp`/embedding concern
-//! ([`mtui_core::run_once`]), not a CLI mode. Full config loading + `Args` merge
-//! remains later Phase-6 config work.
+//! single-command dispatch is an `mtui-mcp`/embedding concern, not a CLI mode.
+//! Full config loading + `Args` merge remains later Phase-6 config work.
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
@@ -81,7 +80,7 @@ fn main() -> anyhow::Result<()> {
     // entering an empty REPL.
     if let ControlFlow::Break(code) = runtime.block_on(seed_session(&registry, &mut session, &args))
     {
-        std::process::exit(code);
+        std::process::exit(code.into());
     }
 
     // The session and registry are shared behind `Arc`/`Arc<Mutex>` so the tab

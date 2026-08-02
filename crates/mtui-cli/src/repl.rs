@@ -249,12 +249,11 @@ async fn step(registry: &Registry, session: &mut Session, line: &str) -> Control
 /// message is the event's *message* (not a structured field), so no `err=`
 /// noise appears; the default format carries no timestamp/target either.
 ///
-/// This deliberately differs from the headless
-/// [`run_once`](mtui_core::entrypoint::run_once) entrypoint (`mtui-mcp` /
-/// embedding), which has no `tracing` subscriber and renders the same
-/// `error: <message>` text through its captured display buffer. The two present
-/// failures with identical *text*; each uses the channel appropriate to its
-/// surface (REPL → operator log on stderr; headless → captured display sink).
+/// This deliberately differs from the headless `mtui-mcp` surface, which has
+/// no `tracing` subscriber and renders the same `error: <message>` text
+/// through its captured display buffer. The two present failures with
+/// identical *text*; each uses the channel appropriate to its surface
+/// (REPL → operator log on stderr; headless → captured display sink).
 ///
 /// One exception: a genuine usage error (`Parse { help_or_version: false,
 /// .. }`) carries clap's *own* already-rendered `error: ` prefix (and

@@ -18,13 +18,11 @@
 //! family, [`show_log`](CommandPromptDisplay::show_log), the three-way
 //! [`ColorMode`], and the [`page`](display::page) pager.
 //!
-//! P5.10 adds [`entrypoint`] — the single-command driver ([`run_once`]) that
-//! runs one Layer-2 REPL command to completion and yields a process
-//! [`ExitStatus`]. It is the seam between the top-level [`Args`] parser (Layer 1)
-//! and the per-command engine (Layer 2), distinct from both and from the MCP
-//! schema synthesis (Layer 3, Phase 7). It is consumed by `mtui-mcp` and
-//! embedding callers that dispatch a single command headlessly; the interactive
-//! `mtui` binary (Phase 6) is REPL-only — the CLI has no single-command mode.
+//! P5.10 adds [`entrypoint`] — the process [`ExitStatus`] contract distinct
+//! from the top-level [`Args`] parser (Layer 1) and the per-command engine
+//! (Layer 2), and from the MCP schema synthesis (Layer 3, Phase 7). Both
+//! process entrypoints, `mtui`'s REPL and `mtui-mcp`, exit through it; neither
+//! has a headless single-command CLI mode.
 
 pub mod args;
 pub mod command;
@@ -41,6 +39,7 @@ pub use args::{Args, ColorArg, Sut, Update};
 pub use command::{Command, Scope, resolve_command_rrids};
 pub use display::{ColorMode, CommandPromptDisplay};
 pub use engine::{EngineError, command_parser, dispatch_argv, dispatch_command, dispatch_line};
+pub use entrypoint::ExitStatus;
 pub use error::{CommandError, CommandResult};
 pub use registry::{MCP_DENYLIST, Registry, register_all};
 pub use session::{LogLevel, LogLevelSink, NotifySink, Session};
