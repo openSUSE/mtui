@@ -22,9 +22,10 @@
 //!
 //! Plain optional flags are emitted first (in `get_arguments()` order), then the
 //! positional tail. Append / multi-value flags are routed into the tail as well:
-//! such a flag consumes every token after it, so a later flag (notably the base
-//! parser's `-T/--template`, declared after per-command args) must not sit behind
-//! it.
+//! a greedy (`num_args(1..)`) one consumes every token after it, so a later flag
+//! (notably the base parser's `-T/--template`, declared after per-command args)
+//! must not sit behind it. Each such flag is emitted once per element (see the
+//! loop below) — the only form every Append arg parses.
 
 use clap::{Arg, ArgAction};
 use serde_json::{Map, Value};
@@ -86,11 +87,17 @@ pub(crate) fn kwargs_to_argv(
         }
 
         // ---- append / multi-value flag -----------------------------------
-        // Emit the flag once followed by every token, into the tail so a later
-        // flag cannot be swallowed as one of its values.
+        // Emit the flag before *every* token, into the tail so a later flag
+        // cannot be swallowed as one of its values. The repeated form is the
+        // only one every Append arg parses: with the default `num_args = 1`
+        // (e.g. `approve --group`), clap rejects `--group a b` as an
+        // unexpected argument, while `num_args(1..)` args (e.g. `commit -m`)
+        // parse `--msg a --msg b` identically to `--msg a b`.
         if is_multi(arg) {
-            tail.push(long_flag(arg));
-            tail.extend(items);
+            for item in items {
+                tail.push(long_flag(arg));
+                tail.push(item);
+            }
             continue;
         }
 
@@ -268,9 +275,43 @@ mod tests {
     // ---------------------------------------------------------------- lists
 
     #[test]
-    fn append_multi_flag_emits_once_into_tail() {
-        // `commit -m/--msg` (Append, num_args 1..): one flag then every token,
-        // in the positional tail so a trailing base flag stays safe.
+    fn append_single_value_flag_repeats_per_element() {
+        // `approve -g/--group` (Append, default num_args = 1): the flag must
+        // repeat before every element — the flag-once form `--group a b` is
+        // rejected by clap ("unexpected argument 'b'") because each occurrence
+        // takes exactly one value. This is the shape `updates --review-group`
+        // and `-F` use too.
+        let out = argv("approve", json!({ "group": ["qam-sle", "qam-teradata"] }));
+        assert_eq!(out, vec!["--group", "qam-sle", "--group", "qam-teradata"]);
+        assert_reparses("approve", &out);
+    }
+
+    #[test]
+    fn updates_multi_group_and_fields_round_trip() {
+        // The #415 surface: two review groups and two osc-qam field names
+        // (one with an embedded space) reconstruct and re-parse to the same
+        // value lists an MCP client sent.
+        let out = argv(
+            "updates",
+            json!({
+                "review_group": ["qam-sle", "qam-teradata"],
+                "field": ["Rating", "Assigned Roles"],
+            }),
+        );
+        assert_reparses("updates", &out);
+        let parsed = parser_for("updates").try_get_matches_from(&out).unwrap();
+        let groups: Vec<&String> = parsed.get_many::<String>("review_group").unwrap().collect();
+        assert_eq!(groups, ["qam-sle", "qam-teradata"]);
+        let fields: Vec<&String> = parsed.get_many::<String>("field").unwrap().collect();
+        assert_eq!(fields, ["Rating", "Assigned Roles"]);
+    }
+
+    #[test]
+    fn append_multi_flag_repeats_per_element_and_reparses_identically() {
+        // `commit -m/--msg` (Append, num_args 1..): the flag repeats before
+        // every token (tail-routed so a trailing base flag stays safe). For a
+        // `num_args(1..)` arg the repeated form parses to the same value list
+        // as the flag-once form — pinned by re-parsing.
         let out = argv(
             "commit",
             json!({ "msg": ["hello", "world"], "template": "a:b:1:1" }),
@@ -278,30 +319,42 @@ mod tests {
         // `-T` (flag) precedes the tail-routed `--msg`.
         assert_eq!(
             out,
-            vec!["--template", "a:b:1:1", "--msg", "hello", "world"]
+            vec!["--template", "a:b:1:1", "--msg", "hello", "--msg", "world"]
         );
         assert_reparses("commit", &out);
+        let parsed = parser_for("commit").try_get_matches_from(&out).unwrap();
+        let msgs: Vec<&String> = parsed.get_many::<String>("msg").unwrap().collect();
+        assert_eq!(msgs, ["hello", "world"]);
     }
 
     #[test]
-    fn append_list_flag_with_choices_emits_once() {
-        // `openqa_overview --aggregated-groups` (Append + PossibleValues).
+    fn append_list_flag_with_choices_repeats_per_element() {
+        // `openqa_overview --aggregated-groups` (Append + PossibleValues,
+        // default num_args = 1): every element gets its own flag. With the
+        // old flag-once emission a two-element call could not re-parse.
         let parser = parser_for("openqa_overview");
-        // Discover a valid enum member from the parser so the re-parse succeeds.
+        // Discover valid enum members from the parser so the re-parse succeeds.
         let arg = parser
             .get_arguments()
             .find(|a| a.get_id() == "aggregated_groups")
             .expect("aggregated_groups arg");
-        let member = arg
+        let members: Vec<String> = arg
             .get_possible_values()
-            .first()
+            .iter()
+            .take(2)
             .map(|pv| pv.get_name().to_owned())
-            .expect("aggregated_groups has choices");
+            .collect();
+        assert!(!members.is_empty(), "aggregated_groups has choices");
         let out = argv(
             "openqa_overview",
-            json!({ "aggregated_groups": [member.clone()] }),
+            json!({ "aggregated_groups": members.clone() }),
         );
-        assert_eq!(out, vec!["--aggregated-groups".to_owned(), member]);
+        // One `--aggregated-groups` immediately before each member, in order.
+        let expected: Vec<String> = members
+            .iter()
+            .flat_map(|m| ["--aggregated-groups".to_owned(), m.clone()])
+            .collect();
+        assert_eq!(out, expected);
         assert_reparses("openqa_overview", &out);
     }
 

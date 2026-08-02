@@ -20,6 +20,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- MCP calls passing a list to a repeatable single-value flag (e.g. `approve`
+  with two `group`s) no longer fail to parse: the reconstructed argv now
+  repeats the flag before every element instead of emitting it once for the
+  whole list.
 - `approve` no longer approves a Gitea update whose PR head differs from the
   checked-out testreport without saying so. Interactively it now logs the
   expected/actual hash pair and asks for confirmation (default no); a missing
