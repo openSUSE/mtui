@@ -1417,14 +1417,27 @@ pub async fn perform_update(
 
     targets.package_check(true).await;
 
-    // Success: remove the test update repositories.
-    if targets.update_lock().await.is_err() {
-        warn!("could not lock hosts to remove update repositories; skipping repo cleanup");
-        return Ok(());
+    remove_test_repos(targets, report).await;
+    Ok(())
+}
+
+/// Removes the test update repositories after a successful update.
+///
+/// Best-effort: a lock failure here does not turn a successful update into a
+/// failed one, so it warns — naming the error, that the repos are left
+/// configured, and the manual remedy — rather than failing the update.
+async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
+    if let Err(e) = targets.update_lock().await {
+        warn!(
+            error = %e,
+            "could not lock hosts to remove the test update repositories; \
+             they are left configured on every host (remove later with \
+             `set_repo --remove`)"
+        );
+        return;
     }
     targets.fanout_set_repo(RepoOp::Remove, report).await;
     targets.unlock().await;
-    Ok(())
 }
 
 /// Runs the update commands, checks every host (collecting failures), reboots on
@@ -3149,6 +3162,89 @@ mod tests {
         assert!(
             ops.contains(&RepoOp::Remove),
             "on success the repos are removed: {ops:?}"
+        );
+    }
+
+    /// Runs `fut` under a scoped tracing subscriber that captures each
+    /// event's message synchronously into an in-memory buffer, returning the
+    /// joined records. Mirrors `mtui-datasources/tests/obs_oscrc.rs`'s
+    /// `capture_logs`, adapted for an async body: `set_default`'s guard stays
+    /// live across the awaited future on the single-threaded `#[tokio::test]`
+    /// runtime these tests run under.
+    async fn capture_logs(fut: impl std::future::Future<Output = ()>) -> String {
+        use std::fmt::Write as _;
+        use std::sync::{Arc, Mutex};
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::Registry;
+
+        #[derive(Clone)]
+        struct CaptureLayer(Arc<Mutex<Vec<String>>>);
+
+        struct MessageVisitor(String);
+        impl Visit for MessageVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    let _ = write!(self.0, "{value:?}");
+                } else {
+                    let _ = write!(self.0, " {}={value:?}", field.name());
+                }
+            }
+        }
+
+        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                let mut visitor = MessageVisitor(String::new());
+                event.record(&mut visitor);
+                self.0.lock().unwrap().push(visitor.0);
+            }
+        }
+
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let sub = Registry::default().with(CaptureLayer(records.clone()));
+        let _guard = tracing::subscriber::set_default(sub);
+        fut.await;
+        records.lock().unwrap().join("\n")
+    }
+
+    #[tokio::test]
+    async fn remove_test_repos_names_the_error_when_it_cannot_lock() {
+        // A foreign lock makes update_lock fail on the only host, so the
+        // cleanup cannot run; it must warn (naming the error and the remedy)
+        // rather than removing the repos.
+        let foreign = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_file(
+                mtui_hosts::TARGET_LOCK_PATH,
+                b"1700000000:alice:4242:busy".to_vec(),
+            );
+        let t = Target::with_connection("h1", TargetState::Enabled, Box::new(foreign));
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+
+        let logs = capture_logs(remove_test_repos(&mut group, &repo)).await;
+
+        let ops = repo.ops.lock().unwrap().clone();
+        assert!(
+            !ops.contains(&RepoOp::Remove),
+            "cleanup must not run when the lock fails: {ops:?}"
+        );
+        // The cleanup's own warning must carry both the lock error and the
+        // remedy in the same line: `update_lock`'s internal fanout also logs
+        // WARNs about the individual foreign-locked host, so a
+        // `logs.contains` across every captured line would still pass with
+        // the error field dropped from this warning.
+        let cleanup_line = logs
+            .lines()
+            .find(|l| l.contains("left configured on every host"))
+            .unwrap_or_else(|| panic!("no cleanup warning found: {logs}"));
+        assert!(
+            cleanup_line.contains("Hosts locked"),
+            "cleanup warning must name the lock error: {cleanup_line}"
+        );
+        assert!(
+            cleanup_line.contains("set_repo --remove"),
+            "cleanup warning must name the manual remedy: {cleanup_line}"
         );
     }
 
