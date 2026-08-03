@@ -160,7 +160,9 @@ spaces, hyphens and underscores treated as equivalent: `ReviewRequestID`,
 `Assignee`, `Assigned Roles`, `Unassigned Roles`, `Title`, `URL`. Fields the
 TeReGen queue listing does not carry (`Products`, `SRCRPMs`, `Bugs`,
 `Package-Streams`, `Creator`, `Issues`, `Comments`) are named in the error
-rather than silently absent. On SLFO rows `Unassigned Roles` renders `n/a` —
-TeReGen does not expose review groups on them. `--json` and `-F` are mutually
+rather than silently absent. `Unassigned Roles` renders `n/a` when it cannot
+be answered honestly: on SLFO rows (TeReGen does not expose review groups on
+them) and on any row served without assignment data, where "every group open"
+would be indistinguishable from the truth. `--json` and `-F` are mutually
 exclusive, and `Assignee`/`Assigned Roles` are refused under `--status all`,
 where TeReGen omits the assignment data they would render.

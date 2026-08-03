@@ -24,8 +24,9 @@
 //! positional tail. Append / multi-value flags are routed into the tail as well:
 //! a greedy (`num_args(1..)`) one consumes every token after it, so a later flag
 //! (notably the base parser's `-T/--template`, declared after per-command args)
-//! must not sit behind it. Each such flag is emitted once per element (see the
-//! loop below) — the only form every Append arg parses.
+//! must not sit behind it. An `Append` flag is emitted once per element (the only
+//! form clap parses when each occurrence takes one value); a non-`Append`
+//! multi-value option is emitted once with all its values (see the loop below).
 
 use clap::{Arg, ArgAction};
 use serde_json::{Map, Value};
@@ -87,16 +88,27 @@ pub(crate) fn kwargs_to_argv(
         }
 
         // ---- append / multi-value flag -----------------------------------
-        // Emit the flag before *every* token, into the tail so a later flag
-        // cannot be swallowed as one of its values. The repeated form is the
-        // only one every Append arg parses: with the default `num_args = 1`
-        // (e.g. `approve --group`), clap rejects `--group a b` as an
-        // unexpected argument, while `num_args(1..)` args (e.g. `commit -m`)
-        // parse `--msg a --msg b` identically to `--msg a b`.
+        // Both shapes route into the tail so a later flag cannot be swallowed
+        // as one of their values, but they emit differently:
+        //
+        // * `ArgAction::Append` → repeat the flag before *every* element. This
+        //   is the only form every Append arg parses: with the default
+        //   `num_args = 1` (e.g. `approve --group`), clap rejects `--group a b`
+        //   as an unexpected argument, while `num_args(1..)` Append args (e.g.
+        //   `commit -m`) parse `--msg a --msg b` identically to `--msg a b`.
+        // * non-`Append` multi-value option (`ArgAction::Set` + `num_args(1..)`)
+        //   → emit the flag *once* followed by all items. One occurrence
+        //   consumes many values there, and repeating the flag would make the
+        //   last occurrence win, silently dropping the earlier values.
         if is_multi(arg) {
-            for item in items {
+            if matches!(arg.get_action(), ArgAction::Append) {
+                for item in items {
+                    tail.push(long_flag(arg));
+                    tail.push(item);
+                }
+            } else {
                 tail.push(long_flag(arg));
-                tail.push(item);
+                tail.extend(items);
             }
             continue;
         }
@@ -287,6 +299,28 @@ mod tests {
     }
 
     #[test]
+    fn run_hosts_and_command_round_trip_without_leaking_across_boundary() {
+        // The silent-corruption case the repeat-per-element fix closes. `run`'s
+        // `-t/--target` (Append) and its trailing `COMMAND` positional share the
+        // tail. The pre-fix flag-once emission produced
+        // `--target h1 h2 uname -a`, which clap parsed as hosts=["h1"] and
+        // command=["h2","uname","-a"] — i.e. it would run `h2 uname -a` on h1.
+        // Repeating `--target` per host keeps the multi-flag/positional boundary
+        // intact; no other test covers this interaction.
+        let out = argv(
+            "run",
+            json!({ "hosts": ["h1", "h2"], "command": ["uname", "-a"] }),
+        );
+        assert_eq!(out, vec!["--target", "h1", "--target", "h2", "uname", "-a"]);
+        assert_reparses("run", &out);
+        let parsed = parser_for("run").try_get_matches_from(&out).unwrap();
+        let hosts: Vec<&String> = parsed.get_many::<String>("hosts").unwrap().collect();
+        assert_eq!(hosts, ["h1", "h2"]);
+        let command: Vec<&String> = parsed.get_many::<String>("command").unwrap().collect();
+        assert_eq!(command, ["uname", "-a"]);
+    }
+
+    #[test]
     fn updates_multi_group_and_fields_round_trip() {
         // The #415 surface: two review groups and two osc-qam field names
         // (one with an embedded space) reconstruct and re-parse to the same
@@ -356,6 +390,32 @@ mod tests {
             .collect();
         assert_eq!(out, expected);
         assert_reparses("openqa_overview", &out);
+    }
+
+    #[test]
+    fn set_multi_value_option_emits_flag_once() {
+        // No mtui registry arg is a non-Append multi-value option, so pin the
+        // branch on a bespoke parser (as `store_false_off_side_emits_flag`
+        // does). An `ArgAction::Set` option with `num_args(2..)` consumes many
+        // values from ONE occurrence; repeating the flag would make the last
+        // occurrence win and silently drop earlier values, so it must emit the
+        // flag once followed by all items — and that form re-parses to the full
+        // value list.
+        let parser = clap::Command::new("probe").no_binary_name(true).arg(
+            clap::Arg::new("point")
+                .long("point")
+                .action(ArgAction::Set)
+                .num_args(2..),
+        );
+        let out = kwargs_to_argv(
+            &parser,
+            json!({ "point": ["1", "2", "3"] }).as_object().unwrap(),
+            &[],
+        );
+        assert_eq!(out, vec!["--point", "1", "2", "3"]);
+        let parsed = parser.try_get_matches_from(&out).unwrap();
+        let values: Vec<&String> = parsed.get_many::<String>("point").unwrap().collect();
+        assert_eq!(values, ["1", "2", "3"]);
     }
 
     // ------------------------------------------------------------ omission

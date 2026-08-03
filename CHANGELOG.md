@@ -19,7 +19,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (`Products`, `SRCRPMs`, `Bugs`, `Package-Streams`, `Creator`, `Issues`,
   `Comments`) are named in an error instead of rendering empty, and
   `Assignee`/`Assigned Roles` are refused under `--status all`, where TeReGen
-  omits the assignment data they would render.
+  omits the assignment data they would render; `Unassigned Roles` degrades to
+  `n/a` on any row carrying no assignment data rather than listing every
+  group as open.
 - `updates --review-group` gained the short form `-G` and is now repeatable;
   multiple groups are OR-ed via one TeReGen query per group, merged
   priority-descending with duplicates collapsed. **MCP schema note:** the
