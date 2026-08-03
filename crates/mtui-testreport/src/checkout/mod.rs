@@ -115,10 +115,10 @@ pub struct TestReportNotLoaded;
 
 /// Outcome of a template read attempt inside the checkout seam.
 ///
-/// The seam is generic over how a report is read so it can be wired now, before
-/// the `TestReport::read` lifecycle method lands (a later Phase 4 task). It
-/// catches a missing template (→ checkout) and lets other errors from the
-/// retry propagate.
+/// The seam is generic over how a report is read, decoupling it from the
+/// [`TestReport::read`](crate::TestReport::read) lifecycle method. It catches
+/// a missing template (→ checkout) and lets other errors from the retry
+/// propagate.
 #[derive(Debug)]
 pub enum ReadOutcome {
     /// The template was read successfully.

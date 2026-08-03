@@ -10,8 +10,8 @@
 //! live connection state) would be the wrong dependency direction, so the
 //! exporter takes a decoupled [`ManualHost`] view capturing exactly the
 //! `hostname`, `system`, `packages`, and `hostlog` fields it needs. The
-//! composition root (Phase 5) builds these from the live targets, mirroring
-//! how the downloader takes `(host, tests)` pairs.
+//! composition root (`mtui-core`) builds these from the live targets,
+//! mirroring how the downloader takes `(host, tests)` pairs.
 
 use std::sync::LazyLock;
 

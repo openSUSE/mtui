@@ -8,7 +8,7 @@
 //!
 //! Writing a divergent existing file asks whether to overwrite it. Per the
 //! established crate-boundary pattern (see `mtui-hosts::target::actions`),
-//! the interactive prompt is a display concern owned by `mtui-cli` (Phase 6);
+//! the interactive prompt is a display concern owned by `mtui-cli`;
 //! here it is injected as the [`OverwritePrompt`] trait so the exporter stays
 //! testable and free of a CLI dependency. The default [`DenyOverwrite`] never
 //! overwrites (safe for non-interactive runs and the MCP surface).
@@ -24,7 +24,7 @@ use crate::support::sysinfo::{EXPORT_PREFIX, detect_system, system_info};
 /// The decision an exporter makes when an existing file differs from what it is
 /// about to write.
 ///
-/// `mtui` (Phase 6) supplies an interactive implementation; library and test
+/// `mtui` supplies an interactive implementation; library and test
 /// callers use [`DenyOverwrite`].
 ///
 /// The bound is `Send + Sync` because [`AutoExport::run`](crate::AutoExport) is

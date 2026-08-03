@@ -1,4 +1,4 @@
-//! Sub-bead A (mtui-rs-0pe.1): `TestReport::read` + `make_testreport`.
+//! `TestReport::read` + `make_testreport`.
 //!
 //! Tests the parse-and-populate slice of `TestReport::read` and the
 //! `make_testreport` factory (report-class selection + checkout +

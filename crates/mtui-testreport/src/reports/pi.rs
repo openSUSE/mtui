@@ -13,10 +13,10 @@
 //! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`](mtui_hosts::RepoManager::run_zypper)) is
 //!   implemented here (task nbv.fly): add uses `-n ar -cfGkn` (same as
 //!   SL), remove uses `-n rr`.
-//! * `list_update_commands` would render per-host commands via
-//!   `target.doer('updater')`, but the `OperationGroup`/doer seam on `Target`
-//!   is deferred (see the `TODO(Phase 4)` in `mtui-hosts::target::operation`).
-//!   Until it is wired this is a documented no-op stub.
+//! * `list_update_commands` would render per-host commands via the doer seam
+//!   ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)), which is wired
+//!   for install/uninstall but has no listing consumer yet — this is a
+//!   documented no-op stub.
 //! * `id()` returns `""` when no RRID is loaded; this matches the graceful
 //!   path chosen for `SlReport`.
 
@@ -89,10 +89,10 @@ impl TestReport for PiReport {
     fn list_update_commands(&self, _targets: &HostsGroup) {
         // This would render per-host `updater` commands for display; the
         // bespoke `perform_update` flow that runs them is implemented below.
-        // A standalone read-only listing has no consumer yet (the `list`/`run`
-        // Wave-1 command lands in mtui-rs-2d3.6), so this stays a no-op until
-        // then.
-        debug!("list_update_commands: no listing consumer yet (see mtui-rs-2d3.6)");
+        // The read-only listing is a documented no-op stub across every
+        // report — the `list_update_commands` command calls this but only
+        // ever prints a placeholder.
+        debug!("list_update_commands: no-op stub, not yet implemented");
     }
 
     // Shared `perform_*` flows (SL/PI/OBS behave identically). See

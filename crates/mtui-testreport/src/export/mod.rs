@@ -11,8 +11,9 @@
 //! deliberately different constructors — [`ManualExport`] needs the connected
 //! hosts, [`KernelExport`] needs the kernel connectors — so a single boxed
 //! factory would flatten inputs that legitimately differ. The composition root
-//! (Phase 5) matches on `Workflow` and constructs the right exporter directly;
-//! this module exposes the concrete types rather than prescribing that match.
+//! (`mtui-core`) matches on `Workflow` and constructs the right exporter
+//! directly; this module exposes the concrete types rather than prescribing
+//! that match.
 
 pub mod auto;
 pub mod base;

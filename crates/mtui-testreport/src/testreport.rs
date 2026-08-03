@@ -1,6 +1,6 @@
 //! The [`TestReport`] trait and its shared-state carrier [`TestReportBase`].
 //!
-//! This is the Phase 4.1 skeleton. Each concrete report (SL/PI/OBS/Null)
+//! Each concrete report (SL/PI/OBS/Null)
 //! shares a large block of state, plus a handful of behaviors that only the
 //! concrete report can supply.
 //!
@@ -13,9 +13,9 @@
 //! inject collaborators).
 //!
 //! Only the shared state and the abstract-method surface land here. The
-//! concrete lifecycle (load/checkout/commit/export), metadata parsing, pool
-//! selection, and host-connect logic arrive in the later Phase 4 tasks that
-//! depend on this skeleton.
+//! concrete lifecycle (load/checkout/commit/export) lives in [`crate::lifecycle`],
+//! metadata parsing in [`crate::metadata_parsers`], and each report's
+//! host-connect logic in [`crate::reports`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -40,10 +40,6 @@ use crate::checkout::TemplateIoError;
 use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_titles};
 
 /// Shared state common to every [`TestReport`] implementation.
-///
-/// Fields whose behavior is only exercised by later Phase 4 tasks (pool
-/// selection, host arbitration, connect) are carried here as pure state — no
-/// logic is wired to them yet.
 ///
 /// The [`openqa`](Self::openqa) holder carries the report's openQA state
 /// ([`ReportOpenQA`]) — the QEM-dashboard "auto" result, the per-instance
@@ -286,8 +282,8 @@ pub fn packages_for_map(
 /// Concrete reports embed a [`TestReportBase`] and expose it through
 /// [`base`](Self::base) / [`base_mut`](Self::base_mut); the remaining
 /// required methods are the abstract surface every report must supply.
-/// Non-abstract lifecycle methods (`connect_target`, `export`, pool
-/// selection, …) are added by the later Phase 4 tasks.
+/// Non-abstract lifecycle methods (`read`, `release_pool_claims`,
+/// `perform_install`, …) are provided as trait defaults below.
 ///
 /// The trait is `#[async_trait]` because [`check_hash`](Self::check_hash) drives
 /// async I/O for git-backed reports (`SLTestReport` awaits `Gitea::get_hash`).
@@ -304,9 +300,8 @@ pub trait TestReport {
 
     /// The metadata field parser table.
     ///
-    /// Maps a template field name to its parsed value. The concrete shape of
-    /// parsed values is refined in the metadata-parser task (P4.2); the
-    /// skeleton uses `String` values, which the null object leaves empty.
+    /// Maps a template field name to its parsed value. The table models
+    /// values as `String`; the null object leaves it empty.
     fn parser(&self) -> HashMap<String, String>;
 
     /// The update-repository parser table.

@@ -1,10 +1,10 @@
 //! `mtui-testreport` — TestReport lifecycle, metadata parsers, update workflow.
 //!
-//! Lands the [`TestReport`] trait, the shared-state [`TestReportBase`] carrier,
-//! the [`NullReport`] null object, and the SUSE Linux report [`SlReport`] (with
-//! its [`repoparse`](reports::repoparse) helpers), plus the metadata parsers and
-//! product-normalization tables. The remaining concrete reports, checkout
-//! backends, and update workflow arrive in the later Phase 4 tasks.
+//! Provides the [`TestReport`] trait, the shared-state [`TestReportBase`]
+//! carrier, the [`NullReport`] null object, and the concrete reports (SL, PI,
+//! OBS — with the [`repoparse`](reports::repoparse) helpers), plus the
+//! metadata parsers, product-normalization tables, checkout backends, and
+//! update workflow.
 
 pub mod checkout;
 pub mod export;
