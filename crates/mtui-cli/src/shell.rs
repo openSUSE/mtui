@@ -1,7 +1,7 @@
 //! The interactive `shell` REPL command and its raw-mode TTY bridge.
 //!
 //! The host-library half — spawning the remote PTY and exposing it as an
-//! object-safe [`ShellChannel`] duplex — landed in P2.10 (`mtui-hosts` feature
+//! object-safe [`ShellChannel`] duplex — lives in `mtui-hosts` (feature
 //! `shell`); this module is the **CLI consumer** that owns the local terminal.
 //!
 //! ## Why this lives in the CLI, not the engine
@@ -247,7 +247,7 @@ async fn run_bridge_on(target: &mut Target) -> anyhow::Result<()> {
 ///
 /// This is the pure seam the REPL uses to route `shell` to the CLI bridge
 /// instead of the headless engine (kept off the reedline boundary so it is
-/// unit-testable, mirroring the P6.2 `step` extraction).
+/// unit-testable, mirroring the `step` extraction).
 #[must_use]
 pub(crate) fn is_shell_line(line: &str) -> Option<Vec<String>> {
     let tokens = shlex_split(line)?;

@@ -24,7 +24,7 @@ mtui-hosts = { workspace = true, features = ["shell"] }
 clap.workspace = true
 anyhow.workspace = true
 reedline.workspace = true
-# Raw-mode terminal + async EventStream for the `shell` bridge (mtui-rs-jww).
+# Raw-mode terminal + async EventStream for the `shell` bridge.
 crossterm.workspace = true
 # `StreamExt` for the crossterm `EventStream` in the bridge input pump.
 futures.workspace = true
@@ -33,7 +33,7 @@ async-trait.workspace = true
 # shlex-split the `shell` line to route it to the bridge (mirrors the engine).
 shlex.workspace = true
 nu-ansi-term.workspace = true
-# Level-token coloring in the custom tracing format layer (mtui-rs-ilt), matching
+# Level-token coloring in the custom tracing format layer, matching
 # the escapes `mtui-core`'s display uses for the `error` token.
 owo-colors.workspace = true
 # `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).

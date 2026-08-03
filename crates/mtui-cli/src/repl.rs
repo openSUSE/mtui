@@ -15,10 +15,11 @@
 //!   `quit`): break the loop, process exit 0.
 //!
 //! The read loop and dispatch are independent of the editor's input features:
-//! tab completion (P6.3), persistent history + Ctrl-R reverse-search + inline
-//! hint (P6.4), and the workflow-aware prompt + RRID status + input highlighter
-//! (P6.5) all live in the [`Reedline`] builder / [`MtuiPrompt`] in [`Repl::new`];
-//! the command-timeout prompter (P6.6) slots in later without changing this loop.
+//! tab completion, persistent history + Ctrl-R reverse-search + inline
+//! hint, and the workflow-aware prompt + RRID status + input highlighter
+//! all live in the [`Reedline`] builder / [`MtuiPrompt`] in [`Repl::new`];
+//! the command-timeout prompter is wired in at the composition root
+//! (`main.rs`) without changing this loop.
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
@@ -63,9 +64,9 @@ impl Repl {
     /// `file_backed_history` persisting to
     /// `$XDG_DATA_HOME/mtui/history` (with Ctrl-R reverse-search from the default
     /// emacs bindings); and a [`DefaultHinter`] showing the greyed inline
-    /// suggestion. The dynamic prompt/toolbar
-    /// (P6.5) and the prompter (P6.6) slot into this builder later without
-    /// changing the loop.
+    /// suggestion. The dynamic prompt/toolbar comes from [`MtuiPrompt`]; the
+    /// command-timeout prompter is wired in separately at the composition
+    /// root (`main.rs`).
     #[must_use]
     pub fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
         let completer = Box::new(MtuiCompleter::new(
@@ -142,7 +143,7 @@ impl Repl {
                     // TTY this REPL owns — the engine (shared with headless MCP)
                     // can't do that, so its `shell` command is a headless-error
                     // stub. Intercept the line *before* dispatch and drive the
-                    // raw-mode bridge here instead (mtui-rs-jww). Any other line
+                    // raw-mode bridge here instead. Any other line
                     // takes the normal engine path. A shell line never exits.
                     if let Some(argv) = crate::shell::is_shell_line(&line) {
                         let mut session = self
@@ -449,7 +450,7 @@ mod tests {
         assert_eq!(out.lines().count(), 1, "rendered exactly once");
     }
 
-    /// The de-noised, single-channel error contract (mtui-rs-7h9 / -ilt): a
+    /// The de-noised, single-channel error contract: a
     /// failing command yields exactly one `error: <message>` line through the
     /// operator log, with none of the old `tracing` noise (a target, a
     /// timestamp, or an `err=` field).
@@ -470,7 +471,7 @@ mod tests {
 
     /// Under color, the `error` level token is red-wrapped while the message
     /// text is not colorized — the same single `CompactLevelFormat` layer that
-    /// colors `info`/`warn`, so all three levels share one look (mtui-rs-ilt).
+    /// colors `info`/`warn`, so all three levels share one look.
     #[test]
     fn error_level_token_is_colorized_message_is_not() {
         let (r, _) = registry();
