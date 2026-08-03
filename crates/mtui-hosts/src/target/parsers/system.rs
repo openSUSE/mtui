@@ -3,7 +3,7 @@
 //! Every SFTP
 //! read is issued through a **single** batched [`SftpSession`] opened once via
 //! [`Connection::sftp_session`] — a host with many product files pays the SFTP
-//! channel+subsystem handshake once, not per probe (mtui-rs-0mop.3). The
+//! channel+subsystem handshake once, not per probe. The
 //! `sftp_session_count == 1` invariant
 //! is pinned by the `parse_system_opens_single_sftp_session` oracle.
 //!
@@ -218,7 +218,7 @@ mod tests {
 
     #[tokio::test]
     async fn parse_system_opens_single_sftp_session() {
-        // mtui-rs-0mop.3 handshake-count oracle: a host with a base + 2 addons
+        // Handshake-count oracle: a host with a base + 2 addons
         // (listdir + readlink + 3 opens + 2 transactional probes = 7 reads)
         // must open exactly ONE batched SFTP session, not one per read.
         let mut conn = sles_with_two_addons();

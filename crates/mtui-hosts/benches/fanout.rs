@@ -1,4 +1,4 @@
-//! Perf baselines for host fan-out and SFTP/lock I/O (mtui-rs-0mop.1).
+//! Perf baselines for host fan-out and SFTP/lock I/O.
 //!
 //! Measurement-only: these record the *current* behaviour of
 //! [`HostsGroup`]'s parallel fan-out so the remediation beads have a baseline to
@@ -164,7 +164,7 @@ fn bench_sftp(c: &mut Criterion) {
 
 /// `locks/lock` (whole-group) vs. `locks/lock_scoped` (a `-t` subset): the
 /// operation-lock fan-out cost, and the baseline for the scoped variant added
-/// with the `run` lock-enforcement fix (`mtui-rs-bwu2`). Scoping to a subset
+/// with the `run` lock-enforcement fix. Scoping to a subset
 /// must never be slower than the whole-group lock over the same fleet — it only
 /// narrows the `run_fanout` predicate. Wall-clock is advisory (see module docs);
 /// the deterministic oracle is the per-host `Connection` call count in the unit

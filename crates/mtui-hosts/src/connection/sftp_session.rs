@@ -1,4 +1,4 @@
-//! The batched SFTP session primitive (mtui-rs-0mop.3).
+//! The batched SFTP session primitive.
 //!
 //! Opens **one** SFTP client and yields it for several reads against the same
 //! host, so a multi-step probe pays the SFTP channel+subsystem handshake

@@ -1,4 +1,4 @@
-//! Integration tests for remote history append (mtui-rs-0mop.5).
+//! Integration tests for remote history append.
 //!
 //! `Target::add_history` records one `/var/log/mtui.log` line per call via the
 //! `Connection::sftp_append` primitive instead of the former

@@ -8,7 +8,7 @@
 //!   that timeout is captured here as [`CommandTimeout`].
 //! * `policy_from_config` — maps the `ssh_strict_host_key_checking` config
 //!   string onto the transport-agnostic [`HostKeyPolicy`] enum; the russh impl
-//!   (P2.3) translates it into a russh client handler.
+//!   translates it into a russh client handler.
 //!
 //! Keeping these here keeps the russh `Connection` impl focused on the
 //! SSH/SFTP wrapper proper.
@@ -22,7 +22,7 @@ use mtui_types::enums::ParseEnumError;
 /// The SSH connect + per-command timeout, as a typed [`Duration`].
 ///
 /// Sourced from `mtui-config`'s `connection_timeout` (an integer number of
-/// seconds, default `300`). The russh impl (P2.3) uses this both to bound the
+/// seconds, default `300`). The russh impl uses this both to bound the
 /// TCP connect / banner / auth handshake and to abort a command whose channel
 /// produces no output within the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

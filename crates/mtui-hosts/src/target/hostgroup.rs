@@ -90,7 +90,7 @@ pub enum LockOutcome {
 pub struct HostsGroup {
     data: BTreeMap<String, Target>,
     /// Whether the surrounding session is interactive. Threaded through to the
-    /// fan-out helpers as the (Phase 6) spinner/prompt seam; see
+    /// fan-out helpers as the spinner/prompt seam; see
     /// [`actions`].
     is_repl: bool,
     /// The injected update-workflow doer/check resolver, or `None` until the
@@ -1972,7 +1972,7 @@ mod tests {
         assert!(matches!(ops[1], MockSftpOp::Get { .. }));
     }
 
-    // --- reboot lifecycle (P2.9) -------------------------------------------
+    // --- reboot lifecycle ---------------------------------------------------
 
     /// A mock that answers the boot-id probe with a *fixed* `boot_id` (same value
     /// on every read) and everything else with "ok". Because the pre- and
@@ -2030,7 +2030,7 @@ mod tests {
 
     #[tokio::test]
     async fn reboot_selected_touches_only_named_hosts() {
-        // Regression for mtui-rs-issz: a `-t`-scoped reboot must fire the reboot,
+        // Regression: a `-t`-scoped reboot must fire the reboot,
         // reconnect, and verify only on the named subset; unselected hosts see no
         // reboot command, no reconnect, and produce no outcome entry.
         let (m1, m2) = (rebooted_mock("h1"), rebooted_mock("h2"));
@@ -2419,7 +2419,7 @@ mod tests {
         assert!(!failures[0].cause.host_still_reachable());
     }
 
-    // --- update_lock / lock / unlock fan-out (P2.9) -------------------------
+    // --- update_lock / lock / unlock fan-out --------------------------------
 
     #[tokio::test]
     async fn update_lock_locks_all_free_hosts() {

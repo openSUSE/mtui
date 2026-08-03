@@ -38,9 +38,9 @@
 //!   documented follow-up.
 //! * **`sftp_open`** returns the file's bytes rather than a live file handle
 //!   (the object-safe trait surface); this covers every current caller.
-//! * The interactive PTY `shell` (feature `shell`, P2.10) returns an
+//! * The interactive PTY `shell` (feature `shell`) returns an
 //!   object-safe [`ShellChannel`] duplex over the PTY; the raw-`termios` local
-//!   terminal bridge that consumes it is a CLI concern (Phase 6).
+//!   terminal bridge that consumes it is a CLI concern.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};

@@ -2,14 +2,14 @@
 //!
 //! Lives in `mtui-hosts` (not `mtui-types`) so the foundation crate stays
 //! I/O-free per the workspace architecture. The variants cover the failure
-//! modes of the SSH connection and command-timeout layers: authentication is
-//! public-key only (there is **no** password
+//! modes of the SSH connection, command-timeout, and SFTP transfer layers:
+//! authentication is public-key only (there is **no** password
 //! fallback), a remote command may time out, and a reconnect loop may give up.
 //!
-//! Later Phase 2 tasks (the russh impl, SFTP transfers) extend this enum with
-//! transport/SFTP variants; it is `#[non_exhaustive]` so adding them is not a
-//! breaking change. It will be wired into the top-level `mtui-types::Error`
-//! via `#[from]` once a real consumer needs the unified type.
+//! The enum is `#[non_exhaustive]` so adding variants is not a breaking
+//! change. It is not wired into the top-level `mtui-types::Error` via
+//! `#[from]` — like `mtui-datasources`'s error enums, it stays a standalone
+//! type rather than folding into a single unified hierarchy.
 
 use thiserror::Error;
 

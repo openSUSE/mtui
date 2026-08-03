@@ -1226,7 +1226,7 @@ impl Target {
     /// does nothing and returns `None`.
     ///
     /// The returned handle is a transport duplex only; the raw-`termios` local
-    /// terminal bridge that consumes it is a CLI concern (Phase 6).
+    /// terminal bridge that consumes it is a CLI concern.
     ///
     /// Available only with the `shell` feature.
     #[cfg(feature = "shell")]
@@ -1801,7 +1801,7 @@ mod tests {
         t.check_stale_lock().await;
     }
 
-    // --- reboot / reconnect / boot_id lifecycle (P2.9) ----------------------
+    // --- reboot / reconnect / boot_id lifecycle -----------------------------
 
     #[tokio::test]
     async fn boot_id_reads_proc_and_strips() {
@@ -2054,7 +2054,7 @@ mod tests {
         assert!(!t.lock_status(true).await.is_locked);
     }
 
-    /// Oracle for mtui-rs-0mop.4: resolving a full `LockRow` must read the
+    /// Oracle: resolving a full `LockRow` must read the
     /// lockfile exactly once, not once per derived field.
     #[tokio::test]
     async fn lock_status_reads_lockfile_once() {
