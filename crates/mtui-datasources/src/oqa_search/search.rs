@@ -12,7 +12,7 @@
 //!   contract. A memo can be reintroduced if a consumer needs it.
 //! * The plain-text renderer (`render_overview` + the `OVERVIEW_*`
 //!   markers) lives in the sibling [`super::render`] module, shared by the
-//!   command layer and the Phase 4 export injector.
+//!   command layer and the export injector.
 //! * The build-check directory-index scan uses the `scraper` HTML parser; the
 //!   golden test pins the extracted `.log` set so any parser drift is caught.
 

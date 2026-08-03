@@ -2,11 +2,9 @@
 //!
 //! This crate holds every outbound integration (the shared HTTP policy layer,
 //! the `refhosts.yml` resolver/search/verify, and the external service
-//! clients). The first landed surface is the HTTP layer, so [`HttpError`] is
-//! the first member of the hierarchy. Later Phase-3 tasks add their own
-//! `#[from]` sub-errors (openQA, QEM dashboard, Gitea, oqa-search) as those
-//! clients land, so each variant is exercised by real tests rather than
-//! sitting dead.
+//! clients). [`HttpError`] wraps the shared HTTP layer; each client (openQA,
+//! QEM dashboard, Gitea, oqa-search) has its own `#[from]` sub-error enum,
+//! exercised by real tests.
 
 use mtui_types::Assignment;
 use thiserror::Error;

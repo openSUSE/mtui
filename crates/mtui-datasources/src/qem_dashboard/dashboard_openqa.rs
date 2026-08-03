@@ -1635,7 +1635,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_jobs_fans_out_concurrently_and_preserves_order() {
-        // Regression for mtui-rs-4sz1: per-setting fetches must run concurrently
+        // Regression: per-setting fetches must run concurrently
         // (bounded by max_parallel) yet be consumed in submission order. Four
         // incident settings each delay their jobs response; the FIRST-submitted
         // (id 11) gets the LONGEST delay, so a naive completion-order collect

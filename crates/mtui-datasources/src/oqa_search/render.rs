@@ -6,7 +6,7 @@
 //! the block stays scannable when pasted into a testreport.
 //!
 //! Two consumers share this: the interactive `openqa_overview` command
-//! (Phase 5) prints the lines directly, and the export injector
+//! prints the lines directly, and the export injector
 //! ([`crate::oqa_search`] via `mtui-testreport`) wraps the block with the
 //! [`OVERVIEW_BEGIN_MARKER`]/[`OVERVIEW_END_MARKER`] so it can find and replace
 //! its own block on re-export.

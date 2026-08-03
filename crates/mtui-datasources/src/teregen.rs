@@ -13,9 +13,10 @@
 //! a genuinely-empty queue apart from an unreachable TeReGen. The base URL comes
 //! from the
 //! `[teregen] api` option (default `https://qam.suse.de/api/v1`);
-//! wiring that config field is deferred to a later phase, so [`TeReGen::new`]
-//! takes the base URL explicitly for now (mirroring the [`Gitea`](crate::gitea)
-//! client's constructor).
+//! [`TeReGen::new`] takes the base URL explicitly rather than reading
+//! `config.teregen_api` itself (mirroring the [`Gitea`](crate::gitea) client's
+//! constructor) — callers pass `session.config.teregen_api` at the point of
+//! use.
 //!
 //! The one documented exception is [`regenerate`](TeReGen::regenerate) (a
 //! write): it returns `None` only when TeReGen is *unreachable*, and
@@ -78,9 +79,8 @@ impl TeReGen {
     /// Build a client targeting `apiurl`, deriving the TLS posture from
     /// `config.ssl_verify`.
     ///
-    /// The base URL is passed
-    /// explicitly (the `[teregen] api` config field is deferred to a later
-    /// phase) rather than read from `config.teregen_api`.
+    /// The base URL is passed explicitly rather than read from
+    /// `config.teregen_api`; callers pass that field at the point of use.
     ///
     /// # Errors
     ///

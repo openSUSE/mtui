@@ -43,8 +43,8 @@ pub struct Refhosts {
 impl Refhosts {
     /// Build a store directly from an already-parsed host list.
     ///
-    /// Useful for tests and for resolver code (Phase 3) that has already
-    /// obtained the rows via another path.
+    /// Useful for tests and for resolver code that has already obtained the
+    /// rows via another path.
     #[must_use]
     pub fn from_hosts(data: Vec<Host>) -> Self {
         let mut by_name = std::collections::HashMap::with_capacity(data.len());
