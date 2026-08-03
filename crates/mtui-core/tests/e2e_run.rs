@@ -1,5 +1,4 @@
-//! Golden end-to-end test for the `run` command — the deliverable that gates
-//! Phase 5 (mtui-rs-2d3.6).
+//! Golden end-to-end test for the `run` command.
 //!
 //! Drives `run "uname -a"` across two mock reference hosts through the **real
 //! dispatch path**: the process-wide [`register_all`] registry and the

@@ -147,7 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn target_selection_reboots_only_named_host() {
-        // Regression for mtui-rs-issz: `-t h1` must reboot only h1 and leave h2
+        // Regression: `-t h1` must reboot only h1 and leave h2
         // untouched. Both hosts would reboot cleanly if the whole group were
         // rebooted, so the absence of any h2 line proves h2 was skipped.
         let (mut session, buf) =

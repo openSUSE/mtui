@@ -36,7 +36,7 @@ pub struct Session {
     /// Loaded templates and the active pointer.
     pub templates: TemplateRegistry,
     /// The per-call active-report handle: the [`OwnedMutexGuard`] of the entry
-    /// this dispatch is acting on (`mtui-rs-f36r`, step 2).
+    /// this dispatch is acting on.
     ///
     /// [`metadata`](Self::metadata) / [`targets`](Self::targets) and their `_mut`
     /// counterparts read through this guard when present, and through
@@ -97,7 +97,7 @@ pub struct Session {
     prompter: Option<Prompter>,
     /// Test-only count of how many times [`http_client`](Self::http_client)
     /// actually *built* a client (vs. handing back a cached clone). The
-    /// regression oracle for perf bead `mtui-rs-0mop.13`: proves back-to-back
+    /// regression oracle proves back-to-back
     /// calls under stable config reuse one client, and that a mid-session
     /// posture change rebuilds exactly once.
     #[cfg(test)]
@@ -134,7 +134,7 @@ pub struct Session {
     /// rebuilding only when the effective posture changes (e.g. a mid-session
     /// `config set ssl_verify`). Interior mutability so the `&Session` call sites
     /// (`export::build_http`) can lazily populate it; the lock is uncontended
-    /// (one dispatch at a time). Perf bead `mtui-rs-0mop.13`.
+    /// (one dispatch at a time).
     http_client: Mutex<Option<(VerifyPolicy, HttpClient)>>,
 }
 
@@ -260,7 +260,7 @@ impl Session {
     /// Builds a cheap per-call [`Session`] that **shares** this session's loaded
     /// reports and carries its own display sink.
     ///
-    /// The headless MCP concurrency seam (`mtui-rs-f36r`, steps 4-5): a
+    /// The headless MCP concurrency seam: a
     /// single-RRID tool call needs a `&mut Session` to dispatch, but holding the
     /// canonical session behind one mutex across dispatch serialises *all* calls.
     /// Instead the caller forks a per-call session — its
@@ -391,7 +391,7 @@ impl Session {
     }
 
     /// Test-only count of clients actually built by
-    /// [`http_client`](Self::http_client) (perf-bead `mtui-rs-0mop.13` oracle).
+    /// [`http_client`](Self::http_client).
     #[cfg(test)]
     fn http_builds(&self) -> usize {
         self.http_builds.load(std::sync::atomic::Ordering::SeqCst)
@@ -1561,7 +1561,7 @@ mod tests {
         assert_eq!(s.metadata().id(), "");
     }
 
-    /// Perf-bead `mtui-rs-0mop.13` oracle: repeated `http_client()` calls under
+    /// Oracle: repeated `http_client()` calls under
     /// a stable `ssl_verify` reuse one built client (a cheap clone), and a
     /// mid-session posture change rebuilds exactly once. Guards against a
     /// regression to per-command client construction.
@@ -2128,7 +2128,7 @@ mod tests {
         );
     }
 
-    // --- pool selection (host over-selection fix, mtui-rs-4eq) --------------
+    // --- pool selection (host over-selection fix) --------------------------
 
     use mtui_types::version::{Version, VersionField};
 
@@ -2314,7 +2314,7 @@ mod tests {
     /// `fork_for_call` shares the canonical session's loaded reports (same entry
     /// locks) while carrying its own display, so a per-RRID command dispatched on
     /// a fork mutates the *shared* report content visible to the canonical
-    /// session (`mtui-rs-f36r`, steps 4-5).
+    /// session.
     #[test]
     fn fork_for_call_shares_reports_with_own_display() {
         use crate::display::{ColorMode, CommandPromptDisplay};

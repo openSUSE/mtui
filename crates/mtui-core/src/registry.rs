@@ -115,10 +115,10 @@ impl Registry {
 pub const MCP_DENYLIST: &[&str] = &[
     "quit", "exit", "EOF",    // session exit (Wave 2)
     "switch", // active-template pointer, REPL-only (Wave 2)
-    "shell",  // interactive PTY attach, Phase 6 (Wave 2)
-    "help",   // registry listing / per-command help, REPL-only (Phase 6)
-    "edit",   // $EDITOR spawn on the controlling TTY, REPL-only (Phase 6)
-    "terms",  // spawn terminal-launcher scripts to hosts, REPL-only (Phase 6)
+    "shell",  // interactive PTY attach, REPL-only (Wave 2)
+    "help",   // registry listing / per-command help, REPL-only
+    "edit",   // $EDITOR spawn on the controlling TTY, REPL-only
+    "terms",  // spawn terminal-launcher scripts to hosts, REPL-only
 ];
 
 /// Builds the process-wide command registry — the single, explicit place every
@@ -191,11 +191,11 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::Approve));
     registry.register(Arc::new(commands::Regenerate));
     registry.register(Arc::new(commands::RequestReview));
-    // Phase 5 follow-ups — deferred commands now unblocked.
+    // Deferred commands whose machinery has since landed.
     registry.register(Arc::new(commands::Export));
     registry.register(Arc::new(commands::ListRefhosts));
     registry.register(Arc::new(commands::LoadTemplate));
-    // Phase 6 — REPL-only command-surface additions.
+    // REPL-only command-surface additions.
     registry.register(Arc::new(commands::Help));
     registry.register(Arc::new(commands::Edit));
     registry.register(Arc::new(commands::Terms));
@@ -342,16 +342,16 @@ mod tests {
     #[test]
     fn register_all_command_count() {
         // 9 Wave 1 (10 originally; `lrun` was later removed outright) + 14
-        // Wave 2 + 17 Wave 3 + 12 Wave 4 (incl. request_review) + 4 P5
-        // follow-ups (export, list_refhosts, load_template, list_locks) + 2
-        // openQA-holder follow-ups (reload_openqa, set_workflow:
-        // mtui-rs-zs4/plt) + 3 Phase 6 (help: mtui-rs-lhz.9; edit:
-        // mtui-rs-lhz.10; terms: mtui-rs-lhz.11) = 61 canonical commands.
+        // Wave 2 + 17 Wave 3 + 12 Wave 4 (incl. request_review) + 4
+        // follow-up commands (export, list_refhosts, load_template,
+        // list_locks) + 2 openQA-holder follow-ups (reload_openqa,
+        // set_workflow) + 3 REPL-only additions (help, edit, terms) = 61
+        // canonical commands.
         assert_eq!(register_all().names().count(), 61);
     }
 
     #[test]
-    fn register_all_wires_phase5_followups() {
+    fn register_all_wires_export_and_template_commands() {
         let r = register_all();
         for name in ["export", "list_refhosts", "load_template"] {
             assert!(r.contains(name), "expected {name} to be registered");
@@ -404,8 +404,8 @@ mod tests {
             let _reserved_or_registered = r.contains(name);
         }
         // Sanity: the currently-registered deny-listed commands are the Wave 2
-        // REPL-only set (quit+aliases, switch, shell) plus `help`, `edit`, and
-        // `terms` (Phase 6).
+        // REPL-only set (quit+aliases, switch, shell) plus the REPL-only
+        // additions `help`, `edit`, and `terms`.
         let registered_denied: Vec<&str> = MCP_DENYLIST
             .iter()
             .copied()

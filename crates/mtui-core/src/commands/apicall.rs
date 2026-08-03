@@ -51,8 +51,8 @@ fn user_override(args: &ArgMatches) -> Option<String> {
 /// Builds a Gitea client for the loaded report, mapping the missing-PR-URL and
 /// build errors onto [`CommandError`].
 ///
-/// Reuses the session-scoped [`HttpClient`](mtui_datasources::HttpClient) (perf
-/// bead `mtui-rs-0mop.13`) via [`Gitea::with_client`], while preserving
+/// Reuses the session-scoped [`HttpClient`](mtui_datasources::HttpClient)
+/// via [`Gitea::with_client`], while preserving
 /// [`Gitea::new`]'s empty-token guard.
 pub(crate) fn gitea_client(session: &Session) -> Result<Gitea, CommandError> {
     let apiurl = session
@@ -81,7 +81,7 @@ pub(crate) fn gitea_client(session: &Session) -> Result<Gitea, CommandError> {
 }
 
 /// Builds a TeReGen client for the loaded report, reusing the session-scoped
-/// [`HttpClient`](mtui_datasources::HttpClient) (perf bead `mtui-rs-0mop.13`)
+/// [`HttpClient`](mtui_datasources::HttpClient)
 /// via [`TeReGen::with_client`].
 ///
 /// # Errors

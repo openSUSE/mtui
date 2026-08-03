@@ -20,7 +20,7 @@ use crate::session::Session;
 /// active group. With `--force` a claim owned by another template is removed too.
 ///
 /// Like `lock`, host sub-selection via `-t` is not yet honoured for the fan-out
-/// (whole active group), matching the group-merge follow-up (`mtui-rs-qd9`).
+/// (whole active group).
 pub struct HostsUnlock;
 
 #[async_trait]

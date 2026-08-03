@@ -35,9 +35,9 @@ impl Command for ListUpdateCommands {
         // touch the display, so no borrow conflict arises.
         let targets = session.targets();
         session.metadata().list_update_commands(targets);
-        // `list_update_commands` is a no-op across every report type today
-        // (unimplemented, bead mtui-rs-2d3.6): the delegate emits nothing, so
-        // print an explicit placeholder instead of returning empty success.
+        // `list_update_commands` is a no-op across every report type today:
+        // the delegate emits nothing, so print an explicit placeholder
+        // instead of returning empty success.
         session
             .display
             .println("list_update_commands: not yet implemented");

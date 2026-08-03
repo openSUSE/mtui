@@ -2,7 +2,7 @@
 //!
 //! Splits a raw input line into argv, resolves the command by name (or
 //! alias) against the [`Registry`], parses its arguments, and awaits
-//! [`Command::run`] (which drives the template fan-out landed in P5.1).
+//! [`Command::run`] (which drives the template fan-out).
 //!
 //! Two entry points share one core so both driving surfaces reuse the same
 //! engine (`AGENTS.md`: MCP dispatches through the *same engine* as the REPL):
@@ -114,7 +114,7 @@ pub async fn dispatch_argv(
 /// The registry-free tail of [`dispatch_argv`]: parse `argv` through the
 /// command's own clap parser (no-exit-on-error), then drive
 /// [`Command::run`]. Exposed so the headless MCP concurrent
-/// path (`mtui-rs-f36r`, steps 4-5) can `tokio::spawn` a dispatch holding an
+/// path can `tokio::spawn` a dispatch holding an
 /// owned `Arc<dyn Command>` + forked [`Session`] — neither borrows the
 /// [`Registry`], so the spawned future is `'static`. `help` is *not* intercepted
 /// here (it resolves to the null report → the MCP exclusive path, which still
@@ -219,7 +219,7 @@ fn print_help_columns(session: &mut Session, names: &[&str]) {
 ///
 /// This is the exact parser [`dispatch_argv`] re-parses argv through, exposed so
 /// out-of-crate consumers that must introspect a command's arg surface build the
-/// *same* parser rather than reconstructing it. The MCP tool synthesiser (P7.6)
+/// *same* parser rather than reconstructing it. The MCP tool synthesiser
 /// uses it to derive a tool's JSON input schema and to reconstruct argv from a
 /// tool call, keeping schema/argv fidelity locked to real dispatch.
 #[must_use]

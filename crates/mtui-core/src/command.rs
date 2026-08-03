@@ -1,7 +1,7 @@
 //! The `Command` trait, its fan-out [`Scope`], and the template fan-out engine.
 //!
 //! Every command implements [`Command`] and is discovered through the
-//! registry (P5.2); the REPL, tab completion, and the MCP tool synthesiser
+//! registry; the REPL, tab completion, and the MCP tool synthesiser
 //! all iterate that one registry.
 //!
 //! A command supplies its abstract body in [`call`](Command::call); the provided
@@ -48,7 +48,7 @@ pub enum Scope {
 ///
 /// Concrete commands implement [`name`](Command::name) and the abstract
 /// [`call`](Command::call) body; the rest have sensible defaults. The engine
-/// (P5.2) dispatches a parsed line to the matching command and awaits
+/// dispatches a parsed line to the matching command and awaits
 /// [`run`](Command::run).
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -65,7 +65,7 @@ pub trait Command: Send + Sync {
     /// `help` groups commands returning `Some(..)` under "Documented commands"
     /// and those returning `None` under "Undocumented commands". Defaults to
     /// `None`; commands opt in by overriding it. (It also feeds MCP tool
-    /// descriptions in Phase 7.)
+    /// descriptions.)
     fn about(&self) -> Option<&'static str> {
         None
     }
@@ -84,9 +84,9 @@ pub trait Command: Send + Sync {
     /// ([`McpSession::command_lock`](../../mtui_mcp/session/struct.McpSession.html))
     /// forces such a command onto the **exclusive** registry gate even when it
     /// resolves to a single template, so its structural mutation lands on the
-    /// canonical session rather than on a discarded per-call fork
-    /// (`mtui-rs-f36r`, steps 4-5). A content-only per-RRID command may run on a
-    /// fork because its mutations reach the shared report through the entry lock.
+    /// canonical session rather than on a discarded per-call fork. A
+    /// content-only per-RRID command may run on a fork because its mutations
+    /// reach the shared report through the entry lock.
     fn mutates_registry(&self) -> bool {
         false
     }
@@ -107,8 +107,10 @@ pub trait Command: Send + Sync {
     /// Contributes this command's arguments to its `clap` subcommand.
     ///
     /// Default is the identity: a command with no arguments. The real
-    /// argparse↔clap fidelity work (`REMAINDER`, no-exit-on-error, per-command
-    /// `--help`) lands in P5.4; this is the hook it fills in.
+    /// argparse↔clap fidelity (`REMAINDER`, no-exit-on-error, per-command
+    /// `--help`) is supplied by the shared base parser in
+    /// [`command_parser`](crate::engine::command_parser); this is the hook it
+    /// extends.
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd
     }
@@ -117,7 +119,7 @@ pub trait Command: Send + Sync {
     ///
     /// `text` is the token being completed and `line` the whole input line;
     /// the readline-style index args (`begidx`/`endidx`) are not needed here —
-    /// the reedline completer (Phase 6) supplies them.
+    /// the reedline completer supplies them.
     fn complete(&self, _session: &Session, _text: &str, _line: &str) -> Vec<String> {
         Vec::new()
     }
@@ -321,7 +323,7 @@ fn resolve_templates(
 
 /// Resolves the ordered *real* RRIDs a `command`/`argv` invocation would act on,
 /// for out-of-crate callers that must know the target templates *before*
-/// dispatch (the MCP per-template lock gate, `mtui-rs-76e.11`).
+/// dispatch (the MCP per-template lock gate).
 ///
 /// Builds the command's clap parser, parses `argv`, and runs the identical
 /// `resolve_templates` fan-out logic `run` uses, then drops the empty-RRID
