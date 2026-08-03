@@ -5,7 +5,7 @@
 //! It records every command issued (so callers can assert ordering / fan-out),
 //! serves canned [`CommandLog`] responses keyed by command (with a default),
 //! and can be scripted to fail a specific command so the retry / timeout paths
-//! in later Phase 2 tasks (P2.3 reconnect, P2.5 parallel fan-out) are testable.
+//! in reconnect and parallel fan-out are testable.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -142,7 +142,7 @@ pub struct MockConnection {
     /// Number of batched SFTP sessions opened via
     /// [`sftp_session`](Connection::sftp_session). Shared across `Clone`d
     /// handles so a test observes every session regardless of which handle
-    /// opened it — this is the `mtui-rs-0mop.3` handshake-count oracle
+    /// opened it — this is the handshake-count oracle
     /// (`parse_system` must open exactly one).
     sftp_sessions: Arc<Mutex<usize>>,
     /// Artificial delay charged **once per SFTP session open** (the
@@ -592,7 +592,7 @@ impl MockConnection {
     /// Returns how many batched SFTP sessions were opened via
     /// [`sftp_session`](Connection::sftp_session).
     ///
-    /// The `mtui-rs-0mop.3` handshake-count oracle: a multi-read probe
+    /// The handshake-count oracle: a multi-read probe
     /// (`parse_system`) that batches correctly opens exactly **one** session
     /// regardless of how many files it reads.
     #[cfg(test)]

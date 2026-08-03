@@ -164,7 +164,7 @@ async fn install_drives_doer_and_reboots_only_transactional() {
 
     // The transactional host ran only the install as a normal command; the
     // reboot is dispatched fire-and-forget (the reboot drops the connection),
-    // then the host is reconnected — the P2.9 `_reboot` lifecycle.
+    // then the host is reconnected — the `_reboot` lifecycle.
     assert_eq!(
         package_commands(&m2),
         vec!["zypper -n in -y -l pkg-a pkg-b".to_owned()]

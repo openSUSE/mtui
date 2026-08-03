@@ -1,6 +1,6 @@
 //! Regression: a live TTY spinner survives concurrent "logging" writes.
 //!
-//! The visible symptom this guards against (mtui-rs-wbo): the spinner is
+//! The visible symptom this guards against: the spinner is
 //! started by `run_parallel`/`run_fanout`, but during a fan-out the worker log
 //! lines and command output were written straight to the terminal, clobbering
 //! the `\r[|] desc` frame so it never rendered cleanly. Every log

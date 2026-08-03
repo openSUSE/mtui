@@ -1,4 +1,4 @@
-//! Integration tests for the russh-backed [`SshConnection`] (P2.3).
+//! Integration tests for the russh-backed [`SshConnection`].
 //!
 //! These run **offline** against an **ephemeral in-process russh server** with
 //! a freshly generated host key — no Docker, no external sshd, so they execute
@@ -535,7 +535,7 @@ async fn connect(port: u16, timeout: CommandTimeout) -> SshConnection {
 /// Builds a [`Target`] whose live connection is a real [`SshConnection`] to the
 /// in-process fixture on `port`, labelled `name` and gated by `state`.
 ///
-/// This is the multi-target seam the P2.5 fan-out / P2.6 lock integration tests
+/// This is the multi-target seam the fan-out / lock integration tests
 /// need: several `Target`s can point at one shared server (one `SharedFs`), so
 /// `HostsGroup::run` and the remote-lock protocol are exercised over real SSH
 /// rather than a `MockConnection`.
@@ -1023,7 +1023,7 @@ async fn shell_spawns_pty_and_bridges_bytes() {
 }
 
 // ----------------------------------------------------------------------------
-// HostsGroup fan-out over real SSH targets (P2.5 DoD).
+// HostsGroup fan-out over real SSH targets.
 //
 // The colocated `hostgroup.rs` unit tests drive fan-out over `MockConnection`.
 // These prove the same fan-out end-to-end over the in-process russh server:
@@ -1087,7 +1087,7 @@ async fn hostsgroup_run_honours_per_host_state_end_to_end() {
 }
 
 // ----------------------------------------------------------------------------
-// Remote lock lifecycle over the fixture's real SFTP (P2.6 DoD).
+// Remote lock lifecycle over the fixture's real SFTP.
 //
 // `locks.rs` unit-tests the protocol over `MockConnection`. These prove the
 // same protocol over the in-process server's real SFTP subsystem — crucially

@@ -1,4 +1,4 @@
-//! The interactive PTY shell primitive (feature `shell`, P2.10).
+//! The interactive PTY shell primitive (feature `shell`).
 //!
 //! Opens a session channel, requests an `xterm` PTY, and invokes a login
 //! shell, then bridges the local terminal to the channel with a raw-mode
@@ -10,7 +10,7 @@
 //! object-safe async duplex handle over the remote shell's PTY, returned by
 //! [`Connection::shell`](super::Connection::shell). The raw-`termios`
 //! stdin↔channel↔stdout bridge and the `shell` REPL command that *drive* this
-//! handle are a terminal concern and live in the CLI crate (Phase 6) — a host
+//! handle are a terminal concern and live in the CLI crate — a host
 //! library has no business toggling the local TTY into raw mode.
 //!
 //! Keeping the loop out of the library also keeps it testable: the CLI bridge
@@ -32,7 +32,7 @@ use crate::error::Result;
 /// duplex over the remote PTY.
 ///
 /// Returned by [`Connection::shell`](super::Connection::shell). The consumer
-/// (the Phase 6 CLI bridge) pumps bytes both ways:
+/// (the CLI bridge) pumps bytes both ways:
 ///
 /// * [`read`](Self::read) drains shell output (stdout/stderr merged onto the
 ///   PTY, as a real terminal sees it) into `buf`, returning the byte count;
