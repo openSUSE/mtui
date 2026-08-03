@@ -3,7 +3,7 @@
 //! The binary ([`main.rs`](../main.rs)) is a thin shell: it parses the
 //! top-level args, builds the [`Session`](mtui_core::Session) and command
 //! [`Registry`](mtui_core::Registry), and drives [`Repl::run`]. Exposing the
-//! REPL as a library lets the `tests/**` suite (and the P6.8 test task) exercise
+//! REPL as a library lets the `tests/**` suite exercise
 //! the loop's `repl::step` seam without a TTY.
 
 pub mod completer;
@@ -75,7 +75,7 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// [`logfmt::CompactLevelFormat`]). Whether escapes are emitted is resolved from
 /// `color` via the *same* [`ColorMode::resolve`] the display uses, so
 /// `--color auto/always/never` governs the level token and the `error:` line
-/// identically (`mtui-rs-ilt`).
+/// identically.
 ///
 /// Under `-d/--debug` the full verbose Rust format is kept (timestamp + level +
 /// target, e.g. `2026-07-10T09:41:39.891821Z DEBUG mtui_cli::repl: …`) for

@@ -1,4 +1,4 @@
-//! Smoke tests for the `mtui` binary (P6.1 skeleton + P6.2 REPL entry).
+//! Smoke tests for the `mtui` binary.
 //!
 //! These drive the built binary via `CARGO_BIN_EXE_mtui` and assert the
 //! top-level surfaces: `--version` (provenance block), `--help` (real `Args`
@@ -74,7 +74,7 @@ fn unknown_flag_is_usage_error_exit_two() {
 
 #[test]
 fn no_args_enters_the_interactive_repl() {
-    // A bare invocation now drops into the REPL (P6.2) instead of bailing. The
+    // A bare invocation now drops into the REPL instead of bailing. The
     // test harness has no controlling TTY, so `reedline::read_line` fails and
     // the process exits non-zero — but the DEBUG breadcrumb proves we reached
     // the REPL entry rather than an earlier error, and stderr must NOT carry the
@@ -112,7 +112,7 @@ fn piped_stdin_reaches_repl_and_exits_without_hanging() {
     // We do not assert a specific exit code: a bare `wait()` after closing the
     // pipe deadlocks only if the child hangs, so reaching the assertions at all
     // is itself the liveness proof. (A pty harness would let us drive real input
-    // lines and assert exit 0 on EOF, but that is out of scope for P6.8 — the
+    // lines and assert exit 0 on EOF, but that is out of scope here — the
     // 80% bar is met without adding a pty dependency.)
     let mut child = mtui()
         .arg("-d")
