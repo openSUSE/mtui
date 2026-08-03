@@ -1,14 +1,13 @@
 //! The `mtui-types` error hierarchy.
 //!
 //! This is the foundation error module every later crate imports, scoped to
-//! what Phase 1 (the domain types) actually needs.
+//! what the domain types actually need.
 //!
-//! Only the RRID / Request-Review-ID parse errors live here for now — they are
-//! consumed by the RRID parser (see the `rrid` task) and are covered by golden
-//! test vectors. The `UpdateError` and `GiteaError` families
-//! belong to later phases (`mtui-hosts` / `mtui-datasources`) and will be added
-//! as `#[from]` sub-errors when those crates land, so they can be exercised by
-//! real tests rather than sitting dead here.
+//! Only the RRID / Request-Review-ID parse errors live here — they are
+//! consumed by the RRID parser (see the `rrid` module) and are covered by
+//! golden test vectors. `mtui-hosts` and `mtui-datasources` define their own
+//! error enums (`HostError`, `GiteaError`, and friends) rather than extending
+//! this one via `#[from]`.
 
 use thiserror::Error;
 
