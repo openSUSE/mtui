@@ -646,7 +646,7 @@ Usage: put <filename>
 
 Arguments:
   <filename>
-          file (or directory) to upload to all hosts
+          file (or directory) to upload to all hosts; the path is literal — shell-style globs are deliberately not expanded (put the directory, or let the invoking shell expand)
 
 Options:
   -h, --help

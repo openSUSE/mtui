@@ -125,6 +125,17 @@ Yes: `export -t <host>`. By default `export` writes the collected data for every
 host in the list — including disabled ones — so to keep a temporarily-added host
 out of the report, `remove_host -t <host>` before exporting.
 
+## Why doesn't `put *.rpm` upload anything?
+
+Inside the REPL nothing expands the `*`, so `put` looks for a file literally
+named `*.rpm` and errors with `File *.rpm not found`. That is deliberate, not
+a gap ([#399](https://github.com/openSUSE/mtui/issues/399)): `put` pushes to
+**every enabled refhost in the group**, which is exactly where an over-broad
+pattern does damage, so mtui refuses to guess how wide a pattern was meant to
+be. To upload several files, `put` the directory containing them (it is
+walked recursively), or expand the glob in your own shell before invoking
+mtui.
+
 ## Where are the per-host install logs stored?
 
 Under the loaded template's checkout, in
