@@ -16,7 +16,7 @@ use anyhow::{Context, Result, bail};
 use clap::CommandFactory;
 use clap_complete::Shell;
 
-/// The three shells the Phase 8 DoD names explicitly.
+/// The three shells the release artefacts cover.
 const SHELLS: [Shell; 3] = [Shell::Bash, Shell::Zsh, Shell::Fish];
 
 /// Fixed column width for rendered command help, so the generated CLI reference

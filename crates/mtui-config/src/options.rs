@@ -809,8 +809,7 @@ pub struct Config {
     /// cycle (each teardown is bounded by the per-session disconnect timeout).
     /// Bounding the fan-out keeps a mass eviction from a host-teardown thundering
     /// herd while making sweep latency ~independent of stale-session count.
-    /// Default is 4. A hardening addition
-    /// (mtui-rs-0mop.10).
+    /// Default is 4.
     pub mcp_sweep_parallel: usize,
     /// Tool-surface profile the `mtui-mcp` server exposes: `"full"` (default,
     /// every synthesised tool) or `"core"` (the curated everyday subset — see

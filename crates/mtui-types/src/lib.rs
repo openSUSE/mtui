@@ -1,6 +1,6 @@
 //! `mtui-types` — domain types and the error hierarchy for mtui.
 //!
-//! Foundation crate: no I/O, no async. Real types land in Phase 1.
+//! Foundation crate: no I/O, no async.
 
 pub mod enums;
 pub mod error;
