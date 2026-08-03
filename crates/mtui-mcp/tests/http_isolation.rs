@@ -1,4 +1,4 @@
-//! Per-client session isolation for the http transport (P7.10, mtui-rs-76e.10).
+//! Per-client session isolation for the http transport.
 //!
 //! Under `--transport http` one process serves many clients, and each must see
 //! **only its own** loaded template + SSH `targets`; sharing one session would

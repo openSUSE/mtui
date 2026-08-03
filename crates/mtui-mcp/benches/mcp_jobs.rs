@@ -1,4 +1,4 @@
-//! Perf baseline for MCP session lock behaviour (mtui-rs-0mop.1).
+//! Perf baseline for MCP session lock behaviour.
 //!
 //! Measurement-only, offline; requires the `mcp` feature (the session model is
 //! gated behind it). Measures [`McpSession::scoped_lock`] acquire+release, the

@@ -15,12 +15,12 @@
 //! fields are required). Slow host commands gain a `background` boolean.
 //!
 //! This layer is intentionally **transport-free**: it returns plain descriptors
-//! and routes, not `rmcp` types. P7.7 converts a [`ToolDescriptor`] into an
-//! `rmcp::model::Tool` and wires `dispatch_tool` into the `ServerHandler`.
+//! and routes, not `rmcp` types. [`crate::server`] converts a [`ToolDescriptor`]
+//! into an `rmcp::model::Tool` and wires `dispatch_tool` into the `ServerHandler`.
 //!
 //! The background-job path (`dispatch_tool` with `background = true`, and the
 //! four job tools from [`job_tool_descriptors`]) drives the session's `_jobs`
-//! table (bead `mtui-rs-76e.12`): a `background=true` slow call fans out one job
+//! table: a `background=true` slow call fans out one job
 //! per resolved template and returns their ids immediately, and the four job
 //! tools poll/control that table.
 
@@ -69,7 +69,7 @@ const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs"];
 
 /// A synthesised MCP tool as plain data (transport-free).
 ///
-/// P7.7 converts this into `rmcp::model::Tool` (name + description +
+/// [`crate::server`] converts this into `rmcp::model::Tool` (name + description +
 /// `Arc<input_schema>` + `ToolAnnotations { read_only_hint }`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDescriptor {

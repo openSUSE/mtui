@@ -177,7 +177,7 @@ async fn same_rrid_serialises() {
 
 /// Two calls scoped to *different* templates overlap in time.
 ///
-/// Genuine wall-clock concurrency (bead `mtui-rs-f36r`, steps 4-5): each call
+/// Genuine wall-clock concurrency: each call
 /// forks a per-call `Session` sharing only its own template's per-entry report
 /// lock, so different-RRID dispatch no longer serialises on a session-wide
 /// mutex.
@@ -214,11 +214,11 @@ async fn different_rrids_run_concurrently() {
 
 /// Overlapping different-RRID runs each capture only their own output.
 ///
-/// Per-call output isolation (bead `mtui-rs-f36r`, step 3): `run_command` swaps a
+/// Per-call output isolation: `run_command` swaps a
 /// fresh capture buffer + display onto the session for each dispatch, so even
 /// interleaved calls each return exactly their own stdout. (This does not require
-/// wall-clock parallelism — the sibling `different_rrids_run_concurrently` still
-/// awaits the step-5 outer-mutex removal.)
+/// wall-clock parallelism, which the sibling `different_rrids_run_concurrently`
+/// proves independently.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn do_not_clobber_each_others_stdout() {
     let seen: Intervals = Arc::new(Mutex::new(Vec::new()));

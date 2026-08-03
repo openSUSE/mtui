@@ -1,9 +1,10 @@
-//! P7.6 synthesis contract test.
+//! Contract test for tool synthesis.
 //!
 //! Library-level (not stdio) checks that the tool set synthesised from the
 //! command registry honours the deny-list, the `config` fan-out, the slow-command
 //! `background` flag, and the read-only allow-list. The full stdio round-trip
-//! (`tools/list` + `tools/call` over a transport) is P7.7's gating test.
+//! (`tools/list` + `tools/call` over a transport) is gated by
+//! `stdio_roundtrip.rs`.
 
 #![cfg(feature = "mcp")]
 
@@ -37,7 +38,7 @@ fn config_fan_out() {
 
 /// Snapshot the synthesised surface — tool name + read_only flag — plus the job
 /// tools, so an accidental deny/rename/hint change surfaces in review. Full-schema
-/// goldens are P7.9's job; this pins names + hints only.
+/// goldens are `slim_profile.rs`'s job; this pins names + hints only.
 #[test]
 fn tool_surface_snapshot() {
     let mut rows: Vec<String> = build_tools(&register_all())

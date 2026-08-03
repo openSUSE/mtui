@@ -1,4 +1,4 @@
-//! HTTP request-body limit wiring for the http transport (mtui-rs-kr7j).
+//! HTTP request-body limit wiring for the http transport.
 //!
 //! `serve_http` mounts rmcp behind an axum `DefaultBodyLimit` derived from
 //! `config.mcp_max_request_bytes`, so an unauthenticated pre-session request

@@ -5,9 +5,9 @@
 //! like `{"type":"object","properties":{…},"required":[…]}`.
 //!
 //! It is intentionally pure: the single entry point [`command_input_schema`]
-//! takes a `&clap::Command` and returns plain data. Tool registration, argv
-//! reconstruction, and schema slimming live in the sibling P7.6/P7.5/P7.9
-//! modules.
+//! takes a `&clap::Command` and returns plain data. Tool registration
+//! ([`crate::tools`]), argv reconstruction ([`crate::argv`]), and schema
+//! slimming ([`crate::slim`]) live in the sibling modules.
 //!
 //! # Design notes
 //!
@@ -33,8 +33,8 @@ use serde_json::{Map, Value, json};
 ///
 /// Walks `cmd.get_arguments()`, skipping the auto `--help`/`--version` args, and
 /// emits one property per remaining arg plus a top-level `required` list. The
-/// result is the `inputSchema` for the tool `rmcp` synthesises from this command
-/// (P7.6). `required` is omitted entirely when empty.
+/// result is the `inputSchema` for the tool `rmcp` synthesises from this
+/// command. `required` is omitted entirely when empty.
 #[must_use]
 pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
     let mut properties = Map::new();
@@ -344,8 +344,9 @@ mod tests {
 
     /// Build the per-command clap parser the way each command's own unit tests
     /// do: a bare `no_binary_name` base with the command's `configure` applied.
-    /// The base template flags (`-T`/`--all-templates`) are the caller's concern
-    /// (P7.6) and out of scope for the per-arg schema this task produces.
+    /// The base template flags (`-T`/`--all-templates`) are the tool
+    /// synthesiser's concern and out of scope for the per-arg schema this
+    /// module produces.
     fn schema_for(command: &str) -> Map<String, Value> {
         let registry: Registry = register_all();
         let cmd = registry

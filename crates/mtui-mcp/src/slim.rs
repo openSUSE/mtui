@@ -3,7 +3,7 @@
 //! Two token-budget concerns live here, co-located:
 //!
 //! * `cap_output` — the per-tool-result byte bound.
-//! * `slim_tool_schema` — the JSON-Schema slimming pass (P7.9) that drops
+//! * `slim_tool_schema` — the JSON-Schema slimming pass that drops
 //!   redundant `title` keys, flattens `anyOf: [{type: X}, {type: null}]` unions,
 //!   and terse-rewrites the long shared `help` strings before the tool list goes
 //!   on the wire.

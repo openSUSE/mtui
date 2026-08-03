@@ -6,7 +6,7 @@
 //! provides a shared in-memory sink and a `session` constructor that wires it
 //! in via the public [`Session::with_display`] seam.
 //!
-//! ## Write-time cap (bead `mtui-rs-th4o.8`)
+//! ## Write-time cap
 //!
 //! The sink is **bounded**: it accepts at most `limit` bytes and *discards* the
 //! overflow at write time, recording the dropped-byte count. A command that

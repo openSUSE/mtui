@@ -1,4 +1,4 @@
-//! P7.8 testreport-tools integration test.
+//! Integration test for the testreport tools.
 //!
 //! Library-level (not stdio) checks that the hand-written testreport tools drive
 //! a fixture checkout end-to-end through the public `dispatch_testreport_tool`
