@@ -38,10 +38,10 @@ pub(crate) const OPENQA_INSTALL_DISTRI: &str = "sle";
 /// parameter.
 ///
 /// Upstream passes an `incident` metadata object and calls
-/// `incident.get_incident_name()`. The concrete metadata type lands with the
-/// testreport work (Phase 4); this trait is the seam so the connectors can be
-/// built and tested now against a mock, and the real metadata can implement it
-/// later without a connector refactor.
+/// `incident.get_incident_name()`. This trait is the seam: the connectors are
+/// built and tested against a mock, and concrete metadata
+/// ([`QemIncident`](crate::qem_dashboard::incident::QemIncident)) implements
+/// it without a connector refactor.
 pub trait IncidentName {
     /// The incident's short name (e.g. the package name `bash`).
     fn get_incident_name(&self) -> String;

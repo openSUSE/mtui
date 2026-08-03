@@ -198,7 +198,7 @@ async fn approve_uses_last_assignee() {
     assert!(String::from_utf8_lossy(&posts[0].body).contains("LGTM"));
 }
 
-/// Request-count oracle (mtui-rs-0mop.8: deduplicate Gitea approval fetches).
+/// Request-count oracle: deduplicate Gitea approval fetches.
 ///
 /// A single happy-path `approve` fetches the comment snapshot **once** and
 /// derives both the assignment state (`assign_state`) and the decision state
@@ -715,7 +715,7 @@ async fn assignee_none_when_unassigned() {
     assert_eq!(gitea_for(&server).assignee().await.unwrap(), None);
 }
 
-// --- token-origin restriction (mtui-rs-9po9) ---
+// --- token-origin restriction ---
 
 /// Build a Gitea client whose metadata PR URL points at `pr_host` but whose
 /// configured trusted origin is `trusted`. Used to drive hostile-metadata cases.

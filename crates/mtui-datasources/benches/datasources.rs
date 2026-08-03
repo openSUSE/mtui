@@ -1,4 +1,4 @@
-//! Perf baselines for datasource hot paths (mtui-rs-0mop.1).
+//! Perf baselines for datasource hot paths.
 //!
 //! Measurement-only, fully offline. Covers the pure/deterministic hot paths the
 //! remediation beads target:
