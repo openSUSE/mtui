@@ -1,4 +1,4 @@
-//! Scheduler-responsiveness oracle for bead `mtui-rs-0mop.9`.
+//! Scheduler-responsiveness oracle.
 //!
 //! The blocking-filesystem conversions (spawn_blocking / `tokio::fs`) exist so a
 //! slow filesystem cannot wedge a Tokio worker mid-operation. On a

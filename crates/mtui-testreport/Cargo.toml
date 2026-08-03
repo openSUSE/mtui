@@ -16,7 +16,7 @@ workspace = true
 name = "it"
 path = "tests/it.rs"
 
-# Perf baseline bench (mtui-rs-0mop.1). `harness = false` -> criterion main.
+# Perf baseline bench. `harness = false` -> criterion main.
 [[bench]]
 name = "testreport"
 path = "benches/testreport.rs"
@@ -42,7 +42,7 @@ thiserror.workspace = true
 insta.workspace = true
 tempfile = "3"
 wiremock.workspace = true
-# Perf baseline bench (mtui-rs-0mop.1): metadata JSON parse hot path.
+# Perf baseline bench: metadata JSON parse hot path.
 criterion.workspace = true
 # Scoped subscriber to capture WARN output in tests.
 tracing-subscriber.workspace = true

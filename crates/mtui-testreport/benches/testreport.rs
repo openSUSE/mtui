@@ -1,5 +1,5 @@
-//! Perf baseline for testreport metadata parsing (mtui-rs-0mop.1) plus the
-//! blocking-filesystem paths converted in mtui-rs-0mop.9.
+//! Perf baseline for testreport metadata parsing plus the
+//! blocking-filesystem paths.
 //!
 //! Measurement-only, offline. `metadata/parse` measures `JSONParser::parse_str`
 //! populating a fresh `TestReportBase` from the golden `metadata.json` fixture —

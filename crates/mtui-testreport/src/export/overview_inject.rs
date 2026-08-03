@@ -5,7 +5,7 @@
 //! appended after any existing content in that section; on subsequent exports a
 //! previously-inserted block is detected via the `OVERVIEW_*` markers and
 //! replaced in place, so the file never accumulates duplicate copies
-//! (**idempotent re-export** — a Phase 4 text-format contract).
+//! (**idempotent re-export** — a text-format contract).
 
 use mtui_datasources::oqa_search::render::{
     OVERVIEW_BEGIN_MARKER, OVERVIEW_END_MARKER, render_overview,
