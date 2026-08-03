@@ -15,8 +15,15 @@ use crate::session::Session;
 /// Files are placed under the
 /// report's remote working directory (`metadata.target_wd(<name>)`); a directory
 /// argument is walked and each contained file uploaded. Only enabled hosts are
-/// contacted. Shell-glob expansion of the argument is a Phase-6 REPL concern;
-/// here the argument is a concrete path (file or directory).
+/// contacted.
+///
+/// The path is taken **literally — shell-style globs are deliberately not
+/// expanded** (#399): `put` pushes to every enabled host in the group, which
+/// is exactly where an over-broad pattern does damage, so a pattern's blast
+/// radius stays the caller's problem (`put` the directory, or let the
+/// invoking shell expand). A path that matches nothing errors
+/// (`File … not found`, pinned by `missing_file_errors`) rather than
+/// succeeding vacuously.
 pub struct SftpPut;
 
 /// Recursively collects the regular files under `path` (a single file returns
@@ -54,7 +61,11 @@ impl Command for SftpPut {
             Arg::new("filename")
                 .required(true)
                 .value_parser(clap::value_parser!(PathBuf))
-                .help("file (or directory) to upload to all hosts"),
+                .help(
+                    "file (or directory) to upload to all hosts; the path is \
+                     literal — shell-style globs are deliberately not expanded \
+                     (put the directory, or let the invoking shell expand)",
+                ),
         )
     }
 
@@ -203,10 +214,19 @@ mod tests {
 
     #[tokio::test]
     async fn missing_file_errors() {
+        // The message text is documented contract (FAQ: an unexpanded glob
+        // errors with `File … not found`), so pin the words, not just the
+        // variant — a variant-only assert also passes for the scan-task
+        // error path.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&SftpPut, &["/no/such/file"]);
         let err = SftpPut.call(&mut session, &args).await.unwrap_err();
-        assert!(matches!(err, CommandError::Other(_)));
+        match err {
+            CommandError::Other(msg) => {
+                assert_eq!(msg, "File /no/such/file not found");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
     }
 
     #[tokio::test]

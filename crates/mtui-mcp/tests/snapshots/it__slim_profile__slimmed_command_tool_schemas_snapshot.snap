@@ -986,7 +986,7 @@ expression: pretty
           "type": "boolean"
         },
         "filename": {
-          "description": "file (or directory) to upload to all hosts",
+          "description": "file (or directory) to upload to all hosts; the path is literal — shell-style globs are deliberately not expanded (put the directory, or let the invoking shell expand)",
           "type": "string"
         },
         "template": {
