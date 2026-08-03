@@ -43,7 +43,8 @@ pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
     for arg in cmd.get_arguments() {
         // clap injects `help`/`version` args (unless disabled). They carry no
         // callable value — the tool envelope advertises descriptions instead —
-        // so drop them exactly as upstream drops `_HelpAction`/`_VersionAction`.
+        // so `--help`/`--version` are parser plumbing, not tool inputs, and are
+        // dropped from the schema.
         let id = arg.get_id().as_str();
         if id == "help" || id == "version" {
             continue;
@@ -114,8 +115,8 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
         array.insert("items".to_owned(), Value::Object(inner));
         apply_list_bounds(&mut array, arg.get_num_args());
         // A list arg is required only when clap marks it required *and* it has no
-        // default; otherwise it is optional (upstream defaults optional lists to
-        // `[]`/their real default, keeping the schema a plain array).
+        // default; otherwise it is optional, defaulting to `[]` or its real
+        // default so the schema stays a plain array.
         let has_default = !arg.get_default_values().is_empty();
         let required = arg.is_required_set() && !has_default;
         if let Some(def) = default_array(arg) {
@@ -150,8 +151,8 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
     }
 
     // Optional scalar with no default: widen to `X | null` so the schema
-    // reflects nullability rather than failing client-side validation (upstream
-    // `Annotated[T | None, …]`). enum members stay inside the string alternative.
+    // reflects nullability rather than failing client-side validation. enum
+    // members stay inside the string alternative.
     let nullable = wrap_nullable(inner);
     (nullable, false)
 }
@@ -184,8 +185,7 @@ impl ScalarKind {
 ///
 /// Possible values (`PossibleValuesParser`) win → `enum`. Otherwise the value
 /// parser's output [`TypeId`] selects integer vs string; an unrecognised parser
-/// degrades to string with a WARNING, mirroring upstream's "unknown argparse
-/// type … falling back to str".
+/// degrades to string with a WARNING rather than failing schema synthesis.
 fn base_type(arg: &Arg) -> BaseType {
     let choices = arg.get_possible_values();
     if !choices.is_empty() {
