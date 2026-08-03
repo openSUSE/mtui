@@ -1,4 +1,4 @@
-//! Smoke test for the `mtui-mcp` binary's `--version` surface (P8.1).
+//! Smoke test for the `mtui-mcp` binary's `--version` surface.
 //!
 //! Mirrors `mtui-cli/tests/cli_smoke.rs::version_prints_provenance_block_and_exits_zero`
 //! for the second binary: drive the built `mtui-mcp` via `CARGO_BIN_EXE_mtui-mcp`

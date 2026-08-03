@@ -1,9 +1,9 @@
-//! P7.9 golden contracts: the slimmed tool schemas and the `core` keep-set.
+//! Golden contracts: the slimmed tool schemas and the `core` keep-set.
 //!
 //! These pin two things a client depends on:
 //!
 //! * the full **slimmed** JSON schema of every synthesised command tool (the
-//!   half `tools_synthesis.rs` deferred to P7.9), so a schema-slimming or
+//!   half `tools_synthesis.rs` leaves to this file), so a schema-slimming or
 //!   arg-spec regression surfaces in review; and
 //! * the resolved `core` profile keep-set against the live registry, so a
 //!   rename that drops a curated tool from `core` is caught.

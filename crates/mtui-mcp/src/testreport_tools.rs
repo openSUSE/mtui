@@ -32,7 +32,7 @@
 //! with >1 loaded refuses (no client-addressable "active" pointer under MCP);
 //! omitted with 0/1 loaded falls back to the active report.
 //!
-//! ## Progress heartbeats (bead `mtui-rs-76e.14`)
+//! ## Progress heartbeats
 //!
 //! [`dispatch_testreport_tool`] races the tool body against the same heartbeat as
 //! the auto-generated command tools (via `run_with_heartbeat`) when the client
@@ -167,7 +167,7 @@ fn resolve_dir(session: &Session, template: Option<&str>) -> Result<PathBuf, Mcp
 /// path), then a symlink-aware re-check that canonicalizes the target's longest
 /// *existing* ancestor. The second stage catches a symlink placed *inside* the
 /// checkout that points outside the tree, which the lexical pass alone would
-/// follow (bead `mtui-rs-ir0d`).
+/// follow.
 fn safe_template_file(base: &Path, relpath: &str) -> Result<PathBuf, McpCommandError> {
     let base_resolved = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     let joined = base_resolved.join(relpath);

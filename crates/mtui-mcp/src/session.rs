@@ -6,40 +6,36 @@
 //! result, and
 //! exposes [`run_command`](McpSession::run_command) — the central dispatch
 //! primitive the tool layer calls (drain → dispatch → capture → output-cap).
+//! `run_command` also supplies the [`McpCommandError`] failure envelope and
+//! the per-result output cap (`[mcp] max_output_bytes`); the non-interactive
+//! contract (`interactive = false`, unset prompter) is provided by
+//! `capture::session` passing `is_repl = false`.
 //!
 //! Under **stdio** one instance serves the single client; under **http** the
-//! future `SessionRegistry` (P7.10) owns one instance per client. In both cases
+//! `SessionRegistry` owns one instance per client. In both cases
 //! the [`crate::provider::SessionProvider`] seam hands callers an
-//! `Arc<McpSession>`, so the tool layer (P7.6/P7.8) stays transport-agnostic.
+//! `Arc<McpSession>`, so the tool layer stays transport-agnostic.
 //!
-//! ## Scope (landed vs deferred)
+//! ## Four mechanisms
 //!
-//! P7.3 landed the dispatch primitive: `run_command`, the [`McpCommandError`]
-//! failure envelope, and the per-result output cap (`[mcp] max_output_bytes`).
-//! The non-interactive contract (`interactive = false`, unset prompter) is
-//! already provided by `capture::session` passing `is_repl = false`.
+//! **Per-template lock discipline.** A shared/exclusive registry gate
+//! ([`crate::concurrency::RwGate`]) plus a lazily-created per-RRID lock map.
+//! `command_lock` takes the gate *shared* + one per-RRID lock for a
+//! single-template call (so same-RRID calls serialise and different-RRID
+//! calls take distinct locks) and the gate *exclusive* for fan-out / registry
+//! mutators; [`scoped_lock`](McpSession::scoped_lock) is the same hold for
+//! the hand-written testreport tools. This also gives genuine wall-clock
+//! concurrency between *different-RRID* calls plus per-call output isolation:
+//! a single-real-RRID call dispatches on a [`Session::fork_for_call`] (which
+//! shares the loaded reports' per-entry `Arc<Mutex<..>>` locks and carries its
+//! own display) via [`dispatch_command`], spawned so it overlaps a concurrent
+//! different-RRID call; [`run_command`](McpSession::run_command) does not hold
+//! a session-wide mutex across the scoped dispatch. Registry-structure
+//! mutators ([`Command::mutates_registry`](mtui_core::Command::mutates_registry))
+//! and unscoped fan-out still take the gate *exclusive* against the canonical
+//! session.
 //!
-//! P7.3a (`mtui-rs-76e.11`) landed the per-template **lock discipline**: a
-//! shared/exclusive registry gate ([`crate::concurrency::RwGate`]) plus a
-//! lazily-created per-RRID lock map.
-//! `command_lock` takes the gate *shared* + one
-//! per-RRID lock for a single-template call (so same-RRID calls serialise and
-//! different-RRID calls take distinct locks) and the gate *exclusive* for
-//! fan-out / registry mutators; [`scoped_lock`](McpSession::scoped_lock) is the
-//! same hold for the hand-written testreport tools.
-//!
-//! **Landed** (`mtui-rs-f36r` / `mtui-rs-0mop.11`) — genuine wall-clock
-//! concurrency between *different-RRID* calls plus per-call output isolation. A
-//! single-real-RRID call dispatches on a [`Session::fork_for_call`] (which shares
-//! the loaded reports' per-entry `Arc<Mutex<..>>` locks and carries its own
-//! display) via [`dispatch_command`], spawned so it overlaps a concurrent
-//! different-RRID call; [`run_command`](McpSession::run_command) no longer holds
-//! a session-wide mutex across the scoped dispatch. Registry-structure mutators
-//! ([`Command::mutates_registry`](mtui_core::Command::mutates_registry)) and
-//! unscoped fan-out still take the gate *exclusive* against the canonical
-//! session. All four `tests/session_concurrency.rs` parity tests pass.
-//!
-//! P7.3b (`mtui-rs-76e.12`) landed the **background-job table** (`_jobs`): a slow
+//! **Background-job table** (`_jobs`). A slow
 //! `run`/`update`/`downgrade` can be started with
 //! [`start_jobs`](McpSession::start_jobs) (one job per resolved template, each
 //! `-T <rrid>`-scoped) and returns a handle immediately instead of holding the
@@ -48,9 +44,8 @@
 //! and controlled via [`job_list`](McpSession::job_list) /
 //! [`job_cancel`](McpSession::job_cancel). Each job worker runs through the same
 //! [`run_command`](McpSession::run_command) primitive (so it takes the same
-//! per-RRID / registry gate and output cap as a foreground call).
-//!
-//! Bead `mtui-rs-th4o.8` bounded this table's resource use: a spawn is rejected
+//! per-RRID / registry gate and output cap as a foreground call). The table's
+//! resource use is bounded: a spawn is rejected
 //! (before allocating a worker) once the session holds
 //! `[mcp] max_active_jobs` running jobs — a fan-out is admitted or rejected as a
 //! whole — and terminal records are FIFO-evicted to `[mcp] max_completed_jobs`
@@ -59,8 +54,8 @@
 //! (see [`crate::capture`]) so a single command cannot buffer more than
 //! `[mcp] max_output_bytes` before the cap applies.
 //!
-//! P7.3d (`mtui-rs-76e.14`) landed the `notifications/progress` **heartbeats**:
-//! a long-running foreground tool call (`run_command_with_progress`) races the
+//! **Progress heartbeats** (`notifications/progress`). A long-running
+//! foreground tool call (`run_command_with_progress`) races the
 //! dispatch against a ticker that emits a progress frame every
 //! `DEFAULT_PROGRESS_INTERVAL` against a transport-free [`ProgressSink`], so an
 //! MCP client that honours the protocol's progress contract does not time out on
@@ -68,8 +63,8 @@
 //! `progressToken`) is built in [`crate::server`] from the request context; this
 //! layer stays rmcp-free. A `None` sink takes the original zero-overhead path.
 //!
-//! P7.3c (`mtui-rs-76e.13`) landed [`close`](McpSession::close): the session
-//! teardown the http `SessionRegistry` (P7.10 / `mtui-rs-odq8`) calls on
+//! **[`close`](McpSession::close).** The session
+//! teardown the http `SessionRegistry` calls on
 //! eviction. For **every** loaded template it releases the report's pool claims
 //! then disconnects its host group, best-effort + idempotent, under a bounded
 //! `DISCONNECT_TIMEOUT` so a wedged host close cannot block the idle-sweep.
@@ -318,14 +313,14 @@ pub struct JobView {
 
 /// Process-global monotonic source of [`McpSession::id`] values. Each session
 /// pulls a fresh id at construction, so two distinct sessions never share one
-/// (freshness independent of heap-address reuse — bead `mtui-rs-1edj`).
+/// (freshness independent of heap-address reuse).
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 
 /// A headless mtui session backing one MCP client.
 ///
 /// Holds the [`Session`] behind a [`Mutex`] because command dispatch
 /// ([`mtui_core::dispatch_argv`]) needs `&mut Session` while the rmcp
-/// `ServerHandler` methods take `&self` (P7.1 spike finding). The paired
+/// `ServerHandler` methods take `&self`. The paired
 /// [`SharedBuf`] is the sink the session's display writes to; a tool call
 /// [`take`](SharedBuf::take)s it to isolate its own output.
 pub struct McpSession {
@@ -376,8 +371,8 @@ pub struct McpSession {
     /// sweep drops the whole session and its table with it; within a session's
     /// lifetime the table is **bounded** — active spawns are capped by
     /// [`max_active_jobs`](Self::max_active_jobs) and terminal records are
-    /// FIFO-evicted to [`max_completed_jobs`](Self::max_completed_jobs) (bead
-    /// `mtui-rs-th4o.8`). The outer [`StdMutex`] guards insert/lookup/eviction
+    /// FIFO-evicted to [`max_completed_jobs`](Self::max_completed_jobs). The
+    /// outer [`StdMutex`] guards insert/lookup/eviction
     /// only (never held across an await).
     jobs: StdMutex<HashMap<String, Arc<StdMutex<Job>>>>,
     /// Monotonic job-id counter, pre-incremented per minted job so ids are
@@ -550,7 +545,7 @@ impl McpSession {
             // to a single template: the concurrent path dispatches on a per-call
             // fork whose registry snapshot is discarded, so a structural mutation
             // would be lost unless it runs against the canonical session under
-            // the exclusive gate (`mtui-rs-f36r`, steps 4-5).
+            // the exclusive gate.
             Some(command) if command.mutates_registry() => None,
             Some(command) => {
                 let session = self.session.lock().await;
@@ -610,7 +605,7 @@ impl McpSession {
 
     /// Releases pool claims and disconnects every loaded template's hosts.
     ///
-    /// Owned by the http `SessionRegistry` (P7.10 / `mtui-rs-odq8`), which calls
+    /// Owned by the http `SessionRegistry`, which calls
     /// it when it evicts a session (idle-TTL sweep or explicit eviction).
     /// Mirrors the REPL `quit`
     /// disconnect path — `HostsGroup::close` per
@@ -700,7 +695,7 @@ impl McpSession {
     /// (non-mutator) call then dispatches on a
     /// [`Session::fork_for_call`](mtui_core::Session::fork_for_call) — sharing the
     /// report entry locks, with its own display — spawned so it runs in genuine
-    /// parallel with a concurrent different-RRID call (`mtui-rs-f36r`); the
+    /// parallel with a concurrent different-RRID call; the
     /// exclusive path dispatches on the canonical session so its config/registry
     /// mutations persist. A `--help`/`--version` request is a *success* (its text
     /// is returned), matching argparse's exit-0 semantics.
@@ -743,7 +738,7 @@ impl McpSession {
         // whole dispatch, released when `_lock` drops at end of scope.
         let lock = self.command_lock(registry, name, argv).await;
 
-        // Per-call output isolation (bead `mtui-rs-f36r`, step 3): give this
+        // Per-call output isolation: give this
         // dispatch its *own* fresh capture buffer + display so two overlapping
         // calls never write into the same buffer and clobber each other's stdout.
         // Bounded to the same budget as the session-wide sink.
@@ -752,7 +747,7 @@ impl McpSession {
             CommandPromptDisplay::with_sink(Box::new(call_buf.clone()), ColorMode::Never);
 
         let result = match &lock {
-            // Concurrent path (bead `mtui-rs-f36r`, steps 4-5): a single-real-RRID
+            // Concurrent path: a single-real-RRID
             // call holds the gate *shared* + its per-RRID lock. Fork a per-call
             // `Session` that *shares* the loaded reports' per-entry locks (so this
             // call locks only its own template's entry) and dispatch on it —
@@ -934,7 +929,7 @@ impl McpSession {
     /// Reject a spawn of `n` new jobs when it would breach the active cap.
     ///
     /// Enforced against the *projected* running count so a fan-out is admitted or
-    /// rejected as a whole (no partial spawn — bead `mtui-rs-th4o.8`). Must be
+    /// rejected as a whole (no partial spawn). Must be
     /// called while holding `jobs_guard` so the count and the subsequent inserts
     /// are atomic against a concurrent (http) spawn. `max_active_jobs == 0`
     /// disables the cap.
@@ -1331,7 +1326,7 @@ mod tests {
 
     /// Each session gets a distinct id, and a session's id is stable across
     /// calls — the freshness invariant `remint_after_drop_is_a_new_session`
-    /// relies on instead of `Arc` address identity (bead `mtui-rs-1edj`).
+    /// relies on instead of `Arc` address identity.
     #[test]
     fn session_id_is_unique_and_stable() {
         let a = McpSession::new(Config::default());
@@ -1718,7 +1713,7 @@ mod tests {
     /// A registry-structure mutator (`load_template`) takes the gate *exclusive*
     /// even when a single template is loaded (so its `resolve_command_rrids`
     /// would otherwise be a single RRID). Guards the `mutates_registry` routing
-    /// added in `mtui-rs-f36r` steps 4-5: a structural mutation must land on the
+    /// added for the concurrent dispatch path: a structural mutation must land on the
     /// canonical session, not a discarded per-call fork. A content command scoped
     /// to that same template still takes the *scoped* (concurrent) path.
     #[tokio::test]
@@ -1964,7 +1959,7 @@ mod tests {
         assert_eq!(err.exit_code, 1);
     }
 
-    // ---- progress heartbeats (bead mtui-rs-76e.14) ------------------------ //
+    // ---- progress heartbeats ----------------------------------------------- //
 
     /// Records every frame `report` receives.
     #[derive(Default)]

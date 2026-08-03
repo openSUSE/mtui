@@ -1,22 +1,21 @@
-//! Contention measurement for different-RRID MCP dispatch (mtui-rs-0mop.11).
+//! Contention measurement for different-RRID MCP dispatch.
 //!
-//! Measurement-only, offline; requires the `mcp` feature. The lock *discipline*
-//! (RwGate + per-RRID locks) is already correct, but `McpSession::run_command`
-//! holds one monolithic `Arc<Mutex<Session>>` over the whole dispatch, so N
-//! commands scoped to N *distinct* RRIDs still serialise on that inner mutex.
+//! Measurement-only, offline; requires the `mcp` feature. `McpSession::run_command`
+//! dispatches a single-real-RRID call on a per-call [`Session::fork_for_call`]
+//! that shares the loaded reports' per-entry locks, so N commands scoped to N
+//! *distinct* RRIDs run concurrently rather than serialising on one session-wide
+//! mutex.
 //!
 //! This bench dispatches N probe commands — each scoped to its own loaded RRID
 //! and each holding a fixed CPU-free `hold` window inside the session lock — via
 //! `join_all`, at N ∈ {1,2,4,8}. The verdict oracle is the *shape* of the curve:
-//!
-//! * **Serialised** (today): wall-clock ≈ N × hold (each waits for the mutex).
-//! * **Concurrent** (post-f36r refactor): wall-clock ≈ ~1 × hold (they overlap).
+//! wall-clock ≈ ~1 × hold (the calls overlap) rather than ≈ N × hold (serialised).
 //!
 //! Wall-clock async timing is scheduler-noisy (the baseline calls it advisory);
-//! the deterministic oracle for the eventual fix is the interval-overlap
+//! the deterministic oracle is the interval-overlap
 //! assertion in `tests/session_concurrency.rs`, not these numbers. This bench
-//! only quantifies *whether* the contention is material enough to justify the
-//! Phase-2 refactor (see plans/mtui-rs-0mop.11-mcp-lock-contention.md).
+//! is a regression guard against contention creeping back into the dispatch
+//! path.
 
 use std::sync::Arc;
 use std::time::Duration;

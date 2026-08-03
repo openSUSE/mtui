@@ -1,4 +1,4 @@
-//! Cap + idle-TTL enforcement for the http `SessionRegistry` (bead `mtui-rs-odq8`).
+//! Cap + idle-TTL enforcement for the http `SessionRegistry`.
 //!
 //! Covers the offline-portable subset of the registry's cap/idle-TTL behaviour.
 //! Session-key/log-label-style cases do not apply here: rmcp owns session
@@ -107,7 +107,7 @@ async fn remint_after_drop_is_a_new_session() {
     // the re-mint. Freshness is asserted via the session's stable, monotonic
     // `id()` — not `Arc` address identity, which the allocator can reuse after a
     // drop (a flake that surfaced once these tests share one process, the
-    // consolidated `it` binary, instead of one binary each — bead mtui-rs-1edj).
+    // consolidated `it` binary, instead of one binary each).
     let reg = registry(2, 0);
 
     let first = reg.live_sessions();

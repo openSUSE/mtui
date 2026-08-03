@@ -1,4 +1,4 @@
-//! Tests for the background-job (async slow-op) path (bead `mtui-rs-76e.12`).
+//! Tests for the background-job (async slow-op) path.
 //!
 //! A backgrounded command runs in a spawned worker that goes through the same
 //! [`McpSession::run_command`] primitive (so it takes the same per-RRID /
@@ -339,7 +339,7 @@ async fn cancel_one_template_job_leaves_others() {
 }
 
 // --------------------------------------------------------------------------- //
-// Resource limits (bead mtui-rs-th4o.8)                                        //
+// Resource limits                                                              //
 // --------------------------------------------------------------------------- //
 
 /// A session with explicit active/completed job caps and a deterministic user.
@@ -463,7 +463,7 @@ async fn completed_jobs_are_fifo_evicted_to_the_cap() {
 // The "eviction spares running jobs" invariant is proven deterministically as a
 // unit test in `session.rs` (it needs direct access to the private jobs table;
 // an integration test cannot drive a concurrent completion while another job
-// holds the single session mutex — see the `mtui-rs-f36r` caveat).
+// holds the single session mutex).
 
 // --------------------------------------------------------------------------- //
 // Test-only blocking probes                                                   //

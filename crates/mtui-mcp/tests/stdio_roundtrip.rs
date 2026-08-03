@@ -1,4 +1,4 @@
-//! P7.7 gate: the MCP round-trip contract test.
+//! The MCP round-trip contract test.
 //!
 //! It connects an rmcp client to the production [`McpServer`] over an in-memory
 //! duplex transport (no subprocess, no socket) and proves the runtime-synthesis
@@ -93,7 +93,7 @@ async fn tools_list_reflects_synthesised_surface_and_denylist() {
             );
         }
 
-        // The hand-written testreport tools (bead mtui-rs-76e.8).
+        // The hand-written testreport tools.
         for expected in [
             "testreport_read",
             "testreport_logs",

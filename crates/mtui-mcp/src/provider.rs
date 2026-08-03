@@ -1,7 +1,7 @@
 //! Session resolution seam: [`SessionProvider`] + the stdio [`StdioProvider`],
 //! plus the http [`SessionRegistry`] factory with its cap + idle-TTL enforcement.
 //!
-//! The tool layer (P7.6 `tools`, P7.8 `testreport_tools`) resolves the
+//! The tool layer ([`crate::tools`], [`crate::testreport_tools`]) resolves the
 //! [`McpSession`] for each call through a [`SessionProvider`], so it never cares
 //! which transport it runs under. There are exactly two implementers:
 //!
@@ -18,7 +18,7 @@
 //! `get_or_create(key)` signature, which is why the trait — not a concrete
 //! session — is the seam.
 //!
-//! ## Cap + idle-TTL (bead `mtui-rs-odq8`)
+//! ## Cap + idle-TTL
 //!
 //! rmcp 2.2.0 gives no built-in max-sessions or idle-TTL knob, and its
 //! `service_factory` receives **no** session key while rmcp itself owns session

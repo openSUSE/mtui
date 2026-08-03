@@ -16,7 +16,7 @@
 //! - `quit`, `exit`, `EOF`: exit the process and would tear down the MCP server
 //!   along with the client connection.
 //! - `edit`: spawns `$EDITOR` on the controlling TTY; the testreport tools
-//!   (P7.8) operate on the loaded report file directly instead.
+//!   operate on the loaded report file directly instead.
 //! - `shell`: opens an interactive root PTY on a refhost and needs a TTY the MCP
 //!   transports do not provide.
 //! - `help`: prints argparser help to stdout; the MCP protocol already

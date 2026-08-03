@@ -33,8 +33,9 @@ use serde_json::{Map, Value};
 
 /// Re-encode a tool-call kwargs dict as `clap`-compatible argv.
 ///
-/// `argv_prefix` is prepended verbatim — used by the P7.6 subparser fan-out to
-/// inject a subcommand name (`["show"]` for the `config_show` tool). Args absent
+/// `argv_prefix` is prepended verbatim — used by the MCP tool synthesiser's
+/// subparser fan-out to inject a subcommand name (`["show"]` for the
+/// `config_show` tool). Args absent
 /// from `kwargs` or whose value is JSON `null` are skipped. Flags come first,
 /// then the positional tail (see the module docs for why).
 #[must_use]
@@ -472,8 +473,9 @@ mod tests {
 
     #[test]
     fn argv_prefix_is_prepended() {
-        // P7.6 fans `config` out per-subcommand and passes the *subparser* here
-        // (its args live on `set`, not the parent). Mirror that: introspect the
+        // The MCP tool synthesiser fans `config` out per-subcommand and passes
+        // the *subparser* here (its args live on `set`, not the parent). Mirror
+        // that: introspect the
         // `set` subcommand and prepend its name as the prefix.
         let parent = parser_for("config");
         let set = parent

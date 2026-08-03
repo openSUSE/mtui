@@ -13,12 +13,12 @@
 //! fairness queue beyond that; the single-session workload (a handful of
 //! concurrent subagents) does not need one.
 //!
-//! ## Locking depth (beads `mtui-rs-76e.11` + `mtui-rs-f36r` / `mtui-rs-0mop.11`)
+//! ## Locking depth
 //!
 //! This gate + the per-RRID lock map in [`crate::session`] land the lock
 //! *discipline*: same-RRID and unscoped calls serialise, and registry mutators
 //! drain in-flight per-RRID work. Genuine wall-clock concurrency between
-//! *different-RRID* calls **has landed** (`mtui-rs-f36r`): `mtui-core` report
+//! *different-RRID* calls **has landed**: `mtui-core` report
 //! entries are per-entry `Arc<Mutex<..>>`, and a single-real-RRID call dispatches
 //! on a [`Session::fork_for_call`](mtui_core::Session::fork_for_call) (sharing
 //! the entry locks, with its own display) via
@@ -102,7 +102,7 @@ impl RwGate {
     /// **Cancellation-safe:** the `writers_waiting` bump is owned by a
     /// [`PendingWriter`] RAII guard, so dropping this future while parked (e.g. a
     /// cancelled MCP request) restores the counter and wakes waiters rather than
-    /// leaking the bump and deadlocking readers (`mtui-rs-b8yi`). On success the
+    /// leaking the bump and deadlocking readers. On success the
     /// pending guard is disarmed and the count is handed to the [`ExclusiveGuard`],
     /// which decrements it on its own drop — so success-path accounting is
     /// unchanged.
@@ -304,7 +304,7 @@ mod tests {
 
     /// Cancelling a *waiting* writer (its `exclusive()` future is dropped before
     /// it ever acquires) must not leak `writers_waiting`, or new shared
-    /// acquisitions would be blocked forever. Regression for `mtui-rs-b8yi`.
+    /// acquisitions would be blocked forever.
     #[tokio::test]
     async fn cancelled_writer_does_not_block_readers() {
         let gate = RwGate::new();

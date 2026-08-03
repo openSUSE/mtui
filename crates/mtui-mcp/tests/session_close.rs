@@ -1,4 +1,4 @@
-//! Tests for the `close()` host-teardown behaviours (bead `mtui-rs-76e.13`).
+//! Tests for the `close()` host-teardown behaviours.
 //!
 //! Three behaviours:
 //!

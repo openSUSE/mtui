@@ -1,11 +1,9 @@
-//! The production MCP server handler (P7.7).
+//! The production MCP server handler.
 //!
 //! A hand-written [`ServerHandler`] whose [`list_tools`](ServerHandler::list_tools)
 //! and [`call_tool`](ServerHandler::call_tool) are built at *runtime* from the
-//! command [`Registry`], built dynamically rather than declared per tool. This
-//! grew out of the P7.1 spike (which proved
-//! the runtime-registration approach against rmcp 2.x with a single hard-coded
-//! `whoami` tool); it now synthesises the **full** tool surface via
+//! command [`Registry`], built dynamically rather than declared per tool, and
+//! synthesises the **full** tool surface via
 //! [`crate::tools`].
 //!
 //! On construction the server precomputes, once:
@@ -23,8 +21,8 @@
 //! server instance serves the process's one client; under http the
 //! [`SessionRegistry`](crate::provider::SessionRegistry) mints a fresh server
 //! (hence a fresh isolated session) per MCP session. The testreport tools are
-//! bead `mtui-rs-76e.8`; the job tools drive the session's background-job table
-//! (bead `mtui-rs-76e.12`).
+//! hand-written (not synthesised from the registry); the job tools drive the
+//! session's background-job table.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -303,10 +301,9 @@ impl ServerHandler for McpServer {
 
 /// Render a dispatch result into a [`CallToolResult`].
 ///
-/// Success returns the captured (output-capped) stdout; failure returns an error
-/// result whose text is the captured stdout followed by the error summary — the
-/// same envelope the P7.1 spike used, preserving any output produced before the
-/// failure.
+/// Success returns the captured (output-capped) stdout; failure returns an
+/// error result whose text is the captured stdout followed by the error
+/// summary, preserving any output produced before the failure.
 fn render(result: Result<String, crate::session::McpCommandError>) -> CallToolResult {
     match result {
         Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
