@@ -11,11 +11,11 @@ use crate::session::Session;
 /// Opens an interactive shell on a reference host.
 ///
 /// Attaching an interactive PTY to a
-/// remote shell needs a controlling terminal, which only the Phase-6 `mtui`
+/// remote shell needs a controlling terminal, which only the `mtui` REPL
 /// binary owns; the command surface (name, args, host selection, completion) is
 /// defined here so the registry and MCP synthesiser see it, but the runtime PTY
-/// attach is deferred to Phase 6. Invoked headlessly it errors cleanly rather
-/// than hanging. REPL-only — on the MCP deny-list.
+/// attach lives in the REPL binary, not here. Invoked headlessly it errors
+/// cleanly rather than hanging. REPL-only — on the MCP deny-list.
 pub struct Shell;
 
 #[async_trait]
@@ -45,7 +45,8 @@ impl Command for Shell {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         // Validate host selection so headless callers get the same argument
-        // errors the REPL would, but the interactive PTY attach is Phase 6.
+        // errors the REPL would, but the interactive PTY attach lives in the
+        // REPL binary.
         let targets = session.targets_mut();
         let hosts =
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
@@ -53,7 +54,7 @@ impl Command for Shell {
             return Err(CommandError::NoRefhostsDefined);
         }
         Err(CommandError::Other(
-            "interactive shell attach is not available in this mode (Phase 6 REPL only)".to_owned(),
+            "interactive shell attach is not available in this mode (REPL only)".to_owned(),
         ))
     }
 }

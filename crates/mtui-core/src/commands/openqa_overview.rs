@@ -19,8 +19,8 @@ const AGGREGATED_GROUP_CHOICES: &[&str] = &["core", "containers", "yast", "secur
 /// checks — and prints them to the REPL; `--export` also injects the plain-text
 /// block into the loaded testreport's `log` under `regression tests:`.
 ///
-/// The `--no-fetch` cache reuse is deferred with the openQA state holder
-/// (`mtui-rs-zs4`); passing `--no-fetch` here logs and fetches anyway.
+/// The `--no-fetch` cache reuse is not yet implemented; passing `--no-fetch`
+/// here logs and fetches anyway.
 pub struct OpenQAOverview;
 
 #[async_trait]

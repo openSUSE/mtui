@@ -30,6 +30,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- The headless `shell` error message no longer carries a roadmap reference:
+  `"interactive shell attach is not available in this mode (Phase 6 REPL
+  only)"` is now `"... (REPL only)"`.
 - `refhosts.yml` rows now resolve YAML merge keys (`<<: *anchor`) instead of
   ignoring them. This is a side effect of retiring the archived `serde_yaml`
   crate in favour of `serde-saphyr`, which expands merge keys by default;

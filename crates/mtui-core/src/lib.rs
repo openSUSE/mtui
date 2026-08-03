@@ -1,26 +1,24 @@
 //! `mtui-core` — the command engine and composition root.
 //!
 //! This crate wires the lower crates together behind a uniform command surface
-//! consumed by both the REPL (Phase 6) and MCP (Phase 7). Phase 5.1 lands the
-//! foundation:
+//! consumed by both the REPL and MCP:
 //!
 //! * [`Command`] — the trait every command implements, with the template
 //!   fan-out engine ([`Command::run`]) and its [`Scope`] policy.
 //! * [`CommandError`] / [`CommandResult`] — the command-layer error hierarchy.
 //! * [`Session`] — the explicitly-passed command state, holding the
 //!   [`TemplateRegistry`] and [`CommandPromptDisplay`].
+//! * The explicit command [`Registry`] and the line-dispatch [`engine`], the
+//!   single machinery both the REPL and MCP dispatch through.
+//! * [`args`] — the top-level process argument parser (`clap`), distinct
+//!   from the per-command parsers the engine synthesises.
+//! * The [`display`] surface: the full `list_*`
+//!   family, `show_log`, the three-way
+//!   [`ColorMode`], and the `page` pager.
 //!
-//! P5.2 adds the explicit command [`Registry`] and the line-dispatch
-//! [`engine`], the single machinery both the REPL and MCP dispatch through. P5.4
-//! adds [`args`] — the top-level process argument parser (`clap`), distinct
-//! from the per-command parsers the engine synthesises. P5.3 rounds out the
-//! [`display`] surface: the full `list_*`
-//! family, `show_log`, the three-way
-//! [`ColorMode`], and the `page` pager.
-//!
-//! P5.10 adds [`entrypoint`] — the process [`ExitStatus`] contract distinct
+//! [`entrypoint`] is the process [`ExitStatus`] contract distinct
 //! from the top-level [`Args`] parser (Layer 1) and the per-command engine
-//! (Layer 2), and from the MCP schema synthesis (Layer 3, Phase 7). Both
+//! (Layer 2), and from the MCP schema synthesis (Layer 3). Both
 //! process entrypoints, `mtui`'s REPL and `mtui-mcp`, exit through it; neither
 //! has a headless single-command CLI mode.
 

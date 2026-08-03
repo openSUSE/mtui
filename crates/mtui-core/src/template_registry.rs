@@ -36,7 +36,7 @@ use tokio::sync::Mutex;
 
 /// A loaded report behind its own lock.
 ///
-/// Each registry entry is individually lockable (bead `mtui-rs-f36r`, step 1):
+/// Each registry entry is individually lockable:
 /// a dispatch takes the [`OwnedMutexGuard`](tokio::sync::OwnedMutexGuard) of
 /// exactly the entry it acts on (via [`TemplateRegistry::handle`]), so per-call
 /// active-report handling no longer needs to borrow the whole registry. With the
@@ -224,8 +224,7 @@ impl TemplateRegistry {
     ///
     /// The caller `.lock()`s it to read/mutate the report. This is how a dispatch
     /// (via [`Session`](crate::Session)) acquires exactly the entry it acts on
-    /// without borrowing the whole registry — the per-call active handle
-    /// (`mtui-rs-f36r`, step 2).
+    /// without borrowing the whole registry — the per-call active handle.
     #[must_use]
     pub fn handle(&self, rrid: &str) -> Option<ReportEntry> {
         self.entries.get(rrid).map(Arc::clone)
@@ -317,7 +316,7 @@ impl TemplateRegistry {
     /// [`Session::fork_for_call`](crate::Session::fork_for_call) to let a headless
     /// MCP dispatch run on its own [`Session`](crate::Session) without a session-wide lock, while
     /// different-RRID calls still act on distinct entry locks and same-RRID calls
-    /// share one (`mtui-rs-f36r`, steps 4-5).
+    /// share one.
     ///
     /// The stable [`id`](Self::id) is preserved so a snapshot keeps the same
     /// host-arbitration owner-key seed as the canonical registry.
@@ -542,7 +541,7 @@ mod tests {
 
     /// `snapshot` clones the registry structure while *sharing* each entry's
     /// `Arc<Mutex<..>>` (same report lock) and preserving the stable id + active
-    /// pointer — so a per-call fork acts on the same reports (`mtui-rs-f36r`).
+    /// pointer — so a per-call fork acts on the same reports.
     #[test]
     fn snapshot_shares_entries_and_preserves_id_and_active() {
         let mut reg = registry();

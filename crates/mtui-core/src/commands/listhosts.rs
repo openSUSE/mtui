@@ -99,7 +99,7 @@ mod tests {
         assert!(out.contains("Enabled"), "{out}");
     }
 
-    /// Regression test for mtui-rs-xlt: a host whose `Target::connect()` ran
+    /// Regression test: a host whose `Target::connect()` ran
     /// over a connection carrying real system-parse data must render its
     /// parsed system, not the pre-parse `unknown--` sentinel.
     #[tokio::test]

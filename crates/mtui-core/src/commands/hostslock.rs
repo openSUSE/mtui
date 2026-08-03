@@ -17,8 +17,7 @@ use crate::session::Session;
 /// comment (`-c`) keeps the lock effective against other sessions too.
 ///
 /// `-t` host sub-selection is not yet honoured for the lock fan-out — the whole
-/// active group is locked, matching Wave-1 `run`'s group-lock behaviour and the
-/// group-merge follow-up (`mtui-rs-qd9`).
+/// active group is locked, matching Wave-1 `run`'s group-lock behaviour.
 pub struct HostLock;
 
 #[async_trait]

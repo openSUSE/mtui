@@ -70,12 +70,12 @@ mod sftpput;
 mod showdiff;
 mod showlog;
 
-// Phase 5 follow-ups — deferred commands whose machinery has since landed.
+// Deferred commands whose machinery has since landed.
 mod export;
 mod list_refhosts;
 mod load_template;
 
-// Phase 6 — REPL-only command-surface additions.
+// REPL-only command-surface additions.
 mod edit;
 mod help;
 mod terms;

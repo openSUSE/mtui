@@ -24,7 +24,7 @@ use crate::session::Session;
 /// already-built [`HttpClient`] (obtain it once from
 /// [`Session::http_client`](crate::session::Session::http_client)) so the QEM
 /// dashboard fetch reuses the session connection pool instead of building a
-/// fresh client (perf bead `mtui-rs-0mop.13`), and plain values rather than
+/// fresh client, and plain values rather than
 /// `&Session` so callers never hold a (non-`Sync`) `Session` borrow across the
 /// `.await`.
 pub(crate) async fn build_incident(
@@ -59,7 +59,7 @@ pub(crate) fn build_auto_openqa(
 /// Takes an already-built [`HttpClient`] (obtain it once from
 /// [`Session::http_client`](crate::session::Session::http_client)) so a
 /// per-host loop reuses one connection pool instead of building a fresh client
-/// per instance (perf bead `mtui-rs-0mop.13`).
+/// per instance.
 #[must_use]
 pub(crate) fn build_kernel_openqa(
     incident: &QemIncident,

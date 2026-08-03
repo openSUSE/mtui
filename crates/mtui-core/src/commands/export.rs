@@ -178,8 +178,8 @@ impl Command for Export {
     }
 }
 
-/// Borrows the session-scoped HTTP client for log downloads (perf bead
-/// `mtui-rs-0mop.13`: reuse one client/pool across commands).
+/// Borrows the session-scoped HTTP client for log downloads (reuse one
+/// client/pool across commands).
 fn build_http(session: &Session) -> Result<HttpClient, CommandError> {
     session
         .http_client()

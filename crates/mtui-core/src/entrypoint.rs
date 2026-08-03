@@ -1,8 +1,8 @@
 //! The process exit-code contract shared by mtui's two process entrypoints
 //! (`mtui`, `mtui-mcp`).
 //!
-//! This distinguishes the **three distinct argparse layers** mtui carries
-//! (the correction that shaped P5.10 — do not conflate them):
+//! This distinguishes the **three distinct argparse layers** mtui carries —
+//! do not conflate them:
 //!
 //! 1. **App invocation** — the top-level `mtui`/`mtui-mcp` process arguments,
 //!    [`Args`](crate::args::Args). The real binary parses these with
@@ -14,7 +14,7 @@
 //!    process; they return a typed
 //!    [`EngineError`](crate::engine::EngineError).
 //! 3. **MCP tool schema** — `mtui-mcp` translating each command's parser into
-//!    JSON parameters (Phase 7). Not touched here.
+//!    JSON parameters. Not touched here.
 //!
 //! Neither entrypoint has a headless single-command CLI mode: the `mtui`
 //! binary has only two surfaces, the interactive REPL and `mtui-mcp`, and
