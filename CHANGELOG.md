@@ -8,6 +8,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP tool calls passing an array with more than one element (e.g. `add_host`
+  `target`, `openqa_overview` `aggregated_groups`, `list_refhosts` `arch`) no
+  longer fail with `unexpected argument '<second element>' found`: the
+  reconstructed argv now repeats the flag before every element instead of
+  emitting it once for the whole list.
+
 ## [26.1.1] - 2026-07-27
 
 ### Added
