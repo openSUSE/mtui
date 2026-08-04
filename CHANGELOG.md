@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.1.2] - 2026-08-04
+
 ### Fixed
 
 - MCP tool calls passing an array with more than one element (e.g. `add_host`
