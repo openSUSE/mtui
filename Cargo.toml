@@ -81,7 +81,7 @@ async-trait = "0.1"
 # `transport-io` for the stdio runner; `transport-async-rw` for the
 # in-memory duplex round-trip test. No `macros` — tools are synthesised from the
 # runtime command registry, so we hand-build schemas/handlers, not `#[tool]`.
-rmcp = { version = "2", default-features = false, features = [
+rmcp = { version = "3", default-features = false, features = [
     "server",
     "client",
     "transport-io",
