@@ -110,8 +110,10 @@ pub enum RefhostError {
 /// `#[non_exhaustive]` and covers eleven distinct failure modes (bad status,
 /// transport, TLS, config, redirect limits, ...); every one collapses onto
 /// [`Fetch`](Self::Fetch)/[`ClientBuild`](Self::ClientBuild) via the
-/// `openqa::client` module's `redact` helper, which strips any URL userinfo
-/// before the message reaches this type.
+/// `openqa::client` module's `describe` helper. Userinfo cannot reach these
+/// messages: `ruoqa` >= 0.1.4 redacts it at every `Display` site and drops it
+/// in `config::resolve`, and `describe` never renders a `reqwest::Error`
+/// directly.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OpenQAError {
@@ -121,13 +123,14 @@ pub enum OpenQAError {
     Http(#[from] HttpError),
 
     /// The `ruoqa` client itself failed to build: a malformed `client.conf`,
-    /// invalid TLS setup, or an incompatible builder combination. Carries a
-    /// sanitized description (never the raw URL).
+    /// invalid TLS setup, or an incompatible builder combination. Userinfo
+    /// cannot reach this message (see the module-level doc above).
     #[error("openQA client could not be built: {0}")]
     ClientBuild(String),
 
     /// A jobs fetch failed: a transport error, a non-2xx status, or a malformed
-    /// response body. Carries a sanitized description (never the raw URL).
+    /// response body. Userinfo cannot reach this message (see the
+    /// module-level doc above).
     #[error("openQA jobs fetch failed: {0}")]
     Fetch(String),
 }
@@ -279,13 +282,12 @@ impl From<HttpError> for OqaSearchError {
 }
 
 impl From<ruoqa::Error> for OqaSearchError {
-    /// Routed through the `openqa::client` module's `redact` helper first:
-    /// `ruoqa::Error` can embed a `url::Url` (`Request`/`Connection`/
-    /// `CrossOriginRedirect`),
-    /// and this crate's contract is that a fetch failure never carries a raw
-    /// URL (which could embed a credentialed openQA instance URL).
+    /// Routed through the `openqa::client` module's `describe` helper first:
+    /// this crate's contract is that a fetch failure never carries a raw URL
+    /// (which could embed a credentialed openQA instance URL) — see the
+    /// [`OpenQAError`] module-level doc for why that's guaranteed.
     fn from(source: ruoqa::Error) -> Self {
-        Self::Http(crate::openqa::client::redact(&source))
+        Self::Http(crate::openqa::client::describe(&source))
     }
 }
 
