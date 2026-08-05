@@ -100,31 +100,36 @@ pub enum RefhostError {
     RefreshJustFailed,
 }
 
-/// Errors from building an openQA API request or fetching jobs.
+/// Errors from building the openQA API client or fetching jobs.
 ///
 /// The connectors' best-effort helper [`OpenQABase::get_jobs`](crate::openqa)
 /// folds all *fetch* failures into a "no jobs" [`None`] result. The fallible variant
 /// [`OpenQABase::try_get_jobs`](crate::openqa) instead surfaces a fetch failure
 /// as [`Fetch`](Self::Fetch) so a caller (e.g. `KernelOpenQA::run`) can tell a
-/// genuinely-empty result apart from an unreachable openQA. This type also
-/// covers the failures that surface *before* the request is dispatched —
-/// building the signed request — plus the HMAC/clock preconditions for signing.
+/// genuinely-empty result apart from an unreachable openQA. `ruoqa::Error` is
+/// `#[non_exhaustive]` and covers eleven distinct failure modes (bad status,
+/// transport, TLS, config, redirect limits, ...); every one collapses onto
+/// [`Fetch`](Self::Fetch)/[`ClientBuild`](Self::ClientBuild) via the
+/// `openqa::client` module's `redact` helper, which strips any URL userinfo
+/// before the message reaches this type.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum OpenQAError {
-    /// The underlying HTTP layer failed to build the request or client.
+    /// The underlying HTTP layer failed to build the injected transport (e.g.
+    /// an unreadable CA bundle).
     #[error(transparent)]
     Http(#[from] HttpError),
 
+    /// The `ruoqa` client itself failed to build: a malformed `client.conf`,
+    /// invalid TLS setup, or an incompatible builder combination. Carries a
+    /// sanitized description (never the raw URL).
+    #[error("openQA client could not be built: {0}")]
+    ClientBuild(String),
+
     /// A jobs fetch failed: a transport error, a non-2xx status, or a malformed
-    /// JSON body. Carries a sanitized description (never the raw URL).
+    /// response body. Carries a sanitized description (never the raw URL).
     #[error("openQA jobs fetch failed: {0}")]
     Fetch(String),
-
-    /// The system clock is before the Unix epoch, so a request microtime
-    /// cannot be computed (required for the `X-API-Microtime` auth header).
-    #[error("system clock is before the Unix epoch; cannot compute request microtime")]
-    Clock,
 }
 
 /// Errors from the Gitea PR review-workflow connector ([`crate::gitea`]).

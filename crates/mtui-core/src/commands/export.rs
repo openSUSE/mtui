@@ -375,12 +375,15 @@ mod tests {
         // Build a real, populated kernel connector against the mock and seed it.
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
+        let openqa_transport = HttpClient::openqa_transport(VerifyPolicy::Default(false)).unwrap();
         let incident =
             build_incident(rrid.clone(), format!("{}/api", oqa.uri()), http.clone()).await;
-        let kernel = crate::commands::support::build_kernel_openqa(&incident, &oqa.uri(), http)
-            .run()
-            .await
-            .unwrap();
+        let kernel =
+            crate::commands::support::build_kernel_openqa(&incident, &oqa.uri(), openqa_transport)
+                .unwrap()
+                .run()
+                .await
+                .unwrap();
         assert!(
             kernel.results().is_some_and(|r| !r.is_empty()),
             "mock kernel connector should populate"

@@ -7,9 +7,9 @@
 //!
 //! * [`base`] — the shared query-parameter build, job fetch, and the
 //!   [`IncidentName`] seam and [`Job`] model.
-//! * [`client`] — the REST client reproducing the `openqa_client` auth contract
-//!   (INI `client.conf`, `X-API-Key`, HMAC-SHA1 `X-API-Hash`) over this crate's
-//!   shared [`HttpClient`](crate::http::HttpClient).
+//! * [`client`] — builds the [`ruoqa::Client`] (signed-request auth,
+//!   `client.conf` discovery, retries) over this crate's shared TLS/timeout
+//!   policy.
 //! * [`kernel`] — the "kernel" workflow ([`KernelOpenQA`]): the LTP test matrix.
 //! * `install` — the install-job → log-filename map (`install_logfile_for`).
 
@@ -20,6 +20,6 @@ pub mod kernel;
 
 pub(crate) use base::OPENQA_INSTALL_DISTRI;
 pub use base::{IncidentName, Job, JobModule, OpenQABase};
-pub use client::{ApiCredentials, ClientConf, OpenQAClient};
+pub use client::build_openqa_client_with_transport;
 pub(crate) use install::install_logfile_for;
 pub use kernel::KernelOpenQA;

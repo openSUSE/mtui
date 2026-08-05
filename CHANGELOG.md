@@ -30,6 +30,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- The openQA REST client is now built on the `ruoqa` crate instead of mtui's
+  own hand-rolled signed-request implementation. User-visible effects:
+  `$OPENQA_CONFIG` and `$XDG_CONFIG_HOME/openqa/client.conf` are now honoured
+  as `client.conf` search paths, in addition to `/etc/openqa/client.conf` and
+  `~/.config/openqa/client.conf`; a credentialed `openqa_instance` URL
+  (`https://user:pass@host`) now has the userinfo dropped when resolving the
+  request target, rather than merely redacted for display; and the
+  unauthenticated `Accept` header sent with every request changed from `json`
+  to `application/json` (both are accepted by openQA).
 - The headless `shell` error message no longer carries a roadmap reference:
   `"interactive shell attach is not available in this mode (Phase 6 REPL
   only)"` is now `"... (REPL only)"`.

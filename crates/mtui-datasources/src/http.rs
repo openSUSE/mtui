@@ -157,6 +157,30 @@ fn disable_insecure_warnings() {
     }
 }
 
+/// The timeout + TLS-verify posture shared by every `reqwest::Client` this
+/// crate builds: [`HttpClient::new`] and [`HttpClient::openqa_transport`].
+/// Kept as a single function so the two clients' TLS/timeout behaviour cannot
+/// drift apart.
+fn base_builder(verify: VerifyPolicy) -> Result<reqwest::ClientBuilder> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
+        .pool_max_idle_per_host(default_pool_size());
+
+    builder = match verify {
+        VerifyPolicy::Default(true) => builder,
+        VerifyPolicy::Default(false) => {
+            disable_insecure_warnings();
+            builder.danger_accept_invalid_certs(true)
+        }
+        VerifyPolicy::CaBundle(path) => {
+            let certs = load_ca_bundle(&path)?;
+            builder.tls_certs_only(certs)
+        }
+    };
+    Ok(builder)
+}
+
 /// A shared outbound HTTP client with a fixed timeout and TLS-verify posture.
 ///
 /// Built once and reused so concurrent fan-out at a single host reuses pooled
@@ -183,26 +207,33 @@ impl HttpClient {
     /// Returns [`HttpError::CaBundle`] if a configured CA bundle cannot be read
     /// or parsed, or [`HttpError::Request`] if the client fails to build.
     pub fn new(verify: VerifyPolicy) -> Result<Self> {
-        let mut builder = reqwest::Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .read_timeout(READ_TIMEOUT)
-            .pool_max_idle_per_host(default_pool_size());
-
-        builder = match verify {
-            VerifyPolicy::Default(true) => builder,
-            VerifyPolicy::Default(false) => {
-                disable_insecure_warnings();
-                builder.danger_accept_invalid_certs(true)
-            }
-            VerifyPolicy::CaBundle(path) => {
-                let certs = load_ca_bundle(&path)?;
-                builder.tls_certs_only(certs)
-            }
-        };
-
         Ok(Self {
-            inner: builder.build()?,
+            inner: base_builder(verify)?.build()?,
         })
+    }
+
+    /// Builds a dedicated `reqwest::Client` for injection into
+    /// [`ruoqa::ClientBuilder::http_client`](https://docs.rs/ruoqa).
+    ///
+    /// Shares this crate's timeout/TLS posture (via the crate-internal
+    /// `base_builder`) but is
+    /// **not** part of the shared connection pool: it additionally disables
+    /// redirects and reqwest-level retries, which `ruoqa` requires of an
+    /// injected client — it re-signs every request and follows same-origin
+    /// redirects itself, so a reqwest-level redirect would forward the
+    /// `X-API-Key`/`X-API-Hash` headers cross-origin (reqwest only strips
+    /// `Authorization`/`Cookie`/`Proxy-Authorization`), and a reqwest-level
+    /// retry would replay a stale signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpError::CaBundle`] if a configured CA bundle cannot be read
+    /// or parsed, or [`HttpError::Request`] if the client fails to build.
+    pub fn openqa_transport(verify: VerifyPolicy) -> Result<reqwest::Client> {
+        Ok(base_builder(verify)?
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .build()?)
     }
 
     /// Borrow the underlying `reqwest::Client` for callers that need the full
@@ -635,5 +666,41 @@ mod tests {
         let out = sanitize_url("alice:s3cret@host.example/x");
         assert_eq!(out, "***@host.example/x");
         assert!(!out.contains("s3cret"));
+    }
+
+    /// [`HttpClient::openqa_transport`] must not follow a redirect: a
+    /// reqwest-level redirect would forward `X-API-Key`/`X-API-Hash` to
+    /// whatever `Location` says, off-origin, since reqwest only strips the
+    /// standard `Authorization`/`Cookie`/`Proxy-Authorization` headers on a
+    /// cross-origin hop. `ruoqa` follows redirects itself (same-origin only),
+    /// so the injected client must be a dead end at the first hop.
+    #[tokio::test]
+    async fn openqa_transport_does_not_follow_redirects() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/start"))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", "/end"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/end"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let client = HttpClient::openqa_transport(VerifyPolicy::Default(true)).unwrap();
+        let resp = client
+            .get(format!("{}/start", server.uri()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            302,
+            "the transport must not follow the redirect itself"
+        );
     }
 }

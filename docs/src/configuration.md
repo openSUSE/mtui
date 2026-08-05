@@ -122,6 +122,16 @@ Defaults below are the built-in values.
 | `baremetal` | URL | `http://openqa.qam.suse.cz` | Baremetal openQA instance URL. |
 | `distri` | string | `sle` | openQA install `distri` parameter. |
 
+openQA API credentials (`key`/`secret`, used to sign requests with
+`X-API-Hash`) are **not** part of `mtui.toml`. They are read from the openQA
+project's own `client.conf` — an INI file with one `[host[:port]]` section per
+instance — searched at `/etc/openqa/client.conf` then
+`$XDG_CONFIG_HOME/openqa/client.conf` (or `~/.config/openqa/client.conf` when
+`$XDG_CONFIG_HOME` is unset), later files overriding earlier ones. Setting
+`$OPENQA_CONFIG` to a directory makes it the **only** path searched. An
+instance with no matching section (or no `client.conf` at all) is queried
+unauthenticated, which openQA permits for GET requests.
+
 ### `[gitea]`
 
 | Key | Type | Default | Meaning |

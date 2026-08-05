@@ -126,6 +126,9 @@ impl Command for SetWorkflow {
         let http = session
             .http_client()
             .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
+        let openqa_transport = session
+            .openqa_transport()
+            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let openqa_instance = session.config.openqa_instance.clone();
         let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
@@ -160,7 +163,8 @@ impl Command for SetWorkflow {
                 let mut kernel = Vec::new();
                 for host in [openqa_instance, openqa_baremetal] {
                     kernel.push(
-                        build_kernel_openqa(&incident, &host, http.clone())
+                        build_kernel_openqa(&incident, &host, openqa_transport.clone())
+                            .map_err(openqa_fetch_err)?
                             .run()
                             .await
                             .map_err(openqa_fetch_err)?,
@@ -464,11 +468,12 @@ mod tests {
         let host = session.config.openqa_instance.clone();
         let http = session.http_client().unwrap();
         let incident = build_incident(rrid, dashboard_api, http.clone()).await;
+        let openqa_transport = session.openqa_transport().unwrap();
         session
             .metadata_mut()
             .openqa_mut()
             .kernel
-            .push(build_kernel_openqa(&incident, &host, http));
+            .push(build_kernel_openqa(&incident, &host, openqa_transport).unwrap());
 
         let args = matches(&SetWorkflow, &["manual"]);
         SetWorkflow.call(&mut session, &args).await.unwrap();

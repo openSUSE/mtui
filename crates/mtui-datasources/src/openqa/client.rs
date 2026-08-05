@@ -1,399 +1,139 @@
-//! The openQA REST API client, reproducing the auth contract of the
-//! third-party python `openqa_client` package on top of this crate's shared
-//! [`HttpClient`].
+//! Builds the [`ruoqa::Client`] used by the openQA connectors.
 //!
-//! `openqa_client.client.OpenQA_Client`'s wire contract is:
-//!
-//! 1. reads `key`/`secret` for the server from INI `client.conf` files under
-//!    `/etc/openqa` and `~/.config/openqa` (later files override earlier);
-//! 2. sends `Accept: json` and, when a key is configured, `X-API-Key`;
-//! 3. signs every request with an HMAC-SHA1 over `"{path}{microtime}"` where
-//!    `path` is the request path+query with openQA's quirk substitutions
-//!    (`%20` → `+`, `~` → `%7E`), emitting `X-API-Microtime` and `X-API-Hash`.
-//!
-//! This module rebuilds that contract with `reqwest` (via [`HttpClient`]) so
-//! mtui needs no python runtime and no third-party client. GET requests do
-//! not strictly require signing (openQA allows unauthenticated GETs), but the
-//! signature is always attached when a secret is configured, matching that
-//! contract.
-
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use hmac::{Hmac, KeyInit, Mac};
-use sha1::Sha1;
+//! `ruoqa` owns the whole signed-request contract (INI `client.conf` /
+//! `$OPENQA_CONFIG` discovery, HMAC-SHA1 `X-API-Hash`, retries, and
+//! same-origin-only redirects) that this module used to hand-roll. The only
+//! thing left here is wiring mtui's shared TLS/timeout policy into it: an
+//! injected, redirect-less, no-reqwest-retry `reqwest::Client` (see
+//! [`crate::http::HttpClient::openqa_transport`]), because `ruoqa` re-signs and redirects
+//! itself and would otherwise leak `X-API-Key`/`X-API-Hash` across an
+//! `Authorization`-stripping-only reqwest redirect.
 
 use crate::error::OpenQAError;
-use crate::http::HttpClient;
+#[cfg(test)]
+use crate::http::{HttpClient, VerifyPolicy};
+use crate::http::{MAX_API_BODY, sanitize_url};
 
-type HmacSha1 = Hmac<Sha1>;
-
-/// The API credentials resolved for one openQA server.
+/// Builds a [`ruoqa::Client`] for `base_url` with a fresh, single-use
+/// transport.
 ///
-/// Mirrors the `key`/`secret` pair `OpenQA_Client` reads from `client.conf`.
-/// Both may be empty, in which case only unauthenticated GET requests are
-/// possible (logged at debug, and the caller continues).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ApiCredentials {
-    /// The API key, sent as the `X-API-Key` header.
-    pub key: String,
-    /// The API secret, used to HMAC-sign each request. Empty means "no signing".
-    pub secret: String,
-}
-
-impl ApiCredentials {
-    /// Whether a secret is present (and thus requests can be signed).
-    #[must_use]
-    fn can_sign(&self) -> bool {
-        !self.secret.is_empty()
-    }
-
-    /// Resolve credentials for `server` from parsed `client.conf` sections.
-    ///
-    /// Tries the bare `server` section first, then the full `baseurl`
-    /// section, else empty credentials.
-    #[must_use]
-    pub fn resolve(sections: &ClientConf, server: &str, baseurl: &str) -> Self {
-        sections
-            .credentials(server)
-            .or_else(|| sections.credentials(baseurl))
-            .unwrap_or_default()
-    }
-}
-
-/// Parsed `client.conf` INI: a map of section name → key/value pairs.
+/// Test/fixture scaffolding only: every production call site
+/// (`Session::openqa_transport` and its `mtui-core` callers) builds the
+/// transport once and reuses it across hosts via
+/// [`build_openqa_client_with_transport`] directly, so the connection pool set
+/// up by D1's dedicated openQA transport is actually shared. Kept
+/// crate-internal so it can't be reached for that (wrong, pool-defeating)
+/// purpose from outside this crate.
 ///
-/// Only the minimal INI shape openQA uses is supported: `[section]` headers and
-/// `key = value` lines. Comments (`#`/`;`) and blank lines are ignored. This
-/// avoids pulling in a full INI dependency for a two-key file.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ClientConf {
-    sections: BTreeMap<String, BTreeMap<String, String>>,
-}
-
-impl ClientConf {
-    /// The standard `client.conf` search paths, lowest precedence first.
-    ///
-    /// `("/etc/openqa", "~/.config/openqa")`; later files
-    /// override earlier ones for the same section/key.
-    #[must_use]
-    fn default_paths() -> Vec<PathBuf> {
-        let mut paths = vec![PathBuf::from("/etc/openqa/client.conf")];
-        if let Some(home) = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf()) {
-            paths.push(home.join(".config/openqa/client.conf"));
-        }
-        paths
-    }
-
-    /// Read and merge the `default_paths`.
-    ///
-    /// Missing files are skipped; an unreadable or malformed file is logged at
-    /// `warn` and skipped, so a bad config never hard-fails a lookup.
-    #[must_use]
-    pub fn load() -> Self {
-        Self::load_from(&Self::default_paths())
-    }
-
-    /// Read and merge the given paths (lowest precedence first).
-    #[must_use]
-    fn load_from(paths: &[PathBuf]) -> Self {
-        let mut conf = Self::default();
-        for path in paths {
-            match std::fs::read_to_string(path) {
-                Ok(contents) => conf.merge(&Self::parse(&contents)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    tracing::warn!("could not read openQA client.conf {}: {e}", path.display());
-                }
-            }
-        }
-        conf
-    }
-
-    /// Parse INI text into sections. Never fails: unparseable lines are skipped.
-    #[must_use]
-    fn parse(text: &str) -> Self {
-        let mut sections: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-        let mut current: Option<String> = None;
-        for raw in text.lines() {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-                continue;
-            }
-            if let Some(name) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                let name = name.trim().to_string();
-                sections.entry(name.clone()).or_default();
-                current = Some(name);
-            } else if let Some((k, v)) = line.split_once('=')
-                && let Some(section) = &current
-            {
-                sections
-                    .entry(section.clone())
-                    .or_default()
-                    .insert(k.trim().to_string(), v.trim().to_string());
-            }
-        }
-        Self { sections }
-    }
-
-    /// Merge `other` into `self`, with `other`'s values winning on conflict.
-    fn merge(&mut self, other: &Self) {
-        for (section, kvs) in &other.sections {
-            let dst = self.sections.entry(section.clone()).or_default();
-            for (k, v) in kvs {
-                dst.insert(k.clone(), v.clone());
-            }
-        }
-    }
-
-    /// Look up `key`/`secret` for a section, if both are present.
-    #[must_use]
-    fn credentials(&self, section: &str) -> Option<ApiCredentials> {
-        let kvs = self.sections.get(section)?;
-        let key = kvs.get("key")?;
-        let secret = kvs.get("secret")?;
-        Some(ApiCredentials {
-            key: key.clone(),
-            secret: secret.clone(),
-        })
-    }
-}
-
-/// Apply openQA's path-encoding quirks before signing.
+/// # Errors
 ///
-/// Applies `path.replace("%20", "+").replace("~", "%7E")`. The input
-/// is the already-percent-encoded request path+query.
-#[must_use]
-fn encode_path_for_signing(path: &str) -> String {
-    path.replace("%20", "+").replace('~', "%7E")
+/// See [`build_openqa_client_with_transport`], plus [`OpenQAError::Http`] if
+/// the transport itself fails to build (e.g. an unreadable CA bundle).
+#[cfg(test)]
+pub(crate) fn build_openqa_client(
+    verify: VerifyPolicy,
+    base_url: &str,
+) -> Result<ruoqa::Client, OpenQAError> {
+    build_openqa_client_with_transport(HttpClient::openqa_transport(verify)?, base_url)
 }
 
-/// Compute the `X-API-Hash` for a request path and microtime.
+/// Builds a [`ruoqa::Client`] for `base_url`, injecting an already-built
+/// `transport` (see [`crate::http::HttpClient::openqa_transport`]).
 ///
-/// `apisecret` keys an HMAC-SHA1 over the concatenation `"{path}{microtime}"`,
-/// hex-encoded — the exact scheme in `openqa_client._add_auth_headers`.
-#[must_use]
-fn compute_api_hash(secret: &str, path: &str, microtime: &str) -> String {
-    let mut mac =
-        HmacSha1::new_from_slice(secret.as_bytes()).expect("HMAC accepts a key of any length");
-    mac.update(encode_path_for_signing(path).as_bytes());
-    mac.update(microtime.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
-}
-
-/// The current time as a floating-point Unix timestamp string.
+/// Credentials are resolved by `ruoqa` itself from the standard
+/// `client.conf`/`$OPENQA_CONFIG` search path (see the crate docs), keyed on
+/// `base_url`'s host. mtui's own ruoqa-level retries are disabled
+/// (`max_retries(0)`): a flaky openQA is mtui's caller's problem to retry or
+/// fold to "no results" (see [`super::base::OpenQABase::get_jobs`]), not
+/// something to hide behind an opaque, cancellation-unaware retry loop.
 ///
-/// Mirrors python `str(time.time())`, used as `X-API-Microtime`. Returns
-/// [`OpenQAError::Clock`] if the system clock predates the Unix epoch.
-fn current_microtime() -> Result<String, OpenQAError> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| OpenQAError::Clock)?;
-    Ok(now.as_secs_f64().to_string())
-}
-
-/// A minimal openQA API client: base URL + credentials over an [`HttpClient`].
-#[derive(Debug, Clone)]
-pub struct OpenQAClient {
-    http: HttpClient,
-    /// The scheme+host base URL, e.g. `https://openqa.example.com`.
-    base_url: String,
-    credentials: ApiCredentials,
-}
-
-impl OpenQAClient {
-    /// Build a client for `base_url` (scheme+host) with the given
-    /// [`HttpClient`] and credentials.
-    #[must_use]
-    pub fn new(http: HttpClient, base_url: impl Into<String>, credentials: ApiCredentials) -> Self {
-        Self {
-            http,
-            base_url: base_url.into(),
-            credentials,
-        }
-    }
-
-    /// The base URL this client targets.
-    #[must_use]
-    pub(crate) fn base_url(&self) -> &str {
-        &self.base_url
-    }
-
-    /// Build a signed GET request to `/api/v1/{path}` with `params`.
-    ///
-    /// Builds the standard request shape: `Accept: json`, `X-API-Key` when a
-    /// key is set, and the `X-API-Microtime`/`X-API-Hash` pair when a secret is
-    /// set. The signature covers the request path+query (`/api/v1/{path}?...`).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OpenQAError::Clock`] if the system clock predates the Unix
-    /// epoch.
-    pub(crate) fn build_get(
-        &self,
-        path: &str,
-        params: &[(&str, String)],
-    ) -> Result<reqwest::RequestBuilder, OpenQAError> {
-        let api_path = format!("/api/v1/{path}");
-
-        // Encode the query ourselves (reqwest's `.query()` needs the `query`
-        // feature, which pulls in default features we disable). Build the same
-        // string we sign so the signed path exactly equals the sent path.
-        let query = build_query_string(params);
-        let path_url = if query.is_empty() {
-            api_path.clone()
-        } else {
-            format!("{api_path}?{query}")
-        };
-        let url = format!("{}{path_url}", self.base_url);
-
-        let mut builder = self.http.inner().get(&url).header("Accept", "json");
-
-        if !self.credentials.key.is_empty() {
-            builder = builder.header("X-API-Key", self.credentials.key.clone());
-        }
-        if self.credentials.can_sign() {
-            let microtime = current_microtime()?;
-            let hash = compute_api_hash(&self.credentials.secret, &path_url, &microtime);
-            builder = builder
-                .header("X-API-Microtime", microtime)
-                .header("X-API-Hash", hash);
-        }
-        Ok(builder)
-    }
-}
-
-/// Build the percent-encoded `key=value&...` query string for signing.
+/// # Errors
 ///
-/// Uses `application/x-www-form-urlencoded` encoding to match reqwest's
-/// `.query()` wire form, so the signed path equals the sent path.
-fn build_query_string(params: &[(&str, String)]) -> String {
-    params
-        .iter()
-        .map(|(k, v)| {
+/// Returns [`OpenQAError::ClientBuild`] if `ruoqa` fails to build the client
+/// (a malformed `client.conf`, or an invalid `User-Agent`/API key).
+pub fn build_openqa_client_with_transport(
+    transport: reqwest::Client,
+    base_url: &str,
+) -> Result<ruoqa::Client, OpenQAError> {
+    ruoqa::ClientBuilder::new()
+        .server(base_url)
+        .http_client(transport)
+        .retry(ruoqa::RetryPolicy::default().max_retries(0).deadline(None))
+        .max_response_bytes(MAX_API_BODY)
+        .build()
+        .map_err(|e| OpenQAError::ClientBuild(redact(&e)))
+}
+
+/// Redacts any URL userinfo from a [`ruoqa::Error`]'s rendered message before
+/// it reaches [`OpenQAError`].
+///
+/// Three of `ruoqa::Error`'s variants embed a `url::Url` in their `Display`:
+/// `Request`, `Connection`, and — the one path that can actually carry a
+/// *server-supplied* credential rather than mtui's own — `CrossOriginRedirect`,
+/// whose `to` comes straight from a `Location` header a malicious or
+/// misconfigured openQA instance controls. Each is rebuilt here with its
+/// URL(s) run through [`sanitize_url`] individually, rather than sanitizing
+/// the whole rendered string: `Display` for `CrossOriginRedirect` embeds
+/// *two* URLs, and [`sanitize_url`] only recognises a single bare
+/// `scheme://[user:pass@]host` shape — scanning the concatenated message finds
+/// the first URL (never credentialed here: it's `ruoqa`'s own request URL),
+/// authorises on it, and returns the *original, unmodified* string, silently
+/// skipping the second, credentialed one. Every other variant renders as-is:
+/// none of them embed a URL, per `ruoqa::error`'s source.
+pub(crate) fn redact(e: &ruoqa::Error) -> String {
+    match e {
+        ruoqa::Error::Request {
+            method,
+            url,
+            status,
+            ..
+        } => {
+            format!("{method} {} returned {status}", sanitize_url(url.as_str()))
+        }
+        ruoqa::Error::Connection { url, source } => {
             format!(
-                "{}={}",
-                urlencoding::encode(k),
-                urlencoding::encode(v).replace("%20", "+")
+                "failed to connect to {}: {}",
+                sanitize_url(url.as_str()),
+                sanitize_url(&source.to_string())
             )
-        })
-        .collect::<Vec<_>>()
-        .join("&")
+        }
+        ruoqa::Error::CrossOriginRedirect { from, to } => {
+            format!(
+                "refusing to follow redirect from {} to a different origin {}",
+                sanitize_url(from.as_str()),
+                sanitize_url(to.as_str())
+            )
+        }
+        other => other.to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Also the regression pin for "`build_openqa_client_with_transport` never
+    /// calls `.tls()`/`.timeouts()`": either is a compile-time-silent, only-
+    /// fails-at-`build()` `Error::IncompatibleHttpClient` once an
+    /// `http_client` is injected (ruoqa's own contract, exercised directly in
+    /// `tests/openqa.rs::injected_transport_rejects_tls_override`/
+    /// `_timeouts_override`), so this assertion turning `Err` is what actually
+    /// catches a future edit re-adding either call here. Observed red: adding
+    /// `.tls(TlsMode::danger_accept_invalid_certs())` to
+    /// `build_openqa_client_with_transport` fails this assertion.
     #[test]
-    fn parse_reads_sections_and_keys() {
-        let conf = ClientConf::parse(
-            "# a comment\n\
-             [openqa.example.com]\n\
-             key = ABCDEF\n\
-             secret = 123456\n\
-             \n\
-             ; another\n\
-             [other]\n\
-             key = ZZZ\n\
-             secret = YYY\n",
-        );
-        let creds = conf.credentials("openqa.example.com").unwrap();
-        assert_eq!(creds.key, "ABCDEF");
-        assert_eq!(creds.secret, "123456");
-        let other = conf.credentials("other").unwrap();
-        assert_eq!(other.key, "ZZZ");
+    fn build_openqa_client_succeeds_with_default_verify() {
+        // No `client.conf` in this process's search path is assumed; a bad
+        // config would surface as `ClientBuild`, exercised via the
+        // integration suite instead (needs a real filesystem fixture).
+        let client = build_openqa_client(VerifyPolicy::Default(true), "openqa.example.com");
+        assert!(client.is_ok());
     }
 
-    #[test]
-    fn parse_skips_malformed_lines_without_failing() {
-        let conf = ClientConf::parse("garbage-without-section\n[s]\nkey=k\nsecret=s\nno-equals\n");
-        let creds = conf.credentials("s").unwrap();
-        assert_eq!(creds.key, "k");
-        assert_eq!(creds.secret, "s");
-    }
-
-    #[test]
-    fn credentials_needs_both_key_and_secret() {
-        let conf = ClientConf::parse("[s]\nkey=only\n");
-        assert!(conf.credentials("s").is_none());
-    }
-
-    #[test]
-    fn merge_later_paths_override_earlier() {
-        let mut base = ClientConf::parse("[s]\nkey=old\nsecret=old\n");
-        let over = ClientConf::parse("[s]\nkey=new\nsecret=new\n");
-        base.merge(&over);
-        let creds = base.credentials("s").unwrap();
-        assert_eq!(creds.key, "new");
-        assert_eq!(creds.secret, "new");
-    }
-
-    #[test]
-    fn resolve_prefers_server_then_baseurl_then_empty() {
-        let conf = ClientConf::parse(
-            "[openqa.example.com]\nkey=SRV\nsecret=srvsec\n\
-             [https://openqa.example.com]\nkey=URL\nsecret=urlsec\n",
-        );
-        // server section wins
-        let c = ApiCredentials::resolve(&conf, "openqa.example.com", "https://openqa.example.com");
-        assert_eq!(c.key, "SRV");
-        // fall back to baseurl section
-        let c2 = ApiCredentials::resolve(&conf, "missing", "https://openqa.example.com");
-        assert_eq!(c2.key, "URL");
-        // empty when neither present
-        let c3 = ApiCredentials::resolve(&conf, "missing", "https://also.missing");
-        assert_eq!(c3, ApiCredentials::default());
-    }
-
-    #[test]
-    fn encode_path_applies_openqa_quirks() {
-        assert_eq!(
-            encode_path_for_signing("/api/v1/jobs?a=x%20y~z"),
-            "/api/v1/jobs?a=x+y%7Ez"
-        );
-    }
-
-    #[test]
-    fn compute_api_hash_is_a_stable_known_vector() {
-        // Fixed inputs -> a deterministic HMAC-SHA1 hex digest, cross-checked
-        // against python: hmac.new(b"secret", b"/api/v1/jobs1000.0",
-        // hashlib.sha1).hexdigest(). This locks the signing scheme (key,
-        // message ordering, hex encoding) so an accidental change is caught.
-        let hash = compute_api_hash("secret", "/api/v1/jobs", "1000.0");
-        assert_eq!(hash, "f50340ce52ef5590362f4adf2eb03cf04aef7862");
-        assert_eq!(hash.len(), 40); // SHA-1 hex is 40 chars
-    }
-
-    #[test]
-    fn compute_api_hash_applies_path_quirks_before_signing() {
-        // "%20" and "~" in the path are rewritten before hashing, so a path
-        // carrying them must hash the same as its rewritten form.
-        let raw = compute_api_hash("s", "/api/v1/x?a=b%20c~d", "1.0");
-        let pre = compute_api_hash("s", "/api/v1/x?a=b+c%7Ed", "1.0");
-        assert_eq!(raw, pre);
-    }
-
-    #[test]
-    fn can_sign_reflects_secret_presence() {
-        assert!(!ApiCredentials::default().can_sign());
-        assert!(
-            ApiCredentials {
-                key: "k".into(),
-                secret: "s".into()
-            }
-            .can_sign()
-        );
-    }
-
-    #[test]
-    fn build_query_string_encodes_params() {
-        let q = build_query_string(&[
-            ("build", ":smelt:1:bash".to_string()),
-            ("latest", "1".to_string()),
-        ]);
-        assert!(q.contains("build=%3Asmelt%3A1%3Abash"));
-        assert!(q.contains("latest=1"));
-    }
+    // `redact` itself is exercised end-to-end against a *real*
+    // `ruoqa::Error::CrossOriginRedirect` (the one variant that can carry a
+    // server-supplied credential) in
+    // `tests/openqa.rs::try_get_jobs_error_never_leaks_a_credential_from_a_redirect_location`:
+    // `ruoqa::Error`'s variants are `#[non_exhaustive]`, so this crate cannot
+    // construct one directly to unit-test `redact`'s match arms in isolation.
 }
