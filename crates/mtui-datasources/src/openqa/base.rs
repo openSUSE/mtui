@@ -45,9 +45,9 @@ pub struct Job {
     /// The test/job name (e.g. `qam-incidentinstall`).
     #[serde(default)]
     pub test: String,
-    /// The overall job result (e.g. `passed`, `failed`).
-    #[serde(default)]
-    pub(crate) result: String,
+    /// The overall job result.
+    #[serde(default = "default_job_result")]
+    pub(crate) result: ruoqa::consts::JobResult,
     /// The id of the job this job was cloned as, if any.
     #[serde(default)]
     pub(crate) clone_id: Option<i64>,
@@ -57,6 +57,22 @@ pub struct Job {
     /// The per-module results.
     #[serde(default)]
     pub(crate) modules: Vec<JobModule>,
+}
+
+/// The default for [`Job::result`] when the field is missing from the
+/// response: `#[serde(default)]` needs a fallible-free `Default`, which the
+/// foreign, `#[non_exhaustive]` [`ruoqa::consts::JobResult`] doesn't derive
+/// (and this crate can't add one under orphan rules), so this names the
+/// fallback explicitly instead.
+///
+/// Deliberately [`Unknown`](ruoqa::consts::JobResult::Unknown), not
+/// [`None`](ruoqa::consts::JobResult::None): openQA itself sends the string
+/// `"none"` for a genuinely pending job (that value deserializes straight
+/// into `JobResult::None`, no default involved), so this fallback is reserved
+/// for the field being *absent* from a malformed/truncated response — a
+/// distinct "we don't know" case this crate has no evidence to call `None`.
+fn default_job_result() -> ruoqa::consts::JobResult {
+    ruoqa::consts::JobResult::Unknown
 }
 
 /// One module within an openQA job.
