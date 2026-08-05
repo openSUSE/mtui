@@ -19,6 +19,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use futures::stream::{self, StreamExt};
+use reqwest::Method;
+use ruoqa::consts::JobResult as OqaJobResult;
 use scraper::{Html, Selector};
 
 use crate::error::OqaSearchError;
@@ -48,6 +50,15 @@ async fn get_json(http: &HttpClient, url: &str) -> Result<serde_json::Value, Oqa
 async fn fetch_url_content(http: &HttpClient, url: &str) -> Result<String, OqaSearchError> {
     let bytes = http.get_bytes_capped(url, MAX_API_BODY).await?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// GET `path` (relative to `oqa`'s base URL) and return the parsed JSON body.
+///
+/// `ruoqa::Client::request` already parses the response and enforces the
+/// client's `max_response_bytes` cap, so — unlike [`get_json`] — there is no
+/// separate byte-fetch step.
+async fn oqa_request(oqa: &ruoqa::Client, path: &str) -> Result<serde_json::Value, OqaSearchError> {
+    Ok(oqa.request(Method::GET, path, None).await?)
 }
 
 // --- Incident info (Dashboard) ---
@@ -146,27 +157,30 @@ async fn fallback_build(
 ///
 /// Returns [`OqaSearchError::Http`] if openQA cannot be reached.
 pub async fn incident_jobs(
-    http: &HttpClient,
+    oqa: &ruoqa::Client,
     build: &str,
-    url_openqa: &str,
     include_obsoleted: bool,
 ) -> Result<Vec<JobResult>, OqaSearchError> {
     if build.is_empty() {
         return Ok(vec![]);
     }
     let encoded = urlencoding::encode(build);
-    let url = format!("{url_openqa}/api/v1/jobs?build={encoded}");
-    let data = get_json(http, &url).await?;
+    let data = oqa_request(oqa, &format!("/api/v1/jobs?build={encoded}")).await?;
     let jobs = data.get("jobs").and_then(|j| j.as_array());
     let Some(jobs) = jobs else {
         return Ok(vec![]);
     };
 
-    let openqa_trimmed = url_openqa.trim_end_matches('/');
+    let openqa_trimmed = oqa.base_url().as_str().trim_end_matches('/').to_owned();
     let mut rows: Vec<JobResult> = Vec::new();
     for job in jobs {
         let result = job.get("result").and_then(|r| r.as_str()).unwrap_or("");
-        if result == "obsoleted" && !include_obsoleted {
+        let is_obsoleted = job
+            .get("result")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<OqaJobResult>(v).ok())
+            == Some(OqaJobResult::Obsoleted);
+        if is_obsoleted && !include_obsoleted {
             continue;
         }
         let settings = job.get("settings");
@@ -217,10 +231,9 @@ pub async fn incident_jobs(
 
 /// Fetch the full openQA job-group list for a host.
 async fn fetch_openqa_groups(
-    http: &HttpClient,
-    url_openqa: &str,
+    oqa: &ruoqa::Client,
 ) -> Result<Vec<serde_json::Value>, OqaSearchError> {
-    let data = get_json(http, &format!("{url_openqa}/api/v1/job_groups")).await?;
+    let data = oqa_request(oqa, "/api/v1/job_groups").await?;
     Ok(data.as_array().cloned().unwrap_or_default())
 }
 
@@ -329,34 +342,27 @@ fn get_group_id(groups: &[serde_json::Value], key: &str) -> Option<i64> {
 // --- openQA job lookups ---
 
 /// Browser-facing openQA overview URL.
-fn openqa_print_url(url_openqa: &str, version: &str, build: &str, group_id: i64) -> String {
+fn openqa_print_url(base_url: &str, version: &str, build: &str, group_id: i64) -> String {
     format!(
-        "{url_openqa}/tests/overview?distri=sle&version={version}&build={build}&groupid={group_id}"
+        "{base_url}/tests/overview?distri=sle&version={version}&build={build}&groupid={group_id}"
     )
 }
 
-/// API endpoint for filtered openQA jobs in a build. Returns `None` for an
-/// unknown state.
-fn openqa_build_url(
-    state: &str,
-    url_openqa: &str,
-    version: &str,
-    build: &str,
-    group_id: i64,
-) -> Option<String> {
+/// API path (relative to the client's base URL) for filtered openQA jobs in a
+/// build. Returns `None` for an unknown state.
+fn openqa_build_path(state: &str, version: &str, build: &str, group_id: i64) -> Option<String> {
     let suffix = oqa_query_string(state)?;
     Some(format!(
-        "{url_openqa}/api/v1/jobs/overview?distri=sle&version={version}&build={build}&groupid={group_id}{suffix}"
+        "/api/v1/jobs/overview?distri=sle&version={version}&build={build}&groupid={group_id}{suffix}"
     ))
 }
 
 /// Set of incident IDs being tested by an openQA job.
 async fn openqa_job_issues(
-    http: &HttpClient,
-    url_openqa: &str,
+    oqa: &ruoqa::Client,
     job_id: i64,
 ) -> Result<BTreeSet<i64>, OqaSearchError> {
-    let response = get_json(http, &format!("{url_openqa}/api/v1/jobs/{job_id}")).await?;
+    let response = oqa_request(oqa, &format!("/api/v1/jobs/{job_id}")).await?;
     let settings = response
         .get("job")
         .and_then(|j| j.get("settings"))
@@ -403,11 +409,10 @@ fn overview_len(value: &serde_json::Value) -> usize {
 
 /// Resolve PASSED / FAILED / RUNNING for one openQA build.
 async fn query_version_status(
-    http: &HttpClient,
+    oqa: &ruoqa::Client,
     version: &str,
     build: &str,
     group_id: i64,
-    url_openqa: &str,
 ) -> Result<VersionResult, OqaSearchError> {
     // Workaround: TERADATA jobs share the base version's URL.
     let version_oqa = if version == "12-SP3-TERADATA" {
@@ -416,18 +421,23 @@ async fn query_version_status(
         version
     };
 
-    let print_url = openqa_print_url(url_openqa, version_oqa, build, group_id);
+    // `ruoqa`'s resolved `base_url` always carries a trailing `/` (`Url`'s own
+    // normalisation); trim it so the browser URL doesn't double up the slash.
+    let base_url = oqa.base_url().as_str().trim_end_matches('/');
+    let print_url = openqa_print_url(base_url, version_oqa, build, group_id);
     // These states are always valid; the .expect documents that invariant.
-    let running_url = openqa_build_url("running", url_openqa, version_oqa, build, group_id)
+    let running_path = openqa_build_path("running", version_oqa, build, group_id)
         .expect("running is a valid state");
-    let failed_url = openqa_build_url("failed", url_openqa, version_oqa, build, group_id)
-        .expect("failed is a valid state");
+    let failed_path =
+        openqa_build_path("failed", version_oqa, build, group_id).expect("failed is a valid state");
 
     // The running and failed overview queries are independent; fetch them
     // concurrently. Both are always needed, and the failed>0 / running>0
     // precedence below is applied to the results, so ordering is unchanged.
-    let (running_results, failed_results) =
-        tokio::join!(get_json(http, &running_url), get_json(http, &failed_url));
+    let (running_results, failed_results) = tokio::join!(
+        oqa_request(oqa, &running_path),
+        oqa_request(oqa, &failed_path)
+    );
     let running_results = running_results?;
     let failed_results = failed_results?;
 
@@ -606,13 +616,12 @@ fn log_matches_package(log: &str, packages: &[String]) -> bool {
 /// recorded as a `failed` row with a note, so a flaky openQA cannot abort the
 /// command.
 pub async fn single_incidents(
-    http: &HttpClient,
+    oqa: &ruoqa::Client,
     build: &str,
     versions: &[String],
-    url_openqa: &str,
     max_parallel: usize,
 ) -> Vec<VersionResult> {
-    let groups = match fetch_openqa_groups(http, url_openqa).await {
+    let groups = match fetch_openqa_groups(oqa).await {
         Ok(g) => g,
         Err(e) => {
             tracing::error!("openQA job-group fetch failed: {e}");
@@ -631,11 +640,12 @@ pub async fn single_incidents(
         .map(|(idx, version)| (idx, version.clone(), get_group_id(&groups, version)))
         .collect();
     let build = build.to_owned();
-    let url_openqa = url_openqa.to_owned();
     let mut indexed: Vec<(usize, VersionResult)> = stream::iter(jobs)
         .map(|(idx, version, group_id)| {
             let build = build.clone();
-            let url_openqa = url_openqa.clone();
+            // `ruoqa::Client` is cheaply `Clone` (`Arc`-backed), matching
+            // `reqwest::Client`'s own clone-to-share-pool convention.
+            let oqa = oqa.clone();
             async move {
                 let Some(group_id) = group_id else {
                     let note = format!(
@@ -652,9 +662,7 @@ pub async fn single_incidents(
                         },
                     );
                 };
-                let row = match query_version_status(http, &version, &build, group_id, &url_openqa)
-                    .await
-                {
+                let row = match query_version_status(&oqa, &version, &build, group_id).await {
                     Ok(row) => row,
                     Err(e) => VersionResult {
                         version,
@@ -676,12 +684,11 @@ pub async fn single_incidents(
 
 /// Walk the last `days` days of aggregated builds for each group.
 pub async fn aggregated_updates(
-    http: &HttpClient,
+    oqa: &ruoqa::Client,
     incident_id: &str,
     versions: &[String],
     days: u32,
     groups_wanted: &[String],
-    url_openqa: &str,
     max_parallel: usize,
 ) -> Vec<GroupResult> {
     let filtered_versions: Vec<String> = versions
@@ -696,7 +703,7 @@ pub async fn aggregated_updates(
 
     let incident_id_int: Option<i64> = incident_id.parse().ok();
 
-    let groups = match fetch_openqa_groups(http, url_openqa).await {
+    let groups = match fetch_openqa_groups(oqa).await {
         Ok(g) => g,
         Err(e) => {
             tracing::error!("openQA job-group fetch failed: {e}");
@@ -733,20 +740,13 @@ pub async fn aggregated_updates(
                 .map(move |(vi, version)| (gi, vi, version.clone(), group_id))
         })
         .collect();
-    let url_openqa = url_openqa.to_owned();
     let mut scanned: Vec<(usize, usize, VersionResult)> = stream::iter(jobs)
         .map(|(gi, vi, version, group_id)| {
-            let url_openqa = url_openqa.clone();
+            let oqa = oqa.clone();
             async move {
-                let row = scan_aggregated_for_version(
-                    http,
-                    &version,
-                    days,
-                    group_id,
-                    incident_id_int,
-                    &url_openqa,
-                )
-                .await;
+                let row =
+                    scan_aggregated_for_version(&oqa, &version, days, group_id, incident_id_int)
+                        .await;
                 (gi, vi, row)
             }
         })
@@ -771,21 +771,20 @@ pub async fn aggregated_updates(
 
 /// Find the most recent aggregated build covering the incident.
 async fn scan_aggregated_for_version(
-    http: &HttpClient,
+    oqa: &ruoqa::Client,
     version: &str,
     days: u32,
     group_id: i64,
     incident_id: Option<i64>,
-    url_openqa: &str,
 ) -> VersionResult {
     let now = current_utc_date();
     for i in 0..days {
         let day = now - chrono::Duration::days(i64::from(i));
         let build = format!("{}-1", day.format("%Y%m%d"));
-        let Some(job_url) = openqa_build_url("all", url_openqa, version, &build, group_id) else {
+        let Some(job_path) = openqa_build_path("all", version, &build, group_id) else {
             continue;
         };
-        let jobs = match get_json(http, &job_url).await {
+        let jobs = match oqa_request(oqa, &job_path).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::debug!("aggregated query for {version}/{build} failed: {e}");
@@ -799,13 +798,13 @@ async fn scan_aggregated_for_version(
         let Some(job_id) = first.get("id").and_then(serde_json::Value::as_i64) else {
             continue;
         };
-        let issues = match openqa_job_issues(http, url_openqa, job_id).await {
+        let issues = match openqa_job_issues(oqa, job_id).await {
             Ok(i) => i,
             Err(_) => continue,
         };
 
         if incident_id.is_none() || incident_id.is_some_and(|id| issues.contains(&id)) {
-            return match query_version_status(http, version, &build, group_id, url_openqa).await {
+            return match query_version_status(oqa, version, &build, group_id).await {
                 Ok(row) => row,
                 Err(e) => VersionResult {
                     version: version.to_string(),

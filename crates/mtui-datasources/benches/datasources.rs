@@ -247,12 +247,20 @@ fn bench_oqa_single_incidents(c: &mut Criterion) {
         (server, uri, versions)
     });
 
-    let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
+    let transport =
+        HttpClient::openqa_transport(VerifyPolicy::Default(true)).expect("transport builds");
+    let oqa = ruoqa::ClientBuilder::new()
+        .server(uri.clone())
+        .http_client(transport)
+        .config_paths(vec![])
+        .retry(ruoqa::RetryPolicy::default().max_retries(0).deadline(None))
+        .build()
+        .expect("ruoqa client builds");
     let mut g = c.benchmark_group("oqa/single_incidents");
     for bound in [1usize, OQA_VERSIONS] {
         g.bench_with_input(BenchmarkId::from_parameter(bound), &bound, |b, &bound| {
             b.to_async(&rt).iter(|| async {
-                black_box(single_incidents(&http, ":1:pkg", &versions, &uri, bound).await)
+                black_box(single_incidents(&oqa, ":1:pkg", &versions, bound).await)
             });
         });
     }

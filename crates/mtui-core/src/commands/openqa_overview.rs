@@ -152,6 +152,14 @@ impl Command for OpenQAOverview {
         let http = session
             .http_client()
             .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
+        let openqa_transport = session
+            .openqa_transport()
+            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
+        let oqa_client = mtui_datasources::openqa::build_openqa_client_with_transport(
+            openqa_transport,
+            &url_openqa,
+        )
+        .map_err(|e| CommandError::Other(format!("could not build openQA client: {e}")))?;
 
         // incident_id is maintenance_id ("1.2" for SLFO); effective id falls back
         // to the review id (the Gitea PR number) when maintenance_id is non-int.
@@ -196,8 +204,7 @@ impl Command for OpenQAOverview {
         let single_fut = async {
             match openqa_versions {
                 Some(versions) => {
-                    oqa::single_incidents(&http, &build, versions, &url_openqa, max_oqa_parallel)
-                        .await
+                    oqa::single_incidents(&oqa_client, &build, versions, max_oqa_parallel).await
                 }
                 None => Vec::new(),
             }
@@ -206,12 +213,11 @@ impl Command for OpenQAOverview {
             match openqa_versions {
                 Some(versions) if !no_aggregated => {
                     oqa::aggregated_updates(
-                        &http,
+                        &oqa_client,
                         &effective_incident_id,
                         versions,
                         days,
                         &groups,
-                        &url_openqa,
                         max_oqa_parallel,
                     )
                     .await

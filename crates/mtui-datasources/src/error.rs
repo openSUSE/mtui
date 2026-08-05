@@ -278,6 +278,17 @@ impl From<HttpError> for OqaSearchError {
     }
 }
 
+impl From<ruoqa::Error> for OqaSearchError {
+    /// Routed through the `openqa::client` module's `redact` helper first:
+    /// `ruoqa::Error` can embed a `url::Url` (`Request`/`Connection`/
+    /// `CrossOriginRedirect`),
+    /// and this crate's contract is that a fetch failure never carries a raw
+    /// URL (which could embed a credentialed openQA instance URL).
+    fn from(source: ruoqa::Error) -> Self {
+        Self::Http(crate::openqa::client::redact(&source))
+    }
+}
+
 /// Errors from the QEM Dashboard connector ([`crate::qem_dashboard`]).
 ///
 /// The dashboard client's default read helpers remain best-effort: every

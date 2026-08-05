@@ -21,6 +21,22 @@ fn client() -> HttpClient {
     HttpClient::new(VerifyPolicy::Default(true)).expect("client builds")
 }
 
+/// A `ruoqa::Client` for the openQA-targeted entry points
+/// (`single_incidents`/`aggregated_updates`/`incident_jobs`), pointed at
+/// `server_uri` with credential discovery disabled (`config_paths(vec![])`)
+/// so tests are hermetic.
+fn oqa_client(server_uri: &str) -> ruoqa::Client {
+    let transport =
+        HttpClient::openqa_transport(VerifyPolicy::Default(true)).expect("transport builds");
+    ruoqa::ClientBuilder::new()
+        .server(server_uri)
+        .http_client(transport)
+        .config_paths(vec![])
+        .retry(ruoqa::RetryPolicy::default().max_retries(0).deadline(None))
+        .build()
+        .expect("ruoqa client builds")
+}
+
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/oqa_search")
 }
@@ -60,10 +76,9 @@ async fn single_incidents_passed() {
         .await;
 
     let rows = single_incidents(
-        &client(),
+        &oqa_client(&server.uri()),
         ":12358:bash",
         &["15-SP5".to_string()],
-        &server.uri(),
         4,
     )
     .await;
@@ -104,10 +119,9 @@ async fn single_incidents_failed_counts_jobs() {
         .await;
 
     let rows = single_incidents(
-        &client(),
+        &oqa_client(&server.uri()),
         ":12358:bash",
         &["15-SP5".to_string()],
-        &server.uri(),
         4,
     )
     .await;
@@ -121,10 +135,9 @@ async fn single_incidents_unknown_version_records_note() {
     mount_job_groups(&server, vec![job_group(490, "SLE 15 SP5 Core Incidents")]).await;
 
     let rows = single_incidents(
-        &client(),
+        &oqa_client(&server.uri()),
         ":12358:bash",
         &["99-SP99".to_string()],
-        &server.uri(),
         4,
     )
     .await;
@@ -147,10 +160,9 @@ async fn single_incidents_teradata_uses_base_version_in_url() {
         .await;
 
     let rows = single_incidents(
-        &client(),
+        &oqa_client(&server.uri()),
         ":12358:bash",
         &["12-SP3-TERADATA".to_string()],
-        &server.uri(),
         4,
     )
     .await;
@@ -173,12 +185,11 @@ async fn aggregated_updates_skips_excluded_versions() {
     .await;
 
     let out = aggregated_updates(
-        &client(),
+        &oqa_client(&server.uri()),
         "12358",
         &["15-SP4-TERADATA".to_string(), "16.0".to_string()],
         5,
         &["core".to_string()],
-        &server.uri(),
         4,
     )
     .await;
@@ -229,12 +240,11 @@ async fn aggregated_updates_finds_matching_build() {
         .await;
 
     let out = aggregated_updates(
-        &client(),
+        &oqa_client(&server.uri()),
         "12358",
         &["15-SP5".to_string()],
         5,
         &["core".to_string()],
-        &server.uri(),
         4,
     )
     .await;
@@ -263,12 +273,11 @@ async fn aggregated_updates_missing_after_window() {
         .await;
 
     let out = aggregated_updates(
-        &client(),
+        &oqa_client(&server.uri()),
         "12358",
         &["15-SP5".to_string()],
         3,
         &["core".to_string()],
-        &server.uri(),
         4,
     )
     .await;
@@ -302,12 +311,11 @@ async fn aggregated_updates_preserves_group_and_version_order() {
         .await;
 
     let out = aggregated_updates(
-        &client(),
+        &oqa_client(&server.uri()),
         "12358",
         &["15-SP5".to_string(), "15-SP4".to_string()],
         2,
         &["core".to_string(), "cloud".to_string()],
-        &server.uri(),
         8,
     )
     .await;
@@ -598,7 +606,7 @@ async fn incident_jobs_drops_obsoleted_by_default() {
         .mount(&server)
         .await;
 
-    let rows = incident_jobs(&client(), ":git:5137:libica", &server.uri(), false)
+    let rows = incident_jobs(&oqa_client(&server.uri()), ":git:5137:libica", false)
         .await
         .expect("ok");
     let results: Vec<&str> = rows.iter().map(|r| r.result.as_str()).collect();
@@ -619,7 +627,7 @@ async fn incident_jobs_include_obsoleted() {
         })))
         .mount(&server)
         .await;
-    let rows = incident_jobs(&client(), ":b", &server.uri(), true)
+    let rows = incident_jobs(&oqa_client(&server.uri()), ":b", true)
         .await
         .expect("ok");
     assert_eq!(rows.len(), 1);
@@ -629,10 +637,36 @@ async fn incident_jobs_include_obsoleted() {
 #[tokio::test]
 async fn incident_jobs_empty_build_makes_no_request() {
     // A falsy build short-circuits with no HTTP call (no server needed).
-    let rows = incident_jobs(&client(), "", "https://openqa.invalid", false)
+    let rows = incident_jobs(&oqa_client("https://openqa.invalid"), "", false)
         .await
         .expect("ok");
     assert!(rows.is_empty());
+}
+
+/// `OqaSearchError`'s `From<ruoqa::Error>` conversion never leaks a credential
+/// embedded in a server-controlled `Location` header (a cross-origin
+/// redirect `ruoqa` refuses to follow but whose error message embeds both
+/// URLs verbatim). Mirrors
+/// `openqa.rs::try_get_jobs_error_never_leaks_a_credential_from_a_redirect_location`
+/// for the `oqa_search` call sites migrated in Phase 2.
+#[tokio::test]
+async fn incident_jobs_error_never_leaks_a_credential_from_a_redirect_location() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/jobs"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", "https://alice:s3cret@evil.example.com/x"),
+        )
+        .mount(&server)
+        .await;
+
+    let err = incident_jobs(&oqa_client(&server.uri()), ":git:5137:libica", false)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(!err.contains("s3cret"), "error leaked credential: {err}");
+    assert!(!err.contains("alice"), "error leaked credential: {err}");
 }
 
 // --- Golden-fixture heuristic tests (parity with the vendored .matches) ---
@@ -746,7 +780,7 @@ async fn single_incidents_request_count_is_exact() {
         "15-SP4".to_string(),
         "12-SP5".to_string(),
     ];
-    let rows = single_incidents(&client(), ":12358:bash", &versions, &server.uri(), 4).await;
+    let rows = single_incidents(&oqa_client(&server.uri()), ":12358:bash", &versions, 4).await;
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|r| r.status == "passed"));
     // Output order matches the input order regardless of completion order.
@@ -796,7 +830,7 @@ async fn single_incidents_runs_versions_concurrently() {
     // bound. Sequential lower bound would be 8×delay = 800ms; bounded-parallel
     // (bound ≥ 4) is closer to ~2×delay. Assert well under the sequential bound.
     let start = std::time::Instant::now();
-    let rows = single_incidents(&client(), ":12358:bash", &versions, &server.uri(), 8).await;
+    let rows = single_incidents(&oqa_client(&server.uri()), ":12358:bash", &versions, 8).await;
     let elapsed = start.elapsed();
 
     assert_eq!(rows.len(), 4);
@@ -827,7 +861,7 @@ async fn single_incidents_respects_bound_of_one() {
     // delay), so serialised ≈ 2×delay while bound≥2 would be ≈ 1×delay. Assert
     // it takes at least the serialised lower bound.
     let start = std::time::Instant::now();
-    let rows = single_incidents(&client(), ":12358:bash", &versions, &server.uri(), 1).await;
+    let rows = single_incidents(&oqa_client(&server.uri()), ":12358:bash", &versions, 1).await;
     let elapsed = start.elapsed();
 
     assert_eq!(rows.len(), 2);
