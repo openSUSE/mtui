@@ -39,6 +39,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   request target, rather than merely redacted for display; and the
   unauthenticated `Accept` header sent with every request changed from `json`
   to `application/json` (both are accepted by openQA).
+- `openqa_jobs` and `openqa_overview` now authenticate against openQA when
+  `client.conf` has credentials for the target instance (`-u/--url-openqa`'s
+  host). Both previously queried openQA unauthenticated even when credentials
+  were configured.
 - The headless `shell` error message no longer carries a roadmap reference:
   `"interactive shell attach is not available in this mode (Phase 6 REPL
   only)"` is now `"... (REPL only)"`.

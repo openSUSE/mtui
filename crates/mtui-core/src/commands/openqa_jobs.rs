@@ -124,6 +124,14 @@ impl Command for OpenQAJobs {
         let http = session
             .http_client()
             .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
+        let openqa_transport = session
+            .openqa_transport()
+            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
+        let oqa_client = mtui_datasources::openqa::build_openqa_client_with_transport(
+            openqa_transport,
+            &url_openqa,
+        )
+        .map_err(|e| CommandError::Other(format!("could not build openQA client: {e}")))?;
 
         // incident_id is maintenance_id (int for Maintenance, "1.2" for SLFO);
         // fall back to the review id in the SLFO case — mirrors openqa_overview.
@@ -143,8 +151,7 @@ impl Command for OpenQAJobs {
                 }
             };
 
-        let mut jobs = match oqa::incident_jobs(&http, &build, &url_openqa, include_obsoleted).await
-        {
+        let mut jobs = match oqa::incident_jobs(&oqa_client, &build, include_obsoleted).await {
             Ok(j) => j,
             Err(e) => {
                 return Err(CommandError::Other(format!(
@@ -222,7 +229,7 @@ impl Command for OpenQAJobs {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{header, header_exists, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -445,5 +452,62 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("kdump"), "{out}");
         assert!(out.contains("1 still pending"), "{out}");
+    }
+
+    /// Proves Phase 2 of the ruoqa migration: `openqa_jobs` authenticates when
+    /// `client.conf` has credentials for the instance, not just when openQA
+    /// happens to accept an unauthenticated GET.
+    #[tokio::test]
+    #[serial_test::serial(openqa_config_env)]
+    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+    // `#[serial(openqa_config_env)]` guard makes the mutation exclusive.
+    #[allow(unsafe_code)]
+    async fn authenticates_against_an_instance_requiring_x_api_hash() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/incident_settings/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"settings": {"BUILD": "BUILD-42", "DISTRI": "sle", "VERSION": "15-SP5"}}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/jobs"))
+            .and(header("X-API-Key", "MYKEY"))
+            .and(header_exists("X-API-Hash"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"jobs": []})))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let host = server.uri();
+        let host = host.split_once("://").map_or(host.as_str(), |(_, h)| h);
+        std::fs::write(
+            dir.path().join("client.conf"),
+            format!("[{host}]\nkey = MYKEY\nsecret = MYSECRET\n"),
+        )
+        .unwrap();
+        // SAFETY: serialised via `#[serial(openqa_config_env)]`.
+        unsafe { std::env::set_var("OPENQA_CONFIG", dir.path()) };
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(
+            &OpenQAJobs,
+            &[
+                "--url-dashboard-qam",
+                &server.uri(),
+                "--url-openqa",
+                &server.uri(),
+            ],
+        );
+        let result = OpenQAJobs.call(&mut session, &args).await;
+        // SAFETY: still inside the `#[serial(openqa_config_env)]` critical section.
+        unsafe { std::env::remove_var("OPENQA_CONFIG") };
+        result.unwrap();
+        assert!(
+            buf.contents().contains("No openQA jobs"),
+            "{}",
+            buf.contents()
+        );
     }
 }
