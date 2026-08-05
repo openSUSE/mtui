@@ -119,14 +119,19 @@ async fn try_get_jobs_errs_on_error_status() {
     assert!(base.try_get_jobs().await.is_err());
 }
 
+/// The `http://user:pass@host` form was already stripped of userinfo by
+/// `ruoqa::config::resolve`'s `netloc()` branch before 0.1.4 existed, so a
+/// credential there could never have regressed — it never reaches a request.
+/// The *bare-authority* form (no scheme, e.g. `alice:s3cret@host`) skips that
+/// branch and reached `Url::parse` untouched in 0.1.3, only gaining a strip
+/// in 0.1.4 (`config::resolve`'s post-parse `username()`/`password()`
+/// check). `describe` no longer sanitizes the URL itself — that's `ruoqa`'s
+/// job now — so this is the one assertion in this file that turns red on a
+/// `ruoqa 0.1.3` downgrade.
 #[tokio::test]
-async fn try_get_jobs_error_never_leaks_url_credentials() {
-    // A fetch failure against a credentialed base URL must never surface the
-    // userinfo in the error. ruoqa's own `config::resolve` already drops
-    // userinfo from the base URL before it reaches a request; `redact` is the
-    // defensive backstop over the whole rendered error.
+async fn try_get_jobs_error_never_leaks_a_bare_authority_credential() {
     let dir = tempfile::tempdir().unwrap();
-    let base = base_for("http://user:s3cret@127.0.0.1:1", dir.path());
+    let base = base_for("user:s3cret@127.0.0.1:1", dir.path());
     let err = base.try_get_jobs().await.unwrap_err().to_string();
     assert!(!err.contains("s3cret"), "error leaked credential: {err}");
 }
@@ -145,19 +150,17 @@ async fn try_get_jobs_ok_empty_on_valid_empty_body() {
     assert!(base.try_get_jobs().await.unwrap().is_empty());
 }
 
-/// Drives `redact`'s backstop with a *real* `ruoqa::Error::CrossOriginRedirect`
+/// Drives `ruoqa`'s own redaction with a *real* `Error::CrossOriginRedirect`
 /// carrying a credentialed URL, rather than a hand-written string.
 ///
 /// `ruoqa::config::resolve` drops userinfo from the *client's own* base URL
 /// before any request, but a `Location` header is server-controlled: a
 /// malicious or misconfigured openQA instance could redirect off-origin to a
-/// URL embedding `user:pass@`. ruoqa refuses to follow it (same-origin only)
-/// but its `Error::CrossOriginRedirect` embeds both URLs verbatim in
-/// `Display` — this is the one path that can actually put a credential into a
-/// `ruoqa::Error`, and the only test that previously exercised `redact` used a
-/// hand-written string instead of a real error, so it could not have caught a
-/// regression in `redact` itself. This one can: gutting `redact` to
-/// `e.to_string()` (dropping `sanitize_url`) turns this red.
+/// URL embedding `user:pass@`. ruoqa refuses to follow it (same-origin only),
+/// and (>= 0.1.4) redacts both URLs in `Error::CrossOriginRedirect`'s
+/// `Display` itself. Pins the exact `***` marker, not just credential
+/// absence: a `ruoqa 0.1.3` downgrade renders both URLs verbatim, turning
+/// this red.
 #[tokio::test]
 async fn try_get_jobs_error_never_leaks_a_credential_from_a_redirect_location() {
     let server = MockServer::start().await;
@@ -172,8 +175,45 @@ async fn try_get_jobs_error_never_leaks_a_credential_from_a_redirect_location() 
 
     let base = base_for_no_creds(&server.uri());
     let err = base.try_get_jobs().await.unwrap_err().to_string();
-    assert!(!err.contains("s3cret"), "error leaked credential: {err}");
-    assert!(!err.contains("alice"), "error leaked credential: {err}");
+    assert!(
+        err.ends_with("to a different origin https://***@evil.example.com/x"),
+        "expected the redacted redirect target, got: {err}"
+    );
+}
+
+/// Risk 2 backstop: a connection-failure message must never contain
+/// reqwest's own `Display` suffix (`" for url (...)"`,
+/// reqwest-0.13.4/src/error.rs:280) — that would leak the request URL
+/// unredacted, bypassing `ruoqa`'s own `Connection` redaction entirely.
+/// Swapping `root_cause(source)` for `source.to_string()` in `describe`
+/// turns this red.
+#[tokio::test]
+async fn try_get_jobs_connection_failure_never_leaks_reqwests_own_url_suffix() {
+    let base = base_for_no_creds("http://127.0.0.1:1");
+    let err = base.try_get_jobs().await.unwrap_err().to_string();
+    assert!(
+        !err.contains(" for url ("),
+        "leaked reqwest's own unredacted Display: {err}"
+    );
+}
+
+/// Risk 1: the message still carries a real transport cause, not just the
+/// redacted URL — dropping `root_cause`'s recovered cause in `describe`
+/// turns this red. Deliberately doesn't pin the OS-specific errno text (61
+/// on macOS, 111 on Linux).
+#[tokio::test]
+async fn try_get_jobs_connection_failure_message_carries_a_transport_cause() {
+    let base = base_for_no_creds("http://127.0.0.1:1");
+    let err = base.try_get_jobs().await.unwrap_err().to_string();
+    assert!(
+        err.contains("failed to connect to http://127.0.0.1:1/api/v1/jobs"),
+        "unexpected message shape: {err}"
+    );
+    let cause = err.rsplit_once(": ").map_or("", |(_, c)| c);
+    assert!(
+        !cause.is_empty(),
+        "expected a non-empty cause after the URL, got: {err}"
+    );
 }
 
 #[tokio::test]

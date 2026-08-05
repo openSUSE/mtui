@@ -646,7 +646,9 @@ async fn incident_jobs_empty_build_makes_no_request() {
 /// `OqaSearchError`'s `From<ruoqa::Error>` conversion never leaks a credential
 /// embedded in a server-controlled `Location` header (a cross-origin
 /// redirect `ruoqa` refuses to follow but whose error message embeds both
-/// URLs verbatim). Mirrors
+/// URLs). `ruoqa` >= 0.1.4 redacts both itself; pins the exact `***` marker,
+/// not just credential absence, so a `ruoqa 0.1.3` downgrade (raw URLs) turns
+/// this red. Mirrors
 /// `openqa.rs::try_get_jobs_error_never_leaks_a_credential_from_a_redirect_location`
 /// for the `oqa_search` call sites migrated in Phase 2.
 #[tokio::test]
@@ -665,8 +667,10 @@ async fn incident_jobs_error_never_leaks_a_credential_from_a_redirect_location()
         .await
         .unwrap_err()
         .to_string();
-    assert!(!err.contains("s3cret"), "error leaked credential: {err}");
-    assert!(!err.contains("alice"), "error leaked credential: {err}");
+    assert!(
+        err.ends_with("to a different origin https://***@evil.example.com/x"),
+        "expected the redacted redirect target, got: {err}"
+    );
 }
 
 // --- Golden-fixture heuristic tests (parity with the vendored .matches) ---

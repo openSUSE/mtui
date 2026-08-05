@@ -56,6 +56,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- An unreachable openQA instance now reports the actual transport failure
+  (e.g. `"...: Connection refused (os error 61)"`) instead of restating the
+  request URL (`"...: error sending request for url (http://.../api/v1/jobs)"`).
 - MCP calls passing a list to a repeatable single-value flag (e.g. `approve`
   with two `group`s) no longer fail to parse: the reconstructed argv now
   repeats the flag before every element instead of emitting it once for the

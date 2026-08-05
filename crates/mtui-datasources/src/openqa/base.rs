@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::error::OpenQAError;
 use crate::http::sanitize_url;
-use crate::openqa::client::redact;
+use crate::openqa::client::describe;
 
 /// The openQA `distri` query parameter.
 ///
@@ -191,8 +191,8 @@ impl OpenQABase {
             .request_as(reqwest::Method::GET, &path, None)
             .await
             .map_err(|e| {
-                tracing::error!("openQA request to {safe_host} failed: {}", redact(&e));
-                OpenQAError::Fetch(redact(&e))
+                tracing::error!("openQA request to {safe_host} failed: {}", describe(&e));
+                OpenQAError::Fetch(describe(&e))
             })?;
         Ok(body.jobs)
     }
