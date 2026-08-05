@@ -7,18 +7,19 @@
 use std::collections::BTreeMap;
 
 use mtui_types::{OpenQAResult, Test};
+use ruoqa::consts::JobResult as OqaJobResult;
 
 use super::base::{Job, OpenQABase};
 use crate::error::OpenQAError;
 use crate::http::sanitize_url;
 
 /// Job results that are excluded from the parsed test list (not real outcomes).
-const EXCLUDED_RESULTS: &[&str] = &[
-    "skipped",
-    "user_cancelled",
-    "incomplete",
-    "user_restarted",
-    "obsoleted",
+const EXCLUDED_RESULTS: &[OqaJobResult] = &[
+    OqaJobResult::Skipped,
+    OqaJobResult::UserCancelled,
+    OqaJobResult::Incomplete,
+    OqaJobResult::UserRestarted,
+    OqaJobResult::Obsoleted,
 ];
 
 /// Module names dropped from every parsed test's module map (boilerplate).
@@ -118,6 +119,7 @@ impl KernelOpenQA {
         Some(
             jobs.iter()
                 .filter(|j| j.clone_id.is_none())
+                .filter(|j| !EXCLUDED_RESULTS.contains(&j.result))
                 .map(|j| {
                     let modules: BTreeMap<String, String> = j
                         .modules
@@ -125,9 +127,8 @@ impl KernelOpenQA {
                         .filter(|m| !EXCLUDED_MODULES.contains(&m.name.as_str()))
                         .map(|m| (m.name.clone(), m.result.clone()))
                         .collect();
-                    Test::new(&j.test, &j.result, j.id, j.setting("ARCH"), modules)
+                    Test::new(&j.test, j.result.as_str(), j.id, j.setting("ARCH"), modules)
                 })
-                .filter(|t| !EXCLUDED_RESULTS.contains(&t.result.as_str()))
                 .collect(),
         )
     }
@@ -209,6 +210,14 @@ mod tests {
         OpenQABase::new(dummy_client(), &rrid, &MockIncident::new("bash"))
     }
 
+    /// Parses a wire-form result string (`"passed"`, `"skipped"`, ...) into
+    /// [`OqaJobResult`], for building test fixtures from the same literals the
+    /// old `String`-typed field took.
+    fn job_result(s: &str) -> OqaJobResult {
+        serde_json::from_value(serde_json::Value::String(s.to_owned()))
+            .expect("valid job-result fixture literal")
+    }
+
     fn job(
         id: i64,
         test: &str,
@@ -224,7 +233,7 @@ mod tests {
         Job {
             id,
             test: test.into(),
-            result: result.into(),
+            result: job_result(result),
             clone_id,
             settings,
             modules: modules
