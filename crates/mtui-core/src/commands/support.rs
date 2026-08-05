@@ -5,11 +5,11 @@
 
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::openqa::base::OpenQABase;
-use mtui_datasources::openqa::client::{ApiCredentials, ClientConf, OpenQAClient};
+use mtui_datasources::openqa::build_openqa_client_with_transport;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_datasources::qem_dashboard::incident::QemIncident;
-use mtui_datasources::{HttpClient, QemDashboardClient};
+use mtui_datasources::{HttpClient, OpenQAError, QemDashboardClient};
 use mtui_hosts::HostsGroup;
 use mtui_types::RequestReviewID;
 
@@ -53,28 +53,28 @@ pub(crate) fn build_auto_openqa(
 /// Builds a fresh, unpopulated [`KernelOpenQA`] connector for a given openQA
 /// instance `host`.
 ///
-/// Resolves openQA API credentials from the standard `client.conf` search
-/// paths, keyed on the instance host. Call [`KernelOpenQA::run`] to populate it.
+/// Resolves openQA API credentials from the standard `client.conf`/
+/// `$OPENQA_CONFIG` search path, keyed on the instance host. Call
+/// [`KernelOpenQA::run`] to populate it.
 ///
-/// Takes an already-built [`HttpClient`] (obtain it once from
-/// [`Session::http_client`](crate::session::Session::http_client)) so a
-/// per-host loop reuses one connection pool instead of building a fresh client
-/// per instance.
-#[must_use]
+/// Takes an already-built openQA transport (obtain it once from
+/// [`Session::openqa_transport`](crate::session::Session::openqa_transport))
+/// so a per-host loop (the kernel workflow's primary + baremetal instances)
+/// reuses one connection pool instead of building a fresh transport per
+/// instance.
+///
+/// # Errors
+///
+/// Returns [`OpenQAError::ClientBuild`] if the underlying `ruoqa` client fails
+/// to build (a malformed `client.conf`, or an invalid `User-Agent`/API key).
 pub(crate) fn build_kernel_openqa(
     incident: &QemIncident,
     host: &str,
-    http: HttpClient,
-) -> KernelOpenQA {
-    let server = host
-        .rsplit("://")
-        .next()
-        .unwrap_or(host)
-        .trim_end_matches('/');
-    let creds: ApiCredentials = ApiCredentials::resolve(&ClientConf::load(), server, host);
-    let client = OpenQAClient::new(http, host.to_owned(), creds);
+    transport: reqwest::Client,
+) -> Result<KernelOpenQA, OpenQAError> {
+    let client = build_openqa_client_with_transport(transport, host)?;
     let base = OpenQABase::new(client, &incident.rrid, incident);
-    KernelOpenQA::new(base)
+    Ok(KernelOpenQA::new(base))
 }
 
 /// Guards a command body that requires a loaded update.

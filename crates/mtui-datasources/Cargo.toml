@@ -40,9 +40,7 @@ scraper.workspace = true
 quick-xml.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
-hmac.workspace = true
-sha1.workspace = true
-hex.workspace = true
+ruoqa.workspace = true
 urlencoding.workspace = true
 # OBS "Signature" (SSH) auth (G1c). `ssh-key` provides the SSHSIG wire-format
 # signer (`sshsig` module) + `Fingerprint` for any key type; pinned to the exact

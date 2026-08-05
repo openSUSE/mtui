@@ -49,6 +49,9 @@ impl Command for ReloadOpenQA {
         let http = session
             .http_client()
             .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
+        let openqa_transport = session
+            .openqa_transport()
+            .map_err(|e| CommandError::Other(format!("could not build openQA transport: {e}")))?;
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let openqa_instance = session.config.openqa_instance.clone();
         let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
@@ -60,7 +63,8 @@ impl Command for ReloadOpenQA {
             if session.metadata().openqa().kernel.is_empty() {
                 tracing::info!("Getting data from kernel openQA");
                 for host in [openqa_instance.clone(), openqa_baremetal] {
-                    let oqa = build_kernel_openqa(&incident, &host, http.clone())
+                    let oqa = build_kernel_openqa(&incident, &host, openqa_transport.clone())
+                        .map_err(openqa_fetch_err)?
                         .run()
                         .await
                         .map_err(openqa_fetch_err)?;

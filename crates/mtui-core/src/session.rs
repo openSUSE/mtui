@@ -136,6 +136,13 @@ pub struct Session {
     /// (`export::build_http`) can lazily populate it; the lock is uncontended
     /// (one dispatch at a time).
     http_client: Mutex<Option<(VerifyPolicy, HttpClient)>>,
+    /// Lazily-built, session-scoped openQA transport: a redirect-less,
+    /// no-reqwest-retry `reqwest::Client` for injection into
+    /// `ruoqa::ClientBuilder::http_client`, cached the same way as
+    /// [`http_client`](Self::http_client) so back-to-back openQA connectors
+    /// (e.g. `reload_openqa`'s primary + baremetal instances) share one pool
+    /// instead of building a fresh transport per host.
+    openqa_transport: Mutex<Option<(VerifyPolicy, reqwest::Client)>>,
 }
 
 /// A candidate-order shuffle seam. Mutates the slot's
@@ -228,6 +235,7 @@ impl Session {
             shuffle: random_shuffle,
             cancel: CancellationToken::new(),
             http_client: Mutex::new(None),
+            openqa_transport: Mutex::new(None),
             #[cfg(test)]
             http_builds: std::sync::atomic::AtomicUsize::new(0),
         }
@@ -252,6 +260,7 @@ impl Session {
             shuffle: random_shuffle,
             cancel: CancellationToken::new(),
             http_client: Mutex::new(None),
+            openqa_transport: Mutex::new(None),
             #[cfg(test)]
             http_builds: std::sync::atomic::AtomicUsize::new(0),
         }
@@ -298,6 +307,7 @@ impl Session {
             // fork) must be observable on both sides of the fork.
             cancel: self.cancel.clone(),
             http_client: Mutex::new(None),
+            openqa_transport: Mutex::new(None),
             #[cfg(test)]
             http_builds: std::sync::atomic::AtomicUsize::new(0),
         }
@@ -395,6 +405,38 @@ impl Session {
     #[cfg(test)]
     fn http_builds(&self) -> usize {
         self.http_builds.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The session-scoped openQA transport, built lazily and reused.
+    ///
+    /// Mirrors [`http_client`](Self::http_client)'s cache-by-[`VerifyPolicy`]
+    /// pattern, but hands out a bare `reqwest::Client` for
+    /// `ruoqa::ClientBuilder::http_client` rather than this crate's
+    /// [`HttpClient`] wrapper: `ruoqa` re-signs and redirects every request
+    /// itself, so the transport it owns must not follow redirects or retry at
+    /// the reqwest level (see [`HttpClient::openqa_transport`]).
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`HttpError`] when the transport cannot be built (e.g. a
+    /// configured CA bundle cannot be read).
+    pub(crate) fn openqa_transport(&self) -> Result<reqwest::Client, HttpError> {
+        let policy = resolve_verify(
+            VerifyPolicy::Default(true),
+            Some(VerifyPolicy::from_config(&self.config.ssl_verify)),
+        );
+        let mut cache = self
+            .openqa_transport
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((cached_policy, transport)) = cache.as_ref()
+            && *cached_policy == policy
+        {
+            return Ok(transport.clone());
+        }
+        let transport = HttpClient::openqa_transport(policy.clone())?;
+        *cache = Some((policy, transport.clone()));
+        Ok(transport)
     }
 
     /// Makes `rrid` the active template *and* installs its per-call active

@@ -10,22 +10,9 @@
 use mtui_types::{RequestKind, RequestReviewID};
 use serde::Deserialize;
 
-use super::client::OpenQAClient;
 use crate::error::OpenQAError;
-use crate::http::{MAX_API_BODY, read_body_capped, sanitize_url};
-
-/// Redact any URL userinfo from a displayable error before it reaches a log or
-/// an [`OpenQAError::Fetch`] value.
-///
-/// reqwest's `Error` `Display` appends `" for url ({url})"`. reqwest strips
-/// userinfo from the URL it stores, but this is the defensive backstop that
-/// honours [`OpenQAError::Fetch`]'s "never the raw URL" contract regardless of
-/// the error's source: [`sanitize_url`] scans the whole string and rewrites any
-/// `scheme://user:pass@host` substring to `scheme://***@host`, and is a no-op
-/// when no userinfo is present.
-fn redact(e: &impl std::fmt::Display) -> String {
-    sanitize_url(&e.to_string())
-}
+use crate::http::sanitize_url;
+use crate::openqa::client::redact;
 
 /// The openQA `distri` query parameter.
 ///
@@ -102,19 +89,15 @@ pub(crate) struct JobsResponse {
     pub jobs: Vec<Job>,
 }
 
-/// The shared connector state: the API client plus the resolved query params.
+/// The shared connector state: the ruoqa client plus the resolved query params.
 ///
-/// Computes the `distri`/`scope`/
-/// `latest`/`build` parameters once, from the [`RequestReviewID`] and incident
-/// name, and holds the [`OpenQAClient`] used to fetch jobs.
+/// Computes the `distri`/`scope`/`latest`/`build` parameters once, from the
+/// [`RequestReviewID`] and incident name, and holds the [`ruoqa::Client`] used
+/// to fetch jobs.
 #[derive(Debug, Clone)]
 pub struct OpenQABase {
-    client: OpenQAClient,
+    client: ruoqa::Client,
     params: Vec<(String, String)>,
-    host: String,
-    /// [`sanitize_url`]-redacted `host`, for logs/errors/display so a
-    /// credentialed base URL (`scheme://user:pass@host`) never leaks userinfo.
-    safe_host: String,
 }
 
 impl OpenQABase {
@@ -123,7 +106,11 @@ impl OpenQABase {
     /// The `build` parameter is
     /// `:{git|smelt}:{maintenance_id}:{incident_name}`, keyed on whether the
     /// request is [`RequestKind::Slfo`] (`git`) or otherwise (`smelt`).
-    pub fn new(client: OpenQAClient, rrid: &RequestReviewID, incident: &impl IncidentName) -> Self {
+    pub fn new(
+        client: ruoqa::Client,
+        rrid: &RequestReviewID,
+        incident: &impl IncidentName,
+    ) -> Self {
         let prefix = if rrid.kind == RequestKind::Slfo {
             "git"
         } else {
@@ -140,20 +127,18 @@ impl OpenQABase {
             ("latest".to_string(), "1".to_string()),
             ("build".to_string(), build),
         ];
-        let host = client.base_url().to_string();
-        let safe_host = sanitize_url(&host);
-        Self {
-            client,
-            params,
-            host,
-            safe_host,
-        }
+        Self { client, params }
     }
 
     /// The openQA instance host (base URL), used in pretty-printed output.
+    ///
+    /// Sourced from `ruoqa`'s own resolved `base_url`, which already carries
+    /// no userinfo: `ruoqa::config::resolve` reduces a URL to `host[:port]`
+    /// before parsing it, dropping any `user:pass@` outright rather than
+    /// merely redacting it for display.
     #[must_use]
     pub(crate) fn host(&self) -> &str {
-        &self.host
+        self.client.base_url().as_str()
     }
 
     /// Fetch jobs from the openQA instance (best-effort).
@@ -171,66 +156,43 @@ impl OpenQABase {
 
     /// Fetch jobs from the openQA instance, surfacing failures as `Err`.
     ///
-    /// The fallible sibling of [`get_jobs`](Self::get_jobs): a request-build,
-    /// transport, non-2xx, or malformed-body failure returns
-    /// [`OpenQAError::Fetch`] (with a URL-free description) instead of being
-    /// folded to `None`, so a caller can distinguish "unreachable" from
-    /// "empty". `Ok(vec![])` is a valid-but-empty response.
+    /// The fallible sibling of [`get_jobs`](Self::get_jobs): a transport,
+    /// non-2xx, or malformed-body failure returns [`OpenQAError::Fetch`]
+    /// (with a URL-free description) instead of being folded to `None`, so a
+    /// caller can distinguish "unreachable" from "empty". `Ok(vec![])` is a
+    /// valid-but-empty response.
     ///
     /// # Errors
     ///
     /// [`OpenQAError::Fetch`] on any fetch failure.
     pub async fn try_get_jobs(&self) -> Result<Vec<Job>, OpenQAError> {
-        tracing::debug!("Get data from openQA - {}", self.safe_host);
+        let safe_host = sanitize_url(self.host());
+        tracing::debug!("Get data from openQA - {safe_host}");
 
-        let param_refs: Vec<(&str, String)> = self
-            .params
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.clone()))
-            .collect();
-
-        let builder = self
+        let path = format!("/api/v1/jobs{}", build_query(&self.params));
+        let body: JobsResponse = self
             .client
-            .build_get("jobs", &param_refs)
-            .inspect_err(|e| {
-                tracing::error!("openQA request to {} failed: {}", self.safe_host, redact(e));
-            })?;
-
-        let response = builder.send().await.map_err(|e| {
-            tracing::error!(
-                "openQA request to {} failed: {}",
-                self.safe_host,
-                redact(&e)
-            );
-            OpenQAError::Fetch(redact(&e))
-        })?;
-
-        let response = response.error_for_status().map_err(|e| {
-            tracing::debug!("openQA returned an error status: {}", redact(&e));
-            OpenQAError::Fetch(redact(&e))
-        })?;
-
-        let bytes = read_body_capped(response, MAX_API_BODY)
+            .request_as(reqwest::Method::GET, &path, None)
             .await
             .map_err(|e| {
-                tracing::error!(
-                    "openQA request to {} failed: {}",
-                    self.safe_host,
-                    redact(&e)
-                );
+                tracing::error!("openQA request to {safe_host} failed: {}", redact(&e));
                 OpenQAError::Fetch(redact(&e))
             })?;
-        serde_json::from_slice::<JobsResponse>(&bytes)
-            .map(|body| body.jobs)
-            .map_err(|e| {
-                tracing::error!(
-                    "openQA request to {} failed: {}",
-                    self.safe_host,
-                    redact(&e)
-                );
-                OpenQAError::Fetch(redact(&e))
-            })
+        Ok(body.jobs)
     }
+}
+
+/// Renders `params` as a `?key=value&...` query string via `url`'s encoder
+/// (through the `reqwest::Url` re-export, so no direct `url` dependency is
+/// needed), or an empty string when `params` is empty.
+fn build_query(params: &[(String, String)]) -> String {
+    if params.is_empty() {
+        return String::new();
+    }
+    let mut url = reqwest::Url::parse("http://x").expect("fixed base URL always parses");
+    url.query_pairs_mut()
+        .extend_pairs(params.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    format!("?{}", url.query().unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -306,30 +268,22 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn safe_host_redacts_url_credentials() {
-        use crate::http::{HttpClient, VerifyPolicy};
-        let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
-        let client = OpenQAClient::new(
-            http,
+    fn host_drops_url_credentials_entirely() {
+        // Unlike the hand-rolled client this replaces, `ruoqa`'s
+        // `config::resolve` reduces a URL to `host[:port]` before parsing, so
+        // userinfo never survives into `base_url()` at all — not merely
+        // redacted for display, genuinely absent.
+        use crate::http::VerifyPolicy;
+        use crate::openqa::client::build_openqa_client;
+        let client = build_openqa_client(
+            VerifyPolicy::Default(true),
             "https://alice:s3cret@openqa.example.com",
-            crate::openqa::client::ApiCredentials::default(),
-        );
+        )
+        .unwrap();
         let base = OpenQABase::new(client, &rrid("Maintenance"), &MockIncident::new("bash"));
-        // The log-facing host never carries userinfo...
-        assert!(!base.safe_host.contains("s3cret"));
-        assert!(base.safe_host.contains("***"));
-        // ...but the functional host() keeps the raw URL for building requests.
-        assert!(base.host().contains("s3cret"));
-    }
-
-    #[test]
-    fn redact_strips_userinfo_from_error_display() {
-        // Mirrors reqwest's `... for url (scheme://user:pass@host)` shape.
-        let msg =
-            "error sending request for url (https://alice:s3cret@openqa.example.com/api/v1/jobs)";
-        let out = redact(&msg);
-        assert!(!out.contains("s3cret"), "leaked credential: {out}");
-        assert!(out.contains("***"), "missing redaction marker: {out}");
+        assert!(!base.host().contains("s3cret"));
+        assert!(!base.host().contains("alice"));
+        assert_eq!(base.host(), "https://openqa.example.com/");
     }
 
     #[test]
@@ -352,13 +306,9 @@ pub(crate) mod tests {
 
     /// A client pointed at an unroutable base URL, for unit tests that only
     /// exercise param building (never the network).
-    pub(crate) fn dummy_client() -> OpenQAClient {
-        use crate::http::{HttpClient, VerifyPolicy};
-        let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
-        OpenQAClient::new(
-            http,
-            "https://openqa.example.com",
-            crate::openqa::client::ApiCredentials::default(),
-        )
+    pub(crate) fn dummy_client() -> ruoqa::Client {
+        use crate::http::VerifyPolicy;
+        use crate::openqa::client::build_openqa_client;
+        build_openqa_client(VerifyPolicy::Default(true), "https://openqa.example.com").unwrap()
     }
 }

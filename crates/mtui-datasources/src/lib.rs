@@ -23,9 +23,7 @@ pub use error::{
 pub use gitea::{Gitea, assign_marker};
 pub use http::{HttpClient, MAX_API_BODY, VerifyPolicy, resolve_verify};
 pub use obs::{NoAuth, ObsAuth, ObsClient, ObsError, Osc};
-pub use openqa::{
-    ApiCredentials, ClientConf, IncidentName, Job, KernelOpenQA, OpenQABase, OpenQAClient,
-};
+pub use openqa::{IncidentName, Job, KernelOpenQA, OpenQABase, build_openqa_client_with_transport};
 pub use oqa_search::{
     BuildCheckResult, GroupResult, JobResult, OVERVIEW_BEGIN_MARKER, OVERVIEW_END_MARKER,
     OpenQAOverviewResult, VersionResult, aggregated_updates, build_checks, get_incident_info,
