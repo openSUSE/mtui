@@ -2,8 +2,11 @@
 //!
 //! Keys its identity on the parsed [`RequestReviewID`], derives its
 //! update-repo map by dispatching among the [`repoparse`](super::repoparse)
-//! helpers, and verifies its git commit hash against Gitea (bypassed for the
-//! legacy `1.1` maintenance id, which is still served from IBS).
+//! helpers, and verifies its git commit hash against Gitea — bypassed for an
+//! OBS-served update (no Gitea PR to compare against), keyed on the report's
+//! own [`UpdateSource`], not the RRID's maintenance id (see
+//! `AGENTS.md`/issue #433: the SL-Micro 6.0/6.1 cutover shares the `SLFO:1.1`
+//! id space between both workflows).
 //!
 //! ## Scope
 //!
@@ -21,7 +24,7 @@ use mtui_config::options::Config;
 use mtui_datasources::error::GiteaError;
 use mtui_datasources::gitea::Gitea;
 use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
-use mtui_types::{RequestReviewID, SystemProduct};
+use mtui_types::{RequestReviewID, SystemProduct, UpdateSource};
 use tracing::debug;
 
 use super::repoparse::{gitrepoparse, reporepoparse, slrepoparse};
@@ -45,11 +48,6 @@ impl SlReport {
         Self {
             base: TestReportBase::new(config),
         }
-    }
-
-    /// The maintenance id of the loaded RRID, or `None` when no RRID is set.
-    fn maintenance_id(&self) -> Option<&str> {
-        self.base.rrid.as_ref().map(|r| r.maintenance_id.as_str())
     }
 }
 
@@ -85,13 +83,18 @@ impl TestReport for SlReport {
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         // Dispatch order:
         //   repositories set        -> reporepoparse(repositories, products)
-        //   maintenance_id == "1.1" -> slrepoparse(repository, products)
-        //   otherwise               -> gitrepoparse(repository, products)
+        //   update_source == Obs    -> slrepoparse(repository, products)
+        //   otherwise (Git)         -> gitrepoparse(repository, products)
+        //
+        // The `repositories` short-circuit must stay first: it is populated
+        // upstream of TeReGen and can start appearing for a git-served update
+        // at any time, with no release-gated notice to mtui (issue #433,
+        // F7) — this precedence is load-bearing, not a nicety.
         if !self.base.repositories.is_empty() {
             let repos: Vec<String> = self.base.repositories.iter().cloned().collect();
             return reporepoparse(&repos, &self.base.products);
         }
-        if self.maintenance_id() == Some("1.1") {
+        if self.base.update_source == UpdateSource::Obs {
             return slrepoparse(&self.base.repository, &self.base.products);
         }
         gitrepoparse(&self.base.repository, &self.base.products)
@@ -165,8 +168,8 @@ impl TestReport for SlReport {
     }
 
     async fn check_hash(&self) -> HashCheck {
-        // "1.1" is still served from IBS — no Gitea comparison.
-        if self.maintenance_id() == Some("1.1") {
+        // An OBS-served update has no Gitea PR to compare against.
+        if self.base.update_source == UpdateSource::Obs {
             return HashCheck::Ok;
         }
 
