@@ -97,7 +97,7 @@ impl Command for Approve {
             .filter(|s| !s.is_empty())
             .cloned();
 
-        if is_gitea_workflow(&rrid) {
+        if is_gitea_workflow(session) {
             let gitea = gitea_client(session)?;
             hash_gate(session).await?;
             gitea
@@ -549,6 +549,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().update_source = mtui_types::UpdateSource::Git;
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         session.config.session_user = "tester".to_owned();
@@ -580,6 +581,7 @@ mod tests {
 
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().update_source = mtui_types::UpdateSource::Git;
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         let args = matches(&Approve, &[]);
@@ -630,6 +632,7 @@ mod tests {
         let (mut session, buf) = empty_session();
         let mut base = TestReportBase::new(mtui_config::Config::default());
         base.rrid = "SUSE:SLFO:1.2:5".parse().ok();
+        base.update_source = mtui_types::UpdateSource::Git;
         base.giteaprapi = Some(giteaprapi.to_owned());
         session.config.gitea_token = "tok".to_owned();
         session.config.session_user = "tester".to_owned();

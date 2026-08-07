@@ -1,16 +1,18 @@
 //! Backend-API commands (`assign`, `unassign`, `reject`, `comment`).
 //!
 //! Each command dispatches to the OSC or Gitea backend depending on the
-//! loaded request's kind (Gitea for SLFO with a
-//! maintenance id other than `1.1`, OSC otherwise), and — for a Product
-//! Increment with `lock_pi_autolock` — locks/unlocks the reference hosts around
-//! the action. `approve` lives in [`approve`](super::approve) and reuses the
+//! loaded report's own [`UpdateSource`] — resolved
+//! at load from the template's `gitea_commit_hash`, not inferred from the
+//! RRID's shape (issue #433: the SL-Micro 6.0/6.1 cutover shares the
+//! `SLFO:1.1` id space between both workflows) — and, for a Product Increment
+//! with `lock_pi_autolock`, locks/unlocks the reference hosts around the
+//! action. `approve` lives in [`approve`](super::approve) and reuses the
 //! dispatch helpers here.
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen};
-use mtui_types::RequestKind;
+use mtui_types::{RequestKind, UpdateSource};
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, template_completion};
@@ -28,10 +30,14 @@ pub(crate) enum PiAction {
     None,
 }
 
-/// Whether the loaded request is handled by the Gitea backend: SLFO with a
-/// maintenance id other than `1.1`.
-pub(crate) fn is_gitea_workflow(rrid: &mtui_types::RequestReviewID) -> bool {
-    rrid.kind == RequestKind::Slfo && rrid.maintenance_id != "1.1"
+/// Whether the loaded report is handled by the Gitea backend.
+///
+/// Reads the active report's [`UpdateSource`]
+/// (resolved once at load — see [`UpdateSource`] for the precedence rule);
+/// `Git` routes to Gitea, `Obs` to OSC. A Product Increment carries no Gitea
+/// metadata and so always resolves `Obs`, whatever its RRID looks like.
+pub(crate) fn is_gitea_workflow(session: &Session) -> bool {
+    session.metadata().update_source() == UpdateSource::Git
 }
 
 /// The `-g/--group` values (repeatable), defaulting to an empty slice.
@@ -261,7 +267,7 @@ impl Command for Assign {
     }
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
-        if is_gitea_workflow(&rrid) {
+        if is_gitea_workflow(session) {
             let gitea = gitea_client(session)?;
             gitea
                 .assign(user_override(args).as_deref(), args.get_flag("force"))
@@ -306,7 +312,7 @@ impl Command for Unassign {
     }
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
-        if is_gitea_workflow(&rrid) {
+        if is_gitea_workflow(session) {
             let gitea = gitea_client(session)?;
             gitea
                 .unassign(user_override(args).as_deref())
@@ -386,7 +392,7 @@ impl Command for Reject {
             .map(|it| it.cloned().collect::<Vec<_>>().join(" "))
             .unwrap_or_default();
 
-        if is_gitea_workflow(&rrid) {
+        if is_gitea_workflow(session) {
             let gitea = gitea_client(session)?;
             gitea
                 .reject(&reason, user_override(args).as_deref(), &message)
@@ -455,7 +461,7 @@ impl Command for Comment {
                 "a comment is required (use -m/--message)".to_owned(),
             ));
         }
-        if is_gitea_workflow(&rrid) {
+        if is_gitea_workflow(session) {
             let gitea = gitea_client(session)?;
             gitea
                 .comment(&comment)
@@ -495,43 +501,37 @@ mod tests {
         }
     }
 
+    /// The dispatch reads the report's own `UpdateSource`, not the RRID's
+    /// shape: a `Git`-resolved report routes to Gitea regardless of its
+    /// maintenance id (including the classic `1.1`, the dual-served case),
+    /// and an `Obs`-resolved report routes to OSC even at `1.2`.
     #[test]
-    fn is_gitea_workflow_behaves_as_specified() {
-        let slfo: mtui_types::RequestReviewID = "SUSE:SLFO:1.2:5".parse().unwrap();
-        assert!(is_gitea_workflow(&slfo));
-        let slfo_11: mtui_types::RequestReviewID = "SUSE:SLFO:1.1:5".parse().unwrap();
-        assert!(!is_gitea_workflow(&slfo_11));
-        let maint: mtui_types::RequestReviewID = "SUSE:Maintenance:1:1".parse().unwrap();
-        assert!(!is_gitea_workflow(&maint));
+    fn is_gitea_workflow_reflects_the_reports_update_source() {
+        let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.1:5", &["h1"], "ok");
+        session.metadata_mut().base_mut().update_source = UpdateSource::Git;
+        assert!(is_gitea_workflow(&session));
+
+        let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
+        session.metadata_mut().base_mut().update_source = UpdateSource::Obs;
+        assert!(!is_gitea_workflow(&session));
+
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        assert!(!is_gitea_workflow(&session));
     }
 
-    /// PI is *not* a Gitea request, even though `qam`'s precondition guard
-    /// treats PI and SLFO alike. This is a live distinction — merging the two
-    /// guards would route PI through the wrong backend.
+    /// A Product Increment carries no Gitea metadata, so it always resolves
+    /// `Obs` and routes to OSC — a live distinction from `qam`'s precondition
+    /// guard, which groups PI *with* SLFO. Merging the two would route PI
+    /// through the wrong backend.
     #[test]
     fn is_gitea_workflow_excludes_pi() {
         for id in ["SUSE:PI:1.1:5", "SUSE:PI:1.2:5", "SUSE:PI:42:99"] {
-            let rrid: mtui_types::RequestReviewID = id.parse().unwrap();
-            assert!(!is_gitea_workflow(&rrid), "{id} must use the OSC backend");
+            let (session, _buf) = session_with_hosts(id, &["h1"], "ok");
+            assert!(
+                !is_gitea_workflow(&session),
+                "{id} must use the OSC backend"
+            );
         }
-    }
-
-    /// Upstream `_is_gitea_workflow` is open-ended (`!= "1.1"`), unlike the QEM
-    /// dashboard's closed `== "1.2"`. Today only `1.1` and `1.2` occur, so the
-    /// two agree on every real RRID and this test is the only thing recording
-    /// that they are nonetheless different predicates.
-    ///
-    /// The id below is **hypothetical** — there is no SLFO 2.0 product, and none
-    /// is expected soon. The test exists so that if one ever appears, the
-    /// open-ended formulation is still in force rather than having been quietly
-    /// narrowed to `== "1.2"` while the suite stayed green.
-    #[test]
-    fn is_gitea_workflow_stays_open_ended_beyond_1_2() {
-        let rrid: mtui_types::RequestReviewID = "SUSE:SLFO:2.0:5".parse().unwrap();
-        assert!(
-            is_gitea_workflow(&rrid),
-            "a future SLFO id must still route to Gitea"
-        );
     }
 
     #[test]
@@ -663,6 +663,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().update_source = UpdateSource::Git;
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
 
@@ -697,6 +698,7 @@ mod tests {
 
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().update_source = UpdateSource::Git;
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
 
@@ -742,6 +744,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().update_source = UpdateSource::Git;
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         session.config.teregen_api = server.uri();
@@ -790,6 +793,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().update_source = UpdateSource::Git;
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         session.config.teregen_api = server.uri();
@@ -838,6 +842,7 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts("SUSE:SLFO:1.2:5", &["h1"], "ok");
         session.metadata_mut().base_mut().giteaprapi = Some(server.uri());
+        session.metadata_mut().base_mut().update_source = UpdateSource::Git;
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
         session.config.teregen_api = server.uri();
