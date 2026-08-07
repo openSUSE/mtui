@@ -84,6 +84,20 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
   [Workflow concepts](concepts.md#locking)).
 - **MCP tool names/schemas** — downstream LLM configs depend on them; the
   synthesised, slimmed schemas are snapshot-tested.
+- **openQA `BUILD` query string** — `:{type}:{number}:{package}`
+  (`crates/mtui-datasources/src/openqa/base.rs::OpenQABase::new`), owed to
+  **openSUSE/qem-bot**, which writes it (`types/submissions.py:236`), not to
+  TeReGen. Each component is qem-bot's own: `type` mirrors
+  qem-dashboard's `incidents.type` column (`git`/`smelt`,
+  `mtui_types::UpdateSource`); `number` is the dashboard's own incident
+  number, which for **every** SLFO update (git- or OBS-served) is the
+  review id, not the maintenance id
+  (`crates/mtui-datasources/src/qem_dashboard/incident.rs::QemIncident::incident_number`);
+  `package` is chosen by qem-bot's `sort_packages` ordering (demote
+  arch-suffixed/`-livepatch-` names, then shortest, then alphabetical), not
+  plain shortest-by-length. A Product Increment is connected to **neither**
+  qem-dashboard nor openQA, so mtui skips the dashboard fetch for PI outright
+  rather than querying a service that was never going to answer.
 
 ## Deliberate design choices
 
@@ -92,3 +106,13 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
 - **Two static binaries** (`mtui`, `mtui-mcp`), no runtime interpreter or
   virtualenv to install.
 - **Async I/O** (`tokio`) with true parallel host fan-out.
+- **Git-vs-OBS is decided per update, from the template, not from the RRID.**
+  During the SL-Micro 6.0/6.1 cutover both workflows share the `SLFO:1.1` id
+  space, so no rule over the RRID's shape can be correct — and an update can
+  briefly be served *both* ways at once. `mtui_types::UpdateSource` is a
+  **selection, not an observation**: `Git` when the template carries
+  `gitea_commit_hash`, `Obs` otherwise, resolved once at load. On a
+  dual-served update `Git` wins by design, and mtui leaves that update's OBS
+  review request untouched — `assign`/`approve`/`reject`/`comment` only ever
+  reach the Gitea side. See [`approve`](commands.md) for the operator-facing
+  consequence.
