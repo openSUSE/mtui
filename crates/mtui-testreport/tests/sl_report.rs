@@ -1,6 +1,12 @@
 //! Covers the `SlReport` surface that lands in task nbv.4: `id`, `parser`,
 //! `update_repos_parser` (all three dispatch branches), and `check_hash` (the
-//! `1.1` fast path plus the Gitea match/mismatch compare via wiremock).
+//! OBS fast path plus the Gitea match/mismatch compare via wiremock).
+//!
+//! `update_repos_parser`/`check_hash` dispatch on the report's own
+//! [`UpdateSource`](mtui_types::UpdateSource), not the RRID's maintenance id
+//! (issue #433) — the tests below deliberately exercise both `1.1` and `1.2`
+//! maintenance ids under each source so no case can pass by accident on the
+//! retired `maintenance_id == "1.1"` literal.
 //!
 //! Not covered here (deferred by design):
 //! * `set_repo` — lands with the `SetRepo` impl in task nbv.fly.
@@ -10,7 +16,7 @@
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
 use mtui_testreport::{HashCheck, SlReport, TestReport};
-use mtui_types::RequestReviewID;
+use mtui_types::{RequestReviewID, UpdateSource};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -70,10 +76,33 @@ fn update_repos_parser_uses_reporepoparse_when_repositories_set() {
     );
 }
 
+/// F7 precedence: a git-served `1.1` carrying `repositories` still takes
+/// `reporepoparse`, not `gitrepoparse` — the short-circuit outranks the
+/// source. This is the case that pins the short-circuit staying *first*: it
+/// must fail (fall to `gitrepoparse`) against a version that moved the
+/// `update_source` branch above the `repositories` check.
 #[test]
-fn update_repos_parser_uses_slrepoparse_for_1_1() {
+fn update_repos_parser_repositories_outrank_git_source() {
     let mut r = SlReport::new(config());
     r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
+    r.base_mut().update_source = UpdateSource::Git;
+    r.base_mut()
+        .repositories
+        .insert("https://example.com/SLES-15-x86_64/".to_string());
+    r.base_mut().products = vec!["SLES 15 (x86_64)".to_string()];
+    let out = r.update_repos_parser();
+    assert_eq!(
+        out.values().next().unwrap(),
+        "https://example.com/SLES-15-x86_64/"
+    );
+}
+
+/// OBS-served at the classic `1.1` maintenance id: `slrepoparse`.
+#[test]
+fn update_repos_parser_uses_slrepoparse_when_obs_at_1_1() {
+    let mut r = SlReport::new(config());
+    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
+    r.base_mut().update_source = UpdateSource::Obs;
     r.base_mut().repository = "https://example.com".to_string();
     r.base_mut().products = vec!["SLES 15 (x86_64)".to_string()];
     let out = r.update_repos_parser();
@@ -84,10 +113,44 @@ fn update_repos_parser_uses_slrepoparse_for_1_1() {
     );
 }
 
+/// OBS-served at `1.2`: still `slrepoparse` — the dispatch keys on
+/// `update_source`, not the maintenance id, so this must pass even though the
+/// retired literal check (`maintenance_id == "1.1"`) would have missed it.
 #[test]
-fn update_repos_parser_falls_back_to_gitrepoparse() {
+fn update_repos_parser_uses_slrepoparse_when_obs_at_1_2() {
+    let mut r = SlReport::new(config());
+    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.2:7"));
+    r.base_mut().update_source = UpdateSource::Obs;
+    r.base_mut().repository = "https://example.com".to_string();
+    r.base_mut().products = vec!["SLES 15 (x86_64)".to_string()];
+    let out = r.update_repos_parser();
+    assert_eq!(
+        out.values().next().unwrap(),
+        "https://example.com/images/repo/SLES-15-x86_64/"
+    );
+}
+
+/// Git-served at the classic `1.1` maintenance id: `gitrepoparse` — the
+/// dual-served case (F8). Must be observed red against the unfixed code,
+/// which routed every `1.1` maintenance id to `slrepoparse` regardless of
+/// source.
+#[test]
+fn update_repos_parser_uses_gitrepoparse_when_git_at_1_1() {
+    let mut r = SlReport::new(config());
+    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
+    r.base_mut().update_source = UpdateSource::Git;
+    r.base_mut().repository = "https://example.com".to_string();
+    r.base_mut().products = vec!["SLES 15 (x86_64)".to_string()];
+    let out = r.update_repos_parser();
+    assert_eq!(out.values().next().unwrap(), "https://example.com/standard");
+}
+
+/// Git-served at `1.2`.
+#[test]
+fn update_repos_parser_uses_gitrepoparse_when_git_at_1_2() {
     let mut r = SlReport::new(config());
     r.base_mut().rrid = Some(rrid_with_maint("2.0"));
+    r.base_mut().update_source = UpdateSource::Git;
     r.base_mut().repository = "https://example.com".to_string();
     r.base_mut().products = vec!["SLES 15 (x86_64)".to_string()];
     let out = r.update_repos_parser();
@@ -95,10 +158,29 @@ fn update_repos_parser_falls_back_to_gitrepoparse() {
 }
 
 #[tokio::test]
-async fn check_hash_maintenance_id_1_1_bypasses_gitea() {
+async fn check_hash_obs_bypasses_gitea() {
     let mut r = SlReport::new(config());
     r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
+    r.base_mut().update_source = UpdateSource::Obs;
     assert_eq!(r.check_hash().await, HashCheck::Ok);
+}
+
+/// OBS-served bypasses Gitea entirely: zero HTTP requests, not merely a
+/// passing verdict — otherwise "skipped" and "succeeded" would be
+/// indistinguishable.
+#[tokio::test]
+async fn check_hash_obs_at_1_1_issues_zero_requests() {
+    let server = MockServer::start().await;
+    let mut r = SlReport::new(config_with_gitea(&server));
+    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
+    r.base_mut().update_source = UpdateSource::Obs;
+    r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));
+
+    assert_eq!(r.check_hash().await, HashCheck::Ok);
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "OBS-served check_hash must never call Gitea"
+    );
 }
 
 /// Mount a GET on the PR endpoint returning `{ "head": { "sha": <sha> } }`,
@@ -129,6 +211,7 @@ async fn check_hash_gitea_compare_match() {
 
     let mut r = SlReport::new(config_with_gitea(&server));
     r.base_mut().rrid = Some(rrid_with_maint("2.0"));
+    r.base_mut().update_source = UpdateSource::Git;
     r.base_mut().giteacohash = Some("abc".to_string());
     r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));
 
@@ -142,6 +225,7 @@ async fn check_hash_gitea_compare_mismatch() {
 
     let mut r = SlReport::new(config_with_gitea(&server));
     r.base_mut().rrid = Some(rrid_with_maint("2.0"));
+    r.base_mut().update_source = UpdateSource::Git;
     r.base_mut().giteacohash = Some("abc".to_string());
     r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));
 
@@ -150,6 +234,30 @@ async fn check_hash_gitea_compare_mismatch() {
         HashCheck::Mismatch {
             expected: "abc".to_string(),
             actual: "xyz".to_string(),
+        }
+    );
+}
+
+/// The `#398` gate restored: a git-served update at the classic `1.1`
+/// maintenance id runs the real Gitea comparison and catches a mismatch.
+/// Must be observed red against the unfixed code, which bypassed Gitea for
+/// every `1.1` maintenance id regardless of source.
+#[tokio::test]
+async fn check_hash_git_at_1_1_runs_gitea_compare_and_catches_mismatch() {
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "freshsha").await;
+
+    let mut r = SlReport::new(config_with_gitea(&server));
+    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
+    r.base_mut().update_source = UpdateSource::Git;
+    r.base_mut().giteacohash = Some("stalesha".to_string());
+    r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));
+
+    assert_eq!(
+        r.check_hash().await,
+        HashCheck::Mismatch {
+            expected: "stalesha".to_string(),
+            actual: "freshsha".to_string(),
         }
     );
 }

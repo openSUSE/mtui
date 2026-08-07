@@ -26,7 +26,7 @@ use mtui_datasources::oqa_search::results::OpenQAOverviewResult;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
 use mtui_types::package::Package;
-use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, Workflow};
+use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, UpdateSource, Workflow};
 
 /// The concrete openQA state holder carried on a report.
 ///
@@ -136,6 +136,11 @@ pub struct TestReportBase {
     pub giteaprapi: Option<String>,
     /// Gitea commit hash (JSON key `gitea_commit_hash`).
     pub giteacohash: Option<String>,
+    /// Which update workflow mtui drives for this report, resolved once at
+    /// load from [`giteacohash`](Self::giteacohash) by
+    /// [`JSONParser`]. Defaults to
+    /// [`UpdateSource::Obs`] until a report is loaded.
+    pub update_source: UpdateSource,
     /// `hostname -> product-drift warning lines` from the last connect.
     pub product_warnings: HashMap<String, Vec<String>>,
     /// The report's openQA results.
@@ -188,6 +193,7 @@ impl TestReportBase {
             giteapr: None,
             giteaprapi: None,
             giteacohash: None,
+            update_source: UpdateSource::default(),
             product_warnings: HashMap::new(),
             openqa: ReportOpenQA::new(),
         }
@@ -762,6 +768,15 @@ pub trait TestReport {
         self.base().giteacohash.as_deref()
     }
 
+    /// Which update workflow mtui drives for this report.
+    ///
+    /// See [`UpdateSource`] for the precedence rule; resolved once at load by
+    /// [`JSONParser`] from
+    /// [`giteacohash`](Self::giteacohash).
+    fn update_source(&self) -> UpdateSource {
+        self.base().update_source
+    }
+
     /// The openQA incident id used by the QEM Dashboard / oqa-search queries.
     ///
     /// Uses `rrid.maintenance_id` as the incident number. `None` for the null
@@ -1065,6 +1080,7 @@ mod tests {
         assert!(base.giteapr.is_none());
         assert!(base.giteaprapi.is_none());
         assert!(base.giteacohash.is_none());
+        assert_eq!(base.update_source, UpdateSource::Obs);
         assert!(base.product_warnings.is_empty());
     }
 
@@ -1258,12 +1274,14 @@ mod tests {
         base.rrid = Some("SUSE:Maintenance:12345:67890".parse().unwrap());
         base.giteaprapi = Some("https://gitea/api/pr/1".to_owned());
         base.giteacohash = Some("deadbeef".to_owned());
+        base.update_source = UpdateSource::Git;
         base.workflow = Workflow::Kernel;
         let r = MetaReport { base };
         assert_eq!(r.rrid().unwrap().maintenance_id, "12345");
         assert_eq!(r.incident_id().as_deref(), Some("12345"));
         assert_eq!(r.giteaprapi(), Some("https://gitea/api/pr/1"));
         assert_eq!(r.giteacohash(), Some("deadbeef"));
+        assert_eq!(r.update_source(), UpdateSource::Git);
         assert_eq!(r.workflow(), Workflow::Kernel);
     }
 

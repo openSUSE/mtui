@@ -18,12 +18,12 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use mtui_types::{PackageSpec, RequestReviewID};
+use mtui_types::{PackageSpec, RequestReviewID, UpdateSource};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use regex::Regex;
 use serde::Deserialize;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::testreport::TestReportBase;
 
@@ -204,6 +204,16 @@ impl JSONParser {
         results.giteapr = data.gitea_pr.clone();
         results.giteaprapi = data.gitea_pr_api.clone();
         results.giteacohash = data.gitea_commit_hash.clone();
+        results.update_source = if data
+            .gitea_commit_hash
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+        {
+            UpdateSource::Git
+        } else {
+            UpdateSource::Obs
+        };
+        debug!(update_source = ?results.update_source, "resolved update source from metadata");
 
         let mut packages: HashMap<String, HashMap<String, String>> = HashMap::new();
         for (prod, pkgvers) in data.packages.iter().flatten() {
@@ -310,4 +320,56 @@ fn issue_id(e: &quick_xml::events::BytesStart<'_>) -> Option<String> {
             None
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mtui_config::options::Config;
+
+    fn base() -> TestReportBase {
+        TestReportBase::new(Config::default())
+    }
+
+    #[test]
+    fn update_source_is_git_when_hash_present() {
+        let mut results = base();
+        JSONParser::parse_str(&mut results, r#"{"gitea_commit_hash": "deadbeef"}"#).unwrap();
+        assert_eq!(results.update_source, UpdateSource::Git);
+    }
+
+    #[test]
+    fn update_source_is_obs_when_hash_absent() {
+        let mut results = base();
+        JSONParser::parse_str(&mut results, "{}").unwrap();
+        assert_eq!(results.update_source, UpdateSource::Obs);
+    }
+
+    #[test]
+    fn update_source_is_obs_when_hash_is_blank_or_whitespace() {
+        for hash in ["", "   "] {
+            let mut results = base();
+            JSONParser::parse_str(
+                &mut results,
+                &format!(r#"{{"gitea_commit_hash": "{hash}"}}"#),
+            )
+            .unwrap();
+            assert_eq!(results.update_source, UpdateSource::Obs, "hash={hash:?}");
+        }
+    }
+
+    /// F8: a `SUSE:SLFO:1.1:*` envelope carrying the hash resolves to `Git` —
+    /// the dual-served case, where the RRID looks classic (`1.1`) and only the
+    /// metadata tells the true story. This is the executable statement of the
+    /// precedence rule; without it, the rule lives only in a doc comment.
+    #[test]
+    fn dual_served_slfo_1_1_with_hash_resolves_to_git() {
+        let mut results = base();
+        JSONParser::parse_str(
+            &mut results,
+            r#"{"rrid": "SUSE:SLFO:1.1:418286", "gitea_commit_hash": "deadbeef"}"#,
+        )
+        .unwrap();
+        assert_eq!(results.update_source, UpdateSource::Git);
+    }
 }
