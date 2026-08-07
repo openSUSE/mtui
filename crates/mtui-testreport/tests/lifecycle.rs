@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use mtui_config::options::Config;
 use mtui_testreport::{ObsReport, TestReport, UpdateKind, make_testreport};
-use mtui_types::{UpdateID, Workflow};
+use mtui_types::{UpdateID, UpdateSource, Workflow};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -431,25 +431,34 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
 // exercise the three non-`Ok` branches (the interactive TeReGen regenerate path
 // is covered in Phase C) plus the happy path.
 
-/// Places an SLFO checkout on disk whose `metadata.json` carries a Gitea PR API
-/// URL (pointed at `gitea_pr_api`) and a recorded commit hash (`giteacohash`).
-/// Returns nothing; the caller drives `make_testreport` against the template dir.
-fn make_slfo_checkout(root: &Path, gitea_pr_api: &str, commit_hash: &str) {
-    let dir = root.join(SLFO_RRID);
+/// Places an SLFO checkout on disk for `rrid` whose `metadata.json` carries a
+/// Gitea PR API URL (pointed at `gitea_pr_api`), a `repository` +
+/// `products` pair (so `update_repos_parser` resolves a URL — issue #433,
+/// step 3), and, when `commit_hash` is `Some`, a recorded commit hash
+/// (`giteacohash`) — the discriminator `update_source` resolves from.
+/// `commit_hash = None` omits the key entirely, resolving `Obs`.
+/// Returns nothing; the caller drives `make_testreport` against the
+/// template dir.
+fn make_slfo_checkout(root: &Path, rrid: &str, gitea_pr_api: &str, commit_hash: Option<&str>) {
+    let dir = root.join(rrid);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("log"),
-        "Testreport for SUSE:SLFO:1.2:4413\n\n  x86_64 (reference host: refhost-a.example.com)\n",
+        format!("Testreport for {rrid}\n\n  x86_64 (reference host: refhost-a.example.com)\n"),
     )
     .unwrap();
+    let hash_field = commit_hash
+        .map(|h| format!(r#", "gitea_commit_hash": "{h}""#))
+        .unwrap_or_default();
     let metadata = format!(
         r#"{{
             "category": "recommended",
             "packager": "someone@suse.com",
             "rating": "low",
-            "rrid": "{SLFO_RRID}",
-            "gitea_pr_api": "{gitea_pr_api}",
-            "gitea_commit_hash": "{commit_hash}",
+            "rrid": "{rrid}",
+            "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.1/",
+            "products": ["SLES 15 (x86_64)"],
+            "gitea_pr_api": "{gitea_pr_api}"{hash_field},
             "packages": {{}},
             "testplatform": []
         }}"#
@@ -482,7 +491,12 @@ async fn make_testreport_slfo_hash_match_loads() {
     mount_dashboard_with_install(&dashboard, "4413").await;
 
     let tmp = tempfile::tempdir().unwrap();
-    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "deadbeef");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", server.uri()),
+        Some("deadbeef"),
+    );
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
@@ -499,13 +513,111 @@ async fn make_testreport_slfo_hash_match_loads() {
     assert!(!report.base().autoconnect_pending);
 }
 
+/// A `SUSE:SLFO:1.1` RRID — the dual-serving cutover id (issue #433): both
+/// git- and OBS-served updates can carry this exact maintenance id, so the
+/// tests below drive the identical RRID shape through both fixtures and
+/// assert that the decision comes from the template's `gitea_commit_hash`,
+/// never from the `1.1`/`1.2` literal.
+const SLFO_11_RRID: &str = "SUSE:SLFO:1.1:418286";
+
+/// A git-served `SLFO:1.1` update — the dual-served case (F8) — resolves
+/// [`UpdateSource::Git`], runs the real Gitea hash comparison (restoring
+/// #398's gate for `1.1`), and derives its update-repo URL via `gitrepoparse`
+/// (`<repository>/standard`), not `slrepoparse`.
+#[tokio::test]
+async fn make_testreport_slfo_1_1_git_served_resolves_git_source_and_gitrepoparse() {
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "deadbeef").await;
+
+    let dashboard = MockServer::start().await;
+    mount_dashboard_with_install(&dashboard, "418286").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_11_RRID,
+        &format!("{}/pulls/1", server.uri()),
+        Some("deadbeef"),
+    );
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    config.gitea_url = server.uri();
+    point_dashboard(&mut config, &dashboard);
+    let update = UpdateID::parse(SLFO_11_RRID).unwrap();
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+
+    assert!(
+        report.is_loaded(),
+        "a matching hash on a git-served 1.1 should load the report"
+    );
+    assert_eq!(report.update_source(), UpdateSource::Git);
+    let repo = report
+        .base()
+        .update_repos
+        .values()
+        .next()
+        .expect("update_repos should be populated");
+    assert!(
+        repo.ends_with("/standard"),
+        "git-served 1.1 must use gitrepoparse, got {repo}"
+    );
+}
+
+/// An OBS-served `SLFO:1.1` update (no `gitea_commit_hash` in the template)
+/// resolves [`UpdateSource::Obs`], loads without any Gitea token or network
+/// call, and derives its update-repo URL via `slrepoparse`
+/// (`<repository>/images/repo/...`), not `gitrepoparse`.
+#[tokio::test]
+async fn make_testreport_slfo_1_1_obs_served_resolves_obs_source_and_slrepoparse() {
+    let dashboard = MockServer::start().await;
+    mount_dashboard_with_install(&dashboard, "418286").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_11_RRID,
+        "http://gitea.invalid/pulls/1",
+        None,
+    );
+
+    // Deliberately no Gitea token: an OBS-served update must never need one.
+    let mut config = cfg(tmp.path().to_path_buf());
+    point_dashboard(&mut config, &dashboard);
+    let update = UpdateID::parse(SLFO_11_RRID).unwrap();
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+
+    assert!(
+        report.is_loaded(),
+        "an OBS-served 1.1 must load without a Gitea token"
+    );
+    assert_eq!(report.update_source(), UpdateSource::Obs);
+    let repo = report
+        .base()
+        .update_repos
+        .values()
+        .next()
+        .expect("update_repos should be populated");
+    assert!(
+        repo.contains("/images/repo/"),
+        "OBS-served 1.1 must use slrepoparse, got {repo}"
+    );
+}
+
 /// A missing Gitea token abandons the load (null report). The `Gitea` client
 /// refuses to build without a token, so no network call is made.
 #[tokio::test]
 async fn make_testreport_slfo_missing_token_yields_null() {
     let tmp = tempfile::tempdir().unwrap();
     // A PR API URL is present in metadata, but the config has no token (default).
-    make_slfo_checkout(tmp.path(), "http://gitea.invalid/pulls/1", "deadbeef");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        "http://gitea.invalid/pulls/1",
+        Some("deadbeef"),
+    );
 
     let config = cfg(tmp.path().to_path_buf());
     assert!(config.gitea_token.is_empty(), "precondition: no token");
@@ -539,7 +651,12 @@ async fn make_testreport_slfo_hash_mismatch_yields_null() {
 
     let tmp = tempfile::tempdir().unwrap();
     // Stored hash "stalesha" differs from the PR head "freshsha".
-    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", server.uri()),
+        Some("stalesha"),
+    );
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
@@ -599,7 +716,12 @@ async fn make_testreport_slfo_mismatch_force_continue_keeps_stale() {
     mount_dashboard_no_results(&dashboard, "4413").await;
 
     let tmp = tempfile::tempdir().unwrap();
-    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", server.uri()),
+        Some("stalesha"),
+    );
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
@@ -635,7 +757,12 @@ async fn make_testreport_slfo_mismatch_decline_deletes_checkout() {
     mount_pr_head_sha(&server, "freshsha").await;
 
     let tmp = tempfile::tempdir().unwrap();
-    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", server.uri()),
+        Some("stalesha"),
+    );
     let checkout_dir = tmp.path().join(SLFO_RRID);
     assert!(checkout_dir.exists(), "precondition: checkout present");
 
@@ -677,7 +804,12 @@ async fn make_testreport_slfo_mismatch_decline_keeps_checkout_when_delete_declin
     mount_pr_head_sha(&server, "freshsha").await;
 
     let tmp = tempfile::tempdir().unwrap();
-    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", server.uri()),
+        Some("stalesha"),
+    );
     let checkout_dir = tmp.path().join(SLFO_RRID);
 
     let mut config = cfg(tmp.path().to_path_buf());
@@ -732,7 +864,12 @@ async fn make_testreport_slfo_regenerate_refused_falls_back_to_manual() {
         .await;
 
     let tmp = tempfile::tempdir().unwrap();
-    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", gitea.uri()), "stalesha");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", gitea.uri()),
+        Some("stalesha"),
+    );
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
@@ -792,7 +929,12 @@ async fn make_testreport_slfo_regenerate_job_unfinished_removes_checkout() {
     mount_teregen(&teregen, "failed").await;
 
     let tmp = tempfile::tempdir().unwrap();
-    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", gitea.uri()), "stalesha");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", gitea.uri()),
+        Some("stalesha"),
+    );
     let checkout_dir = tmp.path().join(SLFO_RRID);
 
     let mut config = cfg(tmp.path().to_path_buf());
@@ -839,7 +981,12 @@ async fn make_testreport_slfo_regenerate_finished_but_reload_fails() {
     mount_teregen(&teregen, "finished").await;
 
     let tmp = tempfile::tempdir().unwrap();
-    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", gitea.uri()), "stalesha");
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", gitea.uri()),
+        Some("stalesha"),
+    );
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
