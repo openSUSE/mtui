@@ -53,9 +53,36 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   schema rule, and merge keys are valid YAML. A `refhosts.yml` document that
   relies on `<<` for shared fields across hosts now loads every host the
   merge expands to, where it previously loaded only the literal rows.
+- The git-vs-OBS decision for `assign`/`unassign`/`reject`/`comment`/`approve`
+  now comes from the loaded update's own `metadata.json`
+  (`gitea_commit_hash`), not from the RRID's `maintenance_id` (#433). During
+  the SL-Micro 6.0/6.1 cutover both workflows share the `SLFO:1.1` id space,
+  so no rule over the RRID could be correct; an update can also briefly be
+  served both ways at once, in which case mtui now drives the Gitea workflow
+  and leaves that update's OBS review request untouched. This also fixes the
+  update-repository URL layout for a git-served `SLFO:1.1` update (previously
+  always treated as OBS-served) and restores the approve-time Gitea
+  checkout-hash comparison for it (previously always skipped).
 
 ### Fixed
 
+- The QEM dashboard incident lookup for an OBS-served `SUSE:SLFO:1.1` update
+  used to key on the maintenance id (`1.1`), so mtui queried
+  `/api/incidents/1.1` instead of an actual incident number — a request that
+  could never succeed (#433). It now keys on the RRID's review id for every
+  SLFO update, matching how qem-bot itself writes the dashboard record.
+- The openQA job query for an SLFO update used the RRID's maintenance id as
+  the job's `BUILD` middle component, where qem-bot writes the dashboard's own
+  incident number there — for SLFO those differ (a dashboard number like
+  `4413` versus a maintenance id like `1.2`), so the query has never matched
+  a real SLFO job (#433). It also now matches qem-bot's own package-name
+  ordering (`sort_packages`): arch-suffixed and `-livepatch-` package names
+  are demoted before choosing the shortest, where mtui previously took the
+  plain shortest name regardless, which disagreed on a livepatch or
+  arch-split submission.
+- A Product Increment request no longer issues a QEM dashboard request that
+  could never succeed: PI is connected to neither qem-dashboard nor openQA,
+  so the fetch is now skipped outright (#433).
 - An unreachable openQA instance now reports the actual transport failure
   (e.g. `"...: Connection refused (os error 61)"`) instead of restating the
   request URL (`"...: error sending request for url (http://.../api/v1/jobs)"`).

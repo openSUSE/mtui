@@ -91,6 +91,19 @@ talks to the OBS/IBS API natively — no `osc` subprocess. `svn` is still used f
 the SVN testreport backend, and a terminal emulator for `terms`/`switch`; both
 are optional and mtui degrades gracefully when they are absent.
 
+## Why does `assign`/`approve` go to Gitea when I expected OBS (or vice versa)?
+
+mtui decides per update, from the loaded template's own metadata, not from the
+RRID: an update whose `metadata.json` carries a `gitea_commit_hash` is
+Gitea-served, otherwise it is OBS-served. This matters because the RRID's shape
+cannot answer the question during the SL-Micro 6.0/6.1 cutover — both workflows
+share the `SLFO:1.1` id space, and an update can briefly be served **both**
+ways at once. When that happens mtui always drives the Gitea workflow and
+**leaves that update's OBS review request alone** — `assign`/`unassign`/
+`reject`/`comment`/`approve` never touch it. If an update's OBS request looks
+stuck open, check whether its template carries a Gitea commit hash; if so,
+that is expected, not a bug.
+
 ## How do I install packages the update newly introduces?
 
 Feature updates often add packages that only exist in the test-update repository,
