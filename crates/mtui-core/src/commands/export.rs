@@ -112,7 +112,13 @@ impl Command for Export {
                 let http = build_http(session)?;
                 let dashboard_api = session.config.qem_dashboard_api.clone();
                 let openqa_instance = session.config.openqa_instance.clone();
-                let incident = build_incident(rrid.clone(), dashboard_api, http).await;
+                let incident = build_incident(
+                    rrid.clone(),
+                    dashboard_api,
+                    http,
+                    session.metadata().update_source(),
+                )
+                .await;
                 let mut auto = build_auto_openqa(
                     openqa_instance,
                     &incident,
@@ -258,6 +264,7 @@ mod tests {
         let incident = QemIncident {
             rrid: rrid.clone(),
             incident_number: "1".to_string(),
+            source: mtui_types::UpdateSource::Obs,
             client,
             data: None,
         };
@@ -376,8 +383,13 @@ mod tests {
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
         let openqa_transport = HttpClient::openqa_transport(VerifyPolicy::Default(false)).unwrap();
-        let incident =
-            build_incident(rrid.clone(), format!("{}/api", oqa.uri()), http.clone()).await;
+        let incident = build_incident(
+            rrid.clone(),
+            format!("{}/api", oqa.uri()),
+            http.clone(),
+            session.metadata().update_source(),
+        )
+        .await;
         let kernel =
             crate::commands::support::build_kernel_openqa(&incident, &oqa.uri(), openqa_transport)
                 .unwrap()
@@ -464,7 +476,13 @@ mod tests {
         let server = dashboard_server("1").await;
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = session.http_client().unwrap();
-        let incident = build_incident(rrid.clone(), format!("{}/api", server.uri()), http).await;
+        let incident = build_incident(
+            rrid.clone(),
+            format!("{}/api", server.uri()),
+            http,
+            session.metadata().update_source(),
+        )
+        .await;
         let max_parallel = session.config.max_parallel as usize;
         session.metadata_mut().openqa_mut().auto = Some(build_auto_openqa(
             server.uri(),

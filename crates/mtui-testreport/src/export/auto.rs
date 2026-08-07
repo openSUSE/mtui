@@ -304,6 +304,7 @@ mod tests {
         let incident = QemIncident {
             rrid: rrid.clone(),
             incident_number: "1".to_string(),
+            source: mtui_types::UpdateSource::Obs,
             client,
             data: None,
         };

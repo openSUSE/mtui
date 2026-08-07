@@ -38,6 +38,13 @@ const PREFIX: &str = "[oscqam] ";
 /// otherwise resembles: that one excludes PI. Merging them would make PI
 /// requests demand a maintenance testreport they never have, and retag every PI
 /// openQA `build` param `git` instead of `smelt`.
+///
+/// **Deliberately keyed on `kind` alone, not `mtui_types::UpdateSource`**
+/// (issue #433, decision 8/site 6): whether a product has a maintenance
+/// testreport on `qam.suse.de` is a property of the *product* — PI and SLFO
+/// never have one — not of which backend serves a given update. A
+/// git-served and an OBS-served `SLFO:1.1` request carry the identical RRID
+/// here and must both skip; see the test below for the explicit pin.
 fn skips_maintenance_testreport(rrid: &RequestReviewID) -> bool {
     matches!(rrid.kind, RequestKind::Pi | RequestKind::Slfo)
 }
@@ -457,6 +464,23 @@ mod tests {
                 "{id} must skip the qam.suse.de preconditions"
             );
         }
+    }
+
+    /// Issue #433, decision 8 (site 6): a git-served and an OBS-served
+    /// `SLFO:1.1` update both skip the `qam.suse.de` preconditions — this
+    /// predicate takes no `UpdateSource` because the two sources present the
+    /// *same* RRID here, and the product-level fact ("SLFO has no
+    /// maintenance testreport") does not depend on which backend served this
+    /// particular update. Both branches below happen to construct the same
+    /// RRID for that reason; the point is the explicit doc pin, not a
+    /// behavioral difference this function could observe.
+    #[test]
+    fn slfo_1_1_skips_regardless_of_which_backend_served_it() {
+        let git_served = RequestReviewID::parse("SUSE:SLFO:1.1:418286").unwrap();
+        assert!(skips_maintenance_testreport(&git_served));
+
+        let obs_served = RequestReviewID::parse("SUSE:SLFO:1.1:418286").unwrap();
+        assert!(skips_maintenance_testreport(&obs_served));
     }
 
     #[test]

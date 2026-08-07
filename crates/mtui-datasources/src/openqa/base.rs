@@ -1,13 +1,13 @@
 //! The shared base for openQA connectors.
 //!
-//! Builds the job-query parameters from the incident's
-//! [`RequestReviewID`] and incident name, fetches jobs from the openQA instance,
-//! and folds every transport/HTTP failure into a `None` result so a command
-//! never aborts on a flaky openQA. This module provides that shared machinery;
-//! the concrete `auto` and `kernel` workflows live in
-//! `standard` and [`kernel`](crate::openqa::kernel).
+//! Builds the job-query parameters from the incident's [`IncidentName`]
+//! facts, fetches jobs from the openQA instance, and folds every
+//! transport/HTTP failure into a `None` result so a command never aborts on a
+//! flaky openQA. This module provides that shared machinery; the concrete
+//! `auto` and `kernel` workflows live in `standard` and
+//! [`kernel`](crate::openqa::kernel).
 
-use mtui_types::{RequestKind, RequestReviewID};
+use mtui_types::UpdateSource;
 use serde::Deserialize;
 
 use crate::error::OpenQAError;
@@ -21,17 +21,32 @@ use crate::openqa::client::describe;
 /// than adding an `[openqa]` config surface.
 pub(crate) const OPENQA_INSTALL_DISTRI: &str = "sle";
 
-/// Provides the incident name used to build the openQA job-query `build`
-/// parameter.
+/// Provides the incident facts used to build the openQA job-query `build`
+/// parameter (`:{type}:{number}:{package}`, mirroring qem-bot's own
+/// `types/submissions.py`).
 ///
-/// Upstream passes an `incident` metadata object and calls
-/// `incident.get_incident_name()`. This trait is the seam: the connectors are
-/// built and tested against a mock, and concrete metadata
+/// This trait is the seam: the connectors are built and tested against a
+/// mock, and concrete metadata
 /// ([`QemIncident`](crate::qem_dashboard::incident::QemIncident)) implements
 /// it without a connector refactor.
+///
+/// No default bodies: a default would let an implementor silently skip a
+/// component, which is exactly how the `build` string's middle component
+/// (issue #433, B3) went unnoticed — it should have come from the incident,
+/// not the RRID, and nothing forced every implementor to say so.
 pub trait IncidentName {
-    /// The incident's short name (e.g. the package name `bash`).
+    /// The incident's short name (e.g. the package name `bash`), chosen by
+    /// qem-bot's `sort_packages` ordering.
     fn get_incident_name(&self) -> String;
+
+    /// The dashboard incident number (the `build` string's middle
+    /// component) — qem-bot's own `sub.id`, not the RRID's maintenance id.
+    fn incident_number(&self) -> String;
+
+    /// Which workflow this incident's update belongs to (the `build`
+    /// string's prefix): the dashboard record's own `type` when available,
+    /// otherwise the report's own [`UpdateSource`] as resolved at load.
+    fn update_source(&self) -> UpdateSource;
 }
 
 /// One openQA job as returned by `GET /api/v1/jobs`.
@@ -108,8 +123,8 @@ pub(crate) struct JobsResponse {
 /// The shared connector state: the ruoqa client plus the resolved query params.
 ///
 /// Computes the `distri`/`scope`/`latest`/`build` parameters once, from the
-/// [`RequestReviewID`] and incident name, and holds the [`ruoqa::Client`] used
-/// to fetch jobs.
+/// incident's [`IncidentName`] facts, and holds the [`ruoqa::Client`] used to
+/// fetch jobs.
 #[derive(Debug, Clone)]
 pub struct OpenQABase {
     client: ruoqa::Client,
@@ -119,22 +134,21 @@ pub struct OpenQABase {
 impl OpenQABase {
     /// Build the shared connector state.
     ///
-    /// The `build` parameter is
-    /// `:{git|smelt}:{maintenance_id}:{incident_name}`, keyed on whether the
-    /// request is [`RequestKind::Slfo`] (`git`) or otherwise (`smelt`).
-    pub fn new(
-        client: ruoqa::Client,
-        rrid: &RequestReviewID,
-        incident: &impl IncidentName,
-    ) -> Self {
-        let prefix = if rrid.kind == RequestKind::Slfo {
-            "git"
-        } else {
-            "smelt"
-        };
+    /// The `build` parameter mirrors qem-bot's own
+    /// `:{sub.type}:{sub.id}:{sub.packages[0]}`
+    /// (`qem-bot/openqabot/types/submissions.py:236`, issue #433):
+    /// [`IncidentName::update_source`] for the prefix (`git`/`smelt`),
+    /// [`IncidentName::incident_number`] for the middle component (the
+    /// dashboard's own number — **not** the RRID's maintenance id, which
+    /// coincides for `SUSE:Maintenance` but never matched an SLFO job; B3),
+    /// and [`IncidentName::get_incident_name`] for the package name. Every
+    /// component now comes from `incident`, so there is no `rrid` parameter
+    /// to leave unused.
+    pub fn new(client: ruoqa::Client, incident: &impl IncidentName) -> Self {
+        let prefix = incident.update_source().as_qem_type();
         let build = format!(
             ":{prefix}:{}:{}",
-            rrid.maintenance_id,
+            incident.incident_number(),
             incident.get_incident_name()
         );
         let params = vec![
@@ -215,15 +229,33 @@ fn build_query(params: &[(String, String)]) -> String {
 pub(crate) mod tests {
     use super::*;
 
-    /// A mock incident provider, mirroring the `mock_incident` pytest fixture
-    /// whose `get_incident_name` returns `"bash"`.
+    /// A mock incident provider exposing all three [`IncidentName`] facts
+    /// directly, mirroring the `mock_incident` pytest fixture. Defaults to
+    /// incident number `"1"` and [`UpdateSource::Obs`]; `with_number`/
+    /// `with_source` override either for a specific test.
     pub(crate) struct MockIncident {
         name: String,
+        number: String,
+        source: UpdateSource,
     }
 
     impl MockIncident {
         pub(crate) fn new(name: &str) -> Self {
-            Self { name: name.into() }
+            Self {
+                name: name.into(),
+                number: "1".to_owned(),
+                source: UpdateSource::Obs,
+            }
+        }
+
+        pub(crate) fn with_number(mut self, number: &str) -> Self {
+            self.number = number.to_owned();
+            self
+        }
+
+        pub(crate) fn with_source(mut self, source: UpdateSource) -> Self {
+            self.source = source;
+            self
         }
     }
 
@@ -231,56 +263,46 @@ pub(crate) mod tests {
         fn get_incident_name(&self) -> String {
             self.name.clone()
         }
+
+        fn incident_number(&self) -> String {
+            self.number.clone()
+        }
+
+        fn update_source(&self) -> UpdateSource {
+            self.source
+        }
     }
 
-    fn rrid(kind: &str) -> RequestReviewID {
-        RequestReviewID::parse(&format!("SUSE:{kind}:1:1")).unwrap()
-    }
-
-    #[test]
-    fn build_param_uses_smelt_prefix_for_maintenance() {
-        let base = OpenQABase::new(
-            dummy_client(),
-            &rrid("Maintenance"),
-            &MockIncident::new("bash"),
-        );
-        let build = base
-            .params
+    fn build_param(base: &OpenQABase) -> &str {
+        base.params
             .iter()
             .find(|(k, _)| k == "build")
             .map(|(_, v)| v.as_str())
-            .unwrap();
-        assert_eq!(build, ":smelt:1:bash");
-    }
-
-    /// PI takes the `smelt` prefix. This is the single case that separates the
-    /// bare `kind == Slfo` test here from `qam`'s precondition guard, which
-    /// groups PI *with* SLFO — merging the two would silently retag every PI
-    /// job's `build` parameter as `git` and break openQA job lookup.
-    #[test]
-    fn build_param_uses_smelt_prefix_for_pi() {
-        let base = OpenQABase::new(dummy_client(), &rrid("PI"), &MockIncident::new("bash"));
-        let build = base
-            .params
-            .iter()
-            .find(|(k, _)| k == "build")
-            .map(|(_, v)| v.as_str())
-            .unwrap();
-        assert_eq!(build, ":smelt:1:bash");
+            .unwrap()
     }
 
     #[test]
-    fn build_param_uses_git_prefix_for_slfo() {
-        // SLFO maintenance ids are dotted; use one that parses.
-        let rrid = RequestReviewID::parse("SUSE:SLFO:1.1:1").unwrap();
-        let base = OpenQABase::new(dummy_client(), &rrid, &MockIncident::new("bash"));
-        let build = base
-            .params
-            .iter()
-            .find(|(k, _)| k == "build")
-            .map(|(_, v)| v.as_str())
-            .unwrap();
-        assert_eq!(build, ":git:1.1:bash");
+    fn build_param_uses_smelt_prefix_for_obs_source() {
+        let base = OpenQABase::new(dummy_client(), &MockIncident::new("bash"));
+        assert_eq!(build_param(&base), ":smelt:1:bash");
+    }
+
+    #[test]
+    fn build_param_uses_git_prefix_for_git_source() {
+        let incident = MockIncident::new("bash").with_source(UpdateSource::Git);
+        let base = OpenQABase::new(dummy_client(), &incident);
+        assert_eq!(build_param(&base), ":git:1:bash");
+    }
+
+    /// B3: the middle component is the incident's own dashboard number, not
+    /// a maintenance id. For SLFO those differ (a dashboard `4413` vs a
+    /// maintenance id `1.2`) — this is the field `OpenQABase::new` must use,
+    /// unconditionally, regardless of any RRID.
+    #[test]
+    fn build_param_uses_incident_number_not_a_maintenance_id() {
+        let incident = MockIncident::new("bash").with_number("4413");
+        let base = OpenQABase::new(dummy_client(), &incident);
+        assert_eq!(build_param(&base), ":smelt:4413:bash");
     }
 
     #[test]
@@ -296,7 +318,7 @@ pub(crate) mod tests {
             "https://alice:s3cret@openqa.example.com",
         )
         .unwrap();
-        let base = OpenQABase::new(client, &rrid("Maintenance"), &MockIncident::new("bash"));
+        let base = OpenQABase::new(client, &MockIncident::new("bash"));
         assert!(!base.host().contains("s3cret"));
         assert!(!base.host().contains("alice"));
         assert_eq!(base.host(), "https://openqa.example.com/");
@@ -304,11 +326,7 @@ pub(crate) mod tests {
 
     #[test]
     fn default_params_are_stable() {
-        let base = OpenQABase::new(
-            dummy_client(),
-            &rrid("Maintenance"),
-            &MockIncident::new("bash"),
-        );
+        let base = OpenQABase::new(dummy_client(), &MockIncident::new("bash"));
         let get = |k: &str| {
             base.params
                 .iter()
