@@ -7,7 +7,7 @@
 
 use mtui_datasources::http::{HttpClient, VerifyPolicy};
 use mtui_datasources::qem_dashboard::{DashboardAutoOpenQA, QemDashboardClient, QemIncident};
-use mtui_types::RequestReviewID;
+use mtui_types::{RequestReviewID, UpdateSource};
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -92,7 +92,8 @@ async fn loads_incident_and_aggregate_jobs() {
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-    let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
+    let incident =
+        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs).await;
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     dashboard.run().await.unwrap();
 
@@ -140,7 +141,8 @@ async fn slfo_1_2_incident_uses_review_id() {
         .await;
 
     let rrid: RequestReviewID = "SUSE:SLFO:1.2:12358".parse().unwrap();
-    let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
+    let incident =
+        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs).await;
     assert_eq!(incident.incident_number, "12358");
 
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
@@ -166,7 +168,7 @@ async fn incident_metadata_shortest_package_name() {
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-    let incident = QemIncident::with_client(rrid, client_for(&server)).await;
+    let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
     assert!(incident.is_present());
     assert_eq!(incident.get_incident_name().as_deref(), Some("kernel-ec2"));
 }
@@ -186,7 +188,7 @@ async fn oversized_incident_body_folds_to_absent() {
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-    let incident = QemIncident::with_client(rrid, client_for(&server)).await;
+    let incident = QemIncident::with_client(rrid, client_for(&server), UpdateSource::Obs).await;
     assert!(!incident.is_present());
 }
 
@@ -212,7 +214,8 @@ async fn run_errors_when_dashboard_unreachable() {
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-    let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
+    let incident =
+        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs).await;
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     assert!(dashboard.run().await.is_err());
 }
@@ -239,7 +242,8 @@ async fn run_ok_on_empty_success() {
         .await;
 
     let rrid: RequestReviewID = "SUSE:Maintenance:12358:199773".parse().unwrap();
-    let incident = QemIncident::with_client(rrid.clone(), client_for(&server)).await;
+    let incident =
+        QemIncident::with_client(rrid.clone(), client_for(&server), UpdateSource::Obs).await;
     let mut dashboard = DashboardAutoOpenQA::new(OPENQA_HOST, &incident, rrid, 4);
     dashboard.run().await.unwrap();
     assert!(dashboard.results.is_none());

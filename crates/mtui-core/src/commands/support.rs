@@ -11,7 +11,7 @@ use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_datasources::qem_dashboard::incident::QemIncident;
 use mtui_datasources::{HttpClient, OpenQAError, QemDashboardClient};
 use mtui_hosts::HostsGroup;
-use mtui_types::RequestReviewID;
+use mtui_types::{RequestReviewID, UpdateSource};
 
 use crate::error::CommandError;
 use crate::session::Session;
@@ -26,14 +26,17 @@ use crate::session::Session;
 /// dashboard fetch reuses the session connection pool instead of building a
 /// fresh client, and plain values rather than
 /// `&Session` so callers never hold a (non-`Sync`) `Session` borrow across the
-/// `.await`.
+/// `.await`. `source` is the report's own [`UpdateSource`]
+/// (`session.metadata().update_source()`), the fallback the incident's
+/// `update_source()` uses when no dashboard record is available.
 pub(crate) async fn build_incident(
     rrid: RequestReviewID,
     dashboard_api: String,
     http: HttpClient,
+    source: UpdateSource,
 ) -> QemIncident {
     let client = QemDashboardClient::with_client(http, dashboard_api);
-    QemIncident::with_client(rrid, client).await
+    QemIncident::with_client(rrid, client, source).await
 }
 
 /// Builds a fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow on
@@ -73,7 +76,7 @@ pub(crate) fn build_kernel_openqa(
     transport: reqwest::Client,
 ) -> Result<KernelOpenQA, OpenQAError> {
     let client = build_openqa_client_with_transport(transport, host)?;
-    let base = OpenQABase::new(client, &incident.rrid, incident);
+    let base = OpenQABase::new(client, incident);
     Ok(KernelOpenQA::new(base))
 }
 

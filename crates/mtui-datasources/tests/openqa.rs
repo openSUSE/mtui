@@ -7,7 +7,7 @@
 
 use mtui_datasources::VerifyPolicy;
 use mtui_datasources::openqa::base::{IncidentName, OpenQABase};
-use mtui_types::RequestReviewID;
+use mtui_types::UpdateSource;
 use wiremock::matchers::{header, header_exists, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -15,6 +15,14 @@ struct Incident(&'static str);
 impl IncidentName for Incident {
     fn get_incident_name(&self) -> String {
         self.0.to_string()
+    }
+
+    fn incident_number(&self) -> String {
+        "1".to_owned()
+    }
+
+    fn update_source(&self) -> UpdateSource {
+        UpdateSource::Obs
     }
 }
 
@@ -31,8 +39,7 @@ fn base_for(server_uri: &str, config_dir: &std::path::Path) -> OpenQABase {
         .retry(ruoqa::RetryPolicy::default().max_retries(0).deadline(None))
         .build()
         .expect("ruoqa client builds");
-    let rrid = RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap();
-    OpenQABase::new(client, &rrid, &Incident("bash"))
+    OpenQABase::new(client, &Incident("bash"))
 }
 
 /// [`base_for`] against an empty (no `client.conf`) fixture directory, for
@@ -311,8 +318,7 @@ async fn request_carries_auth_headers_from_openqa_config_env() {
     // SAFETY: still inside the `#[serial(openqa_config_env)]` critical section.
     unsafe { std::env::remove_var("OPENQA_CONFIG") };
 
-    let rrid = RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap();
-    let base = OpenQABase::new(client, &rrid, &Incident("bash"));
+    let base = OpenQABase::new(client, &Incident("bash"));
     assert_eq!(base.get_jobs().await.map(|j| j.len()), Some(0));
 }
 

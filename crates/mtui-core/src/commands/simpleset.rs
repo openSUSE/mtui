@@ -133,8 +133,9 @@ impl Command for SetWorkflow {
         let openqa_instance = session.config.openqa_instance.clone();
         let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
         let current = session.metadata().workflow();
+        let source = session.metadata().update_source();
 
-        let incident = build_incident(rrid.clone(), dashboard_api, http.clone()).await;
+        let incident = build_incident(rrid.clone(), dashboard_api, http.clone(), source).await;
 
         match desired {
             Workflow::Kernel => {
@@ -467,7 +468,8 @@ mod tests {
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let host = session.config.openqa_instance.clone();
         let http = session.http_client().unwrap();
-        let incident = build_incident(rrid, dashboard_api, http.clone()).await;
+        let source = session.metadata().update_source();
+        let incident = build_incident(rrid, dashboard_api, http.clone(), source).await;
         let openqa_transport = session.openqa_transport().unwrap();
         session
             .metadata_mut()

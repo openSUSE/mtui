@@ -243,12 +243,13 @@ pub async fn make_testreport(
             VerifyPolicy::Default(true),
             Some(VerifyPolicy::from_config(&report.base().config.ssl_verify)),
         );
+        let source = report.update_source();
 
         // Build the incident handle (a failed dashboard fetch folds into
         // `data = None`, not an error) and run the auto connector. Both are
         // best-effort — network failure leaves `results = None`, which the
         // fallback below treats exactly like "no install jobs".
-        match QemIncident::new(rrid.clone(), dashboard_api, policy).await {
+        match QemIncident::new(rrid.clone(), dashboard_api, policy, source).await {
             Ok(incident) => {
                 info!("Getting data from QEM Dashboard");
                 let mut auto = DashboardAutoOpenQA::new(

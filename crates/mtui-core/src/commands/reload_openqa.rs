@@ -56,8 +56,9 @@ impl Command for ReloadOpenQA {
         let openqa_instance = session.config.openqa_instance.clone();
         let openqa_baremetal = session.config.openqa_instance_baremetal.clone();
         let workflow = session.metadata().workflow();
+        let source = session.metadata().update_source();
 
-        let incident = build_incident(rrid.clone(), dashboard_api, http.clone()).await;
+        let incident = build_incident(rrid.clone(), dashboard_api, http.clone(), source).await;
 
         if workflow == Workflow::Kernel {
             if session.metadata().openqa().kernel.is_empty() {
@@ -210,7 +211,8 @@ mod tests {
         let http = session.http_client().unwrap();
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let openqa_instance = session.config.openqa_instance.clone();
-        let incident = build_incident(rrid.clone(), dashboard_api, http).await;
+        let source = session.metadata().update_source();
+        let incident = build_incident(rrid.clone(), dashboard_api, http, source).await;
         let max_parallel = session.config.max_parallel as usize;
         session.metadata_mut().openqa_mut().auto = Some(build_auto_openqa(
             openqa_instance,

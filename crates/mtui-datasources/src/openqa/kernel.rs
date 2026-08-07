@@ -202,12 +202,10 @@ mod tests {
     use super::super::base::tests::{MockIncident, dummy_client};
     use super::super::base::{Job, JobModule, OpenQABase};
     use super::*;
-    use mtui_types::RequestReviewID;
     use std::collections::BTreeMap;
 
     fn base() -> OpenQABase {
-        let rrid = RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap();
-        OpenQABase::new(dummy_client(), &rrid, &MockIncident::new("bash"))
+        OpenQABase::new(dummy_client(), &MockIncident::new("bash"))
     }
 
     /// Parses a wire-form result string (`"passed"`, `"skipped"`, ...) into
