@@ -98,6 +98,9 @@ impl ManualExport {
     /// host.
     fn host_installog_to_template(&self, target: &str) -> Vec<String> {
         let Some(host) = self.results.iter().find(|h| h.hostname == target) else {
+            // #396: an empty install log for a host nobody collected data for
+            // must at least say so, not just silently write nothing.
+            tracing::warn!("no install log recorded for {target}; exporting an empty log");
             return Vec::new();
         };
 
@@ -224,8 +227,22 @@ impl ManualExport {
                 continue;
             };
 
-            // For before/after: track whether any package went un-updated.
+            // #396: with no recorded package data there is nothing honest to
+            // write — leave the scaffold's own lines and its undecided
+            // `=> PASSED/FAILED` marker in place rather than flipping a
+            // verdict over unverified content.
+            if host.packages.is_empty() {
+                tracing::warn!(
+                    "no package version data recorded for {hostname}; leaving its \
+                     install result unverified (scaffold lines and => PASSED/FAILED kept)"
+                );
+                continue;
+            }
+
+            // For before/after: track whether any package went un-updated,
+            // and whether any slot was never checked at all (#396).
             let mut failed = false;
+            let mut unverified = false;
             for state in ["before", "after"] {
                 let state_line = format!("{state}:\n");
                 let Some(pos) = self
@@ -243,13 +260,20 @@ impl ManualExport {
 
                 for package in &host.packages {
                     let name = &package.name;
-                    let version = match state {
-                        "before" => package.before(),
-                        _ => package.after(),
+                    let (version, observed) = match state {
+                        "before" => (package.before(), package.before_observed()),
+                        _ => (package.after(), package.after_observed()),
                     };
-                    let new_line = match version {
-                        Some(v) => format!("\t{name}-{v}\n"),
-                        None => format!("\tpackage {name} is not installed\n"),
+                    // #396: `None` never-observed must not become the positive
+                    // claim "is not installed" — only an actual observation of
+                    // absence may say that.
+                    let new_line = match (version, observed) {
+                        (Some(v), _) => format!("\t{name}-{v}\n"),
+                        (None, true) => format!("\tpackage {name} is not installed\n"),
+                        (None, false) => {
+                            unverified = true;
+                            format!("\tpackage {name}: not checked (no version data recorded)\n")
+                        }
                     };
                     if index < self.ctx.template.len()
                         && self.ctx.template[index].contains(name.as_str())
@@ -278,11 +302,25 @@ impl ManualExport {
 
             // Flip the verdict placeholder, bounded by this host's comment line
             // or the next host block, so an already-set verdict is preserved.
+            // Precedence (#396): a genuine regression flips FAILED even when
+            // other packages are unverified; an unverified block with no
+            // failure keeps the undecided placeholder rather than claiming
+            // PASSED over content nobody checked.
+            if !failed && unverified {
+                tracing::warn!(
+                    "installation test result on {hostname} left undecided: some package \
+                     versions were never checked (run `update`, or `prepare` plus a \
+                     version check, before exporting)"
+                );
+            }
             for j in index..self.ctx.template.len() {
                 let line = &self.ctx.template[j];
                 if line.contains("PASSED/FAILED") {
-                    self.ctx.template[j] =
-                        if failed { "=> FAILED\n" } else { "=> PASSED\n" }.to_string();
+                    if failed {
+                        self.ctx.template[j] = "=> FAILED\n".to_string();
+                    } else if !unverified {
+                        self.ctx.template[j] = "=> PASSED\n".to_string();
+                    }
                     break;
                 }
                 if line.starts_with("comment:") || line.contains("reference host:") {
@@ -347,6 +385,101 @@ mod tests {
             "\n",
             "comment: (none)\n",
         ]
+    }
+
+    /// #396: a never-observed slot must render "not checked", never the
+    /// positive claim "is not installed", and the block must not flip PASSED.
+    #[test]
+    fn install_results_says_not_checked_for_unobserved() {
+        // Package::new with no set_* calls: nothing was ever observed.
+        let mut ex = ManualExport::new(
+            ctx(&host_block()),
+            vec![host(vec![Package::new("bash")])],
+            None,
+            None,
+        );
+        ex.fillup_hosts_to_template();
+        let body = ex.ctx.template.concat();
+        assert!(
+            body.contains("package bash: not checked (no version data recorded)"),
+            "{body}"
+        );
+        assert!(!body.contains("bash is not installed"), "{body}");
+        assert!(
+            body.contains("=> PASSED/FAILED\n"),
+            "undecided placeholder kept: {body}"
+        );
+        assert!(
+            !body.contains("=> PASSED\n"),
+            "must not claim PASSED: {body}"
+        );
+    }
+
+    /// Observed-absent (a real `None` observation) keeps the classic wording.
+    #[test]
+    fn install_results_keeps_is_not_installed_for_observed_absent() {
+        let mut ex = ManualExport::new(
+            ctx(&host_block()),
+            vec![host(vec![pkg("bash", None, None)])],
+            None,
+            None,
+        );
+        ex.fillup_hosts_to_template();
+        let body = ex.ctx.template.concat();
+        assert!(body.contains("package bash is not installed"), "{body}");
+        assert!(!body.contains("not checked"), "{body}");
+    }
+
+    /// #396: a genuine regression still flips FAILED even when another package
+    /// is unverified — unverified must never hide a failure.
+    #[test]
+    fn install_results_failed_wins_over_unverified() {
+        let mut ex = ManualExport::new(
+            ctx(&host_block()),
+            vec![host(vec![
+                pkg("bash", Some("2"), Some("2")),
+                Package::new("zsh"),
+            ])],
+            None,
+            None,
+        );
+        ex.fillup_hosts_to_template();
+        let body = ex.ctx.template.concat();
+        assert!(body.contains("=> FAILED\n"), "{body}");
+        // The mixed block renders BOTH line kinds side by side.
+        assert!(body.contains("\tbash-2\n"), "{body}");
+        assert!(
+            body.contains("package zsh: not checked (no version data recorded)"),
+            "{body}"
+        );
+    }
+
+    /// #396: a host with NO recorded package data keeps the scaffold verbatim —
+    /// including its undecided verdict — instead of flipping PASSED over
+    /// content nobody verified.
+    #[test]
+    fn install_results_skips_empty_host_block() {
+        let scaffold = vec![
+            "system1 (reference host: h1)\n",
+            "before:\n",
+            "\tpackage bash is not installed\n",
+            "after:\n",
+            "\tpackage bash is not installed\n",
+            "\n",
+            "=> PASSED/FAILED\n",
+            "\n",
+            "comment: (none)\n",
+        ];
+        let mut ex = ManualExport::new(ctx(&scaffold), vec![host(vec![])], None, None);
+        ex.fillup_hosts_to_template();
+        let body = ex.ctx.template.concat();
+        assert!(
+            body.contains("=> PASSED/FAILED\n"),
+            "scaffold verdict kept: {body}"
+        );
+        assert!(!body.contains("=> PASSED\n"), "no invented PASSED: {body}");
+        // The scaffold's own (unverified) lines are left untouched.
+        assert_eq!(body.matches("is not installed").count(), 2, "{body}");
     }
 
     #[test]
