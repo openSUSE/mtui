@@ -6,7 +6,7 @@ use clap::{Arg, ArgAction, ArgMatches};
 use super::perform::{PerformOp, drive};
 use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Installs missing packages and updates existing packages.
@@ -74,7 +74,22 @@ impl Command for Prepare {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        // Not-loaded first, so the refusal below can honestly say "the loaded
+        // report" (#396 review).
+        let _rrid = crate::commands::support::require_update(session)?;
         let packages = session.metadata().get_package_list();
+        // #396: a report whose metadata names no package versions would sail
+        // through the flow (repo add/refresh, zero installs) and print
+        // `prepare completed on <hosts>` — an unqualified success an MCP
+        // client cannot distinguish from a prepared host. Refuse up front.
+        if packages.is_empty() {
+            return Err(CommandError::Other(
+                "the loaded report names no package versions, so prepare has nothing to \
+                 install; refusing to report success — check `list_packages -w` and the \
+                 report metadata"
+                    .to_owned(),
+            ));
+        }
         drive(
             session,
             args,
@@ -96,6 +111,16 @@ mod tests {
         empty_session, matches, session_with_failing_perform, session_with_hosts,
     };
     use crate::error::CommandError;
+
+    /// Seeds one package version on the loaded fixture report: the #396
+    /// pre-flight refuses a report whose metadata names none, and these tests
+    /// drive the paths past that guard.
+    fn seed_package(session: &mut crate::session::Session) {
+        session.metadata_mut().base_mut().packages.insert(
+            "standard".to_owned(),
+            std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
+        );
+    }
 
     #[test]
     fn complete_offers_own_flags_target_and_hosts() {
@@ -124,6 +149,7 @@ mod tests {
     #[tokio::test]
     async fn over_loaded_report_succeeds() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        seed_package(&mut session);
         let args = matches(&Prepare, &["-u"]);
         Prepare.call(&mut session, &args).await.unwrap();
         assert_eq!(session.targets().names(), vec!["h1"]);
@@ -137,10 +163,29 @@ mod tests {
     #[tokio::test]
     async fn failure_errors_and_names_host() {
         let (mut session, buf) = session_with_failing_perform("SUSE:Maintenance:1:1", &["h1"]);
+        seed_package(&mut session);
         let args = matches(&Prepare, &[]);
         let err = Prepare.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("h1")));
         assert!(!buf.contents().contains("completed"), "{}", buf.contents());
+    }
+
+    /// #396 headline: a loaded report whose metadata names no package
+    /// versions must REFUSE, not print `prepare completed on h1`.
+    #[tokio::test]
+    async fn empty_package_list_errors_instead_of_success() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&Prepare, &[]);
+        let err = Prepare.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("names no package")),
+            "{err:?}"
+        );
+        assert!(
+            !buf.contents().contains("completed"),
+            "no success line: {}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]
@@ -148,6 +193,7 @@ mod tests {
         // Loaded report but no hosts: passes the requires_update guard, then the
         // empty selection yields NoRefhostsDefined.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        seed_package(&mut session);
         let args = matches(&Prepare, &[]);
         let err = Prepare.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::NoRefhostsDefined));
@@ -160,6 +206,12 @@ mod tests {
         let (mut session, _buf) = empty_session();
         let args = matches(&Prepare, &[]);
         let err = Prepare.call(&mut session, &args).await.unwrap_err();
+        // The not-loaded guard outranks the #396 empty-metadata refusal, so
+        // the message never claims a report is loaded when none is.
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("Metadata not loaded")),
+            "{err:?}"
+        );
         assert!(matches!(err, CommandError::Other(_)));
     }
 }
