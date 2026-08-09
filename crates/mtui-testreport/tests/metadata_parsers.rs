@@ -394,3 +394,72 @@ fn patchinfo_titles_malformed_is_empty() {
         .expect("write patchinfo");
     assert!(patchinfo_titles(dir.path()).is_empty());
 }
+
+/// #396: a product whose entries all fail to parse must NOT leave an empty
+/// sub-map behind — that state makes `base.packages` non-empty while the
+/// flattened package list is empty, defeating every "anything to install?"
+/// guard downstream.
+#[test]
+fn json_parser_drops_products_with_no_parsable_entries() {
+    let mut results = TestReportBase::new(Config::default());
+    JSONParser::parse_str(
+        &mut results,
+        r#"{"packages": {"6.1": ["afterburn 5.9.0"], "other": ["afterburn _ 5.9.0-1"]}}"#,
+    )
+    .unwrap();
+    assert!(
+        !results.packages.contains_key("6.1"),
+        "two-token-only product must be dropped: {:?}",
+        results.packages
+    );
+    assert_eq!(results.packages["other"]["afterburn"], "5.9.0-1");
+}
+
+/// One- and two-token entries are dropped (now loudly); three-plus-token
+/// entries keep parsing as first=name, third=version.
+#[test]
+fn json_parser_drops_short_entries_keeps_three_plus() {
+    let mut results = TestReportBase::new(Config::default());
+    JSONParser::parse_str(
+        &mut results,
+        r#"{"packages": {"6.1": [
+            "solo",
+            "afterburn 5.9.0",
+            "afterburn-dracut _ 5.9.0-1",
+            "four _ 1.2.3 extra"
+        ]}}"#,
+    )
+    .unwrap();
+    let m = &results.packages["6.1"];
+    assert_eq!(m.len(), 2, "{m:?}");
+    assert_eq!(m["afterburn-dracut"], "5.9.0-1");
+    assert_eq!(m["four"], "1.2.3", "trailing tokens tolerated, third wins");
+}
+
+/// An empty packages envelope stays an empty map (no placeholder products).
+#[test]
+fn json_parser_empty_packages_envelope_yields_empty_map() {
+    let mut results = TestReportBase::new(Config::default());
+    JSONParser::parse_str(&mut results, r#"{"packages": {}}"#).unwrap();
+    assert!(results.packages.is_empty());
+}
+
+/// A populated SLFO-shaped envelope parses end-to-end (#396's incident used
+/// SUSE:SLFO:1.1:418286 / SL-Micro 6.1 / afterburn — the only domain values
+/// used here). Synthetic: real-fixture coverage remains #397, NOT closed here.
+#[test]
+fn slfo_populated_envelope_parses() {
+    let mut results = TestReportBase::new(Config::default());
+    JSONParser::parse_str(
+        &mut results,
+        r#"{
+            "rrid": "SUSE:SLFO:1.1:418286",
+            "packages": {"6.1": ["afterburn _ 5.9.0-1", "afterburn-dracut _ 5.9.0-1"]}
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(results.packages["6.1"].len(), 2);
+    // The flattened list feeds prepare's pre-flight; it must be non-empty.
+    let flat: Vec<&String> = results.packages.values().flat_map(|m| m.keys()).collect();
+    assert_eq!(flat.len(), 2, "{flat:?}");
+}
