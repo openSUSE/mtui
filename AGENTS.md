@@ -71,6 +71,9 @@ green:
 - `mtui` — the interactive REPL (`reedline`).
 - `mtui-mcp` — the MCP server, which **synthesises its tools from the command
   registry**. Adding/renaming/removing a command affects MCP tools automatically.
+  Exception: a deny-listed command may be re-served under the same name as a
+  hand-written tool (`edit` → `testreport_*`; `get`/`put` → the in-band
+  transfer tools, #434).
 
 ## Workspace layout
 Cargo workspace; each crate has one job. Lower crates never depend on higher ones;
@@ -192,8 +195,11 @@ next actionable task before working on a subsystem.
   converting the command's `clap` arg spec to a JSON schema, reconstructing argv
   from tool kwargs, and dispatching through the **same engine** as the REPL.
   REPL-only commands (`quit`, `exit`, `EOF`, `edit`, `shell`, `help`, `terms`,
-  `switch`) are deny-listed; the deny-list ∩ registry is consistency-tested and
-  drift is warned about at boot. Local process execution has no command at all —
+  `switch`) are deny-listed, as are `get`/`put`, which are re-served under the
+  same names as hand-written in-band transfer tools (#434) — a deny-listed
+  command may be replaced by a richer hand-written tool (`edit` → the
+  `testreport_*` tools is the same pattern). The deny-list ∩ registry is
+  consistency-tested and drift is warned about at boot. Local process execution has no command at all —
   `lrun` was removed by design; do not reintroduce it.
 - **Cancellation is cooperative-first.** `Session` carries a
   `CancellationToken` (the seam); the `Command::run` driver checks it before
