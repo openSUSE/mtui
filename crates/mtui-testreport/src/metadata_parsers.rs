@@ -23,7 +23,7 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use regex::Regex;
 use serde::Deserialize;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::testreport::TestReportBase;
 
@@ -222,20 +222,49 @@ impl JSONParser {
                 // `"pkg _ version"`: first token is the package name, third
                 // the version, middle token discarded.
                 let mut tokens = entry.split_whitespace();
-                if let (Some(pkg), Some(_), Some(ver)) =
-                    (tokens.next(), tokens.next(), tokens.next())
-                {
-                    // Package names are interpolated into root remote commands.
-                    // Reject anything that is not a valid RPM name at ingestion
-                    // (lenient-load: log and skip, never hard-fail the load).
-                    if let Err(e) = PackageSpec::parse(pkg) {
-                        error!(package = %pkg, error = %e, "skipping invalid package name in metadata");
-                        continue;
+                match (tokens.next(), tokens.next(), tokens.next()) {
+                    (Some(pkg), Some(_), Some(ver)) => {
+                        if tokens.next().is_some() {
+                            warn!(
+                                product = %prod, entry = %entry,
+                                "package entry has trailing tokens; using the first as name and third as version"
+                            );
+                        }
+                        // Package names are interpolated into root remote
+                        // commands. Reject anything that is not a valid RPM
+                        // name at ingestion (lenient-load: log and skip, never
+                        // hard-fail the load).
+                        if let Err(e) = PackageSpec::parse(pkg) {
+                            error!(package = %pkg, error = %e, "skipping invalid package name in metadata");
+                            continue;
+                        }
+                        pkgs.insert(pkg.to_owned(), ver.to_owned());
                     }
-                    pkgs.insert(pkg.to_owned(), ver.to_owned());
+                    // One- and two-token entries used to vanish with no trace
+                    // (#396): the sibling invalid-name arm logs, so must this.
+                    _ => error!(
+                        product = %prod, entry = %entry,
+                        "skipping unparsable package entry in metadata (expected \"<name> <op> <version>\")"
+                    ),
                 }
             }
+            // An empty sub-map must not be inserted: it makes `base.packages`
+            // non-empty while the flattened `get_package_list()` is empty,
+            // defeating every "is anything to install?" guard downstream (#396).
+            if pkgs.is_empty() {
+                error!(
+                    product = %prod,
+                    "metadata names this product but no package entry was parsable; dropping the empty entry"
+                );
+                continue;
+            }
             packages.insert(prod.clone(), pkgs);
+        }
+        if data.packages.iter().flatten().count() > 0 && packages.is_empty() {
+            warn!(
+                "metadata carries no parsable package versions; prepare/downgrade have nothing \
+                 to install and before/after version checks cannot run"
+            );
         }
         results.packages = packages;
 
