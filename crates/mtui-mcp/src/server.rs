@@ -69,6 +69,8 @@ pub struct McpServer {
     job_tools: Arc<HashSet<String>>,
     /// The set of hand-written testreport tool names (`testreport_read`/…).
     testreport_tools: Arc<HashSet<String>>,
+    /// The set of hand-written in-band transfer tool names (`get`/`put`, #434).
+    transfer_tools: Arc<HashSet<String>>,
     /// Last-touch timestamp (monotonic millis), bumped on every tool call and
     /// `list_tools`, read by the http registry's idle sweeper. Under stdio /
     /// tests it is a private throwaway atomic no sweeper observes.
@@ -121,14 +123,18 @@ impl McpServer {
         let command_descriptors = build_tools(&registry);
         let job_descriptors = job_tool_descriptors();
         let testreport_descriptors = testreport_tool_descriptors();
+        let transfer_descriptors = crate::transfer_tools::transfer_tool_descriptors();
         let mut routes = tool_routes(&registry);
 
         // The whole synthesised surface: command tools + the four job tools +
-        // the hand-written testreport tools.
+        // the hand-written testreport tools + the in-band get/put transfer
+        // tools (#434 — their command forms are on MCP_DENYLIST, which is what
+        // makes the same-name reuse here collision-free).
         let mut descriptors: Vec<ToolDescriptor> = command_descriptors
             .into_iter()
             .chain(job_descriptors)
             .chain(testreport_descriptors)
+            .chain(transfer_descriptors)
             .collect();
 
         // Token-budget passes: slim every tool's JSON schema of redundant
@@ -158,6 +164,11 @@ impl McpServer {
             .map(|d| d.name.clone())
             .filter(|n| kept.contains(n))
             .collect();
+        let transfer_tools: HashSet<String> = crate::transfer_tools::transfer_tool_descriptors()
+            .iter()
+            .map(|d| d.name.clone())
+            .filter(|n| kept.contains(n))
+            .collect();
 
         let tools: Vec<Tool> = descriptors.iter().map(descriptor_to_tool).collect();
 
@@ -168,6 +179,7 @@ impl McpServer {
             routes: Arc::new(routes),
             job_tools: Arc::new(job_tools),
             testreport_tools: Arc::new(testreport_tools),
+            transfer_tools: Arc::new(transfer_tools),
             last_touch,
             _guard: guard,
         }
@@ -282,6 +294,15 @@ impl ServerHandler for McpServer {
                 // Serialise the JSON object result to a single text block, matching
                 // the command tools' single-content-block wire shape.
                 .map(|v| v.to_string());
+            return Ok(render(result));
+        }
+
+        // A hand-written in-band transfer tool (get/put, #434).
+        if self.transfer_tools.contains(&name) {
+            let result =
+                crate::transfer_tools::dispatch_transfer_tool(&self.session, &name, &kwargs, sink)
+                    .await
+                    .map(|v| v.to_string());
             return Ok(render(result));
         }
 

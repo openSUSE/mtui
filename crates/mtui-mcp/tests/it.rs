@@ -28,3 +28,5 @@ mod stdio_roundtrip;
 mod testreport_tools;
 #[path = "tools_synthesis.rs"]
 mod tools_synthesis;
+#[path = "transfer_tools.rs"]
+mod transfer_tools;

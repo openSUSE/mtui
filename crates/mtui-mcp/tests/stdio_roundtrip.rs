@@ -161,3 +161,100 @@ async fn call_denied_tool_is_method_not_found() {
     })
     .await;
 }
+
+/// #434: the hand-written in-band transfer tools are wired into the RUNNING
+/// server — advertised on the wire and dispatched (not just present as
+/// descriptors). Dropping the `.chain(transfer_descriptors)` in `build` or the
+/// transfer dispatch arm in `call_tool` fails this.
+#[tokio::test]
+async fn transfer_tools_are_served_and_dispatched() {
+    with_client(|client| async move {
+        let tools = client.list_all_tools().await.expect("list tools");
+        for name in ["get", "put"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("`{name}` missing from tools/list"));
+            // The in-band replacements, not the synthesized path-based forms.
+            assert!(
+                tool.description
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("in-band")
+                    || tool
+                        .description
+                        .as_deref()
+                        .unwrap_or("")
+                        .contains("payload carried in the call"),
+                "`{name}` must be the in-band tool: {:?}",
+                tool.description
+            );
+        }
+
+        // Dispatch reaches the transfer arm: with no report loaded the tool
+        // refuses with its own message (method_not_found would mean the
+        // dispatch arm is missing; a path in the output would mean the old
+        // synthesized command answered).
+        let out = client
+            .call_tool(
+                CallToolRequestParams::new("get").with_arguments(
+                    serde_json::json!({ "remote": "/etc/os-release" })
+                        .as_object()
+                        .cloned()
+                        .expect("object"),
+                ),
+            )
+            .await
+            .expect("call returns a tool result, not a protocol error");
+        assert_eq!(out.is_error, Some(true));
+        let text = format!("{:?}", out.content);
+        assert!(
+            text.contains("no report loaded"),
+            "the in-band tool answered: {text}"
+        );
+    })
+    .await;
+}
+
+/// #434: `[mcp] tools_deny` removes a transfer tool from the wire surface AND
+/// from dispatch — the retain-sets stay in lockstep with the advertised list.
+#[tokio::test]
+async fn tools_deny_removes_transfer_tool_from_surface_and_dispatch() {
+    let mut config = Config::default();
+    config.session_user = "testuser".to_owned();
+    config.mcp_tools_deny = vec!["put".to_owned()];
+    let registry = Arc::new(register_all());
+    let provider = StdioProvider::new(config);
+    let session = provider.get_or_create("<default>").await;
+    let server = McpServer::new(registry, session);
+
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let server_task = tokio::spawn(async move {
+        let running = server.serve(server_io).await.expect("server serve");
+        running.waiting().await.expect("server run");
+    });
+    let client = ().serve(client_io).await.expect("client serve");
+
+    let tools = client.list_all_tools().await.expect("list tools");
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
+    assert!(names.contains(&"get"), "get stays: {names:?}");
+    assert!(!names.contains(&"put"), "put denied: {names:?}");
+
+    let denied = client
+        .call_tool(
+            CallToolRequestParams::new("put").with_arguments(
+                serde_json::json!({ "filename": "f", "content": "x" })
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ),
+        )
+        .await;
+    assert!(
+        denied.is_err(),
+        "a denied tool must not dispatch: {denied:?}"
+    );
+
+    drop(client);
+    let _ = server_task.await;
+}

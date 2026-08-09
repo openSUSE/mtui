@@ -35,6 +35,8 @@ pub mod slim;
 pub mod testreport_tools;
 #[cfg(feature = "mcp")]
 pub mod tools;
+#[cfg(feature = "mcp")]
+pub mod transfer_tools;
 
 pub use args::{McpArgs, Transport};
 #[cfg(feature = "mcp")]
@@ -51,6 +53,8 @@ pub use slim::slim_input_schema;
 pub use testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 #[cfg(feature = "mcp")]
 pub use tools::{ToolDescriptor, ToolRoute, build_tools, job_tool_descriptors};
+#[cfg(feature = "mcp")]
+pub use transfer_tools::{dispatch_transfer_tool, transfer_tool_descriptors};
 
 #[cfg(feature = "mcp")]
 mod runner;
