@@ -30,7 +30,10 @@ use crate::tools::ToolDescriptor;
 /// load → inspect → run/install → fill report → approve/reject without the long
 /// tail of host-bookkeeping and server-tuning verbs. The hand-written
 /// `testreport_*` and `job_*` tools are always part of core because the slow
-/// background-command flow and report editing depend on them.
+/// background-command flow and report editing depend on them; the hand-written
+/// `get`/`put` transfer tools (#434) are deliberately *not* — they are
+/// full-profile only, like the synthesized commands they replaced
+/// (`tools_allow` can restore them under `core`).
 pub const CORE: &[&str] = &[
     // load / inspect
     "load_template",

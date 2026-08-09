@@ -55,6 +55,7 @@ mcp = [
     "dep:tokio-util",
     "dep:mtui-testreport",
     "dep:futures",
+    "dep:base64ct",
 ]
 
 [dependencies]
@@ -65,6 +66,7 @@ clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 rmcp = { workspace = true, optional = true }
+base64ct = { version = "1", features = ["alloc"], optional = true }
 futures = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }

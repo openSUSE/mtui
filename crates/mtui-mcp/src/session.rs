@@ -569,6 +569,15 @@ impl McpSession {
         }
     }
 
+    /// The registry gate in exclusive mode — the hold the hand-written
+    /// transfer tools (`get`/`put`, #434) take around their host fan-outs,
+    /// matching how synthesized fan-out commands serialise today
+    /// ([`command_lock`](Self::command_lock)'s `_ =>` arm): `Session::activate`
+    /// may only be flipped under the exclusive gate.
+    pub(crate) async fn exclusive_lock(&self) -> CommandLock {
+        CommandLock::Exclusive(self.gate.exclusive().await)
+    }
+
     /// Holds the registry-shared gate plus one template's per-RRID lock.
     ///
     /// For the hand-written testreport tools (which act on a single template's
