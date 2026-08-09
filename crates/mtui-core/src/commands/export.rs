@@ -136,6 +136,18 @@ impl Command for Export {
             let hosts = select_names(session.targets(), args, false)
                 .map_err(|e| CommandError::Other(e.to_string()))?;
             let results = manual_hosts(session, &hosts);
+            // #396: a host block exported with no recorded package data keeps
+            // the scaffold's own (unverified) lines — say so on the surface the
+            // operator/MCP client actually sees, not only in the tracing log.
+            for host in &results {
+                if host.packages.is_empty() {
+                    session.display.println(&format!(
+                        "WARNING: no package version data recorded for {}; its install \
+                         result was left unverified",
+                        host.hostname
+                    ));
+                }
+            }
             let overview = session.metadata().openqa().overview.clone();
             (Some((hosts, results)), overview)
         } else {
@@ -459,6 +471,58 @@ mod tests {
         assert!(session.metadata().openqa().auto.is_some());
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("## export MTUI:"));
+    }
+
+    /// #396: a host exported with no recorded package version data must be
+    /// flagged on the operator-visible surface (display/MCP), not only in the
+    /// tracing log — its block is left unverified in the report.
+    #[tokio::test]
+    async fn manual_warns_about_unverified_hosts_on_display() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().workflow = Workflow::Manual;
+        let server = dashboard_server("1").await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let path = dir.path().join("template.txt");
+        std::fs::write(&path, "source code change review:\n").unwrap();
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(
+            out.contains("WARNING: no package version data recorded for h1"),
+            "{out}"
+        );
+    }
+
+    /// Negative control for the #396 WARNING: a host WITH recorded package
+    /// data must not be flagged — kills the warn-unconditionally mutant.
+    #[tokio::test]
+    async fn manual_does_not_warn_when_package_data_recorded() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().workflow = Workflow::Manual;
+        for t in session.targets_mut().targets_mut() {
+            t.set_packages(vec![mtui_types::package::Package::new("bash")]);
+        }
+        let server = dashboard_server("1").await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let path = dir.path().join("template.txt");
+        std::fs::write(&path, "source code change review:\n").unwrap();
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            !buf.contents().contains("WARNING: no package version data"),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]
