@@ -41,12 +41,15 @@ pub enum MockSftpOp {
         /// The remote destination path.
         remote: PathBuf,
     },
-    /// `sftp_put_bytes(data, remote)` — records the payload length (not the
-    /// bytes) and the destination, so a fan-out read-once test can assert that
-    /// N hosts each received the same-sized shared payload.
+    /// `sftp_put_bytes(data, remote)` — records the payload length, the
+    /// payload bytes, and the destination, so a fan-out read-once test can
+    /// assert that N hosts each received the byte-identical shared payload
+    /// (length alone cannot catch a same-length corrupted buffer).
     PutBytes {
         /// The number of bytes dispatched.
         len: usize,
+        /// The dispatched payload itself.
+        data: Vec<u8>,
         /// The remote destination path.
         remote: PathBuf,
     },
@@ -891,6 +894,7 @@ impl Connection for MockConnection {
     async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::PutBytes {
             len: data.len(),
+            data: data.to_vec(),
             remote: remote.to_path_buf(),
         });
         if let Some(reason) = &self.fail_sftp_put {
@@ -1269,6 +1273,7 @@ mod tests {
             conn.sftp_ops(),
             [MockSftpOp::PutBytes {
                 len: b"payload".len(),
+                data: b"payload".to_vec(),
                 remote: PathBuf::from("/remote/a"),
             }]
         );
@@ -1297,6 +1302,7 @@ mod tests {
                 },
                 MockSftpOp::PutBytes {
                     len: b"payload".len(),
+                    data: b"payload".to_vec(),
                     remote: PathBuf::from("/remote/b"),
                 },
             ]

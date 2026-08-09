@@ -482,6 +482,123 @@ impl HostsGroup {
         actions::sftp_get_all(&mut self.data, remote, local, self.is_repl, max_parallel).await;
     }
 
+    /// Reads `remote` into memory from every enabled host in parallel (#434).
+    ///
+    /// Returns one entry per *attempted* host — [`Disabled`] hosts are simply
+    /// absent, mirroring the `None` encoding of [`Target::sftp_read`] — keyed
+    /// by hostname, so callers attribute per host without touching the
+    /// stale-prone `last_download` bookkeeping (the returned-map shape of
+    /// [`lock`](Self::lock)).
+    ///
+    /// [`Disabled`]: super::TargetState::Disabled
+    pub async fn sftp_read(
+        &mut self,
+        remote: &Path,
+    ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
+        self.sftp_read_where(remote, |_t| true).await
+    }
+
+    /// Reads `remote` into memory from only the named hosts, otherwise
+    /// identical to [`sftp_read`](Self::sftp_read).
+    ///
+    /// Unknown names are silently skipped like every selected fan-out here —
+    /// a caller that must *refuse* unknown names checks them against
+    /// [`names`](Self::names) first (the MCP `get` tool does).
+    pub async fn sftp_read_selected(
+        &mut self,
+        remote: &Path,
+        names: &std::collections::BTreeSet<String>,
+    ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>> {
+        self.sftp_read_where(remote, |t| names.contains(t.hostname()))
+            .await
+    }
+
+    /// Shared implementation for [`sftp_read`](Self::sftp_read) /
+    /// [`sftp_read_selected`](Self::sftp_read_selected), the
+    /// [`lock_where`](Self::lock_where) pattern over [`Target::sftp_read`].
+    async fn sftp_read_where<S>(
+        &mut self,
+        remote: &Path,
+        select: S,
+    ) -> BTreeMap<String, std::result::Result<Vec<u8>, String>>
+    where
+        S: Fn(&Target) -> bool + Send + Sync,
+    {
+        use std::sync::Mutex;
+
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
+        let collected: Mutex<BTreeMap<String, std::result::Result<Vec<u8>, String>>> =
+            Mutex::new(BTreeMap::new());
+        actions::run_fanout(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            Some("FileDownload"),
+            select,
+            |t| {
+                let remote = remote.to_path_buf();
+                let collected = &collected;
+                Box::pin(async move {
+                    // `None` = not attempted (disabled): the host stays out of
+                    // the map rather than masquerading as an outcome.
+                    if let Some(outcome) = t.sftp_read(&remote).await {
+                        collected
+                            .lock()
+                            .unwrap()
+                            .insert(t.hostname().to_owned(), outcome);
+                    }
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+        collected.into_inner().unwrap()
+    }
+
+    /// Uploads already-decoded bytes to `remote` on every enabled host in
+    /// parallel (#434), sharing one allocation across the fan-out.
+    ///
+    /// The in-band counterpart of [`sftp_put`](Self::sftp_put): the payload
+    /// arrives from the caller (the MCP `put` tool) rather than a local file.
+    /// Returns one entry per attempted host like
+    /// [`sftp_read`](Self::sftp_read); the per-target upload still records
+    /// `last_upload`, so the REPL aggregation stays coherent if mixed.
+    pub async fn sftp_put_bytes(
+        &mut self,
+        data: &[u8],
+        remote: &Path,
+    ) -> BTreeMap<String, std::result::Result<(), String>> {
+        use std::sync::Mutex;
+
+        // One allocation shared across hosts — the actions::sftp_put_all
+        // shared-bytes pattern; the caller has already size-capped the payload.
+        let shared: std::sync::Arc<[u8]> = std::sync::Arc::from(data);
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
+        let collected: Mutex<BTreeMap<String, std::result::Result<(), String>>> =
+            Mutex::new(BTreeMap::new());
+        actions::run_fanout(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            Some("FileUpload"),
+            |_t| true,
+            |t| {
+                let shared = std::sync::Arc::clone(&shared);
+                let remote = remote.to_path_buf();
+                let collected = &collected;
+                Box::pin(async move {
+                    if let Some(outcome) = t.sftp_put_bytes(&shared, &remote).await {
+                        collected
+                            .lock()
+                            .unwrap()
+                            .insert(t.hostname().to_owned(), outcome);
+                    }
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+        collected.into_inner().unwrap()
+    }
+
     /// Locks every host in the group for `comment`, best-effort.
     ///
     /// Each per-target [`Target::lock`] is
@@ -1940,6 +2057,160 @@ mod tests {
             matches!(&outcomes["h2"], Err(HostError::Connect { host, .. }) if host == "h2"),
             "failing host is named in the outcome map"
         );
+    }
+
+    // --- sftp_read / sftp_put_bytes map fan-outs (#434) --------------------
+
+    /// Per-host DISTINCT content: identical fixtures could pass with the
+    /// fan-out returning one host's bytes for every key.
+    #[tokio::test]
+    async fn sftp_read_fans_out_with_distinct_content() {
+        let m1 = MockConnection::new("h1").with_file("/remote/f", b"alpha".to_vec());
+        let m2 = MockConnection::new("h2").with_file("/remote/f", b"beta".to_vec());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
+            ],
+            false,
+        );
+
+        let got = g.sftp_read(Path::new("/remote/f")).await;
+
+        assert_eq!(got.len(), 2);
+        assert_eq!(got["h1"], Ok(b"alpha".to_vec()));
+        assert_eq!(got["h2"], Ok(b"beta".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn sftp_read_mixed_outcomes() {
+        let ok = MockConnection::new("h1").with_file("/remote/f", b"alpha".to_vec());
+        // h2: no seeded file -> the mock serves SftpNotFound.
+        let bad = MockConnection::new("h2");
+        let off = MockConnection::new("h3").with_file("/remote/f", b"gamma".to_vec());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(ok)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(bad)),
+                Target::with_connection("h3", TargetState::Disabled, Box::new(off)),
+            ],
+            false,
+        );
+
+        let got = g.sftp_read(Path::new("/remote/f")).await;
+
+        assert_eq!(got["h1"], Ok(b"alpha".to_vec()));
+        assert!(got["h2"].is_err(), "h2 must carry its failure: {got:?}");
+        assert!(
+            !got.contains_key("h3"),
+            "disabled host must be absent: {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_selected_only_touches_named() {
+        let m1 = MockConnection::new("h1").with_file("/remote/f", b"alpha".to_vec());
+        let m2 = MockConnection::new("h2").with_file("/remote/f", b"beta".to_vec());
+        let h2 = m2.clone();
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
+            ],
+            false,
+        );
+
+        let names: std::collections::BTreeSet<String> = ["h1".to_owned()].into();
+        let got = g.sftp_read_selected(Path::new("/remote/f"), &names).await;
+
+        assert_eq!(got.len(), 1);
+        assert_eq!(got["h1"], Ok(b"alpha".to_vec()));
+        assert!(
+            h2.sftp_ops().is_empty(),
+            "unselected host must not be touched"
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_put_bytes_group_all_hosts_receive_bytes_once() {
+        let (m1, m2) = (MockConnection::new("h1"), MockConnection::new("h2"));
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(m2)),
+            ],
+            false,
+        );
+
+        let got = g
+            .sftp_put_bytes(b"payload-434", Path::new("/tmp/wd/f"))
+            .await;
+
+        assert_eq!(got.len(), 2);
+        assert_eq!(got["h1"], Ok(()));
+        assert_eq!(got["h2"], Ok(()));
+        for handle in [&h1, &h2] {
+            let ops = handle.sftp_ops();
+            assert_eq!(ops.len(), 1, "exactly one upload per host, got {ops:?}");
+            assert!(
+                matches!(
+                    &ops[0],
+                    crate::connection::MockSftpOp::PutBytes { len, data, remote }
+                        if *remote == Path::new("/tmp/wd/f")
+                            && *len == b"payload-434".len()
+                            && data == b"payload-434"
+                ),
+                "payload/remote mismatch: {ops:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sftp_put_bytes_group_skips_disabled_host() {
+        let m1 = MockConnection::new("h1");
+        let m2 = MockConnection::new("h2");
+        let h2 = m2.clone();
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(m1)),
+                Target::with_connection("h2", TargetState::Disabled, Box::new(m2)),
+            ],
+            false,
+        );
+
+        let got = g.sftp_put_bytes(b"payload", Path::new("/tmp/wd/f")).await;
+
+        assert_eq!(got.len(), 1, "disabled host absent from the map: {got:?}");
+        assert_eq!(got["h1"], Ok(()));
+        assert!(
+            h2.sftp_ops().is_empty(),
+            "disabled host must not be touched"
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_put_bytes_group_reports_failing_host() {
+        let ok = MockConnection::new("h1");
+        let bad = MockConnection::new("h2").with_sftp_put_failure("disk full");
+        let h1 = ok.clone();
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(ok)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(bad)),
+            ],
+            false,
+        );
+
+        let got = g.sftp_put_bytes(b"payload", Path::new("/tmp/wd/f")).await;
+
+        assert_eq!(got["h1"], Ok(()));
+        let Err(reason) = &got["h2"] else {
+            panic!("h2 must carry its failure: {got:?}");
+        };
+        assert!(reason.contains("disk full"), "reason was {reason:?}");
+        // The healthy host's upload still happened.
+        assert_eq!(h1.sftp_ops().len(), 1);
     }
 
     #[tokio::test]

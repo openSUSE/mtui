@@ -1143,14 +1143,25 @@ impl Target {
     ///
     /// The read-once counterpart of [`sftp_put`](Self::sftp_put): a fan-out
     /// reads the local payload a single time and dispatches the shared bytes to
-    /// every host. Same failure semantics (logged, not propagated).
-    async fn sftp_put_bytes(&mut self, data: &[u8], remote: &Path) {
+    /// every host. Same failure semantics (logged, not propagated), and the
+    /// outcome is still recorded into [`last_upload`](Self::last_upload) for
+    /// the REPL `put` aggregation. The outcome is *also* returned so
+    /// map-returning fan-outs ([`HostsGroup::sftp_put_bytes`]) can attribute
+    /// per host without reading the stale-prone `last_*` state: `None` means
+    /// not attempted (disabled), `Some(Err)` unconnected or a transfer error.
+    ///
+    /// [`HostsGroup::sftp_put_bytes`]: super::HostsGroup::sftp_put_bytes
+    pub(crate) async fn sftp_put_bytes(
+        &mut self,
+        data: &[u8],
+        remote: &Path,
+    ) -> Option<std::result::Result<(), String>> {
         match self.state {
             TargetState::Enabled => {
                 let Some(conn) = self.connection.as_mut() else {
                     tracing::error!(host = %self.hostname, "sftp_put on unconnected target");
                     self.last_upload = Some(Err("not connected".into()));
-                    return;
+                    return self.last_upload.clone();
                 };
                 self.last_upload = match conn.sftp_put_bytes(data, remote).await {
                     Ok(()) => Some(Ok(())),
@@ -1162,10 +1173,11 @@ impl Target {
                         Some(Err(e.to_string()))
                     }
                 };
+                self.last_upload.clone()
             }
             // Left as `None` (not attempted) so the `put` aggregation treats a
             // disabled host as skipped rather than a success or failure.
-            TargetState::Disabled => {}
+            TargetState::Disabled => None,
         }
     }
 
@@ -1213,6 +1225,42 @@ impl Target {
             // Left as `None` (not attempted) so the `get` aggregation treats a
             // disabled host as skipped rather than a success or failure.
             TargetState::Disabled => {}
+        }
+    }
+
+    /// Reads `remote` into memory over SFTP, gated by [`TargetState`].
+    ///
+    /// The in-band counterpart of [`sftp_get`](Self::sftp_get) (#434): the
+    /// bytes are returned to the caller instead of landing in a local file, so
+    /// an MCP client on another machine can receive the content directly.
+    /// `None` means not attempted ([`Disabled`](TargetState::Disabled));
+    /// `Some(Err)` an unconnected target or a transfer failure — the same
+    /// encoding [`last_download`](Self::last_download) uses, but *returned*:
+    /// this method deliberately does **not** record into `last_download`, whose
+    /// never-cleared entries misattribute stale outcomes across commands.
+    pub async fn sftp_read(
+        &mut self,
+        remote: &Path,
+    ) -> Option<std::result::Result<Vec<u8>, String>> {
+        match self.state {
+            TargetState::Enabled => {
+                let Some(conn) = self.connection.as_mut() else {
+                    tracing::error!(host = %self.hostname, "sftp_read on unconnected target");
+                    return Some(Err("not connected".into()));
+                };
+                match conn.sftp_open(remote).await {
+                    Ok(bytes) => Some(Ok(bytes)),
+                    Err(e) => {
+                        tracing::error!(
+                            host = %self.hostname, remote = %remote.display(), error = %e,
+                            "failed to read"
+                        );
+                        Some(Err(e.to_string()))
+                    }
+                }
+            }
+            // Not attempted, so a map-returning fan-out simply omits the host.
+            TargetState::Disabled => None,
         }
     }
 
@@ -1488,6 +1536,101 @@ mod tests {
         t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
 
         assert_eq!(t.last_upload(), Some(&Ok(())));
+    }
+
+    /// The returned outcome must mirror what is recorded — dropping either
+    /// half breaks the REPL aggregation or the MCP map fan-out respectively.
+    #[tokio::test]
+    async fn sftp_put_bytes_returns_outcome_and_still_records_last_upload() {
+        let ok = MockConnection::new("h1");
+        let mut t = enabled_with(ok);
+        let returned = t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+        assert_eq!(returned, Some(Ok(())));
+        assert_eq!(t.last_upload(), Some(&Ok(())));
+
+        let bad = MockConnection::new("h2").with_sftp_put_failure("disk full");
+        let mut t2 = enabled_with(bad);
+        let returned = t2.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+        let Some(Err(reason)) = returned else {
+            panic!("expected returned failure, got {returned:?}");
+        };
+        assert!(reason.contains("disk full"), "reason was {reason:?}");
+        assert_eq!(t2.last_upload(), Some(&Err(reason)));
+    }
+
+    /// The Disabled arm must return `None` AND issue no transfer — a mutation
+    /// to `Some(Ok(()))` would let a map fan-out report "ok" for a host that
+    /// received nothing.
+    #[tokio::test]
+    async fn sftp_put_bytes_disabled_is_none_and_no_op() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
+
+        let got = t.sftp_put_bytes(b"payload", Path::new("/remote")).await;
+
+        assert_eq!(got, None);
+        assert_eq!(t.last_upload(), None);
+        assert!(
+            handle.sftp_ops().is_empty(),
+            "disabled host must not be touched"
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_read_enabled_returns_bytes() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"h1-bytes".to_vec());
+        let mut t = enabled_with(conn);
+
+        let got = t.sftp_read(Path::new("/remote/f")).await;
+
+        assert_eq!(got, Some(Ok(b"h1-bytes".to_vec())));
+    }
+
+    #[tokio::test]
+    async fn sftp_read_disabled_is_none() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"h1-bytes".to_vec());
+        let mut t = Target::with_connection("h1", TargetState::Disabled, Box::new(conn));
+
+        assert_eq!(t.sftp_read(Path::new("/remote/f")).await, None);
+    }
+
+    #[tokio::test]
+    async fn sftp_read_unconnected_is_some_err() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
+
+        let got = t.sftp_read(Path::new("/remote/f")).await;
+
+        let Some(Err(reason)) = got else {
+            panic!("expected Some(Err), got {got:?}");
+        };
+        assert!(reason.contains("not connected"), "reason was {reason:?}");
+    }
+
+    #[tokio::test]
+    async fn sftp_read_missing_file_is_some_err() {
+        // No `with_file` seeding: the mock serves SftpNotFound.
+        let conn = MockConnection::new("h1");
+        let mut t = enabled_with(conn);
+
+        let got = t.sftp_read(Path::new("/no/such/file")).await;
+
+        assert!(
+            matches!(got, Some(Err(_))),
+            "expected Some(Err), got {got:?}"
+        );
+    }
+
+    /// `sftp_read` must not regress into the `last_download` bookkeeping —
+    /// those entries are never cleared and misattribute across commands.
+    #[tokio::test]
+    async fn sftp_read_does_not_touch_last_download() {
+        let conn = MockConnection::new("h1").with_file("/remote/f", b"h1-bytes".to_vec());
+        let mut t = enabled_with(conn);
+
+        let _ = t.sftp_read(Path::new("/remote/f")).await;
+
+        assert_eq!(t.last_download(), None);
     }
 
     #[tokio::test]

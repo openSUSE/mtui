@@ -327,7 +327,11 @@ pub(crate) async fn sftp_put_all(
         Some(bytes) => {
             let futs = targets.values_mut().map(|t| {
                 let (bytes, remote) = (Arc::clone(&bytes), remote.clone());
-                async move { t.sftp_put_bytes(&bytes, &remote).await }
+                // The outcome is recorded in `last_upload` for the REPL `put`
+                // aggregation; the returned copy is for map-returning callers.
+                async move {
+                    let _ = t.sftp_put_bytes(&bytes, &remote).await;
+                }
             });
             run_parallel(futs, desc, max_parallel).await;
         }
@@ -591,7 +595,7 @@ mod tests {
             assert!(
                 matches!(
                     h.sftp_ops().as_slice(),
-                    [MockSftpOp::PutBytes { len, remote }]
+                    [MockSftpOp::PutBytes { len, data: _, remote }]
                         if *len == b"hello world".len() && remote == Path::new("/remote/f")
                 ),
                 "each host must receive the shared payload via PutBytes, got {:?}",
