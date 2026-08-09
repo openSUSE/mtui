@@ -100,9 +100,12 @@ impl Registry {
 /// Commands that must not be synthesised into MCP tools.
 ///
 /// The MCP deny-list (`AGENTS.md`): these commands drive
-/// the interactive shell or require a controlling terminal. (Local process
-/// execution used to be the third category; its `lrun` command was removed
-/// outright rather than merely denied.) The Phase-7 `mtui-mcp` tool
+/// the interactive shell or require a controlling terminal, or are replaced by
+/// richer hand-written MCP tools (`edit` → the `testreport_*` tools; `get`/`put`
+/// → the in-band transfer tools, #434 — their synthesized forms exchange
+/// server-local paths a remote `--transport http` client cannot reach). (Local
+/// process execution used to be a further category; its `lrun` command was
+/// removed outright rather than merely denied.) The Phase-7 `mtui-mcp` tool
 /// synthesiser skips every registry command whose name or alias appears here,
 /// and warns at boot if a deny-list entry no longer resolves (so a
 /// renamed/removed command does not drift silently). Kept here, beside
@@ -119,6 +122,8 @@ pub const MCP_DENYLIST: &[&str] = &[
     "help",   // registry listing / per-command help, REPL-only
     "edit",   // $EDITOR spawn on the controlling TTY, REPL-only
     "terms",  // spawn terminal-launcher scripts to hosts, REPL-only
+    "get",
+    "put", // path-based SFTP transfers; replaced by hand-written in-band MCP tools (#434)
 ];
 
 /// Builds the process-wide command registry — the single, explicit place every
@@ -404,8 +409,9 @@ mod tests {
             let _reserved_or_registered = r.contains(name);
         }
         // Sanity: the currently-registered deny-listed commands are the Wave 2
-        // REPL-only set (quit+aliases, switch, shell) plus the REPL-only
-        // additions `help`, `edit`, and `terms`.
+        // REPL-only set (quit+aliases, switch, shell), the REPL-only
+        // additions `help`, `edit`, and `terms`, and the path-based transfer
+        // pair `get`/`put`, re-served as hand-written in-band MCP tools (#434).
         let registered_denied: Vec<&str> = MCP_DENYLIST
             .iter()
             .copied()
@@ -414,7 +420,7 @@ mod tests {
         assert_eq!(
             registered_denied,
             vec![
-                "quit", "exit", "EOF", "switch", "shell", "help", "edit", "terms"
+                "quit", "exit", "EOF", "switch", "shell", "help", "edit", "terms", "get", "put"
             ]
         );
     }
