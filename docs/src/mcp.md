@@ -176,6 +176,16 @@ host, the same destination the REPL `put` uses. `filename` must be a bare name
 outright: truncating an upload would corrupt it. Any host failure fails the
 call with the host named.
 
+## Command behaviour notes
+
+- The `prepare` tool fails — instead of reporting success — when the loaded
+  report's metadata names no package versions, and when no prepare command
+  could be built for a connected host (#396). Automation keying on `prepare`'s
+  success no longer sees a false positive on a metadata-empty report.
+- `export` emits `WARNING: no package version data recorded for <host>...`
+  lines in its tool output when a host has no recorded package data and its
+  install-result block was therefore left unverified in the report.
+
 ## Testreport editing tools
 
 Five hand-written tools operate on the loaded test report's checkout, replacing

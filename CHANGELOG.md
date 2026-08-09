@@ -77,6 +77,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   given bare `filename`) instead of naming a file on the server's filesystem
   that a remote client cannot create (#434). Oversize payloads are refused
   rather than truncated; the REPL `put` command is unchanged.
+- `prepare` no longer reports success while doing nothing (#396): a loaded
+  report whose metadata names no package versions now fails the command (REPL
+  and MCP) with a diagnosis instead of printing `prepare completed on ...`; a
+  host the prepare fan-out could not build a command for now fails the flow by
+  name; and an empty package list inside the flow logs a warning (parity with
+  `downgrade`). Metadata package entries that do not parse as
+  `<name> <op> <version>`, and products left with no parsable entries, are
+  logged and dropped instead of silently vanishing, and connecting a host
+  whose base product matches no metadata packages now warns that before/after
+  version checks cannot run.
+- Exported testreports no longer claim a package "is not installed" when its
+  version was never checked (#396): a never-observed before/after version
+  renders as `package <name>: not checked (no version data recorded)`; a host
+  block with no recorded version data keeps its `=> PASSED/FAILED` placeholder
+  — and `export` prints `WARNING: no package version data recorded for
+  <host>...` on the display — instead of flipping to PASSED; a genuine version
+  regression still flips FAILED even when other packages are unverified.
 - The QEM dashboard incident lookup for an OBS-served `SUSE:SLFO:1.1` update
   used to key on the maintenance id (`1.1`), so mtui queried
   `/api/incidents/1.1` instead of an actual incident number — a request that
