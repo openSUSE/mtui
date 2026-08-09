@@ -28,6 +28,12 @@ pub struct Package {
     after: Option<RPMVersion>,
     required: Option<RPMVersion>,
     current: Option<RPMVersion>,
+    /// Whether a before-version observation was ever recorded (#396): a `None`
+    /// [`before`](Package::before) with this set means *observed absent*, not
+    /// *never checked* — export must render the two differently.
+    before_observed: bool,
+    /// The after-side counterpart of [`before_observed`](Package::before_observed).
+    after_observed: bool,
 }
 
 impl Package {
@@ -40,7 +46,23 @@ impl Package {
             after: None,
             required: None,
             current: None,
+            before_observed: false,
+            after_observed: false,
         }
+    }
+
+    /// Whether a before-version observation was ever recorded — `None` from
+    /// [`before`](Package::before) then means "observed absent", not "never
+    /// checked".
+    #[must_use]
+    pub fn before_observed(&self) -> bool {
+        self.before_observed
+    }
+
+    /// The after-side counterpart of [`before_observed`](Package::before_observed).
+    #[must_use]
+    pub fn after_observed(&self) -> bool {
+        self.after_observed
     }
 
     /// The version of the package before an update, if known.
@@ -77,6 +99,7 @@ impl Package {
     /// as "clear" and never errors.
     pub fn set_before(&mut self, ver: Option<&str>) -> crate::error::Result<()> {
         self.before = parse_opt(ver)?;
+        self.before_observed = true;
         Ok(())
     }
 
@@ -86,6 +109,7 @@ impl Package {
     /// See [`set_before`](Package::set_before).
     pub fn set_after(&mut self, ver: Option<&str>) -> crate::error::Result<()> {
         self.after = parse_opt(ver)?;
+        self.after_observed = true;
         Ok(())
     }
 
@@ -98,14 +122,18 @@ impl Package {
         Ok(())
     }
 
-    /// Sets the [`before`](Package::before) version directly.
+    /// Sets the [`before`](Package::before) version directly, recording that
+    /// an observation was made (even a `None` one — observed absent).
     pub fn set_before_version(&mut self, ver: Option<RPMVersion>) {
         self.before = ver;
+        self.before_observed = true;
     }
 
-    /// Sets the [`after`](Package::after) version directly.
+    /// Sets the [`after`](Package::after) version directly, recording that an
+    /// observation was made (even a `None` one — observed absent).
     pub fn set_after_version(&mut self, ver: Option<RPMVersion>) {
         self.after = ver;
+        self.after_observed = true;
     }
 
     /// Sets the [`current`](Package::current) version directly.
@@ -147,8 +175,30 @@ impl std::hash::Hash for Package {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashSet;
+
+    use super::*;
+
+    /// #396: setting a `None` version still counts as an observation —
+    /// "observed absent" and "never checked" must stay distinguishable.
+    #[test]
+    fn set_version_none_counts_as_observed() {
+        let mut p = Package::new("bash");
+        assert!(!p.before_observed() && !p.after_observed());
+        p.set_before_version(None);
+        assert!(p.before_observed());
+        assert!(!p.after_observed());
+        p.set_after_version(None);
+        assert!(
+            p.after_observed(),
+            "set_after_version must mark the observation"
+        );
+        let mut p = Package::new("bash2");
+        p.set_after(None).unwrap();
+        assert!(p.after_observed());
+        assert!(!p.before_observed());
+        assert!(p.before().is_none() && p.after().is_none());
+    }
 
     #[test]
     fn new_has_name_and_no_versions() {
