@@ -279,7 +279,10 @@ enum PrepareFailure {
     /// installed and the update's premise is broken — the update aborts.
     DidNotRun(UpdateError),
     /// Prepare ran and one or more hosts reported trouble from the package
-    /// manager. Warn and continue.
+    /// manager. Warn and continue. Also carries #396's per-host
+    /// no-command-built failures: `update` intentionally warns there because
+    /// `build_update_maps` re-detects the unresolved-key cause moments later
+    /// and aborts with `MissingUpdater`.
     HostReported(UpdateError),
     /// A cancellation checkpoint, not a failure.
     Cancelled(UpdateError),
@@ -782,6 +785,16 @@ async fn prepare_body(
     let mut dispatched: BTreeSet<String> = BTreeSet::new();
     let mut inert: BTreeSet<String> = BTreeSet::new();
 
+    // Parity with perform_downgrade: an empty list is not a host failure, but
+    // it must never be a silent success either — only the issue repositories
+    // were touched (#396). Above the branch so the `installed_only` path (zero
+    // loop iterations) warns too; the operator-facing refusal lives in the
+    // `prepare`/`update` command pre-flights, this covers embedded callers
+    // (the update flow's newpackage prepare).
+    if pkgs.is_empty() {
+        warn!("no packages to prepare");
+    }
+
     let mut cancelled_at: Option<usize> = None;
     if installed_only {
         // Conditional per-package install — inherently one package at a time.
@@ -846,6 +859,28 @@ async fn prepare_body(
     // entry for one host would push `aggregate_failures` out of its
     // single-failure verbatim branch into the summary, which drops `host` to
     // `None` and breaks callers that read it.
+    // A host the fan-out never reached must fail by name, not ride the
+    // group's success (#396): `build_prepare_map` drops a host whose release
+    // key does not resolve or whose template does not render (e.g. no
+    // installed-only variant), and nothing else records that. Skipped when the
+    // flow was cancelled before the first fan-out (nothing was expected to
+    // dispatch) and when the list was empty (the warn above owns that case).
+    if !pkgs.is_empty() && cancelled_at != Some(0) {
+        for target in targets.targets() {
+            if target.state() != mtui_types::TargetState::Enabled {
+                continue;
+            }
+            let host = target.hostname();
+            if !dispatched.contains(host) {
+                inert.insert(host.to_owned());
+                failures.push(UpdateError::new(
+                    "no prepare command could be built for this host; nothing was installed",
+                    host.to_owned(),
+                ));
+            }
+        }
+    }
+
     let named: BTreeSet<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
     for host in &inert {
         if !named.contains(host) {
@@ -936,6 +971,7 @@ fn build_prepare_map(
     let mut map = BTreeMap::new();
     for target in targets.targets() {
         let Some((release, transactional)) = host_key(target) else {
+            error!(host = %target.hostname(), "prepare: host release key unresolved; no command built");
             continue;
         };
         let Some(doer) = resolve_doer(registry, Role::Prepare, &release, transactional) else {
@@ -952,6 +988,15 @@ fn build_prepare_map(
         };
         if let Some(cmd) = rendered {
             map.insert(target.hostname().to_owned(), cmd);
+        } else {
+            // A dropped render (error, or a family with no installed-only
+            // variant) leaves the host out of the fan-out; the dispatch
+            // accounting in `prepare_body` turns that into a named failure,
+            // this log says why (#396).
+            error!(
+                host = %target.hostname(), release = %release,
+                "prepare: no command rendered for this host; nothing will be installed on it"
+            );
         }
     }
     map
@@ -1318,8 +1363,14 @@ async fn downgrade_verdict(targets: &mut HostsGroup) -> BTreeMap<String, Vec<Str
     for target in targets.targets_mut() {
         let hostname = target.hostname().to_owned();
         for pkg in target.packages_mut() {
-            let after = pkg.after().cloned();
-            pkg.set_before_version(after);
+            // #396: rotate value AND honesty — a never-observed after slot
+            // must not become an "observed" before slot, or a standalone
+            // downgrade (no prior update) exports "is not installed" for a
+            // slot nobody ever checked.
+            if pkg.after_observed() {
+                let after = pkg.after().cloned();
+                pkg.set_before_version(after);
+            }
             let current = pkg.current().cloned();
             pkg.set_after_version(current);
             if let (Some(current), Some(required)) = (pkg.current(), pkg.required())
@@ -3778,6 +3829,57 @@ mod tests {
         assert!(
             !fired.iter().any(|c| c.contains("systemctl reboot")),
             "a host with nothing staged must not be rebooted: {fired:?}"
+        );
+    }
+
+    /// #396: a host `build_prepare_map` drops (unresolvable release key, so
+    /// no command is ever built for it) must fail the prepare BY NAME instead
+    /// of riding the group's success while the other host does the work.
+    #[tokio::test]
+    async fn perform_prepare_fails_a_host_no_command_was_built_for() {
+        let (good, good_handle) = slmicro_target("h1", "", 0);
+        // h2: enabled but with no parsed system -> host_key resolves nothing.
+        let bad_conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
+        let bad_handle = bad_conn.clone();
+        let bad = Target::with_connection("h2", TargetState::Enabled, Box::new(bad_conn));
+        let mut group = HostsGroup::new(vec![good, bad], false);
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["afterburn".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await;
+
+        let err = res.expect_err("the dropped host must fail the flow");
+        // Robust attribution: a single failure keeps its host verbatim; a
+        // second (h1-blaming) entry would collapse `host` to `None` via the
+        // aggregate summary.
+        assert_eq!(err.host.as_deref(), Some("h2"), "{err}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no prepare command could be built"),
+            "cause stated: {msg}"
+        );
+        // Mock-level proof: the dropped host was never sent ANY command —
+        // being both dispatched-to and reported not-installed would be #396's
+        // dishonesty inverted.
+        assert!(
+            bad_handle.commands().is_empty(),
+            "{:?}",
+            bad_handle.commands()
+        );
+        // The healthy host still received its prepare command.
+        assert!(
+            good_handle
+                .commands()
+                .iter()
+                .any(|c| c.contains("transactional-update") && c.contains("afterburn")),
+            "{:?}",
+            good_handle.commands()
         );
     }
 
