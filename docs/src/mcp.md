@@ -6,7 +6,11 @@ surface is *synthesised from the same command registry* the `mtui` REPL uses:
 each non-denied command becomes one tool, with a JSON input schema derived from
 the command's `clap` argument spec, dispatched through the same engine as the
 REPL. Adding, renaming, or removing a command changes the MCP tools
-automatically. The underlying semantics of each tool are the command semantics in
+automatically. Two commands, `get` and `put`, are denied synthesis and
+re-served under the same names as hand-written tools that carry file content
+in-band (see [File transfer tools](#file-transfer-tools)) — a path on the
+server's filesystem would be meaningless to a remote `--transport http` client,
+and is never needed on stdio either. The underlying semantics of each tool are the command semantics in
 the [Command reference](cli.md).
 
 ## Building and running
@@ -68,6 +72,12 @@ cannot be re-enabled with `[mcp] tools_allow`:
 - The interactive/REPL-only commands, which require a controlling terminal or
   have no headless meaning: `quit`, `exit`, `EOF`, `switch`, `shell`, `help`,
   `edit`, `terms`.
+- The path-based transfer commands `get` and `put`, replaced by the
+  hand-written in-band tools of the same names (#434): their synthesized forms
+  exchanged server-local paths a remote client cannot read or create. (Only
+  the synthesized command forms are permanently gone; the replacement
+  hand-written `get`/`put` are ordinary tools — present in `full`, restorable
+  under `core` via `tools_allow`, removable via `tools_deny`.)
 
 Local process execution is not on this list because it is not in mtui at all:
 the former `lrun` command (run a command as the local process user) was removed
@@ -135,6 +145,36 @@ prompt at the REPL never blocks waiting for input:
 
 SSH authentication is public-key only in every surface. A failed key auth reports
 the host as unreachable; `mtui-mcp` never falls back to a password prompt.
+
+## File transfer tools
+
+The hand-written `get` and `put` tools replace the synthesized commands of the
+same names (#434), carrying content in-band in both directions. The REPL
+`get`/`put` commands are unchanged — literal paths, and downloads still land in
+`{report_wd}/downloads/{name}.{host}`.
+
+### `get` (read-only)
+
+Downloads `remote` (an absolute file path; folders are not supported in-band)
+from every enabled host and returns, per host, the full remote `size`, a
+`truncated` flag, and the content: UTF-8 as `content`, binary as `content_b64`
+(standard base64). Reads are capped per host at `[mcp] max_input_bytes`
+(applied after the transfer — the whole remote file is buffered per host), and
+each host gets an equal share of the `[mcp] max_output_bytes` wire budget.
+Truncation never splices a notice into the content: the `truncated` flag and
+the full remote `size` are the signal. Pass `hosts` (a list of connected
+hostnames) to retry or page a subset when one host's file was truncated;
+unknown or disabled names refuse the call. Any host failure fails the whole
+call with the host named — partial content is never returned as success.
+
+### `put`
+
+Uploads a payload carried in the call — `content` (UTF-8) or `content_b64`,
+exactly one of the two — to `<target tempdir>/<filename>` on every enabled
+host, the same destination the REPL `put` uses. `filename` must be a bare name
+(no path separators). A payload above `[mcp] max_input_bytes` is refused
+outright: truncating an upload would corrupt it. Any host failure fails the
+call with the host named.
 
 ## Testreport editing tools
 

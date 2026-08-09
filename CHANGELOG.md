@@ -66,6 +66,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The MCP `get` tool now returns the downloaded file's content in-band — per
+  host, UTF-8 as `content` or binary as `content_b64`, with the full remote
+  `size`, an explicit `truncated` flag, and per-host byte caps — instead of
+  writing to the server-local `{report_wd}/downloads/` and handing back a path
+  a `--transport http` client cannot read (#434). Any host failure fails the
+  call with the host named; the REPL `get` command is unchanged.
+- The MCP `put` tool now accepts its payload in the call (`content` or
+  `content_b64`, placed at the report's remote working directory under the
+  given bare `filename`) instead of naming a file on the server's filesystem
+  that a remote client cannot create (#434). Oversize payloads are refused
+  rather than truncated; the REPL `put` command is unchanged.
 - The QEM dashboard incident lookup for an OBS-served `SUSE:SLFO:1.1` update
   used to key on the maintenance id (`1.1`), so mtui queried
   `/api/incidents/1.1` instead of an actual incident number — a request that
