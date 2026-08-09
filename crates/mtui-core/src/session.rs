@@ -1013,7 +1013,17 @@ impl Session {
                 let base_version = target.system().get_base().version.clone();
                 let seeded =
                     mtui_testreport::testreport::packages_for_map(package_meta, &base_version);
-                if !seeded.is_empty() {
+                if seeded.is_empty() {
+                    // #396: a host whose base product matches no metadata
+                    // packages tracks nothing — before/after version checks
+                    // cannot run and export has nothing to verify. Say so
+                    // instead of skipping silently.
+                    warn!(
+                        host = %host, base_version = %base_version,
+                        "report metadata names no packages for this host's base product; \
+                         package list not seeded — version checks cannot run"
+                    );
+                } else {
                     target.set_packages(seeded);
                     target.query_versions().await;
                 }

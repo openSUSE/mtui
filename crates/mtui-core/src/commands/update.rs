@@ -6,7 +6,7 @@ use clap::{Arg, ArgAction, ArgMatches};
 use super::perform::{PerformOp, drive};
 use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
-use crate::error::CommandResult;
+use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Applies the testing update to the target hosts.
@@ -63,6 +63,20 @@ impl Command for Update {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         tracing::info!("Updating");
+        // Not-loaded first, so the refusal below can honestly say "the loaded
+        // report" (#396 review).
+        let _rrid = crate::commands::support::require_update(session)?;
+        // #396: like `prepare`, an update over a report whose metadata names no
+        // package versions would dispatch an empty package list and print an
+        // unqualified success. Refuse up front.
+        if session.metadata().get_package_list().is_empty() {
+            return Err(CommandError::Other(
+                "the loaded report names no package versions, so update has nothing to \
+                 install; refusing to report success — check `list_packages -w` and the \
+                 report metadata"
+                    .to_owned(),
+            ));
+        }
         let noprepare = args.get_flag("noprepare");
         let newpackage = args.get_flag("newpackage");
         // Upstream fires a desktop toast on both outcomes (`prompt.notify_user`);
@@ -98,6 +112,15 @@ mod tests {
     };
     use crate::error::CommandError;
 
+    /// Seeds one package version on the loaded fixture report — the #396
+    /// pre-flight refuses a report whose metadata names none.
+    fn seed_package(session: &mut crate::session::Session) {
+        session.metadata_mut().base_mut().packages.insert(
+            "standard".to_owned(),
+            std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
+        );
+    }
+
     #[test]
     fn complete_offers_own_flags_target_and_hosts() {
         let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
@@ -125,6 +148,7 @@ mod tests {
     #[tokio::test]
     async fn over_loaded_report_succeeds() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        seed_package(&mut session);
         let args = matches(&Update, &["--noprepare"]);
         Update.call(&mut session, &args).await.unwrap();
         assert_eq!(session.targets().names(), vec!["h1"]);
@@ -134,6 +158,7 @@ mod tests {
     async fn success_fires_finished_notification() {
         use std::sync::{Arc, Mutex};
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        seed_package(&mut session);
         let seen = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
         let sink = Arc::clone(&seen);
         session.set_notify_sink(Box::new(move |msg: &str, err: bool| {
@@ -151,6 +176,7 @@ mod tests {
     async fn no_notification_when_sink_unset() {
         // Headless (no sink): notify_user is a no-op, the command still succeeds.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        seed_package(&mut session);
         let args = matches(&Update, &["--noprepare"]);
         assert!(!session.notify_user("probe", false));
         Update.call(&mut session, &args).await.unwrap();
@@ -162,6 +188,7 @@ mod tests {
         // The report's perform_update returns Err ⇒ the command must surface the
         // failure (Err result) and fire exactly one *error*-class toast.
         let (mut session, _buf) = session_with_failing_update("SUSE:Maintenance:1:1", &["h1"]);
+        seed_package(&mut session);
         let seen = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
         let sink = Arc::clone(&seen);
         session.set_notify_sink(Box::new(move |msg: &str, err: bool| {
@@ -176,11 +203,26 @@ mod tests {
         assert!(seen[0].1, "failure toast must be error-class");
     }
 
+    /// #396: an update over a metadata-empty report refuses instead of
+    /// dispatching an empty package list and printing success.
+    #[tokio::test]
+    async fn empty_package_list_errors_instead_of_success() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&Update, &[]);
+        let err = Update.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("names no package")),
+            "{err:?}"
+        );
+        assert!(!buf.contents().contains("completed"), "{}", buf.contents());
+    }
+
     #[tokio::test]
     async fn no_hosts_is_no_refhosts_defined() {
         // Loaded report but no hosts: passes the requires_update guard, then the
         // empty selection yields NoRefhostsDefined.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
+        seed_package(&mut session);
         let args = matches(&Update, &[]);
         let err = Update.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::NoRefhostsDefined));

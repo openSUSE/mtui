@@ -800,7 +800,13 @@ mod mcp_nonempty_success_guard {
                 (s, b, argv(&["true"]))
             }
             "update" => {
-                let (s, b) = hosts();
+                // Seed one package: the #396 pre-flight refuses a report whose
+                // metadata names no package versions.
+                let (mut s, b) = hosts();
+                s.metadata_mut().base_mut().packages.insert(
+                    "standard".to_owned(),
+                    std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
+                );
                 (s, b, argv(&["--noprepare"]))
             }
             "install" => {
@@ -812,7 +818,12 @@ mod mcp_nonempty_success_guard {
                 (s, b, argv(&["pkg"]))
             }
             "prepare" => {
-                let (s, b) = hosts();
+                // Seeded for the same #396 pre-flight as `update` above.
+                let (mut s, b) = hosts();
+                s.metadata_mut().base_mut().packages.insert(
+                    "standard".to_owned(),
+                    std::collections::HashMap::from([("pkg-a".to_owned(), "1.0".to_owned())]),
+                );
                 (s, b, argv(&["-u"]))
             }
             "downgrade" => {
