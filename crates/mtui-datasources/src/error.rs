@@ -24,8 +24,18 @@ pub type Result<T> = std::result::Result<T, HttpError>;
 pub enum HttpError {
     /// A transport failure, a non-2xx HTTP status, or a client-build failure
     /// surfaced by `reqwest`.
+    ///
+    /// **Invariant: the wrapped error carries no URL.** It is stripped by
+    /// [`From<reqwest::Error>`](HttpError#impl-From<Error>-for-HttpError), so
+    /// no `#[error(transparent)]` chain over it can render one. The variant's
+    /// own `#[non_exhaustive]` makes that the *only* way to build it from
+    /// outside this crate (a bare `HttpError::Request(e)` there is `E0639`);
+    /// inside the crate it is convention, enforced by review, so construct it
+    /// via `?`, `.into()` or `HttpError::from` and never bare. Matching is
+    /// unaffected — `HttpError::Request(..)` stays a legal pattern everywhere.
     #[error(transparent)]
-    Request(#[from] reqwest::Error),
+    #[non_exhaustive]
+    Request(reqwest::Error),
 
     /// A user-configured CA bundle could not be read or parsed into
     /// certificates when building the HTTP client.
@@ -54,6 +64,22 @@ pub enum HttpError {
         /// else `None` (the cap tripped while streaming).
         seen: Option<u64>,
     },
+}
+
+impl From<reqwest::Error> for HttpError {
+    fn from(e: reqwest::Error) -> Self {
+        // #431: reqwest's `Display` appends the request URL verbatim
+        // (" for url (…)"), and `HttpError::Request` plus every `…Error::Http`
+        // over it are `#[error(transparent)]`, so that URL surfaces anywhere an
+        // error is rendered. It is not reliably credential-free either:
+        // `extract_authority` scrubs userinfo only from the URL the
+        // `RequestBuilder` was built with, while `Response::error_for_status`
+        // reports the *redirect-updated* URL, so a `Location` header can put
+        // `user:pass@host` straight back. Drop the URL where reqwest errors
+        // enter this crate's hierarchy; supplying request context is the call
+        // site's job, via `crate::http::sanitize_url`.
+        Self::Request(e.without_url())
+    }
 }
 
 /// Errors from loading and parsing a local `refhosts.yml` database.
@@ -400,6 +426,38 @@ mod tests {
             GiteaError::FailedCall("GET - /x".to_string())
                 .to_string()
                 .contains("GET - /x")
+        );
+    }
+
+    /// The #431 boundary: a `reqwest::Error` entering [`HttpError`] loses its
+    /// URL, so no `#[error(transparent)]` chain over
+    /// [`HttpError::Request`] can render it. Driven by a real transport error
+    /// (nothing listens on the loopback discard port, RFC 863) because the URL
+    /// is attached by reqwest's own send path, not by anything constructible
+    /// here.
+    #[tokio::test]
+    async fn reqwest_error_loses_its_url_at_the_http_error_boundary() {
+        let e = reqwest::Client::new()
+            .get("http://127.0.0.1:9/x")
+            .send()
+            .await
+            .expect_err("nothing listens on the discard port");
+        // Premise guard: if reqwest ever stops appending the URL, this test
+        // would pass vacuously and the boundary below would be untested.
+        assert!(
+            e.to_string().contains(" for url ("),
+            "premise gone: reqwest no longer appends the URL: {e}"
+        );
+
+        let msg = HttpError::from(e).to_string();
+        assert!(
+            !msg.contains(" for url ("),
+            "URL crossed the boundary: {msg}"
+        );
+        // The error *kind* must survive the strip — only the URL is dropped.
+        assert!(
+            msg.contains("error sending request"),
+            "kind was lost with the URL: {msg}"
         );
     }
 }
