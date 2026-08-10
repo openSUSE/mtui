@@ -67,7 +67,7 @@ use std::path::{Path, PathBuf};
 use mtui_config::Config;
 use mtui_types::enums::TargetState;
 use mtui_types::hostlog::{CommandLog, HostLog};
-use mtui_types::package::Package;
+use mtui_types::package::{Package, VersionCheck};
 use mtui_types::system::{System, SystemProduct};
 
 #[cfg(feature = "shell")]
@@ -767,11 +767,13 @@ impl Target {
     }
 
     /// Queries the installed versions of the tracked packages and records them
-    /// as each package's `current` version.
+    /// as each package's `current` check.
     ///
     /// Runs the
     /// [`PackageQuerier`] over `self.packages` and sets `current` from the
-    /// result (`None` when the package is not installed). A no-op when no
+    /// result: [`VersionCheck::NotInstalled`] when the query ran and found the
+    /// package not installed, [`VersionCheck::NotChecked`] when the query
+    /// never answered for it at all (#437). A no-op when no
     /// packages are tracked. Only meaningful for an
     /// [`Enabled`](TargetState::Enabled) host; other states record nothing, as
     /// their `run` does not touch a live connection.
@@ -782,7 +784,11 @@ impl Target {
         }
         let versions = PackageQuerier::new(self).versions(&names).await;
         for pkg in &mut self.packages {
-            pkg.set_current_version(versions.get(&pkg.name).cloned().flatten());
+            let check = match versions.get(&pkg.name) {
+                Some(v) => VersionCheck::from(v.clone()),
+                None => VersionCheck::NotChecked,
+            };
+            pkg.set_current_check(check);
         }
     }
 
@@ -2316,7 +2322,11 @@ mod tests {
             0,
         ));
         let mut t = enabled_with(conn);
-        t.set_packages(vec![Package::new("bash"), Package::new("foo")]);
+        t.set_packages(vec![
+            Package::new("bash"),
+            Package::new("foo"),
+            Package::new("baz"),
+        ]);
         t.query_versions().await;
 
         let by_name: std::collections::HashMap<_, _> =
@@ -2325,7 +2335,10 @@ mod tests {
             by_name["bash"].current(),
             Some(&RPMVersion::parse("5.1-1").unwrap())
         );
-        assert_eq!(by_name["foo"].current(), None);
+        // #437: the query answered "not installed" for foo (NotInstalled) but
+        // never mentioned baz at all (NotChecked) — the two must stay distinct.
+        assert_eq!(by_name["foo"].current_check(), &VersionCheck::NotInstalled);
+        assert_eq!(by_name["baz"].current_check(), &VersionCheck::NotChecked);
     }
 
     #[tokio::test]

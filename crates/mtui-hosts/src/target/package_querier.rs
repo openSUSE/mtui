@@ -15,15 +15,21 @@ use tracing::warn;
 use super::Target;
 
 /// Extracts the package name from the rpm-style `package X is not installed`
-/// line, or `None` when the line is not that shape. The corresponding dpkg
-/// output (`no packages found matching X`) is reported on stderr and does not
-/// appear in the stdout line loop, so it needs no matcher here.
+/// line, or `None` when the line is not that shape.
 ///
 /// Matches the rpm `package (.*) is not installed` line exactly: the name
 /// is everything between the fixed prefix and suffix.
 fn not_installed_name(line: &str) -> Option<&str> {
     line.strip_prefix("package ")
         .and_then(|rest| rest.strip_suffix(" is not installed"))
+}
+
+/// Extracts the package name from dpkg-query's `no packages found matching X`
+/// stderr line, or `None` when the line is not that shape. Matched loosely
+/// (`contains`, not an exact prefix) since the `dpkg-query: ` lead-in is only
+/// documented, not pinned against a real binary.
+fn dpkg_not_found_name(line: &str) -> Option<&str> {
+    line.split("no packages found matching ").nth(1)
 }
 
 /// Adapter that runs `rpm -q` / `dpkg-query` on a [`Target`] and parses the
@@ -84,6 +90,17 @@ impl<'a> PackageQuerier<'a> {
                     });
                 })
                 .or_insert(Some(new_ver));
+        }
+        if is_ubuntu {
+            // dpkg-query reports an absent package on stderr, not stdout —
+            // without this, a genuinely-absent .deb would look identical to
+            // one the query never answered about.
+            let errors = self.target.lasterr().to_owned();
+            for line in errors.lines() {
+                if let Some(name) = dpkg_not_found_name(line) {
+                    pkgs.entry(name.trim().to_owned()).or_insert(None);
+                }
+            }
         }
         pkgs
     }
@@ -184,5 +201,28 @@ mod tests {
         let mut q = PackageQuerier::new(&mut t);
         let _ = q.versions(&["bash".to_owned()]).await;
         assert!(mock.commands().iter().any(|c| c.starts_with("dpkg-query")));
+    }
+
+    #[tokio::test]
+    async fn dpkg_not_found_on_stderr_maps_to_none() {
+        let mock = MockConnection::new("h1").with_default(CommandLog::new(
+            "",
+            "",
+            "dpkg-query: no packages found matching foo\n",
+            0,
+            0,
+        ));
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(mock));
+        t.set_system(
+            mtui_types::system::System::new(
+                mtui_types::system::SystemProduct::new("ubuntu", "22.04", "x86_64"),
+                Default::default(),
+                false,
+            ),
+            false,
+        );
+        let mut q = PackageQuerier::new(&mut t);
+        let map = q.versions(&["foo".to_owned()]).await;
+        assert_eq!(map["foo"], None);
     }
 }
