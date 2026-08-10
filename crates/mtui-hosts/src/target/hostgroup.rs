@@ -689,6 +689,33 @@ impl HostsGroup {
         self.unlock_where(|_t| true).await
     }
 
+    /// Releases only the operation locks **this group's own targets took**,
+    /// best-effort, otherwise identical to [`unlock`](Self::unlock).
+    ///
+    /// For a caller cleaning up after an aborted operation of its own — the MCP
+    /// `job_cancel` force-abort path — where releasing anything else would be an
+    /// ownership overreach. [`unlock`](Self::unlock) removes every lock the
+    /// *process* owns, and wire ownership is per-PID: on a refhost shared
+    /// between two loaded templates, or between two MCP sessions in one server,
+    /// that sweeps up a sibling's live hold. Scoping on
+    /// [`Target::holds_unmarked_operation_lock`] separates those structurally
+    /// (each group owns its own [`Target`] objects) and additionally skips
+    /// comment-marked exclusive reservations (the PI assignment lock, an
+    /// operator's `lock <text>`).
+    ///
+    /// A host this group never locked is not in the returned map at all, so
+    /// `Released` here means a hold really was dropped — not "there was nothing
+    /// to do".
+    ///
+    /// **Residual**: two groups in one process that *both* locked the same host
+    /// (both succeed — the second re-stamps its own PID's line) are still
+    /// indistinguishable, as is an operator's bare `lock` with no comment on a
+    /// group that later ran an operation.
+    pub async fn unlock_held(&mut self) -> BTreeMap<String, LockOutcome> {
+        self.unlock_where(Target::holds_unmarked_operation_lock)
+            .await
+    }
+
     /// Releases the operation lock on only the named hosts, best-effort,
     /// otherwise identical to [`unlock`](Self::unlock).
     ///
@@ -2773,6 +2800,143 @@ mod tests {
         assert_eq!(unlocked["h2"], LockOutcome::Released);
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
         assert!(!g.get_mut("h2").unwrap().is_locked().await.unwrap());
+    }
+
+    /// `unlock_held` releases only what *this group* took: a same-process lock
+    /// it never acquired is left alone and is absent from the outcome map.
+    ///
+    /// The case that matters is a refhost shared with another loaded template
+    /// or another MCP session. Wire ownership is per user+PID, so the sibling's
+    /// live hold reads back as "mine" and the whole-group [`unlock`] removes it
+    /// mid-transaction — as the second half of this test shows.
+    #[tokio::test]
+    async fn unlock_held_releases_only_this_groups_own_holds() {
+        // `Target::with_connection` builds its lock from `Config::default()`, so
+        // that is the identity a same-process sibling's line carries.
+        let mine = format!(
+            "1700000000:{}:{}",
+            mtui_config::Config::default().session_user,
+            std::process::id()
+        );
+        let sibling = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, mine.clone().into_bytes());
+        let sibling_handle = sibling.clone();
+        let mut g = HostsGroup::new(
+            vec![
+                enabled("h1"),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(sibling)),
+            ],
+            false,
+        );
+
+        // Only h1 is locked *by this group*; h2 already carries a same-process
+        // lock this group never took.
+        let names: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        let locked = g.lock_selected("", &names).await;
+        assert_eq!(locked["h1"], LockOutcome::Acquired);
+
+        let released = g.unlock_held().await;
+        assert_eq!(released["h1"], LockOutcome::Released);
+        assert!(
+            !released.contains_key("h2"),
+            "a host this group never locked must not even appear: {released:?}"
+        );
+        assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
+        assert!(
+            sibling_handle.file_contents(TARGET_LOCK_PATH).is_some(),
+            "the sibling's live lock was removed"
+        );
+
+        // The contrast: the unscoped fan-out does remove it, because on the
+        // wire it is indistinguishable from ours.
+        let swept = g.unlock().await;
+        assert_eq!(swept["h2"], LockOutcome::Released);
+        assert!(sibling_handle.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    /// `unlock_held` skips a comment-marked (exclusive) hold — the PI
+    /// assignment lock, or an operator's `lock -c <text>` reservation — while
+    /// still releasing an ordinary uncommented operation hold.
+    #[tokio::test]
+    async fn unlock_held_skips_comment_marked_reservations() {
+        let reserved = MockConnection::new("h2").with_default(CommandLog::new("", "ok", "", 0, 0));
+        let reserved_handle = reserved.clone();
+        let mut g = HostsGroup::new(
+            vec![
+                enabled("h1"),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(reserved)),
+            ],
+            false,
+        );
+
+        let marked: std::collections::BTreeSet<String> = ["h2".to_owned()].into_iter().collect();
+        g.lock_selected("PI assignment", &marked).await;
+        let plain: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        g.lock_selected("", &plain).await;
+
+        let released = g.unlock_held().await;
+        assert_eq!(released["h1"], LockOutcome::Released);
+        assert!(
+            !released.contains_key("h2"),
+            "a comment-marked reservation must not be swept: {released:?}"
+        );
+        assert!(
+            reserved_handle.file_contents(TARGET_LOCK_PATH).is_some(),
+            "the reservation was removed"
+        );
+    }
+
+    /// The hold record survives a plain read and is cleared by a release, so
+    /// `unlock_held` is idempotent rather than repeatedly re-releasing.
+    #[tokio::test]
+    async fn holds_unmarked_operation_lock_tracks_acquire_and_release() {
+        // h2 carries a same-process lock that this group never took — the
+        // shared-refhost shape.
+        let foreign_pid = format!(
+            "1700000000:{}:{}",
+            mtui_config::Config::default().session_user,
+            std::process::id()
+        );
+        let sibling = MockConnection::new("h2")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(TARGET_LOCK_PATH, foreign_pid.into_bytes());
+        let mut g = HostsGroup::new(
+            vec![
+                enabled("h1"),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(sibling)),
+            ],
+            false,
+        );
+        assert!(
+            !g.get("h1").unwrap().holds_unmarked_operation_lock(),
+            "a fresh target holds nothing"
+        );
+
+        let plain: std::collections::BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        g.lock_selected("", &plain).await;
+        assert!(g.get("h1").unwrap().holds_unmarked_operation_lock());
+
+        // Reading a *foreign* host's remote state is not taking it. This is the
+        // whole reason the record cannot be derived from the remote line: the
+        // line says "mine" (same user + PID) and is not.
+        assert!(g.get_mut("h2").unwrap().is_locked().await.unwrap());
+        assert!(
+            !g.get("h2").unwrap().holds_unmarked_operation_lock(),
+            "a read must never establish a hold"
+        );
+
+        let first = g.unlock_held().await;
+        assert_eq!(first["h1"], LockOutcome::Released);
+        assert!(
+            !g.get("h1").unwrap().holds_unmarked_operation_lock(),
+            "the record must clear on release"
+        );
+        let second = g.unlock_held().await;
+        assert!(
+            second.is_empty(),
+            "a second pass has nothing left to do: {second:?}"
+        );
     }
 
     #[tokio::test]

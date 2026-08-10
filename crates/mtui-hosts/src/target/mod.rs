@@ -389,6 +389,24 @@ impl Target {
         }
     }
 
+    /// Whether **this** target object took the operation lock and stamped it
+    /// with no comment.
+    ///
+    /// A non-empty comment marks an *exclusive* hold (see
+    /// [`RemoteLock::comment`]) — the PI assignment lock, an operator's
+    /// `lock -c <text>` — which this deliberately excludes; the operation flows
+    /// all stamp an empty comment.
+    ///
+    /// Purely in-memory (no remote I/O): it answers "did *this* host group
+    /// acquire this lock", which the remote line cannot, because wire ownership
+    /// is per-process. `false` for an unconnected target, one that never locked,
+    /// one that already released, and one holding a comment-marked (exclusive)
+    /// reservation.
+    #[must_use]
+    pub fn holds_unmarked_operation_lock(&self) -> bool {
+        self.lock.as_ref().is_some_and(TargetLock::holds_unmarked)
+    }
+
     /// Sets the owning template's RRID, the [`PoolLock`] ownership identity.
     ///
     /// The report layer pushes the RRID down onto each target (see
