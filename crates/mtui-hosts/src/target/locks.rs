@@ -251,6 +251,21 @@ pub struct TargetLock<C: Clock = SystemClock> {
     lock_wait: u64,
     lock_wait_poll: u64,
     lock: RemoteLock,
+    /// The comment **this instance** stamped when it took the lock, or `None`
+    /// when this instance is not holding it.
+    ///
+    /// Deliberately *not* derived from the remote line: wire ownership is
+    /// per-process (user + PID), so every lock any part of this process took
+    /// reads back as "mine" — two loaded templates sharing a refhost, or two
+    /// MCP sessions in one server, cannot tell their holds apart that way.
+    /// This field is the only record of which `TargetLock` object actually
+    /// acquired the lock, and it is what
+    /// [`HostsGroup::unlock_held`](crate::HostsGroup::unlock_held) scopes on.
+    ///
+    /// Set by [`lock`](Self::lock), cleared by [`unlock`](Self::unlock) once
+    /// the lockfile is provably gone. [`load`](Self::load) never touches it —
+    /// reading a host's lock state is not taking it.
+    held: Option<String>,
     /// The remote lockfile this instance manages. Defaults to
     /// [`TARGET_LOCK_PATH`]; [`PoolLock`] builds its inner lock over
     /// [`POOL_LOCK_PATH`] instead, so the shared lock/unlock/load machinery
@@ -302,8 +317,27 @@ impl<C: Clock> TargetLock<C> {
             lock_wait: config.lock_wait,
             lock_wait_poll: config.lock_wait_poll,
             lock: RemoteLock::default(),
+            held: None,
             path,
         }
+    }
+
+    /// Whether **this** instance is holding the lock and stamped it with no
+    /// comment.
+    ///
+    /// The two halves answer two different questions:
+    ///
+    /// * *this instance* — see [`held`](Self::held): PID-based wire ownership
+    ///   cannot separate two host groups inside one mtui process.
+    /// * *no comment* — a non-empty comment marks an **exclusive** hold
+    ///   ([`RemoteLock::comment`]): the PI assignment lock the session
+    ///   re-applies on every connect and after every reboot, or an operator's
+    ///   `lock <text>` reservation. The operation flows (`update_lock`, `run`'s
+    ///   `lock_selected("")`) all stamp an empty comment, so this separates a
+    ///   transient operation hold from a deliberate reservation.
+    #[must_use]
+    pub(crate) fn holds_unmarked(&self) -> bool {
+        self.held.as_ref().is_some_and(String::is_empty)
     }
 
     /// The lockfile path this lock manages. Set at construction; defaults to
@@ -487,6 +521,7 @@ impl<C: Clock> TargetLock<C> {
                 .await
             {
                 Ok(()) => {
+                    self.held = Some(rl.comment.clone());
                     self.lock = rl;
                     return Ok(());
                 }
@@ -507,6 +542,7 @@ impl<C: Clock> TargetLock<C> {
                 self.connection
                     .sftp_write(&path, line.as_bytes(), false)
                     .await?;
+                self.held = Some(rl.comment.clone());
                 self.lock = rl;
                 return Ok(());
             }
@@ -577,6 +613,9 @@ impl<C: Clock> TargetLock<C> {
     /// "already gone").
     pub async fn unlock(&mut self, force: bool) -> Result<()> {
         if !self.is_locked().await? {
+            // The lockfile is gone (a reboot cleared `/var/lock`, another owner
+            // removed it): whatever this instance took, it no longer holds.
+            self.held = None;
             return Ok(());
         }
         if !self.is_mine()? && !force {
@@ -591,11 +630,13 @@ impl<C: Clock> TargetLock<C> {
             }
             Err(e) => {
                 // A permission/transport failure did NOT remove the lock; do not
-                // pretend we released it (fail closed — leave self.lock intact).
+                // pretend we released it (fail closed — leave self.lock and the
+                // `held` record intact).
                 return Err(e);
             }
         }
         self.lock = RemoteLock::default();
+        self.held = None;
         Ok(())
     }
 
