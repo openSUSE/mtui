@@ -1363,14 +1363,11 @@ async fn downgrade_verdict(targets: &mut HostsGroup) -> BTreeMap<String, Vec<Str
     for target in targets.targets_mut() {
         let hostname = target.hostname().to_owned();
         for pkg in target.packages_mut() {
-            // #396: rotate value AND honesty — a never-observed after slot
-            // must not become an "observed" before slot, or a standalone
-            // downgrade (no prior update) exports "is not installed" for a
-            // slot nobody ever checked.
-            if pkg.after_observed() {
-                let after = pkg.after().cloned();
-                pkg.set_before_version(after);
-            }
+            // #396: rotate the whole check, not just its version — a
+            // never-checked after slot must not land in the before slot as
+            // "checked, not installed", or a standalone downgrade (no prior
+            // update) exports "is not installed" for a slot nobody looked at.
+            pkg.set_before_check(pkg.after_check().clone());
             let current = pkg.current().cloned();
             pkg.set_after_version(current);
             if let (Some(current), Some(required)) = (pkg.current(), pkg.required())
@@ -1749,6 +1746,7 @@ mod tests {
     use mtui_hosts::{HostsGroup, MockConnection, Target};
     use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
+    use mtui_types::package::VersionCheck;
     use mtui_types::system::{System, SystemProduct};
 
     use super::*;
@@ -2648,6 +2646,31 @@ mod tests {
             Some("1.5-1")
         );
         assert_eq!(p.after().map(ToString::to_string).as_deref(), Some("1.5-1"));
+    }
+
+    #[tokio::test]
+    async fn downgrade_verdict_rotation_keeps_an_unchecked_slot_unchecked() {
+        // #396: on a standalone downgrade there was no prior `update`, so the
+        // after slot was never checked. Rotating it into the before slot must
+        // carry that across — turning it into "checked, not installed" would
+        // make the export claim the package was absent before a rollback
+        // nobody measured.
+        let (mut t, _h) = sles_target("h1", "pkg-a 0.9-1\n");
+        let mut pkg = mtui_types::package::Package::new("pkg-a");
+        pkg.set_required(Some("1.5-1")).unwrap();
+        assert_eq!(pkg.after_check(), &VersionCheck::NotChecked);
+        t.set_packages(vec![pkg]);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let _ = downgrade_verdict(&mut group).await;
+
+        let p = &group.get("h1").unwrap().packages()[0];
+        assert_eq!(
+            p.before_check(),
+            &VersionCheck::NotChecked,
+            "an unchecked after slot must not rotate in as an observation"
+        );
+        assert_eq!(p.after().map(ToString::to_string).as_deref(), Some("0.9-1"));
     }
 
     #[tokio::test]
