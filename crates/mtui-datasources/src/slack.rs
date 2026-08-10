@@ -29,10 +29,10 @@ use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::error::SlackError;
+use crate::error::{HttpError, SlackError};
 use crate::http::{
     HttpClient, MAX_API_BODY, VerifyPolicy, is_ssl_verification_error, read_body_capped,
-    resolve_verify, sanitize_url, ssl_verification_hint,
+    resolve_verify, sanitize_url, ssl_error_detail, ssl_verification_hint,
 };
 
 /// Maximum `conversations.replies` pages walked before giving up.
@@ -266,11 +266,16 @@ impl Slack {
         let response = match builder.send().await {
             Ok(r) => r,
             Err(e) => {
-                if is_ssl_verification_error(&e) {
+                // Never render the raw `reqwest::Error`; convert first (#431).
+                let ssl = is_ssl_verification_error(&e);
+                let e = HttpError::from(e);
+                if ssl {
                     tracing::error!("{}", ssl_verification_hint(None));
-                    tracing::debug!("Slack TLS error detail: {e}");
+                    tracing::debug!("Slack TLS error detail: {}", ssl_error_detail(&e));
                 } else {
-                    tracing::warn!("API call to Slack failed: {e}");
+                    // On this arm the sanitized URL is the line's only host
+                    // context, reqwest's having been dropped.
+                    tracing::warn!("API call to Slack {} failed: {e}", sanitize_url(&url));
                 }
                 return Err(SlackError::FailedCall(format!(
                     "{method} - {}",

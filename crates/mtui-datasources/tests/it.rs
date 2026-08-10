@@ -4,11 +4,16 @@
 //! (see `autotests = false` + `[[test]] name = "it"` in Cargo.toml) so the
 //! crate + its heavy deps are linked once, not once per file. Add new
 //! integration tests as a module here, not as a new top-level `tests/*.rs`.
+//!
+//! `log_capture` is shared test support rather than a test module: it installs
+//! one process-global tracing subscriber, which cannot be done per file.
 
 #[path = "gitea.rs"]
 mod gitea;
 #[path = "http_client.rs"]
 mod http_client;
+#[path = "log_capture.rs"]
+mod log_capture;
 #[path = "obs_auth.rs"]
 mod obs_auth;
 #[path = "obs_client.rs"]

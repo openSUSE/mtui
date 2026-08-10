@@ -16,6 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::log_capture::capture_logs;
 use mtui_datasources::VerifyPolicy;
 use mtui_datasources::obs::{NoAuth, ObsClient, ObsError};
 use wiremock::matchers::{header, method, path};
@@ -167,46 +168,6 @@ async fn transport_error_maps_to_http_variant() {
     assert!(matches!(err, ObsError::Http(_)), "got {err:?}");
 }
 
-/// Capture the `message` field of every tracing event emitted by `f`.
-///
-/// A thread-local subscriber works under `#[tokio::test]`'s current-thread
-/// runtime. Mirrors the capture helper in `obs_oscrc`/`gitea`.
-async fn capture_logs<F, Fut>(f: F) -> String
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
-    use std::fmt::Write as _;
-    use std::sync::{Arc as StdArc, Mutex};
-    use tracing::field::{Field, Visit};
-    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-    use tracing_subscriber::registry::Registry;
-
-    struct CaptureLayer(StdArc<Mutex<Vec<String>>>);
-    struct MessageVisitor(String);
-    impl Visit for MessageVisitor {
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            if field.name() == "message" {
-                let _ = write!(self.0, "{value:?}");
-            }
-        }
-    }
-    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-            let mut v = MessageVisitor(String::new());
-            event.record(&mut v);
-            self.0.lock().unwrap().push(v.0);
-        }
-    }
-
-    let records = StdArc::new(Mutex::new(Vec::new()));
-    let sub = Registry::default().with(CaptureLayer(records.clone()));
-    let guard = tracing::subscriber::set_default(sub);
-    f().await;
-    drop(guard);
-    records.lock().unwrap().join("\n")
-}
-
 #[tokio::test]
 async fn logs_and_api_error_redact_url_credentials() {
     let server = MockServer::start().await;
@@ -242,5 +203,104 @@ async fn logs_and_api_error_redact_url_credentials() {
     assert!(
         logs.contains("***@"),
         "logs missing redaction marker: {logs}"
+    );
+}
+
+/// #431: a real *transport* failure (not an API status) must not put reqwest's
+/// own `Display` — which appends ` for url (…)` verbatim — into either the log
+/// stream or the returned `ObsError`, whose `Http` variant is transparent down
+/// to `reqwest::Error`.
+///
+/// OBS has no origin guard, so a credentialed API base reaches `send`; that is
+/// what makes this the datasource where the credential path is actually
+/// reachable. reqwest strips first-hop userinfo into a Basic-auth header
+/// (`RequestBuilder::new` → `extract_authority`), so the password is already
+/// absent from the error URL — the `s3cret` assertions are belt-and-braces, and
+/// the substring that is genuinely red without the fix is `" for url ("`.
+#[tokio::test]
+async fn transport_error_logs_and_error_carry_no_reqwest_url() {
+    // Loopback discard port (RFC 863): nothing listens, so `send` fails.
+    let client = ObsClient::new(
+        "http://alice:s3cret@127.0.0.1:9",
+        Duration::from_secs(180),
+        VerifyPolicy::Default(true),
+        Arc::new(NoAuth),
+    )
+    .expect("client builds");
+
+    let mut err = String::new();
+    let mut dbg = String::new();
+    let logs = capture_logs(|| async {
+        let e = client
+            .get("request/1", &[])
+            .await
+            .expect_err("connection refused is an error");
+        err = format!("{e}");
+        dbg = format!("{e:?}");
+    })
+    .await;
+
+    // Assert on the *failure* line specifically. The unconditional pre-send
+    // debug line already carries a sanitized URL, so a whole-capture anchor
+    // would stay green even if this line were deleted outright. The selector
+    // names mtui's own line exactly: `capture_logs` records every event on the
+    // thread, including hyper's pool chatter, whose content varies with
+    // connection state.
+    let failure = logs
+        .lines()
+        .find(|l| l.starts_with("OBS GET") && l.contains("failed:"))
+        .unwrap_or_else(|| panic!("the transport-failure arm never ran: {logs}"));
+    assert!(
+        !failure.contains(" for url ("),
+        "log rendered reqwest's URL: {failure}"
+    );
+    assert!(
+        !failure.contains("s3cret"),
+        "log leaked credential: {failure}"
+    );
+    // Dropping reqwest's URL must not leave the operator with no host at all.
+    assert!(
+        failure.contains("***@127.0.0.1"),
+        "log lost its sanitized URL context: {failure}"
+    );
+
+    assert!(
+        !err.contains(" for url ("),
+        "error rendered reqwest's URL: {err}"
+    );
+    assert!(!err.contains("s3cret"), "error leaked credential: {err}");
+    assert!(!dbg.contains("s3cret"), "debug leaked credential: {dbg}");
+    // Positive anchor: only the URL is dropped, never the failure kind — an
+    // over-stripping conversion must not pass this test.
+    assert!(
+        err.contains("error sending request"),
+        "error lost the failure kind: {err}"
+    );
+}
+
+/// #431: the between-calls budget message interpolated the raw URL, so an
+/// exhausted budget against a credentialed base leaked the password verbatim —
+/// the one site where the credential (not merely the URL) was reachable.
+#[tokio::test]
+async fn budget_timeout_message_redacts_url_credentials() {
+    let client = ObsClient::new(
+        "http://alice:s3cret@127.0.0.1:9",
+        Duration::from_secs(0),
+        VerifyPolicy::Default(true),
+        Arc::new(NoAuth),
+    )
+    .expect("client builds");
+
+    let err = client
+        .get("request/1", &[])
+        .await
+        .expect_err("exhausted budget aborts");
+    let ObsError::Timeout(msg) = &err else {
+        panic!("expected ObsError::Timeout, got {err:?}");
+    };
+    assert!(!msg.contains("s3cret"), "timeout leaked credential: {msg}");
+    assert!(
+        msg.contains("***@127.0.0.1"),
+        "timeout dropped the URL context: {msg}"
     );
 }

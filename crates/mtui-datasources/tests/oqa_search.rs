@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::log_capture::capture_logs;
 use mtui_datasources::oqa_search::search::{
     aggregated_updates, build_checks, extract_test_results, get_incident_info, incident_jobs,
     single_incidents, summarize_test_results,
@@ -872,5 +873,51 @@ async fn single_incidents_respects_bound_of_one() {
     assert!(
         elapsed >= delay + delay / 2,
         "bound=1 should serialise the two versions, took {elapsed:?}",
+    );
+}
+
+/// #431: `build_checks` builds its log URLs from `[url] testreports`, which is
+/// taken from config verbatim (no validation strips userinfo), so a credentialed
+/// value reaches this WARN — visible at the *default* log level, unlike the
+/// DEBUG-only leaks elsewhere.
+#[tokio::test]
+async fn build_check_log_failure_warns_without_the_credential() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(BUILD_CHECKS_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string(HTML_INDEX))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // The log itself is deliberately not mounted: wiremock answers 404, so
+    // `fetch_url_content` fails and the warn arm runs.
+
+    let url_qam = server.uri().replace("http://", "http://alice:s3cret@");
+    let mut out = Vec::new();
+    let logs = capture_logs(|| async {
+        out = build_checks(
+            &client(),
+            "Maintenance",
+            "12358",
+            199773,
+            &["bash".to_string()],
+            &url_qam,
+            None,
+            4,
+        )
+        .await;
+    })
+    .await;
+
+    // Anti-vacuity: the unavailable-log arm is what produced these rows.
+    assert_eq!(out.len(), 2, "the index must yield two matching logs");
+    let line = logs
+        .lines()
+        .find(|l| l.contains("build_check log"))
+        .unwrap_or_else(|| panic!("the unavailable-log arm never ran: {logs}"));
+    assert!(!line.contains("s3cret"), "warn leaked credential: {line}");
+    assert!(
+        line.contains("***@127.0.0.1"),
+        "warn lost its sanitized URL context: {line}"
     );
 }

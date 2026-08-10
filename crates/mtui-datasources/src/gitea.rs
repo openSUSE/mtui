@@ -33,10 +33,10 @@ use reqwest::Method;
 use serde_json::json;
 use tokio::sync::OnceCell;
 
-use crate::error::GiteaError;
+use crate::error::{GiteaError, HttpError};
 use crate::http::{
     HttpClient, MAX_API_BODY, VerifyPolicy, is_ssl_verification_error, read_body_capped,
-    resolve_verify, sanitize_url, ssl_verification_hint,
+    resolve_verify, sanitize_url, ssl_error_detail, ssl_verification_hint,
 };
 
 /// The default review group a [`Gitea`] client operates on behalf of.
@@ -393,12 +393,17 @@ impl Gitea {
         let response = match builder.send().await {
             Ok(r) => r,
             Err(e) => {
-                if is_ssl_verification_error(&e) {
+                // Never render the raw `reqwest::Error`; convert first (#431).
+                let ssl = is_ssl_verification_error(&e);
+                let e = HttpError::from(e);
+                if ssl {
                     let host = host_of(url);
                     tracing::error!("{}", ssl_verification_hint(host.as_deref()));
-                    tracing::debug!("Gitea TLS error detail: {e}");
+                    tracing::debug!("Gitea TLS error detail: {}", ssl_error_detail(&e));
                 } else {
-                    tracing::warn!("API call to Gitea failed: {e}");
+                    // On this arm the sanitized URL is the line's only host
+                    // context, reqwest's having been dropped.
+                    tracing::warn!("API call to Gitea {} failed: {e}", sanitize_url(url));
                 }
                 return Err(GiteaError::FailedCall(format!(
                     "{method} - {}",

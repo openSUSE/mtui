@@ -23,9 +23,10 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use reqwest::{Method, RequestBuilder};
 
+use crate::error::HttpError;
 use crate::http::{
     HttpClient, MAX_API_BODY, VerifyPolicy, is_ssl_verification_error, read_body_capped,
-    sanitize_url, ssl_verification_hint,
+    sanitize_url, ssl_error_detail, ssl_verification_hint,
 };
 use crate::obs::errors::ObsError;
 
@@ -175,7 +176,8 @@ impl ObsClient {
     fn check_budget(&self, url: &str) -> Result<(), ObsError> {
         if Instant::now() > self.deadline {
             return Err(ObsError::Timeout(format!(
-                "OBS operation exceeded its between-calls time budget before {url}"
+                "OBS operation exceeded its between-calls time budget before {}",
+                sanitize_url(url)
             )));
         }
         Ok(())
@@ -207,14 +209,17 @@ impl ObsClient {
         builder: RequestBuilder,
     ) -> Result<reqwest::Response, ObsError> {
         builder.send().await.map_err(|e| {
-            if is_ssl_verification_error(&e) {
+            // Never render the raw `reqwest::Error`; convert first (#431).
+            let ssl = is_ssl_verification_error(&e);
+            let e = HttpError::from(e);
+            if ssl {
                 let host = host_of(url);
                 tracing::error!("{}", ssl_verification_hint(host.as_deref()));
-                tracing::debug!("OBS TLS error detail: {e}");
+                tracing::debug!("OBS TLS error detail: {}", ssl_error_detail(&e));
             } else {
                 tracing::error!("OBS {method} {} failed: {e}", sanitize_url(url));
             }
-            ObsError::Http(e.into())
+            ObsError::Http(e)
         })
     }
 
@@ -375,13 +380,18 @@ fn build_query_string(params: &[(&str, String)]) -> String {
         .join("&")
 }
 
-/// Extract the host (authority without any port) from an `scheme://host[:port]/…`
-/// URL, for the TLS-failure hint. Returns `None` if the shape is unexpected.
+/// Extract the host (authority without any port) from an
+/// `scheme://[userinfo@]host[:port]/…` URL, for the TLS-failure hint. Returns
+/// `None` if the shape is unexpected.
+///
+/// Any userinfo is dropped first: without that, a credentialed API base makes
+/// the hint name the *username* as the host it failed to verify (#431).
 ///
 /// Mirrors the same helper in [`crate::gitea`].
 fn host_of(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
     let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
     let host = authority.split(':').next()?;
     (!host.is_empty()).then(|| host.to_string())
 }
@@ -431,6 +441,21 @@ mod tests {
             Some("api.suse.de")
         );
         assert_eq!(host_of("not a url"), None);
+    }
+
+    /// Userinfo is not the host: without the strip, `host_of` returns the
+    /// *username*, which `ssl_verification_hint` then names as the server the
+    /// operator failed to verify (#431).
+    #[test]
+    fn host_of_ignores_userinfo() {
+        assert_eq!(
+            host_of("https://user:pass@h.example/x").as_deref(),
+            Some("h.example")
+        );
+        assert_eq!(
+            host_of("https://token@h.example:443/x").as_deref(),
+            Some("h.example")
+        );
     }
 
     #[tokio::test]

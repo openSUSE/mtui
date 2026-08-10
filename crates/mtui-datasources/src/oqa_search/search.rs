@@ -24,7 +24,7 @@ use ruoqa::consts::JobResult as OqaJobResult;
 use scraper::{Html, Selector};
 
 use crate::error::OqaSearchError;
-use crate::http::{HttpClient, MAX_API_BODY};
+use crate::http::{HttpClient, MAX_API_BODY, sanitize_url};
 
 use super::heuristics::{
     AGGREGATED_EXCLUDED_VERSIONS, AGGREGATED_GROUPS_TERMS, AGGREGATED_NAME_MAP, EXCLUDED_GROUPS,
@@ -879,7 +879,14 @@ pub async fn build_checks(
                     let log_text = match fetch_url_content(http, &log_url).await {
                         Ok(t) => t,
                         Err(e) => {
-                            tracing::warn!("build_check log {log_url} unavailable: {e}");
+                            // `log_url` is built from the `[url] testreports`
+                            // config, which is taken verbatim and may embed
+                            // credentials — and this is WARN, i.e. visible by
+                            // default (#431).
+                            tracing::warn!(
+                                "build_check log {} unavailable: {e}",
+                                sanitize_url(&log_url)
+                            );
                             return (
                                 idx,
                                 BuildCheckResult {

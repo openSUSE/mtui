@@ -11,8 +11,9 @@
 //! comment snapshot) is modelled by one mounted GET plus one mounted POST —
 //! exactly the states each case sets up.
 
+use super::log_capture::capture_logs;
 use mtui_datasources::gitea::{Gitea, assign_marker};
-use mtui_datasources::{HttpClient, VerifyPolicy};
+use mtui_datasources::{GiteaError, HttpClient, VerifyPolicy};
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -626,50 +627,22 @@ async fn explicit_user_skips_token_owner_lookup() {
     assert!(body.contains("assigned to user: carol"), "{body}");
 }
 
-/// Capture the `message` field of every tracing event emitted by `f`.
+/// The origin guard refuses a credentialed PR URL *before* any request is sent,
+/// and both the refusal log and the resulting error are sanitized.
 ///
-/// A thread-local subscriber (`with_default`) works here because `#[tokio::test]`
-/// drives a current-thread runtime, so the awaited request's events fire on this
-/// thread. Mirrors the capture helper in `obs_oscrc`.
-async fn capture_logs<F, Fut>(f: F) -> String
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = ()>,
-{
-    use std::fmt::Write as _;
-    use std::sync::{Arc, Mutex};
-    use tracing::field::{Field, Visit};
-    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-    use tracing_subscriber::registry::Registry;
-
-    struct CaptureLayer(Arc<Mutex<Vec<String>>>);
-    struct MessageVisitor(String);
-    impl Visit for MessageVisitor {
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            if field.name() == "message" {
-                let _ = write!(self.0, "{value:?}");
-            }
-        }
-    }
-    impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-            let mut v = MessageVisitor(String::new());
-            event.record(&mut v);
-            self.0.lock().unwrap().push(v.0);
-        }
-    }
-
-    let records = Arc::new(Mutex::new(Vec::new()));
-    let sub = Registry::default().with(CaptureLayer(records.clone()));
-    let guard = tracing::subscriber::set_default(sub);
-    f().await;
-    drop(guard);
-    records.lock().unwrap().join("\n")
-}
-
+/// This never reaches the transport, so it is no evidence about transport-error
+/// rendering; that arm is covered by
+/// `transport_failure_log_carries_no_reqwest_url` below.
 #[tokio::test]
-async fn request_logs_and_error_redact_url_credentials() {
+async fn credentialed_pr_url_is_refused_before_send_and_redacted() {
     let server = MockServer::start().await;
+    // "Before send" is half the claim, so assert it: any request at all would
+    // mean the guard ran too late.
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .expect(0)
+        .mount(&server)
+        .await;
 
     // Embed `user:s3cret@` credentials in the target authority. A userinfo-
     // bearing PR URL is refused by the origin guard *before* any request is
@@ -691,12 +664,20 @@ async fn request_logs_and_error_redact_url_credentials() {
     .expect("gitea client builds");
 
     let mut err = String::new();
+    let mut kind_is_untrusted_origin = false;
     let logs = capture_logs(|| async {
         let e = client.assignee().await.unwrap_err();
+        kind_is_untrusted_origin = matches!(e, GiteaError::UntrustedOrigin(_));
         err = format!("{e}");
     })
     .await;
 
+    // "Refused by the origin guard" is the other half: a transport failure
+    // would also produce a credential-free message, for the wrong reason.
+    assert!(
+        kind_is_untrusted_origin,
+        "expected GiteaError::UntrustedOrigin, got {err}"
+    );
     // Neither the captured debug/warn logs nor the surfaced error leak the
     // password, but the host is preserved for diagnosis.
     assert!(!logs.contains("s3cret"), "logs leaked credential: {logs}");
@@ -704,6 +685,41 @@ async fn request_logs_and_error_redact_url_credentials() {
     assert!(
         logs.contains("***@"),
         "logs missing redaction marker: {logs}"
+    );
+}
+
+/// #431: the *transport* arm, which the origin-guard case above never reaches.
+/// Rendering the raw `reqwest::Error` appended its unredacted request URL
+/// (` for url (…)`); the line must carry mtui's own sanitized URL instead.
+///
+/// A credentialed URL cannot be driven here: the origin guard rejects userinfo
+/// in the configured base *and* in every request URL before send, so for Gitea
+/// the enforceable invariant is URL disclosure, not credential disclosure.
+#[tokio::test]
+async fn transport_failure_log_carries_no_reqwest_url() {
+    // Loopback discard port (RFC 863): userinfo-free and `http` on loopback, so
+    // the origin guard trusts it and the request actually reaches `send`, where
+    // nothing is listening.
+    let client = gitea_with_trust("http://127.0.0.1:9", "http://127.0.0.1:9");
+
+    let logs = capture_logs(|| async {
+        client.assignee().await.expect_err("connection refused");
+    })
+    .await;
+
+    // Anti-vacuity: this line only exists on the transport arm, so finding it
+    // proves the origin guard did not short-circuit the request.
+    let failure = logs
+        .lines()
+        .find(|l| l.starts_with("API call to Gitea"))
+        .unwrap_or_else(|| panic!("transport arm never ran: {logs}"));
+    assert!(
+        !failure.contains(" for url ("),
+        "log rendered reqwest's URL: {failure}"
+    );
+    assert!(
+        failure.contains("127.0.0.1:9"),
+        "log lost its URL context: {failure}"
     );
 }
 
