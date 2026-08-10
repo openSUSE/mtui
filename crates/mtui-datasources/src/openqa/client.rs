@@ -12,7 +12,7 @@
 use crate::error::OpenQAError;
 #[cfg(test)]
 use crate::http::{HttpClient, VerifyPolicy};
-use crate::http::{MAX_API_BODY, sanitize_url};
+use crate::http::{MAX_API_BODY, root_cause};
 
 /// Builds a [`ruoqa::Client`] for `base_url` with a fresh, single-use
 /// transport.
@@ -86,20 +86,6 @@ pub(crate) fn describe(e: &ruoqa::Error) -> String {
     }
 }
 
-/// Walks `e`'s source chain to the deepest cause, deliberately skipping `e`
-/// itself (whose `Display` may be unredacted — see [`describe`]), and returns
-/// it through [`sanitize_url`] as a backstop against a future layer embedding
-/// a URL.
-///
-/// Returns `None` if `e` carries no source at all.
-fn root_cause(e: &dyn std::error::Error) -> Option<String> {
-    let mut deepest = e.source()?;
-    while let Some(next) = deepest.source() {
-        deepest = next;
-    }
-    Some(sanitize_url(&deepest.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,60 +112,6 @@ mod tests {
     // `ruoqa::Error::Connection`/`CrossOriginRedirect` in `tests/openqa.rs`:
     // `ruoqa::Error`'s variants are `#[non_exhaustive]`, so this crate cannot
     // construct one directly to unit-test `describe`'s match arms in
-    // isolation. `root_cause` has no such restriction, since it walks a
-    // plain `&dyn Error`.
-
-    #[derive(Debug)]
-    struct Leaf(&'static str);
-    impl std::fmt::Display for Leaf {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.0)
-        }
-    }
-    impl std::error::Error for Leaf {}
-
-    #[derive(Debug)]
-    struct Wrapper {
-        source: Box<dyn std::error::Error>,
-    }
-    impl std::fmt::Display for Wrapper {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "wrapper")
-        }
-    }
-    impl std::error::Error for Wrapper {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            Some(self.source.as_ref())
-        }
-    }
-
-    /// Two-deep chain: `root_cause` must sanitize the deepest message.
-    /// Deleting the `sanitize_url` call in `root_cause` turns this red.
-    #[test]
-    fn root_cause_sanitizes_the_deepest_message() {
-        let e = Wrapper {
-            source: Box::new(Leaf("boom https://alice:s3cret@h/x")),
-        };
-        assert_eq!(root_cause(&e).as_deref(), Some("boom https://***@h/x"));
-    }
-
-    /// Three-deep chain: `root_cause` must return the *deepest* message, not
-    /// an intermediate one. Changing `root_cause` to stop at the first
-    /// `source()` instead of walking to the end turns this red.
-    #[test]
-    fn root_cause_returns_the_deepest_not_the_intermediate() {
-        let e = Wrapper {
-            source: Box::new(Wrapper {
-                source: Box::new(Leaf("deepest")),
-            }),
-        };
-        assert_eq!(root_cause(&e).as_deref(), Some("deepest"));
-    }
-
-    /// An error with no source at all yields `None`, so callers fall back to
-    /// the outer error's own (already-redacted) `Display`.
-    #[test]
-    fn root_cause_is_none_without_a_source() {
-        assert_eq!(root_cause(&Leaf("no source here")), None);
-    }
+    // isolation. `root_cause` has no such restriction, since it walks a plain
+    // `&dyn Error` — its own unit tests live with it in `crate::http`.
 }
