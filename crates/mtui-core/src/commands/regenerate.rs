@@ -132,15 +132,22 @@ impl Command for Regenerate {
 
         // Drive a TTY spinner for the (long-polling) wait. REPL-only (gated on
         // `interactive`, like the fan-out spinner); a no-op off a TTY / over
-        // MCP. The guard's `is_stopped` predicate feeds `regenerate_and_wait`'s
-        // cooperative-cancel hook so Ctrl-C during the wait bails out promptly
-        // instead of blocking to the next poll.
+        // MCP.
         let spin = session
             .is_repl
             .then(|| mtui_hosts::spinner(format!("Regenerating {rrid_str}")));
+        // `regenerate_and_wait`'s cooperative-cancel hook, fed from the
+        // session's cancellation seam: a REPL Ctrl-C (forwarded onto the
+        // per-line token) or an MCP `job_cancel` abandons the wait at its next
+        // step instead of blocking to the next poll. The spinner's own stop
+        // flag stays in the predicate — it is set by the display layer, never
+        // by a cancel, so neither source can cover for the other.
+        let cancel = session.cancel_token();
         let should_stop = || {
-            spin.as_ref()
-                .is_some_and(mtui_hosts::SpinnerGuard::is_stopped)
+            cancel.is_cancelled()
+                || spin
+                    .as_ref()
+                    .is_some_and(mtui_hosts::SpinnerGuard::is_stopped)
         };
         let outcome = teregen
             .regenerate_and_wait(&rrid_str, force, ignore_inconsistent, should_stop)
@@ -440,6 +447,81 @@ mod tests {
         // The reload passes autoconnect=false: it never grabs additional pool
         // hosts, so the target count is unchanged by the regen-reload.
         assert_eq!(session.targets().len(), before);
+    }
+
+    /// Signals the test the first time the mocked endpoint is hit, so a cancel
+    /// can be timed to land *during* the wait rather than before it.
+    struct SignalOnFirstHit {
+        hit: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        body: serde_json::Value,
+    }
+
+    impl wiremock::Respond for SignalOnFirstHit {
+        fn respond(&self, _req: &wiremock::Request) -> ResponseTemplate {
+            if let Some(tx) = self.hit.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+            ResponseTemplate::new(200).set_body_json(self.body.clone())
+        }
+    }
+
+    /// A cancel arriving **mid-wait** abandons the (long-polling) wait promptly
+    /// instead of blocking to the next poll — the `should_stop` hook's promise,
+    /// which until now only the spinner's stop flag could keep, and nothing
+    /// signal-related ever sets that.
+    ///
+    /// Cancelling *before* the call would not prove this: a predicate that read
+    /// the token once, when the closure was built, would pass that way and still
+    /// leave a live Ctrl-C waiting out the poll interval. So the cancel is fired
+    /// only after TeReGen has been polled once — the wait is by then inside its
+    /// inter-poll sleep, which must notice within one 100ms step.
+    ///
+    /// The bound is the assertion: TeReGen never reports the job finished here,
+    /// so a wait that does not keep observing the seam sleeps a full poll
+    /// interval (5s) before looking again, many times over.
+    #[tokio::test]
+    async fn a_cancel_mid_wait_abandons_it_promptly() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{rrid}/regenerate")))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 9})))
+            .mount(&server)
+            .await;
+        // Still running, forever: only the cancel can end this wait.
+        let (hit_tx, hit_rx) = tokio::sync::oneshot::channel();
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{rrid}/status")))
+            .respond_with(SignalOnFirstHit {
+                hit: std::sync::Mutex::new(Some(hit_tx)),
+                body: serde_json::json!({"minion_state": "running"}),
+            })
+            .mount(&server)
+            .await;
+
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.config = config_for(&server);
+        // Fires once the wait is genuinely under way.
+        let cancel = session.cancel_token();
+        tokio::spawn(async move {
+            hit_rx
+                .await
+                .expect("the wait must poll TeReGen at least once");
+            cancel.cancel();
+        });
+
+        let args = matches(&Regenerate, &[]);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Regenerate.call(&mut session, &args),
+        )
+        .await
+        .expect("the wait must observe the cancel, not poll on")
+        .unwrap();
+
+        // It reports what it saw rather than claiming success or failure.
+        let out = buf.contents();
+        assert!(out.contains("did not finish (state: running)"), "{out}");
     }
 
     #[tokio::test]
