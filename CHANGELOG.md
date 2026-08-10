@@ -206,6 +206,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   not release, matching the `install`/`uninstall` warning above. Previously
   only `install`/`uninstall` reported a stranded `/var/lock/mtui.lock`; the
   other flows silently dropped the same outcome.
+- A forced MCP `job_cancel` no longer strands `/var/lock/mtui.lock` on every
+  host of the cancelled job's templates (#405). A job blocked mid host-operation
+  cannot stop at a checkpoint, so cancelling it aborts the dispatch — which
+  skipped the operation's own `unlock()`, leaving the lock held until the
+  session was evicted or someone ran `unlock` by hand, and blocking every other
+  tester on those hosts. The cancel now releases it on the job's behalf and its
+  reply reports the outcome. The release is scoped to the locks the cancelled
+  job's **own host group actually took**, and skips comment-marked (exclusive)
+  holds such as a Product Increment assignment lock or an operator's
+  `lock -c <text>` reservation: locks are owned per user and PID on the wire, so
+  a broader sweep would remove a sibling template's — or another MCP session's —
+  live hold on a shared refhost. It is bounded, so `job_cancel` stays
+  responsive. The reply names which hosts are now unlocked, which are held by
+  another owner, which release failed — with `unlock --force` as the remedy —
+  and which *templates* could not be reached inside the budget and whose lock
+  state is therefore unknown; a cancel with no held lock to act on says nothing
+  extra. A job started without a resolvable template scope falls back to every
+  loaded template. A *cooperative* cancel is unchanged: a body that unwound
+  through its own flow ran its own unlock discipline. Nothing else is done at
+  the hosts; as before, the remote command may still be running there.
 
 ### Security
 

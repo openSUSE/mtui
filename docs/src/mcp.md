@@ -294,6 +294,35 @@ Four job-control tools manage them:
   a host may run to completion there even after cancel returns — the same caveat as
   Ctrl-C on a foreground `run`.)
 
+A job blocked mid host-operation cannot stop at a checkpoint, so cancelling it
+force-aborts the dispatch — which skips the operation's own `unlock()`. A forced
+cancel therefore releases `/var/lock/mtui.lock` on the job's behalf and reports
+the outcome in its reply.
+
+What it releases is deliberately narrow: **only the locks the cancelled job's own
+host group actually took**, and never a comment-marked (exclusive) hold such as a
+Product Increment assignment lock or an operator's `lock -c <text>` reservation.
+Locks are owned per user + PID on the wire, so a broader sweep would remove a
+sibling template's — or another MCP session's — live hold on a shared refhost and
+report it as released.
+
+The reply distinguishes: which hosts are now unlocked; which are held by another
+owner; which release failed (with `unlock --force` as the remedy); and which
+**templates** could not be reached inside the release budget, whose lock state is
+therefore unknown. A cancel with no held lock to act on says nothing extra.
+
+The job's template scope is recorded when the job is minted. A job started
+without a resolvable scope falls back to every loaded template — the conservative
+reading for a dispatch that may have run across all of them.
+
+Nothing else is done at the hosts. The remote command may still be running there;
+where it is a package transaction, the package manager's own system-wide lock
+keeps serialising it, but a `run` or `reboot` has no such second layer and the
+release is purely mtui-side bookkeeping.
+
+A *cooperative* cancel — a body that unwound at a checkpoint — is unchanged: it
+ran its own unlock discipline, and the cancel does not second-guess it.
+
 Jobs are scoped to the session (under HTTP, the caller's isolated session, so one
 client never sees another's jobs). The per-session job budget
 (`max_active_jobs`, `max_completed_jobs`) and the single-result size cap
