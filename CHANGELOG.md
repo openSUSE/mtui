@@ -207,6 +207,37 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   only `install`/`uninstall` reported a stranded `/var/lock/mtui.lock`; the
   other flows silently dropped the same outcome.
 
+### Security
+
+- Datasource errors and log lines no longer append the unredacted request URL
+  (#431). `reqwest`'s own error rendering ends in ` for url (<url>)`, and mtui
+  wrapped it in transparent error types, so the URL rode along wherever such an
+  error was rendered. It is now dropped where a `reqwest` error enters mtui's
+  error hierarchy, and log lines carry a sanitized URL (`https://***@host/…`) as
+  their context instead. What was affected:
+  - **Returned errors**: the OBS (`ObsError::Http`) and QEM-dashboard
+    (`QemDashboardError::Fetch`) types, plus TeReGen's `Fetch`, rendered the URL
+    to the user. Gitea's and Slack's `FailedCall` never embedded the transport
+    error, so their *errors* were already clean; openQA's path goes through
+    `ruoqa`, which already redacts URLs itself, and was never affected.
+  - **Log lines**: the OBS send failure (ERROR), the Gitea and Slack API-call
+    failures (WARN), TeReGen's GET and POST-regenerate failures (DEBUG), and the
+    testreport-log fetch failure (ERROR).
+  - **Credentials, not just URLs**: `reqwest` moves userinfo out of the first
+    request URL into an auth header, but `error_for_status` reports the
+    *redirect-followed* URL — so a `Location: https://user:pass@host/…` answered
+    with a non-2xx put the password into the error text verbatim.
+- Two mtui-formatted messages that interpolated a raw URL are now sanitized: the
+  OBS between-calls timeout (exhausting `[obs] request_timeout` against a
+  credentialed API URL printed that URL, password included) and the
+  `build_check log … unavailable` warning, which is emitted at the default log
+  level and builds its URL from the `[url] testreports` setting.
+- The OBS TLS-failure hint no longer names the username as the host it failed
+  to verify when the API URL carries credentials.
+- TLS-failure detail logs (OBS, Gitea, Slack, at DEBUG) now carry the
+  underlying certificate/IO cause instead of `reqwest`'s error kind plus URL,
+  which is both more actionable and URL-free by construction.
+
 ## [26.1.1] - 2026-07-27
 
 ### Added
