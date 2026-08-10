@@ -166,6 +166,56 @@ Under the loaded template's checkout, in
 `install_logs` sub-directory name is configurable under `[mtui]`; see
 [Configuration](configuration.md).
 
+## What does Ctrl-C do?
+
+It depends on whether a command is running.
+
+At the prompt, Ctrl-C clears the line you were typing and reprompts. It never
+exits mtui — use `quit`, `exit`, or Ctrl-D for that, so the session's hosts are
+unlocked and closed on the way out.
+
+While a command is running, the first Ctrl-C asks it to **stop at its next
+checkpoint**. Every path releases the hosts' operation locks on the way out, so
+nothing is left behind — but how soon the command stops depends on where its
+checkpoints are:
+
+- `update` checks between its steps, and for the last time just before the point
+  of no return: once the patch command has been dispatched the update runs to its
+  end (rolling back on failure) rather than leaving a half-applied update behind.
+- `prepare --installed-only`, and `downgrade` on non-transactional hosts, check
+  between packages. A transactional (SL-Micro) `downgrade` applies in one
+  transaction, so it finishes first like the commands below.
+- A command applying to several loaded templates stops at the next template
+  boundary, and reports how many it got through.
+- `install`, `uninstall`, `run`, and `reboot` finish the host operation already
+  under way first, then stop.
+
+A command that *did* stop at a checkpoint reports `error: cancelled`, naming what
+it completed first where it can. A command with no checkpoint left to reach
+simply finishes and reports normally — the cancel arrived too late to change
+anything, and saying "cancelled" would be a lie about work that was in fact done.
+Two long waits are their own case: `request_review --watch` and `regenerate`
+stop watching and tell you so (the review request stays posted, the
+regeneration keeps running on the server), and both count as success. Either
+way the session stays usable — the next command starts with a clean slate.
+
+A second Ctrl-C **force-quits** (exit status 130). This is the escape hatch for a
+host that has stopped responding, and it comes at a cost: the running command is
+abandoned where it stands, so the operation locks it holds are left behind. Your
+command history is still saved. mtui warns when this happens; see the next entry
+for the cleanup.
+
+Ctrl-C during the **Ctrl-D/`quit` teardown** behaves the same way but cancels
+nothing: the teardown is what releases the pool claims and closes the hosts, so
+it always runs to completion. A press there warns that it is in progress, and a
+second one force-quits — leaving both the operation locks and the pool claims
+(`unlock --force` and `unlock --pool`).
+
+One carve-out: Ctrl-C during the **initial load** at startup (`-a`/`-k`/`--sut`,
+before the first prompt appears) still exits immediately, without teardown. Any
+locks or pool claims that partial load had already taken need
+`unlock --force`/`unlock --pool`, as after any crash.
+
 ## How do I remove a dangling lock left by a crashed session?
 
 Reconnect to the same hosts and run `unlock -f` (force) to remove locks left by
