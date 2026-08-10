@@ -28,6 +28,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::{PostedMessage, Slack, SlackError, is_ack_reaction, is_nack_reaction};
 use mtui_testreport::{SlackReviewMarker, SvnRunner, TokioSvnRunner, svn_commit_testreport};
+use tokio_util::sync::CancellationToken;
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, template_completion};
@@ -132,7 +133,11 @@ fn resolve_channel(session: &Session, args: &ArgMatches) -> Result<String, Comma
     Ok(channel)
 }
 
-/// Poll `posted` until a verdict, the deadline, or Ctrl-C.
+/// Poll `posted` until a verdict, the deadline, or a cancellation.
+///
+/// `cancel` is the session's cancellation seam: the REPL fires it on Ctrl-C and
+/// the MCP job layer on `job_cancel`, and either stops the watch at its next
+/// sleep with [`WatchOutcome::Interrupted`].
 ///
 /// Returns the outcome rather than printing it, so the caller owns all display
 /// and the loop stays testable.
@@ -142,6 +147,7 @@ async fn watch(
     poll: Duration,
     timeout: Duration,
     bot_id: Option<&str>,
+    cancel: &CancellationToken,
 ) -> WatchOutcome {
     let deadline = Instant::now() + timeout;
     let mut failures: u32 = 0;
@@ -191,7 +197,7 @@ async fn watch(
                     .map_or(DEFAULT_BACKOFF, Duration::from_secs)
                     .clamp(MIN_BACKOFF, MAX_BACKOFF);
                 tracing::debug!(?wait, "rate limited; backing off");
-                if sleep_or_interrupt(jittered(wait), deadline).await {
+                if sleep_or_interrupt(cancel, jittered(wait), deadline).await {
                     return WatchOutcome::Interrupted;
                 }
                 if Instant::now() >= deadline {
@@ -212,23 +218,32 @@ async fn watch(
         if Instant::now() >= deadline {
             return WatchOutcome::TimedOut;
         }
-        if sleep_or_interrupt(jittered(poll), deadline).await {
+        if sleep_or_interrupt(cancel, jittered(poll), deadline).await {
             return WatchOutcome::Interrupted;
         }
     }
 }
 
-/// Sleep for `dur` (never past `deadline`), returning `true` if Ctrl-C arrived.
+/// Sleep for `dur` (never past `deadline`), returning `true` if `cancel` fired.
 ///
-/// Nothing in the CLI installs a SIGINT handler today, so without this a
-/// Ctrl-C during a watch kills the process outright and the user never learns
-/// that their review request was in fact posted.
-async fn sleep_or_interrupt(dur: Duration, deadline: Instant) -> bool {
+/// The point of interrupting the sleep rather than letting the press kill the
+/// process is that the user must learn their review request *was* posted —
+/// only the watching stopped.
+///
+/// This selects the session's cancellation token rather than
+/// `tokio::signal::ctrl_c` directly, so the watch has one interrupt source
+/// instead of two, and that source is *attributable*: the REPL forwards Ctrl-C
+/// onto the token it installed for this dispatch, and an MCP `job_cancel`
+/// reaches the watch too. The old signal branch could not be reached from a
+/// headless tool call (which has no terminal of its own) — and where a stdio
+/// server did share the operator's terminal, a Ctrl-C fired *every* listener at
+/// once, interrupting a watch that nobody had asked to stop.
+async fn sleep_or_interrupt(cancel: &CancellationToken, dur: Duration, deadline: Instant) -> bool {
     let remaining = deadline.saturating_duration_since(Instant::now());
     let dur = dur.min(remaining);
     tokio::select! {
         () = tokio::time::sleep(dur) => false,
-        _ = tokio::signal::ctrl_c() => true,
+        () = cancel.cancelled() => true,
     }
 }
 
@@ -389,7 +404,8 @@ impl Command for RequestReview {
             timeout.as_secs()
         ));
 
-        let outcome = watch(&slack, &posted, poll, timeout, bot_id.as_deref()).await;
+        let cancel = session.cancel_token();
+        let outcome = watch(&slack, &posted, poll, timeout, bot_id.as_deref(), &cancel).await;
         report(session, &rrid.to_string(), &outcome);
 
         // A failed watch is a failed command: over MCP the caller needs a
@@ -766,6 +782,118 @@ mod tests {
         assert!(!out.contains("approved"), "{out}");
     }
 
+    /// A cancel stops the watch at its next sleep and says so: the request
+    /// itself was posted and stays posted, so this is not a failure — the
+    /// command still succeeds.
+    ///
+    /// The cancel is the session's own token, which is what a REPL Ctrl-C (now
+    /// forwarded onto it) and an MCP `job_cancel` both fire. Nothing raises a
+    /// real signal here: the old `tokio::signal::ctrl_c` branch could only have
+    /// been tested that way, which is why this branch had no test at all.
+    #[tokio::test]
+    async fn a_cancel_stops_the_watch_but_keeps_the_request_posted() {
+        let server = MockServer::start().await;
+        mount_post_path(&server).await;
+        // A message nobody has reacted to: without the cancel this would poll
+        // until the (long) timeout.
+        mount(
+            &server,
+            "reactions.get",
+            json!({ "ok": true, "message": { "reactions": [] }}),
+        )
+        .await;
+        let (mut session, buf) = slack_session(&server);
+        // The poll interval is far longer than the deadline, so the one sleep
+        // this watch takes is bounded by the deadline: a watch that ignored the
+        // cancel would time out a few seconds later instead of stopping now.
+        session.config.slack_watch_timeout = 5;
+        session.config.slack_poll_interval = 60;
+        // Cancelled before the call, so the first inter-poll sleep is the one
+        // that observes it — no timing race, and the poll before it still gets
+        // its one honest look at the message.
+        session.cancel_token().cancel();
+
+        let args = matches(&RequestReview, &["--watch"]);
+        // Not an error: the posting succeeded, only the watching stopped.
+        RequestReview.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(
+            out.contains("stopped watching; the request is still posted"),
+            "{out}"
+        );
+        assert!(!out.contains("no review reaction"), "not a timeout: {out}");
+    }
+
+    /// The rate-limit branch takes its own sleep, so it needs its own interrupt
+    /// arm: a 429 can park the watch for up to a minute, and a Ctrl-C that had
+    /// to wait that out would look exactly like a hang.
+    #[tokio::test]
+    async fn a_cancel_interrupts_the_rate_limit_backoff() {
+        let server = MockServer::start().await;
+        // Slack asking us to wait a full minute.
+        Mock::given(path("/reactions.get"))
+            .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "60"))
+            .mount(&server)
+            .await;
+        let slack = slack_for(&server);
+        let posted = PostedMessage {
+            channel: CHANNEL.to_owned(),
+            ts: TS.to_owned(),
+        };
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        // The bound is the assertion: the back-off is clamped to at least
+        // MIN_BACKOFF and here asks for 60s, so a branch that ignored the token
+        // could not possibly return this quickly.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            watch(
+                &slack,
+                &posted,
+                Duration::from_millis(10),
+                Duration::from_secs(600),
+                None,
+                &cancel,
+            ),
+        )
+        .await
+        .expect("the back-off must observe the cancel");
+
+        assert_eq!(outcome, WatchOutcome::Interrupted);
+    }
+
+    /// The seam is the *only* interrupt source: an uncancelled watch runs to
+    /// its deadline exactly as before.
+    #[tokio::test]
+    async fn an_uncancelled_token_does_not_interrupt_the_watch() {
+        let server = MockServer::start().await;
+        mount(
+            &server,
+            "reactions.get",
+            json!({ "ok": true, "message": { "reactions": [] }}),
+        )
+        .await;
+        let slack = slack_for(&server);
+        let posted = PostedMessage {
+            channel: CHANNEL.to_owned(),
+            ts: TS.to_owned(),
+        };
+
+        let outcome = watch(
+            &slack,
+            &posted,
+            Duration::from_millis(10),
+            Duration::from_millis(50),
+            None,
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(outcome, WatchOutcome::TimedOut);
+    }
+
     #[tokio::test]
     async fn watch_gives_up_after_repeated_failures_and_fails_the_command() {
         let server = MockServer::start().await;
@@ -814,6 +942,7 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_millis(1200),
             None,
+            &CancellationToken::new(),
         )
         .await;
 
@@ -845,6 +974,7 @@ mod tests {
             Duration::from_secs(60),
             Duration::ZERO,
             None,
+            &CancellationToken::new(),
         )
         .await;
 
@@ -877,6 +1007,7 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_millis(250),
             None,
+            &CancellationToken::new(),
         )
         .await;
 
