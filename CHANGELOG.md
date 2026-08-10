@@ -93,7 +93,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   block with no recorded version data keeps its `=> PASSED/FAILED` placeholder
   — and `export` prints `WARNING: no package version data recorded for
   <host>...` on the display — instead of flipping to PASSED; a genuine version
-  regression still flips FAILED even when other packages are unverified.
+  regression still flips FAILED even when other packages are unverified. A
+  version query that never answered for a package is no longer recorded as
+  "not installed" either — it renders as not-checked, and the update
+  workflow's package check now warns about it separately from a
+  confirmed-missing package.
 - The QEM dashboard incident lookup for an OBS-served `SUSE:SLFO:1.1` update
   used to key on the maintenance id (`1.1`), so mtui queried
   `/api/incidents/1.1` instead of an actual incident number — a request that
