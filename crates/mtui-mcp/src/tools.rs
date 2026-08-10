@@ -432,7 +432,9 @@ pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
         ToolDescriptor {
             name: "job_cancel".to_owned(),
             description: "Cancel a running background job. A job already executing on a \
-                host may keep running there even after cancel."
+                host may keep running there even after cancel; the operation lock the \
+                job's own host group took is released best-effort (bounded, and never \
+                a comment-marked reservation) and the reply reports the outcome."
                 .to_owned(),
             input_schema: job_id_schema(),
             read_only: false,

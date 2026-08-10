@@ -54,6 +54,7 @@ mcp = [
     "dep:axum",
     "dep:tokio-util",
     "dep:mtui-testreport",
+    "dep:mtui-hosts",
     "dep:futures",
     "dep:base64ct",
 ]
@@ -62,6 +63,9 @@ mcp = [
 mtui-core.workspace = true
 mtui-config.workspace = true
 mtui-testreport = { workspace = true, optional = true }
+# The post-abort unlock fan-out in `session.rs` classifies `LockOutcome`; the
+# crate is already in the tree via `mtui-core`, so this adds no build cost.
+mtui-hosts = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true

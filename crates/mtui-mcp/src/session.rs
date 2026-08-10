@@ -72,7 +72,7 @@
 //! with a dead connection, dropped whole with the report) and it bounds the
 //! wait with [`tokio::time::timeout`].
 //!
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -84,6 +84,7 @@ use mtui_core::{
     ColorMode, CommandError, CommandPromptDisplay, EngineError, Registry, Session, dispatch_argv,
     dispatch_command, resolve_command_rrids,
 };
+use mtui_hosts::LockOutcome;
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
@@ -119,6 +120,19 @@ pub(crate) const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 /// before the hard abort. Kept short so `job_cancel` stays responsive; not a
 /// config key.
 pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(1);
+
+/// Wall-clock budget for the whole post-abort operation-lock release
+/// ([`McpSession::unlock_after_abort`]), across every template the cancelled
+/// job was scoped to.
+///
+/// A force-aborted dispatch never reached its own `unlock()`, so the cancel
+/// releases the operation lock on its behalf — but the release is an SSH
+/// round-trip per host and may queue behind another template's in-flight
+/// dispatch, so it is bounded to keep `job_cancel` responsive (the same reason
+/// [`CANCEL_GRACE`] is short). On expiry the remaining locks stay held and the
+/// reply says so; the `unlock` command and the fleet's stale-lock reap remain
+/// the backstop. Not a config key.
+pub(crate) const ABORT_UNLOCK_BUDGET: Duration = Duration::from_secs(5);
 
 /// A [`JoinHandle`] wrapper that aborts its task when dropped.
 ///
@@ -274,6 +288,23 @@ struct Job {
     id: String,
     /// The command name.
     command: String,
+    /// The templates this job's dispatch resolves to, recorded at mint time.
+    ///
+    /// Scopes the post-abort operation-lock release
+    /// ([`McpSession::unlock_after_abort`]) to the templates this job could
+    /// have locked hosts on, so cancelling one job never disturbs a concurrent
+    /// job's locks on another template. Recorded at mint (from the resolution
+    /// [`McpSession::start_jobs`] already performed) rather than re-derived at
+    /// cancel time: the loaded set may have changed since, and the job id
+    /// carries the RRID only as a `:`-mangled string.
+    ///
+    /// **Empty** means the scope is unknown — the single-job
+    /// [`start_job`](McpSession::start_job) primitive is synchronous and cannot
+    /// resolve, and an argv that resolves to nothing real has no scope to
+    /// record. The cancel path then falls back to every loaded template, which
+    /// is the conservative answer for a dispatch that may have taken the
+    /// registry gate exclusively and locked hosts across all of them.
+    rrids: Vec<String>,
     /// The current lifecycle state.
     state: JobState,
     /// When the job was minted (for `elapsed_s`).
@@ -309,6 +340,131 @@ pub struct JobView {
     pub state: JobState,
     /// Elapsed wall-clock seconds, rounded to 0.1s (frozen once terminal).
     pub(crate) elapsed_s: f64,
+}
+
+/// What the post-abort operation-lock release
+/// ([`McpSession::unlock_after_abort`]) actually achieved.
+///
+/// Kept as disjoint buckets rather than a formatted string so the reply can
+/// distinguish "released" from "left alone" from "failed" from "never got
+/// there" — a forced cancel must never claim a release it did not perform.
+#[derive(Debug, Default)]
+struct AbortUnlock {
+    /// Hosts whose hold this pass dropped. Because the fan-out is scoped to
+    /// locks the job's own group actually held
+    /// ([`HostsGroup::unlock_held`](mtui_hosts::HostsGroup::unlock_held)), a
+    /// host that was never locked is not in the map at all and never lands
+    /// here.
+    unlocked: Vec<String>,
+    /// Hosts whose lock belongs to another owner — left untouched (benign).
+    contended: Vec<String>,
+    /// Hosts whose release hit a real transport error, with the reason. The
+    /// lock is still held there.
+    failed: Vec<(String, String)>,
+    /// Templates the budget expired on, whether before their entry was reached
+    /// or part-way through their host fan-out. In the second case some hosts
+    /// may in fact have been released, but the fan-out future was dropped and
+    /// its partial outcome map went with it — this pass reports the whole
+    /// template as unknown rather than guessing which half succeeded.
+    unknown: Vec<String>,
+    /// The budget expired in the preamble, before the scope was even resolved:
+    /// the pass never ran and no template can be named.
+    stalled: bool,
+}
+
+impl AbortUnlock {
+    /// Folds one template's
+    /// [`HostsGroup::unlock_held`](mtui_hosts::HostsGroup::unlock_held)
+    /// outcome map into the buckets.
+    fn absorb(&mut self, outcomes: BTreeMap<String, LockOutcome>) {
+        for (host, outcome) in outcomes {
+            match outcome {
+                LockOutcome::Released => self.unlocked.push(host),
+                LockOutcome::Contended => self.contended.push(host),
+                LockOutcome::Failed(reason) => self.failed.push((host, reason)),
+                // Unreachable on an unlock fan-out. Ignored rather than folded
+                // into a bucket, matching how the `unlock` command's own match
+                // treats it — inventing a verdict for an impossible outcome is
+                // how a reply starts claiming things that did not happen.
+                LockOutcome::Acquired => {}
+            }
+        }
+    }
+
+    /// The clause appended to the forced-cancel reply, or `None` when there was
+    /// nothing to say (no template in scope, or no held lock in any of them).
+    ///
+    /// Silence is deliberate: a cancel that had no host lock to act on must
+    /// leave the reply byte-identical to what it has always been.
+    ///
+    /// The remedies are deliberately *scoped*. The usual cause of an expired
+    /// release is that a **successor** dispatch already holds the template —
+    /// telling a client to run a bare `unlock` there would have it strip a live
+    /// operation's lock, which is the very failure this whole change exists to
+    /// stop.
+    fn clause(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if !self.unlocked.is_empty() {
+            parts.push(format!("unlocked: {}", self.unlocked.join(", ")));
+        }
+        if !self.contended.is_empty() {
+            parts.push(format!(
+                "still locked by another owner: {} (use `unlock --force` if that owner \
+                 is a dead mtui)",
+                self.contended.join(", ")
+            ));
+        }
+        for (host, reason) in &self.failed {
+            parts.push(format!(
+                "unlock FAILED on {host} ({reason}); release it with `unlock --force`"
+            ));
+        }
+        if !self.unknown.is_empty() {
+            parts.push(format!(
+                "lock state unknown on {} (release timed out); check with \
+                 `list_locks -T <rrid>` and release with `unlock -T <rrid>` once no \
+                 operation is running on that template",
+                self.unknown.join(", ")
+            ));
+        }
+        if self.stalled {
+            parts.push(
+                "lock state unknown (the session was busy, so the release never ran); \
+                 check with `list_locks` and release with `unlock` once no operation is \
+                 running"
+                    .to_owned(),
+            );
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("; "))
+        }
+    }
+}
+
+/// Pins `argv` to `rrid` by **prepending** `-T <rrid>`.
+///
+/// Prepended, not appended: a positional `REMAINDER` command like `run` would
+/// swallow a trailing `-T <rrid>` into its own value.
+///
+/// Left untouched when `argv` already carries an explicit scope flag:
+/// * `-T`/`--template` — already pinned, and a second one is redundant;
+/// * `--all-templates` — declared `conflicts_with("template")`, so adding `-T`
+///   would turn the dispatch into a *parse error* instead of scoping it. The
+///   caller asked for every template, so the job stays unpinned (and its
+///   recorded scope can drift if the loaded set changes mid-flight — the
+///   pre-existing behaviour for that flag).
+fn scope_argv(rrid: &str, argv: &[String]) -> Vec<String> {
+    let already_scoped = argv
+        .iter()
+        .any(|a| a == "-T" || a == "--template" || a == "--all-templates");
+    if already_scoped {
+        return argv.to_vec();
+    }
+    let mut scoped = vec!["-T".to_owned(), rrid.to_owned()];
+    scoped.extend(argv.iter().cloned());
+    scoped
 }
 
 /// Process-global monotonic source of [`McpSession::id`] values. Each session
@@ -646,7 +802,7 @@ impl McpSession {
 
     /// [`close`](Self::close) with an explicit fan-out budget.
     ///
-    /// This timeout seam is kept `pub(crate)` so the wedged-close unit test can
+    /// The timeout seam exists so the (colocated) wedged-close unit test can
     /// bound the wait to a fraction of a second instead of 45s.
     async fn close_with_timeout(&self, timeout: Duration) {
         // Snapshot every loaded entry's lockable handle under the session lock,
@@ -984,6 +1140,10 @@ impl McpSession {
     /// because the spawned task must own the session for its `'static` lifetime.
     /// The caller holds the jobs lock so the admit-check and the insert are
     /// atomic against a concurrent spawn.
+    ///
+    /// `rrids` is the caller's already-computed template scope for `argv` (see
+    /// [`Job::rrids`]); pass an empty vector when the caller could not resolve
+    /// one.
     fn mint_job(
         self: &Arc<Self>,
         jobs_guard: &mut HashMap<String, Arc<StdMutex<Job>>>,
@@ -991,11 +1151,13 @@ impl McpSession {
         name: &str,
         argv: Vec<String>,
         job_id: String,
+        rrids: Vec<String>,
     ) -> String {
         let cancel = CancellationToken::new();
         let job = Arc::new(StdMutex::new(Job {
             id: job_id.clone(),
             command: name.to_owned(),
+            rrids,
             state: JobState::Running,
             started: Instant::now(),
             finished: None,
@@ -1105,11 +1267,30 @@ impl McpSession {
         name: &str,
         argv: Vec<String>,
     ) -> Result<String, McpCommandError> {
+        // Synchronous, so it cannot resolve the template scope (that needs the
+        // session lock): the job records an empty scope and a forced cancel
+        // falls back to every loaded template. See [`Job::rrids`].
+        self.start_job_scoped(registry, name, argv, Vec::new())
+    }
+
+    /// [`start_job`](Self::start_job) with the caller's already-resolved
+    /// template scope recorded on the job (see [`Job::rrids`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`start_job`](Self::start_job).
+    fn start_job_scoped(
+        self: &Arc<Self>,
+        registry: Arc<Registry>,
+        name: &str,
+        argv: Vec<String>,
+        rrids: Vec<String>,
+    ) -> Result<String, McpCommandError> {
         let mut jobs = self.jobs.lock().expect("jobs table poisoned");
         self.admit(&jobs, 1)?;
         let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
         let job_id = format!("{name}-{n}");
-        Ok(self.mint_job(&mut jobs, registry, name, argv, job_id))
+        Ok(self.mint_job(&mut jobs, registry, name, argv, job_id, rrids))
     }
 
     /// Start `name`/`argv` in the background, fanning out one job per template.
@@ -1124,6 +1305,13 @@ impl McpSession {
     /// command is independently observable and cancellable per template. When a
     /// single template (or none) resolves, this is exactly one job with the
     /// unchanged `<command>-<n>` id.
+    ///
+    /// The single-template job is `-T`-scoped too. Resolution happens at mint
+    /// and dispatch happens later, so a `load_template` landing in between would
+    /// otherwise turn an unscoped fan-out command into a two-template dispatch
+    /// while the job record still named one — and a cancel would release only
+    /// the recorded template's locks, stranding the other behind a
+    /// success-shaped reply.
     ///
     /// # Errors
     ///
@@ -1148,15 +1336,39 @@ impl McpSession {
                         let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
                         let token = rrid.replace(':', "_");
                         let job_id = format!("{name}-{token}-{n}");
-                        let mut scoped_argv = vec!["-T".to_owned(), rrid];
-                        scoped_argv.extend(argv.iter().cloned());
-                        self.mint_job(&mut jobs, Arc::clone(&registry), name, scoped_argv, job_id)
+                        let scoped_argv = scope_argv(&rrid, &argv);
+                        self.mint_job(
+                            &mut jobs,
+                            Arc::clone(&registry),
+                            name,
+                            scoped_argv,
+                            job_id,
+                            vec![rrid],
+                        )
                     })
                     .collect())
             }
-            // Single template, none, or a client-supplied `-T` already narrowing
-            // to one: keep the single-job path (and its stable id shape).
-            _ => Ok(vec![self.start_job(registry, name, argv)?]),
+            // Exactly one real template: keep the single-job path (and its
+            // stable id shape), but scope argv and record the RRID so the
+            // dispatch cannot drift away from what the job says it targets.
+            Some(rrids) => {
+                let rrid = rrids.into_iter().next().expect("len == 1");
+                let scoped_argv = scope_argv(&rrid, &argv);
+                Ok(vec![self.start_job_scoped(
+                    registry,
+                    name,
+                    scoped_argv,
+                    vec![rrid],
+                )?])
+            }
+            // Nothing real resolves (unparseable argv, unknown command, or only
+            // the null report): there is no template to pin to or record.
+            None => Ok(vec![self.start_job_scoped(
+                registry,
+                name,
+                argv,
+                Vec::new(),
+            )?]),
         }
     }
 
@@ -1253,6 +1465,28 @@ impl McpSession {
     ///    the host — the same caveat as interrupting a foreground `run` — and
     ///    the reply says the abort was forced.
     ///
+    /// A forced abort drops the dispatch's future mid-`await`, so the
+    /// operation's own `unlock()` never runs and `/var/lock/mtui.lock` would be
+    /// stranded on every host of every template the job was scoped to. The
+    /// forced arm therefore releases it on the job's behalf and reports the
+    /// per-host outcome in the reply. The cooperative arm does **not**: a body
+    /// that unwound through its own flow ran its own unlock discipline.
+    ///
+    /// Only locks the job's **own** host group actually took are released, and
+    /// never a comment-marked exclusive reservation — see
+    /// [`HostsGroup::unlock_held`](mtui_hosts::HostsGroup::unlock_held).
+    ///
+    /// Releasing under this uncertainty matches what the command-timeout path
+    /// already does (it unlocks unconditionally while documenting that the
+    /// package manager may still hold its own lock). Where the aborted operation
+    /// *is* a package transaction, the transaction itself stays serialised by
+    /// the package manager's own system-wide lock; `/var/lock/mtui.lock` is
+    /// mtui's coordination layer on top, and leaving it behind blocks every
+    /// other tester on those hosts. A `run` or `reboot` body has no such
+    /// second layer — for those, the release is purely mtui-side bookkeeping and
+    /// the remote command may still be executing. Nothing else is done at the
+    /// hosts — no reboot, no downgrade, no disconnect.
+    ///
     /// A job already in a terminal state is **not** re-cancelled: the reply
     /// names its actual state instead of claiming a cancellation that never
     /// happened.
@@ -1261,8 +1495,29 @@ impl McpSession {
     ///
     /// [`McpCommandError`] (exit 1) with `"no such job: <id>"` when unknown.
     pub async fn job_cancel(&self, job_id: &str) -> Result<String, McpCommandError> {
+        self.job_cancel_with_budget(job_id, ABORT_UNLOCK_BUDGET)
+            .await
+    }
+
+    /// [`job_cancel`](Self::job_cancel) with an explicit post-abort unlock
+    /// budget.
+    ///
+    /// The timeout seam exists for the same reason
+    /// [`close_with_timeout`](Self::close_with_timeout)'s does: the
+    /// budget-expiry unit test bounds the wait to a fraction of a second
+    /// instead of [`ABORT_UNLOCK_BUDGET`]. Both tests are colocated, so both
+    /// seams stay private.
+    ///
+    /// # Errors
+    ///
+    /// As [`job_cancel`](Self::job_cancel).
+    async fn job_cancel_with_budget(
+        &self,
+        job_id: &str,
+        unlock_budget: Duration,
+    ) -> Result<String, McpCommandError> {
         let job = self.job(job_id)?;
-        let (handle, token) = {
+        let (handle, token, rrids) = {
             let mut j = job.lock().expect("job record poisoned");
             match j.state {
                 JobState::Running => {
@@ -1271,7 +1526,7 @@ impl McpSession {
                     // checks `Running`) can no longer overwrite it.
                     j.state = JobState::Cancelled;
                     j.finished = Some(Instant::now());
-                    (j.handle.take(), j.cancel.clone())
+                    (j.handle.take(), j.cancel.clone(), j.rrids.clone())
                 }
                 state => {
                     // Truthful no-op: nothing was cancelled.
@@ -1282,6 +1537,7 @@ impl McpSession {
         // Cooperative stage: signal the seam before touching the task.
         token.cancel();
         let mut forced = false;
+        let mut unlocked = AbortUnlock::default();
         if let Some(mut handle) = handle {
             if tokio::time::timeout(CANCEL_GRACE, &mut handle)
                 .await
@@ -1293,20 +1549,139 @@ impl McpSession {
                 // Await the aborted task so cancellation has fully unwound
                 // before we return; a `JoinError::Cancelled` is expected.
                 let _ = handle.await;
+                // The worker is gone, so its `CommandLock` (registry-gate share
+                // + per-RRID lock) is released and the fan-out below can take
+                // those holds itself.
+                unlocked = self.unlock_after_abort(&rrids, unlock_budget).await;
             }
             // The worker's terminal-write branch skipped its eviction (state
             // was already `Cancelled`), so reap history here.
             self.evict_completed();
         }
         if forced {
-            Ok(format!(
+            // The prefix is a pinned contract (clients key on "forced abort");
+            // the lock verdict goes inside the same parenthetical.
+            let mut msg = format!(
                 "cancelled job {job_id} (forced abort after {}s grace; a host \
-                 operation already in flight may still finish on the host)",
+                 operation already in flight may still finish on the host",
                 CANCEL_GRACE.as_secs()
-            ))
+            );
+            if let Some(clause) = unlocked.clause() {
+                msg.push_str("; ");
+                msg.push_str(&clause);
+            }
+            msg.push(')');
+            Ok(msg)
         } else {
             Ok(format!("cancelled job {job_id}"))
         }
+    }
+
+    /// Releases the operation lock a force-aborted dispatch left behind, on
+    /// every template in `rrids`.
+    ///
+    /// An empty `rrids` means the job recorded no scope (see [`Job::rrids`]) and
+    /// falls back to every loaded template — the conservative reading for a
+    /// dispatch that may have held the registry gate exclusively.
+    ///
+    /// The whole pass is bounded by `budget`, **including the preamble**: a
+    /// template not reached in time is reported as unknown rather than waited
+    /// out, so `job_cancel` stays responsive. Per template it does nothing but
+    /// release the group's own held locks — no disconnect, no pool release, no
+    /// history row.
+    async fn unlock_after_abort(&self, rrids: &[String], budget: Duration) -> AbortUnlock {
+        let mut summary = AbortUnlock::default();
+        // The deadline is armed *before* the first await. The preamble below
+        // takes the canonical session mutex, which an exclusive dispatch or a
+        // `get`/`put` transfer holds for its whole duration — leaving it outside
+        // the budget would let `job_cancel` block for minutes, which is exactly
+        // what `ABORT_UNLOCK_BUDGET` promises it will not do.
+        let deadline = Instant::now() + budget;
+
+        // Preamble, deliberately **gate-free and unconditional**: drop the
+        // active guard the aborted *exclusive* dispatch left on the canonical
+        // session, then resolve the fallback scope.
+        //
+        // Doing this before (and independently of) the per-template holds is
+        // load-bearing. That guard blocks `Session::activate`'s `try_lock_owned`
+        // on the entry, so every later scoped dispatch on the template would
+        // silently run against the null report — including the `list_locks` the
+        // reply recommends, which would then report a false clean. If it were
+        // only dropped inside the per-template pass, a busy gate (the RwGate is
+        // writer-preferring, so one pending `load_template` blocks shared
+        // acquisition) could burn the budget and leave the session poisoned.
+        //
+        // Gate-free is safe here, and `close_with_timeout` relies on the same
+        // property: every writer of the canonical active guard either runs under
+        // the exclusive gate or holds the session mutex for the whole write, so
+        // taking the mutex is enough to make the drop atomic against them.
+        let preamble = async {
+            let mut session = self.session.lock().await;
+            session.release_active_guard();
+            if rrids.is_empty() {
+                session.templates.rrids()
+            } else {
+                rrids.to_vec()
+            }
+        };
+        let Ok(targets) = tokio::time::timeout(budget, preamble).await else {
+            // Nothing is stranded by giving up here: the mutex being held that
+            // long means a *live* dispatch owns it, and a live dispatch releases
+            // its own active guard on the way out. The lingering-guard case (an
+            // aborted exclusive job) leaves the mutex free, so this branch
+            // cannot be that case.
+            tracing::warn!(?budget, "post-abort unlock: session busy, release skipped");
+            summary.stalled = true;
+            return summary;
+        };
+
+        for rrid in targets {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, self.unlock_template(&rrid)).await {
+                Ok(outcomes) => summary.absorb(outcomes),
+                Err(_) => {
+                    tracing::warn!(rrid = %rrid, ?budget, "post-abort unlock timed out");
+                    summary.unknown.push(rrid);
+                }
+            }
+        }
+        summary
+    }
+
+    /// Releases one template's own held operation locks, taking the same holds a
+    /// dispatch on it would.
+    ///
+    /// The gate-shared + per-RRID hold is not optional bookkeeping: it is what
+    /// makes locking the report entry safe. [`Session::activate`] claims an
+    /// entry with a *non-blocking* `try_lock_owned` and falls back to the null
+    /// report when it fails, so a dispatch racing an entry lock this pass holds
+    /// would silently act on nothing.
+    ///
+    /// Those holds shut out a same-RRID dispatch and any exclusive one, which is
+    /// what this pass needs. They are not a crate-wide guarantee: `command_lock`
+    /// resolves its scope and *then* acquires, and `close_with_timeout` locks
+    /// entries gate-free — both pre-existing windows in which some other caller
+    /// could still meet a locked entry.
+    async fn unlock_template(&self, rrid: &str) -> BTreeMap<String, LockOutcome> {
+        // Same acquire order as `command_lock` (gate-shared → one rrid lock),
+        // and only ever one rrid lock at a time, so this cannot deadlock
+        // against a concurrent dispatch.
+        let _shared = self.gate.shared().await;
+        let rrid_lock = self.lock_for(rrid);
+        let _rrid = rrid_lock.lock_owned().await;
+
+        // The preamble already dropped any guard the aborted dispatch left, so
+        // this only needs the handle.
+        let entry = self.session.lock().await.templates.handle(rrid);
+        // Unloaded since the job was minted: nothing of ours to release.
+        let Some(entry) = entry else {
+            return BTreeMap::new();
+        };
+        // The scoped path's inner dispatch task is aborted asynchronously, so it
+        // may still hold this entry for a moment; the caller's budget bounds the
+        // wait.
+        let mut report = entry.lock().await;
+        report.base_mut().targets.unlock_held().await
     }
 
     /// Look up a job record by id, or the `"no such job"` envelope.
@@ -1326,8 +1701,12 @@ impl McpSession {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::PathBuf;
+
     use mtui_core::register_all;
+    use mtui_hosts::{MockConnection, MockSftpOp, TARGET_LOCK_PATH};
+
+    use super::*;
 
     fn session(config: Config) -> Arc<McpSession> {
         McpSession::new(config)
@@ -1602,6 +1981,7 @@ mod tests {
             Arc::new(StdMutex::new(Job {
                 id: id.to_owned(),
                 command: "probe".to_owned(),
+                rrids: Vec::new(),
                 state,
                 started: base,
                 finished,
@@ -1657,6 +2037,7 @@ mod tests {
                     Arc::new(StdMutex::new(Job {
                         id: format!("t-{i}"),
                         command: "probe".to_owned(),
+                        rrids: Vec::new(),
                         state: JobState::Done,
                         started: Instant::now(),
                         finished: Some(Instant::now()),
@@ -1924,6 +2305,7 @@ mod tests {
             let job = Arc::new(StdMutex::new(Job {
                 id: id.to_owned(),
                 command: "probe".to_owned(),
+                rrids: Vec::new(),
                 state,
                 started: Instant::now(),
                 finished: Some(Instant::now()),
@@ -1950,6 +2332,7 @@ mod tests {
         let job = Arc::new(StdMutex::new(Job {
             id: "whoami-1".to_owned(),
             command: "whoami".to_owned(),
+            rrids: Vec::new(),
             state: JobState::Cancelled,
             started: Instant::now(),
             finished: Some(Instant::now()),
@@ -1966,6 +2349,985 @@ mod tests {
             .expect_err("cancelled job raises on job_result");
         assert!(err.stderr.contains("was cancelled"), "got: {err:?}");
         assert_eq!(err.exit_code, 1);
+    }
+
+    // ---- forced cancel: the stranded operation lock (#405) ------------------ //
+
+    /// The RRIDs the lock tests load.
+    const LOCK_RRID_A: &str = "SUSE:Maintenance:1:1";
+    const LOCK_RRID_B: &str = "SUSE:Maintenance:2:1";
+
+    /// Loads `rrid` with a host group over `mocks` (keyed by the given names)
+    /// into `sess` and makes it active.
+    ///
+    /// The mock handles stay `Arc`-shared with the ones the caller keeps, so
+    /// lock/unlock SFTP ops remain observable after the targets move into the
+    /// group.
+    async fn load_with_hosts(sess: &McpSession, rrid: &str, mocks: &[(&str, MockConnection)]) {
+        use mtui_hosts::{HostsGroup, Target};
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+        use mtui_types::enums::TargetState;
+
+        let targets: Vec<Target> = mocks
+            .iter()
+            .map(|(name, mock)| {
+                Target::with_connection(*name, TargetState::Enabled, Box::new(mock.clone()))
+            })
+            .collect();
+        let mut guard = sess.session().lock().await;
+        let mut report = ObsReport::new(guard.config.clone());
+        report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
+        report.base_mut().targets = HostsGroup::new(targets, false);
+        guard.templates.add(Box::new(report));
+        guard.templates.set_active(rrid);
+    }
+
+    /// Blocks until `mock` records the exclusive lockfile create.
+    ///
+    /// Anti-vacuity guard: without it a cancel could land before the dispatch
+    /// ever locked, and "the lock was released" would pass against a host that
+    /// was never locked in the first place.
+    async fn await_locked(mock: &MockConnection, who: &str) {
+        for _ in 0..2000 {
+            if mock.sftp_ops().iter().any(|op| {
+                matches!(op, MockSftpOp::Write { path, exclusive: true }
+                    if path == &PathBuf::from(TARGET_LOCK_PATH))
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("{who} never took the operation lock");
+    }
+
+    /// Whether `mock` recorded a lockfile removal.
+    fn saw_unlock(mock: &MockConnection) -> bool {
+        mock.sftp_ops()
+            .iter()
+            .any(|op| matches!(op, MockSftpOp::Remove(p) if p == &PathBuf::from(TARGET_LOCK_PATH)))
+    }
+
+    /// Blocks until `mock` records a **non-exclusive** lockfile write — the
+    /// re-stamp `lock()` performs over a lock this process already holds.
+    ///
+    /// The anti-vacuity anchor when the host was already locked before the job
+    /// started: `await_locked` would be satisfied by the *earlier* exclusive
+    /// create and prove nothing about the job.
+    async fn await_relocked(mock: &MockConnection, who: &str) {
+        for _ in 0..2000 {
+            if mock.sftp_ops().iter().any(|op| {
+                matches!(op, MockSftpOp::Write { path, exclusive: false }
+                    if path == &PathBuf::from(TARGET_LOCK_PATH))
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("{who} never re-stamped the operation lock");
+    }
+
+    /// Whether the lockfile is still on `mock`'s (simulated) filesystem.
+    fn still_locked(mock: &MockConnection) -> bool {
+        mock.file_contents(TARGET_LOCK_PATH).is_some()
+    }
+
+    /// A lockfile line stamped with **this process's** identity.
+    ///
+    /// What a sibling template's — or another MCP session's — live hold looks
+    /// like on a shared refhost: wire ownership is per user + PID, so it reads
+    /// back as "mine" to every host group in this process.
+    /// `Target::with_connection` builds its lock from `Config::default()`, so
+    /// that is the identity to match.
+    fn ours_lockfile() -> Vec<u8> {
+        format!(
+            "1700000000:{}:{}",
+            Config::default().session_user,
+            std::process::id()
+        )
+        .into_bytes()
+    }
+
+    /// A fan-out probe that takes the group's operation lock and then parks.
+    ///
+    /// `park` decides how: [`Park::Forever`] never observes the cancellation
+    /// seam (so the cancel must force-abort it, stranding the lock — the #405
+    /// shape), [`Park::Seam`] unwinds cooperatively, and [`Park::Gate`] waits for
+    /// a test-issued permit and then runs its own `unlock()` (a well-behaved
+    /// concurrent job).
+    ///
+    /// The gate is a [`Semaphore`](tokio::sync::Semaphore), not a `Notify`: a
+    /// permit is *stored*, so a release issued before the body reaches the await
+    /// is still observed. `Notify::notify_waiters` would be lost in that window
+    /// and the test would hang.
+    enum Park {
+        Forever,
+        Seam,
+        Gate(Arc<tokio::sync::Semaphore>),
+    }
+
+    struct LockAndPark {
+        park: Park,
+        /// Park only while acting for this template; every other template locks
+        /// and returns at once. `None` parks on the first template it reaches —
+        /// which, on a fan-out, means later templates never run at all.
+        park_rrid: Option<String>,
+    }
+
+    impl LockAndPark {
+        /// A probe that locks the whole group with no comment (an ordinary
+        /// operation hold) and parks per `park`.
+        fn new(park: Park) -> Self {
+            Self {
+                park,
+                park_rrid: None,
+            }
+        }
+
+        /// As [`new`](Self::new) but parks only for `rrid`, so a fan-out gets
+        /// through every template and each ends up holding its own lock.
+        fn parking_on(park: Park, rrid: &str) -> Self {
+            Self {
+                park,
+                park_rrid: Some(rrid.to_owned()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl mtui_core::Command for LockAndPark {
+        fn name(&self) -> &'static str {
+            "lock_and_park_probe"
+        }
+        fn scope(&self) -> mtui_core::Scope {
+            mtui_core::Scope::Fanout
+        }
+        async fn call(
+            &self,
+            session: &mut Session,
+            _args: &clap::ArgMatches,
+        ) -> mtui_core::CommandResult {
+            let rrid = session.metadata().id();
+            session.targets_mut().lock("").await;
+            if self.park_rrid.as_ref().is_some_and(|r| *r != rrid) {
+                return Ok(());
+            }
+            match &self.park {
+                Park::Forever => {
+                    // Blocked mid host-op: never reaches the seam, so only the
+                    // hard abort stops it — and its `unlock()` never runs.
+                    tokio::time::sleep(Duration::from_secs(600)).await;
+                }
+                Park::Seam => {
+                    session.cancel_token().cancelled().await;
+                    return Err(CommandError::Cancelled(String::new()));
+                }
+                Park::Gate(gate) => {
+                    let _permit = gate.acquire().await.expect("gate not closed");
+                    session.targets_mut().unlock().await;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// Registry carrying the lock probe plus the real commands.
+    fn registry_with_probe(probe: LockAndPark) -> Arc<Registry> {
+        let mut registry = register_all();
+        registry.register(Arc::new(probe));
+        Arc::new(registry)
+    }
+
+    /// `scope_argv` pins an unscoped argv and leaves an already-scoped one
+    /// alone — including `--all-templates`, which *conflicts with* `-T` and
+    /// would turn the dispatch into a parse error rather than scoping it.
+    #[test]
+    fn scope_argv_pins_only_an_unscoped_argv() {
+        assert_eq!(
+            scope_argv("R:1", &["true".to_owned()]),
+            vec!["-T".to_owned(), "R:1".to_owned(), "true".to_owned()],
+            "prepended, so a REMAINDER positional cannot swallow it"
+        );
+        for already in [
+            vec!["-T".to_owned(), "R:2".to_owned()],
+            vec!["--template".to_owned(), "R:2".to_owned()],
+            vec!["--all-templates".to_owned()],
+        ] {
+            assert_eq!(
+                scope_argv("R:1", &already),
+                already,
+                "an explicit scope flag must be left alone"
+            );
+        }
+    }
+
+    /// A probe that records the `-T` value its dispatch was given.
+    struct RecordTemplate(Arc<StdMutex<Vec<Option<String>>>>);
+
+    #[async_trait::async_trait]
+    impl mtui_core::Command for RecordTemplate {
+        fn name(&self) -> &'static str {
+            "record_template_probe"
+        }
+        fn scope(&self) -> mtui_core::Scope {
+            mtui_core::Scope::Fanout
+        }
+        async fn call(
+            &self,
+            _session: &mut Session,
+            args: &clap::ArgMatches,
+        ) -> mtui_core::CommandResult {
+            self.0
+                .lock()
+                .unwrap()
+                .push(args.get_one::<String>("template").cloned());
+            Ok(())
+        }
+    }
+
+    /// A backgrounded single-template job dispatches **pinned** to the template
+    /// its record names.
+    ///
+    /// Resolution happens at mint and dispatch happens later, so an unpinned
+    /// argv lets a `load_template` in between turn the dispatch into a wider
+    /// fan-out than the record describes — and a cancel would then release only
+    /// the recorded template's locks while reporting success.
+    #[tokio::test]
+    async fn start_jobs_pins_the_single_template_dispatch_to_its_record() {
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[]).await;
+        let mut registry = register_all();
+        registry.register(Arc::new(RecordTemplate(Arc::clone(&seen))));
+
+        let ids = sess
+            .start_jobs(Arc::new(registry), "record_template_probe", Vec::new())
+            .await
+            .expect("start_jobs succeeds");
+        assert_eq!(ids.len(), 1);
+        for _ in 0..2000 {
+            if sess.job_status(&ids[0]).expect("job exists").state != JobState::Running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(sess.job_status(&ids[0]).unwrap().state, JobState::Done);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![Some(LOCK_RRID_A.to_owned())],
+            "the dispatch must carry the template the job recorded"
+        );
+    }
+
+    /// #405 headline: a job force-aborted mid host-operation has its operation
+    /// lock released on every host of the template it was scoped to, and the
+    /// reply names them.
+    ///
+    /// Driven through the real `run` command (`lock_selected` → `targets.run` →
+    /// `unlock_selected`, with no cancellation checkpoint in between), which is
+    /// the faithful shape of the bug: the abort drops the future between the
+    /// lock and the unlock.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_releases_the_stranded_operation_lock() {
+        let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));
+        let beta = MockConnection::new("host-beta").with_run_delay(Duration::from_secs(600));
+
+        let sess = session(Config::default());
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_A,
+            &[("host-alpha", alpha.clone()), ("host-beta", beta.clone())],
+        )
+        .await;
+        let registry = Arc::new(register_all());
+
+        let ids = sess
+            .start_jobs(Arc::clone(&registry), "run", vec!["true".to_owned()])
+            .await
+            .expect("start_jobs succeeds");
+        assert_eq!(ids.len(), 1, "one template -> one job: {ids:?}");
+        await_locked(&alpha, "host-alpha").await;
+        await_locked(&beta, "host-beta").await;
+
+        let msg = sess.job_cancel(&ids[0]).await.expect("cancel succeeds");
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            msg.contains("unlocked: host-alpha, host-beta"),
+            "the reply must name the hosts it unlocked: {msg}"
+        );
+        assert!(saw_unlock(&alpha), "host-alpha's lock was never removed");
+        assert!(saw_unlock(&beta), "host-beta's lock was never removed");
+        assert!(!still_locked(&alpha), "host-alpha is still locked");
+        assert!(!still_locked(&beta), "host-beta is still locked");
+    }
+
+    /// The exclusive dispatch path: an aborted unscoped fan-out leaves the
+    /// canonical session holding the active entry's guard, so the release must
+    /// drop it first — otherwise `job_cancel` deadlocks on the entry, and a
+    /// later scoped dispatch silently falls back to the null report.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_on_the_exclusive_path_unlocks_and_clears_the_active_guard() {
+        let alpha = MockConnection::new("host-alpha");
+        let beta = MockConnection::new("host-beta");
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        load_with_hosts(&sess, LOCK_RRID_B, &[("host-beta", beta.clone())]).await;
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+
+        // `start_job` records no template scope, and an unscoped fan-out over
+        // two templates takes the gate exclusively — the inline dispatch path.
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        // The unfixed deadlock would hang here forever, not merely fail.
+        let msg = tokio::time::timeout(Duration::from_secs(20), sess.job_cancel(&job_id))
+            .await
+            .expect("job_cancel must not deadlock on the lingering active guard")
+            .expect("cancel succeeds");
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(saw_unlock(&alpha), "host-alpha's lock was never removed");
+        assert!(!still_locked(&alpha), "host-alpha is still locked");
+
+        // The canonical session must hold no active guard afterwards: a scoped
+        // dispatch forks and claims the entry with a *non-blocking*
+        // `try_lock_owned`, so a lingering guard would not error — it would
+        // silently list the null report's (empty) host set.
+        let out = sess
+            .run_command(
+                &registry,
+                "list_hosts",
+                &["-T".to_owned(), LOCK_RRID_A.to_owned()],
+            )
+            .await
+            .expect("list_hosts after a forced abort succeeds");
+        assert!(
+            out.contains("host-alpha"),
+            "a lingering active guard sent the dispatch to the null report: {out:?}"
+        );
+    }
+
+    /// The release is scoped to the cancelled job's own templates: a sibling
+    /// job still mid-operation on another template keeps its locks, and the
+    /// cancel does not queue behind it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn forced_cancel_leaves_a_concurrent_templates_locks_alone() {
+        let alpha = MockConnection::new("host-alpha");
+        let beta = MockConnection::new("host-beta");
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        load_with_hosts(&sess, LOCK_RRID_B, &[("host-beta", beta.clone())]).await;
+
+        // Both templates' bodies lock and park; `Gate` lets the test release
+        // them, and B is never released before the cancel.
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let registry = registry_with_probe(LockAndPark::new(Park::Gate(Arc::clone(&gate))));
+
+        let ids = sess
+            .start_jobs(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .await
+            .expect("start_jobs succeeds");
+        assert_eq!(ids.len(), 2, "two templates -> two jobs: {ids:?}");
+        let job_a = ids
+            .iter()
+            .find(|j| j.contains("SUSE_Maintenance_1_1"))
+            .expect("job for A")
+            .clone();
+        let job_b = ids
+            .iter()
+            .find(|j| j.contains("SUSE_Maintenance_2_1"))
+            .expect("job for B")
+            .clone();
+        await_locked(&alpha, "host-alpha").await;
+        await_locked(&beta, "host-beta").await;
+
+        let before = Instant::now();
+        let msg = sess.job_cancel(&job_a).await.expect("cancel succeeds");
+        let elapsed = before.elapsed();
+
+        assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");
+        assert!(
+            !msg.contains("host-beta"),
+            "the reply must not mention another template's hosts: {msg}"
+        );
+        // The semantic pin, independent of timing: the other template must not
+        // appear in the verdict in any bucket.
+        assert!(
+            !msg.contains(LOCK_RRID_B),
+            "the reply must not mention another template at all: {msg}"
+        );
+        assert!(
+            !saw_unlock(&beta),
+            "the cancel released a lock belonging to a live job on another template"
+        );
+        // A release that fell back to every loaded template would queue behind
+        // job B's per-RRID lock and burn the whole budget instead.
+        assert!(
+            elapsed < CANCEL_GRACE + Duration::from_secs(3),
+            "cancel waited on the other template's lock: {elapsed:?}"
+        );
+
+        // Job B was genuinely mid-operation holding its lock the whole time:
+        // released, it finishes normally and runs its own unlock.
+        gate.add_permits(1);
+        for _ in 0..2000 {
+            if sess.job_status(&job_b).expect("job B exists").state != JobState::Running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(sess.job_status(&job_b).unwrap().state, JobState::Done);
+        assert!(saw_unlock(&beta), "job B never released its own lock");
+    }
+
+    /// All four host verdicts in one reply, each claiming only what happened.
+    ///
+    /// * `host-ok` — released.
+    /// * `host-stolen` — this group *did* take the lock, but by release time the
+    ///   remote line belongs to someone else (a reboot cleared `/var/lock` and
+    ///   another tester claimed it, a stale reap fired): benign contention.
+    /// * `host-broken1`/`2` — our lock, removal fails. Two of them, so a
+    ///   "report only the first failure" bug cannot survive.
+    /// * `host-foreign` — locked by someone else all along, so this group never
+    ///   held it: absent from the verdict entirely, not reported as anything.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_reply_distinguishes_every_host_verdict() {
+        let ok = MockConnection::new("host-ok");
+        let stolen = MockConnection::new("host-stolen");
+        let foreign = MockConnection::new("host-foreign").with_file(
+            TARGET_LOCK_PATH,
+            b"1700000000:someone-else:2147483647".to_vec(),
+        );
+        let broken1 = MockConnection::new("host-broken1").failing_sftp_remove();
+        let broken2 = MockConnection::new("host-broken2").failing_sftp_remove();
+
+        let sess = session(Config::default());
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_A,
+            &[
+                ("host-ok", ok.clone()),
+                ("host-stolen", stolen.clone()),
+                ("host-foreign", foreign.clone()),
+                ("host-broken1", broken1.clone()),
+                ("host-broken2", broken2.clone()),
+            ],
+        )
+        .await;
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&ok, "host-ok").await;
+        await_locked(&stolen, "host-stolen").await;
+        await_locked(&broken1, "host-broken1").await;
+        await_locked(&broken2, "host-broken2").await;
+
+        // Our hold on host-stolen is taken over after we acquired it. `with_file`
+        // writes through the mock's `Arc`-shared file table, so this lands on the
+        // clone the host group owns.
+        let _ = stolen
+            .clone()
+            .with_file(TARGET_LOCK_PATH, b"1700000000:someone-else:4242".to_vec());
+
+        let msg = sess.job_cancel(&job_id).await.expect("cancel succeeds");
+        assert!(
+            msg.contains("unlocked: host-ok)") || msg.contains("unlocked: host-ok;"),
+            "only the released host may be listed as unlocked: {msg}"
+        );
+        assert!(
+            msg.contains("still locked by another owner: host-stolen"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("unlock FAILED on host-broken1"), "got: {msg}");
+        assert!(
+            msg.contains("unlock FAILED on host-broken2"),
+            "every failed host must be named, not just the first: {msg}"
+        );
+        assert!(
+            msg.contains("unlock --force"),
+            "the failure arm must name the remedy: {msg}"
+        );
+        assert!(
+            !msg.contains("host-foreign"),
+            "a lock this group never took must not be reported at all: {msg}"
+        );
+        // Truthful: every non-released host is in fact still locked.
+        assert!(still_locked(&stolen), "the stolen lock was removed");
+        assert!(still_locked(&foreign), "the foreign lock was removed");
+        assert!(!saw_unlock(&foreign), "the foreign lock was acted on");
+        assert!(still_locked(&broken1), "the failed removal claimed success");
+        assert!(still_locked(&broken2), "the failed removal claimed success");
+    }
+
+    /// The release is bounded: a host whose lock read outruns the budget is
+    /// reported as unknown (with the scoped remedy) instead of blocking the
+    /// cancel, and the reply does not claim the lock is gone.
+    ///
+    /// The budget is set **above** the preamble/gate/entry acquisition cost and
+    /// **below** the mock's per-SFTP-read delay, so the expiry is attributable
+    /// to the host fan-out itself rather than to lock-acquisition noise; the
+    /// elapsed assertion is tightened to match.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_unlock_is_bounded_and_says_so_on_expiry() {
+        // Every SFTP read costs 400ms; the release below gets 200ms.
+        let slow = MockConnection::new("host-slow")
+            .with_sftp_session_delay(Duration::from_millis(400))
+            .with_run_delay(Duration::from_secs(600));
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-slow", slow.clone())]).await;
+        let registry = Arc::new(register_all());
+
+        let ids = sess
+            .start_jobs(Arc::clone(&registry), "run", vec!["true".to_owned()])
+            .await
+            .expect("start_jobs succeeds");
+        await_locked(&slow, "host-slow").await;
+
+        let budget = Duration::from_millis(200);
+        let before = Instant::now();
+        let msg = sess
+            .job_cancel_with_budget(&ids[0], budget)
+            .await
+            .expect("cancel succeeds");
+        let elapsed = before.elapsed();
+
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            msg.contains(&format!("lock state unknown on {LOCK_RRID_A}")),
+            "an expired release must not be reported as done: {msg}"
+        );
+        assert!(msg.contains("list_locks -T <rrid>"), "got: {msg}");
+        assert!(!msg.contains("unlocked:"), "nothing was unlocked: {msg}");
+        // Grace + budget + slack. Loose enough not to flake, tight enough that
+        // waiting out even one 400ms host read would breach it.
+        assert!(
+            elapsed < CANCEL_GRACE + budget + Duration::from_millis(700),
+            "the release was not bounded by the budget: {elapsed:?}"
+        );
+        // And that is the truth: the lock really is still there.
+        assert!(!saw_unlock(&slow), "the lockfile removal was reached");
+        assert!(still_locked(&slow), "host-slow's lock is gone after all");
+    }
+
+    /// The release belongs to the *forced* arm only.
+    ///
+    /// The probe deliberately unwinds through the seam **without** unlocking, so
+    /// the surviving lock is unambiguous evidence that the abort-path release
+    /// did not run — the pin is "forced-only", not "the cooperative body cleaned
+    /// up". (A real cooperative flow owns its own unlock discipline; that is why
+    /// the cancel does not second-guess it.) The reply must also stay
+    /// byte-identical.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cooperative_cancel_reply_and_locks_are_untouched() {
+        let alpha = MockConnection::new("host-alpha");
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Seam));
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess.job_cancel(&job_id).await.expect("cancel succeeds");
+        assert_eq!(
+            msg,
+            format!("cancelled job {job_id}"),
+            "the cooperative reply is a pinned contract"
+        );
+        assert!(
+            !saw_unlock(&alpha),
+            "the cooperative arm must not run the abort-path release"
+        );
+        assert!(still_locked(&alpha));
+    }
+
+    // ---- ownership scoping: only locks this job's own group took (#405) ----- //
+
+    /// A same-process lock this group never took is left alone.
+    ///
+    /// The shape: a refhost shared with another loaded template (or another MCP
+    /// session in the same server) that is *live*-locked by its owner. Wire
+    /// ownership is per-PID, so the lock reads back as "mine" — a whole-group
+    /// `unlock()` would remove a sibling's hold mid-transaction and report it as
+    /// released. Scoping on what this group's own `Target` objects actually took
+    /// is what separates them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_leaves_a_same_process_lock_this_group_never_took() {
+        let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));
+        // Seeded with *our own* user+pid: exactly what a sibling template's live
+        // job leaves on a shared refhost.
+        let shared = MockConnection::new("shared-host")
+            .with_file(TARGET_LOCK_PATH, ours_lockfile())
+            .with_run_delay(Duration::from_secs(600));
+
+        let sess = session(Config::default());
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_A,
+            &[
+                ("host-alpha", alpha.clone()),
+                ("shared-host", shared.clone()),
+            ],
+        )
+        .await;
+        let registry = Arc::new(register_all());
+
+        // `run -t host-alpha`: this job locks only host-alpha.
+        let ids = sess
+            .start_jobs(
+                Arc::clone(&registry),
+                "run",
+                vec!["-t".to_owned(), "host-alpha".to_owned(), "true".to_owned()],
+            )
+            .await
+            .expect("start_jobs succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess.job_cancel(&ids[0]).await.expect("cancel succeeds");
+        assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");
+        assert!(
+            !msg.contains("shared-host"),
+            "the reply must not mention a host this job never locked: {msg}"
+        );
+        assert!(
+            !saw_unlock(&shared),
+            "the cancel removed a live lock this group never took"
+        );
+        assert!(still_locked(&shared), "the sibling's lock is gone");
+    }
+
+    /// Hosts of the job's own group that it did not lock are untouched and
+    /// unmentioned — the `run -t <subset>` case.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_only_touches_the_hosts_the_job_locked() {
+        let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));
+        let beta = MockConnection::new("host-beta").with_run_delay(Duration::from_secs(600));
+
+        let sess = session(Config::default());
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_A,
+            &[("host-alpha", alpha.clone()), ("host-beta", beta.clone())],
+        )
+        .await;
+        let registry = Arc::new(register_all());
+
+        let ids = sess
+            .start_jobs(
+                Arc::clone(&registry),
+                "run",
+                vec!["-t".to_owned(), "host-alpha".to_owned(), "true".to_owned()],
+            )
+            .await
+            .expect("start_jobs succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess.job_cancel(&ids[0]).await.expect("cancel succeeds");
+        assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");
+        // host-beta was never locked, so it is neither acted on nor claimed as
+        // "unlocked" — a whole-group release would report it either way.
+        assert!(
+            !msg.contains("host-beta"),
+            "a host the job never locked must not appear in the verdict: {msg}"
+        );
+        assert!(!saw_unlock(&beta), "host-beta was acted on");
+    }
+
+    /// An operator's `lock <comment>` reservation survives the cancel.
+    ///
+    /// A non-empty comment marks an **exclusive** hold — the PI assignment lock
+    /// the session re-applies on every connect and after every reboot, or a
+    /// deliberate manual reservation. Operation flows all stamp an empty
+    /// comment, so the cancel releases those and leaves the reservation alone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_leaves_a_comment_marked_reservation_alone() {
+        let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));
+        let reserved =
+            MockConnection::new("host-reserved").with_run_delay(Duration::from_secs(600));
+
+        let sess = session(Config::default());
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_A,
+            &[
+                ("host-alpha", alpha.clone()),
+                ("host-reserved", reserved.clone()),
+            ],
+        )
+        .await;
+        let registry = Arc::new(register_all());
+
+        // The real `lock` command: whole-group, carrying a comment (`-c` is what
+        // its own docs call "keeps the lock effective against other sessions").
+        sess.run_command(
+            &registry,
+            "lock",
+            &["-c".to_owned(), "reserved-for-me".to_owned()],
+        )
+        .await
+        .expect("lock succeeds");
+        assert!(still_locked(&reserved), "the reservation was not taken");
+        assert!(still_locked(&alpha), "the reservation was not taken");
+
+        // The job re-stamps host-alpha's lock with an empty (operation) comment
+        // and hangs; host-reserved keeps the marked reservation. Anchor on the
+        // *re-stamp*: the exclusive create already happened above.
+        let ids = sess
+            .start_jobs(
+                Arc::clone(&registry),
+                "run",
+                vec!["-t".to_owned(), "host-alpha".to_owned(), "true".to_owned()],
+            )
+            .await
+            .expect("start_jobs succeeds");
+        await_relocked(&alpha, "host-alpha").await;
+
+        let msg = sess.job_cancel(&ids[0]).await.expect("cancel succeeds");
+        assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");
+        assert!(
+            !msg.contains("host-reserved"),
+            "a comment-marked reservation must not appear in the verdict: {msg}"
+        );
+        assert!(
+            still_locked(&reserved),
+            "the cancel removed an operator's reservation"
+        );
+    }
+
+    /// A client-supplied `-T` narrowing to one template is recorded as that
+    /// template, so the cancel never reaches for the other loaded one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_honours_a_client_supplied_template_scope() {
+        let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));
+        let beta = MockConnection::new("host-beta");
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        load_with_hosts(&sess, LOCK_RRID_B, &[("host-beta", beta.clone())]).await;
+        let registry = Arc::new(register_all());
+
+        let ids = sess
+            .start_jobs(
+                Arc::clone(&registry),
+                "run",
+                vec!["-T".to_owned(), LOCK_RRID_A.to_owned(), "true".to_owned()],
+            )
+            .await
+            .expect("start_jobs succeeds");
+        assert_eq!(ids.len(), 1, "-T narrows to one job: {ids:?}");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess.job_cancel(&ids[0]).await.expect("cancel succeeds");
+        assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");
+        assert!(
+            !msg.contains(LOCK_RRID_B) && !msg.contains("host-beta"),
+            "the unnamed template must not be in scope: {msg}"
+        );
+        assert!(!saw_unlock(&beta), "the other template was acted on");
+    }
+
+    /// The lingering active guard is dropped even when the release never gets
+    /// to run a single template.
+    ///
+    /// The guard is dropped in a bounded preamble, before any gate or per-RRID
+    /// wait, precisely so a busy gate cannot leave the session poisoned. Here
+    /// the per-template pass is blocked on the template's own dispatch lock for
+    /// the whole budget, so a release that only dropped the guard *inside* the
+    /// per-template body would never drop it at all — and every later scoped
+    /// dispatch on that template would silently run against the null report,
+    /// including the `list_locks` the reply recommends.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_clears_the_active_guard_even_when_the_release_cannot_run() {
+        let alpha = MockConnection::new("host-alpha");
+        let beta = MockConnection::new("host-beta");
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        load_with_hosts(&sess, LOCK_RRID_B, &[("host-beta", beta.clone())]).await;
+
+        // Unscoped fan-out over two templates: the exclusive, inline dispatch
+        // path, which leaves its active guard on the canonical session when
+        // aborted. It parks on A, so the guard is A's.
+        let registry = registry_with_probe(LockAndPark::parking_on(Park::Forever, LOCK_RRID_A));
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        // Block *both* templates' dispatch locks for the whole cancel, so the
+        // per-template body is never entered for either. Taken directly (not via
+        // `scoped_lock`, which would first queue on the gate behind the job's
+        // exclusive hold), so the holds are established before the cancel with
+        // no ordering race.
+        let blocker_a = sess.lock_for(LOCK_RRID_A).lock_owned().await;
+        let blocker_b = sess.lock_for(LOCK_RRID_B).lock_owned().await;
+
+        let budget = Duration::from_millis(200);
+        let before = Instant::now();
+        let msg = sess
+            .job_cancel_with_budget(&job_id, budget)
+            .await
+            .expect("cancel succeeds");
+        let elapsed = before.elapsed();
+
+        assert!(
+            msg.contains(&format!("lock state unknown on {LOCK_RRID_A}")),
+            "the blocked template must be reported unknown: {msg}"
+        );
+        assert!(
+            elapsed < CANCEL_GRACE + budget + Duration::from_millis(700),
+            "the blocked release was not bounded: {elapsed:?}"
+        );
+        // Truthful: nothing was released.
+        assert!(!saw_unlock(&alpha), "host-alpha was unlocked after all");
+
+        drop(blocker_a);
+        drop(blocker_b);
+        let out = sess
+            .run_command(
+                &registry,
+                "list_hosts",
+                &["-T".to_owned(), LOCK_RRID_A.to_owned()],
+            )
+            .await
+            .expect("list_hosts after a forced abort succeeds");
+        assert!(
+            out.contains("host-alpha"),
+            "the active guard outlived the cancel, so the session reads the null \
+             report: {out:?}"
+        );
+    }
+
+    /// The budget covers the preamble too: a session mutex held by a live
+    /// exclusive dispatch or a `get`/`put` transfer must not make `job_cancel`
+    /// block for that operation's whole duration.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_does_not_block_on_a_busy_session() {
+        let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        let registry = Arc::new(register_all());
+
+        // The scoped dispatch path touches the canonical session only briefly
+        // (to fork), so the test can hold the session mutex while the job is
+        // parked mid host-operation.
+        let ids = sess
+            .start_jobs(Arc::clone(&registry), "run", vec!["true".to_owned()])
+            .await
+            .expect("start_jobs succeeds");
+        await_locked(&alpha, "host-alpha").await;
+        let busy = sess.session().lock().await;
+
+        let budget = Duration::from_millis(200);
+        let before = Instant::now();
+        // An unbounded preamble would wait for `busy` forever, so bound the call
+        // itself: the failure must read as "job_cancel blocked", not as a hung
+        // test.
+        let msg = tokio::time::timeout(
+            Duration::from_secs(20),
+            sess.job_cancel_with_budget(&ids[0], budget),
+        )
+        .await
+        .expect("job_cancel must not block on the session mutex")
+        .expect("cancel succeeds");
+        let elapsed = before.elapsed();
+
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            msg.contains("the session was busy, so the release never ran"),
+            "a skipped release must say so: {msg}"
+        );
+        assert!(!msg.contains("unlocked:"), "nothing was unlocked: {msg}");
+        assert!(
+            elapsed < CANCEL_GRACE + budget + Duration::from_millis(700),
+            "the preamble was outside the budget: {elapsed:?}"
+        );
+        assert!(still_locked(&alpha), "host-alpha's lock is gone after all");
+        drop(busy);
+    }
+
+    /// A pass that releases one template and runs out of budget on the next
+    /// reports both facts — the reply is not all-or-nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn forced_cancel_reports_released_and_expired_templates_together() {
+        let quick = MockConnection::new("host-quick");
+        let slow =
+            MockConnection::new("host-slow").with_sftp_session_delay(Duration::from_millis(400));
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-quick", quick.clone())]).await;
+        load_with_hosts(&sess, LOCK_RRID_B, &[("host-slow", slow.clone())]).await;
+
+        // `start_job` records no scope, so the release falls back to both
+        // loaded templates and walks them in registry order. The probe parks
+        // only on B, so A locks and returns and *both* groups end up holding.
+        let registry = registry_with_probe(LockAndPark::parking_on(Park::Forever, LOCK_RRID_B));
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&quick, "host-quick").await;
+        await_locked(&slow, "host-slow").await;
+
+        let msg = sess
+            .job_cancel_with_budget(&job_id, Duration::from_millis(200))
+            .await
+            .expect("cancel succeeds");
+        assert!(
+            msg.contains("unlocked: host-quick"),
+            "the template that finished must be reported: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("lock state unknown on {LOCK_RRID_B}")),
+            "the template that expired must be reported: {msg}"
+        );
+        assert!(still_locked(&slow), "host-slow's lock is gone after all");
+    }
+
+    /// A job scoped to a template that is no longer loaded has nothing of ours
+    /// to release, and a release with nothing to report leaves the forced reply
+    /// byte-identical to what it has always been.
+    #[tokio::test]
+    async fn forced_cancel_with_nothing_to_release_keeps_the_reply_unchanged() {
+        let sess = session(Config::default());
+        // A worker that never settles, recorded against a template the session
+        // never loaded.
+        let job = Arc::new(StdMutex::new(Job {
+            id: "probe-1".to_owned(),
+            command: "probe".to_owned(),
+            rrids: vec!["SUSE:Maintenance:9:9".to_owned()],
+            state: JobState::Running,
+            started: Instant::now(),
+            finished: None,
+            result: None,
+            error: None,
+            exit_code: None,
+            handle: Some(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+            })),
+            cancel: CancellationToken::new(),
+        }));
+        sess.jobs.lock().unwrap().insert("probe-1".to_owned(), job);
+
+        let msg = sess.job_cancel("probe-1").await.expect("cancel succeeds");
+        assert_eq!(
+            msg,
+            format!(
+                "cancelled job probe-1 (forced abort after {}s grace; a host operation \
+                 already in flight may still finish on the host)",
+                CANCEL_GRACE.as_secs()
+            ),
+            "a silent release must not perturb the pinned forced reply"
+        );
     }
 
     // ---- progress heartbeats ----------------------------------------------- //
