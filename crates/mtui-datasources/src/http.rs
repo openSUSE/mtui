@@ -12,9 +12,16 @@
 //!   preference into the effective [`VerifyPolicy`].
 //! - [`HttpClient`] builds one `reqwest::Client` with a fixed timeout + verify
 //!   posture. Verification is **on by default for every call site.**
-//! - `is_ssl_verification_error` / `ssl_verification_hint` give a short,
-//!   actionable message for the internal-CA hosts (openqa.suse.de,
-//!   dashboard.qam.suse.de, ...) instead of a raw transport error.
+//! - `is_ssl_verification_error` / `ssl_verification_hint` /
+//!   `ssl_error_detail` give a short, actionable message for the internal-CA
+//!   hosts (openqa.suse.de, dashboard.qam.suse.de, ...) instead of a raw
+//!   transport error.
+//! - URL redaction has three legs, in order of load-bearing-ness (#431): the
+//!   primary one is the strip at the [`HttpError`] conversion boundary, which
+//!   most call sites (teregen, the QEM dashboard) rely on and nothing else;
+//!   `sanitize_url` is for interpolating a request URL into a message as
+//!   context; and `root_cause` reaches past an error layer whose own `Display`
+//!   may embed a URL, for a detail line.
 //!
 //! ## Client construction and verify precedence
 //!
@@ -315,7 +322,9 @@ fn load_ca_bundle(path: &Path) -> Result<Vec<reqwest::Certificate>> {
         path: path.display().to_string(),
         source,
     })?;
-    reqwest::Certificate::from_pem_bundle(&pem).map_err(HttpError::Request)
+    // `HttpError::from`, never the bare variant: the URL strip lives in the
+    // conversion (see the variant's invariant).
+    reqwest::Certificate::from_pem_bundle(&pem).map_err(HttpError::from)
 }
 
 /// Return `true` if `err` is (or was caused by) a TLS certificate-verification
@@ -401,6 +410,50 @@ pub(crate) fn sanitize_url(url: &str) -> String {
 /// If `s` contains an `@`, return the slice after the last one; else `None`.
 fn rest_after_at(s: &str) -> Option<&str> {
     s.rsplit_once('@').map(|(_, after)| after)
+}
+
+/// The DEBUG-level detail line accompanying [`ssl_verification_hint`]: the
+/// deepest cause of `e`, or `e`'s own `Display` when it has no source.
+///
+/// Taking [`HttpError`] rather than `&dyn Error` is the point: it makes "the
+/// error has already crossed the conversion boundary" a compile-time
+/// precondition, so neither branch can render a URL (#431). `HttpError::Request`
+/// is `#[error(transparent)]`, so `source()` forwards past reqwest's own
+/// `Display` straight to the rustls/IO cause — which is also the actionable
+/// part, reqwest's `Display` saying only "error sending request".
+#[must_use]
+pub(crate) fn ssl_error_detail(e: &HttpError) -> String {
+    root_cause(e).unwrap_or_else(|| e.to_string())
+}
+
+/// Walks `e`'s source chain to the deepest cause, deliberately skipping `e`
+/// itself (whose `Display` may embed a URL — reqwest's appends the request URL,
+/// `ruoqa::Error::Connection`'s renders a redacted one), and returns it through
+/// [`sanitize_url`] as a backstop.
+///
+/// That backstop handles a **single** embedded URL only: `sanitize_url` parses
+/// one `scheme://[userinfo@]host` and silently no-ops on a second one in the
+/// same string. It is a safety net for an unexpected layer, not a substitute
+/// for stripping at the boundary.
+///
+/// Returns `None` if `e` carries no source at all, so callers fall back to the
+/// outer error's own `Display`. A self-referential source chain is bounded like
+/// [`is_ssl_verification_error`]'s walk, though not identically: that one
+/// inspects at most 65 links, this one advances at most 66 times past the first
+/// source. Either bound only has to terminate. (The openQA copy this was hoisted
+/// from had no bound at all.)
+#[must_use]
+pub(crate) fn root_cause(e: &dyn std::error::Error) -> Option<String> {
+    let mut deepest = e.source()?;
+    let mut seen = 0usize;
+    while let Some(next) = deepest.source() {
+        if seen > 64 {
+            break;
+        }
+        seen += 1;
+        deepest = next;
+    }
+    Some(sanitize_url(&deepest.to_string()))
 }
 
 /// The system's CA bundle path, or `None` when none is found.
@@ -666,6 +719,111 @@ mod tests {
         let out = sanitize_url("alice:s3cret@host.example/x");
         assert_eq!(out, "***@host.example/x");
         assert!(!out.contains("s3cret"));
+    }
+
+    #[derive(Debug)]
+    struct Leaf(&'static str);
+    impl std::fmt::Display for Leaf {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+    impl std::error::Error for Leaf {}
+
+    #[derive(Debug)]
+    struct Wrapper {
+        source: Box<dyn std::error::Error>,
+    }
+    impl std::fmt::Display for Wrapper {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapper")
+        }
+    }
+    impl std::error::Error for Wrapper {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(self.source.as_ref())
+        }
+    }
+
+    /// Two-deep chain: `root_cause` must sanitize the deepest message.
+    /// Deleting the `sanitize_url` call in `root_cause` turns this red.
+    #[test]
+    fn root_cause_sanitizes_the_deepest_message() {
+        let e = Wrapper {
+            source: Box::new(Leaf("boom https://alice:s3cret@h/x")),
+        };
+        assert_eq!(root_cause(&e).as_deref(), Some("boom https://***@h/x"));
+    }
+
+    /// Three-deep chain: `root_cause` must return the *deepest* message, not
+    /// an intermediate one. Changing `root_cause` to stop at the first
+    /// `source()` instead of walking to the end turns this red.
+    #[test]
+    fn root_cause_returns_the_deepest_not_the_intermediate() {
+        let e = Wrapper {
+            source: Box::new(Wrapper {
+                source: Box::new(Leaf("deepest")),
+            }),
+        };
+        assert_eq!(root_cause(&e).as_deref(), Some("deepest"));
+    }
+
+    /// An error with no source at all yields `None`, so callers fall back to
+    /// the outer error's own (already-redacted) `Display`.
+    #[test]
+    fn root_cause_is_none_without_a_source() {
+        assert_eq!(root_cause(&Leaf("no source here")), None);
+    }
+
+    /// Driven by a *real* `HttpError` rather than a synthetic chain, because
+    /// the property under test is a property of the real one: `Request` is
+    /// `#[error(transparent)]`, so `source()` forwards past reqwest's own
+    /// `Display` — the layer that carries the URL — to the transport cause
+    /// underneath. Nothing listens on the loopback discard port (RFC 863).
+    #[tokio::test]
+    async fn ssl_error_detail_reports_the_transport_cause_without_a_url() {
+        let e: HttpError = reqwest::Client::new()
+            .get("http://127.0.0.1:9/x")
+            .send()
+            .await
+            .expect_err("connection refused")
+            .into();
+
+        let detail = ssl_error_detail(&e);
+        assert!(
+            !detail.contains(" for url ("),
+            "detail rendered reqwest's URL: {detail}"
+        );
+        // The recovered cause is the actionable half; `e`'s own Display is only
+        // "error sending request", which is why the walk exists at all.
+        assert!(
+            detail.to_lowercase().contains("connection refused"),
+            "detail lost the transport cause: {detail}"
+        );
+        assert_ne!(
+            detail,
+            e.to_string(),
+            "detail must reach past the outer error, not echo it"
+        );
+    }
+
+    /// A self-referential source chain must terminate rather than hang; the
+    /// hop guard bounds the walk as `is_ssl_verification_error`'s does.
+    #[test]
+    fn root_cause_terminates_on_a_cyclic_chain() {
+        #[derive(Debug)]
+        struct SelfRef;
+        impl std::fmt::Display for SelfRef {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "cycle")
+            }
+        }
+        impl std::error::Error for SelfRef {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&SelfRef)
+            }
+        }
+        assert_eq!(root_cause(&SelfRef).as_deref(), Some("cycle"));
     }
 
     /// [`HttpClient::openqa_transport`] must not follow a redirect: a
