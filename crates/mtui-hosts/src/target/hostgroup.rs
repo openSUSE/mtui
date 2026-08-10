@@ -43,6 +43,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{HostError, Result};
 
+use mtui_types::package::VersionCheck;
 use mtui_types::system::System;
 
 use super::actions::{self, Command, RunCommand};
@@ -908,14 +909,18 @@ impl HostsGroup {
     /// * **post** (`post == true`): record `current` as the package's `after`
     ///   version (leaving `before` as captured on the pre-pass).
     ///
-    /// and emit the four warnings:
+    /// and emit the warnings:
     ///
     /// * *too recent* — pre-update installed version is already `>=` the required
     ///   version,
     /// * *not updated* — `after == before` on the post-pass,
     /// * *below required* — post-update version is `<` the required version,
-    /// * *missing* — the package is not installed (`before` is `None`), collected
-    ///   and logged once per host.
+    /// * *missing* — the package's before check is
+    ///   [`VersionCheck::NotInstalled`] (a query ran and found it not
+    ///   installed), collected and logged once per host,
+    /// * *unchecked* — the before check is [`VersionCheck::NotChecked`] (the
+    ///   version query never answered for it), logged separately since it is a
+    ///   different operator action than a confirmed-missing package.
     ///
     /// The packages must already be [`seeded`](Target::set_packages) with their
     /// `required` versions.
@@ -970,20 +975,22 @@ impl HostsGroup {
             let hostname = target.hostname().to_owned();
 
             let mut not_installed: Vec<String> = Vec::new();
+            let mut unchecked: Vec<String> = Vec::new();
             for pkg in target.packages_mut() {
                 let required = pkg.required().cloned();
-                let current = pkg.current().cloned();
+                let current_check = pkg.current_check().clone();
                 if post {
-                    pkg.set_after_version(current.clone());
+                    pkg.set_after_check(current_check);
                 } else {
-                    pkg.set_before_version(current.clone());
+                    pkg.set_before_check(current_check);
                 }
                 let before = pkg.before().cloned();
                 let after = if post { pkg.after().cloned() } else { None };
 
-                match &before {
-                    None => not_installed.push(pkg.name.clone()),
-                    Some(before_v) => {
+                match pkg.before_check() {
+                    VersionCheck::NotInstalled => not_installed.push(pkg.name.clone()),
+                    VersionCheck::NotChecked => unchecked.push(pkg.name.clone()),
+                    VersionCheck::Installed(before_v) => {
                         if let Some(req) = &required
                             && before_v >= req
                         {
@@ -1019,6 +1026,12 @@ impl HostsGroup {
                 tracing::warn!(
                     host = %hostname, packages = %not_installed.join(", "),
                     "these packages are missing"
+                );
+            }
+            if !unchecked.is_empty() {
+                tracing::warn!(
+                    host = %hostname, packages = %unchecked.join(", "),
+                    "the version query never answered for these packages"
                 );
             }
         }
@@ -3092,6 +3105,27 @@ mod tests {
         let mut g = HostsGroup::new(vec![t], false);
 
         g.package_check(false).await;
+        let before_check = g.get("h1").unwrap().packages()[0].before_check().clone();
         assert!(g.get("h1").unwrap().packages()[0].before().is_none());
+        // #437: an rpm "is not installed" line is a real observation of
+        // absence, not the ambiguous "never checked" state.
+        assert_eq!(before_check, VersionCheck::NotInstalled);
+    }
+
+    /// #437: a package the version query never mentions at all must be
+    /// distinguished from one it reports absent.
+    #[tokio::test]
+    async fn package_check_marks_unqueried_package_as_unchecked() {
+        use mtui_types::package::Package;
+
+        let mut pkg = Package::new("baz");
+        pkg.set_required(Some("1.0-1")).unwrap();
+        let mut t = host_with_rpm_output("h1", "");
+        t.set_packages(vec![pkg]);
+        let mut g = HostsGroup::new(vec![t], false);
+
+        g.package_check(false).await;
+        let before_check = g.get("h1").unwrap().packages()[0].before_check().clone();
+        assert_eq!(before_check, VersionCheck::NotChecked);
     }
 }
