@@ -19,7 +19,7 @@ pub mod startup;
 
 pub use notification::notify_user;
 pub use prompt::MtuiPrompt;
-pub use repl::Repl;
+pub use repl::{Repl, ReplExit};
 pub use startup::seed_session;
 
 use std::io::Write;

@@ -42,6 +42,9 @@ mtui-types.workspace = true
 # startup seeding path (before the REPL loop begins).
 mtui-testreport.workspace = true
 tokio.workspace = true
+# `CancellationToken`: the REPL installs a fresh one per dispatched line so a
+# mid-command Ctrl-C cancels *that* command's flow (and only it).
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 # Optional desktop-notification backend (feature `notify`); a headless no-op

@@ -91,5 +91,16 @@ fn main() -> anyhow::Result<()> {
     let session = Arc::new(Mutex::new(session));
     let mut repl = Repl::new(registry, session);
 
-    runtime.block_on(repl.run())
+    let ending = runtime.block_on(repl.run())?;
+    // Drop the editor before honouring a force-quit: reedline persists its
+    // `FileBackedHistory` when it is dropped, and `std::process::exit` runs no
+    // destructors — exiting straight from the loop would throw the session's
+    // command history away on every double Ctrl-C. The exit itself stays here,
+    // thin and untestable, while the *decision* is made (and tested) in the
+    // loop.
+    drop(repl);
+    if let Some(code) = ending.exit_code() {
+        std::process::exit(code);
+    }
+    Ok(())
 }
