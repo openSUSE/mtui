@@ -34,7 +34,7 @@ use std::time::Duration;
 use mtui_config::Config;
 use serde_json::{Value, json};
 
-use crate::error::TeReGenError;
+use crate::error::{HttpError, TeReGenError};
 use crate::http::{
     HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, resolve_verify,
 };
@@ -84,8 +84,8 @@ impl TeReGen {
     ///
     /// # Errors
     ///
-    /// Returns [`HttpError`](crate::error::HttpError) if the shared HTTP client
-    /// cannot be built (e.g. a configured CA bundle cannot be read).
+    /// Returns [`HttpError`] if the shared HTTP client cannot be built (e.g. a
+    /// configured CA bundle cannot be read).
     pub fn new(config: &Config, apiurl: &str) -> crate::Result<Self> {
         let verify: VerifyPolicy = resolve_verify(
             VerifyPolicy::Default(true),
@@ -123,17 +123,21 @@ impl TeReGen {
             url.push_str(&qs);
         }
         let request = self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1);
+        // Both arms convert before logging: a raw `reqwest::Error` renders the
+        // request URL verbatim, and `error_for_status`'s carries the
+        // *redirect-followed* URL, which can hold credentials a `Location`
+        // header put back (#431).
         let response = match request.send().await {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("TeReGen GET {path} failed: {e}");
+                tracing::debug!("TeReGen GET {path} failed: {}", HttpError::from(e));
                 return None;
             }
         };
         let response = match response.error_for_status() {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("TeReGen GET {path} failed: {e}");
+                tracing::debug!("TeReGen GET {path} failed: {}", HttpError::from(e));
                 return None;
             }
         };
@@ -156,9 +160,11 @@ impl TeReGen {
     /// GET `path`, surfacing failures as `Err`.
     ///
     /// The fallible sibling of [`get`](Self::get): a transport failure, a
-    /// non-2xx status, or invalid JSON returns [`TeReGenError::Fetch`] (with a
-    /// URL-free description) instead of being folded to `None`, so a caller can
-    /// distinguish "unreachable" from a genuinely-empty successful response.
+    /// non-2xx status, or invalid JSON returns [`TeReGenError::Fetch`] instead
+    /// of being folded to `None`, so a caller can distinguish "unreachable"
+    /// from a genuinely-empty successful response. The description is URL-free
+    /// because every `reqwest::Error` is converted to [`HttpError`] — which
+    /// strips the URL — before it is stringified (#431).
     async fn try_get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, TeReGenError> {
         let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         let qs = build_query_string(query);
@@ -168,10 +174,12 @@ impl TeReGen {
         }
         let request = self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1);
         let response = request.send().await.map_err(|e| {
+            let e = HttpError::from(e);
             tracing::debug!("TeReGen GET {path} failed: {e}");
             TeReGenError::Fetch(e.to_string())
         })?;
         let response = response.error_for_status().map_err(|e| {
+            let e = HttpError::from(e);
             tracing::debug!("TeReGen GET {path} failed: {e}");
             TeReGenError::Fetch(e.to_string())
         })?;
@@ -291,7 +299,12 @@ impl TeReGen {
         {
             Ok(r) => r,
             Err(e) => {
-                tracing::debug!("TeReGen POST regenerate {rrid} failed: {e}");
+                // Convert before logging: reqwest's Display appends the request
+                // URL (#431).
+                tracing::debug!(
+                    "TeReGen POST regenerate {rrid} failed: {}",
+                    HttpError::from(e)
+                );
                 return None;
             }
         };
@@ -482,9 +495,97 @@ mod tests {
 
     const RRID: &str = "SUSE:SLFO:1.2:5702";
 
+    /// A base URL where nothing listens, so a request fails inside `send`
+    /// rather than on a status — the arm wiremock cannot reach.
+    const CLOSED_PORT: &str = "http://127.0.0.1:1";
+
     fn client(server: &MockServer) -> TeReGen {
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
         TeReGen::with_client(http, &server.uri())
+    }
+
+    /// A client pointed at [`CLOSED_PORT`].
+    fn unreachable_client() -> TeReGen {
+        let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
+        TeReGen::with_client(http, CLOSED_PORT)
+    }
+
+    thread_local! {
+        /// The active capture buffer for this thread, if any. Events on a
+        /// thread with no active capture are dropped.
+        static SINK: std::cell::RefCell<Option<Vec<String>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Install — once per test binary — a permissive **global** subscriber that
+    /// forwards every event into the calling thread's [`SINK`].
+    ///
+    /// Deliberately global rather than `tracing::subscriber::set_default`'s
+    /// thread-local: `tracing` caches callsite *interest* process-wide, so a
+    /// callsite first reached from a thread with no subscriber is cached as
+    /// `Interest::never()` and stays silent for every later capture. With
+    /// tests running in parallel that is a race — it made
+    /// `regenerate_none_when_unreachable` fail ~30% of runs with "no line in
+    /// capture" while the code under test was correct. A subscriber that is
+    /// always installed keeps interest pinned to `always`; scoping moves to the
+    /// thread-local sink instead.
+    fn install_capture_subscriber() {
+        use std::fmt::Write as _;
+        use std::sync::OnceLock;
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::Registry;
+
+        struct CaptureLayer;
+        struct MessageVisitor(String);
+        impl Visit for MessageVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    let _ = write!(self.0, "{value:?}");
+                }
+            }
+        }
+        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                SINK.with(|s| {
+                    if let Some(buf) = s.borrow_mut().as_mut() {
+                        let mut v = MessageVisitor(String::new());
+                        event.record(&mut v);
+                        buf.push(v.0);
+                    }
+                });
+            }
+        }
+
+        static ONCE: OnceLock<()> = OnceLock::new();
+        ONCE.get_or_init(|| {
+            let _ = tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
+        });
+    }
+
+    /// Capture the `message` field of every tracing event emitted by `f` on
+    /// this thread. See [`install_capture_subscriber`] for why the subscriber
+    /// is global and only the sink is scoped.
+    async fn capture_logs<F, Fut>(f: F) -> String
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        install_capture_subscriber();
+        SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+        f().await;
+        SINK.with(|s| s.borrow_mut().take())
+            .unwrap_or_default()
+            .join("\n")
+    }
+
+    /// The `TeReGen GET … failed` line matching `needle`, or a panic naming the
+    /// whole capture — so an assertion can never pass because the line the test
+    /// is about was never emitted.
+    fn failure_line<'a>(logs: &'a str, needle: &str) -> &'a str {
+        logs.lines()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} line in capture: {logs}"))
     }
 
     // --- reads: best-effort JSON decode ---
@@ -509,6 +610,26 @@ mod tests {
             .mount(&server)
             .await;
         assert_eq!(client(&server).info(RRID).await, None);
+    }
+
+    /// A wiremock server can only produce a *status*, so `get`'s `send` arm is
+    /// otherwise never executed. Drives it, and pins that the log line it emits
+    /// carries no reqwest URL (#431).
+    #[tokio::test]
+    async fn get_swallows_transport_failure_without_logging_a_url() {
+        let mut out = Some(json!({}));
+        let logs = capture_logs(|| async {
+            out = unreachable_client().info(RRID).await;
+        })
+        .await;
+        assert_eq!(out, None);
+
+        let line = failure_line(&logs, "TeReGen GET");
+        assert!(!line.contains(" for url ("), "log rendered the URL: {line}");
+        assert!(
+            line.contains("error sending request"),
+            "log lost the failure kind: {line}"
+        );
     }
 
     #[tokio::test]
@@ -748,8 +869,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn updates_errs_on_transport_failure() {
-        // A non-2xx status surfaces as Err, distinct from an empty queue.
+    async fn updates_errs_on_error_status() {
+        // A non-2xx status surfaces as Err, distinct from an empty queue. This
+        // is `try_get`'s `error_for_status` arm — the transport arm is a
+        // separate case below, since a mock server cannot refuse a connection.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -761,6 +884,31 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, TeReGenError::Fetch(_)));
+    }
+
+    /// `try_get`'s `send` arm: both the log line and the `Fetch` string it
+    /// bakes must be free of reqwest's URL (#431).
+    #[tokio::test]
+    async fn updates_errs_on_transport_failure_without_a_url() {
+        let mut err = None;
+        let logs = capture_logs(|| async {
+            err = unreachable_client()
+                .updates(&UpdatesQuery::default())
+                .await
+                .err();
+        })
+        .await;
+
+        let Some(TeReGenError::Fetch(msg)) = &err else {
+            panic!("expected TeReGenError::Fetch, got {err:?}");
+        };
+        assert!(!msg.contains(" for url ("), "error rendered the URL: {msg}");
+        assert!(
+            msg.contains("error sending request"),
+            "error lost the failure kind: {msg}"
+        );
+        let line = failure_line(&logs, "TeReGen GET");
+        assert!(!line.contains(" for url ("), "log rendered the URL: {line}");
     }
 
     #[tokio::test]
@@ -847,10 +995,23 @@ mod tests {
     #[tokio::test]
     async fn regenerate_none_when_unreachable() {
         // No server: point the client at a closed port so the POST fails to
-        // connect, mapping a connection error to None.
-        let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
-        let c = TeReGen::with_client(http, "http://127.0.0.1:1");
-        assert_eq!(c.regenerate(RRID, false, false).await, None);
+        // connect, mapping a connection error to None. The POST send arm is
+        // reachable no other way — every other `regenerate` test drives a
+        // status, not a transport failure.
+        let mut out = Some(json!({}));
+        let logs = capture_logs(|| async {
+            out = unreachable_client().regenerate(RRID, false, false).await;
+        })
+        .await;
+        assert_eq!(out, None);
+
+        // #431: the line must not carry reqwest's ` for url (…)`.
+        let line = failure_line(&logs, "POST regenerate");
+        assert!(!line.contains(" for url ("), "log rendered the URL: {line}");
+        assert!(
+            line.contains("error sending request"),
+            "log lost the failure kind: {line}"
+        );
     }
 
     // --- wait_for_template ---

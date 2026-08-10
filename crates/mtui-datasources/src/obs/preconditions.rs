@@ -16,6 +16,7 @@ use regex::Regex;
 
 use mtui_types::RequestReviewID;
 
+use crate::error::HttpError;
 use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, sanitize_url};
 
 /// Capture the whole trimmed `SUMMARY:` value, not just the first token, so a
@@ -62,7 +63,12 @@ pub(crate) async fn fetch_testreport_log(
     let response = match client.inner().get(&url).send().await {
         Ok(response) => response,
         Err(e) => {
-            tracing::error!("could not fetch testreport {safe_url}: {e}");
+            // Convert first: a raw `reqwest::Error` would append the *un*safe
+            // URL right next to the sanitized one (#431).
+            tracing::error!(
+                "could not fetch testreport {safe_url}: {}",
+                HttpError::from(e)
+            );
             return None;
         }
     };

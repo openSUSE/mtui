@@ -7,6 +7,7 @@
 //! sequence of differing responses to the same endpoint is expressed with
 //! `expect`-scoped mounts or by matching on the request body.
 
+use super::log_capture::capture_logs;
 use mtui_datasources::slack::Slack;
 use mtui_datasources::{HttpClient, SlackError, VerifyPolicy};
 use serde_json::json;
@@ -362,4 +363,39 @@ async fn non_json_body_is_a_failed_call_not_a_panic() {
         slack_for(&server).auth_test().await,
         Err(SlackError::FailedCall(_))
     ));
+}
+
+/// #431: the transport arm must not render the raw `reqwest::Error`, whose
+/// `Display` appends the unredacted request URL (` for url (…)`); the line
+/// carries mtui's own sanitized URL instead.
+///
+/// A credentialed base cannot be driven here: `is_token_safe_url` rejects
+/// userinfo at construction, so for Slack the enforceable invariant is URL
+/// disclosure, not credential disclosure.
+#[tokio::test]
+async fn transport_failure_log_carries_no_reqwest_url() {
+    // Loopback discard port (RFC 863): accepted by the token-safety guard, and
+    // nothing is listening, so the request fails inside `send`.
+    let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
+    let client = Slack::with_client(http, "xoxb-test".to_owned(), "http://127.0.0.1:9")
+        .expect("slack client builds");
+
+    let logs = capture_logs(|| async {
+        client.auth_test().await.expect_err("connection refused");
+    })
+    .await;
+
+    // Anti-vacuity: this line only exists on the transport arm.
+    let failure = logs
+        .lines()
+        .find(|l| l.starts_with("API call to Slack"))
+        .unwrap_or_else(|| panic!("transport arm never ran: {logs}"));
+    assert!(
+        !failure.contains(" for url ("),
+        "log rendered reqwest's URL: {failure}"
+    );
+    assert!(
+        failure.contains("127.0.0.1:9"),
+        "log lost its URL context: {failure}"
+    );
 }

@@ -102,9 +102,10 @@ impl QemDashboardClient {
     ///
     /// The fallible sibling of [`get`](Self::get): a transport error, a non-2xx
     /// status, or a malformed JSON body returns [`QemDashboardError::Fetch`]
-    /// (with a URL-free description) instead of being folded to `None`, so a
-    /// caller can distinguish "unreachable" from "empty". A valid-but-`null`
-    /// body is `Ok(None)`.
+    /// instead of being folded to `None`, so a caller can distinguish
+    /// "unreachable" from "empty". A valid-but-`null` body is `Ok(None)`. The
+    /// description is URL-free because the URL is stripped where the
+    /// `reqwest::Error` becomes an [`HttpError`](crate::HttpError) (#431).
     async fn try_get(&self, path: &str) -> Result<Option<Value>, QemDashboardError> {
         let url = format!("{}/{}", self.apiurl, path.trim_start_matches('/'));
         let bytes = self
