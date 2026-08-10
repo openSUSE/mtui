@@ -1368,8 +1368,10 @@ async fn downgrade_verdict(targets: &mut HostsGroup) -> BTreeMap<String, Vec<Str
             // "checked, not installed", or a standalone downgrade (no prior
             // update) exports "is not installed" for a slot nobody looked at.
             pkg.set_before_check(pkg.after_check().clone());
-            let current = pkg.current().cloned();
-            pkg.set_after_version(current);
+            // #437: same for `current` -> `after` — a host the re-query never
+            // answered for must not land in `after` as "checked, not
+            // installed" either.
+            pkg.set_after_check(pkg.current_check().clone());
             if let (Some(current), Some(required)) = (pkg.current(), pkg.required())
                 && current >= required
             {
@@ -2671,6 +2673,28 @@ mod tests {
             "an unchecked after slot must not rotate in as an observation"
         );
         assert_eq!(p.after().map(ToString::to_string).as_deref(), Some("0.9-1"));
+    }
+
+    /// #437: a host the re-query never answers about for a package must
+    /// rotate `current` into `after` as `NotChecked`, not the ambiguous
+    /// "checked, not installed" that a plain-`Option` rotation would produce.
+    #[tokio::test]
+    async fn downgrade_verdict_rotation_keeps_an_unqueried_current_unchecked() {
+        // Empty stdout: the mock rpm query never mentions "pkg-a" at all.
+        let (mut t, _h) = sles_target("h1", "");
+        let mut pkg = mtui_types::package::Package::new("pkg-a");
+        pkg.set_required(Some("1.5-1")).unwrap();
+        t.set_packages(vec![pkg]);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let _ = downgrade_verdict(&mut group).await;
+
+        let p = &group.get("h1").unwrap().packages()[0];
+        assert_eq!(
+            p.after_check(),
+            &VersionCheck::NotChecked,
+            "an unqueried current must not rotate in as an observation"
+        );
     }
 
     #[tokio::test]
