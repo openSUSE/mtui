@@ -18,7 +18,7 @@ use std::sync::LazyLock;
 use mtui_datasources::OpenQAOverviewResult;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_types::hostlog::HostLog;
-use mtui_types::package::Package;
+use mtui_types::package::{Package, VersionCheck};
 use regex::Regex;
 
 use super::base::{ExportContext, OverwritePrompt};
@@ -260,17 +260,19 @@ impl ManualExport {
 
                 for package in &host.packages {
                     let name = &package.name;
-                    let (version, observed) = match state {
-                        "before" => (package.before(), package.before_observed()),
-                        _ => (package.after(), package.after_observed()),
+                    let check = match state {
+                        "before" => package.before_check(),
+                        _ => package.after_check(),
                     };
-                    // #396: `None` never-observed must not become the positive
-                    // claim "is not installed" — only an actual observation of
-                    // absence may say that.
-                    let new_line = match (version, observed) {
-                        (Some(v), _) => format!("\t{name}-{v}\n"),
-                        (None, true) => format!("\tpackage {name} is not installed\n"),
-                        (None, false) => {
+                    // #396: an unchecked slot must not become the positive
+                    // claim "is not installed" — only a check that ran and
+                    // found nothing may say that.
+                    let new_line = match check {
+                        VersionCheck::Installed(v) => format!("\t{name}-{v}\n"),
+                        VersionCheck::NotInstalled => {
+                            format!("\tpackage {name} is not installed\n")
+                        }
+                        VersionCheck::NotChecked => {
                             unverified = true;
                             format!("\tpackage {name}: not checked (no version data recorded)\n")
                         }
