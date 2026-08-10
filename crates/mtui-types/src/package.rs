@@ -8,11 +8,12 @@
 //!
 //! Each version field is stored as a single typed representation, with
 //! fallible setters that parse a `&str` rather than silently storing an
-//! unparsed string. `before` and `after` are [`VersionCheck`]s, not
-//! `Option<`[`RPMVersion`]`>`: those two are *measured* on a target, so they
-//! must be able to say "checked, not installed" and "never checked" apart
-//! (#396). `required` (declared by the update metadata) and `current` stay
-//! plain options.
+//! unparsed string. `before`, `after` and `current` are all [`VersionCheck`]s,
+//! not `Option<`[`RPMVersion`]`>`: all three are *measured* on a target, so
+//! they must be able to say "checked, not installed" and "never checked" apart
+//! (#396, #437 — a host the version query never reached must not read the
+//! same as one it confirmed the package absent on). `required` (declared by
+//! the update metadata, never measured) stays a plain option.
 //!
 //! A `Package` hashes and compares **by name only**, so it can live in a
 //! name-keyed set regardless of its version fields.
@@ -30,7 +31,7 @@ pub struct Package {
     before: VersionCheck,
     after: VersionCheck,
     required: Option<RPMVersion>,
-    current: Option<RPMVersion>,
+    current: VersionCheck,
 }
 
 /// The outcome of checking one of a package's versions on a target.
@@ -90,7 +91,7 @@ impl Package {
             before: VersionCheck::NotChecked,
             after: VersionCheck::NotChecked,
             required: None,
-            current: None,
+            current: VersionCheck::NotChecked,
         }
     }
 
@@ -130,9 +131,18 @@ impl Package {
     }
 
     /// The version currently installed on a target, if known.
+    ///
+    /// `None` covers both "checked, not installed" and "never checked" — use
+    /// [`current_check`](Package::current_check) when the difference matters.
     #[must_use]
     pub fn current(&self) -> Option<&RPMVersion> {
-        self.current.as_ref()
+        self.current.version()
+    }
+
+    /// The current-version check, including whether it ran at all.
+    #[must_use]
+    pub fn current_check(&self) -> &VersionCheck {
+        &self.current
     }
 
     /// Sets the [`before`](Package::before) version from an optional string,
@@ -191,9 +201,17 @@ impl Package {
         self.after = check;
     }
 
-    /// Sets the [`current`](Package::current) version directly.
+    /// Sets the [`current`](Package::current) version directly, recording a
+    /// completed check — `None` is *observed absent*, not *never checked*.
     pub fn set_current_version(&mut self, ver: Option<RPMVersion>) {
-        self.current = ver;
+        self.current = ver.into();
+    }
+
+    /// Sets the [`current`](Package::current) check outcome directly,
+    /// including [`NotChecked`](VersionCheck::NotChecked) — the version
+    /// query never having answered for this package at all (#437).
+    pub fn set_current_check(&mut self, check: VersionCheck) {
+        self.current = check;
     }
 }
 
@@ -308,6 +326,23 @@ mod tests {
         assert_eq!(p.current().unwrap(), &RPMVersion::parse("3.0-1").unwrap());
         p.set_current_version(None);
         assert!(p.current().is_none());
+    }
+
+    /// #437: `current` carries the same tri-state as `before`/`after` — a
+    /// version query that never answered for a package must not read the
+    /// same as one that confirmed it absent.
+    #[test]
+    fn current_check_distinguishes_unchecked_from_not_installed() {
+        let mut p = Package::new("bash");
+        assert_eq!(p.current_check(), &VersionCheck::NotChecked);
+        p.set_current_check(VersionCheck::NotInstalled);
+        assert_eq!(p.current_check(), &VersionCheck::NotInstalled);
+        assert!(p.current().is_none());
+        p.set_current_version(Some(RPMVersion::parse("3.0-1").unwrap()));
+        assert_eq!(
+            p.current_check(),
+            &VersionCheck::Installed(RPMVersion::parse("3.0-1").unwrap())
+        );
     }
 
     #[test]
