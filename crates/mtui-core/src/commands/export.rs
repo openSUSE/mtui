@@ -9,6 +9,7 @@ use mtui_testreport::{
     AutoExport, DenyOverwrite, ExportContext, FileList, KernelExport, ManualExport, ManualHost,
 };
 use mtui_types::Workflow;
+use mtui_types::package::VersionCheck;
 
 use super::support::{
     add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_update, select_names,
@@ -136,11 +137,18 @@ impl Command for Export {
             let hosts = select_names(session.targets(), args, false)
                 .map_err(|e| CommandError::Other(e.to_string()))?;
             let results = manual_hosts(session, &hosts);
-            // #396: a host block exported with no recorded package data keeps
-            // the scaffold's own (unverified) lines — say so on the surface the
-            // operator/MCP client actually sees, not only in the tracing log.
+            // #396/#437: a host block exported with no recorded package data —
+            // or seeded packages the version query never answered for at all —
+            // keeps the scaffold's own (unverified) lines. Say so on the
+            // surface the operator/MCP client actually sees, not only in the
+            // tracing log.
             for host in &results {
-                if host.packages.is_empty() {
+                let unverified = host.packages.is_empty()
+                    || host.packages.iter().all(|p| {
+                        *p.before_check() == VersionCheck::NotChecked
+                            && *p.after_check() == VersionCheck::NotChecked
+                    });
+                if unverified {
                     session.display.println(&format!(
                         "WARNING: no package version data recorded for {}; its install \
                          result was left unverified",
@@ -498,6 +506,34 @@ mod tests {
         );
     }
 
+    /// #437: a host seeded with packages the version query never answered for
+    /// at all must still be flagged — the `packages.is_empty()` check alone
+    /// missed this, reachable when a host dies between seed and check.
+    #[tokio::test]
+    async fn manual_warns_about_seeded_but_unchecked_hosts_on_display() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().workflow = Workflow::Manual;
+        for t in session.targets_mut().targets_mut() {
+            t.set_packages(vec![mtui_types::package::Package::new("bash")]);
+        }
+        let server = dashboard_server("1").await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let path = dir.path().join("template.txt");
+        std::fs::write(&path, "source code change review:\n").unwrap();
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(
+            out.contains("WARNING: no package version data recorded for h1"),
+            "{out}"
+        );
+    }
+
     /// Negative control for the #396 WARNING: a host WITH recorded package
     /// data must not be flagged — kills the warn-unconditionally mutant.
     #[tokio::test]
@@ -505,7 +541,9 @@ mod tests {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
         for t in session.targets_mut().targets_mut() {
-            t.set_packages(vec![mtui_types::package::Package::new("bash")]);
+            let mut pkg = mtui_types::package::Package::new("bash");
+            pkg.set_before(Some("5.1-1")).unwrap();
+            t.set_packages(vec![pkg]);
         }
         let server = dashboard_server("1").await;
         session.config.qem_dashboard_api = format!("{}/api", server.uri());
