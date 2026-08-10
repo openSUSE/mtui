@@ -226,6 +226,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   loaded template. A *cooperative* cancel is unchanged: a body that unwound
   through its own flow ran its own unlock discipline. Nothing else is done at
   the hosts; as before, the remote command may still be running there.
+- Ctrl-C during a running command no longer kills the REPL outright (#441).
+  Killing it skipped every teardown, so each locked host was left with a
+  dead-pid `/var/lock/mtui.lock` that blocked the next tester. The first press
+  now cancels the command cooperatively — `update`, `prepare`, `downgrade`, and
+  fan-outs stop at their next checkpoint with their locks released, while
+  `install`/`uninstall`/`run` finish the host operation already under way — and
+  the session stays usable afterwards. A second press still force-quits (exit
+  130), now with a warning naming `unlock --force` as the remedy for whatever
+  locks it strands — and without discarding the session's command history, as
+  the old kill did. During the Ctrl-D/`quit` teardown a press cannot cancel
+  anything (the teardown is what releases the pool claims), but two presses
+  still force-quit, so a blackholed refhost can no longer wedge the exit.
+  Ctrl-C at the prompt is unchanged (it clears the line), and Ctrl-C during the
+  initial `-a`/`-k`/`--sut` load still exits immediately without teardown.
+  Two existing waits are folded onto the same seam: `request_review --watch`
+  stops on a cancel (and now also on an MCP `job_cancel`, which could never
+  interrupt it before), and `regenerate`'s wait for TeReGen finally honours the
+  cooperative-stop hook it always advertised. This also removes a
+  non-determinism: `request_review --watch` used to arm the process-wide SIGINT
+  handler as a side effect, after which Ctrl-C was silently swallowed for the
+  rest of the session.
 
 ### Security
 

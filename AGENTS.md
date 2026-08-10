@@ -221,9 +221,27 @@ next actionable task before working on a subsystem.
   into its function's normal fall-through, never early-`return` past cleanup —
   and a real failure collected before the cancel always outranks it. MCP `job_cancel` cancels the job's token, waits a short grace for a
   cooperative stop, then hard-aborts the worker — its reply distinguishes the
-  two and never claims to cancel a job that had already finished. A flow that
+  two and never claims to cancel a job that had already finished. The REPL is
+  the seam's second producer: a Ctrl-C *during* a command (the terminal is
+  cooked then, so it is a real SIGINT rather than reedline's key event) is
+  forwarded onto the session token instead of killing the process, and a second
+  press force-exits 130 with a warning about the locks that may be left behind.
+  It installs a **fresh token per dispatched line, unconditionally** — the token
+  is one-shot, so a cancelled one left in place would kill every later dispatch
+  at the pre-flight check, `quit`'s teardown included, stranding exactly the
+  locks the cancel had to release. The Ctrl-D teardown gets the fresh token but
+  **no cancel arm**: a press there only escalates, because cancelling the
+  cleanup is what strands the locks. A new interrupt hook belongs on this seam,
+  never on its own `tokio::signal::ctrl_c` — the REPL arms SIGINT process-wide
+  from the first prompt onward (startup seeding is still outside that window),
+  and a headless tool call has no terminal to press Ctrl-C at, while a stdio
+  server that *does* share one would fire every listener at once, interrupting
+  work nobody asked to stop. A flow that
   stops on a cancel must surface as `CommandError::Cancelled`, not a generic
-  failure — and that verdict must come from the flow's own `cancelled` flag,
+  failure — unless stopping *is* its documented success (`request_review
+  --watch` returns `Ok` with "the request is still posted"; `regenerate`
+  abandons the wait and reports the state it last saw, since the server keeps
+  building) — and that verdict must come from the flow's own `cancelled` flag,
   never from sniffing the session token, which would mask a real host failure
   that merely coincided with a cancel (see
   `commands/perform.rs::map_flow_error`). New long-running command bodies
