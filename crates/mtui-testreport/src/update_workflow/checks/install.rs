@@ -9,15 +9,24 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed}
 
 /// The zypper install check.
 ///
+/// The three exit-code sets are the same ones
+/// [`classify_exit`](super::classify_exit) expresses for the `update` check,
+/// but they are spelled out inline here because this check interleaves them
+/// with its stderr markers in a different order (the markers sit *between* the
+/// package-not-found set and the "Unknown Error" fallback, where `update` gives
+/// them first refusal on the fallback). Folding this onto the shared helper is
+/// a behaviour-preserving refactor only if that ordering is preserved
+/// exactly — worth doing on its own, not as a rider.
+///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "package not found", "update stack
 /// locked", "RPM Error", "Dependency Error", or "Unknown Error" depending on
 /// the exit code and stderr/stdout markers. Exit codes `0, 100, 101, 102,
-/// 103, 106` are success. This check surfaces no [`Diagnostic`]s (only
+/// 103, 106, 107` are success. This check surfaces no [`Diagnostic`]s (only
 /// `update` does).
 fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if matches!(args.exitcode, 0 | 100 | 101 | 102 | 103 | 106) {
+    if matches!(args.exitcode, 0 | 100 | 101 | 102 | 103 | 106 | 107) {
         return Ok(Vec::new());
     }
     if matches!(args.exitcode, 104 | 4 | 5 | 8) {
@@ -74,7 +83,13 @@ mod tests {
 
     #[test]
     fn success_exit_codes_pass() {
-        for code in [0, 100, 101, 102, 103, 106] {
+        // `107` (`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`) is in the list because
+        // `man zypper` puts it in the informational band: "Installation
+        // basically succeeded, but some of the packages %post install scripts
+        // returned an error. These packages were successfully unpacked to disk
+        // and are registered in the rpm database". It was missing, so a
+        // routine `%posttrans` hiccup failed the install.
+        for code in [0, 100, 101, 102, 103, 106, 107] {
             assert!(
                 zypper(args("", "", code)).is_ok(),
                 "code {code} should pass"
