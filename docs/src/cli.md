@@ -991,7 +991,7 @@ Options:
           Extra context appended to the review request
 
   -w, --watch
-          After posting, watch the message for reviewer reactions until a verdict or timeout (Ctrl-C stops it). Over MCP, pair this with background=true so the call does not outlive the client timeout
+          After posting, watch the message for reviewer reactions until a verdict or timeout (Ctrl-C / job_cancel stops it). Over MCP, pair this with background=true so the call does not outlive the client timeout
 
   -h, --help
           Print help

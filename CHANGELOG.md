@@ -233,11 +233,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fan-outs stop at their next checkpoint with their locks released, while
   `install`/`uninstall`/`run` finish the host operation already under way — and
   the session stays usable afterwards. A second press still force-quits (exit
-  130), now with a warning naming `unlock --force` as the remedy for whatever
-  locks it strands — and without discarding the session's command history, as
-  the old kill did. During the Ctrl-D/`quit` teardown a press cannot cancel
-  anything (the teardown is what releases the pool claims), but two presses
-  still force-quit, so a blackholed refhost can no longer wedge the exit.
+  130), now naming `unlock --force` as the remedy for whatever locks it strands
+  — and without discarding the session's command history, as the old kill did.
+  During the session teardown (Ctrl-D or a typed `quit`/`exit`) a press cannot
+  cancel anything, because the teardown is what releases the pool claims; two
+  presses still force-quit, so a blackholed refhost can no longer wedge the
+  exit, and that message names `unlock --pool` as well.
   Ctrl-C at the prompt is unchanged (it clears the line), and Ctrl-C during the
   initial `-a`/`-k`/`--sut` load still exits immediately without teardown.
   Two existing waits are folded onto the same seam: `request_review --watch`

@@ -229,9 +229,12 @@ next actionable task before working on a subsystem.
   It installs a **fresh token per dispatched line, unconditionally** — the token
   is one-shot, so a cancelled one left in place would kill every later dispatch
   at the pre-flight check, `quit`'s teardown included, stranding exactly the
-  locks the cancel had to release. The Ctrl-D teardown gets the fresh token but
+  locks the cancel had to release. The teardown dispatch gets the fresh token but
   **no cancel arm**: a press there only escalates, because cancelling the
-  cleanup is what strands the locks. A new interrupt hook belongs on this seam,
+  cleanup is what strands the locks. That is a property of the *dispatch*, not of
+  the key — a typed `quit`/`exit` is routed to it by resolving the line's command
+  position through the registry, so it is protected exactly as Ctrl-D is.
+  A new interrupt hook belongs on this seam,
   never on its own `tokio::signal::ctrl_c` — the REPL arms SIGINT process-wide
   from the first prompt onward (startup seeding is still outside that window),
   and a headless tool call has no terminal to press Ctrl-C at, while a stdio

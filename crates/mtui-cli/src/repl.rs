@@ -22,9 +22,10 @@
 //! now forwarded onto the session's cancellation seam instead
 //! (`spawn_interrupt_forwarder` → `step_interruptible`): the first press
 //! cancels the running command at its next checkpoint, a second press
-//! force-quits with a warning about the locks that may be left behind.
-//! During the Ctrl-D teardown the same presses escalate but never *cancel* —
-//! `step_teardown` explains why.
+//! force-quits with a record of the locks that may be left behind.
+//! During the session teardown — Ctrl-D *or* a typed `quit`/`exit` — the same
+//! presses escalate but never *cancel*, since cancelling the cleanup is what
+//! strands the locks; `OnPress` explains the split.
 //!
 //! The read loop and dispatch are independent of the editor's input features:
 //! tab completion, persistent history + Ctrl-R reverse-search + inline
@@ -36,7 +37,7 @@
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 
-use mtui_core::{EngineError, Registry, Session, dispatch_line};
+use mtui_core::{EngineError, ExitStatus, Registry, Session, dispatch_line};
 use reedline::{
     ColumnarMenu, DefaultHinter, Emacs, KeyCode, KeyModifiers, MenuBuilder, Reedline,
     ReedlineEvent, ReedlineMenu, Signal, default_emacs_keybindings,
@@ -62,15 +63,16 @@ const INTRO: &str = "Maintenance Test Update Installer";
 /// already do.
 const INTERRUPT_QUEUE: usize = 2;
 
-/// The exit status of a force-quit: 128 + `SIGINT`, the shell convention for a
-/// process killed by Ctrl-C (which is what would have happened before this
-/// loop started handling the signal).
-const EXIT_INTERRUPTED: i32 = 130;
+/// The command whose dispatch *is* the session teardown.
+///
+/// Matched after registry resolution, so its aliases (`exit`, `EOF`) — and any
+/// added later — come along for free.
+const QUIT_COMMAND: &str = "quit";
 
 /// How [`Repl::run`] ended.
 ///
 /// A force-quit is *decided* in the loop and *executed* by the caller, because
-/// the process must not exit until the editor has been dropped: reedline
+/// the process must not exit until the line editor has been dropped: reedline
 /// persists its `FileBackedHistory` on drop, and `std::process::exit` runs no
 /// destructors. Exiting from inside the loop would silently discard the
 /// session's command history — a second cost on top of the stranded locks, and
@@ -79,19 +81,118 @@ const EXIT_INTERRUPTED: i32 = 130;
 pub enum ReplExit {
     /// `quit`/Ctrl-D: the teardown ran, the process exits normally.
     Normal,
-    /// A double Ctrl-C: the caller drops the REPL (flushing history) and exits
-    /// with [`ReplExit::exit_code`].
+    /// A double Ctrl-C: the caller flushes the history and exits with
+    /// [`ReplExit::status`].
     ForceQuit,
 }
 
 impl ReplExit {
-    /// The status to `exit` with, or `None` to return from `main` normally.
+    /// The process status to exit with, or `None` to return from `main`
+    /// normally.
+    ///
+    /// [`ExitStatus::Interrupted`] is 128 + `SIGINT`, the shell convention for a
+    /// process killed by Ctrl-C — which is exactly what used to happen here.
+    /// The mapping goes through [`ExitStatus`] rather than a bare integer so
+    /// the binary speaks one exit vocabulary, the one whose module documents
+    /// the contract.
     #[must_use]
-    pub fn exit_code(self) -> Option<i32> {
+    pub fn status(self) -> Option<ExitStatus> {
         match self {
             Self::Normal => None,
-            Self::ForceQuit => Some(EXIT_INTERRUPTED),
+            Self::ForceQuit => Some(ExitStatus::Interrupted),
         }
+    }
+}
+
+/// What a Ctrl-C press does to the dispatch it lands on.
+///
+/// The one difference between an ordinary command and the session teardown, and
+/// the reason they can share [`step_interruptible`]'s protocol rather than
+/// keeping two copies of a subtle `select!` loop in sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnPress {
+    /// An ordinary command: the first press cancels it at its next checkpoint.
+    Cancel,
+    /// The `quit` teardown, however it was asked for (Ctrl-D or a typed
+    /// `quit`/`exit`): a press **never** cancels, because cancelling the
+    /// cleanup is what strands the locks. It still counts toward the
+    /// force-quit, because the teardown can genuinely hang — `quit`'s
+    /// pool-claim release has no timeout of its own.
+    EscalateOnly,
+}
+
+impl OnPress {
+    /// The notice the *first* press prints.
+    ///
+    /// Informational, so `warn` (an operator who set `error` has said they do
+    /// not want it). The force-quit record in [`on_escalate`] is a different
+    /// class of event and is not suppressible.
+    fn first_press_notice(self) -> &'static str {
+        match self {
+            Self::Cancel => {
+                "cancelling — the command stops at its next checkpoint (a host operation already \
+                 under way finishes first); press Ctrl-C again to force-quit, which may strand \
+                 operation locks"
+            }
+            Self::EscalateOnly => {
+                "teardown in progress (releasing pool claims, closing hosts) — it cannot be \
+                 cancelled; press Ctrl-C again to force-quit, which may leave pool claims and \
+                 operation locks behind"
+            }
+        }
+    }
+}
+
+/// Records the force-quit and reports the ending.
+///
+/// The two kinds abandon different things and so must name different remedies:
+/// a command leaves its operation locks, a teardown leaves the pool claims as
+/// well. Extracted from the loop's arms so that pairing is pinned by a test —
+/// the arms themselves need a terminal and cannot be.
+///
+/// `error!`, not `warn!`: this is the only record that mtui is walking away
+/// from locks it holds, and it has to survive the `set_log_level error` an
+/// operator may well be running under.
+fn on_escalate(on_press: OnPress) -> ReplExit {
+    match on_press {
+        OnPress::Cancel => tracing::error!(
+            "forcing exit mid-command; operation locks may remain on the update's hosts — \
+             release them with `unlock --force` from a new session"
+        ),
+        OnPress::EscalateOnly => tracing::error!(
+            "forcing exit mid-teardown; pool claims and operation locks may remain on the \
+             update's hosts — release them with `unlock --force` and `unlock --pool` from a new \
+             session"
+        ),
+    }
+    ReplExit::ForceQuit
+}
+
+/// Decides what a press must do to the dispatch of `line`.
+///
+/// A typed `quit`/`exit`/`EOF` *is* the teardown — the same dispatch Ctrl-D
+/// makes — so it gets the teardown's rules rather than an ordinary command's.
+/// Without this, the operator who types `quit` into a session whose refhost has
+/// blackholed cancels their own cleanup and is then told to run `unlock
+/// --force`, with no mention of the pool claim they just stranded.
+///
+/// The line's first token is resolved through the registry (the
+/// [`is_shell_line`](crate::shell::is_shell_line) precedent), so only a bare
+/// command-position hit counts: `help quit` is a `help` line, and `echo quit`
+/// an `echo` one. An unparseable line matches nothing and takes the ordinary
+/// path, where the engine renders its syntax error.
+fn press_policy(registry: &Registry, line: &str) -> OnPress {
+    let Some(tokens) = shlex::split(line) else {
+        return OnPress::Cancel;
+    };
+    let quits = tokens
+        .first()
+        .and_then(|name| registry.get(name))
+        .is_some_and(|cmd| cmd.name() == QUIT_COMMAND);
+    if quits {
+        OnPress::EscalateOnly
+    } else {
+        OnPress::Cancel
     }
 }
 
@@ -161,6 +262,34 @@ impl Repl {
             session,
             prompt,
         }
+    }
+
+    /// Consumes the REPL, returning **only** the line editor; the rest is
+    /// leaked, not dropped.
+    ///
+    /// For the force-quit path, where the contract is "run exactly one
+    /// destructor, then exit" — neither `process::exit` (runs none) nor
+    /// returning from `main` (runs all of them, and blocks on the runtime)
+    /// expresses that. The one destructor that must run is reedline's: it
+    /// persists the `FileBackedHistory`, and losing the session's history is
+    /// not part of what the operator asked for.
+    ///
+    /// Everything else is deliberately *not* dropped. `Repl` is the sole owner
+    /// of the `Arc<Mutex<Session>>`, so dropping it would synchronously tear
+    /// down the whole session graph — every SSH `Target`, the HTTP clients, the
+    /// template registry — on the one path whose entire job is to get out now.
+    /// Nothing in that chain blocks today; leaking makes sure it cannot start
+    /// to. The process is about to exit, so the kernel reclaims the memory.
+    #[must_use]
+    pub fn into_line_editor(self) -> Reedline {
+        let Self {
+            line_editor,
+            registry,
+            session,
+            prompt,
+        } = self;
+        std::mem::forget((registry, session, prompt));
+        line_editor
     }
 
     /// Runs the read → dispatch loop until `quit`/Ctrl-D, driving the session.
@@ -239,6 +368,9 @@ impl Repl {
                         }
                         continue;
                     }
+                    // A typed `quit`/`exit` dispatches the very teardown Ctrl-D
+                    // does, so it takes the teardown's press rules.
+                    let on_press = press_policy(&self.registry, &line);
                     // Lock only for the dispatch; the completer's own lock during
                     // `read_line` was released before this returned. (Guard held
                     // across the await — justified on `run`'s doc comment.)
@@ -247,8 +379,14 @@ impl Repl {
                             .session
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        step_interruptible(&self.registry, &mut session, &line, &mut interrupts)
-                            .await
+                        step_interruptible(
+                            &self.registry,
+                            &mut session,
+                            &line,
+                            &mut interrupts,
+                            on_press,
+                        )
+                        .await
                     };
                     match outcome {
                         StepOutcome::Flow(flow) => {
@@ -260,14 +398,7 @@ impl Repl {
                         // for the cooperative stop. Honour it — loudly, because
                         // this is the one path that *can* leave the locks a
                         // clean stop would have released.
-                        StepOutcome::Escalate => {
-                            tracing::warn!(
-                                "forcing exit mid-command; operation locks may remain on the \
-                                 update's hosts — release them with `unlock --force` from a new \
-                                 session"
-                            );
-                            return Ok(ReplExit::ForceQuit);
-                        }
+                        StepOutcome::Escalate => return Ok(on_escalate(on_press)),
                     }
                 }
                 // Ctrl-C on a partial line: clear it and reprompt, never exit.
@@ -290,18 +421,20 @@ impl Repl {
                             .session
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        step_teardown(&self.registry, &mut session, &mut interrupts).await
+                        step_interruptible(
+                            &self.registry,
+                            &mut session,
+                            "EOF",
+                            &mut interrupts,
+                            OnPress::EscalateOnly,
+                        )
+                        .await
                     };
                     // A double Ctrl-C during the teardown: the same escape
-                    // hatch as mid-command, and the same honest warning. What
+                    // hatch as mid-command, and the same honest record. What
                     // the teardown had not reached yet stays claimed/locked.
                     if outcome == StepOutcome::Escalate {
-                        tracing::warn!(
-                            "forcing exit mid-teardown; pool claims and operation locks may \
-                             remain on the update's hosts — release them with `unlock --force` \
-                             and `unlock --pool` from a new session"
-                        );
-                        return Ok(ReplExit::ForceQuit);
+                        return Ok(on_escalate(OnPress::EscalateOnly));
                     }
                     break;
                 }
@@ -430,11 +563,18 @@ enum StepOutcome {
 /// flows (`update`, `prepare`, `downgrade`, every fan-out boundary) stop
 /// promptly with their locks released, while a host operation already under
 /// way (`run`, `install`, `uninstall`) finishes first and unlocks normally.
+///
+/// `on_press` is the *only* thing that differs between an ordinary command and
+/// the session teardown ([`OnPress::EscalateOnly`] skips the `token.cancel()`
+/// and prints the teardown's notice). They share this body deliberately: two
+/// copies of a biased-select interrupt protocol is the shape that drifts, and
+/// the reason a typed `quit` was not protected the way Ctrl-D was.
 async fn step_interruptible(
     registry: &Registry,
     session: &mut Session,
     line: &str,
     interrupts: &mut mpsc::Receiver<()>,
+    on_press: OnPress,
 ) -> StepOutcome {
     // Stale presses, then a token this dispatch owns (both per the contract
     // above).
@@ -447,7 +587,7 @@ async fn step_interruptible(
 
     let dispatch = step(registry, session, line);
     tokio::pin!(dispatch);
-    let mut cancelling = false;
+    let mut pressed = false;
     loop {
         let press = tokio::select! {
             // Biased, completion first: a press landing in the same poll window
@@ -467,70 +607,16 @@ async fn step_interruptible(
             // through instead of spinning on a closed channel.
             return StepOutcome::Flow((&mut dispatch).await);
         }
-        if cancelling {
+        if pressed {
             return StepOutcome::Escalate;
         }
-        cancelling = true;
-        token.cancel();
+        pressed = true;
+        if on_press == OnPress::Cancel {
+            token.cancel();
+        }
         // Emitted only on the signal path, so the normal dispatch's
         // exactly-one-`error: `-line contract is untouched.
-        tracing::warn!(
-            "cancelling — the command stops at its next checkpoint (a host operation already \
-             under way finishes first); press Ctrl-C again to force-quit, which may strand \
-             operation locks"
-        );
-    }
-}
-
-/// Dispatches the `EOF` alias of `quit` for Ctrl-D, on a token that cannot
-/// already be cancelled, with an **escalate-only** interrupt arm.
-///
-/// Three deliberate differences from [`step_interruptible`]:
-///
-/// * It installs a fresh token for the same reason — the previous line may have
-///   been cancelled, and this dispatch is precisely the one that must not die at
-///   the driver's pre-flight check, since it releases the pool claims and closes
-///   the hosts.
-/// * A press here **never cancels the token.** Cancelling the cleanup is what
-///   strands the locks; the teardown always runs to completion on its own.
-/// * A press still *counts*, though, because the teardown can genuinely hang:
-///   `quit`'s pool-claim release has no timeout of its own, so a blackholed
-///   refhost parks it indefinitely. Before this loop existed Ctrl-C killed the
-///   process outright there; with the handler armed it would do nothing at all
-///   unless this path offers the same escape. So the first press warns and the
-///   second returns [`StepOutcome::Escalate`].
-async fn step_teardown(
-    registry: &Registry,
-    session: &mut Session,
-    interrupts: &mut mpsc::Receiver<()>,
-) -> StepOutcome {
-    // Presses that raced the *previous* dispatch's completion belong to it, not
-    // to this teardown (see the biased select above).
-    while interrupts.try_recv().is_ok() {}
-
-    session.set_cancel_token(CancellationToken::new());
-
-    let teardown = step(registry, session, "EOF");
-    tokio::pin!(teardown);
-    let mut warned = false;
-    loop {
-        let press = tokio::select! {
-            biased;
-            flow = &mut teardown => return StepOutcome::Flow(flow),
-            press = interrupts.recv() => press,
-        };
-        if press.is_none() {
-            return StepOutcome::Flow((&mut teardown).await);
-        }
-        if warned {
-            return StepOutcome::Escalate;
-        }
-        warned = true;
-        tracing::warn!(
-            "teardown in progress (releasing pool claims, closing hosts) — it cannot be \
-             cancelled; press Ctrl-C again to force-quit, which may leave pool claims and \
-             operation locks behind"
-        );
+        tracing::warn!("{}", on_press.first_press_notice());
     }
 }
 
@@ -883,6 +969,21 @@ mod tests {
         (outcome, out)
     }
 
+    /// Runs `f` under the REPL's real log layer on a scoped subscriber,
+    /// returning its value and whatever it emitted. The synchronous sibling of
+    /// [`capturing_log`], for the parts of the protocol that are pure decisions.
+    fn capture_log<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .event_format(crate::logfmt::CompactLevelFormat::new(false))
+            .with_writer(BufMaker(Arc::clone(&buf)))
+            .finish();
+        let value = tracing::subscriber::with_default(subscriber, f);
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        (value, out)
+    }
+
     /// One press, delivered once the probe reports it is parked mid-dispatch.
     /// A probe that never reports panics here rather than quietly pressing into
     /// the void — a missed handshake would otherwise turn into a green test that
@@ -933,8 +1034,10 @@ mod tests {
         let (r, _) = registry();
         let (mut s, _buf) = session_with_buffer();
         let (_tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
-        let (outcome, _out) =
-            capturing_log(step_teardown(&r, &mut s, &mut rx), std::future::ready(()));
+        let (outcome, _out) = capturing_log(
+            step_interruptible(&r, &mut s, "EOF", &mut rx, OnPress::EscalateOnly),
+            std::future::ready(()),
+        );
         assert_eq!(outcome, StepOutcome::Flow(ControlFlow::Break(())));
         assert!(s.should_exit());
     }
@@ -1010,7 +1113,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
 
         let (outcome, out) = capturing_log(
-            step_interruptible(&r, &mut s, "park", &mut rx),
+            step_interruptible(&r, &mut s, "park", &mut rx, OnPress::Cancel),
             press_once(started_rx, tx),
         );
 
@@ -1061,13 +1164,13 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
 
         let (cancelled, _) = capturing_log(
-            step_interruptible(&r, &mut s, "park", &mut rx),
+            step_interruptible(&r, &mut s, "park", &mut rx, OnPress::Cancel),
             press_once(started_rx, tx),
         );
         assert_eq!(cancelled, StepOutcome::Flow(ControlFlow::Continue(())));
 
         let (outcome, out) = capturing_log(
-            step_interruptible(&r, &mut s, "echo hi", &mut rx),
+            step_interruptible(&r, &mut s, "echo hi", &mut rx, OnPress::Cancel),
             std::future::ready(()),
         );
         assert_eq!(outcome, StepOutcome::Flow(ControlFlow::Continue(())));
@@ -1106,7 +1209,10 @@ mod tests {
             tokio::task::yield_now().await;
             let _ = go_tx.send(());
         };
-        let (outcome, out) = capturing_log(step_interruptible(&r, &mut s, "gate", &mut rx), driver);
+        let (outcome, out) = capturing_log(
+            step_interruptible(&r, &mut s, "gate", &mut rx, OnPress::Cancel),
+            driver,
+        );
 
         assert_ne!(
             outcome,
@@ -1157,8 +1263,10 @@ mod tests {
                 tx.try_send(()).expect("the queue has room");
                 tx.try_send(()).expect("the queue has room for both");
             };
-            let (outcome, out) =
-                capturing_log(step_interruptible(&r, &mut s, "gate", &mut rx), driver);
+            let (outcome, out) = capturing_log(
+                step_interruptible(&r, &mut s, "gate", &mut rx, OnPress::Cancel),
+                driver,
+            );
 
             assert_eq!(
                 outcome,
@@ -1202,7 +1310,10 @@ mod tests {
             let _ = tx.send(()).await;
             let _ = tx.send(()).await;
         };
-        let (outcome, out) = capturing_log(step_interruptible(&r, &mut s, "deaf", &mut rx), driver);
+        let (outcome, out) = capturing_log(
+            step_interruptible(&r, &mut s, "deaf", &mut rx, OnPress::Cancel),
+            driver,
+        );
 
         assert_eq!(outcome, StepOutcome::Escalate);
         assert_eq!(
@@ -1237,7 +1348,10 @@ mod tests {
             tokio::task::yield_now().await;
             let _ = go_tx.send(());
         };
-        let (outcome, out) = capturing_log(step_interruptible(&r, &mut s, "gate", &mut rx), driver);
+        let (outcome, out) = capturing_log(
+            step_interruptible(&r, &mut s, "gate", &mut rx, OnPress::Cancel),
+            driver,
+        );
 
         assert_eq!(outcome, StepOutcome::Flow(ControlFlow::Continue(())));
         assert_eq!(runs.load(Ordering::SeqCst), 1, "the command still ran");
@@ -1259,8 +1373,10 @@ mod tests {
         s.cancel_token().cancel();
         let (_tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
 
-        let (outcome, _out) =
-            capturing_log(step_teardown(&r, &mut s, &mut rx), std::future::ready(()));
+        let (outcome, _out) = capturing_log(
+            step_interruptible(&r, &mut s, "EOF", &mut rx, OnPress::EscalateOnly),
+            std::future::ready(()),
+        );
 
         assert_eq!(outcome, StepOutcome::Flow(ControlFlow::Break(())));
         assert!(s.should_exit(), "the teardown ran and asked to exit");
@@ -1290,7 +1406,10 @@ mod tests {
             tokio::task::yield_now().await;
             let _ = go_tx.send(());
         };
-        let (outcome, out) = capturing_log(step_teardown(&r, &mut s, &mut rx), driver);
+        let (outcome, out) = capturing_log(
+            step_interruptible(&r, &mut s, "EOF", &mut rx, OnPress::EscalateOnly),
+            driver,
+        );
 
         assert_eq!(outcome, StepOutcome::Flow(ControlFlow::Break(())));
         assert_eq!(runs.load(Ordering::SeqCst), 1, "the teardown finished");
@@ -1328,7 +1447,10 @@ mod tests {
             let _ = tx.send(()).await;
             let _ = tx.send(()).await;
         };
-        let (outcome, out) = capturing_log(step_teardown(&r, &mut s, &mut rx), driver);
+        let (outcome, out) = capturing_log(
+            step_interruptible(&r, &mut s, "EOF", &mut rx, OnPress::EscalateOnly),
+            driver,
+        );
 
         assert_eq!(outcome, StepOutcome::Escalate);
         assert_eq!(
@@ -1361,7 +1483,10 @@ mod tests {
             tokio::task::yield_now().await;
             let _ = go_tx.send(());
         };
-        let (outcome, out) = capturing_log(step_teardown(&r, &mut s, &mut rx), driver);
+        let (outcome, out) = capturing_log(
+            step_interruptible(&r, &mut s, "EOF", &mut rx, OnPress::EscalateOnly),
+            driver,
+        );
 
         assert_eq!(outcome, StepOutcome::Flow(ControlFlow::Break(())));
         assert_eq!(runs.load(Ordering::SeqCst), 1, "the teardown finished");
@@ -1374,8 +1499,125 @@ mod tests {
     /// 128 + `SIGINT` — the status a Ctrl-C death would have had.
     #[test]
     fn the_force_quit_exit_status_is_128_plus_sigint() {
-        assert_eq!(ReplExit::Normal.exit_code(), None);
-        assert_eq!(ReplExit::ForceQuit.exit_code(), Some(130));
+        assert_eq!(ReplExit::Normal.status(), None);
+        assert_eq!(
+            ReplExit::ForceQuit.status(),
+            Some(mtui_core::ExitStatus::Interrupted)
+        );
+        assert_eq!(i32::from(mtui_core::ExitStatus::Interrupted), 130);
+    }
+
+    /// Only a bare `quit`/`exit`/`EOF` in **command position** is the teardown.
+    ///
+    /// The line is resolved through the registry, so aliases route without being
+    /// enumerated here — and `quit` appearing as an *argument* does not, or a
+    /// `help quit` would silently get teardown semantics.
+    #[test]
+    fn only_a_quit_line_takes_the_teardown_path() {
+        let (r, _) = registry();
+        for line in ["quit", "exit", "EOF", "  quit  ", "quit reboot"] {
+            assert_eq!(
+                press_policy(&r, line),
+                OnPress::EscalateOnly,
+                "{line:?} dispatches the teardown"
+            );
+        }
+        for line in [
+            "echo hi",
+            // `quit` is an argument here, not the command.
+            "echo quit",
+            // Neither resolves to a command at all: no command, no teardown.
+            "help quit",
+            "quitx",
+            "",
+            // Unbalanced quotes: the engine will render the syntax error.
+            "echo \"unbalanced",
+        ] {
+            assert_eq!(
+                press_policy(&r, line),
+                OnPress::Cancel,
+                "{line:?} is an ordinary line"
+            );
+        }
+    }
+
+    /// A **typed** `quit` dispatches the very teardown Ctrl-D does, so a press
+    /// must not cancel it there either.
+    ///
+    /// Before the routing existed, a typed `quit` took the ordinary path: the
+    /// first press cancelled the cleanup's token, and the second told the
+    /// operator to run `unlock --force` while saying nothing about the pool
+    /// claim they had just stranded.
+    #[test]
+    fn a_typed_quit_is_never_cancelled_by_a_press() {
+        let (go_tx, go_rx) = oneshot::channel();
+        let observed = Arc::new(AtomicBool::new(false));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let mut r = Registry::new();
+        r.register(Arc::new(SlowQuitCmd {
+            go: Mutex::new(Some(go_rx)),
+            observed_cancel: Arc::clone(&observed),
+            runs: Arc::clone(&runs),
+        }));
+        let (mut s, _buf) = session_with_buffer();
+        let (tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
+        // Exactly the decision `Repl::run` makes for this line.
+        let on_press = press_policy(&r, "quit");
+
+        let driver = async move {
+            tokio::task::yield_now().await;
+            let _ = tx.send(()).await;
+            tokio::task::yield_now().await;
+            let _ = go_tx.send(());
+        };
+        let (outcome, out) = capturing_log(
+            step_interruptible(&r, &mut s, "quit", &mut rx, on_press),
+            driver,
+        );
+
+        assert_eq!(outcome, StepOutcome::Flow(ControlFlow::Break(())));
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "the teardown finished");
+        assert!(
+            !observed.load(Ordering::SeqCst),
+            "a typed quit's teardown must not be cancelled by a press"
+        );
+        assert_eq!(
+            out.matches("teardown in progress").count(),
+            1,
+            "and it gets the teardown's notice, not a command's: {out:?}"
+        );
+    }
+
+    /// Each force-quit record must name the remedy for what *that* arm
+    /// abandons — a command leaves its operation locks, a teardown leaves the
+    /// pool claims too — and both must survive `set_log_level error`, which is
+    /// why they are `error!` and not `warn!`.
+    #[test]
+    fn each_escalation_names_the_remedy_for_what_it_abandons() {
+        let (exit, out) = capture_log(|| on_escalate(OnPress::Cancel));
+        assert_eq!(exit, ReplExit::ForceQuit);
+        assert!(
+            out.starts_with("error: "),
+            "must outrank `set_log_level error`, got: {out:?}"
+        );
+        assert!(out.contains("mid-command"), "{out:?}");
+        assert!(out.contains("unlock --force"), "{out:?}");
+        assert!(
+            !out.contains("unlock --pool"),
+            "a mid-command exit strands no pool claim: {out:?}"
+        );
+
+        let (exit, out) = capture_log(|| on_escalate(OnPress::EscalateOnly));
+        assert_eq!(exit, ReplExit::ForceQuit);
+        assert!(
+            out.starts_with("error: "),
+            "must outrank `set_log_level error`, got: {out:?}"
+        );
+        assert!(out.contains("mid-teardown"), "{out:?}");
+        assert!(
+            out.contains("unlock --force") && out.contains("unlock --pool"),
+            "a teardown abandons both kinds of lock: {out:?}"
+        );
     }
 
     /// `quit`'s `Break` survives the interruptible wrapper — the loop must still
@@ -1386,7 +1628,7 @@ mod tests {
         let (mut s, _buf) = session_with_buffer();
         let (_tx, mut rx) = mpsc::channel(INTERRUPT_QUEUE);
         let (outcome, _out) = capturing_log(
-            step_interruptible(&r, &mut s, "quit", &mut rx),
+            step_interruptible(&r, &mut s, "quit", &mut rx, OnPress::Cancel),
             std::future::ready(()),
         );
         assert_eq!(outcome, StepOutcome::Flow(ControlFlow::Break(())));
