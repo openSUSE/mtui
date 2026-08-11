@@ -160,7 +160,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   nothing to remove — so the shell reported that and discarded the
   `zypper -n in -t patch` / `transactional-update -n pkg in -t patch` status
   before anything could read it. Each template now captures the patch's own
-  status and exits with it, and the remote command text visible in `show_log`
+  status and exits with it — unless it never got as far as the patch, which is
+  the entry below — and the remote command text visible in `show_log`
   transcripts changes accordingly.
   The exit code is classified rather than compared against zero. `100`-`103`,
   `106` and `107` are zypper's *informational* results and still pass — `102`
@@ -182,6 +183,48 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `transactional-update` absorbs zypper's status and returns only `0` or `1`,
   so neither the informational codes nor the package-not-found ones can reach
   the check on that key.
+- An `update` on a host that could not work out **what** to patch is no longer
+  reported as a successful update (#447). Both zypper templates decide whether
+  to patch from `zypper -n patches` and the `awk` that filters its output, and a
+  failure of either — exit `6` on a host with no repositories, `7` on a locked
+  ZYpp stack, an unreadable rpmdb, an `awk` that is broken or missing — produced
+  an *empty* patch list, which is indistinguishable from the legitimate "this
+  host carries none of the update's products". The patch was then skipped and
+  the script exited `0`, so mtui reported an update it had never installed.
+  Both are now captured with their own status read before anything can
+  overwrite it; the script prints
+  `mtui: could not determine what to patch: <command> exited <status>` and exits
+  with that command's own status. The check reads that line ahead of the
+  exit-code rules — the two statuses share one numeric space, so nothing else
+  could tell them apart — and reports the new reason **"could not determine
+  what to patch"**, which an operator (or an MCP client) sees instead of
+  "Unknown Error" or "package not found".
+  **Only exit `0` counts as an answer here**, deliberately narrower than the
+  rule the patch's own status is read against: `106`
+  ("some repository had to be disabled temporarily") is routine for a *patch*,
+  but on the listing step it may mean the disabled repository was the update's
+  own, in which case the missing patch would go unnoticed. The cost is that a
+  host carrying an unrelated stale or unreachable repository can now fail its
+  update with "could not determine what to patch" rather than patching; the
+  remedy is to fix or remove that repository. A host carrying none of the
+  update's products still passes — an empty list reached with a `0` status is an
+  answer, not a failure — and so does an update repo that was simply never
+  added, which zypper reports as a perfectly good list without the update's
+  rows.
+  `zypper -n refresh` is **not** judged: it returns the same status whether one
+  repository failed to refresh or all of them did, so on a refhost with an
+  unrelated broken repo it cannot distinguish a fatal problem from a routine
+  one. A refresh failure that really does hide the update surfaces on the
+  listing step instead.
+  Such a host fails the update but does **not** trigger the group-wide rollback
+  downgrade: it never ran a patch, so there is nothing half-applied to repair,
+  and rolling back would revert every healthy host in the group. A run mixing
+  one such host with a genuine check failure still rolls back, on behalf of the
+  host the rollback can actually repair; a run mixing one with a host the flow
+  lost (a timeout, a dropped connection) does not roll back at all, where it
+  previously did — neither host is one a downgrade could repair.
+  The remote command text changes again, so `show_log` transcripts change with
+  it.
 - `install` no longer fails when a package's `%post` script did. zypper exits
   `107` (`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`) in that case — an *informational*
   code meaning the packages "were successfully unpacked to disk and are

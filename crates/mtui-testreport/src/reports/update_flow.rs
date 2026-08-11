@@ -39,13 +39,21 @@ use crate::update_workflow::{CheckProvider, DoerProvider, Role, UpdateError, Wor
 /// built by [`build_update_maps`] (`(commands, reboot)`).
 type UpdateMaps = (BTreeMap<String, String>, BTreeMap<String, String>);
 
-/// Why an update did not apply — distinguishes a *check* failure (packages may be
-/// half-applied, so roll back) from a *config* failure (a concrete target has no
-/// updater doer, so nothing was installed and there is nothing to roll back).
+/// Why an update did not apply.
 ///
-/// Both map to a single [`UpdateError`] at the command boundary; the distinction
-/// exists only so [`perform_update_with_rollback`] rolls back on `Check` and
-/// skips rollback on `MissingUpdater`.
+/// The variants exist to answer exactly one question — **can a group-wide
+/// downgrade repair any host that failed?** — because that is what
+/// [`perform_update_with_rollback`] has to decide, and the rollback reverts
+/// *every* host in the group, not just the one that reported. `Check` and
+/// `RebootNotTaken` answer yes and roll back; every other variant answers no
+/// and re-surfaces the error untouched.
+///
+/// "No" is not one situation, and the variants keep the differences because an
+/// operator needs them: nothing was ever installed (`MissingUpdater`,
+/// `Prepare`, `Cancelled`, `ProbeFailed`), or something may well have been
+/// installed but the flow cannot reach the host to undo it (`Reboot`), or it is
+/// unknown whether anything was (`NotRun`). All of them collapse to a single
+/// [`UpdateError`] at the command boundary.
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpdateFailure {
     /// One or more hosts failed the `updater` check after the command ran.
@@ -115,10 +123,34 @@ pub enum UpdateFailure {
     /// of a verdict. The host's state is unknown, not known-bad; it needs
     /// eyes on it, not an automated second transaction.
     ///
-    /// Only used when **every** failed host is in that state; a run mixing a
-    /// real check failure with a lost host still rolls back, on behalf of the
-    /// host the rollback can genuinely repair.
+    /// Used when **no** failed host is one the rollback could repair: every
+    /// one of them is `-1`, or a mix of `-1` and
+    /// [`ProbeFailed`](Self::ProbeFailed) hosts (`-1` is the more
+    /// conservative of the two labels, and its "state unknown" claim is true
+    /// of at least one host in such a run). A run mixing either with a real
+    /// check failure still rolls back, on behalf of the host the rollback can
+    /// genuinely repair.
     NotRun(UpdateError),
+    /// The update command ran on every host that failed, and each reported
+    /// that it could not work out what to patch — so none of them dispatched
+    /// a patch (`checks::update`'s `probe_failure`).
+    ///
+    /// Skips the rollback, and for a *stronger* reason than
+    /// [`NotRun`](Self::NotRun)'s: this is not the absence of a verdict but a
+    /// definite one. The host said it never patched, so its packages are
+    /// exactly what they were before the flow started. There is nothing
+    /// half-applied for a downgrade to repair, and the rollback is group-wide
+    /// — running it would revert every healthy peer over a probe that broke on
+    /// one host.
+    ///
+    /// It is the operator's `zypper` view that needs attention (a host with no
+    /// repositories, a ZYpp lock, a broken awk), not the host's package state.
+    ///
+    /// Only used when **every** failed host is in that state. A run mixing one
+    /// with a `-1` host is labelled [`NotRun`](Self::NotRun) — also
+    /// non-rolling, and the more conservative of the two claims, since one host
+    /// in such a run really is in an unknown state.
+    ProbeFailed(UpdateError),
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
@@ -167,9 +199,12 @@ where
 /// that did not take effect on a host still reachable
 /// ([`UpdateFailure::RebootNotTaken`]).
 ///
-/// A `MissingUpdater` failure installed nothing, so it re-surfaces without a
-/// rollback attempt. The rollback is best-effort ([`perform_downgrade`] returns
-/// `()`), so it can never bury the original update error.
+/// Every other failure installed nothing — no updater for a host's key, a
+/// prepare that could not run, a cancel before dispatch, a host the flow lost,
+/// or a host that could not determine what to patch — so each re-surfaces
+/// without a rollback attempt. The rollback is best-effort
+/// ([`perform_downgrade`] returns `()`), so it can never bury the original
+/// update error.
 pub async fn perform_update_with_rollback<R>(
     report: &R,
     targets: &mut HostsGroup,
@@ -212,6 +247,17 @@ where
             // group-wide downgrade cannot repair them and would only revert
             // the healthy ones.
             error!(error = %e, "update failed");
+            Err(e)
+        }
+        Err(UpdateFailure::ProbeFailed(e)) => {
+            // Every failed host reported that it could not work out what to
+            // patch, so none of them ran a patch: there is nothing
+            // half-applied for a downgrade to undo, and the rollback is
+            // group-wide — it would revert every healthy peer over a probe
+            // that broke on one host. The test repos are kept, as on any
+            // failure, so the operator can look at the repo state the probe
+            // complained about.
+            error!(error = %e, "update failed: could not determine what to patch");
             Err(e)
         }
         Err(UpdateFailure::Check(e) | UpdateFailure::RebootNotTaken(e)) => {
@@ -396,11 +442,21 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
         let mut hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
         hosts.sort();
         let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
-        Err(UpdateError::reason_only(format!(
+        let mut aggregate = UpdateError::reason_only(format!(
             "{op} failed on {} ({})",
             hosts.join(", "),
             detail.join("; ")
-        )))
+        ));
+        // The typed flags survive the summary. `all`, not `any`: each says
+        // something about *the run*, and a summary that claimed "no patch was
+        // dispatched" while one host had dispatched one would be worse than no
+        // claim at all. The single-failure path above returns the error
+        // verbatim, so without this the flags would exist on one path and
+        // vanish on the other — and they are the declared routing contract,
+        // not a detail of who reads them today.
+        aggregate.probe_failed = failures.iter().all(|e| e.probe_failed);
+        aggregate.cancelled = failures.iter().all(|e| e.cancelled);
+        Err(aggregate)
     }
 }
 
@@ -1605,9 +1661,12 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
 /// host's reboot took effect — reconnecting is not sufficient, since a host can
 /// answer without ever having gone down. Otherwise `Err` with the aggregated
 /// failure: a check failure (packages may be half-applied) is
-/// [`UpdateFailure::Check`] and **suppresses the reboot entirely** — unless
-/// every failed host's command never completed (`lastexit()` of `-1`), which
-/// is [`UpdateFailure::NotRun`] and skips the rollback; a reboot
+/// [`UpdateFailure::Check`] and **suppresses the reboot entirely** — unless no
+/// failed host is one a rollback could repair, which is
+/// [`UpdateFailure::ProbeFailed`] when every one of them reported that it
+/// could not determine what to patch and [`UpdateFailure::NotRun`] when the
+/// command never completed there (`lastexit()` of `-1`); both skip the
+/// rollback. A reboot
 /// failure is [`UpdateFailure::Reboot`] when the host is unreachable and
 /// [`UpdateFailure::RebootNotTaken`] when every failed host is still reachable,
 /// which is what decides whether the group-wide rollback runs. A single failure is returned verbatim; more than
@@ -1659,20 +1718,35 @@ async fn update_run_phase(
         // left of it for the package-manager lock. All three veto the
         // rollback — `UpdateFailure::NotRun` carries the full argument.
         //
-        // `all`, not `any`, for the same reason as the reboot arm: a run that
-        // mixes a lost host with a genuine check failure still rolls back, on
-        // behalf of the host the rollback can actually repair.
-        let never_ran = failures.iter().all(|e| {
-            e.host
-                .as_deref()
-                .and_then(|h| targets.get(h))
-                .and_then(mtui_hosts::Target::lastexit)
-                == Some(-1)
-        });
-        let wrap: fn(UpdateError) -> UpdateFailure = if never_ran {
-            UpdateFailure::NotRun
-        } else {
+        // A probe failure is the third non-rolling cause, and the one the
+        // rollback is *least* entitled to fire on: the host ran the update
+        // command and reported that it could not work out what to patch, so it
+        // never dispatched a patch at all. Its packages are what they were
+        // before the flow started. It is carried as a typed flag on the error
+        // rather than re-derived here — the alternative, matching the reason
+        // string, would be the first place in the tree where control flow
+        // depended on a reason's text.
+        //
+        // The rollback question is one bit — "can a group-wide downgrade
+        // repair any host that failed?" — so it is asked that way: `any`
+        // repairable host routes `Check`, exactly as before (a run that mixes
+        // a lost host with a genuine check failure still rolls back, on behalf
+        // of the host the rollback can actually repair). Only the *label* on
+        // the non-repairable runs is split further.
+        let repairable = |e: &UpdateError| {
+            !e.probe_failed
+                && e.host
+                    .as_deref()
+                    .and_then(|h| targets.get(h))
+                    .and_then(mtui_hosts::Target::lastexit)
+                    != Some(-1)
+        };
+        let wrap: fn(UpdateError) -> UpdateFailure = if failures.iter().any(repairable) {
             UpdateFailure::Check
+        } else if failures.iter().all(|e| e.probe_failed) {
+            UpdateFailure::ProbeFailed
+        } else {
+            UpdateFailure::NotRun
         };
         aggregate_failures("update", failures).map_err(wrap)
     } else {
@@ -2422,6 +2496,57 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_failures_carries_the_typed_flags_through_the_summary() {
+        // The single-failure path returns the error verbatim, flags and all;
+        // the summary path builds a fresh one, so without care the flags exist
+        // on one path and vanish on the other. They are the declared routing
+        // contract — `reports::update_flow` routes on `probe_failed`, and the
+        // command layer reports `cancelled` — so a summary that drops them is a
+        // summary that lies about the run.
+        //
+        // `all`, not `any`: a summary claiming "no patch was dispatched" while
+        // one host had dispatched one would be worse than no claim.
+        let err = aggregate_failures(
+            "update",
+            vec![
+                UpdateError::probe_failure("could not determine what to patch", "h1"),
+                UpdateError::probe_failure("could not determine what to patch", "h2"),
+            ],
+        )
+        .unwrap_err();
+        assert!(
+            err.probe_failed,
+            "a summary of probe failures is still a probe failure: {err:?}"
+        );
+
+        let mixed = aggregate_failures(
+            "update",
+            vec![
+                UpdateError::probe_failure("could not determine what to patch", "h1"),
+                UpdateError::new("Unknown Error", "h2"),
+            ],
+        )
+        .unwrap_err();
+        assert!(
+            !mixed.probe_failed,
+            "one host that did dispatch a patch clears the flag: {mixed:?}"
+        );
+
+        let cancelled = aggregate_failures(
+            "update",
+            vec![
+                UpdateError::cancelled("cancelled before pkg-a"),
+                UpdateError::cancelled("cancelled before pkg-b"),
+            ],
+        )
+        .unwrap_err();
+        assert!(
+            cancelled.is_cancelled(),
+            "a summary of cancellations is still a cancellation: {cancelled:?}"
+        );
+    }
+
+    #[test]
     fn aggregate_failures_summarises_multiple_hosts() {
         let failures = vec![
             UpdateError::new("boom", "h2"),
@@ -2965,19 +3090,13 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn update_timeout_does_not_roll_back_healthy_hosts() {
-        // `Target::run` records -1 for a timeout, a mid-command connection
-        // loss, and an unconnected target — i.e. "the flow could not talk to
-        // this host", not "the patch went wrong". Routing that into the
-        // group-wide rollback would revert every host that patched cleanly on
-        // behalf of one the downgrade cannot reach anyway, which is exactly
-        // what the reboot arm already refuses to do.
-        //
-        // h1's patch times out; h2 patches cleanly. The `-1` is scripted onto
-        // the patch command only — it is exactly what `Target::run` records
-        // when the command times out, and scripting it via `with_default`
-        // would put it on the probes too.
+    /// An SL Micro target whose *update command* records `Target::run`'s
+    /// never-ran sentinel (`-1`) — a timeout, a mid-command connection loss, or
+    /// an unconnected target.
+    ///
+    /// The `-1` is scripted onto the update command alone: scripting it via
+    /// `with_default` would put it on the probes too, a state no run produces.
+    fn slmicro_target_with_lost_update(hostname: &str) -> (Target, MockConnection) {
         let patch = WorkflowRegistry::default()
             .doer(Role::Update, "slmicro", true)
             .expect("slmicro has an updater")
@@ -2990,13 +3109,13 @@ mod tests {
                 .collect(),
             )
             .expect("safe substitution never fails");
-        let lost = MockConnection::new("h1")
+        let lost = MockConnection::new(hostname)
             .with_default(CommandLog::new("", "", "", 0, 0))
             .with_response(patch.clone(), CommandLog::new(&patch, "", "", -1, 0))
             .with_changing_boot_id();
-        let lost_handle = lost.clone();
-        let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(lost));
-        t1.set_system(
+        let handle = lost.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(lost));
+        t.set_system(
             System::new(
                 SystemProduct::new("SL-Micro", "6.0", "x86_64"),
                 BTreeSet::new(),
@@ -3004,6 +3123,20 @@ mod tests {
             ),
             true,
         );
+        (t, handle)
+    }
+
+    #[tokio::test]
+    async fn update_timeout_does_not_roll_back_healthy_hosts() {
+        // `Target::run` records -1 for a timeout, a mid-command connection
+        // loss, and an unconnected target — i.e. "the flow could not talk to
+        // this host", not "the patch went wrong". Routing that into the
+        // group-wide rollback would revert every host that patched cleanly on
+        // behalf of one the downgrade cannot reach anyway, which is exactly
+        // what the reboot arm already refuses to do.
+        //
+        // h1's patch times out; h2 patches cleanly.
+        let (t1, lost_handle) = slmicro_target_with_lost_update("h1");
         let (t2, healthy) = slmicro_target("h2", "pkg-a = 1.0-1\n", 0);
         let mut group = HostsGroup::new(vec![t1, t2], false);
         let mut report = crate::reports::SlReport::new(Config::default());
@@ -3042,6 +3175,32 @@ mod tests {
             "the lost host cannot be rolled back either: {:?}",
             lost_handle.commands()
         );
+
+        // And the variant itself, which the rollback wrapper above collapses
+        // to a bare `UpdateError`. Without this the routing is observed only
+        // through its consequence, and `NotRun` could be replaced by any other
+        // non-rolling variant with the whole suite still green.
+        let (t, _) = slmicro_target_with_lost_update("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("a host whose command never ran returns Err(NotRun): {res:?}");
+        };
+        assert_eq!(e.reason, "update command timed out or failed to run");
+        assert!(!e.probe_failed, "a lost host is not a probe failure: {e:?}");
     }
 
     #[tokio::test]
@@ -3305,6 +3464,244 @@ mod tests {
             false,
         );
         (t, handle, patch)
+    }
+
+    /// A SLES 15 target whose update script reports a **probe** failure: the
+    /// marker line on stdout, and the failed probe's own status as the
+    /// script's.
+    ///
+    /// That pairing is what the rendered template actually produces when
+    /// `zypper -n patches` fails — pinned end-to-end against a real `/bin/sh`
+    /// in `actions::update`'s `rendered_script` module, which is where it can
+    /// be pinned: `MockConnection` scripts one outcome per command string and
+    /// cannot run a shell. Replaying it here is what lets the *routing* be
+    /// tested, and the marker comes from the same constant the check greps
+    /// for, so the two cannot drift apart silently.
+    ///
+    /// The default stdout is a resolvable version line, so a rollback that did
+    /// run would render an `--oldpackage` command — without that, "assert no
+    /// rollback happened" would pass however the failure was routed.
+    fn sles_target_with_probe_failure(
+        hostname: &str,
+        packages: &[String],
+    ) -> (Target, MockConnection, String) {
+        use crate::update_workflow::checks::update::PROBE_FAILURE_MARKER;
+
+        let update = zypper_patch_command(packages);
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(
+                update.clone(),
+                CommandLog::new(
+                    update.clone(),
+                    format!("{PROBE_FAILURE_MARKER}: zypper -n patches exited 6"),
+                    "",
+                    6,
+                    0,
+                ),
+            );
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        (t, handle, update)
+    }
+
+    #[tokio::test]
+    async fn perform_update_routes_a_probe_failure_away_from_the_rollback() {
+        // Issue #447's routing decision. A host that could not work out what
+        // to patch never ran a patch, so its packages are exactly what they
+        // were: there is nothing half-applied for the group-wide rollback
+        // downgrade to repair, and firing it would revert every healthy peer.
+        //
+        // The variant *and* the reason: `ProbeFailed` is the only non-rolling
+        // route reachable from a check failure other than `NotRun`, and the
+        // reason is what tells an operator to look at the repo state rather
+        // than at the host's packages.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t, handle, update) = sles_target_with_probe_failure("h1", &packages);
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        // Not vacuous: the failing script really was dispatched.
+        assert!(
+            handle.commands().contains(&update),
+            "the update command must have been dispatched: {:?}",
+            handle.commands()
+        );
+        let Err(UpdateFailure::ProbeFailed(e)) = res else {
+            panic!("a failed probe returns Err(ProbeFailed): {res:?}");
+        };
+        assert_eq!(e.reason, "could not determine what to patch");
+        assert_eq!(e.host.as_deref(), Some("h1"));
+
+        // As on any failure, the test repos are kept — here so the operator
+        // can inspect the repo state the probe complained about.
+        let ops = repo.ops.lock().unwrap().clone();
+        assert!(ops.contains(&RepoOp::Add), "repo add must run: {ops:?}");
+        assert!(
+            !ops.contains(&RepoOp::Remove),
+            "on failure the repos are kept (no Remove): {ops:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_probe_failure_does_not_roll_back_a_healthy_peer() {
+        // The same decision seen where its blast radius is: through the
+        // rollback wrapper, with a healthy peer in the group. `perform_update_
+        // with_rollback` hands the downgrade the *whole* group, so a probe
+        // failure routed to `Check` would revert h2 — a host that patched
+        // perfectly — on behalf of h1's broken repo configuration.
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+        let packages = report.get_package_list();
+        let (t1, h1, _) = sles_target_with_probe_failure("h1", &packages);
+        let (t2, h2, _) = sles_target_with_patch_exit("h2", &packages, 0);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("a host that could not list its patches must not report success");
+        assert_eq!(err.reason, "could not determine what to patch");
+
+        // h2 first: the peer is what this test exists for.
+        assert!(
+            !h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "the healthy peer h2 must not be rolled back on h1's behalf: {:?}",
+            h2.commands()
+        );
+        assert!(
+            !h1.commands().iter().any(|c| c.contains("--oldpackage")),
+            "h1 never ran a patch, so it has nothing to roll back: {:?}",
+            h1.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_mixed_probe_failure_and_lost_host_routes_not_run_and_skips_the_rollback() {
+        // The case the routing rewrite silently changed, and the one nothing
+        // observed. At HEAD the rule was `all(lastexit == -1)`, so a run mixing
+        // a probe failure with a lost host answered "not every host is `-1`" →
+        // `Check` → the group-wide rollback fired. It should not: neither host
+        // is one a downgrade can repair — h1 never ran a patch, and h2 cannot
+        // be reached.
+        //
+        // The label is `NotRun` rather than `ProbeFailed`: it is the more
+        // conservative of the two, and its claim ("the host's state is
+        // unknown") is true of h2.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+
+        let (t1, _, _) = sles_target_with_probe_failure("h1", &packages);
+        let (t2, _) = slmicro_target_with_lost_update("h2");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = RecordingRepo::default();
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+        let Err(UpdateFailure::NotRun(e)) = res else {
+            panic!("a probe failure mixed with a lost host returns Err(NotRun): {res:?}");
+        };
+        // Both hosts are named — the label is the conservative one, but
+        // neither failure is swallowed.
+        assert!(
+            e.reason.contains("h1") && e.reason.contains("h2"),
+            "both failed hosts are named: {}",
+            e.reason
+        );
+        // The aggregate does not claim "no patch was dispatched" for a run in
+        // which one host's state is unknown.
+        assert!(
+            !e.probe_failed,
+            "a mixed run must not carry the probe-failure flag: {e:?}"
+        );
+
+        // And through the rollback wrapper: neither host is downgraded.
+        let (t1, h1, _) = sles_target_with_probe_failure("h1", &packages);
+        let (t2, h2) = slmicro_target_with_lost_update("h2");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+        report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("two failed hosts must not report success");
+        for (name, handle) in [("h1", &h1), ("h2", &h2)] {
+            assert!(
+                !handle.commands().iter().any(|c| c.contains("--oldpackage")),
+                "{name} must not be rolled back: neither host ran a patch this could undo: {:?}",
+                handle.commands()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn update_still_rolls_back_when_a_probe_failure_rides_with_a_real_one() {
+        // The other side of the routing rule, and the reason it asks "is *any*
+        // failed host repairable?" rather than "did they all fail the same
+        // way?". h2's patch ran and returned 104, which is the half-applied
+        // state the rollback exists to undo; h1's probe failure must not
+        // downgrade the *verdict* and strand h2 with a failed transaction.
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+        let packages = report.get_package_list();
+        let (t1, _h1, _) = sles_target_with_probe_failure("h1", &packages);
+        let (t2, h2, patch) = sles_target_with_patch_exit("h2", &packages, 104);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let err = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await
+            .expect_err("two failed hosts must not report success");
+        // Both hosts are named, neither reason is swallowed.
+        assert!(
+            err.reason.contains("could not determine what to patch")
+                && err.reason.contains("package not found"),
+            "both failures are reported: {}",
+            err.reason
+        );
+
+        // Not vacuous: h2's patch really did run and fail.
+        assert!(
+            h2.commands().contains(&patch),
+            "h2's patch must have been dispatched: {:?}",
+            h2.commands()
+        );
+        assert!(
+            h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "h2 ran a patch that failed and must still be rolled back: {:?}",
+            h2.commands()
+        );
     }
 
     #[tokio::test]
