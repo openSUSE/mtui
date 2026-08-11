@@ -144,13 +144,40 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   failed transaction. As on every other host, a failed update check on these
   also drives the group-wide rollback downgrade, which they could not reach
   before.
-  SL Micro is judged on the command's output markers rather than its exit code:
-  its update template ends with a repo-cleanup loop, so the status the shell
-  reports is that loop's and not the patch's. RHEL/YUM is judged only on
-  whether the command ran: that key covers every RHEL version, `yum` is `dnf`
-  on RHEL 8/9, and mtui passes the whole package list to hosts that carry only
-  a subset — so neither a non-zero exit nor an `Error:` line (the template also
-  runs `yum repolist` in the same shell) reliably means the update failed.
+  SL Micro is judged on the command's output markers and on the patch's exit
+  code. RHEL/YUM is judged only
+  on whether the command ran: that key covers every RHEL version, `yum` is
+  `dnf` on RHEL 8/9, and mtui passes the whole package list to hosts that carry
+  only a subset — so neither a non-zero exit nor an `Error:` line (the template
+  also runs `yum repolist` in the same shell) reliably means the update failed.
+- An `update` whose patch command fails now fails the update, on both zypper
+  and SL Micro hosts, even when the patch's output is clean. The two update
+  templates are multi-line scripts run as a single remote command, and their
+  last line was the repo-cleanup loop — whose status is `0` whenever it finds
+  nothing to remove — so the shell reported that and discarded the
+  `zypper -n in -t patch` / `transactional-update -n pkg in -t patch` status
+  before anything could read it. Each template now captures the patch's own
+  status and exits with it, and the remote command text visible in `show_log`
+  transcripts changes accordingly.
+  The exit code is classified rather than compared against zero. `100`-`103`,
+  `106` and `107` are zypper's *informational* results and still pass — `102`
+  is "reboot needed", the routine outcome of patching a kernel, and `107` means
+  a package's `%post` script failed although the package itself is installed
+  and registered. (`103`, "restart needed", also passes: zypper installed the
+  patch that updates the package manager itself, and any *remaining* patches
+  need a second run — the post-patch `zypper patches` line in the transcript is
+  what shows those.) `104`, `4`, `5` and `8` report "package not found", ahead
+  of the output markers. Any other non-zero reports "Unknown Error", but only
+  when the markers recognise nothing — a locked stack, a dependency problem or
+  an RPM error keeps its own, more precise reason.
+  Without the informational carve-out a host that patched perfectly would fail
+  its check and fire the group-wide rollback downgrade, reverting every healthy
+  host in the group. A host carrying none of the update's products still
+  passes: the patch command is skipped rather than run with no operands.
+  On SL Micro the classification is in practice just "`0` passes": upstream
+  `transactional-update` absorbs zypper's status and returns only `0` or `1`,
+  so neither the informational codes nor the package-not-found ones can reach
+  the check on that key.
 - An `update` that timed out, or whose connection dropped part-way, is no
   longer reported as successful on **any** host. The update check had no
   equivalent of the downgrade check's "timed out or failed to run" gate, so a
