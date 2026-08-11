@@ -178,6 +178,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `transactional-update` absorbs zypper's status and returns only `0` or `1`,
   so neither the informational codes nor the package-not-found ones can reach
   the check on that key.
+- `install` no longer fails when a package's `%post` script did. zypper exits
+  `107` (`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`) in that case — an *informational*
+  code meaning the packages "were successfully unpacked to disk and are
+  registered in the rpm database" — but the install check's success set stopped
+  at `106`, so a routine kernel or dracut scriptlet hiccup was reported as
+  "Unknown Error".
 - An `update` that timed out, or whose connection dropped part-way, is no
   longer reported as successful on **any** host. The update check had no
   equivalent of the downgrade check's "timed out or failed to run" gate, so a
