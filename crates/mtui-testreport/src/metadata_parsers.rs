@@ -141,7 +141,8 @@ pub struct MetadataEnvelope {
     /// Gitea commit hash.
     #[serde(default)]
     gitea_commit_hash: Option<String>,
-    /// Nested package map: `product -> ["pkg _ version", ...]`.
+    /// Nested package map: `product -> ["<name> <op> <version>", ...]`, e.g.
+    /// `{"standard": ["afterburn = 5.10.0.git73.b97f772-99999_stage.1.1"]}`.
     #[serde(default)]
     packages: Option<HashMap<String, Vec<String>>>,
     /// Update repository URLs.
@@ -180,8 +181,11 @@ impl JSONParser {
     ///   leaves the field `None`, degrading gracefully rather than panicking
     ///   on bad input);
     /// * scalar fields map straight through;
-    /// * each package entry `"pkg _ version"` is split on whitespace, taking the
-    ///   first token as the package name and the third as the version.
+    /// * each package entry `"<name> <op> <version>"` — real metadata ships
+    ///   `"afterburn = 5.10.0.git73.b97f772-99999_stage.1.1"` — is split on
+    ///   whitespace, taking the first token as the package name and the third
+    ///   as the version. The middle token is discarded, so the operator itself
+    ///   is not significant.
     fn parse(results: &mut TestReportBase, data: &MetadataEnvelope) {
         for id in data.jira.iter().flatten() {
             results.jira.insert(id.clone(), NO_DESCRIPTION.to_owned());
@@ -219,8 +223,8 @@ impl JSONParser {
         for (prod, pkgvers) in data.packages.iter().flatten() {
             let mut pkgs = HashMap::new();
             for entry in pkgvers {
-                // `"pkg _ version"`: first token is the package name, third
-                // the version, middle token discarded.
+                // `"<name> <op> <version>"`: first token is the package name,
+                // third the version, middle token discarded.
                 let mut tokens = entry.split_whitespace();
                 match (tokens.next(), tokens.next(), tokens.next()) {
                     (Some(pkg), Some(_), Some(ver)) => {
