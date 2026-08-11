@@ -168,6 +168,11 @@ pub(crate) enum ExitClass {
 /// host mtui never contacted has been told the wrong thing. The gate that
 /// normally catches it first is `not_run` in [`update`].
 ///
+/// The reason string is **not** what vetoes the group-wide rollback for such a
+/// host — `reports::update_flow` routes on `Target::lastexit()` and on
+/// `UpdateError`'s typed `probe_failed` flag, never on a reason's text. Nothing
+/// in the tree makes control flow depend on that text, and nothing should.
+///
 /// [`NotRun`]: ExitClass::NotRun
 /// [`Unknown`]: ExitClass::Unknown
 pub(crate) fn classify_exit(exitcode: i32) -> ExitClass {

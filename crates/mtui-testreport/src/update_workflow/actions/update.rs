@@ -30,6 +30,93 @@
 //! package manager complain about its own arguments — a status that is now
 //! real. That verdict is unchanged; only the way it is reached is.
 //!
+//! # The probe guard
+//!
+//! `$mtui_patches` decides whether the patch runs at all, so the commands that
+//! *produce* it are the script's premise. If one of them fails the list comes
+//! back empty, the guard skips the patch, and the script exits `0` — mtui
+//! reporting an update it never installed. That is issue #447, and it is not
+//! merely a discarded status: `mtui_patches=$(zypper -n patches | awk …)` took
+//! the **pipeline's** status, which POSIX defines as the *last* stage's, so it
+//! was awk's — and awk exits `0` on empty input. zypper's status was not
+//! discarded there, it was unobservable.
+//!
+//! `set -o pipefail` (not POSIX) and `${PIPESTATUS[0]}` (bash-only) are both
+//! out: the acceptance tests below run this text under `/bin/sh`, which is
+//! dash on Debian-family builders. The portable lever is POSIX XCU 2.9.1 — an
+//! assignment-only command takes the status of its last command substitution —
+//! so each probe is captured on its own (`mtui_patch_rows=$(zypper -n
+//! patches)`) and its `$?` read on the next line. The rows then reach awk
+//! through the **builtin** `printf '%s\n'`, not `echo` or `xargs`, so no
+//! `ARG_MAX` limit sits between them.
+//!
+//! `mtui_probe_ok <label> <status>` is the guard. On `0` it returns; on
+//! anything else it prints the marker line
+//! `mtui: could not determine what to patch: <label> exited <status>` and
+//! exits with **the probe's own status**. The marker is the signal — the check
+//! gates on it ahead of the exit-code rules
+//! ([`crate::update_workflow::checks::update`]) — because no exit code could
+//! carry it: a POSIX `exit N` truncates to `0..=255`, so any value a template
+//! chose would sit inside the package manager's own space. Nothing in this
+//! workspace exits with a status of its own choosing; every `exit` in shell
+//! text passes a tool's status through, and this one does too.
+//!
+//! The marker is assembled from the `printf` format string **and** its
+//! argument (`printf 'mtui: could not %s\n' "determine what to patch: …"`) so
+//! that the script's own text does not contain the string the check greps for.
+//! Otherwise a transcript that echoed the command — a `set -x` in the host's
+//! profile, a verbose transport — would report a probe failure on every
+//! healthy update. `the_rendered_update_templates_do_not_trip_the_gate` pins
+//! it.
+//!
+//! ## Why the accepted set is `0` and nothing else
+//!
+//! **Deliberately narrower than `classify_exit`'s success set, and the two
+//! must not be unified.** That set is argued from "the transaction committed",
+//! which is a statement about the *patch*. Read as a verdict on a metadata
+//! *probe* its members invert: `106`
+//! (`ZYPPER_EXIT_INF_REPO_SKIPPED`) says a repository was skipped, and if the
+//! skipped one is the issue repo then the list legitimately lacks the patch —
+//! precisely the silent no-op this guard exists to stop. `zypper -n patches`
+//! cannot say *which* repo was skipped, so the status cannot be made to mean
+//! "the issue repo is present" by widening the set.
+//!
+//! The asymmetry is chosen with its cost understood: a host carrying an
+//! unrelated broken repository alongside working ones now fails the update
+//! with "could not determine what to patch" instead of patching. That failure
+//! is **cheap** — it does not roll back (see `UpdateFailure::ProbeFailed`),
+//! and it points the operator at the repo state, which is where the problem
+//! is. A false *pass* is the bug being fixed.
+//!
+//! ## What is and is not guarded
+//!
+//! Guarded: `zypper -n patches` (both templates) and **the awk that filters
+//! its output**. awk is the last stage of the filter pipeline, so `$?` on the
+//! next line is already awk's and the capture is free — and without it #447 is
+//! still reachable: an awk that exits `2`, or is missing from `PATH`, yields an
+//! empty list, a skipped patch and `exit 0`, which is the original verdict
+//! verbatim.
+//!
+//! **`zypper -n refresh` is deliberately NOT guarded**, although it is the
+//! other command whose failure leaves the patch absent from the metadata. Its
+//! status cannot support the verdict: verified against `openSUSE/zypper`
+//! `src/commands/repos/refresh.cc:337-345`, the explicit `refresh` command
+//! returns `ZYPPER_EXIT_ERR_ZYPP` (`4`) both when *every* repository failed and
+//! when only *some* did — and it never returns `106`, which is set by
+//! `init_repos()` during an operation command, not here. So a refhost with one
+//! stale, unreachable or unsigned-key repository alongside working ones is
+//! indistinguishable from a host whose issue repo failed, and guarding it would
+//! abort updates that are fine. The case it would have caught is not lost: a
+//! wholesale refresh failure resurfaces on `zypper -n patches`, which *does* go
+//! through `init_repos` and so answers `106` (or worse) when the issue repo is
+//! missing — and `106` is rejected.
+//!
+//! Also not guarded: the post-state `grep` (a successful patch makes it exit
+//! `1` — the reason `$mtui_status` exists), the repo-cleanup loop (a cosmetic
+//! `zypper -n rr` hiccup must not revert the fleet), and the pre-state `grep`
+//! (exit `1` there is the legitimate "this host carries none of these
+//! products" case).
+//!
 //! The emptiness test is `set -- $mtui_patches` followed by `[ "$#" -gt 0 ]`,
 //! **not** `[ -n "$mtui_patches" ]`. The two differ on a list of whitespace:
 //! `-n` calls it non-empty, but the unquoted expansion that follows splits it
@@ -40,23 +127,11 @@
 //! receive, and lets the patch itself use a quoted `"$@"` instead of a bare
 //! unquoted expansion.
 //!
-//! # The residual: a refresh that fails silently
-//!
-//! `zypper -n refresh` is **not** guarded, and the empty-list no-op above is
-//! what makes that a real gap: if the issue repo is unreachable or its key is
-//! untrusted, the refresh fails, `zypper -n patches` matches no row, the guard
-//! skips the patch and the script exits `0`. An update that installed nothing
-//! passes its check. Deferred rather than fixed, because `refresh` returns `4`
-//! whether one repository failed or all of them did, so its status cannot tell
-//! "the issue repo went missing" from "an unrelated stale repo did" — and
-//! failing on the latter would abort updates on refhosts that would have
-//! patched correctly, which is routine on QAM refhosts. Closing it needs a
-//! check that the *issue* repo specifically is present, not a status test.
-//!
 //! Two constraints on the text:
 //!
 //! * every `$` meant for the remote shell is written `$$`
-//!   (`$$mtui_status`, `$$?`, `$$(`, `$$#`, `$$@`, `$$r`). A bare `$?` happens
+//!   (`$$mtui_status`, `$$?`, `$$(`, `$$#`, `$$@`, `$$r`, and the guard
+//!   function's own `$$1` / `$$2`). A bare `$?` happens
 //!   to survive [`SubstMode::Safe`] today, but `$$` is the documented escape
 //!   and the only form that stays correct if the mode is ever tightened. The
 //!   awk field refs (`print $2`) stay bare — that is the tested convention.
@@ -69,11 +144,21 @@
 //!   `patches` lines, but nothing depends on that —
 //!   `checks::update::transactional_update` deliberately has no such gate.
 //!
-//! One portability note, pre-existing and unchanged: `/$repa\>/` uses `\>`,
-//! which is a **GNU-awk** word-boundary operator. The SUSE hosts these run on
-//! ship gawk. Other awks degrade it to a literal `>`, which matters only to the
-//! tests below — they execute this text under the *build host's* awk, and pick
-//! a stub row that matches under either reading.
+//! One portability note, pre-existing and unchanged: **these templates require
+//! GNU awk on the refhost.** `/$repa\>/` uses `\>`, a GNU-awk word-boundary
+//! operator; mawk, busybox awk and `gawk --traditional` degrade an unknown
+//! escape to the literal character, and against a realistic
+//! `zypper -n patches` row that extracts nothing — an empty patch list, a
+//! skipped patch and a silent no-op. The SUSE hosts these run on ship gawk, so
+//! the dependency is met in production, and it is stated here rather than
+//! guarded because the guard cannot see it (awk succeeds; it simply matches
+//! nothing).
+//!
+//! Do not mistake the tests below for awk coverage. They execute this text
+//! under the *build host's* awk, and the stub row is deliberately chosen to
+//! match under **either** dialect — that keeps the macOS CI leg (BWK awk)
+//! working, and it is exactly why those tests cannot notice a dialect that
+//! extracts nothing.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
 
@@ -87,13 +172,24 @@ yum -y update $packages
 /// zypper update command.
 ///
 /// See the module docs for why the patch's status is captured rather than left
-/// to the shell's last-command-wins rule.
+/// to the shell's last-command-wins rule, why the two commands that produce the
+/// patch list are guarded, and why `zypper -n refresh` is not one of them.
 const ZYPPER_UPDATE: &str = r#"
 export LANG=
+mtui_probe_ok() {
+  case "$$2" in
+  0) return 0 ;;
+  esac
+  printf 'mtui: could not %s\n' "determine what to patch: $$1 exited $$2"
+  exit "$$2"
+}
 zypper -n lr -puU
 zypper -n refresh
 zypper -n patches | grep $repa
-mtui_patches=$$(zypper -n patches | awk -F "|" '/$repa\>/ { print $2; }')
+mtui_patch_rows=$$(zypper -n patches)
+mtui_probe_ok "zypper -n patches" $$?
+mtui_patches=$$(printf '%s\n' "$$mtui_patch_rows" | awk -F "|" '/$repa\>/ { print $2; }')
+mtui_probe_ok "awk" $$?
 mtui_status=0
 set -- $$mtui_patches
 if [ "$$#" -gt 0 ]; then
@@ -108,12 +204,25 @@ exit $$mtui_status
 /// slmicro update command.
 ///
 /// See the module docs for why the patch's status is captured rather than left
-/// to the shell's last-command-wins rule.
+/// to the shell's last-command-wins rule, and why the two commands that produce
+/// the patch list are guarded. Note this template carries no `zypper -n
+/// refresh` line at all — it never refreshes, so stale metadata here yields a
+/// legitimately empty list that no guard can see.
 const SLM_UPDATE: &str = r#"
 export LANG=
+mtui_probe_ok() {
+  case "$$2" in
+  0) return 0 ;;
+  esac
+  printf 'mtui: could not %s\n' "determine what to patch: $$1 exited $$2"
+  exit "$$2"
+}
 zypper -n lr -puU
 zypper -n patches | grep $repa
-mtui_patches=$$(zypper -n patches | awk -F "|" '/$repa\>/ { print $2; }')
+mtui_patch_rows=$$(zypper -n patches)
+mtui_probe_ok "zypper -n patches" $$?
+mtui_patches=$$(printf '%s\n' "$$mtui_patch_rows" | awk -F "|" '/$repa\>/ { print $2; }')
+mtui_probe_ok "awk" $$?
 mtui_status=0
 set -- $$mtui_patches
 if [ "$$#" -gt 0 ]; then
@@ -154,6 +263,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::update_workflow::checks::update::PROBE_FAILURE_MARKER;
 
     fn vars<'a>(repa: &'a str, packages: &'a str) -> HashMap<&'a str, &'a str> {
         [("repa", repa), ("packages", packages)]
@@ -214,11 +324,60 @@ mod tests {
             !rendered.contains("$$"),
             "{name}: an unresolved `$$` reached the remote shell: {rendered}"
         );
-        // The patch list is captured before the patch so the empty case is
-        // distinguishable.
+        // The guard the probe status is fed to. Without the definition
+        // `mtui_probe_ok …` would be a "command not found" — status 127 on
+        // stderr — and the script would carry on to the empty-list skip and
+        // exit 0, which is the bug it exists to close.
+        //
+        // Its accepted set is `0` **alone**, deliberately narrower than
+        // `classify_exit`'s (see the module docs: `106` on a probe can mean
+        // the issue repo was the skipped one), and the marker is split across
+        // the format string and its argument so the script's own text does not
+        // contain it.
         assert!(
-            rendered.contains("mtui_patches=$(zypper -n patches | awk -F \"|\""),
-            "{name}: the patch list must be captured first: {rendered}"
+            rendered.contains(
+                "mtui_probe_ok() {\n  case \"$2\" in\n  0) return 0 ;;\n  esac\n  printf 'mtui: could not %s\\n' \"determine what to patch: $1 exited $2\"\n  exit \"$2\"\n}\n"
+            ),
+            "{name}: the probe guard must be defined before any probe runs: {rendered}"
+        );
+        // The other half of the split: the check's marker must not appear in
+        // the script text, or a transcript echoing the command would report a
+        // probe failure on a host that patched fine.
+        assert!(
+            !rendered.contains(PROBE_FAILURE_MARKER),
+            "{name}: the script text must not contain the marker it prints: {rendered}"
+        );
+        // The patch list is captured before the patch so the empty case is
+        // distinguishable — and captured in three steps, as one contiguous
+        // block, because each step is load-bearing:
+        //
+        // * the probe runs **alone** in a command substitution, so the
+        //   assignment takes zypper's own status (POSIX XCU 2.9.1). Piped
+        //   straight into awk, as it was, the status is the pipeline's — the
+        //   *last* stage's — and awk exits 0 on empty input, so zypper's was
+        //   not observable at all;
+        // * the guard reads that status on the very next line, before
+        //   anything else can clobber `$?`;
+        // * only then does awk filter the captured rows, through the builtin
+        //   `printf` rather than `echo`/`xargs`, so no `ARG_MAX` limit sits
+        //   between the probe and the filter;
+        // * and awk's own status is guarded in turn — it is the last stage of
+        //   that pipeline, so `$?` on the next line is already awk's. An awk
+        //   that exits 2 (or is missing from `PATH`) otherwise produces an
+        //   empty list, a skipped patch and `exit 0`: #447's verdict verbatim,
+        //   reached through the one stage the probe guard does not cover.
+        assert!(
+            rendered.contains(&format!(
+                "mtui_patch_rows=$(zypper -n patches)\nmtui_probe_ok \"zypper -n patches\" $?\nmtui_patches=$(printf '%s\\n' \"$mtui_patch_rows\" | awk -F \"|\" '/{repa}\\>/ {{ print $2; }}')\nmtui_probe_ok \"awk\" $?\n"
+            )),
+            "{name}: the patch list must be captured, guarded, filtered, guarded: {rendered}"
+        );
+        // Discriminating: the block above proves the guarded form is present,
+        // not that the unguarded one is gone. A template carrying both would
+        // satisfy it while the second, unguarded assignment silently won.
+        assert!(
+            !rendered.contains("mtui_patches=$(zypper"),
+            "{name}: no unguarded `zypper … | awk` capture may survive: {rendered}"
         );
         // Guarded on the *word count*, not on the string being non-empty: a
         // whitespace-only list is `-n`-true but splits to zero words, which
@@ -357,6 +516,16 @@ mod tests {
         /// guard counts split words instead.
         const BLANK_PATCH_ROW: &str = "issue-:p=42:7>repo |    | security";
 
+        /// A `zypper -n patches` row for a **different** update.
+        ///
+        /// The production shape of "this host carries none of the update's
+        /// products": the probe answers `0` and prints a full table, and none
+        /// of its rows match `$repa`. An empty *table* (`PATCH_ROW = ""`) is
+        /// the rarer case — a host with no patches at all — so pinning only
+        /// that one would leave the common no-op unpinned.
+        const OTHER_PATCH_ROW: &str =
+            "issue-:p=99:1>repo | patch-omega | security | important | --- | needed";
+
         /// A `zypper -n lr` row the repo-cleanup loop matches, so the loop body
         /// (`zypper -n rr`) actually runs and its status can be controlled.
         const REPO_ROW: &str = "1 | issue-:p=42:7>repo | Yes | Yes";
@@ -371,11 +540,23 @@ mod tests {
         /// as much as the patch: without them "the patch never ran" — the
         /// assertion the empty-list case rests on — is also what a broken
         /// `PATH` produces, and the test would pass with no stubs at all.
+        ///
+        /// `patches` carries its own exit knob because it is the script's
+        /// *probe*: what it returns decides whether the patch runs at all, and
+        /// the template must not read its failure as "this host has nothing to
+        /// patch". `refresh` carries one too, for the opposite reason — to
+        /// show that a failing refresh does **not** abort the update (its
+        /// status cannot distinguish a broken issue repo from an unrelated
+        /// broken repo; see the module docs).
         const ZYPPER_STUB: &str = r#"#!/bin/sh
 printf '%s\n' "$2" >> "$MTUI_STUB_DIR/probe.ran"
 case "$2" in
 patches)
     if [ -n "$MTUI_STUB_PATCH_ROW" ]; then printf '%s\n' "$MTUI_STUB_PATCH_ROW"; fi
+    exit "$MTUI_STUB_PATCHES_EXIT"
+    ;;
+refresh)
+    exit "$MTUI_STUB_REFRESH_EXIT"
     ;;
 lr)
     if [ -n "$MTUI_STUB_REPO_ROW" ]; then printf '%s\n' "$MTUI_STUB_REPO_ROW"; fi
@@ -461,21 +642,76 @@ exit "$MTUI_STUB_PATCH_EXIT"
             vec![("zypper", zypper()), ("slmicro", slmicro())]
         }
 
-        /// Renders `cmds` and runs it under `/bin/sh -c`, returning the script's
-        /// own exit status.
+        /// The knobs one scripted run is driven with.
         ///
-        /// `patch_row` empty means the update matches no patch on this host;
-        /// `repo_row` empty means the cleanup loop finds nothing to remove (its
-        /// body never runs, so the loop's status is `0` — the masking the whole
-        /// issue is about).
-        fn run_script(
-            cmds: &ActionCommands,
-            stubs: &Stubs,
+        /// A struct rather than six more parameters: `run_script` would
+        /// otherwise trip `clippy::too_many_arguments`, and a call site reading
+        /// `Knobs { patches_exit: 7, ..Knobs::default() }` names the one thing
+        /// the case is about. [`Default`] is the wholly healthy run — every
+        /// command exits `0` and [`PATCH_ROW`] matches.
+        #[derive(Clone, Copy)]
+        struct Knobs {
+            /// `zypper -n refresh`'s status. Only `ZYPPER_UPDATE` runs a
+            /// refresh at all; on `SLM_UPDATE` this knob has nothing to act
+            /// on, which is itself asserted below.
+            refresh_exit: i32,
+            /// `zypper -n patches`'s status — the probe whose output becomes
+            /// the patch list, on both templates.
+            patches_exit: i32,
+            /// awk's status. Non-zero replaces `awk` on `PATH` with a stub
+            /// that consumes stdin and exits with it — the shape of a broken
+            /// or missing awk, which is the *other* way the patch list can
+            /// come back empty without anything having gone wrong visibly.
+            awk_exit: i32,
+            /// The patch command's own status.
             patch_exit: i32,
+            /// `zypper -n rr`'s status in the repo-cleanup loop.
             cleanup_exit: i32,
-            patch_row: &str,
-            repo_row: &str,
-        ) -> i32 {
+            /// The `zypper -n patches` row. Empty means the update matches no
+            /// patch on this host.
+            patch_row: &'static str,
+            /// The `zypper -n lr` row. Empty means the cleanup loop finds
+            /// nothing to remove — its body never runs, so the loop's status is
+            /// `0`, the masking #400 was about.
+            repo_row: &'static str,
+        }
+
+        impl Default for Knobs {
+            fn default() -> Self {
+                Self {
+                    refresh_exit: 0,
+                    patches_exit: 0,
+                    awk_exit: 0,
+                    patch_exit: 0,
+                    cleanup_exit: 0,
+                    patch_row: PATCH_ROW,
+                    repo_row: "",
+                }
+            }
+        }
+
+        /// What one scripted run produced.
+        struct Ran {
+            /// The script's own exit status.
+            code: i32,
+            /// The script's stdout — where the probe guard's marker line
+            /// lands, and so what the update check would classify.
+            stdout: String,
+        }
+
+        /// Renders `cmds` and runs it under `/bin/sh -c`.
+        ///
+        /// A non-zero `awk_exit` shadows the real `awk` with a stub for this
+        /// run; the stub dir is already first on `PATH`, and `Stubs` is
+        /// per-case, so nothing leaks into another run.
+        fn run_script(cmds: &ActionCommands, stubs: &Stubs, knobs: Knobs) -> Ran {
+            if knobs.awk_exit != 0 {
+                write_exe(
+                    stubs.dir.path(),
+                    "awk",
+                    &format!("#!/bin/sh\ncat > /dev/null\nexit {}\n", knobs.awk_exit),
+                );
+            }
             let rendered = cmds
                 .render_command(&vars(REPA, "pkg-a"))
                 .expect("safe substitute never fails");
@@ -484,15 +720,21 @@ exit "$MTUI_STUB_PATCH_EXIT"
                 .arg(&rendered)
                 .env("PATH", &stubs.path)
                 .env("MTUI_STUB_DIR", stubs.dir.path())
-                .env("MTUI_STUB_PATCH_EXIT", patch_exit.to_string())
-                .env("MTUI_STUB_CLEANUP_EXIT", cleanup_exit.to_string())
-                .env("MTUI_STUB_PATCH_ROW", patch_row)
-                .env("MTUI_STUB_REPO_ROW", repo_row)
+                .env("MTUI_STUB_REFRESH_EXIT", knobs.refresh_exit.to_string())
+                .env("MTUI_STUB_PATCHES_EXIT", knobs.patches_exit.to_string())
+                .env("MTUI_STUB_PATCH_EXIT", knobs.patch_exit.to_string())
+                .env("MTUI_STUB_CLEANUP_EXIT", knobs.cleanup_exit.to_string())
+                .env("MTUI_STUB_PATCH_ROW", knobs.patch_row)
+                .env("MTUI_STUB_REPO_ROW", knobs.repo_row)
                 .output()
                 .expect("run rendered script under /bin/sh");
-            out.status
-                .code()
-                .unwrap_or_else(|| panic!("script died on a signal: {:?}", out.status))
+            Ran {
+                code: out
+                    .status
+                    .code()
+                    .unwrap_or_else(|| panic!("script died on a signal: {:?}", out.status)),
+                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            }
         }
 
         #[test]
@@ -538,7 +780,14 @@ exit "$MTUI_STUB_PATCH_EXIT"
             // a genuinely failed patch reported success.
             for (name, cmds) in templates() {
                 let stubs = Stubs::new();
-                let code = run_script(&cmds, &stubs, 8, 0, PATCH_ROW, "");
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        patch_exit: 8,
+                        ..Knobs::default()
+                    },
+                );
                 assert_eq!(
                     stubs.patch_invocations().len(),
                     1,
@@ -548,7 +797,10 @@ exit "$MTUI_STUB_PATCH_EXIT"
                     stubs.cleanup_invocations().is_empty(),
                     "{name}: no repo row, so the cleanup loop body must not run"
                 );
-                assert_eq!(code, 8, "{name}: the script must report the patch's status");
+                assert_eq!(
+                    ran.code, 8,
+                    "{name}: the script must report the patch's status"
+                );
             }
         }
 
@@ -560,7 +812,15 @@ exit "$MTUI_STUB_PATCH_EXIT"
             // downgrade, reverting every healthy host in the group.
             for (name, cmds) in templates() {
                 let stubs = Stubs::new();
-                let code = run_script(&cmds, &stubs, 0, 3, PATCH_ROW, REPO_ROW);
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        cleanup_exit: 3,
+                        repo_row: REPO_ROW,
+                        ..Knobs::default()
+                    },
+                );
                 assert_eq!(
                     stubs.patch_invocations().len(),
                     1,
@@ -572,7 +832,7 @@ exit "$MTUI_STUB_PATCH_EXIT"
                     "{name}: the cleanup loop body must have run and failed"
                 );
                 assert_eq!(
-                    code, 0,
+                    ran.code, 0,
                     "{name}: a cosmetic cleanup hiccup must not fail the update"
                 );
             }
@@ -586,7 +846,15 @@ exit "$MTUI_STUB_PATCH_EXIT"
             // status would now be real.
             for (name, cmds) in templates() {
                 let stubs = Stubs::new();
-                let code = run_script(&cmds, &stubs, 8, 0, "", "");
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        patch_exit: 8,
+                        patch_row: "",
+                        ..Knobs::default()
+                    },
+                );
                 // Liveness first. The headline assertion here is a *negative*,
                 // and an empty `PATH` produces exactly the same observation —
                 // so show the script actually reached the stub.
@@ -600,7 +868,18 @@ exit "$MTUI_STUB_PATCH_EXIT"
                     "{name}: with no matching patch the patch command must not run: {:?}",
                     stubs.patch_invocations()
                 );
-                assert_eq!(code, 0, "{name}: a host with nothing to patch passes");
+                assert_eq!(ran.code, 0, "{name}: a host with nothing to patch passes");
+                // And it must not even *look* like a failure. The probe guard
+                // added for #447 sits directly upstream of this skip, and the
+                // one thing it must never do is turn "this host carries none
+                // of the update's products" into "could not determine what to
+                // patch" — the empty list here is the probe's honest answer,
+                // reached with a `0` status.
+                assert!(
+                    !ran.stdout.contains(PROBE_FAILURE_MARKER),
+                    "{name}: a legitimately empty patch list is not a probe failure: {}",
+                    ran.stdout
+                );
             }
         }
 
@@ -619,7 +898,15 @@ exit "$MTUI_STUB_PATCH_EXIT"
             // asserts on the exit status rather than on a reason string.
             for (name, cmds) in templates() {
                 let stubs = Stubs::new();
-                let code = run_script(&cmds, &stubs, 8, 0, BLANK_PATCH_ROW, "");
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        patch_exit: 8,
+                        patch_row: BLANK_PATCH_ROW,
+                        ..Knobs::default()
+                    },
+                );
                 assert!(
                     stubs.probe_invocations().iter().any(|c| c == "patches"),
                     "{name}: the script never reached the stub zypper at all: {:?}",
@@ -630,7 +917,275 @@ exit "$MTUI_STUB_PATCH_EXIT"
                     "{name}: a whitespace-only list must not run the patch: {:?}",
                     stubs.patch_invocations()
                 );
-                assert_eq!(code, 0, "{name}: nothing to patch is not a failure");
+                assert_eq!(ran.code, 0, "{name}: nothing to patch is not a failure");
+            }
+        }
+
+        #[test]
+        fn a_failed_patch_list_probe_fails_the_script_and_skips_the_patch() {
+            // Issue #447. `zypper -n patches` is the script's premise: its
+            // output *is* the patch list. When it fails — `6` (the host has no
+            // repositories at all), `7` (a ZYpp lock), an unreadable rpmdb —
+            // the list comes back empty and the guard below skips the patch.
+            // Before this, that skip exited `0` and mtui reported an update it
+            // never installed.
+            //
+            // Note what is *not* in that list: an update repo that was simply
+            // never added. zypper answers that perfectly well, with a table
+            // that lacks this update's rows, so it is indistinguishable from a
+            // host carrying none of the update's products — see
+            // `a_patch_list_with_no_matching_rows_skips_the_patch_and_succeeds`.
+            //
+            // The old capture could not even see it: `mtui_patches=$(zypper -n
+            // patches | awk …)` takes the *pipeline's* status, which is awk's,
+            // and awk exits 0 on empty input.
+            for (name, cmds) in templates() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        patches_exit: 7,
+                        ..Knobs::default()
+                    },
+                );
+                assert!(
+                    stubs.probe_invocations().iter().any(|c| c == "patches"),
+                    "{name}: the script never reached the stub zypper at all: {:?}",
+                    stubs.probe_invocations()
+                );
+                assert!(
+                    stubs.patch_invocations().is_empty(),
+                    "{name}: a failed probe must not be followed by a patch: {:?}",
+                    stubs.patch_invocations()
+                );
+                // The signal the check gates on, naming the probe that broke.
+                assert!(
+                    ran.stdout.contains(&format!(
+                        "{PROBE_FAILURE_MARKER}: zypper -n patches exited 7"
+                    )),
+                    "{name}: the marker must name the failed probe and its status: {}",
+                    ran.stdout
+                );
+                // Pass-through, not a sentinel: a POSIX `exit N` truncates to
+                // `0..=255`, so any value of the template's own choosing would
+                // sit inside the package manager's space. The marker carries
+                // the meaning; the status stays honest.
+                assert_eq!(
+                    ran.code, 7,
+                    "{name}: the script must exit with the probe's own status"
+                );
+            }
+        }
+
+        #[test]
+        fn only_a_zero_probe_status_is_accepted() {
+            // The probe's success set is `0` **alone**, and deliberately not
+            // `classify_exit`'s — which is the set the *patch*'s status is read
+            // against. Every member of that set means "the transaction
+            // committed", a statement about a command that installs something;
+            // as a verdict on a metadata probe they invert. `106`
+            // (`ZYPPER_EXIT_INF_REPO_SKIPPED`) is the one that matters: it says
+            // a repository was skipped, and if the skipped one is the issue
+            // repo then the list legitimately lacks the patch — the silent
+            // no-op this guard exists to stop.
+            //
+            // The whole vocabulary, not a sample: the informational band
+            // (`100`-`103`, `106`, `107`) which the patch's classifier passes,
+            // the package-not-found set (`104`, `4`, `5`, `8`), the band's
+            // boundaries (`99`, `108`), and plain errors. A code that becomes
+            // acceptable on a probe has to be argued for here, individually.
+            for code in [
+                1, 2, 3, 4, 5, 6, 7, 8, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 255,
+            ] {
+                for (name, cmds) in templates() {
+                    let stubs = Stubs::new();
+                    let ran = run_script(
+                        &cmds,
+                        &stubs,
+                        Knobs {
+                            patches_exit: code,
+                            ..Knobs::default()
+                        },
+                    );
+                    assert!(
+                        ran.stdout.contains(&format!(
+                            "{PROBE_FAILURE_MARKER}: zypper -n patches exited {code}"
+                        )),
+                        "{name}: probe exit {code} must be refused: {}",
+                        ran.stdout
+                    );
+                    assert!(
+                        stubs.patch_invocations().is_empty(),
+                        "{name}: probe exit {code} must skip the patch: {:?}",
+                        stubs.patch_invocations()
+                    );
+                    assert_eq!(
+                        ran.code, code,
+                        "{name}: probe exit {code} must be reported verbatim"
+                    );
+                }
+            }
+            // And `0` is accepted, or the loop above proves only that the
+            // script always fails.
+            for (name, cmds) in templates() {
+                let stubs = Stubs::new();
+                let ran = run_script(&cmds, &stubs, Knobs::default());
+                assert_eq!(
+                    stubs.patch_invocations().len(),
+                    1,
+                    "{name}: a probe that answered must patch: {:?}",
+                    stubs.patch_invocations()
+                );
+                assert!(
+                    !ran.stdout.contains(PROBE_FAILURE_MARKER),
+                    "{name}: a probe exit 0 is not a probe failure: {}",
+                    ran.stdout
+                );
+            }
+        }
+
+        #[test]
+        fn a_failed_refresh_does_not_abort_the_update() {
+            // `zypper -n refresh` is the other command whose failure can leave
+            // the patch out of the metadata, and it is deliberately **not**
+            // guarded. Verified against `openSUSE/zypper`
+            // `src/commands/repos/refresh.cc:337-345`: the explicit `refresh`
+            // command returns `ZYPPER_EXIT_ERR_ZYPP` (`4`) both when every
+            // repository failed and when only some did, and never returns
+            // `106`. So its status cannot distinguish "the issue repo failed"
+            // from "an unrelated stale repo failed" — and a QAM refhost
+            // routinely carries the latter. Guarding it would abort updates
+            // that are fine.
+            //
+            // Pinned as a positive: exit 4 from the refresh, and the patch
+            // still runs. The case it would have caught is not lost — a
+            // wholesale refresh failure resurfaces as a non-zero
+            // `zypper -n patches`, which `only_a_zero_probe_status_is_accepted`
+            // covers.
+            for (name, cmds) in templates() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        refresh_exit: 4,
+                        ..Knobs::default()
+                    },
+                );
+                assert_eq!(
+                    stubs.patch_invocations().len(),
+                    1,
+                    "{name}: a failed refresh must not stop the patch: {:?}",
+                    stubs.patch_invocations()
+                );
+                assert!(
+                    !ran.stdout.contains(PROBE_FAILURE_MARKER),
+                    "{name}: a failed refresh is not a probe failure: {}",
+                    ran.stdout
+                );
+                assert_eq!(ran.code, 0, "{name}: the patch's own status is reported");
+            }
+            // The zypper template really does run a refresh (or the knob above
+            // acted on nothing); the slmicro template really does not.
+            let stubs = Stubs::new();
+            run_script(&zypper(), &stubs, Knobs::default());
+            assert!(
+                stubs.probe_invocations().iter().any(|c| c == "refresh"),
+                "zypper: this template refreshes: {:?}",
+                stubs.probe_invocations()
+            );
+            let stubs = Stubs::new();
+            run_script(&slmicro(), &stubs, Knobs::default());
+            assert!(
+                !stubs.probe_invocations().iter().any(|c| c == "refresh"),
+                "slmicro: this template refreshes nothing: {:?}",
+                stubs.probe_invocations()
+            );
+        }
+
+        #[test]
+        fn a_broken_awk_fails_the_script_and_skips_the_patch() {
+            // The stage that actually *produces* the list, and the one the
+            // probe guard alone does not cover. awk is the last stage of the
+            // filter pipeline, so an awk that exits 2 — or is missing from
+            // `PATH`, which is exit 127 — yields an empty list, a skipped
+            // patch and `exit 0`: #447's verdict verbatim, reached through a
+            // different command. Its status is free to capture, because `$?`
+            // on the line after the pipeline is already awk's.
+            for (name, cmds) in templates() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        awk_exit: 2,
+                        ..Knobs::default()
+                    },
+                );
+                assert!(
+                    stubs.probe_invocations().iter().any(|c| c == "patches"),
+                    "{name}: the script never reached the stub zypper at all: {:?}",
+                    stubs.probe_invocations()
+                );
+                assert!(
+                    stubs.patch_invocations().is_empty(),
+                    "{name}: a broken awk must not be followed by a patch: {:?}",
+                    stubs.patch_invocations()
+                );
+                assert!(
+                    ran.stdout
+                        .contains(&format!("{PROBE_FAILURE_MARKER}: awk exited 2")),
+                    "{name}: the marker must name awk: {}",
+                    ran.stdout
+                );
+                assert_eq!(ran.code, 2, "{name}: awk's own status is reported");
+            }
+        }
+
+        #[test]
+        fn a_patch_list_with_no_matching_rows_skips_the_patch_and_succeeds() {
+            // The production shape of the legitimate no-op: the probe answers
+            // `0` and prints a perfectly good table, and none of its rows carry
+            // this update's `$repa`. The other empty case
+            // (`an_empty_patch_list_skips_the_patch_and_succeeds`) has the
+            // probe print nothing at all, which is the rarer one — a host with
+            // no patches whatsoever.
+            //
+            // This is the case a probe guard is most likely to get wrong, since
+            // "the filter matched nothing" and "the filter could not run" reach
+            // the same empty variable.
+            for (name, cmds) in templates() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        patch_exit: 8,
+                        patch_row: OTHER_PATCH_ROW,
+                        ..Knobs::default()
+                    },
+                );
+                assert!(
+                    stubs.probe_invocations().iter().any(|c| c == "patches"),
+                    "{name}: the script never reached the stub zypper at all: {:?}",
+                    stubs.probe_invocations()
+                );
+                assert!(
+                    stubs.patch_invocations().is_empty(),
+                    "{name}: no row matches this update, so no patch may run: {:?}",
+                    stubs.patch_invocations()
+                );
+                assert!(
+                    !ran.stdout.contains(PROBE_FAILURE_MARKER),
+                    "{name}: a host carrying another update's patches is a no-op, \
+                     not a probe failure: {}",
+                    ran.stdout
+                );
+                assert_eq!(
+                    ran.code, 0,
+                    "{name}: a host with nothing of ours to patch passes"
+                );
             }
         }
     }

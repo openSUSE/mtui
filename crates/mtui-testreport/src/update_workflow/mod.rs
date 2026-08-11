@@ -48,11 +48,12 @@ pub(crate) type WorkflowKey = (String, bool);
 /// `Display` renders `"{host}: {reason}"` when a host is
 /// present, otherwise just `"{reason}"`. The `reason` strings are diagnoses
 /// shown to an operator and asserted on by tests ("package not found", "update
-/// stack locked", "RPM Error", "Dependency Error", "Unknown Error",
-/// "Unspecified Error"); no code branches on them, so a check is free to pick
-/// the most accurate one for a given transcript. What *is* a contract is the
-/// `UpdateFailure` variant a failure routes to, which decides whether the
-/// group is rolled back.
+/// stack locked", "RPM Error", "Dependency Error", "could not determine what to
+/// patch", "Unknown Error", "Unspecified Error"); no code branches on them, so
+/// a check is free to pick the most accurate one for a given transcript. What
+/// *is* a contract is the `UpdateFailure` variant a failure routes to, which
+/// decides whether the group is rolled back — which is why the probe failure
+/// travels as the typed `probe_failed` flag and not as its string.
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub struct UpdateError {
     /// The failure reason: a short diagnosis for the operator, not a value
@@ -67,6 +68,16 @@ pub struct UpdateError {
     /// inferring it from the session token — inferring would misreport a
     /// genuine host failure that merely coincided with a cancel.
     pub(crate) cancelled: bool,
+    /// `true` when the update command ran but never dispatched a patch,
+    /// because it could not work out what to patch (`checks::update`'s
+    /// `probe_failure`).
+    ///
+    /// Carried as a flag for the same reason `cancelled` is: the flow has to
+    /// route this away from the group-wide rollback downgrade, and the only
+    /// alternative — matching on the `reason` string in
+    /// `reports::update_flow` — would be the first place in the tree where
+    /// control flow depended on the text of a reason.
+    pub(crate) probe_failed: bool,
 }
 
 impl UpdateError {
@@ -77,6 +88,7 @@ impl UpdateError {
             reason: reason.into(),
             host: Some(host.into()),
             cancelled: false,
+            probe_failed: false,
         }
     }
 
@@ -87,6 +99,7 @@ impl UpdateError {
             reason: reason.into(),
             host: None,
             cancelled: true,
+            probe_failed: false,
         }
     }
 
@@ -96,11 +109,25 @@ impl UpdateError {
         self.cancelled
     }
 
+    /// Builds an [`UpdateError`] for an update that could not determine what
+    /// to patch, so never dispatched one.
+    ///
+    /// The flag is what `reports::update_flow` routes on; see
+    /// [`probe_failed`](Self::probe_failed).
+    #[must_use]
+    pub(crate) fn probe_failure(reason: impl Into<String>, host: impl Into<String>) -> Self {
+        Self {
+            probe_failed: true,
+            ..Self::new(reason, host)
+        }
+    }
+
     /// Builds a host-less [`UpdateError`].
     #[must_use]
     pub(crate) fn reason_only(reason: impl Into<String>) -> Self {
         Self {
             cancelled: false,
+            probe_failed: false,
             reason: reason.into(),
             host: None,
         }
