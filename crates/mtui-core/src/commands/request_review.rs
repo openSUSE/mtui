@@ -319,7 +319,7 @@ impl Command for RequestReview {
                 .action(ArgAction::SetTrue)
                 .help(
                     "After posting, watch the message for reviewer reactions until a \
-                     verdict or timeout (Ctrl-C stops it). Over MCP, pair this with \
+                     verdict or timeout (Ctrl-C / job_cancel stops it). Over MCP, pair this with \
                      background=true so the call does not outlive the client timeout",
                 ),
         )
@@ -399,8 +399,10 @@ impl Command for RequestReview {
 
         let poll = Duration::from_secs(session.config.slack_poll_interval);
         let timeout = Duration::from_secs(session.config.slack_watch_timeout);
+        // Both interrupt sources, because both surfaces read this line: Ctrl-C
+        // in the REPL, `job_cancel` over MCP (where there is no Ctrl-C at all).
         session.display.println(&format!(
-            "watching for reactions (up to {}s, Ctrl-C to stop)",
+            "watching for reactions (up to {}s, Ctrl-C / job_cancel to stop)",
             timeout.as_secs()
         ));
 

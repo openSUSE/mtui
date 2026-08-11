@@ -92,15 +92,19 @@ fn main() -> anyhow::Result<()> {
     let mut repl = Repl::new(registry, session);
 
     let ending = runtime.block_on(repl.run())?;
-    // Drop the editor before honouring a force-quit: reedline persists its
-    // `FileBackedHistory` when it is dropped, and `std::process::exit` runs no
-    // destructors — exiting straight from the loop would throw the session's
-    // command history away on every double Ctrl-C. The exit itself stays here,
-    // thin and untestable, while the *decision* is made (and tested) in the
-    // loop.
-    drop(repl);
-    if let Some(code) = ending.exit_code() {
-        std::process::exit(code);
-    }
-    Ok(())
+    let Some(status) = ending.status() else {
+        return Ok(());
+    };
+    // Force-quit: run exactly one destructor, then leave. reedline persists its
+    // `FileBackedHistory` on drop and `std::process::exit` runs none, so the
+    // history would be lost; but dropping the whole `Repl` would synchronously
+    // tear down the entire session graph on the one path whose job is to get
+    // out now — `into_line_editor` keeps the blast radius at the editor.
+    //
+    // `process::exit`, not `main() -> ExitCode`: returning would drop the
+    // runtime, which blocks on in-flight `spawn_blocking` — including the stdin
+    // prompter that is very likely outstanding when someone force-quits (its
+    // `keep waiting? [Y/n]` read never returns, so neither would the drop).
+    drop(repl.into_line_editor());
+    std::process::exit(status.into());
 }

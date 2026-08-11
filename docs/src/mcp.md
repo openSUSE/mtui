@@ -292,7 +292,11 @@ Four job-control tools manage them:
   command's failure envelope if it failed.
 - **`job_cancel(job_id)`** — cancel a running job. (A command already executing on
   a host may run to completion there even after cancel returns — the same caveat as
-  Ctrl-C on a foreground `run`.)
+  Ctrl-C on a foreground `run`.) Two commands treat a cancel as a normal ending
+  rather than a failure: `request_review --watch` stops watching (the request
+  stays posted) and `regenerate` stops waiting (the server keeps building). Both
+  return success, so their job ends `done`, not `cancelled`, with the reply text
+  saying what was and was not finished.
 
 A job blocked mid host-operation cannot stop at a checkpoint, so cancelling it
 force-aborts the dispatch — which skips the operation's own `unlock()`. A forced

@@ -205,16 +205,24 @@ abandoned where it stands, so the operation locks it holds are left behind. Your
 command history is still saved. mtui warns when this happens; see the next entry
 for the cleanup.
 
-Ctrl-C during the **Ctrl-D/`quit` teardown** behaves the same way but cancels
-nothing: the teardown is what releases the pool claims and closes the hosts, so
-it always runs to completion. A press there warns that it is in progress, and a
-second one force-quits — leaving both the operation locks and the pool claims
-(`unlock --force` and `unlock --pool`).
+Ctrl-C during the **teardown** behaves the same way but cancels nothing: the
+teardown is what releases the pool claims and closes the hosts, so it always runs
+to completion. A press there warns that it is in progress, and a second one
+force-quits — leaving both the operation locks and the pool claims
+(`unlock --force` and `unlock --pool`). This holds however you asked to leave:
+Ctrl-D and a typed `quit`/`exit` dispatch the same teardown and get the same
+protection.
 
-One carve-out: Ctrl-C during the **initial load** at startup (`-a`/`-k`/`--sut`,
+Two carve-outs. Ctrl-C during the **initial load** at startup (`-a`/`-k`/`--sut`,
 before the first prompt appears) still exits immediately, without teardown. Any
 locks or pool claims that partial load had already taken need
 `unlock --force`/`unlock --pool`, as after any crash.
+
+And in a **non-interactive (piped) session** — mtui reading commands from a pipe
+rather than a terminal — there is no line editor holding the keyboard, so a
+Ctrl-C arriving between commands is queued and then discarded when the next
+command starts: it interrupts nothing. Interrupt such a session with a signal to
+the process (`kill -INT`) *while a command is running*, or `kill` it outright.
 
 ## How do I remove a dangling lock left by a crashed session?
 
