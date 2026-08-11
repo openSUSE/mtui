@@ -9,59 +9,100 @@
 //! alongside. Lock / dependency / RPM failures still raise [`UpdateError`].
 
 use crate::update_workflow::UpdateError;
-use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
+use crate::update_workflow::checks::{
+    CheckArgs, CheckFn, Diagnostic, ExitClass, classify_exit, log_failed,
+};
 
 /// The zypper update check.
+///
+/// The exit code reaching here **is the patch's own**: the update template
+/// captures `$?` on the line after the patch, before the post-state `grep` and
+/// the repo-cleanup loop can clobber it, and ends with `exit $mtui_status`
+/// (see [`crate::update_workflow::actions::update`]). So the status is
+/// classified, by [`classify_exit`] — the same three sets the install check
+/// uses, in one place.
+///
+/// The informational carve-out is the load-bearing part, not the failure rule:
+/// zypper exits `102` ("reboot needed") after patching a kernel and `107` when
+/// a package's `%post` script failed but the package is installed and
+/// registered — both routine outcomes of the thing mtui exists to do. Failing
+/// either would fire the **group-wide** rollback downgrade and revert every
+/// healthy host in the group.
+///
+/// An unrecognised non-zero status gives the stdout/stderr [`markers`] first
+/// refusal — "update stack locked", "Dependency Error" and "RPM Error" name
+/// the failure, where "Unknown Error" only says there was one — so the
+/// fallback fires solely on a clean transcript.
+///
+/// The classification is gated on the command text containing `zypper`, which
+/// is inert in production (this check is only registered for keys whose
+/// updater is the zypper template, and that template's `zypper` token is
+/// pinned by a test) but preserves the long-standing rule that these codes are
+/// only read as zypper's when the transcript is zypper's.
 ///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "update command timed out or
-/// failed to run" (exit `-1`), "package not found" (zypper exit `104`),
-/// "update stack locked", "Dependency Error", or "RPM Error"
-/// depending on the exit code and stderr/stdout markers. Warnings
-/// (exit `106`, "Additional rpm output", "not supported by its vendor") do not
-/// fail the check; the two output sections are returned as [`Diagnostic`]s for
-/// the caller to render.
-///
-/// Note this check does **not** treat an unrecognised non-zero exit as a
-/// failure: the zypper update template ends with the same repo-cleanup loop
-/// that masks the patch status on `slmicro` (see [`transactional_update`]), so
-/// the code reaching here is not the patch's either. It is judged on the
-/// markers, the `-1` never-ran sentinel, and the two exit codes zypper is
-/// known to surface.
+/// failed to run" (exit `-1`), "package not found" (exit `104`, `4`, `5`,
+/// `8`), "update stack locked", "Dependency Error", "RPM Error", or "Unknown
+/// Error" (any other non-zero exit with a clean transcript). The informational
+/// exits (`100`-`103`, `106`, `107`) and the two recognised output sections
+/// ("Additional rpm output", "not supported by its vendor") do not fail the
+/// check; `106` additionally logs a warning, and the two sections are returned
+/// as [`Diagnostic`]s for the caller to render.
 fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     not_run(args)?;
-    if args.stdin.contains("zypper") && args.exitcode == 104 {
-        log_failed(args);
-        return Err(UpdateError::new("package not found", args.hostname));
+    if !args.stdin.contains("zypper") {
+        return markers(args);
     }
-    if args.stdin.contains("zypper") && args.exitcode == 106 {
+    if args.exitcode == 106 {
         tracing::warn!(
             host = args.hostname,
             stderr = args.stderr,
             "zypper returns exitcode 106"
         );
     }
-    markers(args)
+    classified(args)
 }
 
 /// The transactional-update (`slmicro`) update check.
 ///
-/// Deliberately has **no exit-code rule beyond the
-/// [`not_run`] sentinel**, because `lastexit()` does not carry the patch
-/// command's status on this key: the `slmicro` update template is a multi-line
-/// script executed as a single remote `exec`, and its last line is the
-/// `zypper -n lr | … | while read r; do zypper -n rr $r; done` repo-cleanup
-/// loop. The shell therefore reports *that loop's* status — which is `0`
-/// whenever the loop body never runs — and discards the
-/// `transactional-update -n pkg in … -t patch` status entirely.
+/// Judged on the exit code as well as the markers. The slmicro update template
+/// captures the `transactional-update -n pkg in … -t patch` status into a
+/// variable and exits with it, so `lastexit()` is the patch's status and not
+/// the trailing repo-cleanup loop's — which was `0` whenever the loop body
+/// never ran, and let a failed patch report success.
 ///
-/// Judging this key on the exit code would be wrong in both directions: a
-/// failed patch still exits `0`, and a hiccup in the cosmetic repo cleanup
-/// would be reported as a failed update — which, because an `update` check
-/// failure routes the **group-wide** rollback downgrade, would roll back the
-/// whole fleet over a no-op. The stdout/stderr markers below are unaffected by
-/// the masking and are what this key is judged on.
+/// It shares zypper's classifier ([`classify_exit`]), and in practice that
+/// reduces to "`0` passes, anything else fails", because
+/// **`transactional-update` does not propagate zypper's exit code** — it
+/// absorbs it. Verified against upstream `openSUSE/transactional-update`,
+/// `sbin/transactional-update.in` @ `aee1e1b5` (v6.1.3): the zypper status is
+/// captured into `RETVAL` (`:1197`), tested against a hardcoded tolerance list
+/// of `0 | 102 | 103 | (106 unless dup)` (`:1214`), and otherwise turned into a
+/// flat `EXITCODE=1` (`:1232`). `RETVAL` is never assigned to `EXITCODE` and
+/// never reaches the single `exit $EXITCODE` (`:1505`). The documented exit
+/// status (`man/transactional-update.8.xml`) is only `0`, `1` and `2`, and `2`
+/// comes solely from the `apply` command, which this template does not use.
+/// The behaviour is identical across every tag from v2.28.3 to v6.1.3.
+///
+/// So on this key the informational carve-out and the `PackageNotFound` arm
+/// are both **inert**: `102`/`103`/`106` are already mapped to `0` upstream,
+/// and `104`/`4`/`5`/`8` all collapse to `1`. Only `0` and `1` can arrive.
+/// The shared classifier is used anyway rather than a hand-written `!= 0`, so
+/// this key cannot drift away from the zypper one, and so a future
+/// `transactional-update` that *did* propagate would be classified correctly
+/// from the day it started to.
+///
+/// One consequence worth knowing when reading a transcript: `0` is also what
+/// `pkg in` returns when its dry run finds nothing to do (`quit 0` at `:1192`,
+/// after logging `zypper: nothing to update`), so a clean exit does not
+/// distinguish "patched" from "had nothing to patch".
+///
+/// Unlike [`zypper`] this is not gated on a token in the command text: the
+/// slmicro template contains both `zypper` and `transactional-update`, so a
+/// token guard here would only add a second way for the rule to silently stop
+/// firing.
 ///
 /// The markers carry one residual exposure, accepted as a decision rather
 /// than an oversight: the `Error:` rule reads stderr from the whole `exec`,
@@ -76,10 +117,59 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "update command timed out or
-/// failed to run", "update stack locked", "Dependency Error", or "RPM Error".
+/// failed to run", "package not found", "update stack locked", "Dependency
+/// Error", "RPM Error", or "Unknown Error".
 fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     not_run(args)?;
-    markers(args)
+    classified(args)
+}
+
+/// Applies [`classify_exit`] to a patch status, interleaved with the
+/// stdout/stderr [`markers`].
+///
+/// The interleaving is the whole content of this function: `PackageNotFound`
+/// is a named verdict and returns straight away, while `Unknown` lets the
+/// markers speak first, because "update stack locked" is a diagnosis and
+/// "Unknown Error" is an admission. A success status still runs the markers —
+/// a dependency prompt (`(c): c`) leaves the transaction unfinished with a
+/// perfectly clean exit status.
+///
+/// Two consequences of that ordering, both deliberate and neither obvious:
+///
+/// * The `PackageNotFound` arm **skips the markers**. Its set is
+///   `104 | 4 | 5 | 8`, and only `104` actually means "capability not found" —
+///   `4`/`5`/`8` are `ERR_ZYPP`, `ERR_PRIVILEGES` and `ERR_COMMIT`. So an exit
+///   `5` carrying `System management is locked` on stderr now reports "package
+///   not found" where the marker rule alone would have reported the lock. The
+///   set and its reason string are a frozen contract shared with the install
+///   check (an exit code must not carry two verdicts across two checks), so the
+///   inaccurate label stays; what it costs is a less precise reason on three
+///   codes, never a missed failure.
+/// * `103` (`ZYPPER_EXIT_INF_RESTART_NEEDED`) is a success even though zypper
+///   means "the patch that updates the package manager itself was installed,
+///   run the command again to install the *remaining* patches". Those remaining
+///   patches are not installed. Inherited from the install check's set and left
+///   identical for the same contract reason; the post-state
+///   `zypper -n patches | grep $repa` in the template is what surfaces it in
+///   the transcript.
+///
+/// # Errors
+///
+/// Returns [`UpdateError`] with a reason of "package not found", "update stack
+/// locked", "Dependency Error", "RPM Error", or "Unknown Error".
+fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+    match classify_exit(args.exitcode) {
+        ExitClass::Success => markers(args),
+        ExitClass::PackageNotFound => {
+            log_failed(args);
+            Err(UpdateError::new("package not found", args.hostname))
+        }
+        ExitClass::Unknown => {
+            markers(args)?;
+            log_failed(args);
+            Err(UpdateError::new("Unknown Error", args.hostname))
+        }
+    }
 }
 
 /// The yum update check.
@@ -386,19 +476,23 @@ mod tests {
     }
 
     #[test]
-    fn transactional_update_ignores_the_masked_exit_code() {
-        // The slmicro template's last line is the repo-cleanup loop, so
-        // `lastexit()` is that loop's status, not the patch's. Judging this
-        // key on the exit code would roll the whole group back over a cosmetic
-        // cleanup hiccup, so a non-zero code with clean output must pass.
-        let diags = transactional_update(args("transactional-update -n pkg in", "all good", "", 1))
-            .expect("a masked non-zero exit must not fail the transactional check");
-        assert!(diags.is_empty());
+    fn transactional_update_fails_on_an_unrecognised_non_zero_exit() {
+        // The inverse of the rule this check used to carry. The slmicro
+        // template now captures the patch's own status and exits with it, so a
+        // non-zero code with clean output is a failed patch, not the trailing
+        // repo-cleanup loop's status.
+        let err = transactional_update(args("transactional-update -n pkg in", "all good", "", 1))
+            .expect_err("a failed patch with clean output must fail the check");
+        assert_eq!(err.reason, "Unknown Error");
+        assert_eq!(err.host.as_deref(), Some("h1"));
     }
 
     #[test]
     fn transactional_update_still_catches_the_markers() {
-        // What it *is* judged on: the markers survive the exit-code masking.
+        // The other half of the verdict. Each of these carries exit `0`, which
+        // is exactly the shape the exit-code rule cannot see: a
+        // `transactional-update` that ran, reported a problem in its output,
+        // and still returned success.
         let err = transactional_update(args(
             "transactional-update -n pkg in",
             "",
@@ -444,10 +538,131 @@ mod tests {
     }
 
     #[test]
-    fn zypper_does_not_fail_on_an_unrecognised_non_zero_exit() {
-        // The zypper template ends with the same masking cleanup loop, so a
-        // bare `!= 0` rule here would be a false failure — and would fire the
-        // group-wide rollback. Only -1, 104 and the markers judge this key.
-        assert!(zypper(args("zypper -n in -t patch", "all good", "", 7)).is_ok());
+    fn zypper_fails_on_an_unrecognised_non_zero_exit() {
+        // The inverse of the rule this check used to carry. The zypper
+        // template captures the patch's status and exits with it, so an
+        // unrecognised non-zero code is the patch's verdict and not the
+        // trailing repo-cleanup loop's.
+        let err = zypper(args("zypper -n in -t patch", "all good", "", 7))
+            .expect_err("a failed patch with clean output must fail the check");
+        assert_eq!(err.reason, "Unknown Error");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+    }
+
+    #[test]
+    fn informational_exit_codes_pass_on_both_zypper_keys() {
+        // The carve-out that makes the exit-code rule safe to switch on at
+        // all. `102` is "reboot needed" — the routine result of patching a
+        // kernel — `100`/`101` are "(security) updates available", which a
+        // patch run leaves behind whenever the host carries more than this
+        // update, and `107` is "the package is installed and registered but
+        // its %post script failed". Failing any of them would fire the
+        // group-wide rollback downgrade and revert every healthy host in the
+        // group.
+        //
+        // The whole informational band is listed here, not a sample: the
+        // classifier's own test and this one are the two places a code can be
+        // forgotten, and `107` was in fact missing from the band on the first
+        // pass.
+        for code in [0, 100, 101, 102, 103, 106, 107] {
+            assert!(
+                zypper(args("zypper -n in -t patch", "all good", "", code)).is_ok(),
+                "zypper must pass on informational exit {code}"
+            );
+            assert!(
+                transactional_update(args("transactional-update -n pkg in", "all good", "", code))
+                    .is_ok(),
+                "transactional-update must pass on informational exit {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn package_not_found_codes_on_both_zypper_keys() {
+        // The `104 | 4 | 5 | 8` grouping is the install check's, reproduced
+        // exactly: the reason strings are a contract callers match on, so one
+        // exit code must not carry two verdicts across two checks.
+        for code in [104, 4, 5, 8] {
+            let err = zypper(args("zypper -n in -t patch", "", "", code)).unwrap_err();
+            assert_eq!(err.reason, "package not found", "zypper exit {code}");
+            let err = transactional_update(args("transactional-update -n pkg in", "", "", code))
+                .unwrap_err();
+            assert_eq!(
+                err.reason, "package not found",
+                "transactional-update exit {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rendered_update_templates_reach_the_exit_code_rules() {
+        // `zypper`'s classification is gated on the literal token `zypper`
+        // appearing in the command text. That gate and the template are two
+        // separate files, so this feeds the check the *real* rendered template
+        // — the only way the coupling can be pinned. Asserting the token
+        // inside the template's own test would pin it against itself.
+        let vars = [("repa", ":p=42:7"), ("packages", "pkg-a")];
+        for (key, transactional, check) in [
+            (
+                "15",
+                false,
+                Box::new(zypper) as Box<dyn Fn(CheckArgs<'_>) -> _>,
+            ),
+            ("slmicro", true, Box::new(transactional_update)),
+        ] {
+            let rendered = crate::update_workflow::actions::update::updater(key, transactional)
+                .expect("both keys have an updater")
+                .render_command(&vars.into_iter().collect())
+                .expect("safe substitution never fails");
+
+            let err = check(args(&rendered, "", "", 104)).unwrap_err();
+            assert_eq!(err.reason, "package not found", "{key}");
+            let err = check(args(&rendered, "", "", 7)).unwrap_err();
+            assert_eq!(err.reason, "Unknown Error", "{key}");
+            assert!(
+                check(args(&rendered, "", "", 102)).is_ok(),
+                "{key}: 102 is 'reboot needed'"
+            );
+        }
+    }
+
+    #[test]
+    fn package_not_found_outranks_the_markers() {
+        // The other half of `classified`'s ordering, and the half nothing
+        // pinned: every other not-found fixture has empty stdout *and* stderr,
+        // so inserting `markers(args)?` at the top of that arm passed the whole
+        // suite. These carry a marker AND a not-found exit code, so they can
+        // only pass if the exit code is consulted first.
+        //
+        // This is also where the `104 | 4 | 5 | 8` grouping shows its cost: an
+        // exit `5` is `ERR_PRIVILEGES`, not a missing package, so a locked
+        // stack under it is reported as "package not found". Deliberate — the
+        // reason strings are a contract shared with the install check.
+        let err = zypper(args("zypper", "", "System management is locked", 104)).unwrap_err();
+        assert_eq!(err.reason, "package not found");
+        let err = zypper(args("zypper", "(c): c", "", 4)).unwrap_err();
+        assert_eq!(err.reason, "package not found");
+        let err =
+            transactional_update(args("transactional-update", "", "Error: boom", 8)).unwrap_err();
+        assert_eq!(err.reason, "package not found");
+    }
+
+    #[test]
+    fn markers_outrank_the_unknown_error_fallback() {
+        // "Unknown Error" only says a run failed; the markers say why. A
+        // failing patch that also reports a locked stack must keep the
+        // diagnosis, on both keys — this is what the ordering inside
+        // `classified` buys, and a fallback placed before the markers would
+        // silently replace every named reason with "Unknown Error".
+        let err = zypper(args("zypper", "", "System management is locked", 1)).unwrap_err();
+        assert_eq!(err.reason, "update stack locked");
+        let err = zypper(args("zypper", "(c): c", "", 1)).unwrap_err();
+        assert_eq!(err.reason, "Dependency Error");
+        let err = zypper(args("zypper", "", "Error: boom", 1)).unwrap_err();
+        assert_eq!(err.reason, "RPM Error");
+
+        let err =
+            transactional_update(args("transactional-update", "", "Error: boom", 1)).unwrap_err();
+        assert_eq!(err.reason, "RPM Error");
     }
 }

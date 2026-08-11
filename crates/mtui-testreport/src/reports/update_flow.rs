@@ -839,9 +839,9 @@ async fn prepare_body(
     // exit codes only — never from the stderr rule `host_command_failures`
     // also applies, because `transactional-update` writes progress to stderr
     // on a *successful* run and skipping such a host's reboot would leave its
-    // healthy staged snapshot silently inert. Unlike update's multi-line
-    // script, the prepare templates are single commands, so the recorded exit
-    // code is genuinely the prepare command's own.
+    // healthy staged snapshot silently inert. The prepare templates are single
+    // commands, so the recorded exit code is genuinely the prepare command's
+    // own.
     //
     // The check verdicts are seeded too, but they are inert for the hosts that
     // matter today: `prepare_check` has no ("slmicro", true) entry, and only
@@ -2764,10 +2764,10 @@ mod tests {
 
     /// A transactional SL-Micro target whose commands answer with `stderr`.
     ///
-    /// The update check for `("slmicro", true)` is deliberately judged on the
-    /// output markers rather than the exit code — the slmicro update template
-    /// ends with a repo-cleanup loop that masks the patch's status — so a
-    /// stderr marker is the signal a genuinely failing patch leaves behind.
+    /// The update check for `("slmicro", true)` reads the stdout/stderr markers
+    /// *and* the exit code; this fixture exercises the marker half, so it
+    /// answers exit `0` and leaves the failure signal entirely in `stderr` —
+    /// which is also the shape of the failure the exit code alone would miss.
     fn slmicro_target_with_stderr(hostname: &str, stderr: &str) -> (Target, MockConnection) {
         let conn = MockConnection::new(hostname)
             .with_default(CommandLog::new("", "", stderr, 0, 0))
@@ -3251,17 +3251,78 @@ mod tests {
         );
     }
 
+    /// The rendered zypper `update` command for `("15", false)` — the exact
+    /// string a `MockConnection` must be keyed on to script the *patch's* exit
+    /// code rather than every command's.
+    fn zypper_patch_command(packages: &[String]) -> String {
+        WorkflowRegistry::default()
+            .doer(Role::Update, "15", false)
+            .expect("zypper has an updater")
+            .render_command(
+                &[
+                    ("repa", repa_for("42", "7").as_str()),
+                    ("packages", quote_args(packages).as_str()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .expect("safe substitution never fails")
+    }
+
+    /// A SLES 15 target whose *patch command specifically* answers `exit`.
+    ///
+    /// Every other command answers cleanly. This is the fixture shape the
+    /// exit-code rules require: the update template now captures the patch's
+    /// status and re-exits with it, so an exit code scripted via `with_default`
+    /// would be one on *every* command — a state no shell produces, and one
+    /// that keeps a test green with the patch fan-out deleted, because the
+    /// check then reads the repo refresh's snapshot instead.
+    ///
+    /// The default stdout is a resolvable version line so the rollback
+    /// downgrade's version probe succeeds and a rollback, if one is routed,
+    /// actually renders an `--oldpackage` command. Without that, "assert no
+    /// rollback happened" would pass however the failure was routed.
+    fn sles_target_with_patch_exit(
+        hostname: &str,
+        packages: &[String],
+        exit: i16,
+    ) -> (Target, MockConnection, String) {
+        let patch = zypper_patch_command(packages);
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(
+                patch.clone(),
+                CommandLog::new(patch.clone(), "", "", exit, 0),
+            );
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        (t, handle, patch)
+    }
+
     #[tokio::test]
     async fn perform_update_keeps_repos_on_check_failure() {
-        // exit 104 on the updater command ⇒ the update check flags "package not
+        // exit 104 on the patch command ⇒ the update check flags "package not
         // found"; the flow must NOT issue a repo-remove (repos kept for retry).
-        let (t, handle) = sles_target_with_exit("h1", "", 104);
+        //
+        // The 104 is scripted onto the patch alone. It used to ride on
+        // `with_default`, i.e. on every command — which the shell could not
+        // produce even before #400 (the script's status was the cleanup loop's)
+        // and cannot produce now either (it is the patch's).
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t, handle, patch) = sles_target_with_patch_exit("h1", &packages, 104);
         let mut group = HostsGroup::new(vec![t], false);
 
         // A recording repo so we can assert no Remove followed the Add.
         let repo = RecordingRepo::default();
-        let report = report_with_rrid();
-        let packages = report.get_package_list();
 
         // Drive perform_update with the recording repo as the SetRepo hook by
         // calling the module fn directly (SlReport delegates to it).
@@ -3277,10 +3338,14 @@ mod tests {
             &mut Vec::new(),
         )
         .await;
-        assert!(
-            matches!(res, Err(UpdateFailure::Check(_))),
-            "a check failure returns Err(Check): {res:?}"
-        );
+        let Err(UpdateFailure::Check(e)) = res else {
+            panic!("a failed patch returns Err(Check): {res:?}");
+        };
+        // The reason, not just the variant: `Check` is reached by every marker
+        // too, so asserting the variant alone would not show that the *exit
+        // code* was read.
+        assert_eq!(e.reason, "package not found");
+        assert_eq!(e.host.as_deref(), Some("h1"));
 
         let ops = repo.ops.lock().unwrap().clone();
         assert!(ops.contains(&RepoOp::Add), "repo add must run: {ops:?}");
@@ -3288,8 +3353,66 @@ mod tests {
             !ops.contains(&RepoOp::Remove),
             "on failure the repos are kept (no Remove): {ops:?}"
         );
-        // The updater command was still attempted.
-        assert!(handle.commands().iter().any(|c| c.contains(":p=42:7")));
+        // The verdict must come from the patch, so the patch must have run.
+        let cmds = handle.commands();
+        assert!(
+            cmds.contains(&patch),
+            "the patch command must have been dispatched: {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_passes_a_host_that_only_needs_a_reboot() {
+        // The carve-out that makes reading the exit code safe at all, asserted
+        // where the blast radius lives. zypper exits 102
+        // (`ZYPPER_EXIT_INF_REBOOT_NEEDED`) after patching a kernel — the
+        // routine outcome of the thing mtui exists to do. Under a bare `!= 0`
+        // rule that host would fail its check, and a check failure hands
+        // `perform_update_with_rollback` the *whole* group: it removes every
+        // host's issue repos, downgrades every host, and rewrites the report's
+        // before/after version slots. One host's healthy 102 would revert the
+        // fleet.
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+        let packages = report.get_package_list();
+        let (t1, h1, patch) = sles_target_with_patch_exit("h1", &packages, 102);
+        let (t2, h2, _) = sles_target_with_patch_exit("h2", &packages, 0);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await;
+
+        // Not vacuous: the 102 was actually delivered, and to the patch.
+        assert!(
+            h1.commands().contains(&patch),
+            "the patch command must have been dispatched: {:?}",
+            h1.commands()
+        );
+        assert!(
+            res.is_ok(),
+            "exit 102 is 'reboot needed', not a failure: {res:?}"
+        );
+        // And nothing was rolled back. `perform_update_with_rollback` hands the
+        // downgrade the *whole* group, so the healthy peer is where a false
+        // failure shows up as collateral damage — h2 is asserted **first** for
+        // exactly that reason. The fixture answers the version probe with a
+        // parseable line, so a rollback that did run would render
+        // `--oldpackage` here.
+        //
+        // Two assertions rather than a loop over both hosts: in a loop the
+        // first host to fail hides the other, and the peer host is the one this
+        // test exists for.
+        assert!(
+            !h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "the healthy peer h2 must not be rolled back on h1's behalf: {:?}",
+            h2.commands()
+        );
+        assert!(
+            !h1.commands().iter().any(|c| c.contains("--oldpackage")),
+            "h1 must not be rolled back: {:?}",
+            h1.commands()
+        );
     }
 
     #[tokio::test]
