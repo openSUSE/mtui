@@ -1,0 +1,49 @@
+{
+    "SRCRPMs": [
+        "afterburn"
+    ],
+    "bugs": [
+        "1196972",
+        "1242665",
+        "1243850",
+        "1244199",
+        "1270175",
+        "1270483",
+        "1270555",
+        "1270651",
+        "1270787",
+        "1270817",
+        "1270886",
+        "1270949",
+        "1271348"
+    ],
+    "category": "security",
+    "generated_at": "2026-07-21T19:33:33+0200",
+    "id": "SUSE:SLFO:1.1:418286",
+    "jira": [],
+    "packager": "someone@suse.com",
+    "packages": {
+        "standard": [
+            "afterburn = 5.10.0.git73.b97f772-99999_stage.1.1",
+            "afterburn-dracut = 5.10.0.git73.b97f772-99999_stage.1.1"
+        ]
+    },
+    "product_composer": {
+        "afterburn": {
+            "media": [],
+            "pool_only": false,
+            "shipped": false
+        }
+    },
+    "products": [
+        "SL-Micro 6.1 (aarch64, ppc64le, s390x, x86_64)",
+        "SL-Micro-Extras 6.1 (aarch64, ppc64le, s390x, x86_64)"
+    ],
+    "rating": "important",
+    "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.1:/Staging:/B/",
+    "rrid": "SUSE:SLFO:1.1:418286",
+    "testplatform": [
+        "base=SL-Micro(major=6,minor=1);arch=[aarch64,ppc64le,s390x,x86_64]",
+        "base=SL-Micro(major=6,minor=1);arch=[aarch64,ppc64le,s390x,x86_64];addon=SL-Micro-Extras(major=6,minor=1)"
+    ]
+}

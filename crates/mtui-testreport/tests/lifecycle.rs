@@ -9,6 +9,7 @@
 //! load-failure path points at an empty `template_dir` so the internal `svn`
 //! checkout fails fast and the factory falls back to a [`NullReport`].
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use mtui_config::options::Config;
@@ -440,13 +441,6 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
 /// Returns nothing; the caller drives `make_testreport` against the
 /// template dir.
 fn make_slfo_checkout(root: &Path, rrid: &str, gitea_pr_api: &str, commit_hash: Option<&str>) {
-    let dir = root.join(rrid);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("log"),
-        format!("Testreport for {rrid}\n\n  x86_64 (reference host: refhost-a.example.com)\n"),
-    )
-    .unwrap();
     let hash_field = commit_hash
         .map(|h| format!(r#", "gitea_commit_hash": "{h}""#))
         .unwrap_or_default();
@@ -463,6 +457,31 @@ fn make_slfo_checkout(root: &Path, rrid: &str, gitea_pr_api: &str, commit_hash: 
             "testplatform": []
         }}"#
     );
+    make_slfo_checkout_with_metadata(root, rrid, &metadata);
+}
+
+/// The real `SUSE:SLFO:1.1:418286` metadata record, captured from TeReGen on
+/// 2026-08-11 with a single substitution (`packager`) and re-indented to match
+/// its golden sibling. Full provenance note sits on the same const in
+/// `tests/metadata_parsers.rs`.
+const SLFO_METADATA_JSON: &str = include_str!("fixtures/metadata/slfo_metadata.json");
+
+/// Places an SLFO checkout on disk for `rrid` — the `log` template plus a
+/// caller-supplied `metadata.json` body written verbatim.
+///
+/// [`make_slfo_checkout`] is this function plus a computed synthetic envelope,
+/// and delegates here, so the `log` literal lives in exactly one place. Callers
+/// that need a *captured* envelope (rather than the synthetic one the
+/// hash/update-source tests share — those must keep their `"packages": {}`,
+/// which is what makes them indifferent to package parsing) call this directly.
+fn make_slfo_checkout_with_metadata(root: &Path, rrid: &str, metadata: &str) {
+    let dir = root.join(rrid);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("log"),
+        format!("Testreport for {rrid}\n\n  x86_64 (reference host: refhost-a.example.com)\n"),
+    )
+    .unwrap();
     std::fs::write(dir.join("metadata.json"), metadata).unwrap();
 }
 
@@ -603,6 +622,76 @@ async fn make_testreport_slfo_1_1_obs_served_resolves_obs_source_and_slrepoparse
     assert!(
         repo.contains("/images/repo/"),
         "OBS-served 1.1 must use slrepoparse, got {repo}"
+    );
+}
+
+/// #397 T3 — the on-disk loader populates `base().packages` from a **real**
+/// SLFO `metadata.json`.
+///
+/// This is the **only** assertion in the crate on `base().packages` after
+/// `TestReport::read`: no unit test in `src` drives `read()` at all, and every
+/// other SLFO lifecycle test writes `"packages": {}` and asserts nothing about
+/// packages. So the specific thing added here is that the metadata a report
+/// loads from disk actually reaches `base().packages` with its values intact —
+/// not merely that `JSONParser` works when handed a string.
+///
+/// Modelled on the OBS-served 1.1 test above: the captured 1.1 record carries
+/// no `gitea_commit_hash`, so it resolves [`UpdateSource::Obs`] and the load
+/// needs neither a Gitea token nor a network call.
+///
+/// **Scope, stated honestly.** This proves the on-disk read path runs
+/// `JSONParser` over an SL report's metadata and keeps the real values. It does
+/// **not** prove host seeding: the production seeding call site
+/// (`Session::connect_one`) is private, and `Target::connect` hard-codes
+/// `SshConnection::connect` with no injectable seam, so no test can reach it.
+/// `slfo_real_fixture_seeds_packages_for_any_base_version` (in
+/// `tests/metadata_parsers.rs`) re-implements the `packages_for_map` half
+/// explicitly rather than pretending this test covers it.
+#[tokio::test]
+async fn make_testreport_slfo_real_metadata_populates_packages() {
+    let dashboard = MockServer::start().await;
+    mount_dashboard_with_install(&dashboard, "418286").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout_with_metadata(tmp.path(), SLFO_11_RRID, SLFO_METADATA_JSON);
+
+    // Deliberately no Gitea token: the captured record is OBS-served.
+    let mut config = cfg(tmp.path().to_path_buf());
+    point_dashboard(&mut config, &dashboard);
+    let update = UpdateID::parse(SLFO_11_RRID).unwrap();
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+
+    assert!(report.is_loaded(), "the captured SLFO record must load");
+    assert_eq!(report.update_source(), UpdateSource::Obs);
+
+    let packages = &report.base().packages;
+    // A set, not a Vec: `packages` is a HashMap, so a Vec comparison would be
+    // order-dependent the moment a second key appeared — a flake where a clean
+    // failure belongs.
+    let products: HashSet<&str> = packages.keys().map(String::as_str).collect();
+    assert_eq!(
+        products,
+        HashSet::from(["standard"]),
+        "the loader must keep the real product key set: {packages:?}"
+    );
+    let standard = &packages["standard"];
+    assert_eq!(
+        standard["afterburn"], "5.10.0.git73.b97f772-99999_stage.1.1",
+        "{standard:?}"
+    );
+    assert_eq!(
+        standard["afterburn-dracut"], "5.10.0.git73.b97f772-99999_stage.1.1",
+        "{standard:?}"
+    );
+
+    // Secondary, and deliberately labelled as weak: `get_package_list` flattens
+    // *every* product and never consults `base_version`, so it would stay green
+    // under a total failure of the `"standard"` assumption. It shows only that
+    // the loader ran the parser at all — the assertions above are the claim.
+    assert_eq!(
+        report.get_package_list(),
+        vec!["afterburn", "afterburn-dracut"]
     );
 }
 
