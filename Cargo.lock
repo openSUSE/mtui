@@ -3774,9 +3774,9 @@ dependencies = [
 
 [[package]]
 name = "sandogasa-rpmvercmp"
-version = "0.18.2"
+version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98298ac090533560c385faf9e478862006c70c0d4d66ab3eb1c44342ce9f7a13"
+checksum = "9b2044602f338503c12a46d32553d924cb3d2f2b9e5a2b80425cea728f49d612"
 
 [[package]]
 name = "schannel"
