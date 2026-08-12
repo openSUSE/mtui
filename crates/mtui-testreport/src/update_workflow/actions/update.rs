@@ -40,6 +40,19 @@
 //! receive, and lets the patch itself use a quoted `"$@"` instead of a bare
 //! unquoted expansion.
 //!
+//! # The residual: a refresh that fails silently
+//!
+//! `zypper -n refresh` is **not** guarded, and the empty-list no-op above is
+//! what makes that a real gap: if the issue repo is unreachable or its key is
+//! untrusted, the refresh fails, `zypper -n patches` matches no row, the guard
+//! skips the patch and the script exits `0`. An update that installed nothing
+//! passes its check. Deferred rather than fixed, because `refresh` returns `4`
+//! whether one repository failed or all of them did, so its status cannot tell
+//! "the issue repo went missing" from "an unrelated stale repo did" — and
+//! failing on the latter would abort updates on refhosts that would have
+//! patched correctly, which is routine on QAM refhosts. Closing it needs a
+//! check that the *issue* repo specifically is present, not a status test.
+//!
 //! Two constraints on the text:
 //!
 //! * every `$` meant for the remote shell is written `$$`
@@ -599,7 +612,11 @@ exit "$MTUI_STUB_PATCH_EXIT"
             // then splits it into zero words, and the patch runs with **no
             // operands** — the very case the guard exists to prevent. Its
             // status is real now, so the package manager's complaint about its
-            // own arguments becomes "Unknown Error" and a group-wide rollback.
+            // own arguments reaches the check as a failure instead of being
+            // masked — as which reason depends on the code and the transcript
+            // (the stub's `8` reads as "RPM Error" when it writes `Error:` to
+            // stderr, "package not found" when it does not), which is why this
+            // asserts on the exit status rather than on a reason string.
             for (name, cmds) in templates() {
                 let stubs = Stubs::new();
                 let code = run_script(&cmds, &stubs, 8, 0, BLANK_PATCH_ROW, "");

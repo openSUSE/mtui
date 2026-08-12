@@ -46,13 +46,17 @@ pub(crate) type WorkflowKey = (String, bool);
 ///
 /// Its
 /// `Display` renders `"{host}: {reason}"` when a host is
-/// present, otherwise just `"{reason}"`. The `reason` strings are stable
-/// contract values consumed by callers ("package not found", "update stack
-/// locked", "RPM Error", "Dependency Error", "Unknown Error", "Unspecified
-/// Error").
+/// present, otherwise just `"{reason}"`. The `reason` strings are diagnoses
+/// shown to an operator and asserted on by tests ("package not found", "update
+/// stack locked", "RPM Error", "Dependency Error", "Unknown Error",
+/// "Unspecified Error"); no code branches on them, so a check is free to pick
+/// the most accurate one for a given transcript. What *is* a contract is the
+/// `UpdateFailure` variant a failure routes to, which decides whether the
+/// group is rolled back.
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub struct UpdateError {
-    /// The failure reason (a stable, contract short string).
+    /// The failure reason: a short diagnosis for the operator, not a value
+    /// callers match on (see the type doc).
     pub(crate) reason: String,
     /// The host the command ran on, if known.
     pub(crate) host: Option<String>,
