@@ -3484,9 +3484,9 @@ dependencies = [
 
 [[package]]
 name = "ruoqa"
-version = "0.1.4"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22e2366733a0e88dbab896d700e161ce43efe35acb96001235eb76d5acff4294"
+checksum = "a9e238a0cc7ebbe4039696aaa08550ee4c092048ea850d12bf8b872a4c82b648"
 dependencies = [
  "bytes",
  "hmac",

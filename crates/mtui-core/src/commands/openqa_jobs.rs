@@ -454,6 +454,53 @@ mod tests {
         assert!(out.contains("1 still pending"), "{out}");
     }
 
+    /// Clears `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` for the guard's
+    /// lifetime, restoring their prior value on drop. `ruoqa` 0.2 resolves
+    /// this pair *ahead of* `client.conf`, so a test asserting a specific
+    /// `client.conf` credential must not see an ambient pair from the
+    /// developer's or CI's shell. Must only be used inside
+    /// `#[serial(openqa_config_env)]` tests: `std::env` mutation is
+    /// process-global.
+    struct ApiEnvGuard {
+        prev_key: Option<std::ffi::OsString>,
+        prev_secret: Option<std::ffi::OsString>,
+    }
+
+    impl ApiEnvGuard {
+        #[allow(unsafe_code)]
+        fn new() -> Self {
+            let prev_key = std::env::var_os("OPENQA_API_KEY");
+            let prev_secret = std::env::var_os("OPENQA_API_SECRET");
+            // SAFETY: guarded by `#[serial(openqa_config_env)]`, so no other
+            // test reads/writes these vars concurrently.
+            unsafe {
+                std::env::remove_var("OPENQA_API_KEY");
+                std::env::remove_var("OPENQA_API_SECRET");
+            }
+            Self {
+                prev_key,
+                prev_secret,
+            }
+        }
+    }
+
+    impl Drop for ApiEnvGuard {
+        #[allow(unsafe_code)]
+        fn drop(&mut self) {
+            // SAFETY: guarded by `#[serial(openqa_config_env)]`.
+            unsafe {
+                match self.prev_key.take() {
+                    Some(v) => std::env::set_var("OPENQA_API_KEY", v),
+                    None => std::env::remove_var("OPENQA_API_KEY"),
+                }
+                match self.prev_secret.take() {
+                    Some(v) => std::env::set_var("OPENQA_API_SECRET", v),
+                    None => std::env::remove_var("OPENQA_API_SECRET"),
+                }
+            }
+        }
+    }
+
     /// Proves Phase 2 of the ruoqa migration: `openqa_jobs` authenticates when
     /// `client.conf` has credentials for the instance, not just when openQA
     /// happens to accept an unauthenticated GET.
@@ -463,6 +510,7 @@ mod tests {
     // `#[serial(openqa_config_env)]` guard makes the mutation exclusive.
     #[allow(unsafe_code)]
     async fn authenticates_against_an_instance_requiring_x_api_hash() {
+        let _env = ApiEnvGuard::new();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/1"))

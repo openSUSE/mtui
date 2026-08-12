@@ -49,6 +49,59 @@ fn base_for_no_creds(server_uri: &str) -> OpenQABase {
     base_for(server_uri, dir.path())
 }
 
+/// Clears `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` for the guard's lifetime,
+/// restoring their prior value on drop. `ruoqa` 0.2 resolves this pair
+/// *ahead of* `client.conf`, so a test asserting a specific `client.conf`
+/// credential (or none at all) via [`base_for`]/[`base_for_no_creds`] must
+/// not see an ambient pair from the developer's or CI's shell. Must only be
+/// used inside `#[serial(openqa_config_env)]` tests: `std::env` mutation is
+/// process-global.
+struct ApiEnvGuard {
+    prev_key: Option<std::ffi::OsString>,
+    prev_secret: Option<std::ffi::OsString>,
+}
+
+impl ApiEnvGuard {
+    #[allow(unsafe_code)]
+    fn new() -> Self {
+        let prev_key = std::env::var_os("OPENQA_API_KEY");
+        let prev_secret = std::env::var_os("OPENQA_API_SECRET");
+        // SAFETY: guarded by `#[serial(openqa_config_env)]`, so no other
+        // test reads/writes these vars concurrently.
+        unsafe {
+            std::env::remove_var("OPENQA_API_KEY");
+            std::env::remove_var("OPENQA_API_SECRET");
+        }
+        Self {
+            prev_key,
+            prev_secret,
+        }
+    }
+}
+
+impl Drop for ApiEnvGuard {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: guarded by `#[serial(openqa_config_env)]`.
+        unsafe {
+            restore_env("OPENQA_API_KEY", self.prev_key.take());
+            restore_env("OPENQA_API_SECRET", self.prev_secret.take());
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+unsafe fn restore_env(key: &str, prev: Option<std::ffi::OsString>) {
+    // SAFETY: only ever called from `ApiEnvGuard::drop`, itself gated behind
+    // `#[serial(openqa_config_env)]`.
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+}
+
 #[tokio::test]
 async fn get_jobs_returns_parsed_jobs_on_success() {
     let server = MockServer::start().await;
@@ -239,7 +292,9 @@ async fn request_carries_accept_and_query_params() {
 }
 
 #[tokio::test]
+#[serial_test::serial(openqa_config_env)]
 async fn request_carries_auth_headers_when_credentials_present() {
+    let _env = ApiEnvGuard::new();
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs"))
@@ -266,7 +321,9 @@ async fn request_carries_auth_headers_when_credentials_present() {
 }
 
 #[tokio::test]
+#[serial_test::serial(openqa_config_env)]
 async fn request_omits_auth_headers_without_credentials() {
+    let _env = ApiEnvGuard::new();
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs"))
@@ -286,6 +343,7 @@ async fn request_omits_auth_headers_without_credentials() {
 // `#[serial(openqa_config_env)]` guard makes the mutation exclusive.
 #[allow(unsafe_code)]
 async fn request_carries_auth_headers_from_openqa_config_env() {
+    let _env = ApiEnvGuard::new();
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs"))

@@ -99,12 +99,39 @@ mod tests {
     /// catches a future edit re-adding either call here. Observed red: adding
     /// `.tls(TlsMode::danger_accept_invalid_certs())` to
     /// `build_openqa_client_with_transport` fails this assertion.
+    ///
+    /// `#[serial(openqa_config_env)]`-guarded: `ruoqa` 0.2 also resolves
+    /// `$OPENQA_API_KEY`/`$OPENQA_API_SECRET`, and exactly one set in the
+    /// ambient environment (rather than a matched pair, or neither) would
+    /// turn this build into an `Err`.
     #[test]
+    #[serial_test::serial(openqa_config_env)]
+    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+    // `#[serial(openqa_config_env)]` guard makes the mutation exclusive.
+    #[allow(unsafe_code)]
     fn build_openqa_client_succeeds_with_default_verify() {
         // No `client.conf` in this process's search path is assumed; a bad
         // config would surface as `ClientBuild`, exercised via the
         // integration suite instead (needs a real filesystem fixture).
+        let prev_key = std::env::var_os("OPENQA_API_KEY");
+        let prev_secret = std::env::var_os("OPENQA_API_SECRET");
+        // SAFETY: guarded by `#[serial(openqa_config_env)]`.
+        unsafe {
+            std::env::remove_var("OPENQA_API_KEY");
+            std::env::remove_var("OPENQA_API_SECRET");
+        }
         let client = build_openqa_client(VerifyPolicy::Default(true), "openqa.example.com");
+        // SAFETY: guarded by `#[serial(openqa_config_env)]`.
+        unsafe {
+            match prev_key {
+                Some(v) => std::env::set_var("OPENQA_API_KEY", v),
+                None => std::env::remove_var("OPENQA_API_KEY"),
+            }
+            match prev_secret {
+                Some(v) => std::env::set_var("OPENQA_API_SECRET", v),
+                None => std::env::remove_var("OPENQA_API_SECRET"),
+            }
+        }
         assert!(client.is_ok());
     }
 

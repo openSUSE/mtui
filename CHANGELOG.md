@@ -32,9 +32,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - The openQA REST client is now built on the `ruoqa` crate instead of mtui's
   own hand-rolled signed-request implementation. User-visible effects:
-  `$OPENQA_CONFIG` and `$XDG_CONFIG_HOME/openqa/client.conf` are now honoured
-  as `client.conf` search paths, in addition to `/etc/openqa/client.conf` and
-  `~/.config/openqa/client.conf`; a credentialed `openqa_instance` URL
+  `client.conf` discovery is now **tiered and non-merging** —
+  `$OPENQA_CONFIG` (when set), else the user config directory
+  (`$XDG_CONFIG_HOME/openqa`, or `~/.config/openqa`), else `/etc/openqa` and
+  `/usr/etc/openqa`, with the **first tier that yields any file winning
+  outright**; a `~/.config/openqa/client.conf` override no longer combines
+  with host sections that exist only in `/etc/openqa/client.conf`, it
+  replaces them entirely. `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` are now
+  honoured as a credential pair, taken ahead of `client.conf`. An openQA
+  instance served under a path prefix (`https://host/openqa`) is now
+  addressed and signed correctly — previously the prefix was silently
+  dropped, yielding 403/404. A bare-authority `--url-openqa localhost:9526`
+  now infers `http`, not `https`. A credentialed `openqa_instance` URL
   (`https://user:pass@host`) now has the userinfo dropped when resolving the
   request target, rather than merely redacted for display; and the
   unauthenticated `Accept` header sent with every request changed from `json`
