@@ -145,11 +145,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   also drives the group-wide rollback downgrade, which they could not reach
   before.
   SL Micro is judged on the command's output markers and on the patch's exit
-  code. RHEL/YUM is judged only
-  on whether the command ran: that key covers every RHEL version, `yum` is
-  `dnf` on RHEL 8/9, and mtui passes the whole package list to hosts that carry
-  only a subset — so neither a non-zero exit nor an `Error:` line (the template
-  also runs `yum repolist` in the same shell) reliably means the update failed.
+  code — and because `transactional-update` absorbs zypper's status and reports
+  a flat `1`, that key now fails on any non-zero exit, including failures that
+  are not the patch's own (an already-open transaction, a snapshot that could
+  not be created). RHEL/YUM is judged only on whether the command ran: that key
+  covers every RHEL version, `yum` is `dnf` on RHEL 8/9, and mtui passes the
+  whole package list to hosts that carry only a subset — so neither a non-zero
+  exit nor an `Error:` line (the template also runs `yum repolist` in the same
+  shell) reliably means the update failed.
 - An `update` whose patch command fails now fails the update, on both zypper
   and SL Micro hosts, even when the patch's output is clean. The two update
   templates are multi-line scripts run as a single remote command, and their
@@ -166,10 +169,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and registered. (`103`, "restart needed", also passes: zypper installed the
   patch that updates the package manager itself, and any *remaining* patches
   need a second run — the post-patch `zypper patches` line in the transcript is
-  what shows those.) `104`, `4`, `5` and `8` report "package not found", ahead
-  of the output markers. Any other non-zero reports "Unknown Error", but only
-  when the markers recognise nothing — a locked stack, a dependency problem or
-  an RPM error keeps its own, more precise reason.
+  what shows those.) `104` reports "package not found" ahead of the output
+  markers. Every other failing code — `4`, `5`, `8` and anything else non-zero
+  — lets the markers speak first, so a locked stack, a dependency problem or an
+  RPM error keeps its own, more precise reason; with nothing recognised in the
+  output, `4`/`5`/`8` report "package not found" and the rest "Unknown Error".
   Without the informational carve-out a host that patched perfectly would fail
   its check and fire the group-wide rollback downgrade, reverting every healthy
   host in the group. A host carrying none of the update's products still

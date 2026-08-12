@@ -29,10 +29,11 @@ use crate::update_workflow::checks::{
 /// either would fire the **group-wide** rollback downgrade and revert every
 /// healthy host in the group.
 ///
-/// An unrecognised non-zero status gives the stdout/stderr [`markers`] first
-/// refusal — "update stack locked", "Dependency Error" and "RPM Error" name
-/// the failure, where "Unknown Error" only says there was one — so the
-/// fallback fires solely on a clean transcript.
+/// Every failing status except `104` and the `-1` sentinel gives the
+/// stdout/stderr [`markers`] first refusal — "update stack locked",
+/// "Dependency Error" and "RPM Error" name the failure, where "Unknown Error"
+/// and "package not found" only say there was one — so a class label is
+/// reported solely on a clean transcript.
 ///
 /// The classification is gated on the command text containing `zypper`, which
 /// is inert in production (this check is only registered for keys whose
@@ -43,9 +44,10 @@ use crate::update_workflow::checks::{
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "update command timed out or
-/// failed to run" (exit `-1`), "package not found" (exit `104`, `4`, `5`,
-/// `8`), "update stack locked", "Dependency Error", "RPM Error", or "Unknown
-/// Error" (any other non-zero exit with a clean transcript). The informational
+/// failed to run" (exit `-1`), "package not found" (exit `104` always; `4`,
+/// `5`, `8` on a clean transcript), "update stack locked", "Dependency Error",
+/// "RPM Error", or "Unknown Error" (any other non-zero exit with a clean
+/// transcript). The informational
 /// exits (`100`-`103`, `106`, `107`) and the two recognised output sections
 /// ("Additional rpm output", "not supported by its vendor") do not fail the
 /// check; `106` additionally logs a warning, and the two sections are returned
@@ -99,6 +101,18 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// after logging `zypper: nothing to update`), so a clean exit does not
 /// distinguish "patched" from "had nothing to patch".
 ///
+/// **The cost of that, stated deliberately rather than left implicit.** Because
+/// only `0` and `1` can arrive and `1` is `Unknown`, this key went from "never
+/// fails on an exit code" to "fails on any non-zero one" — and a failed update
+/// check fires the **group-wide** rollback, downgrading and rebooting every
+/// host in the group, not only this one. `transactional-update` flattens
+/// failures that are not the patch's into that same `1`: an already-open
+/// transaction, a snapshot that could not be created or deleted. Those are
+/// genuine failures of the operation mtui asked for, and the alternative —
+/// keeping the old silence — reports a failed patch as a successful update,
+/// which is the bug this check exists to close. Judged the worse of the two,
+/// with the blast radius understood.
+///
 /// Unlike [`zypper`] this is not gated on a token in the command text: the
 /// slmicro template contains both `zypper` and `transactional-update`, so a
 /// token guard here would only add a second way for the rule to silently stop
@@ -127,40 +141,55 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// Applies [`classify_exit`] to a patch status, interleaved with the
 /// stdout/stderr [`markers`].
 ///
-/// The interleaving is the whole content of this function: `PackageNotFound`
-/// is a named verdict and returns straight away, while `Unknown` lets the
+/// The interleaving is the whole content of this function: `104` is a named
+/// verdict and returns straight away, while every other failing status lets the
 /// markers speak first, because "update stack locked" is a diagnosis and
-/// "Unknown Error" is an admission. A success status still runs the markers —
-/// a dependency prompt (`(c): c`) leaves the transaction unfinished with a
-/// perfectly clean exit status.
+/// "Unknown Error" — or "package not found" on a code that means neither — is
+/// an admission. A success status still runs the markers too: a dependency
+/// prompt (`(c): c`) leaves the transaction unfinished with a perfectly clean
+/// exit status.
 ///
 /// Two consequences of that ordering, both deliberate and neither obvious:
 ///
-/// * The `PackageNotFound` arm **skips the markers**. Its set is
-///   `104 | 4 | 5 | 8`, and only `104` actually means "capability not found" —
-///   `4`/`5`/`8` are `ERR_ZYPP`, `ERR_PRIVILEGES` and `ERR_COMMIT`. So an exit
-///   `5` carrying `System management is locked` on stderr now reports "package
-///   not found" where the marker rule alone would have reported the lock. The
-///   set and its reason string are a frozen contract shared with the install
-///   check (an exit code must not carry two verdicts across two checks), so the
-///   inaccurate label stays; what it costs is a less precise reason on three
-///   codes, never a missed failure.
+/// * **Only `104` skips the markers.** The class is `104 | 4 | 5 | 8`, and only
+///   `104` (`ZYPPER_EXIT_INF_CAP_NOT_FOUND`) actually means "capability not
+///   found" — `4`/`5`/`8` are `ERR_ZYPP`, `ERR_PRIVILEGES` and `ERR_COMMIT`,
+///   i.e. the package *was* found and the transaction failed. `8` with `Error:`
+///   on stderr is the likeliest status for a genuinely failed patch, and `5`
+///   with `System management is locked` for a busy update stack; letting the
+///   not-found label outrank the markers replaced both headline diagnoses with
+///   a message that is not merely vaguer but wrong. So the three defer to the
+///   markers, and keep "package not found" only when the transcript is clean.
+///
+///   The class itself is still the install check's, unsplit — the sorting is
+///   shared so an exit code cannot land in two classes, while the *message* is
+///   this check's to choose. Nothing branches on these strings (they are
+///   rendered, logged and asserted on, never matched), and on `update` the
+///   three used to reach no verdict at all, falling through to the markers, so
+///   there is no earlier behaviour for the short-circuit to have preserved.
 /// * `103` (`ZYPPER_EXIT_INF_RESTART_NEEDED`) is a success even though zypper
 ///   means "the patch that updates the package manager itself was installed,
 ///   run the command again to install the *remaining* patches". Those remaining
 ///   patches are not installed. Inherited from the install check's set and left
-///   identical for the same contract reason; the post-state
+///   identical so the two keys cannot drift; the post-state
 ///   `zypper -n patches | grep $repa` in the template is what surfaces it in
 ///   the transcript.
 ///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "package not found", "update stack
-/// locked", "Dependency Error", "RPM Error", or "Unknown Error".
+/// locked", "Dependency Error", "RPM Error", "Unknown Error", or — only if a
+/// caller reaches here without its [`not_run`] gate — "update command timed out
+/// or failed to run".
 fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     match classify_exit(args.exitcode) {
         ExitClass::Success => markers(args),
+        ExitClass::PackageNotFound if args.exitcode == 104 => {
+            log_failed(args);
+            Err(UpdateError::new("package not found", args.hostname))
+        }
         ExitClass::PackageNotFound => {
+            markers(args)?;
             log_failed(args);
             Err(UpdateError::new("package not found", args.hostname))
         }
@@ -169,6 +198,13 @@ fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
             log_failed(args);
             Err(UpdateError::new("Unknown Error", args.hostname))
         }
+        // Unreachable through either check — both gate on `not_run` first — but
+        // a class rather than a fallthrough, so a caller that forgets cannot
+        // report a host mtui never reached as a failed patch. Deliberately the
+        // same error the gate raises, which makes the gate's removal
+        // behaviour-preserving on this path; the gate stays because it is the
+        // cheaper check and reads at the top of each key.
+        ExitClass::NotRun => Err(not_run_error(args)),
     }
 }
 
@@ -224,13 +260,22 @@ fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// failed to run".
 fn not_run(args: CheckArgs<'_>) -> Result<(), UpdateError> {
     if args.exitcode == -1 {
-        log_failed(args);
-        return Err(UpdateError::new(
-            "update command timed out or failed to run",
-            args.hostname,
-        ));
+        return Err(not_run_error(args));
     }
     Ok(())
+}
+
+/// The `-1` verdict, in one place.
+///
+/// Built here rather than at each site so [`not_run`] and [`classified`]'s
+/// [`ExitClass::NotRun`] arm cannot drift into two spellings of the same
+/// sentinel. The flow's veto of the group-wide rollback keys on `lastexit()`
+/// being `-1`, not on this string; what the string decides is what the operator
+/// is told the host's failure *was*, which for a host mtui never reached must
+/// not read as a package problem.
+fn not_run_error(args: CheckArgs<'_>) -> UpdateError {
+    log_failed(args);
+    UpdateError::new("update command timed out or failed to run", args.hostname)
 }
 
 /// The stdout/stderr classification shared by every update check.
@@ -263,9 +308,17 @@ fn markers(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
         return Err(UpdateError::new("update stack locked", args.hostname));
     }
     if args.stdout.contains("(c): c") {
+        // Carries `command` and `stderr` as well as `stdout`, matching the
+        // sibling branches' `log_failed` record. Without them this branch was
+        // the one marker that left no forensic trace of the command — invisible
+        // while it could only follow a success or an unrecognised status, but
+        // reachable now on `4`/`5`/`8`, which are the codes an operator is most
+        // likely to be investigating.
         tracing::error!(
             host = args.hostname,
+            command = args.stdin,
             stdout = args.stdout,
+            stderr = args.stderr,
             "unresolved dependency problem. please resolve manually"
         );
         return Err(UpdateError::new("Dependency Error", args.hostname));
@@ -580,8 +633,10 @@ mod tests {
     #[test]
     fn package_not_found_codes_on_both_zypper_keys() {
         // The `104 | 4 | 5 | 8` grouping is the install check's, reproduced
-        // exactly: the reason strings are a contract callers match on, so one
-        // exit code must not carry two verdicts across two checks.
+        // exactly, so an exit code cannot be sorted into two different classes
+        // by two checks. The transcripts here are clean, which is when the
+        // class label is also the message; see `only_104_outranks_the_markers`
+        // for what the three inaccurate members say when it is not.
         for code in [104, 4, 5, 8] {
             let err = zypper(args("zypper -n in -t patch", "", "", code)).unwrap_err();
             assert_eq!(err.reason, "package not found", "zypper exit {code}");
@@ -627,24 +682,62 @@ mod tests {
     }
 
     #[test]
-    fn package_not_found_outranks_the_markers() {
-        // The other half of `classified`'s ordering, and the half nothing
-        // pinned: every other not-found fixture has empty stdout *and* stderr,
-        // so inserting `markers(args)?` at the top of that arm passed the whole
-        // suite. These carry a marker AND a not-found exit code, so they can
-        // only pass if the exit code is consulted first.
-        //
-        // This is also where the `104 | 4 | 5 | 8` grouping shows its cost: an
-        // exit `5` is `ERR_PRIVILEGES`, not a missing package, so a locked
-        // stack under it is reported as "package not found". Deliberate — the
-        // reason strings are a contract shared with the install check.
+    fn only_104_outranks_the_markers() {
+        // `104` is the one member of its class that literally means "capability
+        // not found", and the one whose verdict a marker cannot improve on: it
+        // short-circuits even with a marker present.
         let err = zypper(args("zypper", "", "System management is locked", 104)).unwrap_err();
-        assert_eq!(err.reason, "package not found");
+        assert_eq!(err.reason, "package not found", "104 outranks the marker");
+
+        // `4`/`5`/`8` are `ERR_ZYPP`, `ERR_PRIVILEGES` and `ERR_COMMIT` — the
+        // package was found and the transaction failed. These three are the
+        // headline real-world patch failures, so the transcript names them
+        // rather than the class label. Restoring the blanket short-circuit
+        // turns every one of these into "package not found".
+        let err = zypper(args("zypper", "", "System management is locked", 5)).unwrap_err();
+        assert_eq!(err.reason, "update stack locked", "5 + lock marker");
+        let err = zypper(args(
+            "zypper",
+            "",
+            "A ZYpp transaction is already in progress.",
+            4,
+        ))
+        .unwrap_err();
+        assert_eq!(err.reason, "update stack locked", "4 + ZYpp marker");
         let err = zypper(args("zypper", "(c): c", "", 4)).unwrap_err();
-        assert_eq!(err.reason, "package not found");
+        assert_eq!(err.reason, "Dependency Error", "4 + dependency prompt");
         let err =
             transactional_update(args("transactional-update", "", "Error: boom", 8)).unwrap_err();
-        assert_eq!(err.reason, "package not found");
+        assert_eq!(err.reason, "RPM Error", "8 + rpm marker");
+
+        // What the three say on a *clean* transcript is already pinned by
+        // `package_not_found_codes_on_both_zypper_keys`, which passes empty
+        // stdout and stderr for all four codes. Repeating it here would
+        // constrain nothing the marker cases above do not.
+    }
+
+    #[test]
+    fn the_never_ran_class_cannot_be_read_as_a_package_failure() {
+        // Unreachable through `zypper`/`transactional_update`, which gate on
+        // `not_run` first — so this calls `classified` directly, which is the
+        // only way to prove the arm exists and says the right thing. Before
+        // `ExitClass::NotRun`, `-1` fell through to `Unknown`, and a host mtui
+        // never contacted was reported as a failed patch. (Not as a *rolled
+        // back* one: `never_ran` in `reports::update_flow` reads the target's
+        // `lastexit()`, so the group-wide downgrade was skipped either way.)
+        let err = classified(args("zypper", "", "", -1)).unwrap_err();
+        assert_eq!(err.reason, "update command timed out or failed to run");
+
+        // Both routes to the sentinel give the operator the same string — the
+        // point of `not_run_error`. This cannot detect the gate's removal
+        // (the arm produces the identical error, by design); what it pins is
+        // that the two never drift apart.
+        for reached in [
+            zypper(args("zypper", "", "", -1)),
+            transactional_update(args("transactional-update", "", "", -1)),
+        ] {
+            assert_eq!(reached.unwrap_err().reason, err.reason);
+        }
     }
 
     #[test]

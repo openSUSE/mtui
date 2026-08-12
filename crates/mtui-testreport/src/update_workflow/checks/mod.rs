@@ -114,9 +114,35 @@ pub(crate) enum ExitClass {
     /// The transaction committed: `0`, plus the informational `100`, `101`,
     /// `102`, `103`, `106` and `107`.
     Success,
-    /// `104`, `4`, `5`, `8` — the verdict "package not found".
+    /// `104`, `4`, `5`, `8` — the verdict "package not found". Only `104`
+    /// literally means that; see [`classify_exit`] for why the other three
+    /// share the class, and the `update` check for why they no longer share
+    /// its message when the transcript can say more.
     PackageNotFound,
-    /// Any other non-zero status, including `105` (aborted on a signal).
+    /// `-1`, mtui's own sentinel: the command never produced a status at all.
+    ///
+    /// Its own variant rather than a member of [`Unknown`], because the two
+    /// mean opposite things — an unrecognised status is a patch that ran and
+    /// failed, `-1` is a host mtui never reached. As a member of [`Unknown`] it
+    /// told the operator "Unknown Error" about a host that was never contacted,
+    /// which is not a vaguer diagnosis but a wrong one.
+    ///
+    /// What it does **not** change is the rollback. The group-wide downgrade is
+    /// vetoed by `never_ran` in `reports::update_flow`, which keys on the
+    /// target's recorded `lastexit()` being `-1` and never on the class or the
+    /// reason a check produced — so a `-1` host skipped the rollback under the
+    /// old fallthrough too. This variant fixes what the operator is told, not
+    /// where the flow goes.
+    ///
+    /// The variant also makes the distinction structural: the one `match` on
+    /// this enum ([`classify_exit`]'s caller) is exhaustive, so removing this
+    /// arm is a compile error rather than a silent fallthrough. That holds only
+    /// for exhaustive matchers — a caller writing `_ =>` still compiles.
+    ///
+    /// [`Unknown`]: ExitClass::Unknown
+    NotRun,
+    /// Any other non-zero status except `-1`, including `105` (aborted on a
+    /// signal).
     Unknown,
 }
 
@@ -130,19 +156,25 @@ pub(crate) enum ExitClass {
 /// The `104 | 4 | 5 | 8` grouping is the install check's, reproduced exactly:
 /// only `104` (`ZYPPER_EXIT_INF_CAP_NOT_FOUND`) literally means "capability not
 /// found", while `4`/`5`/`8` are `ERR_ZYPP`, `ERR_PRIVILEGES` and `ERR_COMMIT`.
-/// The label is inaccurate for three of the four, but the reason strings are a
-/// stable contract callers match on, so one exit code must not carry two
-/// different verdicts across two checks. The grouping is preserved rather than
-/// re-derived.
+/// The grouping is preserved rather than re-derived, so that one exit code
+/// cannot be sorted into two different classes by two checks. What a check
+/// then *says* about the three inaccurate members is its own decision: the
+/// `update` check lets the transcript name them where it can (see
+/// `classified` there).
 ///
-/// `-1` is **not** classified here: it is mtui's own "never ran to completion"
-/// sentinel, not a status any package manager returned, and it must keep its
-/// distinct reason so the flow can veto the rollback for a host it never
-/// reached (`not_run` in [`update`]).
+/// `-1` classifies as [`NotRun`], not [`Unknown`]. It is mtui's own "never ran
+/// to completion" sentinel rather than a status a package manager returned, so
+/// it must keep its own reason: an operator reading "Unknown Error" about a
+/// host mtui never contacted has been told the wrong thing. The gate that
+/// normally catches it first is `not_run` in [`update`].
+///
+/// [`NotRun`]: ExitClass::NotRun
+/// [`Unknown`]: ExitClass::Unknown
 pub(crate) fn classify_exit(exitcode: i32) -> ExitClass {
     match exitcode {
         0 | 100 | 101 | 102 | 103 | 106 | 107 => ExitClass::Success,
         104 | 4 | 5 | 8 => ExitClass::PackageNotFound,
+        -1 => ExitClass::NotRun,
         _ => ExitClass::Unknown,
     }
 }
@@ -214,13 +246,19 @@ mod tests {
     }
 
     #[test]
-    fn the_never_ran_sentinel_is_not_classified_as_a_package_problem() {
+    fn the_never_ran_sentinel_gets_its_own_class() {
         // `-1` is mtui's own "timed out / connection lost / not connected"
         // sentinel. It reaches the classifier only if a caller forgets its
         // `not_run` gate, and it must not be mistaken for a status a package
         // manager returned — the flow vetoes the group-wide rollback for a
         // host it never reached, and only the distinct reason string carries
         // that.
-        assert_eq!(classify_exit(-1), ExitClass::Unknown);
+        //
+        // It used to fall through to `Unknown`, which reported a host mtui
+        // never contacted as a failed patch — the wrong diagnosis, though not
+        // (as it would be easy to assume) a wrong rollback: `never_ran` in
+        // `reports::update_flow` vetoes the group-wide downgrade from the
+        // target's `lastexit()`, not from anything a check returns.
+        assert_eq!(classify_exit(-1), ExitClass::NotRun);
     }
 }

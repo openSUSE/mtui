@@ -12,11 +12,15 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed}
 /// The three exit-code sets are the same ones
 /// [`classify_exit`](super::classify_exit) expresses for the `update` check,
 /// but they are spelled out inline here because this check interleaves them
-/// with its stderr markers in a different order (the markers sit *between* the
-/// package-not-found set and the "Unknown Error" fallback, where `update` gives
-/// them first refusal on the fallback). Folding this onto the shared helper is
-/// a behaviour-preserving refactor only if that ordering is preserved
-/// exactly — worth doing on its own, not as a rider.
+/// with its stderr markers in a different order: the markers sit *between* the
+/// package-not-found set and the "Unknown Error" fallback, where `update` now
+/// gives them first refusal on everything except `104`. So the same transcript
+/// can read differently across the two checks — an exit `5` carrying
+/// `System management is locked` is "package not found" here and "update stack
+/// locked" there, pinned on both sides so the divergence stays deliberate.
+/// Folding this onto the shared helper is a behaviour-preserving refactor only
+/// if that ordering is preserved exactly — worth doing on its own, not as a
+/// rider.
 ///
 /// # Errors
 ///
@@ -103,6 +107,31 @@ mod tests {
             let err = zypper(args("", "", code)).unwrap_err();
             assert_eq!(err.reason, "package not found");
             assert_eq!(err.host.as_deref(), Some("h1"));
+        }
+    }
+
+    #[test]
+    fn the_not_found_set_still_outranks_the_markers_here() {
+        // The install check keeps its own ordering: the whole `104 | 4 | 5 | 8`
+        // set short-circuits ahead of the stderr markers, where the `update`
+        // check now lets them speak first on everything but `104`. So the same
+        // transcript reads differently across the two, deliberately — pinned
+        // here and in `update`'s `only_104_outranks_the_markers` so neither
+        // side can drift without a test saying so.
+        //
+        // Every other fixture in this module passes an empty transcript, which
+        // is why hoisting the marker block above the set used to break nothing.
+        for (stdout, stderr, code) in [
+            ("", "System management is locked", 5),
+            ("", "A ZYpp transaction is already in progress.", 4),
+            ("", "Error: something", 8),
+            ("choose (c): c", "", 4),
+        ] {
+            let err = zypper(args(stdout, stderr, code)).unwrap_err();
+            assert_eq!(
+                err.reason, "package not found",
+                "install exit {code} must outrank its markers"
+            );
         }
     }
 
