@@ -59,12 +59,12 @@ reqwest = { version = "0.13", features = ["json", "rustls"], default-features = 
 # `client.conf`/$OPENQA_CONFIG credential discovery, retries, and redirect
 # restriction, replacing mtui's own hand-rolled implementation. reqwest 0.13.4
 # on both sides so `ClientBuilder::http_client` shares mtui's connection pool.
-# "0.1.4" is a floor, not a preference: mtui depends on its userinfo
-# redaction in `Error::Request`/`Error::Connection`/`Error::CrossOriginRedirect`
-# Display and in `config::resolve`'s bare-authority stripping
+# "0.2" is a floor, not a preference: mtui depends on its userinfo redaction
+# in `Error::Request`/`Error::Connection`/`Error::CrossOriginRedirect` Display
+# and in `config::resolve`'s bare-authority stripping
 # (crates/mtui-datasources/src/openqa/client.rs), and a resolver allowed to
-# pick 0.1.3 would silently reintroduce the leak.
-ruoqa = "0.1.4"
+# pick an older release would silently reintroduce the leak.
+ruoqa = "0.2"
 # HMAC-SHA1, for the OpenSSH hashed known_hosts test helper (mtui-hosts dev-dep);
 # not used for openQA auth any more (ruoqa owns that).
 hmac = "0.13"

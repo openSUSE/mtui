@@ -123,14 +123,27 @@ Defaults below are the built-in values.
 | `distri` | string | `sle` | openQA install `distri` parameter. |
 
 openQA API credentials (`key`/`secret`, used to sign requests with
-`X-API-Hash`) are **not** part of `mtui.toml`. They are read from the openQA
-project's own `client.conf` — an INI file with one `[host[:port]]` section per
-instance — searched at `/etc/openqa/client.conf` then
-`$XDG_CONFIG_HOME/openqa/client.conf` (or `~/.config/openqa/client.conf` when
-`$XDG_CONFIG_HOME` is unset), later files overriding earlier ones. Setting
-`$OPENQA_CONFIG` to a directory makes it the **only** path searched. An
-instance with no matching section (or no `client.conf` at all) is queried
-unauthenticated, which openQA permits for GET requests.
+`X-API-Hash`) are **not** part of `mtui.toml`. mtui delegates their discovery
+to the `ruoqa` client, which resolves them in this order:
+
+1. **`$OPENQA_API_KEY`/`$OPENQA_API_SECRET`**, honoured as a pair — setting
+   only one is a configuration error. When both are set they are used for
+   every instance, ahead of `client.conf`.
+2. The openQA project's own `client.conf` — an INI file with one
+   `[host[:port]]` section per instance — found via a **tiered**, non-merging
+   search: `$OPENQA_CONFIG` (when set), else the user config directory
+   (`$XDG_CONFIG_HOME/openqa`, or `~/.config/openqa` when `$XDG_CONFIG_HOME`
+   is unset), else `/etc/openqa` and `/usr/etc/openqa`. **The first tier that
+   yields any file wins outright; later tiers are not read at all** — a
+   `~/.config/openqa/client.conf` does not merge with sections that exist
+   only in `/etc/openqa/client.conf`; it replaces it. Within the winning
+   tier, each directory contributes its `client.conf` (if present) followed
+   by its sorted `client.conf.d/*.conf` drop-ins, later files overriding
+   earlier keys.
+
+An instance with no matching section (or no `client.conf` at all, and no
+`$OPENQA_API_KEY`/`$OPENQA_API_SECRET` pair) is queried unauthenticated, which
+openQA permits for GET requests.
 
 ### `[gitea]`
 
