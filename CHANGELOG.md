@@ -199,18 +199,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   could tell them apart — and reports the new reason **"could not determine
   what to patch"**, which an operator (or an MCP client) sees instead of
   "Unknown Error" or "package not found".
-  **Only exit `0` counts as an answer here**, deliberately narrower than the
-  rule the patch's own status is read against: `106`
-  ("some repository had to be disabled temporarily") is routine for a *patch*,
-  but on the listing step it may mean the disabled repository was the update's
-  own, in which case the missing patch would go unnoticed. The cost is that a
-  host carrying an unrelated stale or unreachable repository can now fail its
-  update with "could not determine what to patch" rather than patching; the
-  remedy is to fix or remove that repository. A host carrying none of the
-  update's products still passes — an empty list reached with a `0` status is an
-  answer, not a failure — and so does an update repo that was simply never
-  added, which zypper reports as a perfectly good list without the update's
-  rows.
+  **Exit `0` counts as an answer here, and `106` only while the update's own
+  repository is still listed** — deliberately narrower than the rule the
+  patch's own status is read against. `106` ("some repository had to be
+  disabled temporarily") is routine for a *patch*, but on the listing step it
+  may mean the disabled repository was the update's own, in which case the
+  missing patch would go unnoticed. zypper raises it for any skipped
+  repository without saying which, so instead of judging the status the script
+  asks `zypper -n lr` whether the update's repository is there: if it is, the
+  skipped one was somebody else's and the update proceeds with a note in the
+  transcript; if it is not, the listing cannot be trusted and the update fails.
+  A refhost carrying an unrelated stale or unreachable repository therefore
+  keeps patching, as it does today. A host carrying none of the update's
+  products still passes — an empty list reached with a `0` status is an answer,
+  not a failure — and so does an update repo that was simply never added, which
+  zypper reports as a perfectly good list without the update's rows.
   `zypper -n refresh` is **not** judged: it returns the same status whether one
   repository failed to refresh or all of them did, so on a refhost with an
   unrelated broken repo it cannot distinguish a fatal problem from a routine

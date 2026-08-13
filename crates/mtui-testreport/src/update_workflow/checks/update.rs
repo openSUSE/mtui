@@ -339,7 +339,12 @@ pub(crate) const PROBE_FAILURE_MARKER: &str = "mtui: could not determine what to
 /// nothing half-applied for a downgrade to repair, and the rollback would
 /// revert every healthy peer.
 fn probe_failure(args: CheckArgs<'_>) -> Result<(), UpdateError> {
-    if args.stdout.contains(PROBE_FAILURE_MARKER) || args.stderr.contains(PROBE_FAILURE_MARKER) {
+    let marked = |stream: &str| {
+        stream
+            .lines()
+            .any(|line| line.starts_with(PROBE_FAILURE_MARKER))
+    };
+    if marked(args.stdout) || marked(args.stderr) {
         log_failed(args);
         return Err(UpdateError::probe_failure(
             "could not determine what to patch",
@@ -933,6 +938,31 @@ mod tests {
                 zypper(args("zypper -n in -t patch", stdout, "", 0)).is_ok(),
                 "an unrelated mtui line must not read as a probe failure: {stdout}"
             );
+        }
+
+        // The other direction: the marker is matched at the *start of a line*,
+        // not anywhere in the stream. The split-`printf` trick keeps the
+        // script's own text from carrying the sentence, but it cannot stop a
+        // host echoing or quoting it mid-line — a `set -x` trace, a log line
+        // that embeds the previous run's output, a package's own message.
+        // Only a line that begins with it is mtui's own verdict.
+        for stdout in [
+            format!("+ echo '{PROBE_FAILURE_MARKER}: zypper -n patches exited 6'\n"),
+            format!("2026-08-13 log: saw \"{PROBE_FAILURE_MARKER}\" on the last run\n"),
+            format!("   {PROBE_FAILURE_MARKER}: indented, so not ours\n"),
+        ] {
+            assert!(
+                zypper(args("zypper -n in -t patch", &stdout, "", 0)).is_ok(),
+                "the marker mid-line must not read as a probe failure: {stdout}"
+            );
+        }
+
+        // And a line that really does begin with it still fires, on either
+        // stream — or the guard above would have disarmed the gate entirely.
+        let marker = format!("{PROBE_FAILURE_MARKER}: zypper -n patches exited 6\n");
+        for (out, err) in [(marker.as_str(), ""), ("", marker.as_str())] {
+            let err = zypper(args("zypper -n in -t patch", out, err, 0)).unwrap_err();
+            assert_eq!(err.reason, "could not determine what to patch");
         }
     }
 
