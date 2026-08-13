@@ -455,7 +455,13 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
         // vanish on the other — and they are the declared routing contract,
         // not a detail of who reads them today.
         aggregate.probe_failed = failures.iter().all(|e| e.probe_failed);
-        aggregate.cancelled = failures.iter().all(|e| e.cancelled);
+        // `cancelled` is deliberately NOT propagated here. Every cancellation
+        // in this module is an early `return Err`, so no cancelled error ever
+        // reaches a `failures` vec — the line would be dead, and if it ever
+        // became live it would newly route a multi-failure aggregate to
+        // `CommandError::Cancelled`, letting a cancel mask a real host failure
+        // that merely coincided with it. That is a behaviour change, not part
+        // of this fix.
         Err(aggregate)
     }
 }
@@ -2532,6 +2538,10 @@ mod tests {
             "one host that did dispatch a patch clears the flag: {mixed:?}"
         );
 
+        // `cancelled` is deliberately not summarised. Every cancellation in
+        // this module is an early `return Err`, so no cancelled error reaches
+        // a `failures` vec; propagating it here would be dead code that, were
+        // it ever reached, would let a cancel mask a coincident real failure.
         let cancelled = aggregate_failures(
             "update",
             vec![
@@ -2541,8 +2551,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            cancelled.is_cancelled(),
-            "a summary of cancellations is still a cancellation: {cancelled:?}"
+            !cancelled.is_cancelled(),
+            "aggregation must not mint a cancel verdict: {cancelled:?}"
         );
     }
 

@@ -47,8 +47,11 @@
 //! assignment-only command takes the status of its last command substitution —
 //! so each probe is captured on its own (`mtui_patch_rows=$(zypper -n
 //! patches)`) and its `$?` read on the next line. The rows then reach awk
-//! through the **builtin** `printf '%s\n'`, not `echo` or `xargs`, so no
-//! `ARG_MAX` limit sits between them.
+//! through the **builtin** `printf '%s\n'`, not `echo` or `xargs`, so on any
+//! shell where `printf` is a builtin — dash, bash and busybox, i.e. every
+//! shell these run under — no `ARG_MAX` limit sits between them. Were it ever
+//! to resolve to `/usr/bin/printf`, a large enough patch table would fail the
+//! probe rather than truncate it: the fail-safe direction.
 //!
 //! `mtui_probe_ok <label> <status>` is the guard. On `0` it returns; on
 //! anything else it prints the marker line
@@ -69,24 +72,42 @@
 //! healthy update. `the_rendered_update_templates_do_not_trip_the_gate` pins
 //! it.
 //!
-//! ## Why the accepted set is `0` and nothing else
+//! ## Why the accepted set is `0`, plus `106` only when the repo is there
 //!
 //! **Deliberately narrower than `classify_exit`'s success set, and the two
 //! must not be unified.** That set is argued from "the transaction committed",
 //! which is a statement about the *patch*. Read as a verdict on a metadata
-//! *probe* its members invert: `106`
-//! (`ZYPPER_EXIT_INF_REPO_SKIPPED`) says a repository was skipped, and if the
-//! skipped one is the issue repo then the list legitimately lacks the patch —
-//! precisely the silent no-op this guard exists to stop. `zypper -n patches`
-//! cannot say *which* repo was skipped, so the status cannot be made to mean
-//! "the issue repo is present" by widening the set.
+//! *probe* its members invert: `106` (`ZYPPER_EXIT_INF_REPO_SKIPPED`) says a
+//! repository was skipped, and if the skipped one is the issue repo then the
+//! list legitimately lacks the patch — precisely the silent no-op this guard
+//! exists to stop.
 //!
-//! The asymmetry is chosen with its cost understood: a host carrying an
-//! unrelated broken repository alongside working ones now fails the update
-//! with "could not determine what to patch" instead of patching. That failure
-//! is **cheap** — it does not roll back (see `UpdateFailure::ProbeFailed`),
-//! and it points the operator at the repo state, which is where the problem
-//! is. A false *pass* is the bug being fixed.
+//! But `106` cannot simply be *rejected* either, and the reason is the same
+//! one that leaves `refresh` unguarded below: `init_repos()` raises it for
+//! **any** skipped repository and cannot say which. A refhost routinely
+//! carries one stale or unreachable repo alongside working ones, and those
+//! hosts patch correctly today. Rejecting `106` would abort exactly the hosts
+//! that leaving `refresh` unguarded was meant to protect — the two rules would
+//! cancel out, and the fleet, not one code path, would pay for it.
+//!
+//! So the status is not asked to carry the verdict at all. On `106` the script
+//! asks the question the guard actually cares about — *is the update's own
+//! repo still there?* — with `mtui_issue_repo_present`, which greps `$repa` out
+//! of `zypper -n lr`, the same selector and the same listing the cleanup loop
+//! already matches on. Repo present: the skipped one was somebody else's, so
+//! note it in the transcript and carry on. Repo absent: the list cannot be
+//! trusted, and the probe fails.
+//!
+//! `mtui_issue_repo_present` is a pipeline, and here the last-stage rule is
+//! wanted rather than worked around: awk's `END { exit !found }` *is* the
+//! verdict. An `lr` that fails outright therefore reads as "absent" and fails
+//! the probe, which is the conservative direction.
+//!
+//! A host carrying none of the update's products is untouched by this: no repo
+//! was added for it, so `patches` answers `0`, no `106` arises, and the empty
+//! list stays the legitimate no-op it always was. The alias question is only
+//! ever asked on the `106` path, which is why it cannot turn that no-op into a
+//! failure.
 //!
 //! ## What is and is not guarded
 //!
@@ -106,10 +127,19 @@
 //! `init_repos()` during an operation command, not here. So a refhost with one
 //! stale, unreachable or unsigned-key repository alongside working ones is
 //! indistinguishable from a host whose issue repo failed, and guarding it would
-//! abort updates that are fine. The case it would have caught is not lost: a
-//! wholesale refresh failure resurfaces on `zypper -n patches`, which *does* go
-//! through `init_repos` and so answers `106` (or worse) when the issue repo is
-//! missing — and `106` is rejected.
+//! abort updates that are fine. The dominant case it would have caught is not
+//! lost: for a freshly added repo with no local cache, a refresh failure means
+//! `zypper -n patches` — which *does* go through `init_repos` — answers `106`,
+//! and the alias question above then finds the repo missing or disabled.
+//!
+//! **One residual remains, narrowed rather than closed.** Repos are added with
+//! `zypper ar` and no `-f` (`mtui-hosts` `target/repo_manager.rs`), so
+//! `patches` will not autorefresh them. A repo whose cache is *stale but
+//! present* — an `update` re-run after an earlier successful `prepare`, with
+//! the repo now unreachable — lets `patches` answer `0` from that cache with
+//! the new patch absent, and the script exits `0`: the original silent no-op,
+//! on that one path. Closing it needs a freshness assertion, not a status
+//! test.
 //!
 //! Also not guarded: the post-state `grep` (a successful patch makes it exit
 //! `1` — the reason `$mtui_status` exists), the repo-cleanup loop (a cosmetic
@@ -176,9 +206,18 @@ yum -y update $packages
 /// patch list are guarded, and why `zypper -n refresh` is not one of them.
 const ZYPPER_UPDATE: &str = r#"
 export LANG=
+mtui_issue_repo_present() {
+  zypper -n lr | awk -F "|" '/$repa\>/ { found = 1 } END { exit !found }'
+}
 mtui_probe_ok() {
   case "$$2" in
   0) return 0 ;;
+  106)
+    if mtui_issue_repo_present; then
+      printf 'mtui: note: %s exited 106, a repository was skipped; the update repo is present, continuing\n' "$$1"
+      return 0
+    fi
+    ;;
   esac
   printf 'mtui: could not %s\n' "determine what to patch: $$1 exited $$2"
   exit "$$2"
@@ -210,9 +249,18 @@ exit $$mtui_status
 /// legitimately empty list that no guard can see.
 const SLM_UPDATE: &str = r#"
 export LANG=
+mtui_issue_repo_present() {
+  zypper -n lr | awk -F "|" '/$repa\>/ { found = 1 } END { exit !found }'
+}
 mtui_probe_ok() {
   case "$$2" in
   0) return 0 ;;
+  106)
+    if mtui_issue_repo_present; then
+      printf 'mtui: note: %s exited 106, a repository was skipped; the update repo is present, continuing\n' "$$1"
+      return 0
+    fi
+    ;;
   esac
   printf 'mtui: could not %s\n' "determine what to patch: $$1 exited $$2"
   exit "$$2"
@@ -329,16 +377,50 @@ mod tests {
         // stderr — and the script would carry on to the empty-list skip and
         // exit 0, which is the bug it exists to close.
         //
-        // Its accepted set is `0` **alone**, deliberately narrower than
-        // `classify_exit`'s (see the module docs: `106` on a probe can mean
-        // the issue repo was the skipped one), and the marker is split across
-        // the format string and its argument so the script's own text does not
-        // contain it.
+        // Pinned by shape rather than as one literal blob, so that editing the
+        // guard's prose does not fail this while a semantic change slips
+        // through it. Each of these is a separate way the guard could stop
+        // guarding.
+        let guard_at = rendered
+            .find("mtui_probe_ok() {")
+            .unwrap_or_else(|| panic!("{name}: the probe guard is not defined at all: {rendered}"));
+        let first_call = rendered
+            .find("mtui_probe_ok \"")
+            .unwrap_or_else(|| panic!("{name}: nothing ever calls the probe guard: {rendered}"));
+        assert!(
+            guard_at < first_call,
+            "{name}: the guard must be defined before any probe runs, else it is \
+             'command not found' (127) and the script carries on to the empty-list \
+             skip and exits 0 — the bug it exists to close: {rendered}"
+        );
+        // `0` is the only status accepted outright.
+        assert!(
+            rendered.contains("  case \"$2\" in\n  0) return 0 ;;\n"),
+            "{name}: the guard must accept `0` and only `0` outright: {rendered}"
+        );
+        // `106` is accepted *conditionally*, on the issue repo still being
+        // listed — the whole of the answer to "a refhost carrying one
+        // unrelated broken repo must still patch". Dropping the condition and
+        // accepting `106` flat would reopen #447 for a skipped issue repo.
+        assert!(
+            rendered.contains("  106)\n    if mtui_issue_repo_present; then\n"),
+            "{name}: `106` must be accepted only when the issue repo is present: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!(
+                "mtui_issue_repo_present() {{\n  zypper -n lr | awk -F \"|\" '/{repa}\\>/ \
+                 {{ found = 1 }} END {{ exit !found }}'\n}}"
+            )),
+            "{name}: the presence probe must ask `lr` about this update's own repo: {rendered}"
+        );
+        // Every other status prints the marker and exits with the probe's own
+        // status. The marker is split across the format string and its
+        // argument so the script's own text does not contain it.
         assert!(
             rendered.contains(
-                "mtui_probe_ok() {\n  case \"$2\" in\n  0) return 0 ;;\n  esac\n  printf 'mtui: could not %s\\n' \"determine what to patch: $1 exited $2\"\n  exit \"$2\"\n}\n"
+                "  printf 'mtui: could not %s\\n' \"determine what to patch: $1 exited $2\"\n  exit \"$2\"\n}\n"
             ),
-            "{name}: the probe guard must be defined before any probe runs: {rendered}"
+            "{name}: an unrecognised probe status must mark and exit: {rendered}"
         );
         // The other half of the split: the check's marker must not appear in
         // the script text, or a transcript echoing the command would report a
@@ -995,6 +1077,12 @@ exit "$MTUI_STUB_PATCH_EXIT"
             // the package-not-found set (`104`, `4`, `5`, `8`), the band's
             // boundaries (`99`, `108`), and plain errors. A code that becomes
             // acceptable on a probe has to be argued for here, individually.
+            //
+            // `106` is in the list and refused *because* `Knobs::default()`
+            // leaves `repo_row` empty — the update's repo is not listed, so
+            // its conditional acceptance does not apply. Both halves of that
+            // condition are pinned at the end of
+            // `only_a_zero_probe_status_is_accepted`.
             for code in [
                 1, 2, 3, 4, 5, 6, 7, 8, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 255,
             ] {
@@ -1028,6 +1116,72 @@ exit "$MTUI_STUB_PATCH_EXIT"
             }
             // And `0` is accepted, or the loop above proves only that the
             // script always fails.
+            // Both directions of the one conditional acceptance.
+            //
+            // `106` is `ZYPPER_EXIT_INF_REPO_SKIPPED`, which `init_repos()`
+            // raises for *any* skipped repository without saying which. A
+            // refhost carrying one stale or unreachable repo alongside working
+            // ones is routine and patches correctly today, so refusing `106`
+            // outright would abort exactly the hosts that leaving
+            // `zypper -n refresh` unguarded exists to protect — the two rules
+            // would cancel out. So the status is not asked to carry the
+            // verdict: the script asks `lr` whether the update's own repo is
+            // still listed.
+            //
+            // Deleting the `106` arm fails the first case; accepting `106`
+            // unconditionally fails the second, which is #447 for a skipped
+            // issue repo.
+            for (name, cmds) in templates() {
+                // Repo listed: somebody else's repo was skipped. Patch runs.
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        patches_exit: 106,
+                        repo_row: REPO_ROW,
+                        ..Knobs::default()
+                    },
+                );
+                assert_eq!(
+                    stubs.patch_invocations().len(),
+                    1,
+                    "{name}: 106 with the update repo listed must still patch: {:?}",
+                    stubs.patch_invocations()
+                );
+                assert!(
+                    !ran.stdout.contains(PROBE_FAILURE_MARKER),
+                    "{name}: 106 with the update repo listed must not mark a probe failure: {}",
+                    ran.stdout
+                );
+                assert_eq!(ran.code, 0, "{name}: and must not fail the update");
+
+                // Repo absent from `lr`: the skipped one may well have been
+                // ours, so the empty list cannot be trusted.
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        patches_exit: 106,
+                        repo_row: "",
+                        ..Knobs::default()
+                    },
+                );
+                assert!(
+                    ran.stdout.contains(&format!(
+                        "{PROBE_FAILURE_MARKER}: zypper -n patches exited 106"
+                    )),
+                    "{name}: 106 without the update repo must be refused: {}",
+                    ran.stdout
+                );
+                assert!(
+                    stubs.patch_invocations().is_empty(),
+                    "{name}: and must skip the patch: {:?}",
+                    stubs.patch_invocations()
+                );
+                assert_eq!(ran.code, 106, "{name}: reported verbatim");
+            }
             for (name, cmds) in templates() {
                 let stubs = Stubs::new();
                 let ran = run_script(&cmds, &stubs, Knobs::default());
