@@ -202,9 +202,13 @@ where
 /// Every other failure installed nothing — no updater for a host's key, a
 /// prepare that could not run, a cancel before dispatch, a host the flow lost,
 /// or a host that could not determine what to patch — so each re-surfaces
-/// without a rollback attempt. The rollback is best-effort
-/// ([`perform_downgrade`] returns `()`), so it can never bury the original
-/// update error.
+/// without a rollback attempt. The rollback is best-effort, but not because it
+/// cannot fail: [`perform_downgrade`] returns a `Result`, and a host whose
+/// version probe never answered raises it (#451). The precedence is enforced at
+/// the call site, which logs that error at WARN and re-surfaces the original
+/// update error, so a failed rollback can never bury the failure it was trying
+/// to repair — do not simplify the call away, or a broken rollback goes silent
+/// again.
 pub async fn perform_update_with_rollback<R>(
     report: &R,
     targets: &mut HostsGroup,
@@ -1141,13 +1145,26 @@ async fn downgrade_body(
     }
 
     // A dead probe must abort that host's downgrade, not degrade it. When the
-    // probe dies (an SSH no-output timeout records exit -1) its stdout is
-    // empty, the version map below stays empty, and the flow would
-    // "complete" having run zero downgrade commands — leaving every package at
-    // the update version behind a success-looking run. The pipeline's exit
-    // status is awk's, so a recorded non-zero exit here always means the probe
-    // itself broke, never "package not found". Handled per host: the healthy
-    // hosts still roll back (and transactional ones still reboot); the error for
+    // probe dies its stdout carries no versions, the version map below stays
+    // empty, and the flow would "complete" having run zero downgrade commands —
+    // leaving every package at the update version behind a success-looking run.
+    //
+    // Non-zero is the whole signal, and the template is what makes it
+    // trustworthy in both directions (#451). It guards the commands that
+    // *produce* the list and exits with the failed tool's own status, so a
+    // non-zero status here is either SSH-level death (the `-1` sentinel) or the
+    // guard passing zypper's or awk's status through — never "package not
+    // found", which the guard accepts as `104` and reports as `0`. And zero now
+    // genuinely means the probe answered: an empty list at `0` is a host
+    // carrying none of these packages, not a probe that failed unnoticed. Left
+    // as one pipeline the status was the *last* stage's — awk's, and awk
+    // succeeds on empty input — so a failed `zypper se` recorded `0` and this
+    // gate could only ever catch the `-1`.
+    //
+    // Handled per host: the healthy hosts still roll back (and transactional
+    // ones still reboot), because this downgrade is often the repair for an
+    // update that already failed on the group, and aborting it over one host's
+    // broken zypper would strand the healthy peers half-applied. The error for
     // the dead ones is raised at the end. All probes dead aborts immediately.
     let dead_probes: std::collections::BTreeSet<String> = list_map
         .keys()
@@ -1164,7 +1181,7 @@ async fn downgrade_body(
         error!(
             host = %hn,
             exit = ?exit,
-            "package version probe failed; skipping downgrade on this host"
+            "package version probe failed; this host was not downgraded"
         );
     }
     if !dead_probes.is_empty() && dead_probes.len() == list_map.len() {
@@ -1351,7 +1368,7 @@ async fn downgrade_body(
             .map(reboot_error),
     );
 
-    let not_downgraded = downgrade_verdict(targets).await;
+    let not_downgraded = downgrade_verdict(targets, &dead_probes).await;
 
     // A per-host check failure aborts first (matches the pre-#336 aggregation).
     aggregate_failures("downgrade", failures)?;
@@ -1416,7 +1433,20 @@ async fn downgrade_body(
 /// map of packages still at or above the update version — empty on a fully
 /// completed rollback. Iterated in sorted hostname order (the group's own
 /// ordering) so the log is deterministic.
-async fn downgrade_verdict(targets: &mut HostsGroup) -> BTreeMap<String, Vec<String>> {
+///
+/// `probe_dead` names the hosts whose version probe never answered, and the
+/// all-clear is withheld while it is non-empty. Nothing was downgraded on those
+/// hosts, and this verdict cannot speak for them either: it flags a package only
+/// when the loaded report carries a `required` version to compare against, so on
+/// a standalone `downgrade` — or for a package outside the report's list — an
+/// unmeasured host produces the same empty map a completed rollback does.
+/// Logging `done` over it is the silent success of issue #451 restated one layer
+/// up. The hosts are named at WARN instead; the command's own failure is raised
+/// by the caller.
+async fn downgrade_verdict(
+    targets: &mut HostsGroup,
+    probe_dead: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<String>> {
     // Query every host's versions concurrently via the shared fan-out, then
     // run the pure verdict scan below.
     targets.query_versions().await;
@@ -1448,8 +1478,20 @@ async fn downgrade_verdict(targets: &mut HostsGroup) -> BTreeMap<String, Vec<Str
         }
     }
 
+    if !probe_dead.is_empty() {
+        warn!(
+            hosts = %probe_dead.iter().cloned().collect::<Vec<_>>().join(", "),
+            "no package version probe answered on these hosts, so nothing was \
+             downgraded there and their package state is unverified"
+        );
+    }
+
     if not_downgraded.is_empty() {
-        tracing::info!("done");
+        // Only when every host was actually measured. A dead probe leaves this
+        // map empty for the same reason a completed rollback does.
+        if probe_dead.is_empty() {
+            tracing::info!("done");
+        }
     } else {
         for (hostname, names) in &not_downgraded {
             error!(
@@ -2758,6 +2800,164 @@ mod tests {
         );
     }
 
+    /// The exact `list_command` the downgrade flow renders for `packages` on a
+    /// SLES 15 host — the string [`MockConnection::with_response`] must match to
+    /// script the **version probe specifically**.
+    ///
+    /// Built through the same registry and the same `quote_args` the flow uses,
+    /// so the two cannot drift apart into a fixture that scripts nothing.
+    fn downgrade_list_command(packages: &[String]) -> String {
+        WorkflowRegistry::default()
+            .doer(Role::Downgrade, "15", false)
+            .expect("zypper has a downgrader")
+            .render_list_command(
+                &[("packages", quote_args(packages).as_str())]
+                    .into_iter()
+                    .collect(),
+            )
+            .expect("safe substitution never fails")
+            .expect("the zypper downgrader carries a list command")
+    }
+
+    /// A SLES 15 target whose **version probe** answers `exit`, with the
+    /// marker line the guarded template prints on stdout.
+    ///
+    /// That pairing is what the rendered probe actually produces when
+    /// `zypper -n se` fails — pinned end-to-end against a real `/bin/sh` in
+    /// `actions::downgrade`'s `rendered_script` module, which is where it *can*
+    /// be pinned: `MockConnection` scripts one outcome per command string and
+    /// cannot run a shell. Replaying it here is what lets the flow's *routing*
+    /// be tested.
+    ///
+    /// Scripted per command rather than through `with_default`, so the failure
+    /// is attributable to the probe: a mock answering every command alike would
+    /// leave nothing to attribute, and every other command on this host answers
+    /// cleanly.
+    fn sles_target_with_probe_exit(
+        hostname: &str,
+        packages: &[String],
+        exit: i16,
+    ) -> (Target, MockConnection, String) {
+        let list = downgrade_list_command(packages);
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "pkg-a = 1.0-1\n", "", 0, 0))
+            .with_response(
+                list.clone(),
+                CommandLog::new(
+                    list.clone(),
+                    format!(
+                        "mtui: could not determine what to downgrade: zypper -n se exited {exit}"
+                    ),
+                    "",
+                    exit,
+                    0,
+                ),
+            );
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        (t, handle, list)
+    }
+
+    #[tokio::test]
+    async fn perform_downgrade_probe_nonzero_exit_is_a_dead_probe() {
+        // Issue #451. Before the guard, a refused `zypper -n se` status could
+        // not reach this gate at all: the probe was a pipeline, so the recorded
+        // status was awk's, and awk exits 0 on empty input. Now the template
+        // exits with the failed tool's own status, and *any* non-zero status is
+        // a dead probe — the `-1` SSH sentinel the two tests above use is only
+        // one of its values, so a predicate narrowed to `c == -1` would still
+        // pass them.
+        //
+        // Per host, deliberately: h1 is what the rollback exists for. Aborting
+        // the whole group over h2's broken zypper would strand every healthy
+        // peer half-applied — the opposite of the update's own probe failure,
+        // where nothing had been applied yet.
+        let packages = vec!["pkg-a".to_owned()];
+        let (t1, h1) = sles_target("h1", "pkg-a = 1.0-1\n");
+        let (t2, h2, list) = sles_target_with_probe_exit("h2", &packages, 7);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_downgrade(&mut group, &NoopRepo, &packages, None).await;
+
+        // Not vacuous: the scripted probe really is the command that ran.
+        assert!(
+            h2.commands().contains(&list),
+            "the rendered version probe must have been dispatched: {:?}",
+            h2.commands()
+        );
+        let err = res.expect_err("a probe that refused its status must fail the command");
+        assert_eq!(err.reason, "package version probe failed");
+        assert_eq!(err.host.as_deref(), Some("h2"));
+        // The healthy host still rolled back — that is what the recovery is for.
+        assert!(
+            h1.commands()
+                .iter()
+                .any(|c| c.contains("--oldpackage") && c.contains("pkg-a") && c.contains("1.0-1")),
+            "the healthy host must still roll back: {:?}",
+            h1.commands()
+        );
+        assert!(
+            !h2.commands().iter().any(|c| c.contains("--oldpackage")),
+            "the dead-probe host must build no downgrade command: {:?}",
+            h2.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn downgrade_verdict_withholds_done_when_a_probe_died() {
+        // The all-clear must be unreachable on a host where no downgrade
+        // command ran. `downgrade_verdict` names a package only when the report
+        // carries a `required` version to compare against; on a standalone
+        // downgrade there is none, so with a dead probe the map came back empty
+        // and `done` was logged over a host nobody had measured — while the
+        // command failed. An operator reading the transcript saw both.
+        let packages = vec!["pkg-a".to_owned()];
+        let (t1, _h1) = sles_target("h1", "pkg-a = 1.0-1\n");
+        let (t2, _h2, _list) = sles_target_with_probe_exit("h2", &packages, 7);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let (res, logs) =
+            capture_logs(perform_downgrade(&mut group, &NoopRepo, &packages, None)).await;
+
+        let err = res.expect_err("a dead probe still fails the command");
+        assert_eq!(err.reason, "package version probe failed");
+        // The capture layer renders a message unquoted, so this is `== "done"`
+        // and not `contains("\"done\"")` — which would have matched nothing at
+        // all and passed however the code behaved.
+        assert!(
+            !logs.lines().any(|l| l == "done"),
+            "the all-clear must be withheld while a host's state is unverified: {logs}"
+        );
+        let unverified = logs
+            .lines()
+            .find(|l| l.contains("unverified"))
+            .unwrap_or_else(|| panic!("no warning about the unverified host: {logs}"));
+        assert!(
+            unverified.contains("h2"),
+            "the warning must name the host whose state is unknown: {unverified}"
+        );
+        // And the per-host ERROR says what happened to the host, not what the
+        // flow did next: "skipping downgrade on this host" reads as a step that
+        // was omitted, where the operator needs to know this host still carries
+        // the update.
+        let named = logs
+            .lines()
+            .find(|l| l.contains("was not downgraded"))
+            .unwrap_or_else(|| panic!("the per-host error must say so plainly: {logs}"));
+        assert!(
+            named.contains("h2"),
+            "the per-host error must name the host: {named}"
+        );
+    }
+
     #[tokio::test]
     async fn downgrade_verdict_names_packages_still_at_update_version() {
         // Re-query returns pkg-a still at 1.5-1, which is the update's `required`
@@ -2770,7 +2970,7 @@ mod tests {
         t.set_packages(vec![pkg]);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let not_downgraded = downgrade_verdict(&mut group).await;
+        let not_downgraded = downgrade_verdict(&mut group, &BTreeSet::new()).await;
 
         assert_eq!(
             not_downgraded.get("h1").map(Vec::as_slice),
@@ -2799,7 +2999,7 @@ mod tests {
         t.set_packages(vec![pkg]);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let _ = downgrade_verdict(&mut group).await;
+        let _ = downgrade_verdict(&mut group, &BTreeSet::new()).await;
 
         let p = &group.get("h1").unwrap().packages()[0];
         assert_eq!(
@@ -2822,7 +3022,7 @@ mod tests {
         t.set_packages(vec![pkg]);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let _ = downgrade_verdict(&mut group).await;
+        let _ = downgrade_verdict(&mut group, &BTreeSet::new()).await;
 
         let p = &group.get("h1").unwrap().packages()[0];
         assert_eq!(
@@ -2846,7 +3046,7 @@ mod tests {
         t2.set_packages(vec![p2]);
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
-        let not_downgraded = downgrade_verdict(&mut group).await;
+        let not_downgraded = downgrade_verdict(&mut group, &BTreeSet::new()).await;
 
         assert!(not_downgraded.contains_key("h1"), "{not_downgraded:?}");
         assert!(not_downgraded.contains_key("h2"), "{not_downgraded:?}");
@@ -2863,7 +3063,7 @@ mod tests {
         t.set_packages(vec![pkg]);
         let mut group = HostsGroup::new(vec![t], false);
 
-        let not_downgraded = downgrade_verdict(&mut group).await;
+        let not_downgraded = downgrade_verdict(&mut group, &BTreeSet::new()).await;
 
         assert!(not_downgraded.is_empty(), "{not_downgraded:?}");
         // Bookkeeping still advanced.

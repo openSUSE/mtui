@@ -10,6 +10,78 @@
 //!
 //! `LIST_COMMAND`'s leading newline keeps the first command off the prompt line
 //! in the transcript `show_log` prints.
+//!
+//! # The probe guard
+//!
+//! `LIST_COMMAND`'s output *is* the downgrade: every package the flow rolls
+//! back is one this probe resolved a released version for, so a probe that
+//! fails silently is a rollback that runs zero commands and reports success
+//! ([`crate::reports::update_flow::perform_downgrade`] would find an empty
+//! version map and skip every package). That is issue #451 — the same defect
+//! [`crate::update_workflow::actions::update`] carries as #447, in the path
+//! that matters most, since the rollback runs *after* an update has already
+//! failed on the group.
+//!
+//! It was not merely a discarded status. The probe was one pipeline, and POSIX
+//! defines a pipeline's status as its **last** stage's: awk's, and awk exits
+//! `0` after a successful run over empty input. A failed `zypper se` — a ZYpp
+//! lock, broken repo metadata, an unreadable rpmdb, zypper missing — was
+//! therefore not observable at all, and `dead_probes`' `lastexit != 0` gate
+//! could only ever catch SSH-level death.
+//!
+//! The technique is the update templates', and the argument for each step is
+//! made in full in that module's docs (§ "The probe guard"); only what differs
+//! is restated here. In outline: each producing stage is captured on its own
+//! line so an assignment's status is the substitution's (POSIX XCU 2.9.1), the
+//! rows reach the filter through the **builtin** `printf '%s\n'` so no
+//! `ARG_MAX` limit sits between probe and filter, `mtui_probe_ok` prints a
+//! start-of-line marker and exits with **the tool's own status** (never an
+//! invented sentinel — a POSIX `exit` truncates to `0..=255`, so any chosen
+//! value would collide with zypper's own space), and the marker is assembled
+//! from `printf`'s format string *and* its argument so the script's own text
+//! never carries the sentence it prints.
+//!
+//! awk is guarded too, for the same reason it is in the update templates: it is
+//! the stage that actually produces the list, and `$?` after the filter
+//! pipeline is already awk's, so the capture is free.
+//!
+//! ## Why the accepted set is `0`, `104` and `106`
+//!
+//! `104` is `ZYPPER_EXIT_INF_CAP_NOT_FOUND`, which `zypper search` sets when
+//! its result table comes back empty. That is the legitimate "this host carries
+//! none of these packages", routine in a mixed group and a no-op the flow has
+//! always treated as one. Refusing it would fail the rollback on every host the
+//! update never touched.
+//!
+//! `106` is `ZYPPER_EXIT_INF_REPO_SKIPPED`, accepted on the fleet argument
+//! `a249a00d` made for the update path: `init_repos()` raises it for **any**
+//! skipped repository and cannot say which, a refhost routinely carries one
+//! stale or unreachable repo alongside working ones, and here the run *is* the
+//! recovery from a failed update — aborting it on hosts that would have rolled
+//! back correctly is the more expensive mistake. The update templates answer
+//! `106` by asking whether the update's own repo survived; that question cannot
+//! be asked here, and not for want of trying: `downgrade_body` removes the issue
+//! repository from every host on purpose before the probe runs, so its absence
+//! is the expected state. The released versions the rollback wants come from the
+//! host's ordinary repositories.
+//!
+//! **The residual that leaves, named rather than hidden:** if the skipped
+//! repository is the one carrying the released versions, the list is silently
+//! short and those packages stay at the update version. On the rollback path
+//! that is caught downstream — `downgrade_verdict` compares each package
+//! against the update's `required` version and fails the command — but on a
+//! standalone `downgrade` with no required versions loaded, it is not. A status
+//! cannot carry that verdict; only a comparison against what should be
+//! installed can, which is what the transcript note exists to prompt.
+//!
+//! ## What is not guarded
+//!
+//! The middle of the filter chain. `grep`, `sed` or a missing binary among them
+//! yields an empty list at awk's `0`, exactly as before — awk is the last stage
+//! and succeeds on no input. That is the same accepted residual the update
+//! templates carry, and closing it needs `pipefail` (not POSIX) or
+//! `${PIPESTATUS[@]}` (bash-only), while these scripts must run under the
+//! `/bin/sh` a refhost provides.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
 
@@ -20,12 +92,37 @@ use crate::update_workflow::actions::{ActionCommands, SubstMode};
 /// awk with no PTY, emits nothing until the last iteration — on a slow host a
 /// long package list blows the SSH no-output timeout (`connection_timeout`,
 /// default 300s) and the probe dies with no versions resolved.
+///
+/// See the module docs for why the two commands that produce the list are
+/// guarded, why the guard exits with the tool's own status, and why `104` and
+/// `106` are accepted while everything else is refused.
+///
+/// Every `$` meant for the remote shell is written `$$` (`$$?`, `$$(`, `$$1`,
+/// `$$2`, `$$mtui_rows`); the awk field refs (`$2`, `$4`) stay bare, which is
+/// the tested convention for [`SubstMode::Safe`]. Shell variables are
+/// `mtui_`-prefixed *and* `$$`-escaped, so no future `$name` template variable
+/// can silently expand one away.
 const LIST_COMMAND: &str = r#"
-zypper -n se -s --match-exact -t package $packages \
-| grep -v "(System" \
-| grep ^[iv] \
-| sed "s, ,,g" \
-| awk -F "|" '{ print $2,"=",$4 }'
+mtui_probe_ok() {
+  case "$$2" in
+  0) return 0 ;;
+  104)
+    printf 'mtui: note: %s exited 104, no package matched; nothing to downgrade here\n' "$$1"
+    return 0
+    ;;
+  106)
+    printf 'mtui: note: %s exited 106, a repository was skipped; the version list may be short\n' "$$1"
+    return 0
+    ;;
+  esac
+  printf 'mtui: could not %s\n' "determine what to downgrade: $$1 exited $$2"
+  exit "$$2"
+}
+mtui_rows=$$(zypper -n se -s --match-exact -t package $packages)
+mtui_probe_ok "zypper -n se" $$?
+mtui_versions=$$(printf '%s\n' "$$mtui_rows" | grep -v "(System" | grep ^[iv] | sed "s, ,,g" | awk -F "|" '{ print $2,"=",$4 }')
+mtui_probe_ok "awk" $$?
+printf '%s\n' "$$mtui_versions"
 "#;
 
 /// zypper downgrade command, verbatim.
@@ -111,8 +208,16 @@ mod tests {
         let listed = cmds.render_list_command(&vars).unwrap().unwrap();
         // No per-package loop.
         assert!(!listed.contains("for p in"), "{listed}");
-        // Exactly one zypper invocation, over the whole list.
-        assert_eq!(listed.matches("zypper").count(), 1, "{listed}");
+        // Exactly one zypper invocation, over the whole list. Counted on the
+        // whole invocation rather than the bare token `zypper`, which the probe
+        // guard's own label ("zypper -n se") also carries.
+        assert_eq!(
+            listed
+                .matches("zypper -n se -s --match-exact -t package")
+                .count(),
+            1,
+            "{listed}"
+        );
         assert!(
             listed.contains("zypper -n se -s --match-exact -t package a b c"),
             "{listed}"
@@ -121,6 +226,7 @@ mod tests {
         assert!(listed.contains("{ print $2,\"=\",$4 }"));
         // Discriminating: the doubled form contains the single-brace substring.
         assert!(!listed.contains("{{"), "{listed}");
+        assert_the_probe_is_guarded("zypper", &listed, "a b c");
     }
 
     #[test]
@@ -130,10 +236,123 @@ mod tests {
         let vars: HashMap<&str, &str> = [("packages", "a b")].into_iter().collect();
         let listed = cmds.render_list_command(&vars).unwrap().unwrap();
         assert!(!listed.contains("for p in"), "{listed}");
-        assert_eq!(listed.matches("zypper").count(), 1, "{listed}");
+        assert_eq!(
+            listed
+                .matches("zypper -n se -s --match-exact -t package")
+                .count(),
+            1,
+            "{listed}"
+        );
         assert!(
             listed.contains("zypper -n se -s --match-exact -t package a b"),
             "{listed}"
+        );
+        assert_the_probe_is_guarded("slmicro", &listed, "a b");
+    }
+
+    /// The `$$`-escaping and probe-guard contract, asserted on the **rendered**
+    /// text rather than the source constant — a `$` that was meant for the
+    /// remote shell but written bare still *looks* right in the source, and a
+    /// mangled escape would render a broken script that no
+    /// `MockConnection`-level test could notice.
+    ///
+    /// Pinned by shape rather than as one literal blob, so that editing the
+    /// guard's prose does not fail this while a semantic change slips through
+    /// it. Each assertion is a separate way the guard could stop guarding.
+    fn assert_the_probe_is_guarded(name: &str, listed: &str, packages: &str) {
+        // The single discriminating check on the escaping: after substitution
+        // no `$$` may survive. Every `$$` here is an escape for the remote
+        // shell, so one left doubled is one the shell would read as its own PID.
+        assert!(
+            !listed.contains("$$"),
+            "{name}: an unresolved `$$` reached the remote shell: {listed}"
+        );
+        // Without the definition, `mtui_probe_ok …` is "command not found"
+        // (127 on stderr) and the script carries on to emit an empty list at
+        // exit 0 — the bug it exists to close.
+        let guard_at = listed
+            .find("mtui_probe_ok() {")
+            .unwrap_or_else(|| panic!("{name}: the probe guard is not defined at all: {listed}"));
+        let first_call = listed
+            .find("mtui_probe_ok \"")
+            .unwrap_or_else(|| panic!("{name}: nothing ever calls the probe guard: {listed}"));
+        assert!(
+            guard_at < first_call,
+            "{name}: the guard must be defined before any probe runs: {listed}"
+        );
+        // `0` is the only status accepted without a word in the transcript.
+        assert!(
+            listed.contains("  case \"$2\" in\n  0) return 0 ;;\n"),
+            "{name}: the guard must accept `0` outright: {listed}"
+        );
+        // `104` — `zypper search`'s empty result table. Dropping this arm turns
+        // every host in a mixed group that carries none of the packages into a
+        // failed rollback.
+        assert!(
+            listed.contains("  104)\n    printf 'mtui: note: %s exited 104,"),
+            "{name}: `104` must stay the legitimate no-op: {listed}"
+        );
+        // `106` — any skipped repository, which `init_repos()` cannot name.
+        // Dropping this arm aborts the recovery on refhosts carrying one stale
+        // repo alongside working ones.
+        assert!(
+            listed.contains("  106)\n    printf 'mtui: note: %s exited 106,"),
+            "{name}: `106` must be noted, not refused: {listed}"
+        );
+        // Every other status marks and exits with the probe's own status. The
+        // marker is split across the format string and its argument so the
+        // script's own text does not contain it.
+        assert!(
+            listed.contains(
+                "  printf 'mtui: could not %s\\n' \"determine what to downgrade: $1 exited $2\"\n  exit \"$2\"\n}\n"
+            ),
+            "{name}: an unrecognised probe status must mark and exit: {listed}"
+        );
+        assert!(
+            !listed.contains("mtui: could not determine what to downgrade"),
+            "{name}: the script text must not contain the marker it prints, or a \
+             transcript echoing the command would read as a probe failure: {listed}"
+        );
+        // The list is produced in four steps, as one contiguous block, because
+        // each step is load-bearing:
+        //
+        // * the probe runs **alone** in a command substitution, so the
+        //   assignment takes zypper's own status (POSIX XCU 2.9.1). Piped
+        //   straight into the filter, as it was, the status is the pipeline's —
+        //   the *last* stage's — and awk exits 0 on empty input, so zypper's
+        //   was not observable at all;
+        // * the guard reads that status on the very next line, before anything
+        //   else can clobber `$?`;
+        // * only then do the filters run, fed by the builtin `printf` rather
+        //   than `echo`/`xargs`, so no `ARG_MAX` limit sits between the probe
+        //   and the filter;
+        // * and awk's own status is guarded in turn — it is the last stage of
+        //   that pipeline, so `$?` on the next line is already awk's.
+        assert!(
+            listed.contains(&format!(
+                "mtui_rows=$(zypper -n se -s --match-exact -t package {packages})\n\
+                 mtui_probe_ok \"zypper -n se\" $?\n\
+                 mtui_versions=$(printf '%s\\n' \"$mtui_rows\" | grep -v \"(System\" | \
+                 grep ^[iv] | sed \"s, ,,g\" | awk -F \"|\" '{{ print $2,\"=\",$4 }}')\n\
+                 mtui_probe_ok \"awk\" $?\n"
+            )),
+            "{name}: the version list must be captured, guarded, filtered, guarded: {listed}"
+        );
+        // Discriminating: the block above proves the guarded form is present,
+        // not that an unguarded one is gone. A template carrying both would
+        // satisfy it while the second, unguarded capture silently won.
+        assert_eq!(
+            listed.matches("awk -F \"|\"").count(),
+            1,
+            "{name}: exactly one awk may filter the rows: {listed}"
+        );
+        // And the captured list must actually be emitted, as the last thing the
+        // script does: capturing the rows and forgetting to re-emit them would
+        // hand the flow empty stdout at exit 0 — this fix reintroducing its own
+        // bug.
+        assert!(
+            listed.ends_with("printf '%s\\n' \"$mtui_versions\"\n"),
+            "{name}: the script must end by emitting the version list: {listed}"
         );
     }
 
@@ -162,5 +381,486 @@ mod tests {
     #[test]
     fn unknown_key_is_none() {
         assert!(downgrader("99", false).is_none());
+    }
+
+    /// Executes the *rendered* `LIST_COMMAND` under a real `/bin/sh`, with a
+    /// stub `zypper` first on `PATH`.
+    ///
+    /// The subject here is shell semantics — *which command's status the script
+    /// reports* — and no mock can express it: `MockConnection` keys on the whole
+    /// command string and scripts one exit code per command, so "the probe
+    /// failed but the last stage of the pipeline succeeded" is a state it cannot
+    /// produce. That state is issue #451 in one sentence, which is why these
+    /// run a shell.
+    ///
+    /// The stub appends to a sentinel file on every invocation, so a case whose
+    /// headline assertion is a *negative* ("no version line was emitted") can
+    /// also show the script reached the stub at all — otherwise a `PATH` mistake
+    /// would make every assertion here vacuous.
+    #[cfg(unix)]
+    mod rendered_script {
+        use std::ffi::OsString;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::Path;
+        use std::process::Command;
+
+        use super::*;
+
+        /// The start of the line a failed probe prints.
+        ///
+        /// Matched at the **start of a line**, never anywhere in the stream: the
+        /// script's own text does not carry this sentence (it is split across
+        /// `printf`'s format string and its argument), but nothing stops a host
+        /// echoing it mid-line — a `set -x` trace, a log line quoting an earlier
+        /// run. Only a line that begins with it is mtui's own verdict.
+        const PROBE_MARKER: &str = "mtui: could not determine what to downgrade";
+
+        /// A `zypper -n se -s` row for an **installed** package, in the real
+        /// table's shape: status, name, type, version, arch, repository.
+        ///
+        /// The filter chain turns it into the `pkg-a = 1.0-1` line
+        /// `parse_downgrade_versions` splits on `" = "`.
+        const INSTALLED_ROW: &str = "i | pkg-a | package | 1.0-1 | x86_64 | test-repo";
+
+        /// A table every row of which the filter chain drops: one whose
+        /// repository is `(System Packages)` — an installed package no
+        /// repository offers, so there is no released version to go back to,
+        /// dropped by `grep -v "(System"` — and one for a package that is not
+        /// installed (blank status column), dropped by `grep ^[iv]`.
+        const FILTERED_ROWS: &str = "i | pkg-a | package | 1.0-1 | x86_64 | (System Packages)\n  \
+                                     | pkg-a | package | 2.0-1 | x86_64 | test-repo";
+
+        /// What `zypper se` prints on the run that exits `104`.
+        const NO_MATCH_STDOUT: &str = "No matching items found.";
+
+        /// The stub `zypper`. Every call the probe makes is
+        /// `zypper -n se …`, so `$2` discriminates — and the `esac` fallthrough
+        /// keeps any future subcommand from silently exiting non-zero.
+        ///
+        /// Every arm records its invocation, which is the liveness signal the
+        /// negative assertions rest on.
+        const ZYPPER_STUB: &str = r#"#!/bin/sh
+printf '%s\n' "$2" >> "$MTUI_STUB_DIR/probe.ran"
+case "$2" in
+se)
+    if [ -n "$MTUI_STUB_SE_ROWS" ]; then printf '%s\n' "$MTUI_STUB_SE_ROWS"; fi
+    exit "$MTUI_STUB_SE_EXIT"
+    ;;
+esac
+exit 0
+"#;
+
+        /// A temp dir holding the stub executables plus the sentinel files they
+        /// append to.
+        struct Stubs {
+            dir: tempfile::TempDir,
+            path: OsString,
+        }
+
+        impl Stubs {
+            fn new() -> Self {
+                let dir = tempfile::tempdir().expect("tempdir");
+                write_exe(dir.path(), "zypper", ZYPPER_STUB);
+                // Keep the inherited PATH behind the stubs: the template also
+                // calls the real `grep`, `sed` and `awk`.
+                let mut path = dir.path().as_os_str().to_owned();
+                if let Some(inherited) = std::env::var_os("PATH") {
+                    path.push(":");
+                    path.push(inherited);
+                }
+                Self { dir, path }
+            }
+
+            /// Every `zypper` subcommand the stub saw, in order.
+            fn probe_invocations(&self) -> Vec<String> {
+                fs::read_to_string(self.dir.path().join("probe.ran"))
+                    .unwrap_or_default()
+                    .lines()
+                    .map(ToOwned::to_owned)
+                    .collect()
+            }
+        }
+
+        fn write_exe(dir: &Path, name: &str, body: &str) {
+            let p = dir.join(name);
+            fs::write(&p, body).expect("write stub");
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        }
+
+        /// The two downgraders that share `LIST_COMMAND`.
+        ///
+        /// Both are run through every case: the constant is shared today, and
+        /// pinning both is what notices a future divergence that guards only one.
+        fn downgraders() -> Vec<(&'static str, ActionCommands)> {
+            vec![
+                (
+                    "zypper",
+                    downgrader("15", false).expect("zypper downgrader"),
+                ),
+                (
+                    "slmicro",
+                    downgrader("slmicro", true).expect("slmicro downgrader"),
+                ),
+            ]
+        }
+
+        /// The knobs one scripted run is driven with. [`Default`] is the wholly
+        /// healthy probe: one installed row, everything exits `0`.
+        #[derive(Clone, Copy)]
+        struct Knobs {
+            /// `zypper -n se`'s status — the probe whose output *is* the version
+            /// list.
+            se_exit: i32,
+            /// awk's status. Non-zero shadows `awk` on `PATH` with a stub that
+            /// consumes stdin and exits with it — a broken or missing awk, the
+            /// other way the list comes back empty with nothing visibly wrong.
+            awk_exit: i32,
+            /// The `zypper -n se -s` table, one row per line.
+            rows: &'static str,
+        }
+
+        impl Default for Knobs {
+            fn default() -> Self {
+                Self {
+                    se_exit: 0,
+                    awk_exit: 0,
+                    rows: INSTALLED_ROW,
+                }
+            }
+        }
+
+        /// What one scripted run produced.
+        struct Ran {
+            /// The script's own exit status — what the flow records as
+            /// `Target::lastexit` and `dead_probes` filters on.
+            code: i32,
+            /// The script's stdout — what the flow parses into the version map,
+            /// and what `show_log` shows the operator.
+            stdout: String,
+        }
+
+        impl Ran {
+            /// The probe-failure marker line, if the script printed one at the
+            /// start of a line.
+            fn marker(&self) -> Option<&str> {
+                self.stdout
+                    .lines()
+                    .find(|l| l.starts_with(PROBE_MARKER))
+                    .map(str::trim_end)
+            }
+
+            /// The `name = version` lines the flow would parse
+            /// (`parse_downgrade_versions` splits on `" = "`).
+            fn versions(&self) -> Vec<&str> {
+                self.stdout.lines().filter(|l| l.contains(" = ")).collect()
+            }
+        }
+
+        /// Renders `cmds`'s list command and runs it under `/bin/sh -c`.
+        ///
+        /// A non-zero `awk_exit` shadows the real `awk` for this run only; the
+        /// stub dir is already first on `PATH`, and `Stubs` is per-case, so
+        /// nothing leaks between runs and no serialisation is needed.
+        fn run_script(cmds: &ActionCommands, stubs: &Stubs, knobs: Knobs) -> Ran {
+            if knobs.awk_exit != 0 {
+                write_exe(
+                    stubs.dir.path(),
+                    "awk",
+                    &format!("#!/bin/sh\ncat > /dev/null\nexit {}\n", knobs.awk_exit),
+                );
+            }
+            let vars: HashMap<&str, &str> = [("packages", "pkg-a")].into_iter().collect();
+            let rendered = cmds
+                .render_list_command(&vars)
+                .expect("safe substitute never fails")
+                .expect("both downgraders carry a list command");
+            let out = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&rendered)
+                .env("PATH", &stubs.path)
+                .env("MTUI_STUB_DIR", stubs.dir.path())
+                .env("MTUI_STUB_SE_EXIT", knobs.se_exit.to_string())
+                .env("MTUI_STUB_SE_ROWS", knobs.rows)
+                .output()
+                .expect("run the rendered list command under /bin/sh");
+            Ran {
+                code: out
+                    .status
+                    .code()
+                    .unwrap_or_else(|| panic!("script died on a signal: {:?}", out.status)),
+                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            }
+        }
+
+        #[test]
+        fn a_failed_se_probe_fails_the_script_and_emits_no_versions() {
+            // Issue #451. `zypper -n se -s` is the probe whose output *is* the
+            // downgrade version list. When it fails — `7` on a locked ZYpp
+            // stack, `6` with no repositories, an unreadable rpmdb, zypper
+            // missing entirely — the list comes back empty. As a pipeline the
+            // probe's status was not merely discarded but unobservable: the
+            // pipeline reports its last stage's status, that stage is awk, and
+            // awk exits `0` on empty input. So the flow recorded exit `0`, the
+            // host never entered `dead_probes`, no downgrade command was built
+            // for it, and the rollback reported success having reverted nothing.
+            for (name, cmds) in downgraders() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        se_exit: 7,
+                        ..Knobs::default()
+                    },
+                );
+                // Liveness first: the negative below is also what an empty
+                // `PATH` produces.
+                assert!(
+                    stubs.probe_invocations().iter().any(|c| c == "se"),
+                    "{name}: the script never reached the stub zypper at all: {:?}",
+                    stubs.probe_invocations()
+                );
+                assert_eq!(
+                    ran.marker(),
+                    Some(format!("{PROBE_MARKER}: zypper -n se exited 7").as_str()),
+                    "{name}: the marker must start a line and name the probe and its \
+                     status: {}",
+                    ran.stdout
+                );
+                assert!(
+                    ran.versions().is_empty(),
+                    "{name}: a failed probe must emit no version line: {:?}",
+                    ran.versions()
+                );
+                // Pass-through, not a sentinel: a POSIX `exit N` truncates to
+                // `0..=255`, so any value of the template's own choosing would
+                // sit inside zypper's space. The marker carries the meaning; the
+                // status stays honest — and non-zero is what `dead_probes`
+                // filters on.
+                assert_eq!(
+                    ran.code, 7,
+                    "{name}: the script must exit with the probe's own status"
+                );
+            }
+        }
+
+        #[test]
+        fn only_zero_104_and_106_are_accepted_by_the_downgrade_probe() {
+            // The whole vocabulary, not a sample: zypper's informational band
+            // (`100`-`103`, `105`-`107`), the band's boundaries (`99`, `108`),
+            // the package-not-found neighbours (`4`, `5`, `8`) and plain errors.
+            // A code that becomes acceptable on this probe has to be argued for
+            // here, individually.
+            //
+            // `107` (`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`) is refused despite
+            // being a success for a *transaction*: that argument is "the
+            // transaction committed", a claim about a command that installs
+            // something. `se` installs nothing, so a `107` from it is not a
+            // partial success but a status this probe cannot account for.
+            for code in [
+                1, 2, 3, 4, 5, 6, 7, 8, 99, 100, 101, 102, 103, 105, 107, 108, 255,
+            ] {
+                for (name, cmds) in downgraders() {
+                    let stubs = Stubs::new();
+                    let ran = run_script(
+                        &cmds,
+                        &stubs,
+                        Knobs {
+                            se_exit: code,
+                            ..Knobs::default()
+                        },
+                    );
+                    assert_eq!(
+                        ran.marker(),
+                        Some(format!("{PROBE_MARKER}: zypper -n se exited {code}").as_str()),
+                        "{name}: probe exit {code} must be refused: {}",
+                        ran.stdout
+                    );
+                    assert!(
+                        ran.versions().is_empty(),
+                        "{name}: probe exit {code} must emit no version line: {:?}",
+                        ran.versions()
+                    );
+                    assert_eq!(
+                        ran.code, code,
+                        "{name}: probe exit {code} must be reported verbatim"
+                    );
+                }
+            }
+            // And the three accepted codes, or the loop above proves only that
+            // the script always fails.
+            //
+            // `104` is `ZYPPER_EXIT_INF_CAP_NOT_FOUND`: `zypper se` sets it when
+            // the result table is empty, which is the legitimate "this host
+            // carries none of these packages" — routine in a mixed group, and it
+            // must stay the no-op it has always been.
+            //
+            // `106` is `ZYPPER_EXIT_INF_REPO_SKIPPED`, raised by `init_repos()`
+            // for *any* skipped repository without saying which. A refhost
+            // routinely carries one stale or unreachable repo alongside working
+            // ones; refusing `106` would abort the recovery on hosts that would
+            // have rolled back correctly — and here the rollback is the repair
+            // for an update that already failed, so the fleet would pay for it.
+            for (name, cmds) in downgraders() {
+                for code in [0, 104, 106] {
+                    let stubs = Stubs::new();
+                    let ran = run_script(
+                        &cmds,
+                        &stubs,
+                        Knobs {
+                            se_exit: code,
+                            ..Knobs::default()
+                        },
+                    );
+                    assert_eq!(
+                        ran.marker(),
+                        None,
+                        "{name}: probe exit {code} must be accepted: {}",
+                        ran.stdout
+                    );
+                    assert_eq!(
+                        ran.code, 0,
+                        "{name}: probe exit {code} must not fail the probe: {}",
+                        ran.stdout
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn a_broken_awk_fails_the_downgrade_probe() {
+            // awk is the stage that actually *produces* the version list, and
+            // the one guarding `zypper se` alone does not cover: an awk that
+            // exits `2`, or is missing from `PATH` (`127`), yields an empty list
+            // at status `0` — #451's verdict verbatim, reached through a
+            // different command. Its status is free to read, because `$?` after
+            // the filter pipeline is already awk's.
+            for (name, cmds) in downgraders() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        awk_exit: 2,
+                        ..Knobs::default()
+                    },
+                );
+                assert!(
+                    stubs.probe_invocations().iter().any(|c| c == "se"),
+                    "{name}: the script never reached the stub zypper at all: {:?}",
+                    stubs.probe_invocations()
+                );
+                assert_eq!(
+                    ran.marker(),
+                    Some(format!("{PROBE_MARKER}: awk exited 2").as_str()),
+                    "{name}: the marker must name awk: {}",
+                    ran.stdout
+                );
+                assert_eq!(ran.code, 2, "{name}: awk's own status is reported");
+            }
+        }
+
+        #[test]
+        fn a_healthy_probe_emits_the_parsable_version_list() {
+            // The positive contract the whole flow rests on: one `name = version`
+            // line per installed package, in the shape
+            // `parse_downgrade_versions` splits on. Capturing the rows into a
+            // variable and forgetting to re-emit them would give the flow empty
+            // stdout at exit `0` — the restructure's own way of reintroducing
+            // exactly the bug it fixes.
+            for (name, cmds) in downgraders() {
+                let stubs = Stubs::new();
+                let ran = run_script(&cmds, &stubs, Knobs::default());
+                assert_eq!(
+                    ran.versions(),
+                    vec!["pkg-a = 1.0-1"],
+                    "{name}: the probe must emit the parsable version list: {}",
+                    ran.stdout
+                );
+                assert_eq!(ran.marker(), None, "{name}: {}", ran.stdout);
+                assert_eq!(ran.code, 0, "{name}: a healthy probe succeeds");
+            }
+        }
+
+        #[test]
+        fn a_host_with_none_of_the_packages_stays_a_noop() {
+            // `zypper search` sets `ZYPPER_EXIT_INF_CAP_NOT_FOUND` (`104`) when
+            // its result table is empty. In a mixed group that is simply a host
+            // carrying none of the update's packages — there is nothing to roll
+            // back on it, and refusing `104` would turn every such host into a
+            // failed rollback.
+            for (name, cmds) in downgraders() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        se_exit: 104,
+                        rows: NO_MATCH_STDOUT,
+                        ..Knobs::default()
+                    },
+                );
+                assert!(
+                    stubs.probe_invocations().iter().any(|c| c == "se"),
+                    "{name}: the script never reached the stub zypper at all: {:?}",
+                    stubs.probe_invocations()
+                );
+                assert_eq!(
+                    ran.marker(),
+                    None,
+                    "{name}: a host carrying none of the packages is not a probe \
+                     failure: {}",
+                    ran.stdout
+                );
+                assert!(
+                    ran.versions().is_empty(),
+                    "{name}: no package matched, so no version line: {:?}",
+                    ran.versions()
+                );
+                assert_eq!(ran.code, 0, "{name}: and the no-op must not fail");
+            }
+        }
+
+        #[test]
+        fn rows_filtered_to_nothing_is_a_noop() {
+            // The probe answers `0` with a perfectly good table whose every row
+            // the filter chain drops: `(System Packages)` (installed, but no
+            // repository offers it — nothing to go back to) and a not-installed
+            // row (blank status column). This pins the chain surviving the move
+            // into a `printf`-fed command substitution — a quoting mistake there
+            // would either break the filtering or make awk fail, and this is the
+            // case a probe guard is most likely to get wrong, since "the filter
+            // matched nothing" and "the filter could not run" reach the same
+            // empty variable.
+            for (name, cmds) in downgraders() {
+                let stubs = Stubs::new();
+                let ran = run_script(
+                    &cmds,
+                    &stubs,
+                    Knobs {
+                        rows: FILTERED_ROWS,
+                        ..Knobs::default()
+                    },
+                );
+                assert!(
+                    stubs.probe_invocations().iter().any(|c| c == "se"),
+                    "{name}: the script never reached the stub zypper at all: {:?}",
+                    stubs.probe_invocations()
+                );
+                assert_eq!(
+                    ran.marker(),
+                    None,
+                    "{name}: rows filtered to nothing is not a probe failure: {}",
+                    ran.stdout
+                );
+                assert!(
+                    ran.versions().is_empty(),
+                    "{name}: every row is filtered, so no version line: {:?}",
+                    ran.versions()
+                );
+                assert_eq!(ran.code, 0, "{name}: and it must not fail");
+            }
+        }
     }
 }

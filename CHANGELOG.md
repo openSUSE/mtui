@@ -228,6 +228,32 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   previously did — neither host is one a downgrade could repair.
   The remote command text changes again, so `show_log` transcripts change with
   it.
+- `downgrade` — and the automatic rollback `update` runs after a failed check —
+  could report success while running zero downgrade commands (#451). The
+  package version probe was a shell pipeline, and a pipeline reports its last
+  stage's status: `awk`'s, which succeeds on empty input. So a failed
+  `zypper -n se` (a ZYpp lock, broken repo metadata, an unreadable rpmdb,
+  zypper missing) recorded exit `0` with an empty package list, the host was
+  taken for healthy, every package was skipped for want of a version to roll
+  back to, and the run finished with `done`. The probe now guards the commands
+  that produce the list, the same way the update templates do (#447): a failed
+  probe prints
+  `mtui: could not determine what to downgrade: <command> exited <status>` to
+  the transcript and exits with that command's own status, the host's downgrade
+  is abandoned, and the command fails (REPL and MCP) naming it. The healthy
+  hosts still roll back and still reboot — this run is usually the repair for
+  an update that already failed on the group — and the flow no longer logs
+  `done` while any host's state is unverified.
+  A host carrying none of the packages is still a no-op: `zypper search`
+  answers `104` for an empty result table, which stays an accepted, noted
+  answer. A skipped **unrelated** repository (`106`) is noted in the transcript
+  rather than failing the recovery — zypper raises it for any skipped
+  repository without saying which, and a refhost routinely carries one stale
+  one. The residual that leaves is named rather than papered over: if the
+  skipped repository was the one carrying the released versions, the list is
+  short and those packages stay at the update version — which the verdict
+  catches whenever the loaded update names required versions.
+  The remote command text changes, so `show_log` transcripts change with it.
 - `install` no longer fails when a package's `%post` script did. zypper exits
   `107` (`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`) in that case — an *informational*
   code meaning the packages "were successfully unpacked to disk and are
