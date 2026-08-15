@@ -2099,6 +2099,44 @@ mod tests {
         );
     }
 
+    /// The history fan-out is never gated on cancellation.
+    ///
+    /// The flows write their `/var/log/mtui.log` row *after* the work landed on
+    /// the host, which for a cancelled operation means after the token was
+    /// cancelled — an `update` stopped at its pre-dispatch gate still owes a row
+    /// for the packages its prepare installed (#407). A cancel check here (or in
+    /// `run_fanout`, whose own contract forbids one) would suppress the record
+    /// exactly when an operator needs it: after a `job_cancel`.
+    #[tokio::test]
+    async fn add_history_still_writes_after_the_token_is_cancelled() {
+        let conn = echo("h1");
+        let handle = conn.clone();
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn),
+            )],
+            false,
+        );
+        g.cancel_token().cancel();
+        assert!(g.cancel_requested(), "the group observes the cancel");
+
+        g.add_history(&["prepare".to_owned(), "pkg-a".to_owned()])
+            .await;
+
+        let written = String::from_utf8(
+            handle
+                .file_contents("/var/log/mtui.log")
+                .expect("a cancelled group still records its history row"),
+        )
+        .unwrap();
+        assert!(
+            written.ends_with(":prepare:pkg-a\n"),
+            "history line: {written:?}"
+        );
+    }
+
     // --- sftp_read / sftp_put_bytes map fan-outs (#434) --------------------
 
     /// Per-host DISTINCT content: identical fixtures could pass with the
