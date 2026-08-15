@@ -10,12 +10,18 @@
 //! contract callers match on.
 //!
 //! A diagnostic breadcrumb is logged via `tracing` before each raised error.
-//! `update`'s check additionally *prints* two recognised-but-non-fatal
-//! diagnostic sections to stdout (one with the word `warning` highlighted
-//! yellow). To reproduce that stdout parity without a crate cycle, a check
-//! returns those sections as [`Diagnostic`]s on the `Ok` path; the command
-//! layer (`mtui-core::commands::perform`) drains and renders them through
-//! `session.display`, where the color mode lives.
+//! `update`'s check is the only one whose *diagnostic sections* are surfaced
+//! to the operator's terminal: it recognises two non-fatal stdout sections and
+//! returns them as [`Diagnostic`]s on the `Ok` path (one with the word
+//! `warning` highlighted yellow), which the command layer
+//! (`mtui-core::commands::perform`) drains and renders through
+//! `session.display`, where the color mode lives — stdout parity without a
+//! crate cycle.
+//!
+//! The prepare and install `("slmicro", true)` checks reuse `update`'s shared
+//! marker classification, so they can return those sections too; neither
+//! caller renders them (`prepare_body` discards its sink, and the
+//! `PlanProvider` adapter info-logs them), which is why only `update` prints.
 
 pub(crate) mod downgrade;
 pub(crate) mod install;

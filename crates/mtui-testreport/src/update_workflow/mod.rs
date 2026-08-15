@@ -49,7 +49,10 @@ pub(crate) type WorkflowKey = (String, bool);
 /// present, otherwise just `"{reason}"`. The `reason` strings are diagnoses
 /// shown to an operator and asserted on by tests ("package not found", "update
 /// stack locked", "RPM Error", "Dependency Error", "could not determine what to
-/// patch", "Unknown Error", "Unspecified Error"); no code branches on them, so
+/// patch", "Unknown Error", "Unspecified Error", and the per-role never-ran
+/// verdicts "update/downgrade/prepare command timed out or failed to run" plus
+/// install/uninstall's role-neutral "command timed out or failed to run"); no
+/// code branches on them, so
 /// a check is free to pick the most accurate one for a given transcript. What
 /// *is* a contract is the `UpdateFailure` variant a failure routes to, which
 /// decides whether the group is rolled back — which is why the probe failure
@@ -373,15 +376,18 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
                     Err(e) => Err(e.reason),
                 }
             }
-            // No *install/uninstall* check table for this key (`slmicro`,
-            // `YUM`): fall back to the exit code alone, exactly as
-            // `install_verdict` used to. Not "any stderr is a failure" —
-            // `transactional-update` and `yum` both write progress and
-            // warnings to stderr on a successful run.
+            // Defensive only: every key with an installer or uninstaller now
+            // has an install-table check (#406 registered the last two,
+            // `slmicro` and `YUM`), so no real key reaches here. It stays for
+            // the window in which a doer is added before its check — falling
+            // back to the exit code alone, which is what this arm has always
+            // done. Never "any stderr is a failure": `transactional-update`
+            // and `yum` both write progress and warnings to stderr on a
+            // successful run.
             //
-            // Only this adapter is meant: `update` does now have checks for
-            // both keys, but it resolves them through `CheckProvider`, not
-            // here.
+            // Unreachable in production means untested by the flows, so
+            // `plan_provider_check_falls_back_to_the_exit_code_for_an_unknown_key`
+            // drives it directly.
             None if a.exitcode != 0 => Err(format!("{op} command failed")),
             None => Ok(()),
         })
@@ -534,6 +540,29 @@ mod tests {
         assert!(reg.check(Role::Update, "YUM", false).is_some());
     }
 
+    #[test]
+    fn registry_resolves_the_prepare_and_install_checks_that_used_to_be_missing() {
+        // The sibling holes to the `update` ones above (#406). Both keys have
+        // had a preparer, an installer and an uninstaller since the port but no
+        // check for any of the three: `prepare` skipped the host in
+        // `run_checks`, while `install`/`uninstall` fell through to the
+        // `PlanProvider` adapter's exit-code-only fallback.
+        //
+        // Resolved through the registry, not the tables, because that is the
+        // path `run_checks` and the adapter actually take — and `Uninstall`
+        // is listed explicitly because it reaches the *install* table through
+        // this match, which a role-blind rewrite would silently break.
+        let reg = WorkflowRegistry::default();
+        for (release, transactional) in [("slmicro", true), ("YUM", false)] {
+            for role in [Role::Prepare, Role::Install, Role::Uninstall] {
+                assert!(
+                    reg.check(role, release, transactional).is_some(),
+                    "{role:?} @ ({release}, {transactional}) must resolve a check"
+                );
+            }
+        }
+    }
+
     // --- the mtui-hosts PlanProvider adapter --------------------------------
 
     #[test]
@@ -567,6 +596,42 @@ mod tests {
             format!("{uninstall:?}"),
             "installer and uninstaller must not resolve to the same doer"
         );
+    }
+
+    #[test]
+    fn plan_provider_check_falls_back_to_the_exit_code_for_an_unknown_key() {
+        use mtui_hosts::PlanProvider;
+
+        // Since #406 every key with an install/uninstall doer also has a
+        // check, so no production key reaches the adapter's `None` arms. They
+        // stay as the safety net for a doer added before its check — and a
+        // safety net nothing exercises is one nobody notices breaking, hence
+        // this direct drive.
+        let reg = WorkflowRegistry::default();
+        let mut check = PlanProvider::check(&reg, "installer", "nonesuch", false);
+        let args = |exitcode| mtui_hosts::CheckArgs {
+            hostname: "h1",
+            stdout: "",
+            stdin: "some install command",
+            stderr: "",
+            exitcode,
+        };
+        assert_eq!(
+            check(args(1)).unwrap_err(),
+            "install command failed",
+            "a non-zero exit with no check table must still fail"
+        );
+        assert!(check(args(0)).is_ok(), "a clean exit passes");
+        // Not "any stderr is a failure": that rule would fail every SL Micro
+        // install, which is why it is spelled out here as well as in the flow.
+        let chatty = mtui_hosts::CheckArgs {
+            hostname: "h1",
+            stdout: "",
+            stdin: "some install command",
+            stderr: "warning: chatty",
+            exitcode: 0,
+        };
+        assert!(check(chatty).is_ok(), "stderr alone is not a failure");
     }
 
     #[test]

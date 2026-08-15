@@ -380,6 +380,34 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   templates` count now reports templates actually completed instead of counting
   never-attempted ones as done — as does the `succeeded` log line, which no
   longer names templates the stop never reached.
+- `prepare`, `install` and `uninstall` now judge SL Micro (`transactional-
+  update`) and RHEL (`yum`/`dnf`) hosts (#406). Both keys had commands for all
+  three roles but no post-run check: `prepare` skipped such a host silently, so
+  only the coarse "non-zero exit or any stderr" scan spoke for it, and
+  `install`/`uninstall` fell back to the exit code alone, reporting every
+  failure as "install command failed" with no further attribution. On SL Micro
+  the checks now read the same output markers the `update` check uses, so a
+  locked update stack, an unresolved dependency prompt or an RPM error is named
+  — and, the headline case, a `prepare` that reported a locked stack **and
+  still exited `0`** no longer reboots the host into the failed transaction. On
+  RHEL the verdict stays deliberately narrow: `install`/`uninstall` judge the
+  exit code (zypper's informational `100`-`107` are *not* transferred to
+  `yum`/`dnf`), while `prepare` judges only whether the command ran, because
+  `prepare --installed-only` renders `rpm -q <pkg> && yum … install <pkg>`,
+  which exits `1` on the routine "this host does not carry the package" skip.
+  A command that never ran to completion (a timeout, a dropped connection, an
+  unconnected host) now gets its own verdict on every one of these keys instead
+  of passing on an empty transcript. Neither check treats stderr as a failure:
+  both package managers write progress there on a successful run. The verdict
+  is taken after **every** fan-out, so `prepare --installed-only` — which runs
+  one command per package — is judged on each package rather than only the
+  last, whose clean no-op used to mask an earlier one.
+  **Reason strings an operator or MCP client sees change accordingly** — the
+  typed failure a check routes to, which is what decides whether a group is
+  rolled back, is unchanged. A multi-failure summary also names each host once
+  now: a single host can contribute two failures (a lock message is reported
+  both by the stderr scan and by the check that recognised it), which used to
+  read "prepare failed on h1, h1".
 
 ### Security
 
