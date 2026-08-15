@@ -149,6 +149,13 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// Applies [`classify_exit`] to a patch status, interleaved with the
 /// stdout/stderr [`markers`].
 ///
+/// Also the install/uninstall check's `("slmicro", true)` verdict
+/// ([`super::install`]), which reuses it rather than restating "`0` passes,
+/// anything else fails" so the two `transactional-update` keys cannot drift
+/// apart. That caller gates `-1` itself — with its own role-neutral reason —
+/// before reaching here, so the [`ExitClass::NotRun`] arm's `update` wording
+/// never surfaces on it.
+///
 /// The interleaving is the whole content of this function: `104` is a named
 /// verdict and returns straight away, while every other failing status lets the
 /// markers speak first, because "update stack locked" is a diagnosis and
@@ -189,7 +196,7 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// locked", "Dependency Error", "RPM Error", "Unknown Error", or — only if a
 /// caller reaches here without its [`not_run`] gate — "update command timed out
 /// or failed to run".
-fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+pub(super) fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     match classify_exit(args.exitcode) {
         ExitClass::Success => markers(args),
         ExitClass::PackageNotFound if args.exitcode == 104 => {
@@ -360,11 +367,18 @@ fn probe_failure(args: CheckArgs<'_>) -> Result<(), UpdateError> {
 /// (see [`transactional_update`]); everything here reads only the command's
 /// output and so is valid on all of them.
 ///
+/// Also the `("slmicro", true)` *prepare* check's whole verdict beyond its `-1`
+/// gate ([`super::prepare`]), where it closes the exit-`0`-with-a-lock-message
+/// hole the prepare reboot gate could not see. The `Error:`-from-a-sibling-
+/// command exposure documented on [`transactional_update`] does not arise
+/// there: the prepare and install templates are a *single* command, so the
+/// whole transcript belongs to the command being judged.
+///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "update stack locked",
 /// "Dependency Error", or "RPM Error".
-fn markers(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+pub(super) fn markers(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     let mut diagnostics = Vec::new();
     if let Some(section) = extract_between(args.stdout, "Additional rpm output:", "Retrieving") {
         // Logs a breadcrumb, then prints the section with "warning"

@@ -445,6 +445,12 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
     } else {
         let mut hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
         hosts.sort();
+        // One name per host: the same host legitimately contributes two
+        // failures (an exit-`0` lock message is reported by both the stderr
+        // rule and the check that recognised the marker), and "prepare failed
+        // on h1, h1" reads as two hosts. The `detail` list still carries both
+        // causes — this dedups the roll-call, not the diagnosis.
+        hosts.dedup();
         let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
         let mut aggregate = UpdateError::reason_only(format!(
             "{op} failed on {} ({})",
@@ -850,6 +856,17 @@ async fn prepare_body(
     // earlier failure and let the host reboot into it.
     let mut dispatched: BTreeSet<String> = BTreeSet::new();
     let mut inert: BTreeSet<String> = BTreeSet::new();
+    // The check verdicts, accumulated in the same place and for the same
+    // reason: `run_checks` reads the `last*` snapshot too, so a single
+    // post-loop call would judge only the last package's transcript. The
+    // exit-code half of that hole was closed by `note_dispatch`; the marker
+    // half needs this, or an exit-`0` lock message on package 1 of 2 is
+    // overwritten by package 2's clean run and the host reboots into it
+    // (#406). `check_failed` keeps it to one verdict per host — a second entry
+    // would push `aggregate_failures` out of its single-failure verbatim
+    // branch, where `host` is `Some`.
+    let mut check_failed: BTreeSet<String> = BTreeSet::new();
+    let mut check_failures: Vec<UpdateError> = Vec::new();
 
     // Parity with perform_downgrade: an empty list is not a host failure, but
     // it must never be a silent success either — only the issue repositories
@@ -881,6 +898,13 @@ async fn prepare_body(
             let cmd = build_prepare_map(targets, registry, Some(&quoted), true);
             targets.run(Command::PerHost(cmd.clone())).await;
             note_dispatch(targets, &cmd, &mut dispatched, &mut inert);
+            note_check(
+                targets,
+                registry,
+                &cmd,
+                &mut check_failed,
+                &mut check_failures,
+            );
         }
     } else if !pkgs.is_empty() {
         // Install every package in a SINGLE transaction (one snapshot for
@@ -889,13 +913,18 @@ async fn prepare_body(
         let cmd = build_prepare_map(targets, registry, Some(&joined), false);
         targets.run(Command::PerHost(cmd.clone())).await;
         note_dispatch(targets, &cmd, &mut dispatched, &mut inert);
+        note_check(
+            targets,
+            registry,
+            &cmd,
+            &mut check_failed,
+            &mut check_failures,
+        );
     }
 
-    // Surface any per-host command failure from the install fan-out plus the
-    // prepare check's own failures. The prepare check emits no diagnostics; the
-    // sink is discarded.
+    // Surface any per-host command failure from the install fan-out; the
+    // prepare check's own failures were collected per fan-out above.
     let mut failures = host_command_failures(targets, "prepare command failed");
-    let check_failures = run_checks(targets, registry, Role::Prepare, &mut Vec::new());
 
     // A host whose prepare failed must not reboot into the failed transaction,
     // mirroring the install/uninstall template's per-host gate: activating the
@@ -909,15 +938,16 @@ async fn prepare_body(
     // commands, so the recorded exit code is genuinely the prepare command's
     // own.
     //
-    // The check verdicts are seeded too, but they are inert for the hosts that
-    // matter today: `prepare_check` has no ("slmicro", true) entry, and only
-    // transactional hosts are ever in `reboot`. Kept so the gate is already
-    // right when that check is registered, not because it fires now.
-    inert.extend(check_failures.iter().filter_map(|e| e.host.clone()));
-    for e in check_failures {
-        error!(error = %e, "prepare check failed");
-        failures.push(e);
-    }
+    // The check verdicts are the other half of the gate, and on
+    // ("slmicro", true) they are what makes it complete: a prepare that
+    // reported a locked update stack, a dependency prompt or an RPM error and
+    // still exited `0` is invisible to the exit-code rule above, and its
+    // reboot would activate the failed transaction. A marker-failed prepare
+    // therefore skips its reboot, while a host whose only stderr is progress
+    // still gets one (#406) — for *any* package it failed on, not just the
+    // last, which is why `check_failed` is filled per fan-out.
+    inert.extend(check_failed.iter().cloned());
+    failures.extend(check_failures);
 
     // `host_command_failures` reads one post-loop snapshot, so on the
     // per-package path it only ever sees the last package. Name every host a
@@ -1022,6 +1052,40 @@ fn note_dispatch(
             .is_some_and(|c| c != 0)
         {
             inert.insert(hostname.clone());
+        }
+    }
+}
+
+/// Runs the prepare check over the hosts *this* fan-out reached and records the
+/// first failure per host.
+///
+/// The companion to [`note_dispatch`], and called from the same places for the
+/// same reason: [`run_checks`] reads the `last*` snapshot, which the next
+/// package's fan-out overwrites. A single post-loop call therefore judges only
+/// the last package — and under `--installed-only` that is very often a clean
+/// no-op, so an exit-`0` lock message on an earlier package would be masked and
+/// the host would reboot into it (#406).
+///
+/// Scoped to `cmd`'s keys, again like `note_dispatch`: a host outside this
+/// fan-out still carries an earlier phase's record (the `set_repo` fan-out, or
+/// a package it was skipped for), and judging that as a prepare would invent a
+/// verdict. First-failure-wins per host keeps `aggregate_failures` in its
+/// single-failure verbatim branch, where `host` survives.
+fn note_check(
+    targets: &HostsGroup,
+    registry: &WorkflowRegistry,
+    cmd: &BTreeMap<String, String>,
+    check_failed: &mut BTreeSet<String>,
+    failures: &mut Vec<UpdateError>,
+) {
+    for e in run_checks(targets, registry, Role::Prepare, &mut Vec::new()) {
+        let Some(host) = e.host.clone() else { continue };
+        if !cmd.contains_key(&host) {
+            continue;
+        }
+        if check_failed.insert(host) {
+            error!(error = %e, "prepare check failed");
+            failures.push(e);
         }
     }
 }
@@ -2521,33 +2585,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn perform_install_falls_back_to_raw_scan_without_a_check_table() {
-        // slmicro/YUM keys have no install check registered. They must still get
-        // a verdict rather than an unconditional pass.
-        let conn = MockConnection::new("h1").with_default(CommandLog::new("t-u", "", "", 1, 0));
-        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
-        t.set_system(
-            System::new(
-                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
-                BTreeSet::new(),
-                true,
-            ),
-            true,
-        );
-        let key = host_key(&t).expect("resolvable key");
-        assert!(
-            WorkflowRegistry::default()
-                .check(Role::Install, &key.0, key.1)
-                .is_none(),
-            "this test is only meaningful while the key has no check table"
-        );
-        let mut group = HostsGroup::new(vec![t], false);
+    async fn perform_install_reports_the_check_verdict_on_formerly_uncovered_keys() {
+        // The slmicro and YUM keys used to have *no* install check, so they
+        // fell through to the `PlanProvider` adapter's exit-code-only fallback
+        // and every failure read "install command failed" — the same sentence
+        // for a locked update stack, a failed RPM transaction and a command
+        // that never ran (#406). Both keys now carry a check, so the verdict
+        // comes from it.
+        //
+        // Both host shapes are driven because they take different routes into
+        // the same table: SL Micro is transactional (its check shares the
+        // update check's classifier), RHEL is not (its check judges the exit
+        // code alone).
+        for (product, version, transactional) in [("SL-Micro", "6.0", true), ("rhel", "9", false)] {
+            let conn = MockConnection::new("h1")
+                .with_default(CommandLog::new("t-u", "", "", 1, 0))
+                .with_changing_boot_id();
+            let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new(product, version, "x86_64"),
+                    BTreeSet::new(),
+                    transactional,
+                ),
+                transactional,
+            );
+            let key = host_key(&t).expect("resolvable key");
+            // The guard this test used to carry asserted the *absence* of the
+            // check — it pinned the hole. Inverted: the verdict below is only
+            // the check's if there is one.
+            assert!(
+                WorkflowRegistry::default()
+                    .check(Role::Install, &key.0, key.1)
+                    .is_some(),
+                "{product}: the install check table must cover this key"
+            );
+            let mut group = HostsGroup::new(vec![t], false);
 
-        let err = perform_install(&mut group, &["pkg-a".to_owned()])
-            .await
-            .expect_err("a non-zero exit must still be reported");
-        assert_eq!(err.host.as_deref(), Some("h1"));
-        assert_eq!(err.reason, "install command failed");
+            let err = perform_install(&mut group, &["pkg-a".to_owned()])
+                .await
+                .expect_err("a non-zero exit must still be reported");
+            assert_eq!(err.host.as_deref(), Some("h1"), "{product}");
+            // Exact, not `contains`: "install command failed" is what the
+            // adapter's fallback says, and the whole point is that the check —
+            // not the fallback — now answers.
+            assert_eq!(err.reason, "Unknown Error", "{product}");
+        }
     }
 
     #[test]
@@ -2616,6 +2699,53 @@ mod tests {
         assert!(
             msg.contains("prepare failed on h1, h2"),
             "aggregated message names both hosts sorted: {msg}"
+        );
+    }
+
+    #[test]
+    fn aggregate_failures_names_each_host_once() {
+        // One host legitimately contributes two failures: an exit-`0` prepare
+        // carrying a lock message is reported by `host_command_failures`'
+        // stderr rule *and* by the check that recognised the marker. Undeduped,
+        // the roll-call read "prepare failed on h1, h1", which names one host
+        // as two.
+        let err = aggregate_failures(
+            "prepare",
+            vec![
+                UpdateError::new("prepare command failed", "h1"),
+                UpdateError::new("update stack locked", "h1"),
+            ],
+        )
+        .unwrap_err();
+        // `starts_with`, not `contains`: "prepare failed on h1, h1 (" contains
+        // "prepare failed on h1" too, so a `contains` here would pin nothing.
+        assert!(
+            err.reason.starts_with("prepare failed on h1 ("),
+            "one host, named once: {}",
+            err.reason
+        );
+        // Both causes still reach the operator — this dedups the roll-call,
+        // not the diagnosis.
+        assert!(
+            err.reason.contains("h1: prepare command failed")
+                && err.reason.contains("h1: update stack locked"),
+            "both causes survive: {}",
+            err.reason
+        );
+        // And distinct hosts are still listed separately: a dedup that
+        // collapsed them would hide a host.
+        let err = aggregate_failures(
+            "prepare",
+            vec![
+                UpdateError::new("boom", "h1"),
+                UpdateError::new("boom", "h2"),
+            ],
+        )
+        .unwrap_err();
+        assert!(
+            err.reason.starts_with("prepare failed on h1, h2 ("),
+            "two hosts stay two: {}",
+            err.reason
         );
     }
 
@@ -4650,6 +4780,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn perform_prepare_judges_the_markers_of_every_package_not_just_the_last() {
+        // The marker half of the test above, and the half the first cut of
+        // #406 left open: every command here exits `0`, so `note_dispatch`'s
+        // exit-code rule and `host_command_failures`' stderr rule (which reads
+        // only the post-loop snapshot — pkg-b's clean run) see nothing at all.
+        // The ONLY mechanism that can fail h1 or keep it out of the reboot map
+        // is the `("slmicro", true)` prepare check's verdict on pkg-a — and
+        // with the check run once after the loop it judged pkg-b's clean
+        // transcript instead, so the host rebooted into the locked
+        // transaction while the flow reported success.
+        let locked = "if $(rpm -q pkg-a &>/dev/null); \
+                      then transactional-update -n pkg in -l  pkg-a ; fi";
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                locked.to_owned(),
+                CommandLog::new(locked, "", "System management is locked", 0, 0),
+            )
+            .with_changing_boot_id();
+        let h1 = conn.clone();
+        let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t1.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        // h2 is clean throughout: it keeps the reboot assertion honest in the
+        // positive direction, so an empty `fired` list cannot fake h1's red.
+        let (t2, h2) = slmicro_target("h2", "", 0);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await;
+
+        // The fixture only means anything if BOTH fan-outs really happened:
+        // pkg-a's locked one, and a later clean one to overwrite its snapshot.
+        let cmds = h1.commands();
+        assert!(
+            cmds.iter().any(|c| c == locked),
+            "pkg-a's command must have been dispatched: {cmds:?}"
+        );
+        assert!(
+            cmds.iter().any(|c| c.contains("pkg-b")),
+            "pkg-b must have run after it, overwriting the snapshot: {cmds:?}"
+        );
+
+        // The reboot before the verdict, as in `perform_prepare_skips_the_
+        // reboot_of_an_exit_zero_lock_message_prepare`: it is the consequence
+        // the issue is about, so it must own the red when both regress.
+        let fired1 = h1.fired_commands();
+        assert!(
+            !fired1.iter().any(|c| c.contains("systemctl reboot")),
+            "h1's pkg-a hit a locked stack; it must not reboot into it: {fired1:?}"
+        );
+        let fired2 = h2.fired_commands();
+        assert!(
+            fired2.iter().any(|c| c.contains("systemctl reboot")),
+            "healthy h2 must still reboot so its snapshot activates: {fired2:?}"
+        );
+
+        // Exact, not `contains`: only h1 failed, so the single failure is
+        // returned verbatim and keeps its host. A second entry would collapse
+        // `host` to `None` via the aggregate summary.
+        let err = res.expect_err("a locked stack on any package must fail the prepare");
+        assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
+        assert_eq!(err.reason, "update stack locked", "err: {err}");
+    }
+
+    #[tokio::test]
     async fn perform_prepare_does_not_reboot_a_host_with_nothing_staged() {
         // An empty package list dispatches no prepare command at all, but the
         // reboot map is built from the host's transactional flag and does not
@@ -4775,6 +4984,49 @@ mod tests {
         assert!(
             fired.iter().any(|c| c.contains("systemctl reboot")),
             "a stderr-only host keeps its reboot: {fired:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_skips_the_reboot_of_an_exit_zero_lock_message_prepare() {
+        // The failure #406 names: `transactional-update` reported a locked
+        // update stack and still exited `0`. The exit-code half of the reboot
+        // gate cannot see that, and the stderr half deliberately must not
+        // (progress on stderr is routine — see the test above), so before the
+        // `("slmicro", true)` prepare check existed the host rebooted straight
+        // into the failed transaction.
+        //
+        // The inverse of `perform_prepare_still_reboots_a_host_that_only_wrote_
+        // _to_stderr`, and the pair is the whole rule: stderr gates nothing,
+        // a *recognised marker* on stderr gates the reboot.
+        let (t, handle) = slmicro_target_with_stderr("h1", "System management is locked");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("a locked update stack must not report success");
+        // The reboot first: it is the consequence the issue is about, and
+        // asserting it before the message keeps the message assert from
+        // masking it when both regress together.
+        let fired = handle.fired_commands();
+        assert!(
+            !fired.iter().any(|c| c.contains("systemctl reboot")),
+            "a host whose prepare reported a locked stack must not be rebooted: {fired:?}"
+        );
+        // `to_string`, not `err.reason`: the host is named twice here (the
+        // stderr rule in `host_command_failures` and the check's own verdict),
+        // which puts `aggregate_failures` in its summary branch where `host`
+        // is `None` and the detail is embedded in the reason.
+        assert!(
+            err.to_string().contains("update stack locked"),
+            "the check's diagnosis must reach the operator: {err}"
         );
     }
 
