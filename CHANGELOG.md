@@ -357,6 +357,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
+- `-d/--debug`, a runtime `set_log_level debug`, and `mtui-mcp -d` no longer hand
+  DEBUG to the third-party HTTP transport stack (#439). `hyper_util` logs its
+  connection-pool key — the scheme plus the authority, userinfo included — at
+  DEBUG, and a hostile redirect (`Location: https://user:pass@host/…`) is never
+  re-stripped, so turning on debug logging could print credential-shaped
+  authorities from transport internals. mtui's own targets still log at DEBUG;
+  `hyper_util`, `hyper` and `reqwest` are capped at INFO by the default
+  directives, so their warnings and errors still reach the operator. An explicit
+  `RUST_LOG` (e.g. `RUST_LOG=hyper_util=debug`) overrides the defaults entirely
+  for anyone who needs the transport's own view.
 - Datasource errors and log lines no longer append the unredacted request URL
   (#431). `reqwest`'s own error rendering ends in ` for url (<url>)`, and mtui
   wrapped it in transparent error types, so the URL rode along wherever such an

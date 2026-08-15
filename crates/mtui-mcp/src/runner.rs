@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use mtui_core::{ColorMode, register_all};
+use mtui_core::{ColorMode, TRANSPORT_LOG_CARVE_OUT, register_all};
 use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::session::local::{LocalSessionManager, SessionConfig};
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
@@ -252,11 +252,23 @@ fn init_tracing(debug: bool, color: ColorMode) {
 /// controller ~10-30ms *after* a successful `tools/call` result, which rmcp logs
 /// as a no-op `CancelledNotification` at INFO under `rmcp::service`. Silencing
 /// that target to `warn` drops the noise (and rmcp's one-time init breadcrumbs)
-/// while keeping every `mtui_*` INFO line. Any explicit `RUST_LOG` takes over
-/// completely — this directive only seeds the fallback.
+/// while keeping every `mtui_*` INFO line.
+///
+/// Under `-d/--debug` it additionally appends [`TRANSPORT_LOG_CARVE_OUT`], which
+/// holds `hyper_util`/`hyper`/`reqwest` at `INFO`: those log connection details
+/// at `DEBUG`, and hyper-util's pool key carries an authority that a hostile
+/// redirect can load with userinfo (#439). The `info` arm needs no carve-out —
+/// its base level already caps the transport at `INFO`.
+///
+/// Any explicit `RUST_LOG` takes over completely — this directive only seeds the
+/// fallback, so `RUST_LOG=hyper_util=debug` still exposes the transport's view
+/// on request.
 fn default_directives(debug: bool) -> String {
-    let base = if debug { "debug" } else { "info" };
-    format!("{base},rmcp::service=warn")
+    if debug {
+        format!("debug,rmcp::service=warn,{TRANSPORT_LOG_CARVE_OUT}")
+    } else {
+        "info,rmcp::service=warn".to_string()
+    }
 }
 
 /// Build the runtime-synthesised stdio server from resolved args.
@@ -342,11 +354,92 @@ mod tests {
     }
 
     #[test]
-    fn default_directives_pin_rmcp_service_warn() {
+    fn default_directives_pin_rmcp_service_warn_and_transport_carve_out() {
         // The fallback filter (RUST_LOG unset) carries both the base level and
-        // the rmcp::service=warn silencer for the http cancellation noise.
+        // the rmcp::service=warn silencer for the http cancellation noise. Under
+        // `-d` it also carries the third-party transport carve-out (#439) — an
+        // `info` base already caps the transport, so that arm stays bare.
+        // Literal strings on purpose: rebuilding them from
+        // `TRANSPORT_LOG_CARVE_OUT` would let an emptied constant green both
+        // sides at once.
         assert_eq!(default_directives(false), "info,rmcp::service=warn");
-        assert_eq!(default_directives(true), "debug,rmcp::service=warn");
+        assert_eq!(
+            default_directives(true),
+            "debug,rmcp::service=warn,hyper_util=info,hyper=info,reqwest=info"
+        );
+    }
+
+    /// The assembled `-d` directive string must both **parse** and **filter**:
+    /// `EnvFilter::new` drops a malformed directive silently, so a string pin
+    /// alone cannot tell a working carve-out from an inert one. Builds the real
+    /// fallback filter with `try_new` (which errors instead of swallowing) and
+    /// asserts the transport's DEBUG pool line — the credential-bearing one from
+    /// hyper-util 0.1.20 — never reaches the writer, while mtui's own DEBUG and
+    /// the transport's INFO both do (#439).
+    #[test]
+    fn debug_default_filter_suppresses_transport_debug() {
+        use std::io;
+        use std::sync::{Arc, Mutex};
+
+        use tracing::subscriber::with_default;
+        use tracing_subscriber::fmt::MakeWriter;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        #[derive(Clone)]
+        struct BufMaker(Arc<Mutex<Vec<u8>>>);
+        struct BufWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl io::Write for BufWriter {
+            fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(data);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for BufMaker {
+            type Writer = BufWriter;
+            fn make_writer(&'a self) -> Self::Writer {
+                BufWriter(Arc::clone(&self.0))
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let filter =
+            EnvFilter::try_new(default_directives(true)).expect("default directives must parse");
+        let subscriber = tracing_subscriber::registry().with(filter).with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(BufMaker(Arc::clone(&buf))),
+        );
+
+        with_default(subscriber, || {
+            tracing::debug!(
+                target: "hyper_util::client::legacy::pool",
+                "pooling idle connection for (\"http\", alice:s3cret@example.test:9)"
+            );
+            tracing::debug!(target: "mtui_mcp::probe", "mtui debug reaches the log");
+            tracing::info!(
+                target: "hyper_util::client::legacy::pool",
+                "transport info reaches the log"
+            );
+        });
+
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(
+            !out.contains("s3cret"),
+            "transport DEBUG must stay filtered, got: {out:?}"
+        );
+        assert!(
+            out.contains("mtui debug reaches the log"),
+            "mtui targets must still reach DEBUG, got: {out:?}"
+        );
+        assert!(
+            out.contains("transport info reaches the log"),
+            "transport INFO must survive the carve-out, got: {out:?}"
+        );
     }
 
     #[test]
