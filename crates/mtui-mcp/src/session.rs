@@ -196,6 +196,11 @@ pub(crate) async fn run_with_heartbeat<F>(
 where
     F: Future,
 {
+    // `progress` is measured on the std clock, which tokio's `start_paused`
+    // does not advance — a test on virtual time sees 0.0 on every frame, and an
+    // assertion about progress values would hold vacuously there. Tick *counts*
+    // stay exact under a paused clock (the ticker is a tokio timer), so pin the
+    // schedule with counts on virtual time and the values on the wall clock.
     let started = Instant::now();
     tokio::pin!(fut);
     loop {
@@ -3461,7 +3466,13 @@ mod tests {
 
     /// A sink whose send would fail must not mask the command result: the slow
     /// future still returns its value and the sink's attempts are recorded.
-    #[tokio::test]
+    ///
+    /// Driven on a paused clock so the schedule is exact rather than a race
+    /// against wall time: tokio auto-advances to each next timer, so the ticks
+    /// land at virtual 40/80/120ms and the body completes at 150ms — three
+    /// attempted sends, every run. The wall-clock version could observe zero
+    /// ticks on a starved CPU.
+    #[tokio::test(start_paused = true)]
     async fn run_with_heartbeat_send_failure_does_not_mask_result() {
         let sink = FailingSink::default();
         let body = async {
@@ -3472,9 +3483,10 @@ mod tests {
         let out =
             run_with_heartbeat(body, &sink, "_sleepy_command", Duration::from_millis(40)).await;
         assert_eq!(out, "ok", "result survives a failing sink");
-        assert!(
-            *sink.calls.lock().unwrap() >= 1,
-            "at least one heartbeat was attempted"
+        assert_eq!(
+            *sink.calls.lock().unwrap(),
+            3,
+            "every tick before completion attempted a send (40/80/120ms)"
         );
     }
 }
