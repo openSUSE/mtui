@@ -4192,21 +4192,56 @@ mod tests {
         );
     }
 
-    /// Runs `fut` under a scoped tracing subscriber that captures each
-    /// event's message synchronously into an in-memory buffer, returning
-    /// `fut`'s output paired with the joined records. Mirrors
-    /// `mtui-datasources/tests/obs_oscrc.rs`'s `capture_logs`, adapted for an
-    /// async body: `set_default`'s guard stays live across the awaited future
-    /// on the single-threaded `#[tokio::test]` runtime these tests run under.
+    /// Runs `fut` with this thread's log capture armed, recording each
+    /// event's message and fields synchronously into an in-memory buffer,
+    /// returning `fut`'s output paired with the joined records.
+    ///
+    /// The subscriber is **global and installed once**, and only the sink is
+    /// scoped to the calling thread. That is not a style choice: `tracing`
+    /// caches callsite *interest* process-wide, so a callsite first reached
+    /// from a thread with no subscriber installed is cached as
+    /// `Interest::never()` and stays silent for every later capture. With the
+    /// suite running in parallel that is a race, and it is not hypothetical —
+    /// under `tracing::subscriber::set_default`'s thread-local guard,
+    /// `downgrade_verdict_withholds_done_when_a_probe_died` failed about one
+    /// run in three with a capture holding a single line, because its sibling
+    /// `perform_downgrade_probe_nonzero_exit_is_a_dead_probe` drives the same
+    /// `warn!`/`error!` callsites with no subscriber and whichever test reached
+    /// them first decided the cache. `mtui-datasources`' `teregen` capture hit
+    /// the same race and is fixed the same way. An always-installed subscriber
+    /// keeps interest pinned to `always`.
+    ///
+    /// Scoping via the thread-local sink captures exactly what the guard did:
+    /// the fan-out is `buffer_unordered` on the test's own task and
+    /// `#[tokio::test]` is single-threaded, so no event under test is emitted
+    /// off this thread.
     async fn capture_logs<T>(fut: impl std::future::Future<Output = T>) -> (T, String) {
+        install_capture_subscriber();
+        CAPTURE_SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+        let out = fut.await;
+        let records = CAPTURE_SINK
+            .with(|s| s.borrow_mut().take())
+            .unwrap_or_default();
+        (out, records.join("\n"))
+    }
+
+    thread_local! {
+        /// Buffer for the capture in progress on this thread, or `None` when no
+        /// capture is active — events from a thread without one are dropped.
+        static CAPTURE_SINK: std::cell::RefCell<Option<Vec<String>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Install the permissive global subscriber backing [`capture_logs`], once
+    /// per test binary. See [`capture_logs`] for why it must be global.
+    fn install_capture_subscriber() {
         use std::fmt::Write as _;
-        use std::sync::{Arc, Mutex};
+        use std::sync::OnceLock;
         use tracing::field::{Field, Visit};
         use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
         use tracing_subscriber::registry::Registry;
 
-        #[derive(Clone)]
-        struct CaptureLayer(Arc<Mutex<Vec<String>>>);
+        struct CaptureLayer;
 
         struct MessageVisitor(String);
         impl Visit for MessageVisitor {
@@ -4221,17 +4256,20 @@ mod tests {
 
         impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
             fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-                let mut visitor = MessageVisitor(String::new());
-                event.record(&mut visitor);
-                self.0.lock().unwrap().push(visitor.0);
+                CAPTURE_SINK.with(|s| {
+                    if let Some(buf) = s.borrow_mut().as_mut() {
+                        let mut visitor = MessageVisitor(String::new());
+                        event.record(&mut visitor);
+                        buf.push(visitor.0);
+                    }
+                });
             }
         }
 
-        let records = Arc::new(Mutex::new(Vec::new()));
-        let sub = Registry::default().with(CaptureLayer(records.clone()));
-        let _guard = tracing::subscriber::set_default(sub);
-        let out = fut.await;
-        (out, records.lock().unwrap().join("\n"))
+        static ONCE: OnceLock<()> = OnceLock::new();
+        ONCE.get_or_init(|| {
+            let _ = tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
+        });
     }
 
     #[tokio::test]
