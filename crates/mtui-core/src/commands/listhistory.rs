@@ -10,7 +10,14 @@ use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// The event types `-e/--event` accepts.
-const EVENTS: [&str; 5] = ["connect", "disconnect", "install", "update", "downgrade"];
+const EVENTS: [&str; 6] = [
+    "connect",
+    "disconnect",
+    "install",
+    "update",
+    "downgrade",
+    "prepare",
+];
 
 /// Lists the history of mtui events recorded on the reference hosts.
 ///
@@ -123,6 +130,31 @@ mod tests {
         assert_eq!(
             history_command(10, &["install".to_owned()]),
             "tac /var/log/mtui.log | grep -m 10 -e \":install\" | tac"
+        );
+    }
+
+    #[test]
+    fn prepare_is_a_selectable_event() {
+        // `prepare` writes its own `/var/log/mtui.log` rows (#407), so it must
+        // be selectable like every other op: the value parser rejects any
+        // event not in `EVENTS`, and `matches` panics on a rejected argv.
+        let args = matches(&ListHistory, &["-e", "prepare"]);
+        let events: Vec<String> = args
+            .get_many::<String>("event")
+            .expect("the event arg parsed")
+            .cloned()
+            .collect();
+        assert_eq!(events, vec!["prepare".to_owned()]);
+        assert_eq!(
+            history_command(10, &["prepare".to_owned()]),
+            "tac /var/log/mtui.log | grep -m 10 -e \":prepare\" | tac"
+        );
+        // And it is offered by tab-completion, where the prefix is ambiguous
+        // with nothing else in the list.
+        let (session, _buf) = empty_session();
+        assert_eq!(
+            ListHistory.complete(&session, "prep", "list_history -e prep"),
+            vec!["prepare".to_owned()]
         );
     }
 

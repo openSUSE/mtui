@@ -558,7 +558,7 @@ Options:
   -e, --event <event>
           event type to list (repeatable)
           
-          [possible values: connect, disconnect, install, update, downgrade]
+          [possible values: connect, disconnect, install, update, downgrade, prepare]
 
   -h, --help
           Print help

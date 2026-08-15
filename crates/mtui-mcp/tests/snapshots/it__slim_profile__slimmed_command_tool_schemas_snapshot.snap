@@ -397,7 +397,8 @@ expression: pretty
               "disconnect",
               "install",
               "update",
-              "downgrade"
+              "downgrade",
+              "prepare"
             ],
             "type": "string"
           },
