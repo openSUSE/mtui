@@ -85,12 +85,39 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
     Ok(Vec::new())
 }
 
+/// The yum downgrade check.
+///
+/// The same shape as [`transactional_update`] above and for the same kind of
+/// reason: only the timed-out/unrunnable gate, because nothing else about a
+/// `yum -y downgrade` transcript can be judged without guessing. The zypper
+/// branches (`104`, the lock strings) are that transcript's vocabulary, not
+/// this one's, and a non-zero status is a routine outcome on a refhost that
+/// carries only part of the update's package list. What is *not* routine is a
+/// rollback command that never ran to completion: the host stays on the update
+/// version while the flow ends looking done.
+///
+/// # Errors
+///
+/// Returns [`UpdateError`] with a reason of "downgrade command timed out or
+/// failed to run" when the command recorded exit `-1`.
+fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+    if args.exitcode == -1 {
+        log_failed(args);
+        return Err(UpdateError::new(
+            "downgrade command timed out or failed to run",
+            args.hostname,
+        ));
+    }
+    Ok(Vec::new())
+}
+
 /// The downgrade check for `(release, transactional)`, or `None` for an
 /// unknown key.
 #[must_use]
 pub(crate) fn downgrade_check(release: &str, transactional: bool) -> Option<CheckFn> {
     match (release, transactional) {
         ("11", false) | ("12", false) | ("15", false) | ("16", false) => Some(Box::new(zypper)),
+        ("YUM", false) => Some(Box::new(yum)),
         ("slmicro", true) => Some(Box::new(transactional_update)),
         _ => None,
     }
@@ -176,8 +203,41 @@ mod tests {
     }
 
     #[test]
+    fn yum_downgrade_judges_only_whether_the_command_ran() {
+        // The last key with a downgrader and no check (#406). The verdict is
+        // as narrow as the transactional one directly above, and for the same
+        // reason: `yum -y downgrade` on a host that carries only part of the
+        // update's package list is a routine outcome, and the zypper markers
+        // are not this transcript's vocabulary — but a rollback command that
+        // never ran leaves the host on the update version while the flow ends
+        // looking done.
+        let err = yum(args("", "", -1)).unwrap_err();
+        assert_eq!(err.reason, "downgrade command timed out or failed to run");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+
+        // Everything the check cannot justify judging still passes.
+        assert!(yum(args("", "", 1)).is_ok());
+        assert!(yum(args("", "Error: nothing to downgrade", 0)).is_ok());
+        assert!(yum(args("", "", 104)).is_ok());
+    }
+
+    #[test]
     fn table_lookup() {
         assert!(downgrade_check("11", false).is_some());
+        // The YUM key has had a downgrader since the port; it now has a check
+        // too, so a `yum` rollback that never ran is not read as a completed
+        // one.
+        let check = downgrade_check("YUM", false).expect("YUM check registered");
+        let err = check(CheckArgs {
+            hostname: "h1",
+            stdout: "",
+            stdin: "yum -y downgrade pkg-a",
+            stderr: "",
+            exitcode: -1,
+        })
+        .unwrap_err();
+        assert_eq!(err.reason, "downgrade command timed out or failed to run");
+        assert!(downgrade_check("YUM", true).is_none());
         assert!(downgrade_check("12", false).is_some());
         assert!(downgrade_check("15", false).is_some());
         assert!(downgrade_check("16", false).is_some());
