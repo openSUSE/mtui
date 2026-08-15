@@ -49,11 +49,19 @@ type UpdateMaps = (BTreeMap<String, String>, BTreeMap<String, String>);
 /// and re-surfaces the error untouched.
 ///
 /// "No" is not one situation, and the variants keep the differences because an
-/// operator needs them: nothing was ever installed (`MissingUpdater`,
-/// `Prepare`, `Cancelled`, `ProbeFailed`), or something may well have been
-/// installed but the flow cannot reach the host to undo it (`Reboot`), or it is
-/// unknown whether anything was (`NotRun`). All of them collapse to a single
-/// [`UpdateError`] at the command boundary.
+/// operator needs them: no update patch was ever dispatched, so there is
+/// nothing for a downgrade to undo (`MissingUpdater`, `Prepare`, `Cancelled`,
+/// `ProbeFailed`), or the patch may well have applied but the flow cannot
+/// reach the host to undo it (`Reboot`), or it is unknown whether it did
+/// (`NotRun`). All of them collapse to a single [`UpdateError`] at the command
+/// boundary.
+///
+/// "No patch was dispatched" is not the same as "the host is untouched": an
+/// abort that follows a *completed* `prepare` — the pre-dispatch cancel gate
+/// and `MissingUpdater` — leaves that prepare's packages installed. That is
+/// still a "no" for the rollback, which exists to undo a patch that never ran
+/// here, but the host did change, so the prepare writes its own
+/// `/var/log/mtui.log` row rather than leaving the abort silent (#407).
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpdateFailure {
     /// One or more hosts failed the `updater` check after the command ran.
@@ -292,9 +300,13 @@ where
 /// never started — but *before* any transactional reboot, since a host that
 /// does not come back can no longer be written to.
 ///
-/// `id_field` carries the RRID for ops that log it (`update`/`downgrade`) and
-/// is `None` for `install`/`uninstall`. The op label and package list
-/// complete the colon-joined line written by [`HostsGroup::add_history`].
+/// `id_field` carries the RRID for the ops that log one (`update`,
+/// `downgrade`) and is `None` for `prepare`, whose row is just the label and
+/// the package set. The op label and package list complete the colon-joined
+/// line written by [`HostsGroup::add_history`]. `install`/`uninstall` write a
+/// row of the same shape, but from `OperationGroup::run` rather than through
+/// here — so this function's callers are not the full list of ops that appear
+/// in `/var/log/mtui.log`.
 pub async fn add_op_history(
     targets: &mut HostsGroup,
     op: &str,
@@ -958,6 +970,29 @@ async fn prepare_body(
         );
     }
 
+    // A prepare *installs packages*, so it owes its own history row — the
+    // record every other dispatching op already writes. Placed here for the
+    // same two reasons as `update`'s and `downgrade`'s rows: after the
+    // dispatch, so no row ever claims work that never started, and before
+    // `reboot_transactional`, because a host that does not come back can no
+    // longer be written to.
+    //
+    // It is also what closes #407 for `update`: both of that flow's
+    // post-prepare aborts (the pre-dispatch cancel gate and the missing-updater
+    // abort) return without an `update` row — correctly, since no updater
+    // command dispatched — but the packages this prepare installed stay on
+    // every host. Writing the row where the side effect is produced records
+    // them for the standalone `prepare`, the initial prepare inside `update`,
+    // and the `--newpackage` prepare alike.
+    //
+    // Gated on a real dispatch: an empty list, a cancel before the first
+    // package, or a prepare for which no command could be built leaves no row.
+    // The row names the whole prepare set, as `update`/`downgrade` do; a
+    // per-package cancel names its own progress in the error.
+    if !dispatched.is_empty() {
+        add_op_history(targets, "prepare", None, pkgs).await;
+    }
+
     // Surface any per-host command failure from the install fan-out; the
     // prepare check's own failures were collected per fan-out above.
     //
@@ -1318,6 +1353,13 @@ async fn downgrade_body(
         );
     }
     if !dead_probes.is_empty() && dead_probes.len() == list_map.len() {
+        // The abort still leaves side effects behind: `fanout_set_repo(Remove)`
+        // above has already stripped the issue repo from every host, and this
+        // path fires most often *during the update rollback*, when
+        // reconstructing what was done to a refhost matters most. Record the
+        // row before returning — the site below is unreachable from here, so
+        // there is no double write.
+        add_op_history(targets, "downgrade", id, packages).await;
         return Err(UpdateError::new(
             "package version probe failed",
             dead_probes.iter().cloned().collect::<Vec<_>>().join(", "),
@@ -1782,8 +1824,19 @@ pub async fn perform_update(
         // on every host (the same undo the MissingUpdater abort performs).
         targets.fanout_set_repo(RepoOp::Remove, report).await;
         warn_on_unlock_failures("update", &targets.unlock().await);
+        // True of the *update command* — but with a prepare behind us the host
+        // is not untouched, and saying only "nothing was dispatched" reads as
+        // if it were. The repo add is undone above; a completed prepare's
+        // packages are not, and its own history row is the record of them.
         return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
-            "cancelled before the update command was dispatched",
+            if noprepare {
+                "cancelled before the update command was dispatched".to_owned()
+            } else {
+                "cancelled before the update command was dispatched; any packages \
+                 installed by the prepare that ran first are left in place \
+                 (see `list_history`)"
+                    .to_owned()
+            },
         )));
     }
 
@@ -2647,6 +2700,300 @@ mod tests {
         );
     }
 
+    // --- #407: an abort that already produced side effects records them ----
+
+    #[tokio::test]
+    async fn prepare_records_history_once_dispatched() {
+        // `prepare` installs packages, so it owes its own row — the residue an
+        // `update` aborted after its prepare would otherwise leave unrecorded.
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await;
+        assert!(res.is_ok(), "a clean prepare returns Ok: {res:?}");
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("a prepare that dispatched an install records history"),
+        )
+        .unwrap();
+        assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
+        // Anchored on the tail: it pins the label *and* the package list. A
+        // bare `contains("prepare")` would also match a package named
+        // `prepare-something` or the `:update:` row's payload.
+        assert!(
+            contents.ends_with(":prepare:pkg-a pkg-b\n"),
+            "history line: {contents:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_writes_no_history_when_cancelled_before_any_dispatch() {
+        // The inverse failure direction: a row claiming an install that never
+        // started is worse than no row. `installed_only` takes the per-package
+        // loop, whose checkpoint breaks at package 0, so nothing dispatches.
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        group.cancel_token().cancel();
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect_err("a cancelled prepare reports an error");
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+
+        assert!(
+            handle.commands().is_empty(),
+            "cancelled at package 0, so nothing dispatched: {:?}",
+            handle.commands()
+        );
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "a prepare that dispatched nothing must leave no row: {:?}",
+            handle.file_contents(HISTORY_LOG)
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_writes_no_history_for_an_empty_package_list() {
+        // Reaches the same site through the empty-list warn path and returns
+        // Ok: still nothing dispatched, so still no row.
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_prepare(&mut group, &NoopRepo, &[], false, false, false).await;
+        assert!(res.is_ok(), "an empty prepare is a no-op Ok: {res:?}");
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "an empty prepare must leave no row"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_records_history_for_a_host_lost_to_its_reboot() {
+        // Pins the row's placement *before* `reboot_transactional`: the mock's
+        // `sftp_append` reconnects at entry like the real `SshConnection`, so a
+        // write attempted after the reboot would fail on the dead host.
+        let (t, handle) = slmicro_target_failing_reconnect("h1");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("a lost transactional host must not report success");
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("a host lost to its reboot must still have its prepare row"),
+        )
+        .unwrap();
+        assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
+        assert!(
+            contents.ends_with(":prepare:pkg-a\n"),
+            "history line: {contents:?}"
+        );
+    }
+
+    /// A [`SetRepo`] that cancels the group's token the first time it is asked
+    /// to *add* a repo, recording every op it saw.
+    ///
+    /// The only `RepoOp::Add` in `perform_update` happens after the initial
+    /// prepare has dispatched and before the pre-dispatch cancel gate, so this
+    /// reproduces "`job_cancel` during a multi-minute prepare" deterministically,
+    /// with no timing.
+    struct CancellingRepo {
+        /// Cancels the group's token. A boxed closure rather than the token
+        /// itself so the test double needs no `tokio-util` dependency here.
+        cancel: Box<dyn Fn() + Send + Sync>,
+        ops: std::sync::Mutex<Vec<RepoOp>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SetRepo for CancellingRepo {
+        async fn set_repo(&self, _target: &mut Target, operation: RepoOp) {
+            self.ops.lock().unwrap().push(operation);
+            if operation == RepoOp::Add {
+                (self.cancel)();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn update_cancelled_at_the_pre_dispatch_gate_records_the_prepare_row() {
+        // #407's headline path: the update is cancelled after its prepare has
+        // installed packages on every host. The repo add is undone, but the
+        // installed packages are not — so the prepare must be on record.
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        let token = group.cancel_token();
+        let repo = CancellingRepo {
+            cancel: Box::new(move || token.cancel()),
+            ops: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Cancelled(err)) = res else {
+            panic!("a cancel at the pre-dispatch gate is Err(Cancelled): {res:?}");
+        };
+        // Discriminating: the entry gate says "before the update started", so
+        // this pins the *pre-dispatch* gate, the one that runs after prepare.
+        assert!(
+            err.reason
+                .contains("before the update command was dispatched"),
+            "reason: {}",
+            err.reason
+        );
+        // …and it must not read as "nothing happened here": a prepare ran.
+        assert!(
+            err.reason.contains("left in place"),
+            "the message must own the prepare residue: {}",
+            err.reason
+        );
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("the completed prepare must be on record"),
+        )
+        .unwrap();
+        assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
+        assert!(
+            contents.ends_with(":prepare:pkg-a\n"),
+            "history line: {contents:?}"
+        );
+        // A row claiming the *update* ran would be worse than none: the update
+        // command never dispatched.
+        assert!(
+            !contents.contains(":update:"),
+            "no update row may be written when no updater command ran: {contents:?}"
+        );
+        assert!(
+            !handle.commands().iter().any(|c| c.contains(":p=42:7")),
+            "the updater command must not have dispatched: {:?}",
+            handle.commands()
+        );
+        // The undo still runs: the repo the gate added is removed again.
+        let ops = repo.ops.lock().unwrap().clone();
+        assert!(
+            ops.contains(&RepoOp::Add) && ops.last() == Some(&RepoOp::Remove),
+            "the cancel gate undoes its repo add: {ops:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_cancelled_at_the_gate_under_noprepare_records_nothing() {
+        // Same gate, `--noprepare`: nothing was installed and no updater
+        // command dispatched, so this abort owes no row — and its message must
+        // not invent a prepare residue that cannot exist here.
+        let (t, handle) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+        let token = group.cancel_token();
+        let repo = CancellingRepo {
+            cancel: Box::new(move || token.cancel()),
+            ops: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let Err(UpdateFailure::Cancelled(err)) = res else {
+            panic!("a cancel at the pre-dispatch gate is Err(Cancelled): {res:?}");
+        };
+        assert!(
+            err.reason
+                .contains("before the update command was dispatched"),
+            "reason: {}",
+            err.reason
+        );
+        assert!(
+            !err.reason.contains("left in place"),
+            "no prepare ran, so nothing was left in place: {}",
+            err.reason
+        );
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "an abort that dispatched nothing must leave no row: {:?}",
+            handle.file_contents(HISTORY_LOG)
+        );
+    }
+
+    #[tokio::test]
+    async fn downgrade_all_probes_dead_still_records_history() {
+        // The issue repo was removed from every host before the probe ran, and
+        // this abort fires on the rollback path — the row is what an operator
+        // reconstructs the refhost's state from.
+        let (t, handle) = sles_target_with_exit("h1", "", -1);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_downgrade(&mut group, &NoopRepo, &["pkg-a".to_owned()], None).await;
+        let err = res.expect_err("a dead probe must still abort");
+        // The verdict must not change: writing the row is bookkeeping.
+        assert_eq!(err.reason, "package version probe failed");
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(
+            !handle.commands().iter().any(|c| c.contains("--oldpackage")),
+            "no downgrade command may run after a dead probe: {:?}",
+            handle.commands()
+        );
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("the repo removal already landed; the row must be written"),
+        )
+        .unwrap();
+        assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
+        // `id` is None here, so the row carries no RRID field.
+        assert!(
+            contents.ends_with(":downgrade:pkg-a\n"),
+            "history line: {contents:?}"
+        );
+    }
+
     #[tokio::test]
     async fn perform_install_accepts_zyppers_informational_exit_codes() {
         // zypper exits 100-103/106 to mean "update needed", "reboot needed",
@@ -2982,6 +3329,14 @@ mod tests {
             ops.contains(&RepoOp::Remove),
             "abort removes the repo: {ops:?}"
         );
+        // #407's other half: this abort is *correct* to stay silent. With
+        // `noprepare` nothing was installed and no updater command dispatched,
+        // so the fix must not make this path write a row either.
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "an abort that dispatched nothing must leave no row: {:?}",
+            handle.file_contents(HISTORY_LOG)
+        );
     }
 
     // --- perform_downgrade -------------------------------------------------
@@ -3064,6 +3419,23 @@ mod tests {
             !h2.commands().iter().any(|c| c.contains("--oldpackage")),
             "dead host must build no downgrade command: {:?}",
             h2.commands()
+        );
+        // Not every probe died, so the all-dead abort must not fire: the flow
+        // reaches the single post-dispatch history site and writes exactly one
+        // downgrade row. An abort-site write that escaped its `if` would show
+        // up here as two.
+        let contents = String::from_utf8(
+            h1.file_contents(HISTORY_LOG)
+                .expect("the healthy host's row"),
+        )
+        .unwrap();
+        assert_eq!(
+            contents
+                .lines()
+                .filter(|l| l.contains(":downgrade:"))
+                .count(),
+            1,
+            "exactly one downgrade row on the healthy host: {contents:?}"
         );
     }
 
