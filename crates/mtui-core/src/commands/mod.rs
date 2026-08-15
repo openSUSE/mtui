@@ -1095,6 +1095,81 @@ mod cancellation_seam {
 
     const RRID_A: &str = "SUSE:Maintenance:1:1";
     const RRID_B: &str = "SUSE:Maintenance:2:2";
+    const RRID_C: &str = "SUSE:Maintenance:3:3";
+    const RRID_D: &str = "SUSE:Maintenance:4:4";
+
+    /// Captures the `succeeded` field of the fan-out driver's summary log, so
+    /// the templates it *names* can be asserted and not just assumed from the
+    /// verdict.
+    ///
+    /// The subscriber is installed **globally and permanently**, not as a
+    /// thread-local default: `tracing` caches callsite interest process-wide,
+    /// so the `succeeded` callsite — reached by many other tests in this
+    /// binary, none of which has a subscriber — would otherwise be cached as
+    /// `Interest::never` and stay silent here for good. `set_global_default`
+    /// rebuilds that cache and then keeps interest pinned. Scoping moves to a
+    /// thread-local sink instead, so the tests running in parallel on other
+    /// threads cannot see (or pollute) this capture.
+    mod succeeded_log {
+        use std::cell::RefCell;
+        use std::sync::Once;
+
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::Registry;
+
+        thread_local! {
+            /// The active capture buffer for this thread, if any.
+            static SINK: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+        }
+
+        struct CaptureLayer;
+
+        /// Records the rendered `succeeded` field, if the event carries one.
+        struct SucceededVisitor(Option<String>);
+
+        impl Visit for SucceededVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                // `succeeded = %…` arrives as a `Display` value, which tracing
+                // hands to `record_debug` already rendered.
+                if field.name() == "succeeded" {
+                    self.0 = Some(format!("{value:?}"));
+                }
+            }
+        }
+
+        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                SINK.with(|s| {
+                    if let Some(buf) = s.borrow_mut().as_mut() {
+                        let mut v = SucceededVisitor(None);
+                        event.record(&mut v);
+                        if let Some(found) = v.0 {
+                            buf.push(found);
+                        }
+                    }
+                });
+            }
+        }
+
+        /// Arms the capture for this thread (installing the subscriber once).
+        pub fn start() {
+            static INSTALL: Once = Once::new();
+            INSTALL.call_once(|| {
+                // A pre-existing global default would leave the capture empty,
+                // which the caller's exact-equality assertion reports loudly
+                // rather than passing over.
+                let _ =
+                    tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
+            });
+            SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+        }
+
+        /// Every `succeeded` value logged on this thread since [`start`].
+        pub fn take() -> Vec<String> {
+            SINK.with(|s| s.borrow_mut().take()).unwrap_or_default()
+        }
+    }
 
     /// A fan-out probe that records each template it runs on and cancels the
     /// session's token from inside its first `call`.
@@ -1120,6 +1195,182 @@ mod cancellation_seam {
             session.cancel_token().cancel();
             Ok(())
         }
+    }
+
+    /// A fan-out probe whose body returns a scripted per-template verdict, so
+    /// the driver's classification of a body-level cancel can be pinned
+    /// independently of the session token.
+    struct ScriptedBody {
+        ran: Arc<Mutex<Vec<String>>>,
+        /// Template whose body fails with a *real* error.
+        fail_on: Option<&'static str>,
+        /// Template whose body stops at one of its own cancellation
+        /// checkpoints (what `perform.rs::map_flow_error` produces).
+        cancel_on: &'static str,
+        /// Also fire the session token from the cancelling body (the
+        /// `job_cancel` coincidence); `false` pins that the verdict needs no
+        /// token at all.
+        cancel_token_too: bool,
+    }
+
+    #[async_trait]
+    impl Command for ScriptedBody {
+        fn name(&self) -> &'static str {
+            "scripted_probe"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Fanout
+        }
+        async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            let rrid = session.templates.active_rrid().unwrap_or("").to_owned();
+            self.ran
+                .lock()
+                .expect("probe log poisoned")
+                .push(rrid.clone());
+            if self.fail_on == Some(rrid.as_str()) {
+                return Err(CommandError::Other("boom".into()));
+            }
+            if rrid == self.cancel_on {
+                if self.cancel_token_too {
+                    session.cancel_token().cancel();
+                }
+                return Err(CommandError::Cancelled("flow stopped mid-body".into()));
+            }
+            Ok(())
+        }
+    }
+
+    /// Three loaded templates, the second one's *body* stopping at its own
+    /// cancellation checkpoint while the session token is never fired: the
+    /// verdict is [`CommandError::Cancelled`] carrying the flow's own detail
+    /// and an honest completion count — not a `FanOut` aggregate with the
+    /// cancel impersonating a broken template (#404).
+    #[tokio::test]
+    async fn fanout_body_cancel_reports_cancelled_not_fanout() {
+        let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
+        session.templates.add(fake_report(RRID_B, &["h2"], "ok"));
+        session.templates.add(fake_report(RRID_C, &["h3"], "ok"));
+
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let cmd = ScriptedBody {
+            ran: Arc::clone(&ran),
+            fail_on: None,
+            cancel_on: RRID_B,
+            // Deliberately never cancelled: the verdict may only come from the
+            // body's own error variant, never from sniffing the token.
+            cancel_token_too: false,
+        };
+        let args = matches(&cmd, &[]);
+
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("a body-level cancel must not report success");
+        assert!(
+            matches!(
+                &err,
+                CommandError::Cancelled(m)
+                    if *m == format!("stopped after 1 of 3 templates; {RRID_B}: flow stopped mid-body")
+            ),
+            "got: {err}"
+        );
+        assert_eq!(
+            *ran.lock().expect("probe log poisoned"),
+            vec![RRID_A.to_owned(), RRID_B.to_owned()],
+            "the third template must never run after the body-level cancel"
+        );
+    }
+
+    /// A real per-template failure collected *before* a body-level cancel still
+    /// outranks it: the verdict stays the `FanOut` aggregate, the cancel does
+    /// not pad the failure list, and the fan-out still stops at the boundary.
+    /// The token *is* fired here, so a verdict derived from the token instead
+    /// of the error variant would bury the broken template.
+    #[tokio::test]
+    async fn real_failure_before_body_cancel_still_outranks_it() {
+        let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
+        session.templates.add(fake_report(RRID_B, &["h2"], "ok"));
+        session.templates.add(fake_report(RRID_C, &["h3"], "ok"));
+
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let cmd = ScriptedBody {
+            ran: Arc::clone(&ran),
+            fail_on: Some(RRID_A),
+            cancel_on: RRID_B,
+            cancel_token_too: true,
+        };
+        let args = matches(&cmd, &[]);
+
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("a failed template must not report success");
+        match err {
+            CommandError::FanOut(failures) => {
+                assert_eq!(failures.len(), 1, "the cancel must not pad the aggregate");
+                assert_eq!(failures[0].0, RRID_A);
+                assert!(
+                    matches!(failures[0].1, CommandError::Other(_)),
+                    "got: {}",
+                    failures[0].1
+                );
+            }
+            other => panic!("expected FanOut, got {other:?}"),
+        }
+        assert_eq!(
+            *ran.lock().expect("probe log poisoned"),
+            vec![RRID_A.to_owned(), RRID_B.to_owned()],
+            "the outranked cancel must still stop the fan-out at the boundary"
+        );
+    }
+
+    /// The `succeeded` summary log names templates that actually completed.
+    ///
+    /// This is the outranked-cancel fall-through — a real failure *and* a
+    /// body-level cancel — which is the only shape where the old derived list
+    /// (`resolved` minus `failures` minus `skipped`) could lie: the
+    /// body-cancelled template no longer lands in `failures`, and the template
+    /// after the break never ran at all, so both were reported as succeeded.
+    #[tokio::test]
+    async fn succeeded_log_names_only_completed_templates() {
+        let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
+        session.templates.add(fake_report(RRID_B, &["h2"], "ok"));
+        session.templates.add(fake_report(RRID_C, &["h3"], "ok"));
+        session.templates.add(fake_report(RRID_D, &["h4"], "ok"));
+
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let cmd = ScriptedBody {
+            ran: Arc::clone(&ran),
+            fail_on: Some(RRID_B),
+            cancel_on: RRID_C,
+            cancel_token_too: false,
+        };
+        let args = matches(&cmd, &[]);
+
+        succeeded_log::start();
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("a failed template must not report success");
+        let logged = succeeded_log::take();
+
+        // Only A ran to completion: B failed, C stopped mid-body, D was never
+        // reached. Exact equality, not `contains` — the whole defect is *extra*
+        // names in this list, which a substring check would sail past.
+        assert_eq!(
+            logged,
+            vec![RRID_A.to_owned()],
+            "the fan-out summary must name only the template that completed"
+        );
+        assert!(
+            matches!(&err, CommandError::FanOut(f) if f.len() == 1 && f[0].0 == RRID_B),
+            "got: {err}"
+        );
+        assert_eq!(
+            *ran.lock().expect("probe log poisoned"),
+            vec![RRID_A.to_owned(), RRID_B.to_owned(), RRID_C.to_owned()],
+            "the fourth template must never run after the body-level cancel"
+        );
     }
 
     /// Two loaded templates, cancel fired during the first `call`: the driver

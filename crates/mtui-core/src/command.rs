@@ -149,7 +149,13 @@ pub trait Command: Send + Sync {
     /// multi-template job stops at the next template boundary instead of
     /// grinding through the rest. A cancel arriving *mid*-`call` is only
     /// observed if the body opts in ([`Session::cancel_requested`]); otherwise
-    /// the MCP job layer hard-aborts after its grace period.
+    /// the MCP job layer hard-aborts after its grace period. A body that does
+    /// opt in reports its stop as [`CommandError::Cancelled`], and the driver
+    /// treats that variant as the cancel itself — breaking at the template
+    /// boundary and keeping the flow's detail — rather than collecting it as a
+    /// template failure. A real failure banked before the cancel still
+    /// outranks it and is still reported as the [`CommandError::FanOut`]
+    /// aggregate.
     async fn run(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         session.check_cancelled()?;
         let resolved = resolve_templates(self.scope(), session, args)?;
@@ -193,6 +199,17 @@ pub trait Command: Send + Sync {
         let mut skipped: Vec<String> = Vec::new();
 
         let mut cancelled = false;
+        // Templates whose body actually returned `Ok`, in fan-out order —
+        // counted, never derived. Deriving it (`resolved` minus `skipped` minus
+        // `failures`) claimed every template a `break` never reached, and the
+        // body-cancelled one that no longer lands in `failures`, as done: it
+        // reported "stopped after M of M templates" for a fan-out that stopped
+        // at the first one, and named never-attempted templates as `succeeded`.
+        let mut completed: Vec<&str> = Vec::new();
+        // Set when the break came from a body-level cancel: the flow's own
+        // verdict detail, preserved rather than flattened (`CommandError::
+        // Cancelled` promises the payload names what the flow managed to do).
+        let mut body_stop: Option<(String, String)> = None;
         for rrid in &resolved {
             // Template boundary = cancellation checkpoint: a job_cancel that
             // lands while template N runs stops the fan-out before N+1.
@@ -208,9 +225,24 @@ pub trait Command: Send + Sync {
             }
             session.activate(rrid);
             session.display.template_banner(rrid);
-            if let Err(exc) = self.call(session, args).await {
-                tracing::error!(command = self.name(), rrid = %rrid, error = %exc, "command failed");
-                failures.push((rrid.clone(), exc));
+            match self.call(session, args).await {
+                Ok(()) => completed.push(rrid.as_str()),
+                // A body that stopped at one of its own cancellation
+                // checkpoints (`commands::perform::map_flow_error`) *is* the
+                // cancel verdict, not a template failure: stop at the boundary
+                // exactly like the loop-top check does. Pushing it into
+                // `failures` would let a cancel impersonate a broken template
+                // and be reported as a `FanOut` aggregate.
+                Err(CommandError::Cancelled(detail)) => {
+                    tracing::info!(command = self.name(), rrid = %rrid, "template body cancelled");
+                    body_stop = Some((rrid.clone(), detail));
+                    cancelled = true;
+                    break;
+                }
+                Err(exc) => {
+                    tracing::error!(command = self.name(), rrid = %rrid, error = %exc, "command failed");
+                    failures.push((rrid.clone(), exc));
+                }
             }
         }
 
@@ -221,25 +253,21 @@ pub trait Command: Send + Sync {
             // `FanOut` aggregate below: burying a broken template behind a
             // bare "cancelled" is the one thing the caller must not be told.
             tracing::info!(command = self.name(), "fan-out cancelled");
-            let done = resolved.len() - skipped.len() - failures.len();
-            return Err(CommandError::Cancelled(format!(
-                "stopped after {done} of {} templates",
+            let mut msg = format!(
+                "stopped after {} of {} templates",
+                completed.len(),
                 resolved.len()
-            )));
+            );
+            if let Some((rrid, detail)) = body_stop
+                && !detail.is_empty()
+            {
+                msg.push_str(&format!("; {rrid}: {detail}"));
+            }
+            return Err(CommandError::Cancelled(msg));
         }
 
-        let done: std::collections::HashSet<&str> = failures
-            .iter()
-            .map(|(r, _)| r.as_str())
-            .chain(skipped.iter().map(String::as_str))
-            .collect();
-        let ok: Vec<&str> = resolved
-            .iter()
-            .map(String::as_str)
-            .filter(|r| !done.contains(r))
-            .collect();
-        if !ok.is_empty() {
-            tracing::info!(command = self.name(), succeeded = %ok.join(", "));
+        if !completed.is_empty() {
+            tracing::info!(command = self.name(), succeeded = %completed.join(", "));
         }
         if !skipped.is_empty() {
             tracing::info!(command = self.name(), skipped = %skipped.join(", "), "no connected host");
@@ -247,7 +275,7 @@ pub trait Command: Send + Sync {
         if !failures.is_empty() {
             return Err(CommandError::FanOut(failures));
         }
-        if !skipped.is_empty() && ok.is_empty() {
+        if !skipped.is_empty() && completed.is_empty() {
             // Every resolved template was skipped: the command executed on
             // nothing, which must stay an error, not a silent success.
             return Err(CommandError::NoRefhostsDefined);

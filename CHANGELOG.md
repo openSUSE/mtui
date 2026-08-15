@@ -340,6 +340,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   non-determinism: `request_review --watch` used to arm the process-wide SIGINT
   handler as a side effect, after which Ctrl-C was silently swallowed for the
   rest of the session.
+- A cancel (MCP `job_cancel`, REPL Ctrl-C) that lands inside a command body
+  during a multi-template fan-out is again reported as `cancelled: stopped
+  after N of M templates` — carrying the interrupted flow's own detail of what
+  it had applied — instead of `fan-out failed on ...` with the cancel listed as
+  a template failure (#404). A real template failure collected before the
+  cancel still outranks it and is still reported as the fan-out aggregate, now
+  without the cancel entry padding the failure list; and the `stopped after N
+  of M templates` count now reports templates actually completed instead of
+  counting never-attempted ones as done — as does the `succeeded` log line,
+  which no longer names templates the stop never reached.
 
 ### Security
 
