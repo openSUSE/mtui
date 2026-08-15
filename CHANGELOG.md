@@ -408,6 +408,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   now: a single host can contribute two failures (a lock message is reported
   both by the stderr scan and by the check that recognised it), which used to
   read "prepare failed on h1, h1".
+- A `downgrade` on a RHEL host is no longer reported as completed when its
+  `yum -y downgrade` never ran (#406) — the last `(release, transactional)`
+  key with a downgrade command and no check. As on SL Micro, the check judges
+  only that: a rollback that timed out, lost its connection, or never reached
+  the host leaves the packages at the update version while the flow ends
+  looking done.
 
 ### Security
 
