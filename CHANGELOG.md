@@ -416,6 +416,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   only that: a rollback that timed out, lost its connection, or never reached
   the host leaves the packages at the update version while the flow ends
   looking done.
+- Aborts that had already changed a host no longer leave `/var/log/mtui.log`
+  silent (#407). `prepare` now records its own history row once it has
+  dispatched an install command — standalone, and for both prepares that run
+  inside `update` (the initial one and `--newpackage`'s after the update) — so
+  an `update` cancelled at its pre-dispatch gate, or aborted for a missing
+  updater, no longer leaves the packages its prepare installed unrecorded on
+  every host. A prepare that dispatched nothing (cancelled before its first
+  package, an empty package list, no command built for any host) still writes
+  no row. A full `update` run therefore now leaves one row per operation that
+  dispatched: `prepare` and `update`. `list_history` gained `prepare` as an
+  `-e/--event` filter value (**MCP schema note:** the `list_history` tool's
+  `event` enum gained `"prepare"`). A `downgrade` aborted because every version
+  probe died now writes its row before aborting: its issue-repo removal had
+  already run on every host, and that abort fires precisely on the rollback
+  path, where reconstructing what was done to a refhost matters most. The
+  cancel message on the update's pre-dispatch gate now says that a completed
+  prepare's packages are left in place, instead of only that the update
+  command never dispatched.
 
 ### Security
 
