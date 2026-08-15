@@ -24,7 +24,7 @@ pub use startup::seed_session;
 
 use std::io::Write;
 
-use mtui_core::{ColorMode, LogLevel, LogLevelSink};
+use mtui_core::{ColorMode, LogLevel, LogLevelSink, TRANSPORT_LOG_CARVE_OUT};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -68,6 +68,14 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// Honours `RUST_LOG` (mtui logging contract); `-d/--debug` raises the
 /// default level to `DEBUG` when `RUST_LOG` is unset.
 ///
+/// **`DEBUG` raises mtui's targets only.** Both `-d` and a runtime
+/// `set_log_level debug` build their directive through `level_directive`,
+/// which caps the third-party HTTP transport (`hyper_util`, `hyper`, `reqwest`)
+/// at `INFO`: those crates log connection details — including a pool authority
+/// that can carry redirect-supplied userinfo — at `DEBUG` (#439). An operator
+/// who needs the transport's own view opts in explicitly with `RUST_LOG`
+/// (e.g. `RUST_LOG=hyper_util=debug`), which replaces these defaults entirely.
+///
 /// At the **default** level the output is compact and colorized like the
 /// command display: a lowercased,
 /// colored level token (green `info` / yellow `warn` / red `error`) then
@@ -98,13 +106,21 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// `mtui-cli`, so the `tracing_subscriber` types never leak into the lower
 /// crates. A runtime `set_log_level` **replaces the whole filter** with the new
 /// level, discarding any per-target `RUST_LOG` directives the process started
-/// with. It changes the *level filter
+/// with — including an explicit transport opt-in, which the reloaded `debug`
+/// directive replaces with the carve-out above. It changes the *level filter
 /// only*, not the event format — a runtime switch to `debug` does not
 /// retroactively add the verbose timestamp/target layout selected by `-d` at
 /// startup (deliberate, consistent with [`logfmt`]).
 #[must_use]
 pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
-    let default = if debug { "debug" } else { "info" };
+    // Both startup levels go through the same helper the `set_log_level` sink
+    // uses, so the transport carve-out cannot apply to one path and not the other.
+    let startup = if debug {
+        LogLevel::Debug
+    } else {
+        LogLevel::Info
+    };
+    let default = level_directive(startup);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     // Wrap the filter in a reload layer so `set_log_level` can flip it live.
     let (filter, handle) = tracing_subscriber::reload::Layer::new(filter);
@@ -141,11 +157,22 @@ pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
     })
 }
 
-/// The `EnvFilter` directive string for a [`LogLevel`] (the lowercased
-/// [`tracing::Level`] name, e.g. `"debug"`), used to rebuild the filter on a
-/// runtime `set_log_level`.
+/// The `EnvFilter` directive string for a [`LogLevel`]: the lowercased
+/// [`tracing::Level`] name (e.g. `"debug"`), used both to seed the startup
+/// fallback filter and to rebuild it on a runtime `set_log_level`.
+///
+/// At `debug` the base level is followed by [`TRANSPORT_LOG_CARVE_OUT`], which
+/// holds the third-party HTTP stack at `INFO` — raising mtui's verbosity must
+/// not print hyper-util's connection-pool key, whose authority can carry
+/// redirect-supplied userinfo (#439). The coarser levels stay bare: appending
+/// the carve-out there would *raise* those targets to `INFO` above an operator's
+/// chosen `error`/`warn`.
 fn level_directive(level: LogLevel) -> String {
-    level.as_tracing().as_str().to_ascii_lowercase()
+    let base = level.as_tracing().as_str().to_ascii_lowercase();
+    match level {
+        LogLevel::Debug => format!("{base},{TRANSPORT_LOG_CARVE_OUT}"),
+        LogLevel::Error | LogLevel::Warning | LogLevel::Info => base,
+    }
 }
 
 #[cfg(test)]
@@ -158,12 +185,86 @@ mod tests {
 
     use super::*;
 
+    /// Byte-pins the directive strings themselves: the bare lowercased
+    /// `tracing` name at the coarser levels, and `debug` plus the transport
+    /// carve-out (#439) spelled out in full. These literals — not the
+    /// behavioural test below — are what catch a respelling that `EnvFilter`
+    /// still happens to cover (`hyper-util` for `hyper_util`, which the
+    /// `hyper=info` prefix match would silently absorb).
     #[test]
-    fn level_directive_is_lowercased_tracing_name() {
+    fn level_directive_pins_bare_levels_and_debug_transport_carve_out() {
+        // The coarser levels are the bare `tracing` name: appending the
+        // transport carve-out there would *raise* those targets to `info`
+        // above an operator's chosen `error`/`warn`.
         assert_eq!(level_directive(LogLevel::Error), "error");
         assert_eq!(level_directive(LogLevel::Warning), "warn");
         assert_eq!(level_directive(LogLevel::Info), "info");
-        assert_eq!(level_directive(LogLevel::Debug), "debug");
+        // `debug` carries the third-party transport carve-out (#439): hyper-util
+        // logs its pool key — authority userinfo included — at DEBUG. Spelled
+        // out literally, never rebuilt from `TRANSPORT_LOG_CARVE_OUT`, so
+        // emptying that constant cannot green both sides at once.
+        assert_eq!(
+            level_directive(LogLevel::Debug),
+            "debug,hyper_util=info,hyper=info,reqwest=info"
+        );
+    }
+
+    /// A runtime `set_log_level debug` must raise mtui's own targets to DEBUG
+    /// without switching on the HTTP transport's DEBUG logging, where a
+    /// credential-bearing pool authority would be printed (#439). Exercises the
+    /// real sink shape (`handle.reload(EnvFilter::new(level_directive(level)))`)
+    /// on a scoped subscriber, so it pins the assembled directive string's
+    /// *behaviour*, not just its bytes — an `EnvFilter`-invalid target would be
+    /// dropped silently by `EnvFilter::new` and a pure string pin would not
+    /// notice.
+    #[test]
+    fn set_log_level_debug_does_not_enable_transport_debug() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let (filter, handle) =
+            tracing_subscriber::reload::Layer::new(EnvFilter::new(level_directive(LogLevel::Info)));
+        let subscriber = tracing_subscriber::registry().with(filter).with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(BufMaker(Arc::clone(&buf))),
+        );
+
+        let mut sink: LogLevelSink = Box::new(move |level: LogLevel| {
+            let _ = handle.reload(EnvFilter::new(level_directive(level)));
+        });
+
+        with_default(subscriber, || {
+            sink(LogLevel::Debug);
+            // The leak shape from hyper-util 0.1.20 (`pool.rs:401`), verbatim.
+            tracing::debug!(
+                target: "hyper_util::client::legacy::pool",
+                "pooling idle connection for (\"http\", alice:s3cret@example.test:9)"
+            );
+            tracing::debug!(target: "mtui_cli::probe", "mtui debug reaches the log");
+            tracing::info!(
+                target: "hyper_util::client::legacy::pool",
+                "transport info reaches the log"
+            );
+        });
+
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        // The guard: a unique credential-shaped token, so no unrelated line can
+        // satisfy (or vacuously fail) the assertion.
+        assert!(
+            !out.contains("s3cret"),
+            "transport DEBUG must stay filtered, got: {out:?}"
+        );
+        // Anti-vacuity: without this, assertion 1 would also pass with the whole
+        // filter stuck at `info` (i.e. with `set_log_level debug` broken).
+        assert!(
+            out.contains("mtui debug reaches the log"),
+            "mtui targets must still reach DEBUG, got: {out:?}"
+        );
+        // The cap is exactly `info`, not `warn`/`off`: real transport problems
+        // must still reach the operator.
+        assert!(
+            out.contains("transport info reaches the log"),
+            "transport INFO must survive the carve-out, got: {out:?}"
+        );
     }
 
     /// A `MakeWriter` over a shared buffer so a scoped subscriber's output can be

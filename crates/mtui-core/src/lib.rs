@@ -40,5 +40,5 @@ pub use engine::{EngineError, command_parser, dispatch_argv, dispatch_command, d
 pub use entrypoint::ExitStatus;
 pub use error::{CommandError, CommandResult};
 pub use registry::{MCP_DENYLIST, Registry, register_all};
-pub use session::{LogLevel, LogLevelSink, NotifySink, Session};
+pub use session::{LogLevel, LogLevelSink, NotifySink, Session, TRANSPORT_LOG_CARVE_OUT};
 pub use template_registry::TemplateRegistry;
