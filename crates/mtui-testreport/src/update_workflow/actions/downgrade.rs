@@ -74,6 +74,31 @@
 //! cannot carry that verdict; only a comparison against what should be
 //! installed can, which is what the transcript note exists to prompt.
 //!
+//! ## The notes share a stream with the parser
+//!
+//! Both accepted-status notes print to **stdout** — the same stream
+//! [`crate::reports::update_flow::parse_downgrade_versions`] reads back as the
+//! version list. That parser takes *any* line containing a space-equals-space
+//! as one `name`/`version` row, so the notes are safe only because neither
+//! contains that separator. It is a real coupling between a shell string here
+//! and a Rust parser two modules away: rewording a note into, say, "no package
+//! = no rollback" would inject a bogus package into the version map and make
+//! the flow try to downgrade it. A short comment at the `printf` sites names
+//! the constraint, and
+//! `rendered_script::the_probe_notes_never_parse_as_versions` pins it against
+//! the real script's real output.
+//!
+//! Routing the notes to stderr instead is not the free escape it looks. The
+//! flow's general rule for judging a fan-out is
+//! [`crate::reports::update_flow`]'s `host_command_failures`, which counts
+//! *any* stderr as a failure — it is what judges the repo removal that runs
+//! immediately before this probe. The probe step itself is the exception,
+//! gated on the exit status alone (`dead_probes`), so a note on stderr would
+//! survive *today*; but that is one call site's choice, not a property of the
+//! flow, and the arm exists precisely to keep `104` from failing the command.
+//! Putting the note one snapshot field away from the rule that would refuse it
+//! buys nothing a comment and a test do not.
+//!
 //! ## What is not guarded
 //!
 //! The middle of the filter chain. `grep`, `sed` or a missing binary among them
@@ -106,6 +131,8 @@ const LIST_COMMAND: &str = r#"
 mtui_probe_ok() {
   case "$$2" in
   0) return 0 ;;
+  # Both notes print to stdout, which parse_downgrade_versions also reads. It
+  # splits on space-equals-space, so no note may ever contain that separator.
   104)
     printf 'mtui: note: %s exited 104, no package matched; nothing to downgrade here\n' "$$1"
     return 0
@@ -299,6 +326,15 @@ mod tests {
             listed.contains("  106)\n    printf 'mtui: note: %s exited 106,"),
             "{name}: `106` must be noted, not refused: {listed}"
         );
+        // Both notes ride the stream `parse_downgrade_versions` reads, and are
+        // safe only because neither carries the separator it splits on. That
+        // constraint lives two modules away, so the script names it where the
+        // notes are written; `the_probe_notes_never_parse_as_versions` pins the
+        // property itself.
+        assert!(
+            listed.contains("parse_downgrade_versions"),
+            "{name}: the notes must name the parser whose stream they share: {listed}"
+        );
         // Every other status marks and exits with the probe's own status. The
         // marker is split across the format string and its argument so the
         // script's own text does not contain it.
@@ -406,6 +442,7 @@ mod tests {
         use std::process::Command;
 
         use super::*;
+        use crate::reports::update_flow::parse_downgrade_versions;
 
         /// The start of the line a failed probe prints.
         ///
@@ -819,6 +856,85 @@ exit 0
                     ran.versions()
                 );
                 assert_eq!(ran.code, 0, "{name}: and the no-op must not fail");
+            }
+        }
+
+        #[test]
+        fn the_probe_notes_never_parse_as_versions() {
+            // Everything this template prints goes to **stdout**, and stdout is
+            // what `parse_downgrade_versions` reads back as the version list —
+            // it takes any line carrying the separator as one `name`/`version`
+            // row. So the three notes are safe only for as long as none of them
+            // contains it, and a reword ("... exited 104, no package = no
+            // rollback") would quietly add a package the flow then tries to
+            // downgrade. That coupling is between a shell string here and a
+            // parser two modules away, which is why it is pinned with the real
+            // parser rather than a local re-implementation of its rule.
+            //
+            // Each case is the real script's real stdout, so the note text is
+            // never copied into this test — a reword is caught because it is
+            // *parsed*, not because it stopped matching a literal.
+            for (name, cmds) in downgraders() {
+                for (case, knobs, expected) in [
+                    // A refused status: only the failure marker on stdout.
+                    (
+                        "a failed probe",
+                        Knobs {
+                            se_exit: 7,
+                            rows: "",
+                            ..Knobs::default()
+                        },
+                        Vec::new(),
+                    ),
+                    // `104`: the note, and nothing else.
+                    (
+                        "the 104 note",
+                        Knobs {
+                            se_exit: 104,
+                            rows: NO_MATCH_STDOUT,
+                            ..Knobs::default()
+                        },
+                        Vec::new(),
+                    ),
+                    // `106`: the note *alongside* a real version line, which is
+                    // the realistic shape (a repo was skipped, the survivors
+                    // still answered). Discriminating in a way the note-only
+                    // cases are not: a note that parsed would show up as a
+                    // second entry rather than as the difference between empty
+                    // and non-empty.
+                    (
+                        "the 106 note beside a real row",
+                        Knobs {
+                            se_exit: 106,
+                            ..Knobs::default()
+                        },
+                        vec![("pkg-a".to_owned(), "1.0-1".to_owned())],
+                    ),
+                ] {
+                    let stubs = Stubs::new();
+                    let ran = run_script(&cmds, &stubs, knobs);
+                    // Anti-vacuity: without a note on stdout every assertion
+                    // below holds for the wrong reason. Matched on the prefix
+                    // the script prints, not on the wording it is free to
+                    // change.
+                    assert!(
+                        ran.stdout
+                            .lines()
+                            .any(|l| l.starts_with("mtui: note: ") || l.starts_with(PROBE_MARKER)),
+                        "{name}/{case}: the script printed no note at all, so nothing is \
+                         being tested: {}",
+                        ran.stdout
+                    );
+                    let parsed = parse_downgrade_versions(&ran.stdout);
+                    let mut got: Vec<(String, String)> = parsed.into_iter().collect();
+                    got.sort();
+                    assert_eq!(
+                        got, expected,
+                        "{name}/{case}: the notes must contribute no package to the version \
+                         map: {}",
+                        ran.stdout
+                    );
+                }
             }
         }
 
