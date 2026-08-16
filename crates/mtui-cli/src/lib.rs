@@ -24,7 +24,9 @@ pub use startup::seed_session;
 
 use std::io::Write;
 
-use mtui_core::{ColorMode, LogLevel, LogLevelSink, TRANSPORT_LOG_CARVE_OUT};
+use mtui_core::{
+    ColorMode, LogLevel, LogLevelSink, TRANSPORT_LOG_CARVE_OUT, resolve_log_directives,
+};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -68,13 +70,16 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// Honours `RUST_LOG` (mtui logging contract); `-d/--debug` raises the
 /// default level to `DEBUG` when `RUST_LOG` is unset.
 ///
-/// **`DEBUG` raises mtui's targets only.** Both `-d` and a runtime
-/// `set_log_level debug` build their directive through `level_directive`,
-/// which caps the third-party HTTP transport (`hyper_util`, `hyper`, `reqwest`)
-/// at `INFO`: those crates log connection details — including a pool authority
-/// that can carry redirect-supplied userinfo — at `DEBUG` (#439). An operator
-/// who needs the transport's own view opts in explicitly with `RUST_LOG`
-/// (e.g. `RUST_LOG=hyper_util=debug`), which replaces these defaults entirely.
+/// **`DEBUG` raises mtui's targets only — by whichever knob turned it on.**
+/// `-d` and a runtime `set_log_level debug` build their directive through
+/// `level_directive`, which appends [`TRANSPORT_LOG_CARVE_OUT`]; a `RUST_LOG`
+/// gets the same cap applied *on top* of the operator's directives by
+/// [`resolve_log_directives`], so `RUST_LOG=debug` — the ordinary way anyone
+/// turns on debug logging — no longer switches the third-party HTTP transport's
+/// `DEBUG` back on. Those crates log connection details, including a pool
+/// authority that can carry redirect-supplied userinfo, at `DEBUG` (#439).
+/// Naming a transport target (`RUST_LOG=hyper_util=debug`) is an informed
+/// opt-in: it is honoured verbatim, and announced on stderr at startup.
 ///
 /// At the **default** level the output is compact and colorized like the
 /// command display: a lowercased,
@@ -113,15 +118,7 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// startup (deliberate, consistent with [`logfmt`]).
 #[must_use]
 pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
-    // Both startup levels go through the same helper the `set_log_level` sink
-    // uses, so the transport carve-out cannot apply to one path and not the other.
-    let startup = if debug {
-        LogLevel::Debug
-    } else {
-        LogLevel::Info
-    };
-    let default = level_directive(startup);
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+    let (filter, notice) = startup_filter(debug);
     // Wrap the filter in a reload layer so `set_log_level` can flip it live.
     let (filter, handle) = tracing_subscriber::reload::Layer::new(filter);
     let registry = tracing_subscriber::registry().with(filter);
@@ -149,12 +146,45 @@ pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
             .init();
     }
 
+    if let Some(notice) = notice {
+        // Straight to stderr, not `tracing::warn!`: the opt-in that triggers
+        // this is typically `RUST_LOG=hyper_util=debug`, which enables no
+        // `mtui_*` target at all, so a `WARN` event would be swallowed by the
+        // very filter it is warning about.
+        eprintln!("{notice}");
+    }
+
     // The sink `set_log_level` drives: reload the whole `EnvFilter` to the new
     // level. Best-effort — if the subscriber was already dropped, the reload is
     // silently ignored.
     Box::new(move |level: LogLevel| {
         let _ = handle.reload(EnvFilter::new(level_directive(level)));
     })
+}
+
+/// The startup `EnvFilter` and the optional one-line stderr notice, resolved
+/// from `$RUST_LOG` and this process's own defaults.
+///
+/// The seam `init_tracing` resolves through, so the `RUST_LOG` composition is
+/// testable without installing a global subscriber (which a process can only do
+/// once). The defaults come from [`level_directive`], so the `-d` fallback and a
+/// runtime `set_log_level debug` cannot diverge; `RUST_LOG` is layered on by
+/// [`resolve_log_directives`], the same helper `mtui-mcp` uses, so neither
+/// entrypoint can grow its own answer.
+fn startup_filter(debug: bool) -> (EnvFilter, Option<&'static str>) {
+    let defaults = level_directive(if debug {
+        LogLevel::Debug
+    } else {
+        LogLevel::Info
+    });
+    let resolved = resolve_log_directives(&defaults);
+    match EnvFilter::try_new(&resolved.directives) {
+        Ok(filter) => (filter, resolved.notice()),
+        // A malformed `RUST_LOG` falls back to the defaults, exactly as the
+        // previous `EnvFilter::try_from_default_env()` did — and the defaults
+        // cap the transport, so the opt-in notice falls away with it.
+        Err(_) => (EnvFilter::new(&defaults), None),
+    }
 }
 
 /// The `EnvFilter` directive string for a [`LogLevel`]: the lowercased
@@ -265,6 +295,171 @@ mod tests {
             out.contains("transport info reaches the log"),
             "transport INFO must survive the carve-out, got: {out:?}"
         );
+    }
+
+    /// `RUST_LOG=debug` — the single most common way anyone turns on debug
+    /// logging — must **not** re-open the transport leak the carve-out exists to
+    /// close (#439). It names no transport target, so the cap is layered on top
+    /// of it and mtui's own DEBUG still flows.
+    ///
+    /// Note `startup_filter(false)`: `-d` is *not* set, so everything asserted
+    /// here is the `RUST_LOG` path, not the default path the byte-pin above
+    /// already covers.
+    #[test]
+    #[serial_test::serial(env)]
+    fn rust_log_debug_still_holds_the_transport_at_info() {
+        let (filter, notice) = with_rust_log(Some("debug"), || startup_filter(false));
+        let out = probe(filter);
+
+        assert!(
+            !out.contains("s3cret"),
+            "RUST_LOG=debug must not enable the transport's DEBUG, got: {out:?}"
+        );
+        // Anti-vacuity: assertion 1 also passes with the filter stuck at `info`,
+        // i.e. with `RUST_LOG` ignored altogether.
+        assert!(
+            out.contains("mtui debug reaches the log"),
+            "RUST_LOG=debug must still raise mtui's own targets, got: {out:?}"
+        );
+        assert!(
+            out.contains("transport info reaches the log"),
+            "transport INFO must survive the carve-out, got: {out:?}"
+        );
+        assert_eq!(notice, None, "nothing was opted into, so nothing to say");
+    }
+
+    /// The informed opt-in stays open: naming a transport target hands the
+    /// operator the transport's own view, verbatim — and says so on stderr,
+    /// because this is now the only way to print a pool authority.
+    #[test]
+    #[serial_test::serial(env)]
+    fn rust_log_transport_opt_in_is_honoured_and_announced() {
+        let (filter, notice) = with_rust_log(Some("hyper_util=debug"), || startup_filter(false));
+        let out = probe(filter);
+
+        assert!(
+            out.contains("s3cret"),
+            "an explicit hyper_util=debug must not be capped, got: {out:?}"
+        );
+        assert_eq!(notice, Some(mtui_core::TRANSPORT_DEBUG_NOTICE));
+    }
+
+    /// An unrelated per-target directive must not read as a transport opt-in.
+    /// The `debug` beside it is what would reach `hyper_util`, and it is still
+    /// capped; `mtui_cli=trace` still gets its TRACE.
+    #[test]
+    #[serial_test::serial(env)]
+    fn rust_log_unrelated_target_keeps_the_transport_capped() {
+        let (filter, notice) =
+            with_rust_log(Some("mtui_cli=trace,debug"), || startup_filter(false));
+        let out = probe(filter);
+
+        assert!(
+            !out.contains("s3cret"),
+            "an unrelated target directive must not stand the carve-out down, got: {out:?}"
+        );
+        assert!(
+            out.contains("mtui trace reaches the log"),
+            "the operator's own directive must still be honoured, got: {out:?}"
+        );
+        assert_eq!(notice, None);
+    }
+
+    /// A `RUST_LOG` `EnvFilter` cannot parse falls back to the (capped)
+    /// defaults, as `try_from_default_env` did — and the opt-in notice falls
+    /// away with the opt-in, even though the unparseable value named a
+    /// transport target.
+    #[test]
+    #[serial_test::serial(env)]
+    fn malformed_rust_log_falls_back_to_the_capped_defaults() {
+        let (filter, notice) = with_rust_log(Some("hyper_util=debug,!!!"), || startup_filter(true));
+        let out = probe(filter);
+
+        assert!(
+            !out.contains("s3cret"),
+            "the fallback defaults cap the transport, got: {out:?}"
+        );
+        assert!(
+            out.contains("mtui debug reaches the log"),
+            "the fallback is the `-d` default, which is DEBUG, got: {out:?}"
+        );
+        assert_eq!(notice, None, "a discarded opt-in must not be announced");
+    }
+
+    /// With `RUST_LOG` unset the entrypoint's own defaults apply unchanged —
+    /// the `-d` arm still reaching mtui's DEBUG and still capping the transport.
+    #[test]
+    #[serial_test::serial(env)]
+    fn unset_rust_log_uses_the_debug_defaults() {
+        let (filter, notice) = with_rust_log(None, || startup_filter(true));
+        let out = probe(filter);
+
+        assert!(
+            !out.contains("s3cret"),
+            "the `-d` default caps the transport, got: {out:?}"
+        );
+        assert!(
+            out.contains("mtui debug reaches the log"),
+            "`-d` must reach mtui's DEBUG, got: {out:?}"
+        );
+        assert_eq!(notice, None);
+    }
+
+    /// Run `body` with `$RUST_LOG` set (or removed), restoring the previous
+    /// value afterwards. Callers must hold `#[serial(env)]`: the whole crate's
+    /// unit tests share one process, so the variable is a process-global.
+    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+    // `#[serial(env)]` guard on every caller makes the mutation exclusive.
+    #[allow(unsafe_code)]
+    fn with_rust_log<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let previous = std::env::var("RUST_LOG").ok();
+        // SAFETY: serialised via `#[serial(env)]`, so no other test observes or
+        // mutates the environment concurrently. `set_var`/`remove_var` are
+        // `unsafe` in edition 2024 for exactly that reason.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var("RUST_LOG", value),
+                None => std::env::remove_var("RUST_LOG"),
+            }
+        }
+        let out = body();
+        // SAFETY: still inside the `#[serial(env)]` critical section.
+        unsafe {
+            match previous {
+                Some(previous) => std::env::set_var("RUST_LOG", previous),
+                None => std::env::remove_var("RUST_LOG"),
+            }
+        }
+        out
+    }
+
+    /// Emit the four probe events under `filter` on a **scoped** subscriber
+    /// (the process-global default is installed once per process and cannot be
+    /// replaced) and return everything that reached the writer.
+    ///
+    /// The transport line is the leak shape from hyper-util 0.1.20
+    /// (`pool.rs:401`), verbatim; `s3cret` is a token no other line carries, so
+    /// the "must not appear" assertion cannot be satisfied by the wrong record.
+    fn probe(filter: EnvFilter) -> String {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(filter).with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(BufMaker(Arc::clone(&buf))),
+        );
+        with_default(subscriber, || {
+            tracing::debug!(
+                target: "hyper_util::client::legacy::pool",
+                "pooling idle connection for (\"http\", alice:s3cret@example.test:9)"
+            );
+            tracing::debug!(target: "mtui_cli::probe", "mtui debug reaches the log");
+            tracing::trace!(target: "mtui_cli::probe", "mtui trace reaches the log");
+            tracing::info!(
+                target: "hyper_util::client::legacy::pool",
+                "transport info reaches the log"
+            );
+        });
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
     }
 
     /// A `MakeWriter` over a shared buffer so a scoped subscriber's output can be

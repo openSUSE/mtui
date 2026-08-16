@@ -91,5 +91,8 @@ mtui-types.workspace = true
 tokio-util = { workspace = true }
 futures.workspace = true
 tempfile = "3"
+# Serialises the `$RUST_LOG` mutations in the `startup_filter` tests: the whole
+# crate's tests share one process, so the env var is a process-global.
+serial_test.workspace = true
 # Perf baseline bench: MCP scoped-lock acquire/release contention.
 criterion.workspace = true

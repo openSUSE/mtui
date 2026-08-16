@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use mtui_core::{ColorMode, TRANSPORT_LOG_CARVE_OUT, register_all};
+use mtui_core::{ColorMode, TRANSPORT_LOG_CARVE_OUT, register_all, resolve_log_directives};
 use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::session::local::{LocalSessionManager, SessionConfig};
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
@@ -234,13 +234,39 @@ fn resolve_body_limit(max_request_bytes: usize) -> Option<usize> {
 /// stdout carries the MCP JSON-RPC stream. `-d/--debug` and `RUST_LOG` select the
 /// level; ANSI follows the resolved [`ColorMode`].
 fn init_tracing(debug: bool, color: ColorMode) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(default_directives(debug)));
+    let (filter, notice) = startup_filter(debug);
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .with_ansi(color.resolve())
         .try_init();
+    if let Some(notice) = notice {
+        // Straight to stderr, not `tracing::warn!`: the opt-in that triggers
+        // this is typically `RUST_LOG=hyper_util=debug`, which enables no
+        // `mtui_*` target at all, so a `WARN` event would be swallowed by the
+        // very filter it is warning about. stderr is already this binary's log
+        // channel — stdout is the JSON-RPC stream.
+        eprintln!("{notice}");
+    }
+}
+
+/// The startup `EnvFilter` and the optional one-line stderr notice, resolved
+/// from `$RUST_LOG` and this process's own [`default_directives`].
+///
+/// The seam `init_tracing` resolves through, so the `RUST_LOG` composition is
+/// testable without installing a global subscriber. [`resolve_log_directives`]
+/// is the same `mtui-core` helper the REPL uses, so the transport carve-out
+/// cannot hold on one entrypoint and not the other.
+fn startup_filter(debug: bool) -> (EnvFilter, Option<&'static str>) {
+    let defaults = default_directives(debug);
+    let resolved = resolve_log_directives(&defaults);
+    match EnvFilter::try_new(&resolved.directives) {
+        Ok(filter) => (filter, resolved.notice()),
+        // A malformed `RUST_LOG` falls back to the defaults, exactly as the
+        // previous `EnvFilter::try_from_default_env()` did — and the defaults
+        // cap the transport, so the opt-in notice falls away with it.
+        Err(_) => (EnvFilter::new(&defaults), None),
+    }
 }
 
 /// The default `EnvFilter` directive string when `RUST_LOG` is unset.
@@ -260,9 +286,11 @@ fn init_tracing(debug: bool, color: ColorMode) {
 /// redirect can load with userinfo (#439). The `info` arm needs no carve-out —
 /// its base level already caps the transport at `INFO`.
 ///
-/// Any explicit `RUST_LOG` takes over completely — this directive only seeds the
-/// fallback, so `RUST_LOG=hyper_util=debug` still exposes the transport's view
-/// on request.
+/// An explicit `RUST_LOG` replaces *these* directives — `rmcp::service=warn`
+/// included — but not the transport cap: [`startup_filter`] layers that back on
+/// through [`resolve_log_directives`] unless the operator named a transport
+/// target, so `RUST_LOG=debug` does not reopen the leak while
+/// `RUST_LOG=hyper_util=debug` still exposes the transport's view on request.
 fn default_directives(debug: bool) -> String {
     if debug {
         format!("debug,rmcp::service=warn,{TRANSPORT_LOG_CARVE_OUT}")
@@ -378,6 +406,141 @@ mod tests {
     /// the transport's INFO both do (#439).
     #[test]
     fn debug_default_filter_suppresses_transport_debug() {
+        let filter =
+            EnvFilter::try_new(default_directives(true)).expect("default directives must parse");
+        let out = probe(filter);
+
+        assert!(
+            !out.contains("s3cret"),
+            "transport DEBUG must stay filtered, got: {out:?}"
+        );
+        assert!(
+            out.contains("mtui debug reaches the log"),
+            "mtui targets must still reach DEBUG, got: {out:?}"
+        );
+        assert!(
+            out.contains("transport info reaches the log"),
+            "transport INFO must survive the carve-out, got: {out:?}"
+        );
+    }
+
+    /// The same guarantee for the *other* knob, on the *other* binary:
+    /// `RUST_LOG=debug` replaces `mtui-mcp`'s defaults but not the transport cap
+    /// (#439). `startup_filter(false)` — `-d` is not set, so this is purely the
+    /// `RUST_LOG` path.
+    #[test]
+    #[serial_test::serial(env)]
+    fn rust_log_debug_still_holds_the_transport_at_info() {
+        let (filter, notice) = with_rust_log(Some("debug"), || startup_filter(false));
+        let out = probe(filter);
+
+        assert!(
+            !out.contains("s3cret"),
+            "RUST_LOG=debug must not enable the transport's DEBUG, got: {out:?}"
+        );
+        // Anti-vacuity: assertion 1 also passes with the filter stuck at `info`,
+        // i.e. with `RUST_LOG` ignored altogether.
+        assert!(
+            out.contains("mtui debug reaches the log"),
+            "RUST_LOG=debug must still raise mtui's own targets, got: {out:?}"
+        );
+        assert!(
+            out.contains("transport info reaches the log"),
+            "transport INFO must survive the carve-out, got: {out:?}"
+        );
+        assert_eq!(notice, None);
+    }
+
+    /// The informed opt-in stays open on this binary too, and is announced —
+    /// on **stderr**, which is `mtui-mcp`'s log channel (stdout is JSON-RPC).
+    #[test]
+    #[serial_test::serial(env)]
+    fn rust_log_transport_opt_in_is_honoured_and_announced() {
+        let (filter, notice) = with_rust_log(Some("reqwest=debug,hyper_util=debug"), || {
+            startup_filter(false)
+        });
+        let out = probe(filter);
+
+        assert!(
+            out.contains("s3cret"),
+            "an explicit hyper_util=debug must not be capped, got: {out:?}"
+        );
+        assert_eq!(notice, Some(mtui_core::TRANSPORT_DEBUG_NOTICE));
+    }
+
+    /// An unrelated per-target directive must not read as a transport opt-in.
+    #[test]
+    #[serial_test::serial(env)]
+    fn rust_log_unrelated_target_keeps_the_transport_capped() {
+        let (filter, notice) =
+            with_rust_log(Some("mtui_mcp=trace,debug"), || startup_filter(false));
+        let out = probe(filter);
+
+        assert!(
+            !out.contains("s3cret"),
+            "an unrelated target directive must not stand the carve-out down, got: {out:?}"
+        );
+        assert!(
+            out.contains("mtui trace reaches the log"),
+            "the operator's own directive must still be honoured, got: {out:?}"
+        );
+        assert_eq!(notice, None);
+    }
+
+    /// A `RUST_LOG` `EnvFilter` cannot parse falls back to
+    /// [`default_directives`] — which keeps both the cap and `rmcp::service=warn`
+    /// — and the discarded opt-in is not announced.
+    #[test]
+    #[serial_test::serial(env)]
+    fn malformed_rust_log_falls_back_to_the_capped_defaults() {
+        let (filter, notice) = with_rust_log(Some("hyper_util=debug,!!!"), || startup_filter(true));
+        let out = probe(filter);
+
+        assert!(
+            !out.contains("s3cret"),
+            "the fallback defaults cap the transport, got: {out:?}"
+        );
+        assert!(
+            out.contains("mtui debug reaches the log"),
+            "the fallback is the `-d` default, which is DEBUG, got: {out:?}"
+        );
+        assert_eq!(notice, None, "a discarded opt-in must not be announced");
+    }
+
+    /// Run `body` with `$RUST_LOG` set (or removed), restoring the previous
+    /// value afterwards. Callers must hold `#[serial(env)]`: this crate's unit
+    /// tests share one process, so the variable is a process-global.
+    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+    // `#[serial(env)]` guard on every caller makes the mutation exclusive.
+    #[allow(unsafe_code)]
+    fn with_rust_log<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let previous = std::env::var("RUST_LOG").ok();
+        // SAFETY: serialised via `#[serial(env)]`, so no other test observes or
+        // mutates the environment concurrently.
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var("RUST_LOG", value),
+                None => std::env::remove_var("RUST_LOG"),
+            }
+        }
+        let out = body();
+        // SAFETY: still inside the `#[serial(env)]` critical section.
+        unsafe {
+            match previous {
+                Some(previous) => std::env::set_var("RUST_LOG", previous),
+                None => std::env::remove_var("RUST_LOG"),
+            }
+        }
+        out
+    }
+
+    /// Emit the four probe events under `filter` on a **scoped** subscriber and
+    /// return everything that reached the writer.
+    ///
+    /// The transport line is the leak shape from hyper-util 0.1.20
+    /// (`pool.rs:401`), verbatim; `s3cret` is a token no other line carries, so
+    /// the "must not appear" assertion cannot be satisfied by the wrong record.
+    fn probe(filter: EnvFilter) -> String {
         use std::io;
         use std::sync::{Arc, Mutex};
 
@@ -407,8 +570,6 @@ mod tests {
         }
 
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let filter =
-            EnvFilter::try_new(default_directives(true)).expect("default directives must parse");
         let subscriber = tracing_subscriber::registry().with(filter).with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
@@ -421,25 +582,14 @@ mod tests {
                 "pooling idle connection for (\"http\", alice:s3cret@example.test:9)"
             );
             tracing::debug!(target: "mtui_mcp::probe", "mtui debug reaches the log");
+            tracing::trace!(target: "mtui_mcp::probe", "mtui trace reaches the log");
             tracing::info!(
                 target: "hyper_util::client::legacy::pool",
                 "transport info reaches the log"
             );
         });
 
-        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
-        assert!(
-            !out.contains("s3cret"),
-            "transport DEBUG must stay filtered, got: {out:?}"
-        );
-        assert!(
-            out.contains("mtui debug reaches the log"),
-            "mtui targets must still reach DEBUG, got: {out:?}"
-        );
-        assert!(
-            out.contains("transport info reaches the log"),
-            "transport INFO must survive the carve-out, got: {out:?}"
-        );
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
     }
 
     #[test]

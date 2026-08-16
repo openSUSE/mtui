@@ -12,6 +12,9 @@
 //!   single machinery both the REPL and MCP dispatch through.
 //! * [`args`] — the top-level process argument parser (`clap`), distinct
 //!   from the per-command parsers the engine synthesises.
+//! * [`log_filter`] — the `tracing` filter policy (the HTTP-transport
+//!   carve-out and how it composes with `RUST_LOG`), shared by both
+//!   entrypoints because neither can see the other.
 //! * The [`display`] surface: the full `list_*`
 //!   family, `show_log`, the three-way
 //!   [`ColorMode`], and the `page` pager.
@@ -29,6 +32,7 @@ pub mod display;
 pub mod engine;
 pub mod entrypoint;
 pub mod error;
+pub mod log_filter;
 pub mod registry;
 pub mod session;
 pub mod template_registry;
@@ -39,6 +43,10 @@ pub use display::{ColorMode, CommandPromptDisplay};
 pub use engine::{EngineError, command_parser, dispatch_argv, dispatch_command, dispatch_line};
 pub use entrypoint::ExitStatus;
 pub use error::{CommandError, CommandResult};
+pub use log_filter::{
+    LogDirectives, TRANSPORT_DEBUG_NOTICE, TRANSPORT_LOG_CARVE_OUT, TRANSPORT_LOG_TARGETS,
+    resolve_log_directives, resolve_log_directives_from,
+};
 pub use registry::{MCP_DENYLIST, Registry, register_all};
-pub use session::{LogLevel, LogLevelSink, NotifySink, Session, TRANSPORT_LOG_CARVE_OUT};
+pub use session::{LogLevel, LogLevelSink, NotifySink, Session};
 pub use template_registry::TemplateRegistry;
