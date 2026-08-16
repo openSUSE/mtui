@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use mtui_hosts::{
-    Check, CheckArgs, Doer, HostError, HostsGroup, InstallOperation, Operation, OperationGroup,
-    PlanProvider, RebootFailure, RebootFailureCause, Target, UninstallOperation,
+    Check, CheckArgs, CheckFailure, Doer, HostError, HostsGroup, InstallOperation, Operation,
+    OperationGroup, PlanProvider, RebootFailure, RebootFailureCause, Target, UninstallOperation,
 };
 use mtui_types::enums::TargetState;
 use mtui_types::hostlog::CommandLog;
@@ -276,6 +276,43 @@ async fn install_reports_a_transactional_host_that_never_reconnects() {
         }]
     );
     assert_eq!(handle.reconnect_count(), 1);
+}
+
+/// A [`PlanProvider`] whose check always fails with a cancelled
+/// [`CheckFailure`], so the report round-trip can be asserted end to end.
+struct CancellingProvider;
+
+impl PlanProvider for CancellingProvider {
+    fn doer(&self, _role: &str, _release: &str, _transactional: bool) -> Result<Doer, HostError> {
+        Ok(Doer::new(
+            "zypper -n in -y -l $packages",
+            "systemctl reboot",
+        ))
+    }
+
+    fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
+        Box::new(|_a: CheckArgs<'_>| Err(CheckFailure::cancelled("stopped at a checkpoint")))
+    }
+}
+
+#[tokio::test]
+async fn a_cancelled_check_failure_arrives_in_the_report_with_the_flag_intact() {
+    let (h1, _m1) = target("h1", "SLES", "15.5", false);
+    let mut group =
+        HostsGroup::new(vec![h1], false).with_plan_provider(Arc::new(CancellingProvider));
+
+    let report = InstallOperation::new(vec!["pkg-a".to_owned()])
+        .run(&mut group)
+        .await
+        .expect("the run started even though the check failed");
+
+    assert_eq!(
+        report.check_failures,
+        vec![(
+            "h1".to_owned(),
+            CheckFailure::cancelled("stopped at a checkpoint")
+        )]
+    );
 }
 
 #[tokio::test]

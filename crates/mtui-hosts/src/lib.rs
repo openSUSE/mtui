@@ -34,8 +34,8 @@ pub use prompter::{Prompter, Reader};
 #[cfg(test)]
 pub(crate) use target::POOL_LOCK_PATH;
 pub use target::{
-    Check, CheckArgs, Clock, Command, Doer, HostArbiter, HostOutput, HostPlan, HostsGroup,
-    InstallOperation, LockOutcome, Operation, OperationGroup, OperationReport, Owner,
+    Check, CheckArgs, CheckFailure, Clock, Command, Doer, HostArbiter, HostOutput, HostPlan,
+    HostsGroup, InstallOperation, LockOutcome, Operation, OperationGroup, OperationReport, Owner,
     PackageQuerier, PlanProvider, PoolLock, RebootFailure, RebootFailureCause, RemoteLock,
     RepoManager, RepoOp, SetRepo, Sink, SpinnerGuard, Suspend, SystemClock, TARGET_LOCK_PATH,
     Target, TargetLock, TtySpinner, UninstallOperation, get_arbiter, parse_system, set_test_sink,
