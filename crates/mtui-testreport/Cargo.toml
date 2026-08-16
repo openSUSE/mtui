@@ -41,6 +41,11 @@ thiserror.workspace = true
 [dev-dependencies]
 insta.workspace = true
 tempfile = "3"
+# `test-util` for `#[tokio::test(start_paused = true)]`: the prepare loop's
+# cancellation checkpoint is a boundary between two awaited fan-outs, and
+# virtual time is the only way to land a cancel *between* two of them without a
+# wall-clock race.
+tokio = { workspace = true, features = ["test-util"] }
 wiremock.workspace = true
 # Perf baseline bench: metadata JSON parse hot path.
 criterion.workspace = true
