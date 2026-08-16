@@ -202,9 +202,12 @@ pub trait OperationGroup: Send {
 
     /// Reads back `hostname`'s post-run output, for the [`Check`] call.
     ///
-    /// Returns `None` for a host outside the group (should not happen for a
-    /// host with a [`HostPlan`]); the template treats that as an empty
-    /// snapshot rather than panicking.
+    /// A `None` here is a bug by construction: every caller only ever asks for
+    /// a hostname it just built a [`HostPlan`] for, so the host cannot be
+    /// outside the group. The template does not panic on it — it falls back to
+    /// [`HostOutput::default`], which is **exit 0**. Every [`Check`] reads exit
+    /// 0 as success, so a `None` here makes the host silently pass its check
+    /// and stay in the reboot map instead of failing loudly.
     fn last_output(&self, hostname: &str) -> Option<HostOutput>;
 
     /// Reboots the transactional hosts named in `reboot`.
@@ -405,7 +408,16 @@ pub trait Operation: Send + Sync {
 
         let mut check_failures: Vec<(String, String)> = Vec::new();
         for plan in &mut plans {
-            let output = group.last_output(&plan.hostname).unwrap_or_default();
+            let output = group.last_output(&plan.hostname).unwrap_or_else(|| {
+                // See `OperationGroup::last_output`: this host has a `HostPlan`,
+                // so it cannot really be missing from the group. Warn so the
+                // silent-pass is at least visible, rather than swallowing it.
+                tracing::warn!(
+                    host = %plan.hostname,
+                    "no post-run output for a planned host; treating as exit 0"
+                );
+                HostOutput::default()
+            });
             let args = CheckArgs {
                 hostname: &plan.hostname,
                 stdout: &output.stdout,
@@ -652,6 +664,9 @@ mod tests {
         reboot_failures: Vec<RebootFailure>,
         /// What `unlock` should report per host.
         unlock_outcomes: BTreeMap<String, LockOutcome>,
+        /// When `true`, `last_output` returns `None` for every host, modelling
+        /// a host outside the group despite having a [`HostPlan`].
+        missing_output: bool,
     }
 
     impl MockGroup {
@@ -673,6 +688,7 @@ mod tests {
                 fail_update_lock: false,
                 reboot_failures: Vec::new(),
                 unlock_outcomes: BTreeMap::new(),
+                missing_output: false,
             }
         }
 
@@ -693,6 +709,14 @@ mod tests {
         /// release failed or was contended.
         fn with_unlock_outcomes(mut self, outcomes: BTreeMap<String, LockOutcome>) -> Self {
             self.unlock_outcomes = outcomes;
+            self
+        }
+
+        /// Scripts `last_output` to return `None` for every host, modelling
+        /// the unreachable-by-construction case documented on
+        /// [`OperationGroup::last_output`].
+        fn with_missing_output(mut self) -> Self {
+            self.missing_output = true;
             self
         }
 
@@ -734,6 +758,9 @@ mod tests {
         }
 
         fn last_output(&self, _hostname: &str) -> Option<HostOutput> {
+            if self.missing_output {
+                return None;
+            }
             // The tests below assert on the Check event log, not the output
             // snapshot, so an empty snapshot is enough here.
             Some(HostOutput::default())
@@ -1146,6 +1173,53 @@ mod tests {
                 &vec![("h2".to_owned(), "systemctl reboot".to_owned())],
                 "only the passing host's reboot may run: {map:?}"
             );
+        }
+    }
+
+    // --- run(): a missing last_output silently passes the check ------------
+
+    #[tokio::test]
+    async fn missing_last_output_silently_passes_the_check_and_keeps_the_reboot() {
+        // Pins the hazard documented on `OperationGroup::last_output`: a
+        // `None` snapshot falls back to `HostOutput::default()` (exit 0),
+        // which the check below reads as a failure only on a non-zero exit
+        // code — so it passes, and the host stays in the reboot map. If the
+        // fallback ever changes to fail the check instead, this goes red.
+        let check: Check = Box::new(|a: CheckArgs<'_>| {
+            if a.exitcode == 0 {
+                Ok(())
+            } else {
+                Err("nonzero exit".to_owned())
+            }
+        });
+        let plans = vec![HostPlan {
+            hostname: "h1".to_owned(),
+            transactional: true,
+            doer: Doer::new("in $packages", "systemctl reboot"),
+            check,
+        }];
+        let mut group = MockGroup::new(Ok(plans)).with_missing_output();
+
+        let op = InstallOperation::new(strs(&["pkg-a"]));
+        let report = op.run(&mut group).await.expect("the run started");
+
+        assert!(
+            report.check_failures.is_empty(),
+            "a missing snapshot must not fail the check: {:?}",
+            report.check_failures
+        );
+        if let Some(Event::Reboot(map)) = group
+            .events()
+            .into_iter()
+            .find(|e| matches!(e, Event::Reboot(_)))
+        {
+            assert_eq!(
+                map,
+                vec![("h1".to_owned(), "systemctl reboot".to_owned())],
+                "the host with no output still stays in the reboot map: {map:?}"
+            );
+        } else {
+            panic!("expected a Reboot event");
         }
     }
 
