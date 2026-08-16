@@ -1405,15 +1405,12 @@ async fn downgrade_body(
         // row before returning — the site below is unreachable from here, so
         // there is no double write.
         //
-        // Merge note (#451/PR #454): the `lastexit != 0` test above is
-        // unchanged there, but the probe template starts guarding its own
-        // stages and exiting with the failing tool's status. Today the
-        // pipeline's status is awk's, and awk exits `0` over empty input, so
-        // this gate can in practice only catch the `-1` SSH-death sentinel;
-        // afterwards a broken `zypper se` reaches it too. This row is therefore
-        // written in strictly more zero-commands-ran cases once #454 lands —
-        // which is the point: those are exactly the aborts that leave a host
-        // with its issue repo removed and nothing rolled back.
+        // The `lastexit != 0` gate above catches more than SSH-level death:
+        // the probe template guards its own producing stages and exits with
+        // the failing tool's own status (#451), so a refused `zypper se`
+        // reaches here as well as the `-1` sentinel. Every one of those is an
+        // abort that left the host with its issue repo removed and nothing
+        // rolled back, which is precisely the state this row exists to record.
         add_op_history(targets, "downgrade", id, packages).await;
         return Err(UpdateError::new(
             "package version probe failed",
