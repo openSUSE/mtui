@@ -408,14 +408,20 @@ mod tests {
     /// Run `body` with `$RUST_LOG` set (or removed), restoring the previous
     /// value afterwards. Callers must hold `#[serial(env)]`: the whole crate's
     /// unit tests share one process, so the variable is a process-global.
+    ///
+    /// `env` is this crate's **only** exclusion domain for the environment —
+    /// `edit`'s `$EDITOR` spawns and `notification`'s `var_os` probe are on it
+    /// too. A second, private lock elsewhere would make the SAFETY claim below
+    /// false without making any test fail.
     // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
     // `#[serial(env)]` guard on every caller makes the mutation exclusive.
     #[allow(unsafe_code)]
     fn with_rust_log<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
         let previous = std::env::var("RUST_LOG").ok();
-        // SAFETY: serialised via `#[serial(env)]`, so no other test observes or
-        // mutates the environment concurrently. `set_var`/`remove_var` are
-        // `unsafe` in edition 2024 for exactly that reason.
+        // SAFETY: serialised via `#[serial(env)]`, which every env-touching test
+        // in this crate holds, so no other test observes, mutates or inherits
+        // the environment concurrently. `set_var`/`remove_var` are `unsafe` in
+        // edition 2024 for exactly that reason.
         unsafe {
             match value {
                 Some(value) => std::env::set_var("RUST_LOG", value),

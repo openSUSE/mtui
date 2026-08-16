@@ -145,6 +145,9 @@ mod tests {
     }
 
     #[test]
+    // Reads the process-global environment (`var_os`), so it joins the crate's
+    // one `env` exclusion domain rather than racing a `set_var` in another test.
+    #[serial_test::serial(env)]
     fn desktop_available_reads_the_real_environment() {
         // Exercise the real (un-injected) entry point so the closure that reads
         // `std::env::var_os` and the `std::io::stdin().is_terminal()` probe are
