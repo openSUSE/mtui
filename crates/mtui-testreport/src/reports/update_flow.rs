@@ -1512,7 +1512,14 @@ async fn downgrade_verdict(
 
 /// Parses the downgrader `list_command` output into a `name -> highest version`
 /// map, selecting the highest version per package by RPM version ordering.
-fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
+///
+/// The split on `" = "` is a contract with the downgrade template, whose
+/// accepted-status notes print to this same stream — see
+/// [`crate::update_workflow::actions::downgrade`] § "The notes share a stream
+/// with the parser". `pub(crate)` so the test pinning that coupling can put the
+/// real script's real output through the real parser, instead of
+/// re-implementing the rule and then pinning its copy.
+pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
     use mtui_types::rpmver::RPMVersion;
 
     let mut release: HashMap<String, Vec<String>> = HashMap::new();
