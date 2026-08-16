@@ -100,9 +100,55 @@ impl Doer {
 /// The post-run *check* callable for one target.
 ///
 /// Invoked once per target with that host's post-run output, and returns
-/// `Err(reason)` when it recognises a failure. Boxed so it is object-safe and
+/// `Err(failure)` when it recognises a failure. Boxed so it is object-safe and
 /// can be produced per target by the doer/check registry seam.
-pub type Check = Box<dyn FnMut(CheckArgs<'_>) -> Result<(), String> + Send>;
+pub type Check = Box<dyn FnMut(CheckArgs<'_>) -> Result<(), CheckFailure> + Send>;
+
+/// Why a post-run [`Check`] failed.
+///
+/// Mirrors [`RebootFailure`]'s `reason` + cause shape: a bare `String` made a
+/// cancellation unrepresentable across this seam, so `reports::update_flow`
+/// could not route a check that stopped at a cancellation checkpoint away from
+/// the group-wide rollback the way it does for every other cancel point. The
+/// producer side lives in `mtui-testreport`'s `WorkflowRegistry::check` adapter
+/// (`update_workflow/mod.rs`), which forwards `UpdateError::cancelled` here;
+/// nothing on this path sets it today (checks are pure verdicts over a
+/// captured transcript), so the flag exists for representability, not because
+/// a live check currently cancels.
+///
+/// Deliberately **not** produced by `checks::update`'s `probe_failed` case:
+/// only `checks::update` ever sets that flag, and the update role does not go
+/// through this seam (it drives its own template, not
+/// [`Operation`]/[`OperationGroup`]) — so `probe_failed` has nothing to cross
+/// here, and its omission is a decision, not an oversight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckFailure {
+    /// The failure reason, shown to the operator.
+    pub reason: String,
+    /// `true` when the check stopped at a cancellation checkpoint rather than
+    /// failing.
+    pub cancelled: bool,
+}
+
+impl CheckFailure {
+    /// Builds a plain (non-cancelled) check failure.
+    #[must_use]
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            cancelled: false,
+        }
+    }
+
+    /// Builds a check failure recording a cooperative cancellation.
+    #[must_use]
+    pub fn cancelled(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            cancelled: true,
+        }
+    }
+}
 
 /// The argument tuple passed to a [`Check`], keeping the call site readable.
 #[derive(Debug, Clone, Copy)]
@@ -238,8 +284,8 @@ pub trait OperationGroup: Send {
               reports a failed operation as a clean one"]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct OperationReport {
-    /// `(hostname, reason)` for every host whose post-run [`Check`] failed.
-    pub check_failures: Vec<(String, String)>,
+    /// `(hostname, failure)` for every host whose post-run [`Check`] failed.
+    pub check_failures: Vec<(String, CheckFailure)>,
     /// Every transactional host whose reboot did not demonstrably take effect.
     /// A host whose check already failed is excluded — its reboot was skipped,
     /// not attempted and lost.
@@ -406,7 +452,7 @@ pub trait Operation: Send + Sync {
             .add_history(&[self.history_label().to_owned(), self.packages().join(" ")])
             .await;
 
-        let mut check_failures: Vec<(String, String)> = Vec::new();
+        let mut check_failures: Vec<(String, CheckFailure)> = Vec::new();
         for plan in &mut plans {
             let output = group.last_output(&plan.hostname).unwrap_or_else(|| {
                 // See `OperationGroup::last_output`: this host has a `HostPlan`,
@@ -425,8 +471,8 @@ pub trait Operation: Send + Sync {
                 stderr: &output.stderr,
                 exitcode: output.exitcode,
             };
-            if let Err(reason) = (plan.check)(args) {
-                check_failures.push((plan.hostname.clone(), reason));
+            if let Err(failure) = (plan.check)(args) {
+                check_failures.push((plan.hostname.clone(), failure));
             }
         }
 
@@ -795,7 +841,7 @@ mod tests {
         transactional: bool,
         doer: Doer,
         sink: Arc<Mutex<Vec<Event>>>,
-        result: Result<(), String>,
+        result: Result<(), CheckFailure>,
     ) -> HostPlan {
         let check: Check = Box::new(move |a: CheckArgs<'_>| {
             sink.lock()
@@ -1133,7 +1179,7 @@ mod tests {
                 true,
                 Doer::new("in $packages", "systemctl reboot"),
                 log.clone(),
-                Err("boom".to_owned()),
+                Err(CheckFailure::new("boom")),
             ),
             plan_with_check(
                 "h2",
@@ -1150,7 +1196,7 @@ mod tests {
 
         assert_eq!(
             report.check_failures,
-            vec![("h1".to_owned(), "boom".to_owned())]
+            vec![("h1".to_owned(), CheckFailure::new("boom"))]
         );
 
         let events = group.events();
@@ -1189,7 +1235,7 @@ mod tests {
             if a.exitcode == 0 {
                 Ok(())
             } else {
-                Err("nonzero exit".to_owned())
+                Err(CheckFailure::new("nonzero exit"))
             }
         });
         let plans = vec![HostPlan {

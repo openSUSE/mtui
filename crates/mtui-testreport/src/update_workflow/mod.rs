@@ -373,7 +373,10 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
                         }
                         Ok(())
                     }
-                    Err(e) => Err(e.reason),
+                    Err(e) => Err(mtui_hosts::CheckFailure {
+                        reason: e.reason,
+                        cancelled: e.cancelled,
+                    }),
                 }
             }
             // Defensive only: every key with an installer or uninstaller now
@@ -388,7 +391,9 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
             // Unreachable in production means untested by the flows, so
             // `plan_provider_check_falls_back_to_the_exit_code_for_an_unknown_key`
             // drives it directly.
-            None if a.exitcode != 0 => Err(format!("{op} command failed")),
+            None if a.exitcode != 0 => Err(mtui_hosts::CheckFailure::new(format!(
+                "{op} command failed"
+            ))),
             None => Ok(()),
         })
     }
@@ -618,7 +623,7 @@ mod tests {
         };
         assert_eq!(
             check(args(1)).unwrap_err(),
-            "install command failed",
+            mtui_hosts::CheckFailure::new("install command failed"),
             "a non-zero exit with no check table must still fail"
         );
         assert!(check(args(0)).is_ok(), "a clean exit passes");

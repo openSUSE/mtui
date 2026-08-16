@@ -688,7 +688,12 @@ async fn perform_operation(
     let mut failures: Vec<UpdateError> = report
         .check_failures
         .into_iter()
-        .map(|(host, reason)| UpdateError::new(reason, host))
+        .map(|(host, failure)| UpdateError {
+            reason: failure.reason,
+            host: Some(host),
+            cancelled: failure.cancelled,
+            probe_failed: false,
+        })
         .collect();
     failures.extend(report.reboot_failures.into_iter().map(reboot_error));
     aggregate_failures(op, failures)

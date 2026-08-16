@@ -53,8 +53,9 @@ pub use hostgroup::{HostsGroup, LockOutcome};
 pub(crate) use locks::POOL_LOCK_PATH;
 pub use locks::{Clock, LockRow, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock};
 pub use operation::{
-    Check, CheckArgs, Doer, HostOutput, HostPlan, InstallOperation, Operation, OperationGroup,
-    OperationReport, PlanProvider, RebootFailure, RebootFailureCause, UninstallOperation,
+    Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
+    OperationGroup, OperationReport, PlanProvider, RebootFailure, RebootFailureCause,
+    UninstallOperation,
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::parse_system;
