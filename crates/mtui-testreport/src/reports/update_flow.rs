@@ -4037,6 +4037,18 @@ mod tests {
             .await
             .expect_err("a lost transactional host must not report success");
         assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(
+            err.reason.contains("did not come back after the reboot"),
+            "reason: {}",
+            err.reason
+        );
+        // Discriminating: the two reachable causes must not be claimed for a
+        // host that genuinely went away — they route the rollback differently.
+        assert!(
+            !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
+            "reason: {}",
+            err.reason
+        );
     }
 
     #[tokio::test]
