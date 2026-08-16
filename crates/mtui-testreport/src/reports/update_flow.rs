@@ -474,10 +474,18 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
         let mut hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
         hosts.sort();
         // One name per host: the same host legitimately contributes two
-        // failures (an exit-`0` lock message is reported by both the stderr
-        // rule and the check that recognised the marker), and "prepare failed
-        // on h1, h1" reads as two hosts. The `detail` list still carries both
-        // causes — this dedups the roll-call, not the diagnosis.
+        // failures with two distinct causes (`downgrade_body` seeds its list
+        // from the issue-repo removal scan and then adds that same host's
+        // downgrade-check verdict), and "downgrade failed on h1, h1" reads as
+        // two hosts. The `detail` list still carries both causes — this dedups
+        // the roll-call, not the diagnosis.
+        //
+        // Not the place to fix *one* signal reported by two rules: that
+        // duplication has to be resolved before it reaches here, because
+        // arriving at all means the verbatim branch above was skipped and the
+        // `host` field is already lost. `prepare_body` and `downgrade_body`
+        // each drop their coarse exit-code entry for a host whose check has
+        // already named it, for exactly that reason.
         hosts.dedup();
         let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
         let mut aggregate = UpdateError::reason_only(format!(
