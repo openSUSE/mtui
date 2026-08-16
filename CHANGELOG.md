@@ -343,16 +343,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Security
 
-- `-d/--debug`, a runtime `set_log_level debug`, and `mtui-mcp -d` no longer hand
-  DEBUG to the third-party HTTP transport stack (#439). `hyper_util` logs its
-  connection-pool key — the scheme plus the authority, userinfo included — at
-  DEBUG, and a hostile redirect (`Location: https://user:pass@host/…`) is never
-  re-stripped, so turning on debug logging could print credential-shaped
-  authorities from transport internals. mtui's own targets still log at DEBUG;
-  `hyper_util`, `hyper` and `reqwest` are capped at INFO by the default
-  directives, so their warnings and errors still reach the operator. An explicit
-  `RUST_LOG` (e.g. `RUST_LOG=hyper_util=debug`) overrides the defaults entirely
-  for anyone who needs the transport's own view.
+- Turning on debug logging no longer hands DEBUG to the third-party HTTP
+  transport stack (#439). `hyper_util` logs its connection-pool key — the scheme
+  plus the authority, userinfo included — at DEBUG, and a hostile redirect
+  (`Location: https://user:pass@host/…`) is never re-stripped, so debug logging
+  could print credential-shaped authorities from transport internals. This now
+  holds for **every** knob: `-d/--debug`, a runtime `set_log_level debug`,
+  `mtui-mcp -d`, and `RUST_LOG` — including a bare `RUST_LOG=debug` or
+  `RUST_LOG=trace`, which previously replaced the defaults wholesale and put the
+  leak back. mtui's own targets still log at DEBUG; `hyper_util`, `hyper` and
+  `reqwest` are capped at INFO, so their warnings and errors still reach the
+  operator. Precisely:
+  - A `RUST_LOG` carrying a global `debug`/`trace` gets the cap layered on top,
+    for each of the three targets its own directives do not already govern.
+  - Naming a transport target at `debug`/`trace` (`RUST_LOG=hyper_util=debug`,
+    `RUST_LOG=hyper=trace`, …) remains an informed opt-in, and mtui never
+    overrides it: the cap is added only where the operator's own directive still
+    wins. That is the way to get the transport's own view, and it is now the
+    only setting that can print a credential-shaped authority — so mtui prints a
+    one-line warning to stderr at startup when one is in force.
+  - Nothing else changes: `RUST_LOG=error`, `RUST_LOG=off` and a `RUST_LOG` that
+    only names unrelated targets are left exactly as written — the cap is only
+    ever added where it *lowers* a target, never where it would raise one.
 - Datasource errors and log lines no longer append the unredacted request URL
   (#431). `reqwest`'s own error rendering ends in ` for url (<url>)`, and mtui
   wrapped it in transparent error types, so the URL rode along wherever such an

@@ -205,29 +205,6 @@ impl LogLevel {
     }
 }
 
-/// The `EnvFilter` directives that cap the third-party HTTP transport stack at
-/// `INFO`, appended to every `debug` directive string mtui builds for itself.
-///
-/// `hyper-util`'s connection pool logs its pooled key — `(scheme, authority)`,
-/// and an `http::uri::Authority` retains userinfo — at DEBUG. `reqwest` strips
-/// the first-hop userinfo when the client is built, but never re-strips a
-/// redirect's `Location: https://user:pass@host/…`, so a hostile redirect puts a
-/// credential-shaped authority into the pool key, where enabling DEBUG prints it
-/// verbatim. Raising mtui's own verbosity must not switch that on, so the
-/// defaults keep `hyper_util`, `hyper` and `reqwest` at `INFO` — real transport
-/// warnings and errors still reach the operator.
-///
-/// This only seeds the *defaults*. An explicit `RUST_LOG` replaces them
-/// wholesale (both binaries resolve `EnvFilter::try_from_default_env()` first),
-/// so `RUST_LOG=hyper_util=debug` still works for anyone who needs the
-/// transport's own view.
-///
-/// `EnvFilter` matches a directive's target as a **prefix**, so `hyper=info`
-/// alone would already cover `hyper_util::client::legacy::pool`; `hyper_util` is
-/// named anyway so the intent survives a future crate rename or a narrowing of
-/// the `hyper` entry.
-pub const TRANSPORT_LOG_CARVE_OUT: &str = "hyper_util=info,hyper=info,reqwest=info";
-
 /// A callback the REPL installs to apply a runtime log-level change.
 pub type LogLevelSink = Box<dyn FnMut(LogLevel) + Send>;
 
