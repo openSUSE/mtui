@@ -147,7 +147,7 @@ mtui_probe_ok() {
 }
 mtui_rows=$$(zypper -n se -s --match-exact -t package $packages)
 mtui_probe_ok "zypper -n se" $$?
-mtui_versions=$$(printf '%s\n' "$$mtui_rows" | grep -v "(System" | grep ^[iv] | sed "s, ,,g" | awk -F "|" '{ print $2,"=",$4 }')
+mtui_versions=$$(printf '%s\n' "$$mtui_rows" | grep -v "(System" | grep '^[iv]' | sed "s, ,,g" | awk -F "|" '{ print $2,"=",$4 }')
 mtui_probe_ok "awk" $$?
 printf '%s\n' "$$mtui_versions"
 "#;
@@ -369,7 +369,7 @@ mod tests {
                 "mtui_rows=$(zypper -n se -s --match-exact -t package {packages})\n\
                  mtui_probe_ok \"zypper -n se\" $?\n\
                  mtui_versions=$(printf '%s\\n' \"$mtui_rows\" | grep -v \"(System\" | \
-                 grep ^[iv] | sed \"s, ,,g\" | awk -F \"|\" '{{ print $2,\"=\",$4 }}')\n\
+                 grep '^[iv]' | sed \"s, ,,g\" | awk -F \"|\" '{{ print $2,\"=\",$4 }}')\n\
                  mtui_probe_ok \"awk\" $?\n"
             )),
             "{name}: the version list must be captured, guarded, filtered, guarded: {listed}"
@@ -464,7 +464,7 @@ mod tests {
         /// repository is `(System Packages)` — an installed package no
         /// repository offers, so there is no released version to go back to,
         /// dropped by `grep -v "(System"` — and one for a package that is not
-        /// installed (blank status column), dropped by `grep ^[iv]`.
+        /// installed (blank status column), dropped by `grep '^[iv]'`.
         const FILTERED_ROWS: &str = "i | pkg-a | package | 1.0-1 | x86_64 | (System Packages)\n  \
                                      | pkg-a | package | 2.0-1 | x86_64 | test-repo";
 
