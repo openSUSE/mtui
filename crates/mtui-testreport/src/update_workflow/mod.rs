@@ -589,18 +589,33 @@ mod tests {
 
     #[test]
     fn plan_provider_resolves_the_role_specific_table() {
-        use mtui_hosts::PlanProvider;
+        use mtui_hosts::{Doer, PlanProvider};
 
         let reg = WorkflowRegistry::default();
-        // The role string must actually select the table: an adapter that
-        // ignored it would make `uninstall` run the *install* command.
+        // The role string must actually select the *matching* table: an
+        // adapter comparing the two doers for mere inequality would also pass
+        // on a role swap (installer <-> uninstaller). Compare each resolved
+        // doer against one built straight from that role's own table entry, so
+        // only the correct mapping passes. `Doer::command` / `Doer::reboot`
+        // are crate-private, so `Debug` is the only way to compare from here.
         let install = PlanProvider::doer(&reg, "installer", "15", false).expect("installer");
         let uninstall = PlanProvider::doer(&reg, "uninstaller", "15", false).expect("uninstaller");
-        assert_ne!(
-            format!("{install:?}"),
-            format!("{uninstall:?}"),
-            "installer and uninstaller must not resolve to the same doer"
+
+        let install_commands =
+            DoerProvider::doer(&reg, Role::Install, "15", false).expect("install table entry");
+        let expected_install = Doer::new(
+            install_commands.command_template(),
+            install_commands.reboot_template().unwrap_or_default(),
         );
+        let uninstall_commands =
+            DoerProvider::doer(&reg, Role::Uninstall, "15", false).expect("uninstall table entry");
+        let expected_uninstall = Doer::new(
+            uninstall_commands.command_template(),
+            uninstall_commands.reboot_template().unwrap_or_default(),
+        );
+
+        assert_eq!(format!("{install:?}"), format!("{expected_install:?}"));
+        assert_eq!(format!("{uninstall:?}"), format!("{expected_uninstall:?}"));
     }
 
     #[test]
