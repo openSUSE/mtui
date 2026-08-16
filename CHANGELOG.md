@@ -422,11 +422,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   inside `update` (the initial one and `--newpackage`'s after the update) — so
   an `update` cancelled at its pre-dispatch gate, or aborted for a missing
   updater, no longer leaves the packages its prepare installed unrecorded on
-  every host. A prepare that dispatched nothing (cancelled before its first
-  package, an empty package list, no command built for any host) still writes
-  no row. A full `update` run therefore now leaves one row per operation that
-  dispatched: `prepare` and `update`. `list_history` gained `prepare` as an
-  `-e/--event` filter value (**MCP schema note:** the `list_history` tool's
+  every host. The row goes only to the hosts a prepare command actually
+  reached, and names only the packages that were actually dispatched: a host
+  the flow could build no command for keeps its "nothing was installed"
+  failure with no row to contradict it, and a prepare cancelled at package 3
+  of 10 records those three, not all ten. A prepare that dispatched nothing
+  (cancelled before its first package, an empty package list, no command built
+  for any host) still writes no row. On a transactional host the row records
+  what was *staged*: it is written before the reboot that activates the
+  snapshot, deliberately, because a host that never comes back would otherwise
+  leave those packages unrecorded entirely. A full `update` run therefore now
+  leaves one row per operation that dispatched: `prepare` and `update`.
+  `list_history` gained `prepare` as an `-e/--event` filter value
+  (**MCP schema note:** the `list_history` tool's
   `event` enum gained `"prepare"`). A `downgrade` aborted because every version
   probe died now writes its row before aborting: its issue-repo removal had
   already run on every host, and that abort fires precisely on the rollback

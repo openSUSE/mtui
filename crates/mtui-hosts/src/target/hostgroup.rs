@@ -35,7 +35,7 @@
 //! deterministically ordered by hostname — order-sensitive operations always
 //! iterate in sorted order, without an insertion-order dependency.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -963,6 +963,37 @@ impl HostsGroup {
             max_parallel,
             Some("add_history"),
             |_t| true,
+            |t| {
+                let fields = fields.to_vec();
+                Box::pin(async move { t.add_history(&fields).await }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+    }
+
+    /// Appends a history entry to *only* the named hosts' remote history files.
+    ///
+    /// The host-scoped counterpart to [`add_history`](Self::add_history), for a
+    /// flow whose work reached some of the group but not all of it. The
+    /// group-wide fan-out is the right default for an op whose command map
+    /// covers every enabled host, but `prepare` builds a per-host map and
+    /// deliberately drops a host whose release key does not resolve or whose
+    /// template does not render — and that same host is then failed with
+    /// "nothing was installed". Writing it a `:prepare:` row anyway would put a
+    /// false entry in `/var/log/mtui.log`, which is an interop contract other
+    /// tools read (#407).
+    ///
+    /// `hosts` is matched against [`Target::hostname`]; a name that is not in
+    /// the group is ignored, and the per-target
+    /// [`enabled`](mtui_types::enums::TargetState) check still applies on top.
+    pub async fn add_history_for(&mut self, hosts: &BTreeSet<String>, fields: &[String]) {
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
+        actions::run_fanout(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            Some("add_history"),
+            |t| hosts.contains(t.hostname()),
             |t| {
                 let fields = fields.to_vec();
                 Box::pin(async move { t.add_history(&fields).await }) as actions::BoxTargetFut<'_>
@@ -2134,6 +2165,46 @@ mod tests {
         assert!(
             written.ends_with(":prepare:pkg-a\n"),
             "history line: {written:?}"
+        );
+    }
+
+    /// `add_history_for` writes to the named hosts and to no others.
+    ///
+    /// The distinction the group-wide [`HostsGroup::add_history`] cannot make:
+    /// `prepare` builds a per-host command map, so a host it never dispatched
+    /// to must not be handed a row claiming an install (#407). Both directions
+    /// are asserted — a predicate stuck at `true` fails on h2, one stuck at
+    /// `false` fails on h1.
+    #[tokio::test]
+    async fn add_history_for_writes_only_to_the_named_hosts() {
+        let (c1, c2) = (echo("h1"), echo("h2"));
+        let (h1, h2) = (c1.clone(), c2.clone());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(c1)),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(c2)),
+            ],
+            false,
+        );
+
+        let only_h1: BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+        g.add_history_for(&only_h1, &["prepare".to_owned(), "pkg-a".to_owned()])
+            .await;
+
+        let written = String::from_utf8(
+            h1.file_contents("/var/log/mtui.log")
+                .expect("the named host gets its row"),
+        )
+        .unwrap();
+        assert!(
+            written.ends_with(":prepare:pkg-a\n"),
+            "history line: {written:?}"
+        );
+        assert!(
+            h2.file_contents("/var/log/mtui.log").is_none(),
+            "an unnamed host must not be written to: {:?}",
+            h2.file_contents("/var/log/mtui.log")
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
         );
     }
 

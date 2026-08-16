@@ -313,12 +313,36 @@ pub async fn add_op_history(
     id_field: Option<&str>,
     packages: &[String],
 ) {
+    let fields = op_history_fields(op, id_field, packages);
+    targets.add_history(&fields).await;
+}
+
+/// [`add_op_history`], written to `hosts` only.
+///
+/// For an op whose fan-out did not reach the whole group. `prepare` builds a
+/// per-host command map and drops a host whose release key does not resolve or
+/// whose template does not render; that host is failed with "nothing was
+/// installed", so a group-wide row would contradict its own verdict in a file
+/// other tools parse (#407).
+pub async fn add_op_history_for(
+    targets: &mut HostsGroup,
+    hosts: &BTreeSet<String>,
+    op: &str,
+    id_field: Option<&str>,
+    packages: &[String],
+) {
+    let fields = op_history_fields(op, id_field, packages);
+    targets.add_history_for(hosts, &fields).await;
+}
+
+/// The colon-joined field list of a history row: `op[:id]:pkg-a pkg-b`.
+fn op_history_fields(op: &str, id_field: Option<&str>, packages: &[String]) -> Vec<String> {
     let mut fields = vec![op.to_owned()];
     if let Some(id) = id_field {
         fields.push(id.to_owned());
     }
     fields.push(packages.join(" "));
-    targets.add_history(&fields).await;
+    fields
 }
 
 /// The `$repa` maintenance-selector for an update.
@@ -975,7 +999,10 @@ async fn prepare_body(
     // same two reasons as `update`'s and `downgrade`'s rows: after the
     // dispatch, so no row ever claims work that never started, and before
     // `reboot_transactional`, because a host that does not come back can no
-    // longer be written to.
+    // longer be written to. On a transactional host that placement means the
+    // row records what was *staged*, not what is active — deliberate, because
+    // a host that never returns from its reboot would otherwise leave the
+    // packages it holds in a snapshot entirely unrecorded.
     //
     // It is also what closes #407 for `update`: both of that flow's
     // post-prepare aborts (the pre-dispatch cancel gate and the missing-updater
@@ -985,12 +1012,30 @@ async fn prepare_body(
     // them for the standalone `prepare`, the initial prepare inside `update`,
     // and the `--newpackage` prepare alike.
     //
-    // Gated on a real dispatch: an empty list, a cancel before the first
-    // package, or a prepare for which no command could be built leaves no row.
-    // The row names the whole prepare set, as `update`/`downgrade` do; a
-    // per-package cancel names its own progress in the error.
+    // Two things keep the row from over-claiming, both instances of "a row
+    // claiming an install that never started is worse than no row":
+    //
+    // * **Per host, not group-wide.** `dispatched` is a per-host set and
+    //   `build_prepare_map` drops a host whose release key does not resolve or
+    //   whose template does not render — the very hosts the block below fails
+    //   with "nothing was installed". A group-wide fan-out would hand exactly
+    //   those hosts a `:prepare:` row contradicting their own verdict, in a
+    //   file the project treats as an interop contract, so the write is scoped
+    //   to the hosts a command actually reached.
+    // * **The dispatched subset, not the whole set.** A cancel at package `i`
+    //   of the `--installed-only` loop dispatched `pkgs[..i]` and nothing
+    //   after, so that is what the row names. The error message names the
+    //   progress too, but it is transient; the log line is what an operator
+    //   coming back to the host later reconstructs from.
+    //
+    // An empty list, a cancel before the first package, or a prepare for which
+    // no command could be built for any host therefore leaves no row at all.
+    let recorded: &[String] = match cancelled_at {
+        Some(i) => &pkgs[..i],
+        None => pkgs,
+    };
     if !dispatched.is_empty() {
-        add_op_history(targets, "prepare", None, pkgs).await;
+        add_op_history_for(targets, &dispatched, "prepare", None, recorded).await;
     }
 
     // Surface any per-host command failure from the install fan-out; the
@@ -2766,6 +2811,140 @@ mod tests {
             handle.file_contents(HISTORY_LOG).is_none(),
             "a prepare that dispatched nothing must leave no row: {:?}",
             handle.file_contents(HISTORY_LOG)
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_records_history_only_on_the_hosts_it_dispatched_to() {
+        // Per host, not group-wide. `build_prepare_map` drops a host whose
+        // release key does not resolve, and `prepare_body` then fails exactly
+        // that host with "nothing was installed". A group-wide history fan-out
+        // would hand the same host a `:prepare:` row — a false entry in a
+        // format the project treats as an interop contract, and one that
+        // contradicts the host's own verdict in the same run.
+        let (good, good_handle) = sles_target("h1", "");
+        // h2: enabled, answers commands, but has no parsed system — so
+        // `host_key` resolves nothing and no command is ever built for it.
+        let bad_conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
+        let bad_handle = bad_conn.clone();
+        let bad = Target::with_connection("h2", TargetState::Enabled, Box::new(bad_conn));
+        let mut group = HostsGroup::new(vec![good, bad], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            false,
+        )
+        .await
+        .expect_err("the dropped host must fail the flow");
+        // The contradiction this test exists to prevent, stated from the other
+        // side: h2 is told nothing was installed on it.
+        assert_eq!(err.host.as_deref(), Some("h2"), "{err}");
+        assert!(
+            err.to_string().contains("nothing was installed"),
+            "cause stated: {err}"
+        );
+
+        // The host that was actually dispatched to is on record.
+        let contents = String::from_utf8(
+            good_handle
+                .file_contents(HISTORY_LOG)
+                .expect("the dispatched host keeps its prepare row"),
+        )
+        .unwrap();
+        assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
+        assert!(
+            contents.ends_with(":prepare:pkg-a\n"),
+            "history line: {contents:?}"
+        );
+
+        // The dropped one is not. Mock-level proof it was never dispatched to,
+        // so the row would be a claim about work that never started.
+        assert!(
+            bad_handle.commands().is_empty(),
+            "no command reached h2: {:?}",
+            bad_handle.commands()
+        );
+        assert!(
+            bad_handle.file_contents(HISTORY_LOG).is_none(),
+            "a host nothing was dispatched to must have no prepare row: {:?}",
+            bad_handle
+                .file_contents(HISTORY_LOG)
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        );
+    }
+
+    /// A cancel mid-way through the `--installed-only` loop must record the
+    /// packages that were dispatched, not the whole prepare set.
+    ///
+    /// Deterministic without a wall clock: under `start_paused` the runtime
+    /// only advances the timer when every task is idle, so the interleaving is
+    /// fixed. Each package's fan-out takes 10ms of virtual time and the
+    /// canceller fires at 15ms: package 0 completes at 10ms, package 1's
+    /// checkpoint passes (the cancel is still 5ms away), the cancel lands at
+    /// 15ms, package 1 completes at 20ms, and package 2's checkpoint breaks the
+    /// loop. Two of four packages dispatched.
+    #[tokio::test(start_paused = true)]
+    async fn prepare_cancelled_mid_loop_records_only_the_dispatched_packages() {
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_run_delay(std::time::Duration::from_millis(10));
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let token = group.cancel_token();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+            token.cancel();
+        });
+
+        let pkgs: Vec<String> = ["pkg-a", "pkg-b", "pkg-c", "pkg-d"]
+            .iter()
+            .map(|p| (*p).to_owned())
+            .collect();
+        let err = perform_prepare(&mut group, &NoopRepo, &pkgs, false, false, true)
+            .await
+            .expect_err("a cancelled prepare reports an error");
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        // Pins the interleaving itself, so a change that moved the cancel to a
+        // different package would fail here rather than silently re-aiming the
+        // assertion below.
+        assert_eq!(
+            err.reason,
+            "prepare cancelled after 2/4 packages; applied: [pkg-a, pkg-b]; \
+             not attempted: [pkg-c, pkg-d]",
+            "the loop must have broken at package 2"
+        );
+        assert_eq!(
+            handle.commands().len(),
+            2,
+            "exactly two packages dispatched: {:?}",
+            handle.commands()
+        );
+
+        let contents = String::from_utf8(
+            handle
+                .file_contents(HISTORY_LOG)
+                .expect("two packages were installed, so there is a row"),
+        )
+        .unwrap();
+        assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
+        // The whole point: `pkg-c`/`pkg-d` were never attempted, so naming them
+        // would be the same over-claim as a row for a prepare that never ran.
+        assert!(
+            contents.ends_with(":prepare:pkg-a pkg-b\n"),
+            "the row must name only the dispatched packages: {contents:?}"
         );
     }
 
