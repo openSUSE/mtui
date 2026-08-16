@@ -43,7 +43,14 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 ///
 /// * **`-1`**, mtui's own "timed out / connection lost / not connected"
 ///   sentinel: a prepare that never ran to completion is not a successful
-///   prepare, and its transcript is empty, so no marker would catch it.
+///   prepare, and its transcript is empty, so no marker would catch it. It is
+///   worth a verdict even though `host_command_failures` also reports the
+///   host — for a *different* fact. "prepare command failed" says the command
+///   ran and returned a failure; on `-1` it did neither, and the operator's
+///   next step (go and see whether the host is alive) differs accordingly.
+///   Both rules firing on the one signal would name the host twice, which
+///   `prepare_body` resolves by dropping its own coarser entry for a host this
+///   check has named — so the sharper reason survives *and* stays attributed.
 /// * **The shared stdout/stderr [`markers`](super::update::markers)**, which
 ///   close the hole this check exists for: `transactional-update` can report a
 ///   locked update stack, a dependency prompt or an RPM error and still exit
@@ -53,12 +60,14 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 ///
 /// **No bare non-zero-exit arm, on purpose.** `prepare_body` already owns exit
 /// codes: `note_dispatch` feeds them to the reboot gate and
-/// `host_command_failures` reports them. A second verdict on the same signal
-/// would name the host twice, pushing `aggregate_failures` out of its
-/// single-failure verbatim branch into the summary — where `host` becomes
-/// `None`, which `perform_prepare_skips_the_reboot_of_a_host_whose_prepare_
-/// failed` pins. Adding the arm is not "completing" the check; it duplicates a
-/// verdict the flow already renders.
+/// `host_command_failures` reports them, accurately — the prepare templates are
+/// a single command, so a non-zero status *is* the prepare's own, and "prepare
+/// command failed" is exactly what happened. An arm here could only reword that
+/// (this key's `transactional-update` returns just `0` or `1`, so there is no
+/// status to classify), while changing the reason string
+/// `perform_prepare_skips_the_reboot_of_a_host_whose_prepare_failed` pins.
+/// Adding it is not "completing" the check; it restates a verdict the flow
+/// already renders.
 ///
 /// The `Error:`-from-a-sibling-command caveat the markers carry on the update
 /// template does not arise here: a prepare command is a single
@@ -259,13 +268,15 @@ mod tests {
 
     #[test]
     fn slmicro_prepare_does_not_judge_a_bare_non_zero_exit() {
-        // Exit codes are `prepare_body`'s to report (`note_dispatch` gates the
-        // reboot on them, `host_command_failures` names the host). A verdict
-        // here would name the same host a second time, pushing
-        // `aggregate_failures` into its summary branch — where `host` is
-        // `None`, which `perform_prepare_skips_the_reboot_of_a_host_whose_
-        // prepare_failed` asserts against. So a clean transcript with a failing
-        // status passes *this* check while the flow still fails the host.
+        // Exit codes are `prepare_body`'s to report, and it reports them
+        // accurately: `note_dispatch` gates the reboot on them and
+        // `host_command_failures` names the host "prepare command failed",
+        // which is precisely what a non-zero status from this single-command
+        // template means. A verdict here could only reword that — and would
+        // change the reason string
+        // `perform_prepare_skips_the_reboot_of_a_host_whose_prepare_failed`
+        // pins. So a clean transcript with a failing status passes *this*
+        // check while the flow still fails the host.
         assert!(
             transactional_update(args_for(
                 "transactional-update -n pkg in -l  pkg-a",
