@@ -182,9 +182,12 @@ async fn partial_failure_raises_fanout_aggregate() {
     let cmd = MockCommand::failing(Scope::Fanout, &["b"]);
     let err = cmd.run(&mut s, &matches(&[])).await.unwrap_err();
     match err {
-        CommandError::FanOut(failures) => {
+        CommandError::FanOut { failures, stop } => {
             assert_eq!(failures.len(), 1);
             assert_eq!(failures[0].0, "b");
+            // Nothing stopped this fan-out: every template ran, so the
+            // aggregate carries no stop note to mislead the caller with.
+            assert_eq!(stop, None, "an uninterrupted fan-out has no stop note");
         }
         other => panic!("expected FanOut, got {other:?}"),
     }

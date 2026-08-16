@@ -346,10 +346,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   it had applied — instead of `fan-out failed on ...` with the cancel listed as
   a template failure (#404). A real template failure collected before the
   cancel still outranks it and is still reported as the fan-out aggregate, now
-  without the cancel entry padding the failure list; and the `stopped after N
-  of M templates` count now reports templates actually completed instead of
-  counting never-attempted ones as done — as does the `succeeded` log line,
-  which no longer names templates the stop never reached.
+  without the cancel entry padding the failure list — but the stop is no longer
+  dropped from that aggregate either: it is appended to the message
+  (`fan-out failed on A (A: boom); stopped after 0 of 3 templates; B: <what the
+  interrupted flow had done>`), so a caller is no longer left believing the
+  templates the stop never reached ran clean. The `stopped after N of M
+  templates` count now reports templates actually completed instead of counting
+  never-attempted ones as done — as does the `succeeded` log line, which no
+  longer names templates the stop never reached.
 
 ### Security
 
