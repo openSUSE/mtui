@@ -60,6 +60,8 @@ notify = ["dep:notify-rust"]
 [dev-dependencies]
 # Temp scripts standing in for `$EDITOR` in the offline `edit`-spawn tests.
 tempfile = "3"
-# Serialises the `$RUST_LOG` mutations in the `startup_filter` tests: the whole
-# crate's tests share one process, so the env var is a process-global.
+# One `env` exclusion domain for every test that touches the process-global
+# environment — `$RUST_LOG` in the `startup_filter` tests, `$EDITOR` in the
+# `edit` spawn tests, the `var_os` probe in `notification` — because the whole
+# crate's tests share one process.
 serial_test.workspace = true

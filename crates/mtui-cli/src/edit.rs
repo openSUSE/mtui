@@ -94,11 +94,6 @@ mod tests {
     use super::*;
     use mtui_config::Config;
     use mtui_core::{ColorMode, CommandPromptDisplay, Session};
-    use std::sync::Mutex;
-
-    /// Serializes the two tests that mutate the process-global `$EDITOR`, so they
-    /// never race under the parallel test harness.
-    static EDITOR_ENV: Mutex<()> = Mutex::new(());
 
     /// A headless session with a captured (sunk) display and nothing loaded.
     fn empty_session() -> Session {
@@ -161,8 +156,9 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
-    // EDITOR_ENV mutex makes the mutation exclusive within these tests.
+    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the crate's
+    // single `env` serial domain makes the mutation exclusive.
+    #[serial_test::serial(env)]
     #[allow(unsafe_code)]
     fn run_edit_uses_editor_env_and_path() {
         let dir = tempfile::tempdir().unwrap();
@@ -170,9 +166,9 @@ mod tests {
         let stub = editor_stub(dir.path(), &record, 0);
 
         let mut session = empty_session();
-        let _env = EDITOR_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: the EDITOR_ENV mutex serializes every $EDITOR reader/writer in
-        // this module's tests, so no concurrent env access occurs.
+        // SAFETY: `#[serial(env)]` is the crate's one exclusion domain for the
+        // process-global environment, so no other test reads, writes or
+        // *inherits* it (this one spawns `$EDITOR`) while this runs.
         unsafe {
             std::env::set_var("EDITOR", &stub);
         }
@@ -189,7 +185,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     // See `run_edit_uses_editor_env_and_path`: edition-2024 env mutation is
-    // `unsafe`, serialized by EDITOR_ENV.
+    // `unsafe`, serialized on the crate's one `env` domain.
+    #[serial_test::serial(env)]
     #[allow(unsafe_code)]
     fn run_edit_nonzero_exit_errors() {
         let dir = tempfile::tempdir().unwrap();
@@ -197,8 +194,9 @@ mod tests {
         let stub = editor_stub(dir.path(), &record, 3);
 
         let mut session = empty_session();
-        let _env = EDITOR_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        // SAFETY: the EDITOR_ENV mutex serializes every $EDITOR access here.
+        // SAFETY: `#[serial(env)]`, the crate's one exclusion domain for the
+        // process-global environment; this test spawns `$EDITOR`, which inherits
+        // it.
         unsafe {
             std::env::set_var("EDITOR", &stub);
         }
