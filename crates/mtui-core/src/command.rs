@@ -155,7 +155,10 @@ pub trait Command: Send + Sync {
     /// boundary and keeping the flow's detail — rather than collecting it as a
     /// template failure. A real failure banked before the cancel still
     /// outranks it and is still reported as the [`CommandError::FanOut`]
-    /// aggregate.
+    /// aggregate; the stop then rides along as that aggregate's `stop` note
+    /// (`stopped after N of M templates`, plus the interrupted flow's detail),
+    /// so it neither pads the failure list nor leaves the templates the break
+    /// never reached looking as though they ran clean.
     async fn run(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         session.check_cancelled()?;
         let resolved = resolve_templates(self.scope(), session, args)?;
@@ -247,23 +250,33 @@ pub trait Command: Send + Sync {
         }
 
         restore_active(session, restore);
+        // How far the fan-out got, in one shape for both verdicts: it is the
+        // `Cancelled` payload when the stop *is* the verdict, and the `FanOut`
+        // aggregate's `stop` note when a real failure outranks it. The cancel
+        // never becomes a failure entry — it is not a broken template — but a
+        // caller told only "template X failed" would otherwise read the
+        // templates the break never reached as having run clean.
+        let stop_summary = || {
+            let mut msg = format!(
+                "stopped after {} of {} templates",
+                completed.len(),
+                resolved.len()
+            );
+            if let Some((rrid, detail)) = &body_stop
+                && !detail.is_empty()
+            {
+                msg.push_str(&format!("; {rrid}: {detail}"));
+            }
+            msg
+        };
+
         if cancelled && failures.is_empty() {
             // Report the stop — but only when nothing actually failed. A real
             // per-template failure outranks it and falls through to the
             // `FanOut` aggregate below: burying a broken template behind a
             // bare "cancelled" is the one thing the caller must not be told.
             tracing::info!(command = self.name(), "fan-out cancelled");
-            let mut msg = format!(
-                "stopped after {} of {} templates",
-                completed.len(),
-                resolved.len()
-            );
-            if let Some((rrid, detail)) = body_stop
-                && !detail.is_empty()
-            {
-                msg.push_str(&format!("; {rrid}: {detail}"));
-            }
-            return Err(CommandError::Cancelled(msg));
+            return Err(CommandError::Cancelled(stop_summary()));
         }
 
         if !completed.is_empty() {
@@ -273,7 +286,10 @@ pub trait Command: Send + Sync {
             tracing::info!(command = self.name(), skipped = %skipped.join(", "), "no connected host");
         }
         if !failures.is_empty() {
-            return Err(CommandError::FanOut(failures));
+            return Err(CommandError::FanOut {
+                failures,
+                stop: cancelled.then(stop_summary),
+            });
         }
         if !skipped.is_empty() && completed.is_empty() {
             // Every resolved template was skipped: the command executed on

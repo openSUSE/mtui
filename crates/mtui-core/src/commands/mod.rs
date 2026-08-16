@@ -1207,10 +1207,12 @@ mod cancellation_seam {
         /// Template whose body stops at one of its own cancellation
         /// checkpoints (what `perform.rs::map_flow_error` produces).
         cancel_on: &'static str,
-        /// Also fire the session token from the cancelling body (the
-        /// `job_cancel` coincidence); `false` pins that the verdict needs no
-        /// token at all.
-        cancel_token_too: bool,
+        /// Template whose body also fires the session token, before returning
+        /// its scripted verdict (the `job_cancel` coincidence). `None` on a
+        /// `cancel_on` run pins that the verdict needs no token at all; set on
+        /// a `fail_on` run it produces the *other* stop shape — the loop-top
+        /// checkpoint breaking the fan-out with a failure already banked.
+        fire_token_on: Option<&'static str>,
     }
 
     #[async_trait]
@@ -1227,13 +1229,15 @@ mod cancellation_seam {
                 .lock()
                 .expect("probe log poisoned")
                 .push(rrid.clone());
+            // Fired first, so it also composes with the failing body: a token
+            // cancel banked alongside a real failure is the loop-top stop.
+            if self.fire_token_on == Some(rrid.as_str()) {
+                session.cancel_token().cancel();
+            }
             if self.fail_on == Some(rrid.as_str()) {
                 return Err(CommandError::Other("boom".into()));
             }
             if rrid == self.cancel_on {
-                if self.cancel_token_too {
-                    session.cancel_token().cancel();
-                }
                 return Err(CommandError::Cancelled("flow stopped mid-body".into()));
             }
             Ok(())
@@ -1258,7 +1262,7 @@ mod cancellation_seam {
             cancel_on: RRID_B,
             // Deliberately never cancelled: the verdict may only come from the
             // body's own error variant, never from sniffing the token.
-            cancel_token_too: false,
+            fire_token_on: None,
         };
         let args = matches(&cmd, &[]);
 
@@ -1286,6 +1290,10 @@ mod cancellation_seam {
     /// not pad the failure list, and the fan-out still stops at the boundary.
     /// The token *is* fired here, so a verdict derived from the token instead
     /// of the error variant would bury the broken template.
+    ///
+    /// The outranked cancel is still *reported*, as the aggregate's `stop`
+    /// note: without it the caller is told only that A broke, and reads the
+    /// interrupted B and the never-attempted C as clean.
     #[tokio::test]
     async fn real_failure_before_body_cancel_still_outranks_it() {
         let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
@@ -1297,7 +1305,7 @@ mod cancellation_seam {
             ran: Arc::clone(&ran),
             fail_on: Some(RRID_A),
             cancel_on: RRID_B,
-            cancel_token_too: true,
+            fire_token_on: Some(RRID_B),
         };
         let args = matches(&cmd, &[]);
 
@@ -1305,14 +1313,35 @@ mod cancellation_seam {
             .run(&mut session, &args)
             .await
             .expect_err("a failed template must not report success");
+        // Rendered first: this is the string the REPL prints and the MCP error
+        // envelope carries, and the whole point of the note is that it reaches
+        // a caller who never sees the `tracing` breadcrumb.
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "fan-out failed on {RRID_A} ({RRID_A}: boom); \
+                 stopped after 0 of 3 templates; {RRID_B}: flow stopped mid-body"
+            ),
+            "the aggregate must name the interrupted template and how far the \
+             fan-out got"
+        );
         match err {
-            CommandError::FanOut(failures) => {
+            CommandError::FanOut { failures, stop } => {
                 assert_eq!(failures.len(), 1, "the cancel must not pad the aggregate");
                 assert_eq!(failures[0].0, RRID_A);
                 assert!(
                     matches!(failures[0].1, CommandError::Other(_)),
                     "got: {}",
                     failures[0].1
+                );
+                assert_eq!(
+                    stop.as_deref(),
+                    Some(
+                        format!("stopped after 0 of 3 templates; {RRID_B}: flow stopped mid-body")
+                            .as_str()
+                    ),
+                    "the interrupted flow's own detail must survive the outranking \
+                     failure, not just the count"
                 );
             }
             other => panic!("expected FanOut, got {other:?}"),
@@ -1321,6 +1350,47 @@ mod cancellation_seam {
             *ran.lock().expect("probe log poisoned"),
             vec![RRID_A.to_owned(), RRID_B.to_owned()],
             "the outranked cancel must still stop the fan-out at the boundary"
+        );
+    }
+
+    /// The sibling stop shape: a *token* cancel fired while the first template
+    /// was failing, so the loop-top checkpoint — not a body verdict — breaks
+    /// the fan-out with a failure already banked.
+    ///
+    /// The aggregate is still the verdict, and still carries the stop note, so
+    /// the caller does not read the two templates that never ran as clean.
+    /// There is no interrupted body here, so the note is the bare count: a
+    /// `; rrid: detail` suffix appearing would mean the driver invented a
+    /// detail no flow reported.
+    #[tokio::test]
+    async fn real_failure_before_token_cancel_keeps_the_stop_note() {
+        let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
+        session.templates.add(fake_report(RRID_B, &["h2"], "ok"));
+        session.templates.add(fake_report(RRID_C, &["h3"], "ok"));
+
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let cmd = ScriptedBody {
+            ran: Arc::clone(&ran),
+            fail_on: Some(RRID_A),
+            // No body ever returns `Cancelled` here: RRID_D is not loaded.
+            cancel_on: RRID_D,
+            fire_token_on: Some(RRID_A),
+        };
+        let args = matches(&cmd, &[]);
+
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("a failed template must not report success");
+        assert_eq!(
+            err.to_string(),
+            format!("fan-out failed on {RRID_A} ({RRID_A}: boom); stopped after 0 of 3 templates"),
+            "the aggregate must say how far the fan-out got"
+        );
+        assert_eq!(
+            *ran.lock().expect("probe log poisoned"),
+            vec![RRID_A.to_owned()],
+            "the token cancel must stop the fan-out at the next boundary"
         );
     }
 
@@ -1343,7 +1413,7 @@ mod cancellation_seam {
             ran: Arc::clone(&ran),
             fail_on: Some(RRID_B),
             cancel_on: RRID_C,
-            cancel_token_too: false,
+            fire_token_on: None,
         };
         let args = matches(&cmd, &[]);
 
@@ -1363,7 +1433,19 @@ mod cancellation_seam {
             "the fan-out summary must name only the template that completed"
         );
         assert!(
-            matches!(&err, CommandError::FanOut(f) if f.len() == 1 && f[0].0 == RRID_B),
+            matches!(
+                &err,
+                CommandError::FanOut { failures, stop }
+                    if failures.len() == 1
+                        && failures[0].0 == RRID_B
+                        && stop.as_deref()
+                            == Some(
+                                format!(
+                                    "stopped after 1 of 4 templates; {RRID_C}: flow stopped mid-body"
+                                )
+                                .as_str()
+                            )
+            ),
             "got: {err}"
         );
         assert_eq!(
