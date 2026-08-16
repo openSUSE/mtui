@@ -302,6 +302,20 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
   lands with that prefix automatically; don't hand-name it otherwise.
 - **Gate real hosts/containers** behind `#[ignore]` + a CI env flag (sshd
   integration fixture); unit tests must run offline and fast.
+- **Capturing `tracing` output: install the subscriber globally, scope the
+  sink.** `tracing::subscriber::set_default`'s guard is thread-local, but
+  callsite *interest* is cached **process-wide**: a callsite first reached from a
+  thread with no subscriber installed is cached `Interest::never()` and stays
+  silent for every later capture, so with libtest running in parallel whichever
+  test got there first decides whether a log assertion can even fail. Install
+  once with `set_global_default` and move the scoping to a thread-local sink.
+  The pattern is settled and already written up three times — canonical copy:
+  `crates/mtui-datasources/tests/log_capture.rs`; also
+  `mtui-datasources::teregen` and `mtui-testreport::reports::update_flow`'s test
+  modules. Copy it, do not re-derive it. Known cost: an unfiltered `Registry`
+  reports no `max_level_hint`, so `LevelFilter::current()` goes to `TRACE` for
+  that whole test binary and every `debug!`/`trace!` in it starts evaluating its
+  arguments; bound the layer with a `LevelFilter` if that ever matters.
 - **A test that cannot fail is not evidence.** Twice a real regression has sailed
   through a green workspace run: once because the fixture disarmed the assertion
   (a `MockConnection` answering empty stdout builds no downgrade command, so

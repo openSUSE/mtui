@@ -4222,6 +4222,27 @@ mod tests {
     /// the fan-out is `buffer_unordered` on the test's own task and
     /// `#[tokio::test]` is single-threaded, so no event under test is emitted
     /// off this thread.
+    ///
+    /// **Blast radius, accepted knowingly.** The `Registry` is unfiltered, so
+    /// it reports no `max_level_hint`; `set_global_default` reads that as "no
+    /// maximum" and `LevelFilter::current()` becomes `TRACE` for the *whole*
+    /// `mtui-testreport` lib test binary from the first capture onward. Every
+    /// `debug!`/`trace!` in the crate — previously dead, and none of them under
+    /// test here — then evaluates its formatting arguments and dispatches into
+    /// `CaptureLayer`, which drops it for want of a sink. The cost is argument
+    /// evaluation in tests only, and it buys the interest cache the race above
+    /// needs. Bounding the layer with a `LevelFilter` would keep the pinned
+    /// interest without the blast radius, and is the change to make if the lib
+    /// suite ever slows down noticeably.
+    ///
+    /// **This is the workspace's third copy of the pattern** — the others are
+    /// `mtui-datasources`' `tests/log_capture.rs` (the fullest write-up) and
+    /// `mtui-datasources::teregen`'s test module, and `mtui-core` gains a
+    /// fourth in #404/PR #459. They are copies rather than one helper because
+    /// each is a `#[cfg(test)]` module in a different crate and target
+    /// (unit-test modules cannot share an integration test's file); the
+    /// standing note in `AGENTS.md` § "Testing conventions" is what keeps the
+    /// next one from re-deriving the race from scratch.
     async fn capture_logs<T>(fut: impl std::future::Future<Output = T>) -> (T, String) {
         install_capture_subscriber();
         CAPTURE_SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
