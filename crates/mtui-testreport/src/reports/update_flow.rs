@@ -397,14 +397,42 @@ fn build_reboot_map(
 ///
 /// The check reads each host's `last*` snapshot after the command ran. Only the
 /// `update` check currently emits diagnostics; the other roles append nothing.
+///
+/// Every host in the group is judged. A caller that fans out to a *subset* —
+/// the per-package `prepare` and `downgrade` loops — must use
+/// [`run_checks_where`] instead of filtering the returned list: a check logs
+/// its own ERROR breadcrumb before returning `Err`, so a verdict discarded
+/// afterwards has already been printed, for a host whose `last*` snapshot
+/// belongs to some earlier phase.
 fn run_checks(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
     role: Role,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<UpdateError> {
+    run_checks_where(targets, registry, role, diagnostics, |_| true)
+}
+
+/// [`run_checks`] restricted to the hosts `allowed` accepts.
+///
+/// The predicate is applied *before* the check runs, not to its verdict. That
+/// is the whole point: a check calls
+/// [`log_failed`](crate::update_workflow::checks) on the way to its `Err`, so a
+/// post-filter still emits an operator-facing ERROR for a host whose verdict is
+/// then thrown away — once per package under `prepare --installed-only`, each
+/// time against a snapshot from a fan-out that host was not part of.
+fn run_checks_where(
+    targets: &HostsGroup,
+    registry: &WorkflowRegistry,
+    role: Role,
+    diagnostics: &mut Vec<Diagnostic>,
+    allowed: impl Fn(&str) -> bool,
+) -> Vec<UpdateError> {
     let mut failures = Vec::new();
     for target in targets.targets() {
+        if !allowed(target.hostname()) {
+            continue;
+        }
         let Some((release, transactional)) = host_key(target) else {
             continue;
         };
@@ -924,7 +952,26 @@ async fn prepare_body(
 
     // Surface any per-host command failure from the install fan-out; the
     // prepare check's own failures were collected per fan-out above.
-    let mut failures = host_command_failures(targets, "prepare command failed");
+    //
+    // A host the check already named is dropped here: the two rules overlap on
+    // one signal. `Target::run` records exit `-1` for a timeout, a dropped
+    // connection or an unconnected host, which trips this scan's
+    // `lastexit() != 0` *and* the `("slmicro", true)` / `("YUM", false)`
+    // checks' never-ran gate; a lock message on stderr trips the stderr half
+    // and the marker check. Both would name one host twice, which pushes
+    // `aggregate_failures` out of its single-failure verbatim branch into the
+    // summary — where `host` becomes `None` and the MCP client loses the one
+    // field that says *which* refhost to go and look at. The check's verdict
+    // is the one kept because it is the more specific of the two ("timed out
+    // or failed to run" and "update stack locked" both say more than "prepare
+    // command failed"); dropping the check's instead would trade attribution
+    // back for a coarser diagnosis. `downgrade_body` resolves the identical
+    // overlap the identical way — its `failed_downgrade.insert` gates the
+    // exit-code entry behind the check's verdict for the same host.
+    let mut failures: Vec<UpdateError> = host_command_failures(targets, "prepare command failed")
+        .into_iter()
+        .filter(|e| !e.host.as_ref().is_some_and(|h| check_failed.contains(h)))
+        .collect();
 
     // A host whose prepare failed must not reboot into the failed transaction,
     // mirroring the install/uninstall template's per-host gate: activating the
@@ -1071,6 +1118,20 @@ fn note_dispatch(
 /// a package it was skipped for), and judging that as a prepare would invent a
 /// verdict. First-failure-wins per host keeps `aggregate_failures` in its
 /// single-failure verbatim branch, where `host` survives.
+///
+/// The scope is imposed through [`run_checks_where`], so an out-of-fan-out host
+/// is never *judged*, rather than judged and then filtered: a check logs its
+/// own ERROR breadcrumb before it returns `Err`, and a discarded verdict has
+/// still been printed to the operator — once per package under
+/// `--installed-only`.
+///
+/// A consequence worth naming because it is intended, not incidental: a host
+/// [`build_prepare_map`] dropped (unresolved release key, or a template with no
+/// `--installed-only` variant) is in no `cmd` map, so it is never check-judged
+/// on its stale snapshot. It is not thereby excused — `prepare_body`'s dispatch
+/// accounting fails it by name with "no prepare command could be built for this
+/// host" (#396), which is a truthful verdict where a check's would have been an
+/// invented one.
 fn note_check(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -1078,11 +1139,11 @@ fn note_check(
     check_failed: &mut BTreeSet<String>,
     failures: &mut Vec<UpdateError>,
 ) {
-    for e in run_checks(targets, registry, Role::Prepare, &mut Vec::new()) {
+    let judged = run_checks_where(targets, registry, Role::Prepare, &mut Vec::new(), |host| {
+        cmd.contains_key(host)
+    });
+    for e in judged {
         let Some(host) = e.host.clone() else { continue };
-        if !cmd.contains_key(&host) {
-            continue;
-        }
         if check_failed.insert(host) {
             error!(error = %e, "prepare check failed");
             failures.push(e);
@@ -1319,14 +1380,20 @@ async fn downgrade_body(
             targets.run(Command::PerHost(cmd.clone())).await;
             // Check only the hosts that actually ran this command: a host
             // outside `cmd` (e.g. a dead-probe host) still carries its previous
-            // record, whose stale -1 would trip the new timeout gate and cancel
-            // the healthy hosts' rollback.
-            for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
-                let host = e.host.as_deref().unwrap_or("");
-                if cmd.contains_key(host) && !transactional_hosts.contains(host) {
-                    error!(error = %e, "downgrade check failed");
-                    failures.push(e);
-                }
+            // record, whose stale -1 would trip the timeout gate and cancel
+            // the healthy hosts' rollback. Scoped through `run_checks_where`,
+            // so such a host is not judged at all — a post-filter would still
+            // have emitted its ERROR breadcrumb, once per package.
+            let judged = run_checks_where(
+                targets,
+                registry,
+                Role::Downgrade,
+                &mut Vec::new(),
+                |host| cmd.contains_key(host) && !transactional_hosts.contains(host),
+            );
+            for e in judged {
+                error!(error = %e, "downgrade check failed");
+                failures.push(e);
             }
         }
     }
@@ -1363,15 +1430,21 @@ async fn downgrade_body(
     let mut failed_downgrade: BTreeSet<String> = BTreeSet::new();
     if !combined.is_empty() {
         targets.run(Command::PerHost(combined.clone())).await;
-        // Same scoping as the per-package loop: only check the transactional
-        // hosts that ran this combined command.
-        for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
-            let host = e.host.as_deref().unwrap_or("");
-            if combined.contains_key(host) && transactional_hosts.contains(host) {
-                error!(error = %e, "downgrade check failed");
-                failed_downgrade.insert(host.to_owned());
-                failures.push(e);
-            }
+        // Same scoping as the per-package loop, and imposed the same way: a
+        // host outside `combined` is not judged, rather than judged and then
+        // dropped after its breadcrumb has already been logged.
+        let judged = run_checks_where(
+            targets,
+            registry,
+            Role::Downgrade,
+            &mut Vec::new(),
+            |host| combined.contains_key(host) && transactional_hosts.contains(host),
+        );
+        for e in judged {
+            let Some(host) = e.host.clone() else { continue };
+            error!(error = %e, "downgrade check failed");
+            failed_downgrade.insert(host);
+            failures.push(e);
         }
         // The transactional check only gates "timed out or failed to run"; the
         // downgrade template is a single command, so a non-zero exit is
@@ -2633,6 +2706,50 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn perform_install_names_the_host_of_an_install_that_never_ran() {
+        // The install/uninstall twin of `perform_prepare_names_the_host_of_a_
+        // prepare_that_never_ran`, and the answer to "does this path double a
+        // `-1` too?": it does not, and this pins that it stays that way.
+        //
+        // The two flows collect failures differently. `prepare_body` runs its
+        // own `host_command_failures` scan alongside the check, so the two
+        // overlap on `-1` and the flow has to suppress one. This path collects
+        // *only* what the `Operation` template reports: exactly one
+        // `check_failures` entry per host plan
+        // (`mtui-hosts::target::operation`, one `push` per plan), plus
+        // `reboot_failures` — which cannot add a second entry for the same
+        // host, because a host whose check failed is removed from the reboot
+        // map before the reboot runs. No exit-code scan runs here at all, so
+        // there is nothing to double with.
+        for (product, version, transactional) in [("SL-Micro", "6.0", true), ("rhel", "9", false)] {
+            let conn = MockConnection::new("h1")
+                .with_default(CommandLog::new("", "", "", -1, 0))
+                .with_changing_boot_id();
+            let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new(product, version, "x86_64"),
+                    BTreeSet::new(),
+                    transactional,
+                ),
+                transactional,
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let err = perform_install(&mut group, &["pkg-a".to_owned()])
+                .await
+                .expect_err("an install that never ran must not report success");
+
+            assert_eq!(err.host.as_deref(), Some("h1"), "{product}: {err}");
+            // Role-neutral wording, because this table also serves uninstall.
+            assert_eq!(
+                err.reason, "command timed out or failed to run",
+                "{product}"
+            );
+        }
+    }
+
     #[test]
     fn aggregate_failures_carries_the_typed_flags_through_the_summary() {
         // The single-failure path returns the error verbatim, flags and all;
@@ -2704,31 +2821,36 @@ mod tests {
 
     #[test]
     fn aggregate_failures_names_each_host_once() {
-        // One host legitimately contributes two failures: an exit-`0` prepare
-        // carrying a lock message is reported by `host_command_failures`'
-        // stderr rule *and* by the check that recognised the marker. Undeduped,
-        // the roll-call read "prepare failed on h1, h1", which names one host
-        // as two.
+        // One host can legitimately contribute two failures with two distinct
+        // causes: `downgrade_body` seeds its list from the issue-repo removal
+        // scan and then adds that same host's downgrade-check verdict.
+        // Undeduped, the roll-call read "downgrade failed on h1, h1", which
+        // names one host as two. (The prepare flow's own overlap — one signal,
+        // two rules — is resolved upstream of here instead, in `prepare_body`:
+        // deduping a roll-call would not have restored the `host` field the
+        // summary branch drops.)
         let err = aggregate_failures(
-            "prepare",
+            "downgrade",
             vec![
-                UpdateError::new("prepare command failed", "h1"),
-                UpdateError::new("update stack locked", "h1"),
+                UpdateError::new("failed to remove issue repo", "h1"),
+                UpdateError::new("downgrade command timed out or failed to run", "h1"),
             ],
         )
         .unwrap_err();
-        // `starts_with`, not `contains`: "prepare failed on h1, h1 (" contains
-        // "prepare failed on h1" too, so a `contains` here would pin nothing.
+        // `starts_with`, not `contains`: "downgrade failed on h1, h1 (" contains
+        // "downgrade failed on h1" too, so a `contains` here would pin nothing.
         assert!(
-            err.reason.starts_with("prepare failed on h1 ("),
+            err.reason.starts_with("downgrade failed on h1 ("),
             "one host, named once: {}",
             err.reason
         );
         // Both causes still reach the operator — this dedups the roll-call,
         // not the diagnosis.
         assert!(
-            err.reason.contains("h1: prepare command failed")
-                && err.reason.contains("h1: update stack locked"),
+            err.reason.contains("h1: failed to remove issue repo")
+                && err
+                    .reason
+                    .contains("h1: downgrade command timed out or failed to run"),
             "both causes survive: {}",
             err.reason
         );
@@ -5020,14 +5142,125 @@ mod tests {
             !fired.iter().any(|c| c.contains("systemctl reboot")),
             "a host whose prepare reported a locked stack must not be rebooted: {fired:?}"
         );
-        // `to_string`, not `err.reason`: the host is named twice here (the
-        // stderr rule in `host_command_failures` and the check's own verdict),
-        // which puts `aggregate_failures` in its summary branch where `host`
-        // is `None` and the detail is embedded in the reason.
+        // Exact reason *and* host: the stderr rule in `host_command_failures`
+        // fires on this transcript too, so the host is a candidate to be named
+        // twice — which would put `aggregate_failures` in its summary branch,
+        // where `host` is `None` and the diagnosis is buried in the reason
+        // string. `prepare_body` drops its own coarse entry for a host the
+        // check named, so the specific verdict is returned verbatim and keeps
+        // its host.
+        assert_eq!(err.reason, "update stack locked", "err: {err}");
+        assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn run_checks_where_never_judges_a_host_outside_the_predicate() {
+        // The scoping has to happen *before* the check runs, not after it
+        // returns: a check calls `log_failed` on its way to `Err`, so a
+        // verdict filtered out afterwards has already printed an operator- and
+        // MCP-visible ERROR for a host whose `last*` snapshot belongs to some
+        // other fan-out — once per package on the `--installed-only` path.
+        //
+        // Both hosts here carry the same failing transcript, so the only thing
+        // that can separate them is the predicate.
+        let (t1, _h1) = slmicro_target_with_stderr("h1", "System management is locked");
+        let (t2, _h2) = slmicro_target_with_stderr("h2", "System management is locked");
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let cmd: BTreeMap<String, String> = ["h1", "h2"]
+            .into_iter()
+            .map(|h| {
+                (
+                    h.to_owned(),
+                    "transactional-update -n pkg in -l  pkg-a".to_owned(),
+                )
+            })
+            .collect();
+        group.run(Command::PerHost(cmd)).await;
+        let registry = WorkflowRegistry::default();
+
+        let (failures, logs) = capture_logs(async {
+            run_checks_where(&group, &registry, Role::Prepare, &mut Vec::new(), |host| {
+                host == "h1"
+            })
+        })
+        .await;
+
+        // h1 is in scope: it is judged, it fails, and it says so.
+        assert_eq!(failures.len(), 1, "only the in-scope host is judged");
+        assert_eq!(failures[0].host.as_deref(), Some("h1"));
         assert!(
-            err.to_string().contains("update stack locked"),
-            "the check's diagnosis must reach the operator: {err}"
+            logs.contains("h1"),
+            "the in-scope host's breadcrumb still fires: {logs}"
         );
+        // h2 is out of scope: not judged at all, so nothing about it is
+        // logged. This is the assertion a post-filter cannot satisfy — the
+        // verdict would be dropped from the returned list, but `log_failed`
+        // would already have named h2.
+        assert!(
+            !logs.contains("h2"),
+            "an out-of-scope host must not be judged, so it must not be logged: {logs}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_names_the_host_of_a_prepare_that_never_ran() {
+        // `-1` is `Target::run`'s sentinel for a timeout, a dropped connection
+        // or a host that was never connected, and it is the one signal both
+        // new prepare checks raise on. `host_command_failures` raises on the
+        // *same* exit code (`bad_exit = lastexit() != 0`), so unless the flow
+        // suppresses its own coarse entry one host contributes TWO failures,
+        // `aggregate_failures` leaves its single-failure verbatim branch, and
+        // `host` — the field an MCP client reads to know which refhost to go
+        // look at — collapses to `None`.
+        //
+        // Before #406 these keys had no prepare check at all, so a timed-out
+        // prepare returned a single verbatim error carrying its host. Keeping
+        // that attribution while gaining the sharper reason is the point;
+        // losing it would be a regression on exactly the path #406 adds.
+        for (product, version, transactional) in [("SL-Micro", "6.0", true), ("rhel", "9", false)] {
+            let conn = MockConnection::new("h1")
+                .with_default(CommandLog::new("", "", "", -1, 0))
+                .with_changing_boot_id();
+            let handle = conn.clone();
+            let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+            t.set_system(
+                System::new(
+                    SystemProduct::new(product, version, "x86_64"),
+                    BTreeSet::new(),
+                    transactional,
+                ),
+                transactional,
+            );
+            let mut group = HostsGroup::new(vec![t], false);
+
+            let err = perform_prepare(
+                &mut group,
+                &NoopRepo,
+                &["pkg-a".to_owned()],
+                false,
+                false,
+                false,
+            )
+            .await
+            .expect_err("a prepare that never ran must not report success");
+
+            // The fixture is only meaningful if a prepare really dispatched:
+            // a host no command was built for fails by a different name.
+            let cmds = handle.commands();
+            assert!(
+                cmds.iter().any(|c| c.contains("pkg-a")),
+                "{product}: a prepare command must have been dispatched: {cmds:?}"
+            );
+            assert_eq!(err.host.as_deref(), Some("h1"), "{product}: {err}");
+            // Exact, not `contains`: "prepare command failed" is
+            // `host_command_failures`' coarse wording for this very exit code,
+            // and the whole point is that the check's sharper verdict is the
+            // one that survives — and survives *alone*.
+            assert_eq!(
+                err.reason, "prepare command timed out or failed to run",
+                "{product}"
+            );
+        }
     }
 
     #[tokio::test]

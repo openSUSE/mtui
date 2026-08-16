@@ -404,10 +404,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   last, whose clean no-op used to mask an earlier one.
   **Reason strings an operator or MCP client sees change accordingly** — the
   typed failure a check routes to, which is what decides whether a group is
-  rolled back, is unchanged. A multi-failure summary also names each host once
-  now: a single host can contribute two failures (a lock message is reported
-  both by the stderr scan and by the check that recognised it), which used to
-  read "prepare failed on h1, h1".
+  rolled back, is unchanged, and so is the failing host's name: where a check
+  and the coarse scan both speak for one host, `prepare` now reports the
+  check's sharper reason alone rather than summarising two, which would have
+  dropped the host field the summary form cannot carry. A summary over
+  genuinely distinct causes on one host also names it once now, instead of
+  reading "downgrade failed on h1, h1".
 - A `downgrade` on a RHEL host is no longer reported as completed when its
   `yum -y downgrade` never ran (#406) — the last `(release, transactional)`
   key with a downgrade command and no check. As on SL Micro, the check judges
