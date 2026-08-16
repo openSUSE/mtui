@@ -1110,6 +1110,28 @@ mod cancellation_seam {
     /// rebuilds that cache and then keeps interest pinned. Scoping moves to a
     /// thread-local sink instead, so the tests running in parallel on other
     /// threads cannot see (or pollute) this capture.
+    ///
+    /// Two consequences of that choice, both deliberate:
+    ///
+    /// - **The level ceiling goes to `TRACE` binary-wide.** An unfiltered
+    ///   `Registry` reports no `max_level_hint`, so from the first [`start`]
+    ///   call `LevelFilter::current()` is `TRACE` for the whole `mtui-core` lib
+    ///   test binary: every `debug!`/`trace!` callsite that was dead before now
+    ///   evaluates its formatting arguments (in every parallel test, not just
+    ///   this one). That costs a little time, and a `Display`/`Debug` impl that
+    ///   takes a lock the emitting thread already holds would deadlock rather
+    ///   than stay unevaluated. Nothing in this binary does that today; if a
+    ///   callsite ever pays for it, bound the layer with a `LevelFilter` — that
+    ///   keeps the interest rebuild without the blast radius — rather than
+    ///   going back to a thread-local default.
+    /// - **The capture assumes the fan-out runs on the arming thread.**
+    ///   `#[tokio::test]` defaults to the current-thread flavour, so the driver
+    ///   and its `info!` run on the thread that called [`start`] and reach its
+    ///   sink. Adding `flavor = "multi_thread"` to a test using this capture
+    ///   would move the event to a worker thread with no sink, silently
+    ///   emptying the buffer — and the caller's exact-equality assertion would
+    ///   then read as a product bug ("the driver named no templates") rather
+    ///   than as the harness change it is.
     mod succeeded_log {
         use std::cell::RefCell;
         use std::sync::Once;
