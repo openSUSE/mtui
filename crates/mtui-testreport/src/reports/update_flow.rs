@@ -539,7 +539,8 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
         aggregate.probe_failed = failures.iter().all(|e| e.probe_failed);
         // `cancelled` is deliberately NOT propagated here. Where
         // `probe_failed` above is both representable and produced, `cancelled`
-        // is representable and *unproduced*: `perform_operation` builds
+        // is representable and *unproduced*: `perform_operation_with`, the
+        // shared body of `perform_install` / `perform_uninstall`, builds
         // `UpdateError { cancelled: failure.cancelled, .. }` straight from
         // `report.check_failures`, so a cancelled check does cross the
         // `Operation` seam into a `failures` list — but no check in
@@ -2521,9 +2522,10 @@ mod tests {
     /// A [`PlanProvider`](mtui_hosts::PlanProvider) whose check always stops at
     /// a cancellation checkpoint.
     ///
-    /// The only way to put a cancelled `CheckFailure` on `perform_operation`'s
-    /// input: the real check tables never emit one, so scripting a
-    /// `MockConnection` cannot express this state. Mirrors the provider in
+    /// The only way to put a cancelled `CheckFailure` on the input of
+    /// `perform_operation_with`, the install/uninstall shared body: the real
+    /// check tables never emit one, so scripting a `MockConnection` cannot
+    /// express this state. Mirrors the provider in
     /// `crates/mtui-hosts/tests/operation_group.rs`, which pins the same flag
     /// one layer down, at `OperationReport`.
     struct CancellingProvider;
@@ -2553,8 +2555,9 @@ mod tests {
     #[tokio::test]
     async fn a_cancelled_check_failure_reaches_the_update_error_with_the_flag_intact() {
         // The flow half of the seam widening: `OperationReport` carrying the
-        // flag is worth nothing if `perform_operation`'s map drops it on the
-        // way into `UpdateError`, which is what it did (hardcoded `false`)
+        // flag is worth nothing if the map in `perform_operation_with` — the
+        // shared body of `perform_install` / `perform_uninstall` — drops it on
+        // the way into `UpdateError`, which is what it did (hardcoded `false`)
         // before this branch. One host and an always-cancelling check means
         // exactly one failure, so `aggregate_failures` takes the verbatim
         // branch and the flag reaches the caller untouched — the summary
@@ -3457,12 +3460,12 @@ mod tests {
         );
 
         // `cancelled` is deliberately not summarised. It is representable in a
-        // `failures` vec — `perform_operation` maps it out of
-        // `report.check_failures` — but no production check emits one, so the
-        // only cancellations reaching this module are its own early
-        // `return Err`s. A lone cancelled failure routes verbatim with the
-        // flag; a summary drops it, so a cancel cannot mask a real failure
-        // collected beside it.
+        // `failures` vec — `perform_operation_with`, the install/uninstall
+        // shared body, maps it out of `report.check_failures` — but no
+        // production check emits one, so the only cancellations reaching this
+        // module are its own early `return Err`s. A lone cancelled failure
+        // routes verbatim with the flag; a summary drops it, so a cancel
+        // cannot mask a real failure collected beside it.
         let cancelled = aggregate_failures(
             "update",
             vec![
