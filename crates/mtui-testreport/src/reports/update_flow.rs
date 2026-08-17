@@ -539,8 +539,9 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
         aggregate.probe_failed = failures.iter().all(|e| e.probe_failed);
         // `cancelled` is deliberately NOT propagated here. Where
         // `probe_failed` above is both representable and produced, `cancelled`
-        // is representable and *unproduced*: `perform_operation_with`, the
-        // shared body of `perform_install` / `perform_uninstall`, builds
+        // is representable and *unproduced* — THE AUTHORITATIVE STATEMENT OF
+        // THAT CLAIM LIVES HERE, at the omission it justifies:
+        // `perform_operation_with` builds
         // `UpdateError { cancelled: failure.cancelled, .. }` straight from
         // `report.check_failures`, so a cancelled check does cross the
         // `Operation` seam into a `failures` list — but no check in
@@ -555,24 +556,14 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
         // summary drops it, and for the mixed case that *is* the outranking
         // rule — a real host failure collected beside a cancel must not be
         // re-routed to `CommandError::Cancelled` and excused as "the operator
-        // stopped it" (see `commands/perform.rs::map_flow_error`).
+        // stopped it" (see `commands/perform.rs::map_flow_error`). The flag
+        // routes *reporting* (`map_flow_error` is its only non-test reader);
+        // it does not route the rollback, which follows the `UpdateFailure`
+        // variant `update_run_phase` picks from `repairable`/`probe_failed`.
         //
-        // The all-cancelled case loses the flag too, which `probe_failed`'s
-        // `all()` above would have kept. That asymmetry is deliberate: with no
-        // live producer there is no all-cancelled population to summarise, and
-        // minting a group-wide cancel verdict for a case that cannot yet occur
-        // would be a behaviour decision taken blind. Make it here, with
-        // `all()`, if a check ever does cancel — but know what that verdict
-        // does and does not reach. The flag routes *reporting*:
-        // `commands/perform.rs::map_flow_error` is its only non-test reader,
-        // and it turns the error into `CommandError::Cancelled`. It does not
-        // route the rollback — that follows the `UpdateFailure` variant
-        // `update_run_phase` picks from `repairable`/`probe_failed`, which
-        // never inspects `cancelled`. Setting it here alone would tell the
-        // operator the run was cancelled while the group-wide downgrade ran
-        // on every healthy host anyway; skipping that rollback the way
-        // `UpdateFailure::Cancelled` does needs a matching change at the
-        // `wrap` site.
+        // The all-cancelled case also loses the flag, unlike `probe_failed`'s
+        // `all()` above: with no producer there is no all-cancelled population
+        // to summarise, so that asymmetry costs nothing today.
         Err(aggregate)
     }
 }
@@ -662,14 +653,14 @@ async fn perform_operation(
 /// [`perform_operation`] with the [`PlanProvider`](mtui_hosts::PlanProvider)
 /// spelled out as a parameter, so a test can script the check seam.
 ///
-/// Production only ever reaches this through [`perform_operation`], which
+/// Production must not reach this except through [`perform_operation`], which
 /// passes the real [`WorkflowRegistry`] — the parameter changes nothing about
 /// what runs on a host. It exists because there is no other way in: the
 /// injection below overwrites unconditionally
 /// (`HostsGroup::set_plan_provider`), so a provider installed on the group
-/// beforehand never survives to [`OperationGroup::plans`], and no production
-/// check emits `CheckFailure::cancelled`, so the `cancelled` arm of the failure
-/// map below has no live producer to drive it either.
+/// beforehand never survives to [`OperationGroup::plans`]. On what does and
+/// does not produce a cancelled check failure, see the `cancelled` comment in
+/// [`aggregate_failures`] — the authoritative statement lives there.
 ///
 /// The single `set_plan_provider` call site stays in this body, which is what
 /// the inject-at-the-point-of-use rule on [`perform_install`] is about: there
@@ -2189,7 +2180,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use mtui_config::options::Config;
-    use mtui_hosts::{HostsGroup, MockConnection, Target};
+    use mtui_hosts::{Check, CheckArgs, CheckFailure, Doer, HostsGroup, MockConnection, Target};
     use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
     use mtui_types::package::VersionCheck;
@@ -2536,19 +2527,15 @@ mod tests {
             _role: &str,
             _release: &str,
             _transactional: bool,
-        ) -> Result<mtui_hosts::Doer, HostError> {
-            Ok(mtui_hosts::Doer::new(
+        ) -> Result<Doer, HostError> {
+            Ok(Doer::new(
                 "zypper -n in -y -l $packages",
                 "systemctl reboot",
             ))
         }
 
-        fn check(&self, _role: &str, _release: &str, _transactional: bool) -> mtui_hosts::Check {
-            Box::new(|_a: mtui_hosts::CheckArgs<'_>| {
-                Err(mtui_hosts::CheckFailure::cancelled(
-                    "stopped at a checkpoint",
-                ))
-            })
+        fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
+            Box::new(|_a: CheckArgs<'_>| Err(CheckFailure::cancelled("stopped at a checkpoint")))
         }
     }
 
@@ -3459,13 +3446,11 @@ mod tests {
             "one host that did dispatch a patch clears the flag: {mixed:?}"
         );
 
-        // `cancelled` is deliberately not summarised. It is representable in a
-        // `failures` vec — `perform_operation_with`, the install/uninstall
-        // shared body, maps it out of `report.check_failures` — but no
-        // production check emits one, so the only cancellations reaching this
-        // module are its own early `return Err`s. A lone cancelled failure
-        // routes verbatim with the flag; a summary drops it, so a cancel
-        // cannot mask a real failure collected beside it.
+        // `cancelled` is deliberately not summarised: a lone cancelled failure
+        // routes verbatim with the flag, a summary drops it, so a cancel
+        // cannot mask a real failure collected beside it. On what does and
+        // does not produce one, see the `cancelled` comment in
+        // `aggregate_failures` — the authoritative statement lives there.
         let cancelled = aggregate_failures(
             "update",
             vec![
