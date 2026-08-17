@@ -537,13 +537,32 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
         // vanish on the other — and they are the declared routing contract,
         // not a detail of who reads them today.
         aggregate.probe_failed = failures.iter().all(|e| e.probe_failed);
-        // `cancelled` is deliberately NOT propagated here. Every cancellation
-        // in this module is an early `return Err`, so no cancelled error ever
-        // reaches a `failures` vec — the line would be dead, and if it ever
-        // became live it would newly route a multi-failure aggregate to
-        // `CommandError::Cancelled`, letting a cancel mask a real host failure
-        // that merely coincided with it. That is a behaviour change, not part
-        // of this fix.
+        // `cancelled` is deliberately NOT propagated here. Where
+        // `probe_failed` above is both representable and produced, `cancelled`
+        // is representable and *unproduced*: `perform_operation` builds
+        // `UpdateError { cancelled: failure.cancelled, .. }` straight from
+        // `report.check_failures`, so a cancelled check does cross the
+        // `Operation` seam into a `failures` list — but no check in
+        // `update_workflow::checks` emits `CheckFailure::cancelled` (checks
+        // are pure verdicts over a captured transcript), and this module's own
+        // cancellations are early `return Err`s that never reach an aggregate.
+        // Empty by producer, not by type: do not read the emptiness as a
+        // structural guarantee the way the pre-`CheckFailure` seam allowed.
+        //
+        // A lone cancelled failure keeps its flag regardless: the
+        // single-failure branch above returns the error verbatim. Only the
+        // summary drops it, and for the mixed case that *is* the outranking
+        // rule — a real host failure collected beside a cancel must not be
+        // re-routed to `CommandError::Cancelled` and excused as "the operator
+        // stopped it" (see `commands/perform.rs::map_flow_error`).
+        //
+        // The all-cancelled case loses the flag too, which `probe_failed`'s
+        // `all()` above would have kept. That asymmetry is deliberate: with no
+        // live producer there is no all-cancelled population to summarise, and
+        // minting a group-wide cancel verdict — which routes rollback and
+        // reporting differently — for a case that cannot yet occur would be a
+        // behaviour decision taken blind. Make it here, with `all()`, if a
+        // check ever does cancel.
         Err(aggregate)
     }
 }
@@ -3333,10 +3352,13 @@ mod tests {
             "one host that did dispatch a patch clears the flag: {mixed:?}"
         );
 
-        // `cancelled` is deliberately not summarised. Every cancellation in
-        // this module is an early `return Err`, so no cancelled error reaches
-        // a `failures` vec; propagating it here would be dead code that, were
-        // it ever reached, would let a cancel mask a coincident real failure.
+        // `cancelled` is deliberately not summarised. It is representable in a
+        // `failures` vec — `perform_operation` maps it out of
+        // `report.check_failures` — but no production check emits one, so the
+        // only cancellations reaching this module are its own early
+        // `return Err`s. A lone cancelled failure routes verbatim with the
+        // flag; a summary drops it, so a cancel cannot mask a real failure
+        // collected beside it.
         let cancelled = aggregate_failures(
             "update",
             vec![
