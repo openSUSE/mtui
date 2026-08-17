@@ -633,11 +633,42 @@ pub async fn perform_uninstall(
     perform_operation(targets, Role::Uninstall, packages).await
 }
 
-/// The shared body of [`perform_install`] / [`perform_uninstall`].
+/// The shared body of [`perform_install`] / [`perform_uninstall`], driving the
+/// template through the real [`WorkflowRegistry`].
 async fn perform_operation(
     targets: &mut HostsGroup,
     role: Role,
     packages: &[String],
+) -> Result<(), UpdateError> {
+    perform_operation_with(
+        targets,
+        role,
+        packages,
+        Arc::new(WorkflowRegistry::default()),
+    )
+    .await
+}
+
+/// [`perform_operation`] with the [`PlanProvider`](mtui_hosts::PlanProvider)
+/// spelled out as a parameter, so a test can script the check seam.
+///
+/// Production only ever reaches this through [`perform_operation`], which
+/// passes the real [`WorkflowRegistry`] — the parameter changes nothing about
+/// what runs on a host. It exists because there is no other way in: the
+/// injection below overwrites unconditionally
+/// (`HostsGroup::set_plan_provider`), so a provider installed on the group
+/// beforehand never survives to [`OperationGroup::plans`], and no production
+/// check emits `CheckFailure::cancelled`, so the `cancelled` arm of the failure
+/// map below has no live producer to drive it either.
+///
+/// The single `set_plan_provider` call site stays in this body, which is what
+/// the inject-at-the-point-of-use rule on [`perform_install`] is about: there
+/// is still exactly one place that cannot forget to wire the provider.
+async fn perform_operation_with(
+    targets: &mut HostsGroup,
+    role: Role,
+    packages: &[String],
+    provider: Arc<dyn mtui_hosts::PlanProvider>,
 ) -> Result<(), UpdateError> {
     // Matched exhaustively on purpose: a `_ =>` arm defaulting to install would
     // quietly run the wrong package-manager command if a role were ever added,
@@ -662,7 +693,7 @@ async fn perform_operation(
         )));
     }
 
-    targets.set_plan_provider(Arc::new(WorkflowRegistry::default()));
+    targets.set_plan_provider(provider);
 
     let outcome = match role {
         Role::Install => InstallOperation::new(packages.to_vec()).run(targets).await,
@@ -2476,6 +2507,70 @@ mod tests {
         // table classifies. The verdict reports *what* went wrong, not just that
         // the exit was non-zero.
         assert_eq!(err.reason, "package not found");
+    }
+
+    /// A [`PlanProvider`](mtui_hosts::PlanProvider) whose check always stops at
+    /// a cancellation checkpoint.
+    ///
+    /// The only way to put a cancelled `CheckFailure` on `perform_operation`'s
+    /// input: the real check tables never emit one, so scripting a
+    /// `MockConnection` cannot express this state. Mirrors the provider in
+    /// `crates/mtui-hosts/tests/operation_group.rs`, which pins the same flag
+    /// one layer down, at `OperationReport`.
+    struct CancellingProvider;
+
+    impl mtui_hosts::PlanProvider for CancellingProvider {
+        fn doer(
+            &self,
+            _role: &str,
+            _release: &str,
+            _transactional: bool,
+        ) -> Result<mtui_hosts::Doer, HostError> {
+            Ok(mtui_hosts::Doer::new(
+                "zypper -n in -y -l $packages",
+                "systemctl reboot",
+            ))
+        }
+
+        fn check(&self, _role: &str, _release: &str, _transactional: bool) -> mtui_hosts::Check {
+            Box::new(|_a: mtui_hosts::CheckArgs<'_>| {
+                Err(mtui_hosts::CheckFailure::cancelled(
+                    "stopped at a checkpoint",
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_check_failure_reaches_the_update_error_with_the_flag_intact() {
+        // The flow half of the seam widening: `OperationReport` carrying the
+        // flag is worth nothing if `perform_operation`'s map drops it on the
+        // way into `UpdateError`, which is what it did (hardcoded `false`)
+        // before this branch. One host and an always-cancelling check means
+        // exactly one failure, so `aggregate_failures` takes the verbatim
+        // branch and the flag reaches the caller untouched — the summary
+        // branch deliberately does not carry it.
+        let (t, _h) = sles_target("h1", "");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_operation_with(
+            &mut group,
+            Role::Install,
+            &["pkg-a".to_owned()],
+            Arc::new(CancellingProvider),
+        )
+        .await
+        .expect_err("a failing check surfaces as Err");
+
+        assert!(
+            err.is_cancelled(),
+            "the check stopped at a checkpoint, so the error must say cancelled: {err:?}"
+        );
+        // Not just the flag: the rest of the failure has to survive the same
+        // map, or an assertion on `is_cancelled` alone would pass on an error
+        // synthesised anywhere else in the flow.
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert_eq!(err.reason, "stopped at a checkpoint");
     }
 
     #[tokio::test]
