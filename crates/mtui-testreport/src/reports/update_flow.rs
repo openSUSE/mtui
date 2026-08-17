@@ -559,10 +559,19 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
         // The all-cancelled case loses the flag too, which `probe_failed`'s
         // `all()` above would have kept. That asymmetry is deliberate: with no
         // live producer there is no all-cancelled population to summarise, and
-        // minting a group-wide cancel verdict — which routes rollback and
-        // reporting differently — for a case that cannot yet occur would be a
-        // behaviour decision taken blind. Make it here, with `all()`, if a
-        // check ever does cancel.
+        // minting a group-wide cancel verdict for a case that cannot yet occur
+        // would be a behaviour decision taken blind. Make it here, with
+        // `all()`, if a check ever does cancel — but know what that verdict
+        // does and does not reach. The flag routes *reporting*:
+        // `commands/perform.rs::map_flow_error` is its only non-test reader,
+        // and it turns the error into `CommandError::Cancelled`. It does not
+        // route the rollback — that follows the `UpdateFailure` variant
+        // `update_run_phase` picks from `repairable`/`probe_failed`, which
+        // never inspects `cancelled`. Setting it here alone would tell the
+        // operator the run was cancelled while the group-wide downgrade ran
+        // on every healthy host anyway; skipping that rollback the way
+        // `UpdateFailure::Cancelled` does needs a matching change at the
+        // `wrap` site.
         Err(aggregate)
     }
 }
