@@ -1245,6 +1245,14 @@ mod tests {
             check,
         }];
         let mut group = MockGroup::new(Ok(plans)).with_missing_output();
+        // Liveness guard: the fixture *is* the test. If `with_missing_output`
+        // stopped being consulted, `last_output` would answer
+        // `Some(HostOutput::default())` — also exit 0 — and every assertion
+        // below would keep passing while covering nothing.
+        assert!(
+            group.last_output("h1").is_none(),
+            "the fixture must really be scripting a missing snapshot"
+        );
 
         let op = InstallOperation::new(strs(&["pkg-a"]));
         let report = op.run(&mut group).await.expect("the run started");
