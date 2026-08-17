@@ -127,10 +127,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - An unreachable openQA instance now reports the actual transport failure
   (e.g. `"...: Connection refused (os error 61)"`) instead of restating the
   request URL (`"...: error sending request for url (http://.../api/v1/jobs)"`).
-- MCP calls passing a list to a repeatable single-value flag (e.g. `approve`
-  with two `group`s) no longer fail to parse: the reconstructed argv now
-  repeats the flag before every element instead of emitting it once for the
-  whole list.
 - `approve` no longer approves a Gitea update whose PR head differs from the
   checked-out testreport without saying so. Interactively it now logs the
   expected/actual hash pair and asks for confirmation (default no); a missing
@@ -496,6 +492,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   underlying certificate/IO cause instead of `reqwest`'s error kind plus URL,
   which is both more actionable and URL-free by construction.
 
+## [26.1.2] - 2026-08-04
+
+### Fixed
+
+- MCP tool calls passing an array with more than one element (e.g. `add_host`
+  `target`, `openqa_overview` `aggregated_groups`, `list_refhosts` `arch`) no
+  longer fail with `unexpected argument '<second element>' found`: the
+  reconstructed argv now repeats the flag before every element instead of
+  emitting it once for the whole list.
+
 ## [26.1.1] - 2026-07-27
 
 ### Added
@@ -507,14 +513,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   CI runs the targets under the address sanitizer on every PR and main push
   via ClusterFuzzLite; a crash fails the job.
 
-- New `[connection]` config keys `reboot_timeout` (default `10` seconds) and
-  `reboot_retries` (default `10`) control the reconnect budget `prepare`,
-  `reboot`, and `update` use after rebooting a host: `reboot_timeout` is the
-  backoff base and `reboot_retries` the number of attempts beyond the first,
-  giving a slow/high-latency host (e.g. aarch64, cross-site refhosts) up to
-  ~12.7 minutes by default to come back before it is marked failed. Both are
-  visible in `config show`, settable with `config set`, and overridable with
-  the new `--reboot-timeout`/`--reboot-retries` CLI flags.
 
 ### Changed
 
@@ -657,21 +655,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   differed, the marker disagreed with the account Gitea attributes the comment
   to. If the lookup fails, it falls back to the session user so the action still
   completes. Passing an explicit user still overrides both.
-- `prepare`/`reboot`/`update` no longer falsely mark a slow-to-reboot host as
-  "reconnect after reboot failed" when it is still mid-boot: reconnect after a
-  reboot now retries with a growing backoff (`reboot_timeout`/`reboot_retries`,
-  ~12.7 minutes by default) instead of a fixed ~1.2s burst of 6 attempts.
-  Because fan-out aggregates per-host failures, one slow host previously failed
-  the whole batch. Non-reboot paths (a dead SSH link mid-`run`/`shell`, or the
-  `sftp` pre-op check) are unaffected: they still fail fast on the first probe.
-- The `https` refhosts resolver no longer aborts when it cannot write its
-  on-disk mirror to a read-only `refhosts.path` (e.g. a package-managed
-  `/usr/share/qam-metadata/refhosts.yml`): the freshly downloaded database is
-  now used in-memory and a warning is logged instead. A separate warning fires
-  when the configured `refhosts.path` directory is missing or not writable.
-  The `refhosts.yml` I/O error message no longer misreports a write failure as
-  a read. `docs/src/configuration.md` now documents the real default
-  (`~/.local/share/refdb/refhosts.yml`) instead of a stale path.
 - `docs/src/configuration.md` documented the default `[mcp]
   session_idle_timeout` as `1800` (upstream Python mtui's value); the actual
   default is `14400`, chosen so an idle HTTP MCP session outlasts rmcp's own
