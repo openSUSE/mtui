@@ -6,7 +6,7 @@
 //!   [`Workflow::Manual`], and `mtui-<mode]> ` (e.g. `mtui-kernel> `,
 //!   `mtui-auto> `) otherwise.
 //! * **Right prompt** — the `mode / hosts / templates / active:RRID` status
-//!   line. reedline 0.49 has no bottom-toolbar segment, so the status lives in
+//!   line. reedline 0.50 has no bottom-toolbar segment, so the status lives in
 //!   the right prompt — the closest persistent analogue.
 //!
 //! Both read the shared `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl)
