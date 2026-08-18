@@ -116,7 +116,7 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// only*, not the event format — a runtime switch to `debug` does not
 /// retroactively add the verbose timestamp/target layout selected by `-d` at
 /// startup (deliberate, consistent with [`logfmt`]).
-#[must_use]
+#[must_use = "install the sink via Session::set_log_level_sink, or `set_log_level` has no effect"]
 pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
     let (filter, notice) = startup_filter(debug);
     // Wrap the filter in a reload layer so `set_log_level` can flip it live.
