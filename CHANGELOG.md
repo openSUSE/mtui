@@ -30,6 +30,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- The REPL line editor moved to reedline 0.50. User-facing deltas: the
+  terminal painter no longer misplaces the cursor once a line fills the full
+  terminal width, a bottom-flush prompt no longer reuses a stale anchor after
+  scrolling, and a multi-line prompt no longer loses its trailing newline. The
+  Tab-completion menu is now decided only once the completer has actually
+  answered, rather than racing its own redraw.
 - The openQA REST client is now built on the `ruoqa` crate instead of mtui's
   own hand-rolled signed-request implementation. User-visible effects:
   `client.conf` discovery is now **tiered and non-merging** —

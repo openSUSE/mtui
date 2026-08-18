@@ -22,7 +22,7 @@
 use std::sync::{Arc, Mutex};
 
 use mtui_core::{Registry, Session};
-use reedline::{Completer, Span, Suggestion};
+use reedline::{Completer, CompletionResult, Span, Suggestion};
 
 /// reedline completer that defers first-token completion to the [`Registry`] and
 /// argument completion to each command's `complete()`.
@@ -72,7 +72,10 @@ impl Completer for MtuiCompleter {
     ///
     /// A poisoned session lock is recovered ([`into_inner`](std::sync::PoisonError::into_inner))
     /// rather than panicking — a bad completion must never tear down the REPL.
-    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
+    ///
+    /// This adapter computes candidates synchronously, so it always answers
+    /// [`CompletionResult::Fresh`] and never `Pending`/`Stale`.
+    fn complete(&mut self, line: &str, pos: usize) -> CompletionResult {
         // The buffer up to the cursor (reedline hands us the whole line + pos).
         let before = &line[..pos.min(line.len())];
         // Left-trim before computing offsets; track the shift so the
@@ -118,15 +121,17 @@ impl Completer for MtuiCompleter {
             }
         };
 
-        candidates
-            .into_iter()
-            .map(|value| Suggestion {
-                value,
-                span,
-                append_whitespace: true,
-                ..Default::default()
-            })
-            .collect()
+        CompletionResult::fresh(
+            candidates
+                .into_iter()
+                .map(|value| Suggestion {
+                    value,
+                    span,
+                    append_whitespace: true,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -221,8 +226,12 @@ mod tests {
         MtuiCompleter::new(Arc::new(registry), Arc::new(Mutex::new(session)))
     }
 
-    fn values(suggestions: &[Suggestion]) -> Vec<&str> {
-        suggestions.iter().map(|s| s.value.as_str()).collect()
+    fn values(result: &CompletionResult) -> Vec<&str> {
+        result
+            .suggestions()
+            .iter()
+            .map(|s| s.value.as_str())
+            .collect()
     }
 
     // ---- split_text_word --------------------------------------------------
@@ -265,6 +274,15 @@ mod tests {
     }
 
     #[test]
+    fn first_token_completion_is_never_provisional() {
+        // The adapter is synchronous, so it must always answer `Fresh` — a
+        // `Pending`/`Stale` result here would silently empty the Tab menu.
+        let mut c = completer();
+        let s = c.complete("r", 1);
+        assert!(!s.is_provisional());
+    }
+
+    #[test]
     fn first_token_prefix_filters() {
         let mut c = completer();
         let s = c.complete("r", 1);
@@ -289,14 +307,14 @@ mod tests {
     #[test]
     fn first_token_is_case_sensitive() {
         let mut c = completer();
-        assert!(c.complete("R", 1).is_empty());
+        assert!(c.complete("R", 1).suggestions().is_empty());
     }
 
     #[test]
     fn first_token_span_covers_whole_token() {
         let mut c = completer();
         let s = c.complete("ru", 2);
-        assert_eq!(s[0].span, Span::new(0, 2));
+        assert_eq!(s.suggestions()[0].span, Span::new(0, 2));
     }
 
     // ---- per-command completion -------------------------------------------
@@ -316,20 +334,20 @@ mod tests {
         let s = c.complete("run --h", 7);
         assert_eq!(values(&s), vec!["--host"]);
         // The span replaces just the "--h" partial arg, not the command.
-        assert_eq!(s[0].span, Span::new(4, 7));
+        assert_eq!(s.suggestions()[0].span, Span::new(4, 7));
     }
 
     #[test]
     fn unknown_first_token_yields_nothing() {
         let mut c = completer();
-        assert!(c.complete("nope --x", 8).is_empty());
+        assert!(c.complete("nope --x", 8).suggestions().is_empty());
     }
 
     #[test]
     fn command_without_completer_yields_nothing() {
         let mut c = completer();
         // `reboot` (BareCmd) has the default empty `complete()`.
-        assert!(c.complete("reboot ", 7).is_empty());
+        assert!(c.complete("reboot ", 7).suggestions().is_empty());
     }
 
     /// A bare command named `help` so the adapter's `help`-argument special case
@@ -403,7 +421,10 @@ mod tests {
         // FixedCmd.complete("r", …) → "reboot".
         assert_eq!(values(&s), vec!["reboot"]);
         // Span must index the ORIGINAL buffer: the "r" partial is bytes 6..7.
-        assert_eq!(s[0].span, Span::new(6, 7));
-        assert_eq!(&line[s[0].span.start..s[0].span.end], "r");
+        assert_eq!(s.suggestions()[0].span, Span::new(6, 7));
+        assert_eq!(
+            &line[s.suggestions()[0].span.start..s.suggestions()[0].span.end],
+            "r"
+        );
     }
 }
