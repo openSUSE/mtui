@@ -19,7 +19,7 @@ clap_complete = "4"
 # Man-page generation for both binaries. Used only by the `xtask` dev
 # tool, not by any shipped binary, so it never enters a release build.
 clap_mangen = { version = "0.3", features = ["env"] }
-reedline = "0.49"
+reedline = "0.50"
 # raw-mode terminal + async input/resize stream for the interactive `shell`
 # TTY bridge (mtui-rs-jww). Pinned to reedline 0.49's `crossterm` major so
 # the two share one copy; `event-stream` enables the async `EventStream` the
