@@ -631,7 +631,8 @@ mod tests {
         /// status cannot distinguish a broken issue repo from an unrelated
         /// broken repo; see the module docs).
         const ZYPPER_STUB: &str = r#"#!/bin/sh
-printf '%s\n' "$2" >> "$MTUI_STUB_DIR/probe.ran"
+# A failed append must not look like a healthy probe (no set -e in the stub).
+printf '%s\n' "$2" >> "$MTUI_STUB_DIR/probe.ran" || exit 97
 case "$2" in
 patches)
     if [ -n "$MTUI_STUB_PATCH_ROW" ]; then printf '%s\n' "$MTUI_STUB_PATCH_ROW"; fi
@@ -644,11 +645,11 @@ lr)
     if [ -n "$MTUI_STUB_REPO_ROW" ]; then printf '%s\n' "$MTUI_STUB_REPO_ROW"; fi
     ;;
 rr)
-    printf '%s\n' "$*" >> "$MTUI_STUB_DIR/cleanup.ran"
+    printf '%s\n' "$*" >> "$MTUI_STUB_DIR/cleanup.ran" || exit 97
     exit "$MTUI_STUB_CLEANUP_EXIT"
     ;;
 in)
-    printf '%s\n' "$*" >> "$MTUI_STUB_DIR/patch.ran"
+    printf '%s\n' "$*" >> "$MTUI_STUB_DIR/patch.ran" || exit 97
     exit "$MTUI_STUB_PATCH_EXIT"
     ;;
 esac
@@ -658,7 +659,7 @@ exit 0
         /// The stub `transactional-update`: the slmicro patch command, and the
         /// only thing that binary is called for in `SLM_UPDATE`.
         const TU_STUB: &str = r#"#!/bin/sh
-printf '%s\n' "$*" >> "$MTUI_STUB_DIR/patch.ran"
+printf '%s\n' "$*" >> "$MTUI_STUB_DIR/patch.ran" || exit 97
 exit "$MTUI_STUB_PATCH_EXIT"
 "#;
 
@@ -779,6 +780,8 @@ exit "$MTUI_STUB_PATCH_EXIT"
             /// The script's stdout — where the probe guard's marker line
             /// lands, and so what the update check would classify.
             stdout: String,
+            /// The script's stderr, captured for sentinel-miss diagnostics.
+            stderr: String,
         }
 
         /// Renders `cmds` and runs it under `/bin/sh -c`.
@@ -816,7 +819,20 @@ exit "$MTUI_STUB_PATCH_EXIT"
                     .code()
                     .unwrap_or_else(|| panic!("script died on a signal: {:?}", out.status)),
                 stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             }
+        }
+
+        fn assert_reached_stub(name: &str, stubs: &Stubs, ran: &Ran, expected: &str) {
+            let invocations = stubs.probe_invocations();
+            assert!(
+                invocations.iter().any(|c| c == expected),
+                "{name}: the script never reached the stub zypper at all: {invocations:?}\n\
+                 code: {}\nstdout: {}\nstderr: {}",
+                ran.code,
+                ran.stdout,
+                ran.stderr,
+            );
         }
 
         #[test]
@@ -940,11 +956,7 @@ exit "$MTUI_STUB_PATCH_EXIT"
                 // Liveness first. The headline assertion here is a *negative*,
                 // and an empty `PATH` produces exactly the same observation —
                 // so show the script actually reached the stub.
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "patches"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "patches");
                 assert!(
                     stubs.patch_invocations().is_empty(),
                     "{name}: with no matching patch the patch command must not run: {:?}",
@@ -989,11 +1001,7 @@ exit "$MTUI_STUB_PATCH_EXIT"
                         ..Knobs::default()
                     },
                 );
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "patches"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "patches");
                 assert!(
                     stubs.patch_invocations().is_empty(),
                     "{name}: a whitespace-only list must not run the patch: {:?}",
@@ -1031,11 +1039,7 @@ exit "$MTUI_STUB_PATCH_EXIT"
                         ..Knobs::default()
                     },
                 );
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "patches"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "patches");
                 assert!(
                     stubs.patch_invocations().is_empty(),
                     "{name}: a failed probe must not be followed by a patch: {:?}",
@@ -1277,11 +1281,7 @@ exit "$MTUI_STUB_PATCH_EXIT"
                         ..Knobs::default()
                     },
                 );
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "patches"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "patches");
                 assert!(
                     stubs.patch_invocations().is_empty(),
                     "{name}: a broken awk must not be followed by a patch: {:?}",
@@ -1320,11 +1320,7 @@ exit "$MTUI_STUB_PATCH_EXIT"
                         ..Knobs::default()
                     },
                 );
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "patches"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "patches");
                 assert!(
                     stubs.patch_invocations().is_empty(),
                     "{name}: no row matches this update, so no patch may run: {:?}",
@@ -1339,6 +1335,29 @@ exit "$MTUI_STUB_PATCH_EXIT"
                 assert_eq!(
                     ran.code, 0,
                     "{name}: a host with nothing of ours to patch passes"
+                );
+            }
+        }
+
+        #[test]
+        fn a_failed_sentinel_append_exits_97() {
+            // The stub has no `set -e`; a failed `>> probe.ran` must not look
+            // like a healthy probe.
+            for (name, cmds) in templates() {
+                let stubs = Stubs::new();
+                fs::create_dir(stubs.dir.path().join("probe.ran"))
+                    .expect("pre-create probe.ran as a directory so the append fails");
+                let ran = run_script(&cmds, &stubs, Knobs::default());
+                assert_eq!(
+                    ran.code, 97,
+                    "{name}: a failed sentinel append must exit 97, not look healthy: \
+                     stdout: {}\nstderr: {}",
+                    ran.stdout, ran.stderr,
+                );
+                assert!(
+                    stubs.probe_invocations().is_empty(),
+                    "{name}: the append failed, so the log must stay empty: {:?}",
+                    stubs.probe_invocations()
                 );
             }
         }
