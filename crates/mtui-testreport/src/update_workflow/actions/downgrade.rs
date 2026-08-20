@@ -478,7 +478,8 @@ mod tests {
         /// Every arm records its invocation, which is the liveness signal the
         /// negative assertions rest on.
         const ZYPPER_STUB: &str = r#"#!/bin/sh
-printf '%s\n' "$2" >> "$MTUI_STUB_DIR/probe.ran"
+# A failed append must not look like a healthy probe (no set -e in the stub).
+printf '%s\n' "$2" >> "$MTUI_STUB_DIR/probe.ran" || exit 97
 case "$2" in
 se)
     if [ -n "$MTUI_STUB_SE_ROWS" ]; then printf '%s\n' "$MTUI_STUB_SE_ROWS"; fi
@@ -575,6 +576,8 @@ exit 0
             /// The script's stdout — what the flow parses into the version map,
             /// and what `show_log` shows the operator.
             stdout: String,
+            /// The script's stderr, captured for sentinel-miss diagnostics.
+            stderr: String,
         }
 
         impl Ran {
@@ -627,7 +630,20 @@ exit 0
                     .code()
                     .unwrap_or_else(|| panic!("script died on a signal: {:?}", out.status)),
                 stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             }
+        }
+
+        fn assert_reached_stub(name: &str, stubs: &Stubs, ran: &Ran, expected: &str) {
+            let invocations = stubs.probe_invocations();
+            assert!(
+                invocations.iter().any(|c| c == expected),
+                "{name}: the script never reached the stub zypper at all: {invocations:?}\n\
+                 code: {}\nstdout: {}\nstderr: {}",
+                ran.code,
+                ran.stdout,
+                ran.stderr,
+            );
         }
 
         #[test]
@@ -653,11 +669,7 @@ exit 0
                 );
                 // Liveness first: the negative below is also what an empty
                 // `PATH` produces.
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "se"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "se");
                 assert_eq!(
                     ran.marker(),
                     Some(format!("{PROBE_MARKER}: zypper -n se exited 7").as_str()),
@@ -783,11 +795,7 @@ exit 0
                         ..Knobs::default()
                     },
                 );
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "se"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "se");
                 assert_eq!(
                     ran.marker(),
                     Some(format!("{PROBE_MARKER}: awk exited 2").as_str()),
@@ -838,11 +846,7 @@ exit 0
                         ..Knobs::default()
                     },
                 );
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "se"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "se");
                 assert_eq!(
                     ran.marker(),
                     None,
@@ -959,11 +963,7 @@ exit 0
                         ..Knobs::default()
                     },
                 );
-                assert!(
-                    stubs.probe_invocations().iter().any(|c| c == "se"),
-                    "{name}: the script never reached the stub zypper at all: {:?}",
-                    stubs.probe_invocations()
-                );
+                assert_reached_stub(name, &stubs, &ran, "se");
                 assert_eq!(
                     ran.marker(),
                     None,
@@ -976,6 +976,29 @@ exit 0
                     ran.versions()
                 );
                 assert_eq!(ran.code, 0, "{name}: and it must not fail");
+            }
+        }
+
+        #[test]
+        fn a_failed_sentinel_append_exits_97() {
+            // The stub has no `set -e`; a failed `>> probe.ran` must not look
+            // like a healthy probe.
+            for (name, cmds) in downgraders() {
+                let stubs = Stubs::new();
+                fs::create_dir(stubs.dir.path().join("probe.ran"))
+                    .expect("pre-create probe.ran as a directory so the append fails");
+                let ran = run_script(&cmds, &stubs, Knobs::default());
+                assert_eq!(
+                    ran.code, 97,
+                    "{name}: a failed sentinel append must exit 97, not look healthy: \
+                     stdout: {}\nstderr: {}",
+                    ran.stdout, ran.stderr,
+                );
+                assert!(
+                    stubs.probe_invocations().is_empty(),
+                    "{name}: the append failed, so the log must stay empty: {:?}",
+                    stubs.probe_invocations()
+                );
             }
         }
     }
