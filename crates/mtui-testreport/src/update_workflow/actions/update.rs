@@ -823,6 +823,7 @@ exit "$MTUI_STUB_PATCH_EXIT"
             }
         }
 
+        #[track_caller]
         fn assert_reached_stub(name: &str, stubs: &Stubs, ran: &Ran, expected: &str) {
             let invocations = stubs.probe_invocations();
             assert!(
@@ -1354,10 +1355,16 @@ exit "$MTUI_STUB_PATCH_EXIT"
                      stdout: {}\nstderr: {}",
                     ran.stdout, ran.stderr,
                 );
+                // `probe.ran` is a directory here, so `probe_invocations()`
+                // swallows EISDIR and would stay empty with the stub or guard
+                // removed. The marker names the probe and the stub's 97, which
+                // is the path `mtui_probe_ok` must have seen.
                 assert!(
-                    stubs.probe_invocations().is_empty(),
-                    "{name}: the append failed, so the log must stay empty: {:?}",
-                    stubs.probe_invocations()
+                    ran.stdout.contains(&format!(
+                        "{PROBE_FAILURE_MARKER}: zypper -n patches exited 97"
+                    )),
+                    "{name}: the marker must name the failed probe and its status: {}",
+                    ran.stdout
                 );
             }
         }
