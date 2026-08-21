@@ -44,7 +44,7 @@ authenticated boundary trusted to operate the remaining maintenance tools.
 
 - Parallel SSH command execution across reference hosts (`run`, `update`,
   `install`, `prepare`, `downgrade`, …) with per-host `enabled`/`disabled`
-  states and `parallel`/`serial` modes. **Pubkey auth only.**
+  states. **Pubkey auth only.**
 - OBS/IBS and Gitea maintenance-request workflow (`assign`, `approve`, `reject`,
   `comment`, …) via the native OBS/IBS API (no `osc` subprocess).
 - Optional Slack review-request integration (`request_review`, off by default):
@@ -57,8 +57,10 @@ authenticated boundary trusted to operate the remaining maintenance tools.
   regeneration (`regenerate`).
 - Reference-host discovery via `refhosts.yml` (HTTPS- or filesystem-resolved,
   cached) and offline inventory search (`list_refhosts`).
-- Cooperative reference-host locking (`/var/lock/mtui.lock`) so concurrent
-  testers can share a fleet.
+- Cooperative reference-host locking so concurrent testers can share a fleet: a
+  PID-based operation lock (`/var/lock/mtui.lock`) serializing repository
+  transactions, and an RRID-based pool claim (`/var/lock/mtui-pool.lock`)
+  reserving a host for a template.
 - Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`
   (SVN and Gitea backends).
 - File transfer (`put`/`get`) over SFTP.
@@ -75,7 +77,7 @@ build-from-source, install, and packaging details.
 ```sh
 cargo build --workspace              # build all crates
 cargo run -p mtui-cli -- --help      # run the REPL binary (mtui)
-cargo run -p mtui-mcp -- --help      # run the MCP server (mtui-mcp)
+cargo run -p mtui-mcp --features mcp -- --help   # run the MCP server (mtui-mcp)
 cargo test --workspace               # run tests
 cargo fmt --all --check              # formatting gate
 cargo clippy --workspace --all-targets -- -D warnings   # lint gate
