@@ -67,7 +67,7 @@
 //! teardown the http `SessionRegistry` calls on
 //! eviction. For **every** loaded template it releases the report's pool claims
 //! then disconnects its host group, best-effort + idempotent, under a bounded
-//! `DISCONNECT_TIMEOUT` so a wedged host close cannot block the idle-sweep.
+//! [`HOST_CLOSE_TIMEOUT`] so a wedged host close cannot block the idle-sweep.
 //! It does not empty each `HostsGroup` (a closed `Target` is left in the group
 //! with a dead connection, dropped whole with the report) and it bounds the
 //! wait with [`tokio::time::timeout`].
@@ -81,8 +81,8 @@ use std::time::{Duration, Instant};
 
 use mtui_config::Config;
 use mtui_core::{
-    ColorMode, CommandError, CommandPromptDisplay, EngineError, Registry, Session, dispatch_argv,
-    dispatch_command, resolve_command_rrids,
+    ColorMode, CommandError, CommandPromptDisplay, EngineError, HOST_CLOSE_TIMEOUT, Registry,
+    Session, dispatch_argv, dispatch_command, resolve_command_rrids,
 };
 use mtui_hosts::LockOutcome;
 use tokio::sync::Mutex;
@@ -93,14 +93,6 @@ use tokio_util::sync::CancellationToken;
 use crate::capture::{self, SharedBuf};
 use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
 use crate::slim::{cap_output, truncation_notice};
-
-/// Wall-clock budget for the whole [`close`](McpSession::close) host-disconnect
-/// fan-out.
-///
-/// A wedged host teardown (a dead peer with no RST whose close never returns)
-/// must not block the http registry's idle-sweep behind it; a close that
-/// overruns this bound is logged and abandoned so `close()` always returns.
-pub(crate) const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Default interval between `notifications/progress` heartbeat frames while a
 /// long-running foreground tool call runs.
@@ -793,7 +785,7 @@ impl McpSession {
     /// remote pool locks; a no-op when pool selection was never used) then closes
     /// its host group. A second call re-runs both over already-released claims and
     /// already-closed targets, both no-ops. The fan-out is bounded by
-    /// `DISCONNECT_TIMEOUT`: a wedged host close is logged and abandoned so
+    /// [`HOST_CLOSE_TIMEOUT`]: a wedged host close is logged and abandoned so
     /// `close()` — and the registry idle-sweep awaiting it — always returns.
     ///
     /// `HostsGroup::close` (like the REPL `quit`) closes each `Target` but leaves
@@ -802,13 +794,14 @@ impl McpSession {
     /// empty the groups; a closed target simply reports its connection
     /// inactive/closed.
     pub async fn close(&self) {
-        self.close_with_timeout(DISCONNECT_TIMEOUT).await;
+        self.close_with_timeout(HOST_CLOSE_TIMEOUT).await;
     }
 
     /// [`close`](Self::close) with an explicit fan-out budget.
     ///
     /// The timeout seam exists so the (colocated) wedged-close unit test can
-    /// bound the wait to a fraction of a second instead of 45s.
+    /// bound the wait to a fraction of a second instead of the full
+    /// [`HOST_CLOSE_TIMEOUT`].
     async fn close_with_timeout(&self, timeout: Duration) {
         // Snapshot every loaded entry's lockable handle under the session lock,
         // then drop the session guard *before* the teardown awaits: holding the

@@ -12,6 +12,7 @@
 //! registry grows past one entry.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use mtui_config::Config;
 use mtui_datasources::HttpError;
@@ -28,6 +29,15 @@ use tracing::{info, warn};
 use crate::display::CommandPromptDisplay;
 use crate::error::CommandError;
 use crate::template_registry::TemplateRegistry;
+
+/// Wall-clock budget for a host-close fan-out.
+///
+/// A wedged host teardown (a dead peer with no RST whose close never returns)
+/// must not block whatever is waiting on it: the REPL `quit` command, template
+/// replacement/removal, or the MCP idle-sweep's `close`. Each of those bounds
+/// its own fan-out with this budget and abandons a straggler rather than
+/// hanging forever.
+pub const HOST_CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// The explicitly-passed state every command operates on.
 pub struct Session {
