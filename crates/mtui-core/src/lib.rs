@@ -48,5 +48,5 @@ pub use log_filter::{
     resolve_log_directives, resolve_log_directives_from,
 };
 pub use registry::{MCP_DENYLIST, Registry, register_all};
-pub use session::{LogLevel, LogLevelSink, NotifySink, Session};
+pub use session::{HOST_CLOSE_TIMEOUT, LogLevel, LogLevelSink, NotifySink, Session};
 pub use template_registry::TemplateRegistry;

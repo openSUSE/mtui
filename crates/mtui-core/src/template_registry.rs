@@ -34,6 +34,8 @@ use mtui_hosts::get_arbiter;
 use mtui_testreport::TestReport;
 use tokio::sync::Mutex;
 
+use crate::session::HOST_CLOSE_TIMEOUT;
+
 /// A loaded report behind its own lock.
 ///
 /// Each registry entry is individually lockable:
@@ -45,17 +47,12 @@ use tokio::sync::Mutex;
 /// different-RRID dispatch overlap is step 5, out of scope here.
 pub type ReportEntry = Arc<Mutex<Box<dyn TestReport + Send + Sync>>>;
 
-/// Wall-clock budget for one removed report's host-close fan-out (matches
-/// `quit`'s `CLOSE_TIMEOUT`); removal must still complete if a host hangs
-/// during teardown.
-const REMOVE_CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
-
 /// Resolves the per-report close budget. Overridable in tests (via
 /// `tests::set_close_timeout`) so the wedged-host path can be exercised without
-/// waiting the full 45s; always [`REMOVE_CLOSE_TIMEOUT`] in production.
+/// waiting the full budget; always [`HOST_CLOSE_TIMEOUT`] in production.
 #[cfg(not(test))]
 fn remove_close_timeout() -> Duration {
-    REMOVE_CLOSE_TIMEOUT
+    HOST_CLOSE_TIMEOUT
 }
 #[cfg(test)]
 fn remove_close_timeout() -> Duration {
@@ -346,7 +343,7 @@ mod tests {
     use crate::commands::testkit::{fake_report, fake_report_from_base};
 
     /// Test-only override for [`remove_close_timeout`], in milliseconds.
-    /// `u64::MAX` means "use the production [`REMOVE_CLOSE_TIMEOUT`]". Serialised
+    /// `u64::MAX` means "use the production [`HOST_CLOSE_TIMEOUT`]". Serialised
     /// by [`CLOSE_TIMEOUT_LOCK`] so a shrunk budget never leaks into a concurrent
     /// test (the whole integration suite shares one process).
     static CLOSE_TIMEOUT_MS: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -354,7 +351,7 @@ mod tests {
 
     pub(super) fn close_timeout_override() -> Duration {
         match CLOSE_TIMEOUT_MS.load(Ordering::SeqCst) {
-            u64::MAX => REMOVE_CLOSE_TIMEOUT,
+            u64::MAX => HOST_CLOSE_TIMEOUT,
             ms => Duration::from_millis(ms),
         }
     }

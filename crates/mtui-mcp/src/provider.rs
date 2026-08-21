@@ -50,12 +50,12 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
 use mtui_config::Config;
-use mtui_core::Registry;
+use mtui_core::{HOST_CLOSE_TIMEOUT, Registry};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::server::McpServer;
-use crate::session::{DISCONNECT_TIMEOUT, McpSession};
+use crate::session::McpSession;
 
 /// A monotonic clock reading in milliseconds, for last-touch bookkeeping.
 ///
@@ -359,7 +359,7 @@ impl SessionRegistry {
     ///
     /// Snapshots the live sessions, removes them from the live set, and closes
     /// them concurrently under [`sweep_parallel`](Self::sweep_parallel) with a
-    /// single overall deadline (`DISCONNECT_TIMEOUT + 1s`) so one wedged host
+    /// single overall deadline (`HOST_CLOSE_TIMEOUT + 1s`) so one wedged host
     /// close cannot hang process exit. Best-effort and idempotent: a second call
     /// finds an empty set.
     pub(crate) async fn close_all(&self) {
@@ -377,7 +377,7 @@ impl SessionRegistry {
 }
 
 /// Close a batch of sessions concurrently under `parallel`, bounded by a single
-/// overall deadline (`DISCONNECT_TIMEOUT + 1s`).
+/// overall deadline (`HOST_CLOSE_TIMEOUT + 1s`).
 ///
 /// Shared by the idle sweep ([`sweep_once`]) and graceful shutdown
 /// ([`SessionRegistry::close_all`]): one budget (not N×) guarantees the batch
@@ -393,7 +393,7 @@ async fn close_sessions(sessions: Vec<Arc<McpSession>>, parallel: usize) {
         futures::stream::iter(sessions).for_each_concurrent(parallel, |session| async move {
             session.close().await;
         });
-    let deadline = DISCONNECT_TIMEOUT + Duration::from_secs(1);
+    let deadline = HOST_CLOSE_TIMEOUT + Duration::from_secs(1);
     if tokio::time::timeout(deadline, batch).await.is_err() {
         tracing::warn!(
             ?deadline,

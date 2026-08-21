@@ -7,22 +7,18 @@ use clap::{Arg, ArgMatches};
 
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
-use crate::session::Session;
+use crate::session::{HOST_CLOSE_TIMEOUT, Session};
 
 /// The two accepted boot actions, mirrored onto the CLI positional and reused
 /// for completion.
 const BOOT_ACTIONS: [&str; 2] = ["reboot", "poweroff"];
 
-/// Wall-clock budget for a template's host-close fan-out; quit must still
-/// exit if a host hangs during teardown.
-const CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
-
 /// Resolves the per-template close budget. In tests it is overridable (via
 /// `tests::set_close_timeout`) so the straggler path can be exercised without
-/// waiting the full 45s; in production it is always [`CLOSE_TIMEOUT`].
+/// waiting the full budget; in production it is always [`HOST_CLOSE_TIMEOUT`].
 #[cfg(not(test))]
 fn close_timeout() -> Duration {
-    CLOSE_TIMEOUT
+    HOST_CLOSE_TIMEOUT
 }
 #[cfg(test)]
 fn close_timeout() -> Duration {
@@ -36,8 +32,8 @@ fn close_timeout() -> Duration {
 /// releases the report's host-arbitration pool claims (in-process arbiter
 /// ownership + remote pool locks) then closes its host group — rebooting
 /// (`reboot`), powering off (`poweroff` → shell `halt`), or simply
-/// disconnecting when no bootarg is given. Each template's close runs under a
-/// 45s budget so a hung host never blocks exit; a host that fails to disconnect
+/// disconnecting when no bootarg is given. Each template's close runs under
+/// [`HOST_CLOSE_TIMEOUT`] so a hung host never blocks exit; a host that fails to disconnect
 /// is named (`failed to disconnect from <host>: <err>`) and a host still
 /// disconnecting at the budget is named as a straggler
 /// (`still disconnecting from <host> after <secs> seconds`). Afterwards it
@@ -156,7 +152,7 @@ mod tests {
     };
 
     /// Test-only override for [`close_timeout`], in milliseconds. `u64::MAX`
-    /// means "use the production [`CLOSE_TIMEOUT`]". Serialised by
+    /// means "use the production [`HOST_CLOSE_TIMEOUT`]". Serialised by
     /// [`CLOSE_TIMEOUT_LOCK`] so a shrunk budget never leaks into a concurrent
     /// test.
     static CLOSE_TIMEOUT_MS: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -164,7 +160,7 @@ mod tests {
 
     pub(super) fn close_timeout_override() -> Duration {
         match CLOSE_TIMEOUT_MS.load(Ordering::SeqCst) {
-            u64::MAX => CLOSE_TIMEOUT,
+            u64::MAX => HOST_CLOSE_TIMEOUT,
             ms => Duration::from_millis(ms),
         }
     }
