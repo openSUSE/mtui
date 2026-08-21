@@ -56,8 +56,6 @@ pub struct TestReportBase {
     pub workflow: Workflow,
     /// Path to the loaded testreport file, or `None` when nothing is loaded.
     pub path: Option<PathBuf>,
-    /// `hostname -> system` mapping.
-    pub systems: HashMap<String, String>,
     /// Connected reference-host targets.
     pub targets: HostsGroup,
     /// `SystemProduct -> repository` map for the update repositories.
@@ -165,7 +163,6 @@ impl TestReportBase {
             config,
             workflow: Workflow::Manual,
             path: None,
-            systems: HashMap::new(),
             targets: HostsGroup::new(Vec::new(), false),
             update_repos: HashMap::new(),
             hostnames: HashSet::new(),
@@ -513,14 +510,6 @@ pub trait TestReport {
     /// label. The caller renders each surviving row as `{label:15}: {value}`.
     fn show_yourself_data(&self) -> Vec<(String, String)> {
         let base = self.base();
-        let mut systems: Vec<&String> = base.systems.keys().collect();
-        systems.sort();
-        let hosts = systems
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-
         let mut bug_ids: Vec<&String> = base.bugs.keys().collect();
         bug_ids.sort();
         let mut jira_ids: Vec<&String> = base.jira.keys().collect();
@@ -534,7 +523,18 @@ pub trait TestReport {
 
         let mut rows: Vec<(String, String)> = vec![
             ("Category".to_owned(), base.category.clone()),
-            ("Hosts".to_owned(), hosts),
+            (
+                "ReviewRequestID".to_owned(),
+                base.rrid
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+            ),
+            ("Rating".to_owned(), base.rating.clone().unwrap_or_default()),
+            (
+                "Gitea PR".to_owned(),
+                base.giteapr.clone().unwrap_or_default(),
+            ),
             ("Reviewer".to_owned(), base.reviewer.clone()),
             (
                 "Slack Review".to_owned(),
@@ -1055,7 +1055,6 @@ mod tests {
 
         assert_eq!(base.workflow, Workflow::Manual);
         assert!(base.path.is_none());
-        assert!(base.systems.is_empty());
         assert!(base.update_repos.is_empty());
         assert!(base.hostnames.is_empty());
         assert_eq!(base.lock_comment, "");
@@ -1219,8 +1218,10 @@ mod tests {
         base.reviewer = "alice".to_owned();
         base.bugs.insert("1200000".to_owned(), "boom".to_owned());
         base.jira.insert("PED-1".to_owned(), "epic".to_owned());
-        base.systems.insert("h1".to_owned(), "SLES-15.5".to_owned());
         base.testplatforms.push("base=sles".to_owned());
+        base.rrid = Some("SUSE:Maintenance:1:1".parse().unwrap());
+        base.rating = Some("moderate".to_owned());
+        base.giteapr = Some("42".to_owned());
         MetaReport { base }
     }
 
@@ -1256,6 +1257,9 @@ mod tests {
         assert!(has("Reviewer"));
         assert!(has("Bugs"));
         assert!(has("Testplatform"));
+        assert!(has("ReviewRequestID"));
+        assert!(has("Rating"));
+        assert!(has("Gitea PR"));
         assert!(!has("Packager"));
         // Build checks strips the trailing "log".
         let build = rows.iter().find(|(l, _)| l == "Build checks").unwrap();
