@@ -30,6 +30,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- The zypper `install`/`uninstall` check now shares the `update` check's exit
+  code/marker classifier instead of restating it inline, so the two cannot
+  drift apart. Reason-string changes on `install`/`uninstall` for the
+  `("11"|"12"|"15"|"16", false)` keys: exit `4`/`5`/`8` now let a locked
+  update stack, dependency prompt or RPM error name the failure instead of
+  always answering "package not found" (only `104` still short-circuits to
+  it); a transcript carrying both a dependency prompt and an `Error:` line now
+  answers "Dependency Error" instead of "RPM Error"; and a command that never
+  produced an exit status now answers "command timed out or failed to run"
+  (previously "Unknown Error").
 - The REPL line editor moved to reedline 0.50. User-facing deltas: the
   terminal painter no longer misplaces the cursor once a line fills the full
   terminal width, a bottom-flush prompt no longer reuses a stale anchor after

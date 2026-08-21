@@ -843,6 +843,37 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.reason, "RPM Error", "8 + rpm marker");
 
+        // The install check shares this classifier now, so it must answer
+        // identically on every one of the four rows above — asserted here so
+        // the two checks cannot re-diverge without this test catching it.
+        let install_zypper = crate::update_workflow::checks::install::install_check("15", false)
+            .expect("the zypper key has an install check");
+        for (stdout, stderr, code, expected) in [
+            (
+                "",
+                "System management is locked",
+                ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+                "package not found",
+            ),
+            (
+                "",
+                "System management is locked",
+                ZYPPER_EXIT_ERR_PRIVILEGES,
+                "update stack locked",
+            ),
+            (
+                "",
+                "A ZYpp transaction is already in progress.",
+                ZYPPER_EXIT_ERR_ZYPP,
+                "update stack locked",
+            ),
+            ("(c): c", "", ZYPPER_EXIT_ERR_ZYPP, "Dependency Error"),
+            ("", "Error: boom", ZYPPER_EXIT_ERR_COMMIT, "RPM Error"),
+        ] {
+            let err = install_zypper(args("zypper", stdout, stderr, code)).unwrap_err();
+            assert_eq!(err.reason, expected, "install exit {code}");
+        }
+
         // What the three say on a *clean* transcript is already pinned by
         // `package_not_found_codes_on_both_zypper_keys`, which passes empty
         // stdout and stderr for all four codes. Repeating it here would
