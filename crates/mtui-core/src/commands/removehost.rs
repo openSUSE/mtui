@@ -17,8 +17,8 @@ use crate::session::Session;
 /// [`TestReport::release_pool_claim`](mtui_testreport::TestReport::release_pool_claim)
 /// (without which a scarce-pool host stays marked busy in the process-global
 /// [`HostArbiter`](mtui_hosts::HostArbiter) for the rest of a long-lived MCP
-/// session), removes it from the group, and drops its `systems` entry. With no
-/// `-t` argument every host is removed.
+/// session), and removes it from the group. With no `-t` argument every host
+/// is removed.
 pub struct RemoveHost;
 
 #[async_trait]
@@ -63,12 +63,6 @@ impl Command for RemoveHost {
             // Release the in-process arbiter claim + prune slot candidates;
             // no-op when unpooled.
             session.metadata_mut().release_pool_claim(name);
-            // Drop the per-host system entry.
-            session
-                .metadata_mut()
-                .base_mut()
-                .systems
-                .remove(name.as_str());
         }
         session
             .display

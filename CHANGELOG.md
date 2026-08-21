@@ -88,6 +88,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   update-repository URL layout for a git-served `SLFO:1.1` update (previously
   always treated as OBS-served) and restores the approve-time Gitea
   checkout-hash comparison for it (previously always skipped).
+- `list_metadata` now reports `ReviewRequestID`, `Rating` and the Gitea PR
+  where the template carries one, and no longer emits the always-empty
+  `Hosts` row.
 
 ### Fixed
 
