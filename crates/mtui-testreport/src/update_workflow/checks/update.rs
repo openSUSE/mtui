@@ -10,7 +10,8 @@
 
 use crate::update_workflow::UpdateError;
 use crate::update_workflow::checks::{
-    CheckArgs, CheckFn, Diagnostic, ExitClass, classify_exit, log_failed,
+    CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, ExitClass, ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+    ZYPPER_EXIT_INF_REPO_SKIPPED, classify_exit, log_failed,
 };
 
 /// The zypper update check.
@@ -64,7 +65,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if !args.stdin.contains("zypper") {
         return markers(args);
     }
-    if args.exitcode == 106 {
+    if args.exitcode == ZYPPER_EXIT_INF_REPO_SKIPPED {
         tracing::warn!(
             host = args.hostname,
             stderr = args.stderr,
@@ -199,7 +200,7 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 pub(super) fn classified(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     match classify_exit(args.exitcode) {
         ExitClass::Success => markers(args),
-        ExitClass::PackageNotFound if args.exitcode == 104 => {
+        ExitClass::PackageNotFound if args.exitcode == ZYPPER_EXIT_INF_CAP_NOT_FOUND => {
             log_failed(args);
             Err(UpdateError::new("package not found", args.hostname))
         }
@@ -274,7 +275,7 @@ fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// Returns [`UpdateError`] with a reason of "update command timed out or
 /// failed to run".
 fn not_run(args: CheckArgs<'_>) -> Result<(), UpdateError> {
-    if args.exitcode == -1 {
+    if args.exitcode == EXIT_NOT_RUN {
         return Err(not_run_error(args));
     }
     Ok(())
@@ -468,6 +469,12 @@ pub(crate) fn update_check(release: &str, transactional: bool) -> Option<CheckFn
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update_workflow::checks::{
+        ZYPPER_EXIT_ERR_COMMIT, ZYPPER_EXIT_ERR_PRIVILEGES, ZYPPER_EXIT_ERR_ZYPP,
+        ZYPPER_EXIT_INF_REBOOT_NEEDED, ZYPPER_EXIT_INF_RESTART_NEEDED,
+        ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED, ZYPPER_EXIT_INF_SEC_UPDATE_NEEDED,
+        ZYPPER_EXIT_INF_UPDATE_NEEDED,
+    };
 
     fn args<'a>(stdin: &'a str, stdout: &'a str, stderr: &'a str, exitcode: i32) -> CheckArgs<'a> {
         CheckArgs {
@@ -483,7 +490,13 @@ mod tests {
     fn zypper_104_is_package_not_found() {
         // zypper + exit 104 is "package not found"
         // (ZYPPER_EXIT_INF_CAP_NOT_FOUND), matching the install check.
-        let err = zypper(args("zypper -n patch", "", "", 104)).unwrap_err();
+        let err = zypper(args(
+            "zypper -n patch",
+            "",
+            "",
+            ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+        ))
+        .unwrap_err();
         assert_eq!(err.reason, "package not found");
     }
 
@@ -492,7 +505,7 @@ mod tests {
         // 104 only means "package not found" when the command was a zypper
         // invocation. (The old name said "lock branch"; there is no such
         // branch on 104 — the lock verdict comes from the stderr markers.)
-        assert!(zypper(args("yum update", "", "", 104)).is_ok());
+        assert!(zypper(args("yum update", "", "", ZYPPER_EXIT_INF_CAP_NOT_FOUND)).is_ok());
     }
 
     #[test]
@@ -534,13 +547,13 @@ mod tests {
     fn warnings_do_not_fail_the_check() {
         let stdout = "before Additional rpm output:\nwarning: stuff\nRetrieving repo\nafter";
         // exit 106 warn + additional rpm output warn, still Ok.
-        assert!(zypper(args("zypper", stdout, "", 106)).is_ok());
+        assert!(zypper(args("zypper", stdout, "", ZYPPER_EXIT_INF_REPO_SKIPPED)).is_ok());
     }
 
     #[test]
     fn additional_rpm_output_returned_as_highlighted_diagnostic() {
         let stdout = "before Additional rpm output:\nwarning: stuff\nRetrieving repo\nafter";
-        let diags = zypper(args("zypper", stdout, "", 106)).unwrap();
+        let diags = zypper(args("zypper", stdout, "", ZYPPER_EXIT_INF_REPO_SKIPPED)).unwrap();
         assert_eq!(diags.len(), 1);
         assert!(diags[0].highlight_warning);
         assert_eq!(diags[0].text, "\nwarning: stuff\n");
@@ -707,7 +720,15 @@ mod tests {
         // classifier's own test and this one are the two places a code can be
         // forgotten, and `107` was in fact missing from the band on the first
         // pass.
-        for code in [0, 100, 101, 102, 103, 106, 107] {
+        for code in [
+            0,
+            ZYPPER_EXIT_INF_UPDATE_NEEDED,
+            ZYPPER_EXIT_INF_SEC_UPDATE_NEEDED,
+            ZYPPER_EXIT_INF_REBOOT_NEEDED,
+            ZYPPER_EXIT_INF_RESTART_NEEDED,
+            ZYPPER_EXIT_INF_REPO_SKIPPED,
+            ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED,
+        ] {
             assert!(
                 zypper(args("zypper -n in -t patch", "all good", "", code)).is_ok(),
                 "zypper must pass on informational exit {code}"
@@ -727,7 +748,12 @@ mod tests {
         // by two checks. The transcripts here are clean, which is when the
         // class label is also the message; see `only_104_outranks_the_markers`
         // for what the three inaccurate members say when it is not.
-        for code in [104, 4, 5, 8] {
+        for code in [
+            ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+            ZYPPER_EXIT_ERR_ZYPP,
+            ZYPPER_EXIT_ERR_PRIVILEGES,
+            ZYPPER_EXIT_ERR_COMMIT,
+        ] {
             let err = zypper(args("zypper -n in -t patch", "", "", code)).unwrap_err();
             assert_eq!(err.reason, "package not found", "zypper exit {code}");
             let err = transactional_update(args("transactional-update -n pkg in", "", "", code))
@@ -760,12 +786,12 @@ mod tests {
                 .render_command(&vars.into_iter().collect())
                 .expect("safe substitution never fails");
 
-            let err = check(args(&rendered, "", "", 104)).unwrap_err();
+            let err = check(args(&rendered, "", "", ZYPPER_EXIT_INF_CAP_NOT_FOUND)).unwrap_err();
             assert_eq!(err.reason, "package not found", "{key}");
             let err = check(args(&rendered, "", "", 7)).unwrap_err();
             assert_eq!(err.reason, "Unknown Error", "{key}");
             assert!(
-                check(args(&rendered, "", "", 102)).is_ok(),
+                check(args(&rendered, "", "", ZYPPER_EXIT_INF_REBOOT_NEEDED)).is_ok(),
                 "{key}: 102 is 'reboot needed'"
             );
         }
@@ -776,7 +802,13 @@ mod tests {
         // `104` is the one member of its class that literally means "capability
         // not found", and the one whose verdict a marker cannot improve on: it
         // short-circuits even with a marker present.
-        let err = zypper(args("zypper", "", "System management is locked", 104)).unwrap_err();
+        let err = zypper(args(
+            "zypper",
+            "",
+            "System management is locked",
+            ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+        ))
+        .unwrap_err();
         assert_eq!(err.reason, "package not found", "104 outranks the marker");
 
         // `4`/`5`/`8` are `ERR_ZYPP`, `ERR_PRIVILEGES` and `ERR_COMMIT` — the
@@ -784,20 +816,31 @@ mod tests {
         // headline real-world patch failures, so the transcript names them
         // rather than the class label. Restoring the blanket short-circuit
         // turns every one of these into "package not found".
-        let err = zypper(args("zypper", "", "System management is locked", 5)).unwrap_err();
+        let err = zypper(args(
+            "zypper",
+            "",
+            "System management is locked",
+            ZYPPER_EXIT_ERR_PRIVILEGES,
+        ))
+        .unwrap_err();
         assert_eq!(err.reason, "update stack locked", "5 + lock marker");
         let err = zypper(args(
             "zypper",
             "",
             "A ZYpp transaction is already in progress.",
-            4,
+            ZYPPER_EXIT_ERR_ZYPP,
         ))
         .unwrap_err();
         assert_eq!(err.reason, "update stack locked", "4 + ZYpp marker");
-        let err = zypper(args("zypper", "(c): c", "", 4)).unwrap_err();
+        let err = zypper(args("zypper", "(c): c", "", ZYPPER_EXIT_ERR_ZYPP)).unwrap_err();
         assert_eq!(err.reason, "Dependency Error", "4 + dependency prompt");
-        let err =
-            transactional_update(args("transactional-update", "", "Error: boom", 8)).unwrap_err();
+        let err = transactional_update(args(
+            "transactional-update",
+            "",
+            "Error: boom",
+            ZYPPER_EXIT_ERR_COMMIT,
+        ))
+        .unwrap_err();
         assert_eq!(err.reason, "RPM Error", "8 + rpm marker");
 
         // What the three say on a *clean* transcript is already pinned by
@@ -820,7 +863,12 @@ mod tests {
         // whose status the transport lost would otherwise be reported as a
         // clean update.
         let marker = format!("{PROBE_FAILURE_MARKER}: zypper -n patches exited 6");
-        for code in [0, 7, 104, 106] {
+        for code in [
+            0,
+            7,
+            ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+            ZYPPER_EXIT_INF_REPO_SKIPPED,
+        ] {
             for (name, check) in [
                 ("zypper", update_check("15", false).unwrap()),
                 ("transactional", update_check("slmicro", true).unwrap()),
