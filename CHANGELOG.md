@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.2.1] - 2026-08-21
+
 ### Added
 
 - `updates` gained osc-qam-style field selection and a scripting output
