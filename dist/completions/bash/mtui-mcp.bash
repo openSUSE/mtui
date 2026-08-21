@@ -1,4 +1,4 @@
-_mtui-mcp() {
+_mtui__mcp() {
     local i cur prev opts cmd
     COMPREPLY=()
     if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
@@ -92,7 +92,7 @@ _mtui-mcp() {
 }
 
 if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then
-    complete -F _mtui-mcp -o nosort -o bashdefault -o default mtui-mcp
+    complete -F _mtui__mcp -o nosort -o bashdefault -o default mtui-mcp
 else
-    complete -F _mtui-mcp -o bashdefault -o default mtui-mcp
+    complete -F _mtui__mcp -o bashdefault -o default mtui-mcp
 fi
