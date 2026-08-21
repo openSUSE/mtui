@@ -327,6 +327,12 @@ fn load_ca_bundle(path: &Path) -> Result<Vec<reqwest::Certificate>> {
     reqwest::Certificate::from_pem_bundle(&pem).map_err(HttpError::from)
 }
 
+/// The bound both source-chain walks below use to guard against a
+/// self-referential chain looping forever. Shared so the two cannot drift
+/// apart — see [`root_cause`]'s doc for how the two loops differ in effect
+/// while sharing this bound.
+const MAX_ERROR_SOURCE_LINKS: usize = 64;
+
 /// Return `true` if `err` is (or was caused by) a TLS certificate-verification
 /// failure.
 ///
@@ -341,7 +347,7 @@ pub(crate) fn is_ssl_verification_error(err: &(dyn std::error::Error + 'static))
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(e) = current {
         // Guard against a self-referential source chain looping forever.
-        if seen > 64 {
+        if seen > MAX_ERROR_SOURCE_LINKS {
             break;
         }
         seen += 1;
@@ -438,16 +444,16 @@ pub(crate) fn ssl_error_detail(e: &HttpError) -> String {
 ///
 /// Returns `None` if `e` carries no source at all, so callers fall back to the
 /// outer error's own `Display`. A self-referential source chain is bounded like
-/// [`is_ssl_verification_error`]'s walk, though not identically: that one
-/// inspects at most 65 links, this one advances at most 66 times past the first
-/// source. Either bound only has to terminate. (The openQA copy this was hoisted
-/// from had no bound at all.)
+/// [`is_ssl_verification_error`]'s walk, sharing [`MAX_ERROR_SOURCE_LINKS`],
+/// though not identically: that one inspects at most 65 links, this one
+/// advances at most 66 times past the first source. Either bound only has to
+/// terminate. (The openQA copy this was hoisted from had no bound at all.)
 #[must_use]
 pub(crate) fn root_cause(e: &dyn std::error::Error) -> Option<String> {
     let mut deepest = e.source()?;
     let mut seen = 0usize;
     while let Some(next) = deepest.source() {
-        if seen > 64 {
+        if seen > MAX_ERROR_SOURCE_LINKS {
             break;
         }
         seen += 1;

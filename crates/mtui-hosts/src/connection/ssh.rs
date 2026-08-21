@@ -110,6 +110,10 @@ pub const MAX_TOTAL_BYTES: usize = 2 * MAX_STREAM_BYTES;
 /// long, chatty commands (large `zypper` transactions) still complete.
 const COMMAND_DEADLINE_FACTOR: u32 = 12;
 
+/// The standard SSH port, used when neither `~/.ssh/config` nor the refhost
+/// entry names one.
+const DEFAULT_SSH_PORT: u16 = 22;
+
 /// Accumulates a command's stdout/stderr under fixed per-stream and combined
 /// byte caps, discarding overflow instead of buffering it.
 ///
@@ -662,7 +666,7 @@ fn resolve(hostname: &str, port: u16) -> Resolved {
         connect_host: cfg_host,
         port: cfg_port
             .or(if port == 0 { None } else { Some(port) })
-            .unwrap_or(22),
+            .unwrap_or(DEFAULT_SSH_PORT),
         user: cfg_user.unwrap_or_else(|| DEFAULT_USER.to_owned()),
         identity_files,
     }
@@ -712,7 +716,7 @@ fn persist_host_key_inner(
     let openssh = pubkey
         .to_openssh()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-    let entry = if port == 22 {
+    let entry = if port == DEFAULT_SSH_PORT {
         format!("{host} {openssh}\n")
     } else {
         format!("[{host}]:{port} {openssh}\n")
