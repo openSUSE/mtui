@@ -488,6 +488,11 @@ fn filter_ansi(text: &str) -> String {
     erase.replace_all(&no_sgr, "").into_owned()
 }
 
+/// The VT100 default geometry, used when the terminal size is unknowable.
+pub const DEFAULT_TERM_COLS: u16 = 80;
+/// The VT100 default geometry, used when the terminal size is unknowable.
+pub const DEFAULT_TERM_ROWS: u16 = 24;
+
 /// Returns the terminal size as `(cols, rows)`.
 ///
 /// Reads `TIOCGWINSZ` via `ioctl`,
@@ -514,7 +519,7 @@ fn termsize() -> (usize, usize) {
             }
         }
     }
-    termsize_from_env().unwrap_or((80, 24))
+    termsize_from_env().unwrap_or((DEFAULT_TERM_COLS as usize, DEFAULT_TERM_ROWS as usize))
 }
 
 /// Pure `ACCTEST_COLS`/`ACCTEST_ROWS` fallback, split out so the `(cols, rows)`

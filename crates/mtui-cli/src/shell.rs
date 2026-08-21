@@ -229,7 +229,10 @@ fn encode_key(key: KeyEvent) -> Option<Vec<u8>> {
 ///   the caller reports it and moves on to the next host).
 /// * Propagates a [`bridge`] failure.
 async fn run_bridge_on(target: &mut Target) -> anyhow::Result<()> {
-    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((
+        mtui_core::display::DEFAULT_TERM_COLS,
+        mtui_core::display::DEFAULT_TERM_ROWS,
+    ));
     // Enter raw mode *before* spawning so the guard restores it even if the
     // bridge fails partway; the spawn itself does not touch the local TTY.
     let _guard = RawModeGuard::new()?;
