@@ -1,7 +1,7 @@
 //! Post-prepare check.
 
 use crate::update_workflow::UpdateError;
-use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
+use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, log_failed};
 
 /// The zypper prepare check.
 ///
@@ -80,7 +80,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// failed to run" (exit `-1`), "update stack locked", "Dependency Error", or
 /// "RPM Error".
 fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == -1 {
+    if args.exitcode == EXIT_NOT_RUN {
         log_failed(args);
         return Err(UpdateError::new(
             "prepare command timed out or failed to run",
@@ -115,7 +115,7 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// Returns [`UpdateError`] with a reason of "prepare command timed out or
 /// failed to run" when the command recorded exit `-1`.
 fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == -1 {
+    if args.exitcode == EXIT_NOT_RUN {
         log_failed(args);
         return Err(UpdateError::new(
             "prepare command timed out or failed to run",
@@ -140,6 +140,7 @@ pub(crate) fn prepare_check(release: &str, transactional: bool) -> Option<CheckF
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update_workflow::checks::ZYPPER_EXIT_INF_CAP_NOT_FOUND;
 
     fn args<'a>(stdout: &'a str, stderr: &'a str) -> CheckArgs<'a> {
         CheckArgs {
@@ -299,7 +300,7 @@ mod tests {
             ("slmicro", prepare_check("slmicro", true).unwrap()),
             ("yum", prepare_check("YUM", false).unwrap()),
         ] {
-            let Err(err) = check(args_for("some prepare command", "", "", -1)) else {
+            let Err(err) = check(args_for("some prepare command", "", "", EXIT_NOT_RUN)) else {
                 panic!("{name} must fail on exit -1");
             };
             assert_eq!(
@@ -337,10 +338,10 @@ mod tests {
         // Nor are zypper's exit-code classes transferable: `104` is
         // `ZYPPER_EXIT_INF_CAP_NOT_FOUND`, which means nothing to yum. Reusing
         // the shared classifier here would fail this host.
-        assert!(yum(args_for(&plain, "", "", 104)).is_ok());
+        assert!(yum(args_for(&plain, "", "", ZYPPER_EXIT_INF_CAP_NOT_FOUND)).is_ok());
 
         // What it does catch: the command never ran to completion.
-        let err = yum(args_for(&plain, "", "", -1)).unwrap_err();
+        let err = yum(args_for(&plain, "", "", EXIT_NOT_RUN)).unwrap_err();
         assert_eq!(err.reason, "prepare command timed out or failed to run");
     }
 

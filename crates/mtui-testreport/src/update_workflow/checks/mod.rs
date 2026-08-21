@@ -91,6 +91,20 @@ pub struct CheckArgs<'a> {
 /// stable reason string otherwise.
 pub type CheckFn = Box<dyn Fn(CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> + Send + Sync>;
 
+/// zypper's documented exit codes, by their `zypper(8)` names.
+pub(crate) const ZYPPER_EXIT_ERR_ZYPP: i32 = 4;
+pub(crate) const ZYPPER_EXIT_ERR_PRIVILEGES: i32 = 5;
+pub(crate) const ZYPPER_EXIT_ERR_COMMIT: i32 = 8;
+pub(crate) const ZYPPER_EXIT_INF_UPDATE_NEEDED: i32 = 100;
+pub(crate) const ZYPPER_EXIT_INF_SEC_UPDATE_NEEDED: i32 = 101;
+pub(crate) const ZYPPER_EXIT_INF_REBOOT_NEEDED: i32 = 102;
+pub(crate) const ZYPPER_EXIT_INF_RESTART_NEEDED: i32 = 103;
+pub(crate) const ZYPPER_EXIT_INF_CAP_NOT_FOUND: i32 = 104;
+pub(crate) const ZYPPER_EXIT_INF_REPO_SKIPPED: i32 = 106;
+pub(crate) const ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED: i32 = 107;
+/// mtui's own "the command never produced a status" sentinel — *not* zypper's.
+pub(crate) const EXIT_NOT_RUN: i32 = -1;
+
 /// What a package manager's exit status says about the run.
 ///
 /// zypper's status is not a boolean. Quoting `man zypper` (verified against
@@ -100,13 +114,13 @@ pub type CheckFn = Box<dyn Fn(CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// information"* is not the same as *"the transaction committed"*. Two members
 /// of the band are not successes:
 ///
-/// * `104` (`ZYPPER_EXIT_INF_CAP_NOT_FOUND`) — the requested capability was
+/// * `104` ([`ZYPPER_EXIT_INF_CAP_NOT_FOUND`]) — the requested capability was
 ///   not found, so nothing was installed. Classified [`PackageNotFound`].
 /// * `105` (`ZYPPER_EXIT_ON_SIGNAL`) — *"Returned upon exiting after receiving
 ///   a SIGINT or SIGTERM"*, i.e. aborted mid-flight. Classified [`Unknown`].
 ///
 /// Getting the band's *extent* wrong is not academic: `107`
-/// (`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`) sat outside it in the first version of
+/// ([`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`]) sat outside it in the first version of
 /// this enum, which made a routine kernel/dracut `%posttrans` hiccup a failed
 /// update — and an `update` check failure fires the **group-wide** rollback
 /// downgrade, reverting every host in the group, not just the one that
@@ -160,7 +174,7 @@ pub(crate) enum ExitClass {
 /// bent into this shape (see the note there).
 ///
 /// The `104 | 4 | 5 | 8` grouping is the install check's, reproduced exactly:
-/// only `104` (`ZYPPER_EXIT_INF_CAP_NOT_FOUND`) literally means "capability not
+/// only `104` ([`ZYPPER_EXIT_INF_CAP_NOT_FOUND`]) literally means "capability not
 /// found", while `4`/`5`/`8` are `ERR_ZYPP`, `ERR_PRIVILEGES` and `ERR_COMMIT`.
 /// The grouping is preserved rather than re-derived, so that one exit code
 /// cannot be sorted into two different classes by two checks. What a check
@@ -183,9 +197,18 @@ pub(crate) enum ExitClass {
 /// [`Unknown`]: ExitClass::Unknown
 pub(crate) fn classify_exit(exitcode: i32) -> ExitClass {
     match exitcode {
-        0 | 100 | 101 | 102 | 103 | 106 | 107 => ExitClass::Success,
-        104 | 4 | 5 | 8 => ExitClass::PackageNotFound,
-        -1 => ExitClass::NotRun,
+        0
+        | ZYPPER_EXIT_INF_UPDATE_NEEDED
+        | ZYPPER_EXIT_INF_SEC_UPDATE_NEEDED
+        | ZYPPER_EXIT_INF_REBOOT_NEEDED
+        | ZYPPER_EXIT_INF_RESTART_NEEDED
+        | ZYPPER_EXIT_INF_REPO_SKIPPED
+        | ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED => ExitClass::Success,
+        ZYPPER_EXIT_INF_CAP_NOT_FOUND
+        | ZYPPER_EXIT_ERR_ZYPP
+        | ZYPPER_EXIT_ERR_PRIVILEGES
+        | ZYPPER_EXIT_ERR_COMMIT => ExitClass::PackageNotFound,
+        EXIT_NOT_RUN => ExitClass::NotRun,
         _ => ExitClass::Unknown,
     }
 }
@@ -220,7 +243,15 @@ mod tests {
         // band, which is where it got missed the first time.
         //
         // Each of these failing would fire the group-wide rollback downgrade.
-        for code in [0, 100, 101, 102, 103, 106, 107] {
+        for code in [
+            0,
+            ZYPPER_EXIT_INF_UPDATE_NEEDED,
+            ZYPPER_EXIT_INF_SEC_UPDATE_NEEDED,
+            ZYPPER_EXIT_INF_REBOOT_NEEDED,
+            ZYPPER_EXIT_INF_RESTART_NEEDED,
+            ZYPPER_EXIT_INF_REPO_SKIPPED,
+            ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED,
+        ] {
             assert_eq!(
                 classify_exit(code),
                 ExitClass::Success,
@@ -231,7 +262,12 @@ mod tests {
 
     #[test]
     fn package_not_found_codes() {
-        for code in [104, 4, 5, 8] {
+        for code in [
+            ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+            ZYPPER_EXIT_ERR_ZYPP,
+            ZYPPER_EXIT_ERR_PRIVILEGES,
+            ZYPPER_EXIT_ERR_COMMIT,
+        ] {
             assert_eq!(
                 classify_exit(code),
                 ExitClass::PackageNotFound,
@@ -270,6 +306,6 @@ mod tests {
         // (as it would be easy to assume) a wrong rollback: `never_ran` in
         // `reports::update_flow` vetoes the group-wide downgrade from the
         // target's `lastexit()`, not from anything a check returns.
-        assert_eq!(classify_exit(-1), ExitClass::NotRun);
+        assert_eq!(classify_exit(EXIT_NOT_RUN), ExitClass::NotRun);
     }
 }

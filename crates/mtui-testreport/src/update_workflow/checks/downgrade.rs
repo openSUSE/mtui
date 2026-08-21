@@ -1,7 +1,10 @@
 //! Post-downgrade check.
 
 use crate::update_workflow::UpdateError;
-use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
+use crate::update_workflow::checks::{
+    CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RUN, ZYPPER_EXIT_INF_CAP_NOT_FOUND,
+    ZYPPER_EXIT_INF_REPO_SKIPPED, log_failed,
+};
 
 /// The zypper downgrade check.
 ///
@@ -18,7 +21,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     // command records. Continuing past it turns an interrupted rollback into a
     // silent half-rollback: the remaining packages stay at the update version
     // while the flow ends looking done.
-    if args.exitcode == -1 {
+    if args.exitcode == EXIT_NOT_RUN {
         log_failed(args);
         return Err(UpdateError::new(
             "downgrade command timed out or failed to run",
@@ -44,7 +47,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
         );
         return Err(UpdateError::new("Dependency Error", args.hostname));
     }
-    if args.exitcode == 104 {
+    if args.exitcode == ZYPPER_EXIT_INF_CAP_NOT_FOUND {
         tracing::error!(
             host = args.hostname,
             stderr = args.stderr,
@@ -52,7 +55,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
         );
         return Err(UpdateError::new("Unspecified Error", args.hostname));
     }
-    if args.exitcode == 106 {
+    if args.exitcode == ZYPPER_EXIT_INF_REPO_SKIPPED {
         tracing::warn!(
             host = args.hostname,
             stderr = args.stderr,
@@ -75,7 +78,7 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// Returns [`UpdateError`] with a reason of "downgrade command timed out or
 /// failed to run" when the command recorded exit `-1`.
 fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == -1 {
+    if args.exitcode == EXIT_NOT_RUN {
         log_failed(args);
         return Err(UpdateError::new(
             "downgrade command timed out or failed to run",
@@ -101,7 +104,7 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 /// Returns [`UpdateError`] with a reason of "downgrade command timed out or
 /// failed to run" when the command recorded exit `-1`.
 fn yum(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
-    if args.exitcode == -1 {
+    if args.exitcode == EXIT_NOT_RUN {
         log_failed(args);
         return Err(UpdateError::new(
             "downgrade command timed out or failed to run",
@@ -146,7 +149,7 @@ mod tests {
     fn zypper_exitcode_minus_one_raises() {
         // Exit -1 (a timed-out or unrunnable command) raises instead of letting
         // the flow continue past an interrupted rollback.
-        let err = zypper(args("", "", -1)).unwrap_err();
+        let err = zypper(args("", "", EXIT_NOT_RUN)).unwrap_err();
         assert_eq!(err.reason, "downgrade command timed out or failed to run");
         assert_eq!(err.host.as_deref(), Some("h1"));
     }
@@ -155,7 +158,7 @@ mod tests {
     fn transactional_update_exitcode_minus_one_raises() {
         // Without this the registry falls back to a no-op and a dead
         // transactional-update sails on to the reboot with no snapshot staged.
-        let err = transactional_update(args("", "", -1)).unwrap_err();
+        let err = transactional_update(args("", "", EXIT_NOT_RUN)).unwrap_err();
         assert_eq!(err.reason, "downgrade command timed out or failed to run");
         assert_eq!(err.host.as_deref(), Some("h1"));
     }
@@ -192,14 +195,16 @@ mod tests {
     #[test]
     fn exit_104_is_unspecified_error() {
         assert_eq!(
-            zypper(args("", "boom", 104)).unwrap_err().reason,
+            zypper(args("", "boom", ZYPPER_EXIT_INF_CAP_NOT_FOUND))
+                .unwrap_err()
+                .reason,
             "Unspecified Error"
         );
     }
 
     #[test]
     fn exit_106_warns_but_passes() {
-        assert!(zypper(args("", "warn", 106)).is_ok());
+        assert!(zypper(args("", "warn", ZYPPER_EXIT_INF_REPO_SKIPPED)).is_ok());
     }
 
     #[test]
@@ -211,14 +216,14 @@ mod tests {
         // are not this transcript's vocabulary — but a rollback command that
         // never ran leaves the host on the update version while the flow ends
         // looking done.
-        let err = yum(args("", "", -1)).unwrap_err();
+        let err = yum(args("", "", EXIT_NOT_RUN)).unwrap_err();
         assert_eq!(err.reason, "downgrade command timed out or failed to run");
         assert_eq!(err.host.as_deref(), Some("h1"));
 
         // Everything the check cannot justify judging still passes.
         assert!(yum(args("", "", 1)).is_ok());
         assert!(yum(args("", "Error: nothing to downgrade", 0)).is_ok());
-        assert!(yum(args("", "", 104)).is_ok());
+        assert!(yum(args("", "", ZYPPER_EXIT_INF_CAP_NOT_FOUND)).is_ok());
     }
 
     #[test]
@@ -233,7 +238,7 @@ mod tests {
             stdout: "",
             stdin: "yum -y downgrade pkg-a",
             stderr: "",
-            exitcode: -1,
+            exitcode: EXIT_NOT_RUN,
         })
         .unwrap_err();
         assert_eq!(err.reason, "downgrade command timed out or failed to run");
@@ -250,7 +255,7 @@ mod tests {
             stdout: "",
             stdin: "tu pkg in",
             stderr: "",
-            exitcode: -1,
+            exitcode: EXIT_NOT_RUN,
         })
         .unwrap_err();
         assert_eq!(err.reason, "downgrade command timed out or failed to run");
