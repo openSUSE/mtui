@@ -12,7 +12,7 @@
 //! 3. A deny-listed tool call is rejected (`method_not_found`) — no route exists.
 //!
 //! This is the Phase-7 gating contract test: it demonstrates the hand-written
-//! `ServerHandler` with a runtime-built tool set + schemas works against rmcp 2.x
+//! `ServerHandler` with a runtime-built tool set + schemas works against rmcp 3.x
 //! over a transport.
 
 #![cfg(feature = "mcp")]
