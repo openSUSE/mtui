@@ -103,6 +103,13 @@ sessions and reaps a session after `[mcp] session_idle_timeout` seconds of
 inactivity (disconnecting its hosts — the SDK gives no per-session teardown
 callback, so this sweep is what releases a vanished client's SSH connections).
 
+This isolation depends on rmcp's legacy `Mcp-Session-Id` session lifecycle, so
+`mtui-mcp` advertises protocol revisions `2024-11-05` through `2025-11-25` and
+declines `2026-07-28`: that revision removes protocol-level sessions and is
+served statelessly (a throwaway session per request) regardless of config, which
+would defeat per-client isolation under HTTP. A client asking for it falls back
+to the latest revision `mtui-mcp` does support.
+
 ## Multiple templates: scoping and fan-out
 
 A session can hold several loaded templates at once (call `load_template` more

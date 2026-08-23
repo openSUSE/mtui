@@ -24,6 +24,7 @@
 //! hand-written (not synthesised from the registry); the job tools drive the
 //! session's background-job table.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,8 +36,8 @@ use mtui_core::Registry;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
-    PaginatedRequestParams, ProgressNotificationParam, ProgressToken, ServerCapabilities,
-    ServerInfo, Tool, ToolAnnotations,
+    PaginatedRequestParams, ProgressNotificationParam, ProgressToken, ProtocolVersion,
+    ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
@@ -242,9 +243,31 @@ impl ProgressSink for PeerProgressSink {
     }
 }
 
+/// The protocol revisions `initialize` and `server/discover` negotiate down to:
+/// [`rmcp::model::ProtocolVersion::KNOWN_VERSIONS`] minus `V_2026_07_28`.
+///
+/// mtui's http per-client isolation *is* the legacy session model: rmcp calls
+/// [`crate::provider::SessionRegistry::try_make_server`] once per
+/// `Mcp-Session-Id` session, and the minted [`McpServer`] owns that client's
+/// [`McpSession`]. Revision 2026-07-28 removes protocol-level sessions and is
+/// served statelessly (a throwaway session per request) regardless of
+/// `legacy_session_mode`, so it must never be among the versions a client can
+/// negotiate. A client that asks for it gets `-32022` and falls back to one of
+/// these four.
+const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
+    ProtocolVersion::V_2024_11_05,
+    ProtocolVersion::V_2025_03_26,
+    ProtocolVersion::V_2025_06_18,
+    ProtocolVersion::V_2025_11_25,
+];
+
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(SUPPORTED_PROTOCOL_VERSIONS)
     }
 
     async fn list_tools(
@@ -420,6 +443,19 @@ mod tests {
 
         assert!(!tool_names(&server).iter().any(|n| n == "shell"));
         assert!(!server.routes.contains_key("shell"));
+    }
+
+    #[test]
+    fn supported_protocol_versions_excludes_the_stateless_revision() {
+        // 2026-07-28 is served statelessly regardless of `legacy_session_mode`
+        // (rmcp classifies it from the request, not the config), so it must
+        // never be among the versions a client can negotiate to. Anti-vacuity:
+        // also assert the latest legacy revision *is* present, so an
+        // accidentally emptied list cannot green this.
+        let server = server_with(Config::default());
+        let versions = server.supported_protocol_versions();
+        assert!(!versions.contains(&rmcp::model::ProtocolVersion::V_2026_07_28));
+        assert!(versions.contains(&rmcp::model::ProtocolVersion::V_2025_11_25));
     }
 
     #[test]
