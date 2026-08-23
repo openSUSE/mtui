@@ -34,9 +34,9 @@ use std::pin::Pin;
 use mtui_core::Registry;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
-    ProgressNotificationParam, ProgressToken, ServerCapabilities, ServerInfo, Tool,
-    ToolAnnotations,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
+    PaginatedRequestParams, ProgressNotificationParam, ProgressToken, ServerCapabilities,
+    ServerInfo, Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
@@ -260,7 +260,7 @@ impl ServerHandler for McpServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
+    ) -> Result<CallToolResponse, McpError> {
         self.touch();
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
@@ -282,9 +282,7 @@ impl ServerHandler for McpServer {
 
         // A job-control tool: poll/control the session's background-job table.
         if self.job_tools.contains(&name) {
-            return Ok(render(
-                dispatch_job_tool(&self.session, &name, &kwargs).await,
-            ));
+            return Ok(render(dispatch_job_tool(&self.session, &name, &kwargs).await).into());
         }
 
         // A hand-written testreport tool: acts directly on the loaded checkout.
@@ -294,7 +292,7 @@ impl ServerHandler for McpServer {
                 // Serialise the JSON object result to a single text block, matching
                 // the command tools' single-content-block wire shape.
                 .map(|v| v.to_string());
-            return Ok(render(result));
+            return Ok(render(result).into());
         }
 
         // A hand-written in-band transfer tool (get/put, #434).
@@ -303,14 +301,15 @@ impl ServerHandler for McpServer {
                 crate::transfer_tools::dispatch_transfer_tool(&self.session, &name, &kwargs, sink)
                     .await
                     .map(|v| v.to_string());
-            return Ok(render(result));
+            return Ok(render(result).into());
         }
 
         // A synthesised command tool: dispatch through the shared engine.
         if let Some(route) = self.routes.get(&name) {
             return Ok(render(
                 dispatch_tool(&self.registry, &self.session, route, &kwargs, sink).await,
-            ));
+            )
+            .into());
         }
 
         // Unknown / deny-listed name: no route was synthesised for it.

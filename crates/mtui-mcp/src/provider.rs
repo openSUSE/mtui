@@ -20,7 +20,7 @@
 //!
 //! ## Cap + idle-TTL
 //!
-//! rmcp 2.2.0 gives no built-in max-sessions or idle-TTL knob, and its
+//! rmcp 3.x gives no built-in max-sessions or idle-TTL knob, and its
 //! `service_factory` receives **no** session key while rmcp itself owns session
 //! teardown (no application hook). So the `[mcp] session_cap` /
 //! `session_idle_timeout` bounds are enforced **application-side, wrapped around
