@@ -127,6 +127,7 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     let keep_alive = session_keep_alive(config.mcp_session_idle_timeout);
     // Captured before `config` moves into the registry (usize is Copy).
     let body_limit = resolve_body_limit(config.mcp_max_request_bytes);
+    let rmcp_body_cap = rmcp_body_limit(config.mcp_max_request_bytes);
     tracing::info!(
         cap = config.mcp_session_cap,
         idle_timeout_s = config.mcp_session_idle_timeout,
@@ -159,17 +160,26 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     session_config.keep_alive = keep_alive;
     let mut session_manager = LocalSessionManager::default();
     session_manager.session_config = session_config;
+    // `legacy_session_mode` is already rmcp's default; set it explicitly so a
+    // future rmcp default flip cannot silently make mtui stateless (mtui's
+    // per-client http isolation depends on the legacy session lifecycle — see
+    // `McpServer::supported_protocol_versions`). `max_request_body_bytes`
+    // governs rmcp's own pre-session body buffering, below the `body_layer`
+    // (axum's `DefaultBodyLimit`) applied further down.
     let service = StreamableHttpService::new(
         move || factory_sessions.try_make_server(),
         Arc::new(session_manager),
-        StreamableHttpServerConfig::default(),
+        StreamableHttpServerConfig::default()
+            .with_legacy_session_mode(true)
+            .with_max_request_body_bytes(rmcp_body_cap),
     );
 
     // Cap the inbound request body before rmcp buffers it: an unauthenticated
     // pre-session request must not be bufferable until memory exhaustion. `0`
-    // fully disables mtui's limit (removing even axum's implicit 2 MB floor);
-    // any positive value becomes a hard `413` ceiling. (`body_limit` resolved
-    // above, before `config` moved into the registry.)
+    // fully disables mtui's limit (removing even axum's implicit 2 MB floor,
+    // and raising rmcp's own 4 MB default to `usize::MAX`); any positive value
+    // becomes a hard `413` ceiling and the same cap on rmcp's body gate.
+    // (`body_limit` resolved above, before `config` moved into the registry.)
     tracing::info!(
         request_body_limit =
             body_limit.map_or_else(|| "disabled".to_owned(), |n| format!("{n} bytes")),
@@ -224,6 +234,20 @@ fn session_keep_alive(idle_timeout_s: u64) -> Option<Duration> {
 /// buffers the body.
 fn resolve_body_limit(max_request_bytes: usize) -> Option<usize> {
     (max_request_bytes != 0).then_some(max_request_bytes)
+}
+
+/// The [`StreamableHttpServerConfig::max_request_body_bytes`] cap to apply,
+/// from the same `config.mcp_max_request_bytes` value `resolve_body_limit`
+/// maps for axum's layer. `0` (mtui's "disabled") becomes `usize::MAX` rather
+/// than `None` — rmcp's field is a plain `usize`, not an `Option` — so the
+/// same knob also lifts rmcp's own 4 MB default; any positive value passes
+/// through unchanged.
+fn rmcp_body_limit(max_request_bytes: usize) -> usize {
+    if max_request_bytes == 0 {
+        usize::MAX
+    } else {
+        max_request_bytes
+    }
 }
 
 /// Install a minimal stderr `tracing` subscriber.
@@ -599,6 +623,32 @@ mod tests {
         assert_eq!(resolve_body_limit(10_000_000), Some(10_000_000));
         assert_eq!(resolve_body_limit(1), Some(1));
         assert_eq!(resolve_body_limit(0), None);
+    }
+
+    #[test]
+    fn rmcp_body_limit_maps_max_request_bytes() {
+        // A positive cap passes through unchanged; 0 (mtui's "disabled")
+        // becomes `usize::MAX` — rmcp's field has no "unlimited" sentinel.
+        assert_eq!(rmcp_body_limit(10_000_000), 10_000_000);
+        assert_eq!(rmcp_body_limit(1), 1);
+        assert_eq!(rmcp_body_limit(0), usize::MAX);
+    }
+
+    #[test]
+    fn built_config_carries_the_configured_body_cap_not_rmcps_default() {
+        // The `StreamableHttpServerConfig` `serve_http` builds must carry our
+        // config-derived cap, overriding rmcp's 4 MB default (mirrors
+        // `session_manager_pins_keep_alive_from_config` below).
+        let config = StreamableHttpServerConfig::default()
+            .with_legacy_session_mode(true)
+            .with_max_request_body_bytes(rmcp_body_limit(10_000_000));
+        assert_eq!(config.max_request_body_bytes, 10_000_000);
+        assert_ne!(
+            config.max_request_body_bytes,
+            StreamableHttpServerConfig::default().max_request_body_bytes,
+            "must not inherit rmcp's 4 MB default",
+        );
+        assert!(config.legacy_session_mode);
     }
 
     #[test]

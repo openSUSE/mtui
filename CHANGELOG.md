@@ -8,6 +8,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- MCP SDK moved to rmcp 3.x. `mtui-mcp` now advertises protocol revisions
+  `2024-11-05` through `2025-11-25` and declines `2026-07-28`, which removes
+  protocol-level sessions and would break per-client HTTP session isolation.
+  `[mcp] max_request_bytes` now also sets rmcp's own request-body ceiling
+  (previously a fixed 4 MB), so `0` disables both gates.
+
 ## [26.2.1] - 2026-08-21
 
 ### Added
