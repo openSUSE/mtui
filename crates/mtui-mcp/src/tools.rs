@@ -29,11 +29,12 @@ use std::sync::Arc;
 
 use mtui_core::{Registry, command_parser};
 use serde_json::{Map, Value, json};
+use tokio_util::sync::CancellationToken;
 
 use crate::deny::is_denied;
 use crate::schema::command_input_schema;
 use crate::session::{
-    DEFAULT_PROGRESS_INTERVAL, JobView, McpCommandError, McpSession, ProgressSink,
+    DEFAULT_PROGRESS_INTERVAL, JobView, McpCommandError, McpSession, ProgressSink, ToolOutcome,
 };
 
 /// Commands that touch reference hosts and can run for minutes. These gain a
@@ -292,23 +293,24 @@ pub(crate) fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
 /// Pops the `background` flag for slow commands; when `true` the call fans out
 /// background jobs via [`McpSession::start_jobs`] (one per resolved template) and
 /// returns a "started job(s)" reply naming the ids to poll. Otherwise
-/// reconstructs argv from `kwargs` (honouring the route's `argv_prefix`) and runs
-/// it synchronously through [`McpSession::run_command_with_progress`], emitting
-/// heartbeats via `sink` (when the client requested progress) so a slow
-/// foreground call does not time the client out.
+/// reconstructs argv from `kwargs` (honouring the route's `argv_prefix`) and
+/// runs it through [`McpSession::run_command_with_progress`] (`client_ct ==
+/// None`) or [`McpSession::run_command_client_cancellable`] (`client_ct ==
+/// Some`), emitting heartbeats via `sink` (when the client requested progress)
+/// so a slow foreground call does not time the client out.
 ///
-/// # Errors
-///
-/// Returns [`McpCommandError`] when the command is not registered, or when the
-/// synchronous parse/run fails (propagated from
-/// [`McpSession::run_command_with_progress`]).
+/// `client_ct` is the MCP request's own cancellation token: only this
+/// synthesised-command path can hold `/var/lock/mtui.lock`, so it is the one
+/// call site that needs the two-stage cancel/abort/unlock sequence instead of
+/// the bare drop [`crate::server`] uses for the testreport/transfer branches.
 pub(crate) async fn dispatch_tool(
     registry: &Arc<Registry>,
     session: &Arc<McpSession>,
     route: &ToolRoute,
     kwargs: &Map<String, Value>,
     sink: Option<&dyn ProgressSink>,
-) -> Result<String, McpCommandError> {
+    client_ct: Option<&CancellationToken>,
+) -> ToolOutcome {
     let mut kwargs = kwargs.clone();
     let background = if route.slow {
         matches!(kwargs.remove("background"), Some(Value::Bool(true)))
@@ -316,11 +318,14 @@ pub(crate) async fn dispatch_tool(
         false
     };
 
-    let command = registry.get(route.command).ok_or_else(|| McpCommandError {
-        stdout: String::new(),
-        stderr: format!("command not registered: {}", route.command),
-        exit_code: 1,
-    })?;
+    let Some(command) = registry.get(route.command) else {
+        return Err::<String, _>(McpCommandError {
+            stdout: String::new(),
+            stderr: format!("command not registered: {}", route.command),
+            exit_code: 1,
+        })
+        .into();
+    };
     let parser = command_parser(command.as_ref());
 
     // Reject misspelled fields before argv reconstruction silently drops them.
@@ -334,26 +339,44 @@ pub(crate) async fn dispatch_tool(
         .get_arguments()
         .map(|a| a.get_id().as_str())
         .filter(|id| *id != "help" && *id != "version");
-    reject_unknown_kwargs(&kwargs, allowed)?;
+    if let Err(err) = reject_unknown_kwargs(&kwargs, allowed) {
+        return Err::<String, _>(err).into();
+    }
 
     let argv = crate::argv::kwargs_to_argv(&parser, &kwargs, &route.argv_prefix);
 
     if background {
-        let job_ids = session
+        return session
             .start_jobs(Arc::clone(registry), route.command, argv)
-            .await?;
-        return Ok(started_jobs_reply(route.command, &job_ids));
+            .await
+            .map(|job_ids| started_jobs_reply(route.command, &job_ids))
+            .into();
     }
 
-    session
-        .run_command_with_progress(
-            registry,
-            route.command,
-            &argv,
-            sink,
-            DEFAULT_PROGRESS_INTERVAL,
-        )
-        .await
+    match client_ct {
+        Some(ct) => {
+            session
+                .run_command_client_cancellable(
+                    registry,
+                    route.command,
+                    &argv,
+                    sink,
+                    DEFAULT_PROGRESS_INTERVAL,
+                    ct,
+                )
+                .await
+        }
+        None => session
+            .run_command_with_progress(
+                registry,
+                route.command,
+                &argv,
+                sink,
+                DEFAULT_PROGRESS_INTERVAL,
+            )
+            .await
+            .into(),
+    }
 }
 
 /// The client-facing reply after starting one or more background jobs.
@@ -529,6 +552,15 @@ mod tests {
     use clap::ArgMatches;
     use mtui_config::Config;
     use mtui_core::{Command, CommandResult, Scope, Session, register_all};
+
+    /// Unwraps a [`ToolOutcome`] produced with `client_ct: None`, which can
+    /// only ever be [`ToolOutcome::Completed`].
+    fn completed(outcome: ToolOutcome) -> Result<String, McpCommandError> {
+        match outcome {
+            ToolOutcome::Completed(result) => result,
+            ToolOutcome::Aborted(_) => panic!("client_ct was None; expected Completed"),
+        }
+    }
 
     // ------------------------------------------------------ reject_unknown_kwargs
 
@@ -725,14 +757,17 @@ mod tests {
 
         let registry = Arc::new(registry);
         let kwargs = json!({ "attributes": ["session_user"] });
-        let out = dispatch_tool(
-            &registry,
-            &session,
-            route,
-            kwargs.as_object().unwrap(),
-            None,
+        let out = completed(
+            dispatch_tool(
+                &registry,
+                &session,
+                route,
+                kwargs.as_object().unwrap(),
+                None,
+                None,
+            )
+            .await,
         )
-        .await
         .expect("config show succeeds");
         assert!(out.contains("session_user"), "got: {out:?}");
         assert!(out.contains("alice"), "got: {out:?}");
@@ -747,14 +782,17 @@ mod tests {
         let routes = tool_routes(&registry);
         let route = routes.get("config_show").expect("config_show route");
         let kwargs = json!({ "attribut": ["session_user"] }); // typo: attribut(e)s
-        let err = dispatch_tool(
-            &registry,
-            &session,
-            route,
-            kwargs.as_object().unwrap(),
-            None,
+        let err = completed(
+            dispatch_tool(
+                &registry,
+                &session,
+                route,
+                kwargs.as_object().unwrap(),
+                None,
+                None,
+            )
+            .await,
         )
-        .await
         .expect_err("typo refused");
         assert_eq!(err.exit_code, 1);
         assert!(
@@ -773,14 +811,17 @@ mod tests {
         let route = routes.get("run").expect("run route").clone();
         assert!(route.slow, "run must be slow");
         let kwargs = json!({ "background": true, "command": ["true"] });
-        let out = dispatch_tool(
-            &registry,
-            &session,
-            &route,
-            kwargs.as_object().unwrap(),
-            None,
+        let out = completed(
+            dispatch_tool(
+                &registry,
+                &session,
+                &route,
+                kwargs.as_object().unwrap(),
+                None,
+                None,
+            )
+            .await,
         )
-        .await
         .expect("background start not rejected");
         assert!(out.contains("started job"), "got: {out:?}");
     }
@@ -797,14 +838,17 @@ mod tests {
 
         // `run` needs a command to execute; supply one so argv reconstructs.
         let kwargs = json!({ "background": true, "command": ["true"] });
-        let reply = dispatch_tool(
-            &registry,
-            &session,
-            &route,
-            kwargs.as_object().unwrap(),
-            None,
+        let reply = completed(
+            dispatch_tool(
+                &registry,
+                &session,
+                &route,
+                kwargs.as_object().unwrap(),
+                None,
+                None,
+            )
+            .await,
         )
-        .await
         .expect("background start returns a reply, not an error");
         assert!(
             reply.starts_with("started job 'run-1' (`run`);"),
