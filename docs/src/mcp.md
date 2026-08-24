@@ -283,11 +283,17 @@ confirm:
 
 Long-running commands run as background jobs so a tool call returns promptly with
 a job id you can poll. The slow host commands — `run`, `update`, `downgrade`,
-`prepare`, `install`, `uninstall`, `set_repo`, `reboot`, and `regenerate` — accept
-a **`background=true`** parameter. Instead of holding the request open for the
-minutes the operation takes, the call returns immediately with the job id(s); when
-the command fans out across several templates it mints **one job per template**,
-each independently pollable and cancellable.
+`prepare`, `install`, `uninstall`, `set_repo`, `reboot`, `regenerate`, `add_host`,
+and `load_template` — accept a **`background=true`** parameter. Instead of
+holding the request open for the minutes the operation takes, the call returns
+immediately with the job id(s); when the command fans out across several
+templates it mints **one job per template**, each independently pollable and
+cancellable.
+
+`add_host` and `load_template -a` connect to a whole batch of reference hosts, and
+one unreachable candidate among them can hold the call open far past any client's
+patience — backgrounding is the only way to keep such a call cancellable via
+`job_cancel`.
 
 Four job-control tools manage them:
 
@@ -339,6 +345,24 @@ client never sees another's jobs). The per-session job budget
 (`max_active_jobs`, `max_completed_jobs`) and the single-result size cap
 (`max_output_bytes`) bound resource use so one client cannot exhaust the server or
 dwarf the client's context.
+
+## Cancelling a foreground call
+
+A client that sends an explicit `notifications/cancelled` for an in-flight
+foreground tool call (a testreport tool, a transfer tool, or a synthesised
+command tool) drops the dispatch immediately and releases the `CommandLock` it
+was holding — a follow-up call on the same RRID is not left queued behind it.
+The tool call itself resolves to an error rather than a fabricated success.
+
+**This only helps a client that sends the notification.** mtui-mcp's default
+transport is stdio, where there is no per-request connection to drop — a
+client that simply stops waiting (e.g. because it hit its own timeout) sends
+nothing, and the server has no way to learn the caller gave up. In that case
+the lock is still released, just on the ordinary schedule: the `connect_timeout`
+budget (commit A) and the shared backup-retry budget bound how long that takes
+rather than leaving it unbounded. Backgrounding a slow command
+(`background=true`, see above) plus `job_cancel` remains the reliable way to
+recover a stuck call regardless of transport.
 
 ## Long-running calls: progress heartbeats
 

@@ -19,12 +19,15 @@ use std::time::Duration;
 
 use mtui_types::enums::ParseEnumError;
 
-/// The SSH connect + per-command timeout, as a typed [`Duration`].
+/// A duration budget for either the per-command no-output window or the SSH
+/// connect handshake, as a typed [`Duration`].
 ///
-/// Sourced from `mtui-config`'s `connection_timeout` (an integer number of
-/// seconds, default `300`). The russh impl uses this both to bound the
-/// TCP connect / banner / auth handshake and to abort a command whose channel
-/// produces no output within the window.
+/// Sourced from `mtui-config`'s `connection_timeout` (the per-command window,
+/// default `300`s) or `connect_timeout` (the TCP connect / banner / auth
+/// handshake, default `60`s) — two distinct budgets sharing this one type. The
+/// russh impl aborts a command whose channel produces no output within the
+/// `connection_timeout` window, and separately bounds the handshake by
+/// `connect_timeout`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CommandTimeout(Duration);
 

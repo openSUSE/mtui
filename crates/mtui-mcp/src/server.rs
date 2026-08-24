@@ -42,6 +42,7 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use serde_json::{Map, Value};
+use tokio_util::sync::CancellationToken;
 
 use crate::provider::SessionGuard;
 use crate::session::{McpSession, ProgressSink};
@@ -310,29 +311,43 @@ impl ServerHandler for McpServer {
 
         // A hand-written testreport tool: acts directly on the loaded checkout.
         if self.testreport_tools.contains(&name) {
-            let result = dispatch_testreport_tool(&self.session, &name, &kwargs, sink)
-                .await
-                // Serialise the JSON object result to a single text block, matching
-                // the command tools' single-content-block wire shape.
-                .map(|v| v.to_string());
-            return Ok(render(result).into());
+            let Some(result) = cancellable(
+                dispatch_testreport_tool(&self.session, &name, &kwargs, sink),
+                &context.ct,
+            )
+            .await
+            else {
+                return Err(cancelled_error());
+            };
+            // Serialise the JSON object result to a single text block, matching
+            // the command tools' single-content-block wire shape.
+            return Ok(render(result.map(|v| v.to_string())).into());
         }
 
         // A hand-written in-band transfer tool (get/put, #434).
         if self.transfer_tools.contains(&name) {
-            let result =
-                crate::transfer_tools::dispatch_transfer_tool(&self.session, &name, &kwargs, sink)
-                    .await
-                    .map(|v| v.to_string());
-            return Ok(render(result).into());
+            let Some(result) = cancellable(
+                crate::transfer_tools::dispatch_transfer_tool(&self.session, &name, &kwargs, sink),
+                &context.ct,
+            )
+            .await
+            else {
+                return Err(cancelled_error());
+            };
+            return Ok(render(result.map(|v| v.to_string())).into());
         }
 
         // A synthesised command tool: dispatch through the shared engine.
         if let Some(route) = self.routes.get(&name) {
-            return Ok(render(
-                dispatch_tool(&self.registry, &self.session, route, &kwargs, sink).await,
+            let Some(result) = cancellable(
+                dispatch_tool(&self.registry, &self.session, route, &kwargs, sink),
+                &context.ct,
             )
-            .into());
+            .await
+            else {
+                return Err(cancelled_error());
+            };
+            return Ok(render(result).into());
         }
 
         // Unknown / deny-listed name: no route was synthesised for it.
@@ -340,6 +355,36 @@ impl ServerHandler for McpServer {
             rmcp::model::CallToolRequestMethod,
         >())
     }
+}
+
+/// Races `fut` against the client's `notifications/cancelled` signal,
+/// `biased` so a future that is already resolved is never starved by the
+/// cancellation branch. Returns `None` when `ct` fires first.
+///
+/// This only ever fires for a client that explicitly cancels — on stdio
+/// (mtui-mcp's default transport) there is no per-request connection to drop,
+/// and rmcp's client-disconnect cancellation exists only on the stateless HTTP
+/// paths mtui declines (see `docs/src/mcp.md`). The job-control branch is
+/// deliberately left unwrapped: it is fast, and cancelling `job_cancel` itself
+/// makes no sense.
+async fn cancellable<T>(fut: impl Future<Output = T>, ct: &CancellationToken) -> Option<T> {
+    tokio::select! {
+        biased;
+        result = fut => Some(result),
+        () = ct.cancelled() => None,
+    }
+}
+
+/// The error returned in place of a cancelled call's result.
+///
+/// rmcp has already dropped this request's id from its cancellation-token
+/// pool once the notification arrives, so the caller-visible response is
+/// discarded either way (`service.rs`'s "dropping response for cancelled
+/// request"); returning an explicit error here — rather than fabricating a
+/// success — keeps the code honest about what happened.
+fn cancelled_error() -> McpError {
+    tracing::info!("MCP tool call cancelled by client notification");
+    McpError::internal_error("request cancelled by client", None)
 }
 
 /// Render a dispatch result into a [`CallToolResult`].
@@ -476,5 +521,88 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    /// The property that matters for `notifications/cancelled` support: the
+    /// `CommandLock` a cancelled dispatch was holding is released, not just
+    /// that the call returns. Drives `cancellable` directly against
+    /// `McpSession` — a real `RequestContext<RoleServer>` needs a live `Peer`,
+    /// which is awkward to fake offline; the `call_tool` wiring around this
+    /// helper is covered by inspection.
+    #[tokio::test]
+    async fn cancelling_a_dispatch_drops_the_future_and_releases_its_command_lock() {
+        use std::sync::Mutex as StdMutex;
+
+        use clap::ArgMatches;
+        use mtui_core::{Command, CommandResult, Scope, register_all};
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+
+        /// A body blocked mid host-op that never observes any cancellation
+        /// signal itself — only dropping its future can stop it, exactly the
+        /// shape `cancellable` exists to handle.
+        struct Stubborn(StdMutex<Option<tokio::sync::oneshot::Sender<()>>>);
+        #[async_trait::async_trait]
+        impl Command for Stubborn {
+            fn name(&self) -> &'static str {
+                "cancellable_probe"
+            }
+            fn scope(&self) -> Scope {
+                Scope::Fanout
+            }
+            async fn call(
+                &self,
+                _session: &mut mtui_core::Session,
+                _args: &ArgMatches,
+            ) -> CommandResult {
+                if let Some(tx) = self.0.lock().expect("probe channel poisoned").take() {
+                    let _ = tx.send(());
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                Ok(())
+            }
+        }
+
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let session = McpSession::new(config);
+        let mut registry = register_all();
+        registry.register(Arc::new(Stubborn(StdMutex::new(Some(started_tx)))));
+        let registry = Arc::new(registry);
+
+        let ct = CancellationToken::new();
+        let call = tokio::spawn({
+            let session = Arc::clone(&session);
+            let registry = Arc::clone(&registry);
+            let ct = ct.clone();
+            async move {
+                cancellable(
+                    session.run_command(&registry, "cancellable_probe", &[]),
+                    &ct,
+                )
+                .await
+            }
+        });
+
+        started_rx.await.expect("probe body started");
+        ct.cancel();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), call)
+            .await
+            .expect("cancellable must return promptly, not hang on the parked body")
+            .expect("spawned task did not panic");
+        assert!(result.is_none(), "a cancelled dispatch must yield None");
+
+        // The exclusive-path lock the parked probe held is released once its
+        // future is dropped: a follow-up dispatch completes rather than
+        // queuing forever behind a stranded hold.
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            session.run_command(&registry, "whoami", &[]),
+        )
+        .await
+        .expect("follow-up dispatch must not hang on a stranded lock")
+        .expect("whoami succeeds");
+        assert!(out.contains("testuser"), "got: {out}");
     }
 }

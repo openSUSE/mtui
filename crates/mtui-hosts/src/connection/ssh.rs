@@ -359,6 +359,11 @@ pub struct SshConnection {
     resolved: Resolved,
     policy: HostKeyPolicy,
     timeout: CommandTimeout,
+    /// SSH connect handshake budget (TCP connect, banner, and auth), applied
+    /// both by [`connect`](Self::connect) and by [`reconnect`](Connection::reconnect).
+    /// Distinct from [`timeout`](Self::timeout), which bounds the per-command
+    /// no-output window only.
+    connect_timeout: CommandTimeout,
     handle: Option<Handle<ClientHandler>>,
     /// Whether a TTY-backed user can answer the command-timeout prompt. `false`
     /// (the default, and always under `mtui-mcp`) makes a no-output timeout
@@ -394,7 +399,9 @@ impl std::fmt::Debug for SshConnection {
 
 impl SshConnection {
     /// Connects to `hostname` on `port` (0 means "use `~/.ssh/config` / 22"),
-    /// applying `policy` to the host key and `timeout` to the handshake.
+    /// applying `policy` to the host key, `connect_timeout` to the handshake
+    /// (TCP connect, banner, and auth), and `timeout` to the later per-command
+    /// no-output window.
     ///
     /// `known_hosts` selects the file consulted (and, under
     /// [`AutoAdd`](HostKeyPolicy::AutoAdd), appended) during host-key
@@ -413,17 +420,26 @@ impl SshConnection {
         hostname: impl Into<String>,
         port: u16,
         policy: HostKeyPolicy,
+        connect_timeout: CommandTimeout,
         timeout: CommandTimeout,
         known_hosts: Option<PathBuf>,
     ) -> Result<Self> {
         let hostname = hostname.into();
         let resolved = resolve(&hostname, port);
-        let handle = establish(&hostname, &resolved, policy, timeout, known_hosts.clone()).await?;
+        let handle = establish(
+            &hostname,
+            &resolved,
+            policy,
+            connect_timeout,
+            known_hosts.clone(),
+        )
+        .await?;
         Ok(Self {
             hostname,
             resolved,
             policy,
             timeout,
+            connect_timeout,
             handle: Some(handle),
             is_repl: false,
             timeout_prompt: None,
@@ -744,12 +760,13 @@ fn reconnect_delay(count: usize, base: Duration) -> Duration {
 }
 
 /// Establishes the transport and authenticates. Shared by `connect` and
-/// `reconnect`.
+/// `reconnect`. `connect_timeout` bounds the TCP connect / banner wait
+/// **and** the subsequent authentication — the whole handshake is one budget.
 async fn establish(
     hostname: &str,
     resolved: &Resolved,
     policy: HostKeyPolicy,
-    ctimeout: CommandTimeout,
+    connect_timeout: CommandTimeout,
     known_hosts: Option<PathBuf>,
 ) -> Result<Handle<ClientHandler>> {
     let config = Arc::new(ClientConfig {
@@ -766,7 +783,7 @@ async fn establish(
 
     let addr = (resolved.connect_host.as_str(), resolved.port);
     let connect_fut = client::connect(config, addr, handler);
-    let mut handle = match timeout(ctimeout.as_duration(), connect_fut).await {
+    let mut handle = match timeout(connect_timeout.as_duration(), connect_fut).await {
         Ok(Ok(handle)) => handle,
         Ok(Err(e)) => {
             return Err(HostError::Connect {
@@ -777,12 +794,30 @@ async fn establish(
         Err(_) => {
             return Err(HostError::Connect {
                 host: hostname.to_owned(),
-                reason: format!("connection timed out after {}s", ctimeout.as_secs()),
+                reason: format!("connection timed out after {}s", connect_timeout.as_secs()),
             });
         }
     };
 
-    if authenticate(&mut handle, hostname, resolved).await? {
+    let authenticated = match timeout(
+        connect_timeout.as_duration(),
+        authenticate(&mut handle, hostname, resolved),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            return Err(HostError::Connect {
+                host: hostname.to_owned(),
+                reason: format!(
+                    "authentication timed out after {}s",
+                    connect_timeout.as_secs()
+                ),
+            });
+        }
+    };
+
+    if authenticated {
         Ok(handle)
     } else {
         Err(HostError::Auth {
@@ -964,6 +999,7 @@ impl Connection for SshConnection {
             resolved: self.resolved.clone(),
             policy: self.policy,
             timeout: self.timeout,
+            connect_timeout: self.connect_timeout,
             handle: None,
             is_repl: self.is_repl,
             timeout_prompt: self.timeout_prompt.clone(),
@@ -1154,7 +1190,7 @@ impl Connection for SshConnection {
                 &self.hostname,
                 &self.resolved,
                 self.policy,
-                self.timeout,
+                self.connect_timeout,
                 self.known_hosts.clone(),
             )
             .await
@@ -1871,6 +1907,7 @@ mod tests {
             },
             policy: HostKeyPolicy::AutoAdd,
             timeout: CommandTimeout::default(),
+            connect_timeout: CommandTimeout::default(),
             handle: None,
             is_repl: false,
             timeout_prompt: None,
@@ -1904,6 +1941,7 @@ mod tests {
             },
             policy: HostKeyPolicy::AutoAdd,
             timeout: CommandTimeout::new(Duration::from_millis(200)),
+            connect_timeout: CommandTimeout::new(Duration::from_millis(200)),
             handle: None,
             is_repl: false,
             timeout_prompt: None,
@@ -1938,6 +1976,37 @@ mod tests {
             "fast path must not sleep by the reboot backoff base: took {:?}",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn connect_against_a_black_hole_host_bounds_on_connect_timeout() {
+        // Bind but never accept(): the kernel completes the TCP handshake from
+        // the listen backlog, so the socket connects but no SSH banner ever
+        // arrives -- a synthetic black hole with no network dependency. A
+        // short connect_timeout must still bound the hang; a much larger
+        // connection_timeout (the per-command budget) must not leak into it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("local_addr").port();
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            SshConnection::connect(
+                "127.0.0.1",
+                port,
+                HostKeyPolicy::AutoAdd,
+                CommandTimeout::from_secs(1),
+                CommandTimeout::from_secs(300),
+                None,
+            ),
+        )
+        .await
+        .expect("connect() must return within the 5s test wrapper, not hang");
+
+        assert!(
+            matches!(result, Err(HostError::Connect { .. })),
+            "expected HostError::Connect, got {result:?}"
+        );
+        drop(listener);
     }
 
     #[tokio::test(start_paused = true)]

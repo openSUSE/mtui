@@ -49,6 +49,11 @@ const SLOW_COMMANDS: &[&str] = &[
     "set_repo",
     "reboot",
     "regenerate",
+    // Both connect to a whole fleet of hosts (a pool-selected slot batch or an
+    // autoconnecting template load) and can run for minutes; a black-hole host
+    // among the candidates has no other cancellable escape hatch.
+    "add_host",
+    "load_template",
     // `--watch` polls Slack for up to `[slack] watch_timeout` (an hour by
     // default), far past any MCP client timeout, so the caller needs the
     // `background` escape hatch. Without `--watch` the command just posts and
@@ -671,6 +676,26 @@ mod tests {
             !props.contains_key("background"),
             "non-slow whoami should not carry background"
         );
+    }
+
+    /// `add_host` and `load_template` connect to whole fleets and can run for
+    /// minutes; both must carry the `background` escape hatch so a black-hole
+    /// candidate host does not wedge the caller with no way to cancel.
+    #[test]
+    fn add_host_and_load_template_carry_background() {
+        let tools = build_tools(&register_all());
+        for name in ["add_host", "load_template"] {
+            let props = descriptor(&tools, name)
+                .input_schema
+                .get("properties")
+                .unwrap()
+                .as_object()
+                .unwrap();
+            assert!(
+                props.contains_key("background"),
+                "{name} should carry background"
+            );
+        }
     }
 
     #[test]

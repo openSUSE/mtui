@@ -526,6 +526,7 @@ async fn connect(port: u16, timeout: CommandTimeout) -> SshConnection {
         port,
         HostKeyPolicy::AutoAdd,
         timeout,
+        timeout,
         Some(test_known_hosts()),
     )
     .await
@@ -864,6 +865,7 @@ async fn connect_to_unreachable_host_maps_to_connect_error() {
         "127.0.0.1",
         1,
         HostKeyPolicy::AutoAdd,
+        CommandTimeout::new(Duration::from_millis(500)),
         CommandTimeout::new(Duration::from_millis(500)),
         Some(test_known_hosts()),
     )
