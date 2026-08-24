@@ -245,6 +245,28 @@ impl std::fmt::Display for McpCommandError {
 
 impl std::error::Error for McpCommandError {}
 
+/// The outcome of [`McpSession::run_command_client_cancellable`].
+///
+/// Distinguishes a dispatch that ran to completion (cooperatively or not) from
+/// one the client's cancel forced an abort on, so the server layer can render
+/// the forced case's `McpError` with the unlock verdict
+/// [`Completed`](Self::Completed) never carries.
+pub(crate) enum ToolOutcome {
+    /// The dispatch returned its own verdict — either it finished before the
+    /// client cancelled, or it observed the cancel cooperatively and unwound
+    /// (running its own `unlock()`) inside the grace period.
+    Completed(Result<String, McpCommandError>),
+    /// The grace period elapsed and the dispatch was force-aborted; this is
+    /// the post-abort operation-lock release's outcome.
+    Aborted(AbortUnlock),
+}
+
+impl From<Result<String, McpCommandError>> for ToolOutcome {
+    fn from(result: Result<String, McpCommandError>) -> Self {
+        ToolOutcome::Completed(result)
+    }
+}
+
 /// The lifecycle state of a background job.
 ///
 /// One of `running`/`done`/`failed`/`cancelled`; [`Display`](std::fmt::Display)
@@ -346,7 +368,7 @@ pub struct JobView {
 /// distinguish "released" from "left alone" from "failed" from "never got
 /// there" — a forced cancel must never claim a release it did not perform.
 #[derive(Debug, Default)]
-struct AbortUnlock {
+pub(crate) struct AbortUnlock {
     /// Hosts whose hold this pass dropped. Because the fan-out is scoped to
     /// locks the job's own group actually held
     /// ([`HostsGroup::unlock_held`](mtui_hosts::HostsGroup::unlock_held)), a
@@ -399,7 +421,7 @@ impl AbortUnlock {
     /// telling a client to run a bare `unlock` there would have it strip a live
     /// operation's lock, which is the very failure this whole change exists to
     /// stop.
-    fn clause(&self) -> Option<String> {
+    pub(crate) fn clause(&self) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
         if !self.unlocked.is_empty() {
             parts.push(format!("unlocked: {}", self.unlocked.join(", ")));
@@ -438,6 +460,25 @@ impl AbortUnlock {
             Some(parts.join("; "))
         }
     }
+}
+
+/// The shared parenthetical for a forced abort: the grace period, the
+/// in-flight-host-operation caveat, and (if any) the unlock verdict.
+///
+/// Shared between [`McpSession::job_cancel_with_budget`]'s reply and
+/// [`crate::server`]'s `cancelled_error` for a client-cancelled synthesised
+/// command tool, so both forced-abort surfaces read identically.
+pub(crate) fn forced_abort_note(unlocked: &AbortUnlock) -> String {
+    let mut note = format!(
+        "forced abort after {}s grace; a host operation already in flight may \
+         still finish on the host",
+        CANCEL_GRACE.as_secs()
+    );
+    if let Some(clause) = unlocked.clause() {
+        note.push_str("; ");
+        note.push_str(&clause);
+    }
+    note
 }
 
 /// Pins `argv` to `rrid` by **prepending** `-T <rrid>`.
@@ -1060,13 +1101,109 @@ impl McpSession {
         sink: Option<&dyn ProgressSink>,
         interval: Duration,
     ) -> Result<String, McpCommandError> {
+        self.run_command_cancellable_with_progress(registry, name, argv, sink, interval, None)
+            .await
+    }
+
+    /// [`run_command_with_progress`](Self::run_command_with_progress) with an
+    /// optional per-call cancellation token installed on the session the
+    /// dispatch runs on (see [`run_command_cancellable`](Self::run_command_cancellable)).
+    ///
+    /// [`run_command_client_cancellable`](Self::run_command_client_cancellable)
+    /// is the only caller that passes `Some`; every other caller keeps `None`
+    /// and this is [`run_command_with_progress`](Self::run_command_with_progress)
+    /// verbatim.
+    async fn run_command_cancellable_with_progress(
+        &self,
+        registry: &Registry,
+        name: &str,
+        argv: &[String],
+        sink: Option<&dyn ProgressSink>,
+        interval: Duration,
+        cancel: Option<CancellationToken>,
+    ) -> Result<String, McpCommandError> {
         match sink {
-            None => self.run_command(registry, name, argv).await,
-            Some(sink) => {
-                run_with_heartbeat(self.run_command(registry, name, argv), sink, name, interval)
+            None => {
+                self.run_command_cancellable(registry, name, argv, cancel)
                     .await
             }
+            Some(sink) => {
+                run_with_heartbeat(
+                    self.run_command_cancellable(registry, name, argv, cancel),
+                    sink,
+                    name,
+                    interval,
+                )
+                .await
+            }
         }
+    }
+
+    /// [`run_command_with_progress`](Self::run_command_with_progress) driven
+    /// against an MCP client's own cancellation signal (`context.ct` —
+    /// `notifications/cancelled`), with the same two-stage contract as
+    /// [`job_cancel`](Self::job_cancel): cooperative signal → [`CANCEL_GRACE`]
+    /// → forced abort → best-effort operation-lock release.
+    ///
+    /// Only a synthesised **command** tool can hold `/var/lock/mtui.lock`
+    /// (testreport/transfer tools do not dispatch through the engine at all),
+    /// so this is the one call site the server layer routes through this
+    /// method instead of the bare `cancellable` used for those two branches.
+    ///
+    /// A cooperative stop inside the grace unwinds the dispatch's own flow —
+    /// which runs its own `unlock()` — so [`ToolOutcome::Completed`] carries
+    /// its **own** verdict, success or failure, exactly as an uncancelled call
+    /// would; only a forced abort yields [`ToolOutcome::Aborted`].
+    ///
+    /// The post-abort scope resolution ([`resolve_job_rrids`](Self::resolve_job_rrids))
+    /// is bounded to a quarter of [`ABORT_UNLOCK_BUDGET`], not the whole
+    /// budget: it locks the session briefly, and a concurrent *exclusive*
+    /// dispatch can hold that mutex for minutes — `job_cancel`-grade
+    /// responsiveness is the promise this method exists to keep, so a resolve
+    /// that cannot complete quickly falls back to the empty scope (every
+    /// loaded template) rather than eating the whole budget itself.
+    pub(crate) async fn run_command_client_cancellable(
+        &self,
+        registry: &Registry,
+        name: &str,
+        argv: &[String],
+        sink: Option<&dyn ProgressSink>,
+        interval: Duration,
+        client_ct: &CancellationToken,
+    ) -> ToolOutcome {
+        let token = CancellationToken::new();
+        let mut fut = Box::pin(self.run_command_cancellable_with_progress(
+            registry,
+            name,
+            argv,
+            sink,
+            interval,
+            Some(token.clone()),
+        ));
+        tokio::select! {
+            biased;
+            r = &mut fut => return ToolOutcome::Completed(r),
+            () = client_ct.cancelled() => {}
+        }
+        // Cooperative stage: signal the seam before touching the future.
+        token.cancel();
+        if let Ok(r) = tokio::time::timeout(CANCEL_GRACE, &mut fut).await {
+            return ToolOutcome::Completed(r);
+        }
+        // Forced stage: the body never reached a checkpoint. Drop the future
+        // *before* the unlock pass — on the exclusive path it holds the
+        // canonical session mutex for its whole life, and the pass's preamble
+        // would otherwise time out and report `stalled`.
+        drop(fut);
+        let rrids = tokio::time::timeout(
+            ABORT_UNLOCK_BUDGET / 4,
+            self.resolve_job_rrids(registry, name, argv),
+        )
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+        ToolOutcome::Aborted(self.unlock_after_abort(&rrids, ABORT_UNLOCK_BUDGET).await)
     }
 
     /// Resolve the target RRIDs for a backgrounded fan-out, or `None` to keep
@@ -1557,19 +1694,10 @@ impl McpSession {
             self.evict_completed();
         }
         if forced {
-            // The prefix is a pinned contract (clients key on "forced abort");
-            // the lock verdict goes inside the same parenthetical.
-            let mut msg = format!(
-                "cancelled job {job_id} (forced abort after {}s grace; a host \
-                 operation already in flight may still finish on the host",
-                CANCEL_GRACE.as_secs()
-            );
-            if let Some(clause) = unlocked.clause() {
-                msg.push_str("; ");
-                msg.push_str(&clause);
-            }
-            msg.push(')');
-            Ok(msg)
+            Ok(format!(
+                "cancelled job {job_id} ({})",
+                forced_abort_note(&unlocked)
+            ))
         } else {
             Ok(format!("cancelled job {job_id}"))
         }
@@ -3325,6 +3453,204 @@ mod tests {
                 CANCEL_GRACE.as_secs()
             ),
             "a silent release must not perturb the pinned forced reply"
+        );
+    }
+
+    // ---- client cancel of a synthesised command tool (PR #476) ------------- //
+
+    /// The MCP client's own cancel must not strand the remote operation lock
+    /// any more than `job_cancel` does: `run_command_client_cancellable` mints
+    /// its own token, gives the dispatch [`CANCEL_GRACE`] to settle
+    /// cooperatively, then force-aborts it and releases the lock on its
+    /// behalf.
+    ///
+    /// Driven through the real `run` command (`lock_selected` → `targets.run`
+    /// → `unlock_selected`, no cancellation checkpoint in between) on two
+    /// hosts blocked mid-op — the faithful shape of the bug: the abort drops
+    /// the future between the lock and the unlock.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_cancel_frees_the_stranded_operation_lock() {
+        let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));
+        let beta = MockConnection::new("host-beta").with_run_delay(Duration::from_secs(600));
+
+        let sess = session(Config::default());
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_A,
+            &[("host-alpha", alpha.clone()), ("host-beta", beta.clone())],
+        )
+        .await;
+        let registry = Arc::new(register_all());
+
+        let client_ct = CancellationToken::new();
+        let call = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            let registry = Arc::clone(&registry);
+            let client_ct = client_ct.clone();
+            async move {
+                sess.run_command_client_cancellable(
+                    &registry,
+                    "run",
+                    &["true".to_owned()],
+                    None,
+                    DEFAULT_PROGRESS_INTERVAL,
+                    &client_ct,
+                )
+                .await
+            }
+        });
+
+        await_locked(&alpha, "host-alpha").await;
+        await_locked(&beta, "host-beta").await;
+
+        let before = Instant::now();
+        client_ct.cancel();
+        let outcome = tokio::time::timeout(
+            CANCEL_GRACE + ABORT_UNLOCK_BUDGET + Duration::from_secs(3),
+            call,
+        )
+        .await
+        .expect("client cancel must not hang")
+        .expect("spawned task did not panic");
+        assert!(
+            before.elapsed() < CANCEL_GRACE + ABORT_UNLOCK_BUDGET + Duration::from_secs(2),
+            "client cancel took too long: {:?}",
+            before.elapsed()
+        );
+
+        let ToolOutcome::Aborted(unlock) = outcome else {
+            panic!("a run blocked mid host-op must be force-aborted");
+        };
+        assert!(
+            unlock
+                .clause()
+                .is_some_and(|c| c.contains("host-alpha") && c.contains("host-beta")),
+            "the unlock verdict must name the hosts it released"
+        );
+        assert!(saw_unlock(&alpha), "host-alpha's lock was never removed");
+        assert!(saw_unlock(&beta), "host-beta's lock was never removed");
+        assert!(!still_locked(&alpha), "host-alpha is still locked");
+        assert!(!still_locked(&beta), "host-beta is still locked");
+    }
+
+    /// A body that observes the cancellation seam cooperatively unwinds inside
+    /// [`CANCEL_GRACE`] and its **own** verdict is returned — not a synthetic
+    /// forced-abort error, and the outcome is `Completed`, not `Aborted`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_cancel_lets_a_cooperative_body_run_its_own_verdict() {
+        let alpha = MockConnection::new("host-alpha");
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        let registry = registry_with_probe(LockAndPark::new(Park::Seam));
+
+        let client_ct = CancellationToken::new();
+        let call = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            let registry = Arc::clone(&registry);
+            let client_ct = client_ct.clone();
+            async move {
+                sess.run_command_client_cancellable(
+                    &registry,
+                    "lock_and_park_probe",
+                    &[],
+                    None,
+                    DEFAULT_PROGRESS_INTERVAL,
+                    &client_ct,
+                )
+                .await
+            }
+        });
+
+        await_locked(&alpha, "host-alpha").await;
+        client_ct.cancel();
+
+        let outcome = tokio::time::timeout(CANCEL_GRACE + Duration::from_secs(3), call)
+            .await
+            .expect("a cooperative body must unwind well inside the grace")
+            .expect("spawned task did not panic");
+
+        let ToolOutcome::Completed(result) = outcome else {
+            panic!("a body that observes the seam must not be force-aborted");
+        };
+        let err = result.expect_err("the probe reports its own cancellation");
+        assert_eq!(
+            err.stderr, "cancelled",
+            "the flow's own verdict must survive unchanged: {err:?}"
+        );
+        assert!(
+            !err.stderr.contains("forced abort"),
+            "a cooperative stop must not read as a forced abort: {err:?}"
+        );
+        assert!(
+            !saw_unlock(&alpha),
+            "the cooperative arm must not run the abort-path release"
+        );
+    }
+
+    /// The exclusive dispatch path: a force-aborted unscoped fan-out leaves
+    /// the canonical session holding the active entry's guard, so the release
+    /// must drop the dispatch future *before* the unlock pass — otherwise the
+    /// pass deadlocks on the entry (or, bounded, reports `stalled`) and a
+    /// later scoped dispatch silently falls back to the null report.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_cancel_on_the_exclusive_path_clears_the_active_guard() {
+        let alpha = MockConnection::new("host-alpha");
+        let beta = MockConnection::new("host-beta");
+
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        load_with_hosts(&sess, LOCK_RRID_B, &[("host-beta", beta.clone())]).await;
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+
+        let client_ct = CancellationToken::new();
+        let call = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            let registry = Arc::clone(&registry);
+            let client_ct = client_ct.clone();
+            async move {
+                sess.run_command_client_cancellable(
+                    &registry,
+                    "lock_and_park_probe",
+                    &[],
+                    None,
+                    DEFAULT_PROGRESS_INTERVAL,
+                    &client_ct,
+                )
+                .await
+            }
+        });
+
+        await_locked(&alpha, "host-alpha").await;
+        client_ct.cancel();
+
+        // The unfixed deadlock/stall would hang here forever, not merely fail.
+        let outcome = tokio::time::timeout(Duration::from_secs(20), call)
+            .await
+            .expect("run_command_client_cancellable must not deadlock on the lingering guard")
+            .expect("spawned task did not panic");
+        let ToolOutcome::Aborted(_) = outcome else {
+            panic!("a body parked forever must be force-aborted");
+        };
+        assert!(saw_unlock(&alpha), "host-alpha's lock was never removed");
+        assert!(!still_locked(&alpha), "host-alpha is still locked");
+
+        // The canonical session must hold no active guard afterwards: a scoped
+        // dispatch forks and claims the entry with a *non-blocking*
+        // `try_lock_owned`, so a lingering guard would not error — it would
+        // silently list the null report's (empty) host set.
+        let out = sess
+            .run_command(
+                &registry,
+                "list_hosts",
+                &["-T".to_owned(), LOCK_RRID_A.to_owned()],
+            )
+            .await
+            .expect("list_hosts after a client cancel succeeds");
+        assert!(
+            out.contains("host-alpha"),
+            "a lingering active guard sent the dispatch to the null report: {out:?}"
         );
     }
 

@@ -349,10 +349,28 @@ dwarf the client's context.
 ## Cancelling a foreground call
 
 A client that sends an explicit `notifications/cancelled` for an in-flight
-foreground tool call (a testreport tool, a transfer tool, or a synthesised
-command tool) drops the dispatch immediately and releases the `CommandLock` it
-was holding — a follow-up call on the same RRID is not left queued behind it.
-The tool call itself resolves to an error rather than a fabricated success.
+foreground tool call drops the dispatch and releases the `CommandLock` it was
+holding — a follow-up call on the same RRID is not left queued behind it. What
+happens next depends on whether the call could be holding a **host** operation
+lock.
+
+A testreport tool or a transfer tool (`get`/`put`) never dispatches through the
+engine, so it cannot hold `/var/lock/mtui.lock`: the cancel drops the dispatch
+immediately and the tool call resolves to an error rather than a fabricated
+success.
+
+A synthesised command tool (`run`, `update`, `install`, …) can be mid
+host-operation when the cancel arrives, and dropping it outright would strand
+that lock exactly as an unhandled `job_cancel` would. It instead runs the same
+two-stage sequence `job_cancel` uses: the dispatch's own cancellation token is
+signalled first, giving it a short grace period to unwind at a checkpoint (a
+body that does — for example one already watching the session's cancel
+token — returns its **own** verdict, success or failure, not a synthetic
+cancellation error). Only if the grace elapses is the dispatch force-aborted;
+the abort then best-effort releases `/var/lock/mtui.lock` on every host the
+call's own group actually took (never a comment-marked reservation) and the
+error text names what it unlocked, what is still held by another owner, and
+what could not be reached inside the release budget.
 
 **This only helps a client that sends the notification.** mtui-mcp's default
 transport is stdio, where there is no per-request connection to drop — a

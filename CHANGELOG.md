@@ -23,30 +23,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   sibling of every slot to exhaustion. This bounds the whole retry phase at
   around four minutes regardless of report size, instead of scaling with
   `slots x siblings x connect_timeout`.
-
-### Fixed
-
-- MCP: a client that sends `notifications/cancelled` for an in-flight
-  foreground tool call (testreport / transfer / synthesised command tools) now
-  actually drops the dispatch and releases the `CommandLock` it held, instead
-  of the notification being silently ignored. This only fires for a client
-  that sends the notification explicitly — on stdio (the default transport)
-  there is no per-request connection to drop, so a client that just stops
-  waiting is not covered; use `background=true` + `job_cancel` for that case.
-
-### Added
-
-- `[connection] connect_timeout` (default 60s): the SSH connect handshake
-  (TCP connect, banner, and auth) now has its own budget, separate from
-  `connection_timeout`.
-- MCP: `add_host` and `load_template` gained the `background=true` parameter
-  already available on `run`/`update`/`reboot`/etc., so a fleet-wide connect
-  fanning out to several reference hosts stays cancellable via `job_cancel`
-  instead of holding the request open for however long a black-hole candidate
-  host takes to fail. Additive, optional schema change.
-
-### Changed
-
 - The SSH connect handshake (TCP connect, banner, and now auth, which was
   previously unbounded) is capped at 60s by the new `connect_timeout` key
   instead of inheriting the 300s `connection_timeout` (which now bounds only
@@ -60,6 +36,33 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   protocol-level sessions and would break per-client HTTP session isolation.
   `[mcp] max_request_bytes` now also sets rmcp's own request-body ceiling
   (previously a fixed 4 MB), so `0` disables both gates.
+
+### Fixed
+
+- MCP: a client that sends `notifications/cancelled` for an in-flight
+  foreground tool call now actually drops the dispatch and releases the
+  `CommandLock` it held, instead of the notification being silently ignored.
+  For a testreport/transfer tool this is a plain drop (neither can hold a host
+  operation lock); for a synthesised command tool (`run`/`update`/…) it is the
+  same two-stage sequence `job_cancel` uses — a cooperative signal, a short
+  grace period for the dispatch to unwind at its own checkpoint, and only then
+  a forced abort that best-effort releases `/var/lock/mtui.lock` on the hosts
+  the call actually locked, naming the outcome in the error text. This only
+  fires for a client that sends the notification explicitly — on stdio (the
+  default transport) there is no per-request connection to drop, so a client
+  that just stops waiting is not covered; use `background=true` + `job_cancel`
+  for that case.
+
+### Added
+
+- `[connection] connect_timeout` (default 60s): the SSH connect handshake
+  (TCP connect, banner, and auth) now has its own budget, separate from
+  `connection_timeout`.
+- MCP: `add_host` and `load_template` gained the `background=true` parameter
+  already available on `run`/`update`/`reboot`/etc., so a fleet-wide connect
+  fanning out to several reference hosts stays cancellable via `job_cancel`
+  instead of holding the request open for however long a black-hole candidate
+  host takes to fail. Additive, optional schema change.
 
 ## [26.2.1] - 2026-08-21
 
