@@ -10,6 +10,44 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Backup-refhost retries across a report's pool slots (when a chosen host
+  fails to connect and a sibling is tried) now share one time budget (`4 *
+  connect_timeout`) and stop once it is spent, instead of walking every
+  sibling of every slot to exhaustion. This bounds the whole retry phase at
+  around four minutes regardless of report size, instead of scaling with
+  `slots x siblings x connect_timeout`.
+
+### Fixed
+
+- MCP: a client that sends `notifications/cancelled` for an in-flight
+  foreground tool call (testreport / transfer / synthesised command tools) now
+  actually drops the dispatch and releases the `CommandLock` it held, instead
+  of the notification being silently ignored. This only fires for a client
+  that sends the notification explicitly — on stdio (the default transport)
+  there is no per-request connection to drop, so a client that just stops
+  waiting is not covered; use `background=true` + `job_cancel` for that case.
+
+### Added
+
+- `[connection] connect_timeout` (default 60s): the SSH connect handshake
+  (TCP connect, banner, and auth) now has its own budget, separate from
+  `connection_timeout`.
+- MCP: `add_host` and `load_template` gained the `background=true` parameter
+  already available on `run`/`update`/`reboot`/etc., so a fleet-wide connect
+  fanning out to several reference hosts stays cancellable via `job_cancel`
+  instead of holding the request open for however long a black-hole candidate
+  host takes to fail. Additive, optional schema change.
+
+### Changed
+
+- The SSH connect handshake (TCP connect, banner, and now auth, which was
+  previously unbounded) is capped at 60s by the new `connect_timeout` key
+  instead of inheriting the 300s `connection_timeout` (which now bounds only
+  the per-command no-output window). A dead reference host is dropped from a
+  batch in about a minute rather than five, so a single black-hole host no
+  longer stalls a fan-out for the full `connection_timeout` window. If a host
+  legitimately needs longer to present its banner (e.g. a loaded s390x LPAR
+  or a jump-path host), raise `connect_timeout`.
 - MCP SDK moved to rmcp 3.x. `mtui-mcp` now advertises protocol revisions
   `2024-11-05` through `2025-11-25` and declines `2026-07-28`, which removes
   protocol-level sessions and would break per-client HTTP session isolation.

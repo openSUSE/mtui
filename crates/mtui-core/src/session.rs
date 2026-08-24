@@ -12,7 +12,7 @@
 //! registry grows past one entry.
 
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mtui_config::Config;
 use mtui_datasources::HttpError;
@@ -1059,6 +1059,12 @@ impl Session {
     /// A no-op when pool selection is inactive (`arbiter`/`owner` unset) or no
     /// slots are recorded. Best-effort: connect failures release the in-process
     /// claim and move to the next sibling.
+    ///
+    /// The whole phase shares one wall-clock budget (`4 * connect_timeout`,
+    /// 240s at the default), not a per-slot one: once spent, remaining slots
+    /// (and a slot's remaining siblings) are abandoned with a `warn!` rather
+    /// than walked to exhaustion, which is what let a report with many dead
+    /// slots wedge a caller for `slots * siblings * connect_timeout`.
     async fn connect_pool_backups(
         &mut self,
         config: &Config,
@@ -1093,7 +1099,23 @@ impl Session {
             attempted_initial.iter().cloned().collect();
         let mut new_drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
 
+        // One shared wall-clock budget for the whole backup phase, not a
+        // per-slot one: a per-slot budget still multiplies by slot count, so a
+        // report with many dead slots would stay wedged for tens of minutes.
+        // This bounds the entire phase regardless of report size, at the cost
+        // of a late slot being starved of backup attempts when earlier slots
+        // burn the budget — logged per slot, and strictly better than wedging.
+        let started = Instant::now();
+        let budget = Duration::from_secs(4 * config.connect_timeout);
+
         for (slot, candidates) in slot_candidates {
+            if started.elapsed() >= budget {
+                warn!(
+                    slot = %slot,
+                    "backup-refhost retry budget exhausted; giving up on remaining slots"
+                );
+                break;
+            }
             // Slot already has a live connection? Nothing to do.
             if candidates.iter().any(|c| live.contains(c)) {
                 continue;
@@ -1117,6 +1139,13 @@ impl Session {
                 .collect();
             let mut connected = false;
             while !remaining.is_empty() {
+                if started.elapsed() >= budget {
+                    warn!(
+                        slot = %slot,
+                        "backup-refhost retry budget exhausted; giving up on this slot's remaining siblings"
+                    );
+                    break;
+                }
                 let Some(chosen) = arbiter.acquire_any(&remaining, &owner, wait, poll).await else {
                     break;
                 };
@@ -1363,6 +1392,13 @@ impl Session {
     ///
     /// Takes owned/borrowed plain data (not `&Session`) so the caller's connect
     /// future stays `Send` across this await.
+    ///
+    /// Production dispatch always has the arbiter/owner wired (see
+    /// [`resolve_and_record_pool`](Self::resolve_and_record_pool)'s doc), so this
+    /// is retained only as the offline comparison baseline
+    /// [`autoconnect_hosts_of`](tests::autoconnect_hosts_of) tests pool
+    /// selection against.
+    #[cfg(test)]
     async fn resolve_testplatform_hosts(config: &Config, testplatforms: &[String]) -> Vec<String> {
         if testplatforms.is_empty() {
             return Vec::new();
@@ -1466,13 +1502,15 @@ impl Session {
     /// deduplicated host list to connect.
     ///
     /// The shared selection step behind [`autoconnect_active`](Self::autoconnect_active)
-    /// and [`add_testplatform_hosts`](Self::add_testplatform_hosts). When the
-    /// arbiter + owner are wired (`_pool_selection_active`), each testplatform
-    /// contributes one arbiter-chosen host per requested slot (via
+    /// and [`add_testplatform_hosts`](Self::add_testplatform_hosts). Each
+    /// testplatform contributes one arbiter-chosen host per requested slot (via
     /// [`pool_select`](Self::pool_select)) and the chosen hosts are recorded as
     /// `pool_claims` so [`connect_and_add_hosts`](Self::connect_and_add_hosts)
-    /// connects only them (with sibling backup fallback). Without the arbiter it
-    /// degrades to the legacy `search()` path (connect every candidate).
+    /// connects only them (with sibling backup fallback). The arbiter/owner are
+    /// wired unconditionally by [`TemplateRegistry::add`](crate::template_registry::TemplateRegistry::add),
+    /// so an unwired call is not a supported configuration; it resolves no
+    /// testplatform hosts and warns rather than silently connecting every
+    /// `search()` match, which the removed legacy fallback used to do.
     async fn resolve_and_record_pool(
         &mut self,
         config: &Config,
@@ -1485,7 +1523,6 @@ impl Session {
         let mut wanted = ref_hosts;
 
         let tp_hosts = match (arbiter, owner) {
-            // Pool-selection path.
             (Some(arbiter), Some(owner)) if !testplatforms.is_empty() => {
                 if let Some(store) = Self::build_refhosts_store(config).await {
                     let (chosen, slot_candidates) = Self::pool_select(
@@ -1511,8 +1548,11 @@ impl Session {
                     Vec::new()
                 }
             }
-            // Legacy path (no arbiter/owner): connect every search() match.
-            _ => Self::resolve_testplatform_hosts(config, &testplatforms).await,
+            (Some(_), Some(_)) => Vec::new(),
+            _ => {
+                warn!("host arbitration not wired; no testplatform hosts resolved");
+                Vec::new()
+            }
         };
 
         for host in tp_hosts {
@@ -1769,10 +1809,11 @@ mod tests {
         session.activate(rrid);
     }
 
-    /// Reconstructs the legacy (non-pool) autoconnect host set from the active
-    /// report: reference hosts merged with the `search()`-resolved testplatform
-    /// hosts, minus the already-connected ones — the fallback path
-    /// [`Session::resolve_and_record_pool`] takes when the arbiter is unwired.
+    /// Reconstructs the pre-pool autoconnect host set from the active report:
+    /// reference hosts merged with the `search()`-resolved testplatform hosts,
+    /// minus the already-connected ones — kept as a comparison baseline against
+    /// [`Session::resolve_and_record_pool`]'s pool-selection behaviour, not a
+    /// path production dispatch ever takes.
     async fn autoconnect_hosts_of(s: &Session) -> Vec<String> {
         let config = s.config.clone();
         let (ref_hosts, already, testplatforms) = {
@@ -2330,6 +2371,91 @@ mod tests {
             "chosen hosts must follow first-seen slot order"
         );
         assert_eq!(slot_candidates.len(), 2, "two distinct arch slots");
+    }
+
+    /// With the arbiter/owner unwired, `resolve_and_record_pool` resolves no
+    /// testplatform hosts at all — pinning that the legacy connect-every-
+    /// candidate `search()` fallback is gone. Production dispatch always wires
+    /// both (`TemplateRegistry::add`), so this only exercises the fall-through.
+    #[tokio::test]
+    async fn resolve_and_record_pool_unwired_resolves_no_testplatform_hosts() {
+        let config = config_with_path_refhosts();
+        let mut s = Session::new(config.clone(), false);
+        let ref_hosts = vec!["explicit-host".to_owned()];
+        // Matches fixture hosts (sles 15-SP5 x86_64) that a wired arbiter/owner
+        // (or the old legacy fallback) would otherwise resolve.
+        let testplatforms = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
+
+        let wanted = s
+            .resolve_and_record_pool(
+                &config,
+                ref_hosts.clone(),
+                testplatforms,
+                None,
+                None,
+                no_shuffle,
+            )
+            .await;
+
+        assert_eq!(
+            wanted, ref_hosts,
+            "unwired arbiter/owner must not resolve any testplatform host"
+        );
+    }
+
+    /// Once the shared backup-retry budget is exhausted, `connect_pool_backups`
+    /// gives up on the remaining slots rather than walking every sibling of
+    /// every slot. Each candidate is a real black-hole listener (bound, never
+    /// `accept()`ed, per the `mtui-hosts` black-hole fixture): with
+    /// `connect_timeout = 1s` each one costs a full second to fail, so walking
+    /// all 6 across 3 slots would take ~6s while the shared `4 *
+    /// connect_timeout` budget must cut it off around 4s.
+    #[tokio::test]
+    async fn connect_pool_backups_stops_once_budget_is_spent() {
+        let mut config = config_with_path_refhosts();
+        config.connect_timeout = 1;
+        let mut s = Session::new(config.clone(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+
+        // 3 slots x 2 black-hole siblings each; kept alive for the test's
+        // duration so the ports stay open (never accept()ed).
+        let listeners: Vec<std::net::TcpListener> = (0..6)
+            .map(|_| std::net::TcpListener::bind("127.0.0.1:0").expect("bind"))
+            .collect();
+        let candidates: Vec<String> = listeners
+            .iter()
+            .map(|l| format!("127.0.0.1:{}", l.local_addr().unwrap().port()))
+            .collect();
+
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        {
+            let base = s.metadata_mut().base_mut();
+            base.arbiter = Some(arbiter);
+            base.owner = Some(owner);
+            for (i, pair) in candidates.chunks(2).enumerate() {
+                base.slot_candidates
+                    .insert(format!("slot-{i}"), pair.to_vec());
+            }
+        }
+
+        let live = std::collections::HashSet::new();
+        let started = Instant::now();
+        let drift = tokio::time::timeout(
+            Duration::from_secs(7),
+            s.connect_pool_backups(&config, "SUSE:Maintenance:1:1", &[], &live, None),
+        )
+        .await
+        .expect("must not hang past the outer test wrapper");
+
+        assert!(drift.is_empty(), "no black hole ever connects: {drift:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "shared budget must cut the walk short of trying all 6 siblings \
+             (~6s naive), took {:?}",
+            started.elapsed()
+        );
+        drop(listeners);
     }
 
     /// A fresh session's token is never cancelled; `check_cancelled` is `Ok`

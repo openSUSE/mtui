@@ -98,9 +98,12 @@ pub struct Target {
     port: String,
     /// Per-host execution state.
     state: TargetState,
-    /// Connect/command timeout, defaulted from
+    /// Per-command no-output timeout, defaulted from
     /// [`Config::connection_timeout`](mtui_config::Config).
     timeout: CommandTimeout,
+    /// SSH connect handshake budget, defaulted from
+    /// [`Config::connect_timeout`](mtui_config::Config).
+    connect_timeout: CommandTimeout,
     /// The host-key policy resolved from config, used when [`connect`] builds
     /// the transport.
     ///
@@ -207,6 +210,7 @@ impl Target {
             port,
             state,
             timeout: CommandTimeout::from_secs(config.connection_timeout),
+            connect_timeout: CommandTimeout::from_secs(config.connect_timeout),
             policy: HostKeyPolicy::from_config(&config.ssh_strict_host_key_checking),
             out: HostLog::new(),
             connection: None,
@@ -259,6 +263,7 @@ impl Target {
             port,
             state,
             timeout: CommandTimeout::default(),
+            connect_timeout: CommandTimeout::from_secs(60),
             policy: HostKeyPolicy::default(),
             out: HostLog::new(),
             connection: Some(connection),
@@ -321,6 +326,16 @@ impl Target {
     #[must_use]
     pub const fn timeout_secs(&self) -> u64 {
         self.timeout.as_secs()
+    }
+
+    /// The SSH connect handshake budget for this target, in whole seconds.
+    ///
+    /// Defaulted from [`Config::connect_timeout`](mtui_config::Config); bounds
+    /// only the TCP connect / banner / auth handshake, not the per-command
+    /// no-output window (see [`timeout_secs`](Self::timeout_secs)).
+    #[must_use]
+    pub const fn connect_timeout_secs(&self) -> u64 {
+        self.connect_timeout.as_secs()
     }
 
     /// Sets the connect/command timeout for this target, in whole seconds.
@@ -928,6 +943,7 @@ impl Target {
                 self.host.clone(),
                 port,
                 self.policy,
+                self.connect_timeout,
                 self.timeout,
                 None,
             )
@@ -2104,6 +2120,27 @@ mod tests {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         // Must not panic; no live connection to close, no action dispatched.
         t.close(Some("reboot")).await.expect("close ok");
+    }
+
+    /// `close` releases an operation lock the target itself holds — the
+    /// generic teardown a Product Increment's session-long lock (mtui-core's
+    /// `load_update_reported`/`connect_one`) relies on for release at
+    /// unload/quit, with no PI-specific code of its own.
+    #[tokio::test]
+    async fn close_releases_a_previously_held_operation_lock() {
+        let conn = MockConnection::new("h1");
+        let mut t = enabled_with(conn);
+        t.lock("testing of SUSE:PI:1.2:5")
+            .await
+            .expect("lock succeeds");
+        assert!(t.is_locked().await.expect("is_locked before"));
+
+        t.close(None).await.expect("close ok");
+
+        assert!(
+            !t.is_locked().await.expect("is_locked after"),
+            "close() must release the operation lock it held"
+        );
     }
 
     #[tokio::test]

@@ -173,6 +173,9 @@ fn is_relative_dir_name(raw: &str) -> bool {
 fn default_connection_timeout() -> u64 {
     300
 }
+fn default_connect_timeout() -> u64 {
+    60
+}
 fn default_reboot_timeout() -> u64 {
     10
 }
@@ -371,6 +374,7 @@ pub(crate) struct MtuiSection {
 #[serde(default)]
 pub(crate) struct ConnectionSection {
     pub connection_timeout: Option<u64>,
+    pub connect_timeout: Option<u64>,
     pub reboot_timeout: Option<u64>,
     pub reboot_retries: Option<u64>,
     pub max_parallel: Option<u64>,
@@ -566,6 +570,7 @@ impl RawConfig {
         take!(mtui, chdir_to_template_dir);
         take!(mtui, ssl_verify);
         take!(connection, connection_timeout);
+        take!(connection, connect_timeout);
         take!(connection, reboot_timeout);
         take!(connection, reboot_retries);
         take!(connection, max_parallel);
@@ -639,8 +644,16 @@ pub struct Config {
     pub ssl_verify: SslVerify,
 
     // [connection]
-    /// SSH connect + command timeout, in seconds.
+    /// SSH per-command no-output timeout, in seconds. Does not bound the
+    /// initial connect handshake — see [`connect_timeout`](Self::connect_timeout)
+    /// for that.
     pub connection_timeout: u64,
+    /// SSH connect handshake budget (TCP connect, banner, and auth), in
+    /// seconds. Kept far tighter than [`connection_timeout`](Self::connection_timeout)
+    /// since a dead host should be dropped from a batch quickly rather than
+    /// held for a command-sized window. Raise it for a host with a
+    /// genuinely slow banner (e.g. a loaded s390x LPAR or a jump-path host).
+    pub connect_timeout: u64,
     /// Backoff base (seconds) for post-reboot reconnect retries. Sleeps grow
     /// as `2*(reboot_timeout + 5*count)` after the first probe. Upstream
     /// `reconnect(timeout=...)`.
@@ -751,8 +764,8 @@ pub struct Config {
     /// Age (seconds) beyond which a pool-claim lock is considered stale and
     /// reapable. A value of `0` disables pool-claim reaping.
     pub pool_stale_age: u64,
-    /// When testing a Product Increment (PI), auto-lock all reference hosts on
-    /// `assign` and unlock them at end of testing.
+    /// When testing a Product Increment (PI), lock each reference host as it
+    /// connects while the report is loaded, released on unload/quit.
     pub lock_pi_autolock: bool,
     /// Host-arbitration pool-claim queueing budget, in seconds. `0` (the
     /// default) fails fast on a busy host.
@@ -844,6 +857,7 @@ impl Default for Config {
             chdir_to_template_dir: false,
             ssl_verify: SslVerify::Enabled,
             connection_timeout: default_connection_timeout(),
+            connect_timeout: default_connect_timeout(),
             reboot_timeout: default_reboot_timeout(),
             reboot_retries: default_reboot_retries(),
             max_parallel: default_max_parallel(),
@@ -965,6 +979,11 @@ impl Config {
                 raw.connection.connection_timeout,
                 "connection_timeout",
                 d.connection_timeout
+            ),
+            connect_timeout: validated_positive!(
+                raw.connection.connect_timeout,
+                "connect_timeout",
+                d.connect_timeout
             ),
             reboot_timeout: validated_positive!(
                 raw.connection.reboot_timeout,
@@ -1102,6 +1121,7 @@ mod tests {
     fn default_scalars_are_pinned() {
         let c = Config::default();
         assert_eq!(c.connection_timeout, 300);
+        assert_eq!(c.connect_timeout, 60);
         assert_eq!(c.reboot_timeout, 10);
         assert_eq!(c.reboot_retries, 10);
         assert_eq!(c.max_parallel, 50);
@@ -1397,6 +1417,7 @@ mod tests {
     fn from_raw_applies_values_and_defaults() {
         let mut raw = RawConfig::default();
         raw.connection.connection_timeout = Some(450);
+        raw.connection.connect_timeout = Some(90);
         raw.connection.reboot_timeout = Some(20);
         raw.connection.reboot_retries = Some(5);
         raw.connection.max_parallel = Some(8);
@@ -1406,6 +1427,7 @@ mod tests {
         let c = Config::from_raw(raw);
         // Overridden.
         assert_eq!(c.connection_timeout, 450);
+        assert_eq!(c.connect_timeout, 90);
         assert_eq!(c.reboot_timeout, 20);
         assert_eq!(c.reboot_retries, 5);
         assert_eq!(c.max_parallel, 8);
@@ -1522,6 +1544,7 @@ mod tests {
             r#"
             [connection]
             connection_timeout = 0
+            connect_timeout = 0
             reboot_timeout = 0
             reboot_retries = 0
             max_parallel = 0
@@ -1540,6 +1563,7 @@ mod tests {
         let c = Config::from_raw(raw);
         let d = Config::default();
         assert_eq!(c.connection_timeout, d.connection_timeout);
+        assert_eq!(c.connect_timeout, d.connect_timeout);
         assert_eq!(c.reboot_timeout, d.reboot_timeout);
         assert_eq!(c.reboot_retries, d.reboot_retries);
         assert_eq!(c.max_parallel, d.max_parallel);

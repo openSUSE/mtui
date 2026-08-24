@@ -12,6 +12,11 @@ expression: pretty
           "description": "Act on every loaded template",
           "type": "boolean"
         },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
         "keep_mode": {
           "default": false,
           "description": "Do not switch to the manual workflow when in automatic mode",
@@ -747,6 +752,11 @@ expression: pretty
         "auto": {
           "description": "OBS request review id, e.g. SUSE:Maintenance:1:1",
           "type": "string"
+        },
+        "background": {
+          "default": false,
+          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
         },
         "kernel": {
           "description": "OBS kernel/live-patch request review id, e.g. SUSE:Maintenance:1:1",

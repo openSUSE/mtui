@@ -22,6 +22,7 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "chdir_to_template_dir" => config.chdir_to_template_dir.to_string(),
         "ssl_verify" => ssl_verify_to_string(&config.ssl_verify),
         "connection_timeout" => config.connection_timeout.to_string(),
+        "connect_timeout" => config.connect_timeout.to_string(),
         "reboot_timeout" => config.reboot_timeout.to_string(),
         "reboot_retries" => config.reboot_retries.to_string(),
         "max_parallel" => config.max_parallel.to_string(),
@@ -100,7 +101,7 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 40] = [
+const ATTRS: [&str; 41] = [
     "template_dir",
     "local_tempdir",
     "session_user",
@@ -108,6 +109,7 @@ const ATTRS: [&str; 40] = [
     "chdir_to_template_dir",
     "ssl_verify",
     "connection_timeout",
+    "connect_timeout",
     "reboot_timeout",
     "reboot_retries",
     "max_parallel",
@@ -198,6 +200,7 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "pool_reap_stale" => config.pool_reap_stale = parse_bool(raw)?,
         "lock_pi_autolock" => config.lock_pi_autolock = parse_bool(raw)?,
         "connection_timeout" => config.connection_timeout = parse_positive_u64(raw)?,
+        "connect_timeout" => config.connect_timeout = parse_positive_u64(raw)?,
         "reboot_timeout" => config.reboot_timeout = parse_positive_u64(raw)?,
         "reboot_retries" => config.reboot_retries = parse_positive_u64(raw)?,
         "max_parallel" => config.max_parallel = parse_positive_u64(raw)?,
@@ -546,6 +549,7 @@ mod tests {
         // value the file would refuse, breaking the command's own contract.
         for attr in [
             "connection_timeout",
+            "connect_timeout",
             "reboot_timeout",
             "reboot_retries",
             "max_parallel",
