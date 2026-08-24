@@ -118,11 +118,15 @@ left over from a crashed session); see [Configuration](configuration.md) for
 ### Product-Increment autolock
 
 When testing a Product Increment (PI) and `[lock] pi_autolock` is enabled (the
-default), mtui auto-locks all reference hosts on [`assign`](cli.md#assign) — with a
-comment naming the request — and releases this session's locks at the end of
-testing (`unassign` / `approve` / `reject`). Hosts added with `add_host` while the
-assignment is active are locked too. A [`reboot`](cli.md#reboot) clears
-`/var/lock`, so the per-host testing lock is re-applied after the host comes back.
+default), mtui locks each reference host — with a comment naming the request —
+as it connects, for the life of the loaded report; the lock is released when
+the report is unloaded or the session quits, matching how every non-PI
+report's pool claims already behave. A host added later with `add_host`
+(including a pool-selected host, with no `-t`) is locked too, since the lock
+comment is seeded on load and every connect path applies it. Review actions
+(`assign`/`unassign`/`approve`/`reject`) no longer lock or unlock hosts
+themselves. A [`reboot`](cli.md#reboot) clears `/var/lock`, so the per-host
+testing lock is re-applied after the host comes back.
 
 ### Assignment context on `assign`
 

@@ -780,6 +780,20 @@ impl Session {
         // through `metadata()`/`targets_mut()`.
         self.refresh_active_guard();
 
+        // Seed the PI operation-lock comment before any host connects: a
+        // Product Increment under `[lock] pi_autolock` is locked for the life
+        // of the loaded report, not bracketed around the review workflow (see
+        // `connect_one`/`lock_connected_target`, which locks each host as it
+        // arrives). No hosts are connected yet at this point, so seeding the
+        // comment is all the acquire side needs.
+        if self.config.lock_pi_autolock
+            && let Some(loaded_rrid) = self.metadata().rrid()
+            && loaded_rrid.kind == mtui_types::RequestKind::Pi
+        {
+            let comment = format!("testing of {loaded_rrid}");
+            self.metadata_mut().base_mut().lock_comment = comment;
+        }
+
         if pending && !rrid.is_empty() {
             self.autoconnect_active(&rrid).await;
         }
@@ -974,6 +988,48 @@ impl Session {
     /// fallback ([`connect_pool_backups`](Self::connect_pool_backups)) share one
     /// connect path. All inputs are borrowed/owned plain data so the returned
     /// future stays `Send` (the `Command::call` bound).
+    /// Takes the pool claim and/or operation lock on an already-connected
+    /// `target`, mirroring the sequence [`connect_one`](Self::connect_one) runs
+    /// after a successful [`Target::connect`]. Returns `false` when a pool
+    /// claim was required but lost the remote race (the caller should drop the
+    /// host); `true` otherwise.
+    ///
+    /// The two branches are sequential, not mutually exclusive: a non-empty
+    /// `lock_comment` (a loaded Product Increment) takes the operation lock
+    /// regardless of `is_pool_claim`, so a pool-selected host is locked for the
+    /// PI too. Extracted from `connect_one` so this — previously an `if/else`
+    /// that left a pool host never PI-locked — is exercisable against a
+    /// [`MockConnection`](mtui_hosts::MockConnection) without a live SSH
+    /// connect.
+    async fn lock_connected_target(
+        target: &mut Target,
+        host: &str,
+        rrid: &str,
+        lock_comment: &str,
+        is_pool_claim: bool,
+    ) -> bool {
+        if is_pool_claim {
+            // Take the remote pool lock: the `mtui pool <RRID> [<RRID>]` stamp.
+            // Losing the remote race means another process holds this host —
+            // drop it so a sibling in the slot can be tried (the in-process
+            // claim is released by `connect_pool_backups`).
+            let comment = format!("mtui pool {rrid} [{rrid}]");
+            match target.pool_claim(&comment).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    warn!(host = %host, "claimed in-process but busy remotely; skipping");
+                    return false;
+                }
+                Err(e) => {
+                    warn!(host = %host, error = %e, "pool claim failed remotely; skipping");
+                    return false;
+                }
+            }
+        }
+        Self::autolock_target(target, lock_comment).await;
+        true
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn connect_one(
         config: &Config,
@@ -994,25 +1050,16 @@ impl Session {
         }
         match target.connect().await {
             Ok(()) => {
-                if is_pool_claim {
-                    // Take the remote pool lock: the `mtui pool <RRID> [<RRID>]` stamp.
-                    // Losing the remote race means another process holds this
-                    // host — drop it so a sibling in the slot can be tried (the
-                    // in-process claim is released by `connect_pool_backups`).
-                    let comment = format!("mtui pool {rrid} [{rrid}]");
-                    match target.pool_claim(&comment).await {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            warn!(host = %host, "claimed in-process but busy remotely; skipping");
-                            return None;
-                        }
-                        Err(e) => {
-                            warn!(host = %host, error = %e, "pool claim failed remotely; skipping");
-                            return None;
-                        }
-                    }
-                } else {
-                    Self::autolock_target(&mut target, lock_comment).await;
+                if !Self::lock_connected_target(
+                    &mut target,
+                    &host,
+                    rrid,
+                    lock_comment,
+                    is_pool_claim,
+                )
+                .await
+                {
+                    return None;
                 }
                 // Seed the host's tracked packages with their metadata
                 // `required` versions, keyed by the just-parsed base product
@@ -1923,6 +1970,88 @@ mod tests {
         assert!(s.targets().is_empty());
     }
 
+    /// Loading a Product Increment RRID with `lock_pi_autolock` enabled (the
+    /// default) seeds `lock_comment` before any host connects — the PI is
+    /// locked for the life of the loaded report rather than bracketed around
+    /// `assign`/`approve`.
+    #[tokio::test]
+    async fn load_update_reported_seeds_pi_lock_comment_when_enabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rrid = "SUSE:PI:1.2:5";
+        let dir = tmp.path().join(rrid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log"), "log\n").unwrap();
+        std::fs::write(
+            dir.join("metadata.json"),
+            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
+        )
+        .unwrap();
+
+        let mut config = config_with_path_refhosts();
+        config.template_dir = tmp.path().to_path_buf();
+        assert!(config.lock_pi_autolock, "default must be enabled");
+        let mut s = Session::new(config, false);
+
+        let update = UpdateID::parse(rrid).unwrap();
+        s.load_update(&update, true, UpdateKind::Kernel).await;
+
+        assert_eq!(
+            s.metadata().base().lock_comment,
+            format!("testing of {rrid}")
+        );
+    }
+
+    /// A Maintenance RRID never gets the PI lock comment, whatever
+    /// `lock_pi_autolock` says.
+    #[tokio::test]
+    async fn load_update_reported_leaves_lock_comment_empty_for_maintenance_rrid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rrid = "SUSE:Maintenance:24993:275518";
+        let dir = tmp.path().join(rrid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log"), "log\n").unwrap();
+        std::fs::write(
+            dir.join("metadata.json"),
+            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
+        )
+        .unwrap();
+
+        let mut config = config_with_path_refhosts();
+        config.template_dir = tmp.path().to_path_buf();
+        assert!(config.lock_pi_autolock, "default must be enabled");
+        let mut s = Session::new(config, false);
+
+        let update = UpdateID::parse(rrid).unwrap();
+        s.load_update(&update, true, UpdateKind::Kernel).await;
+
+        assert_eq!(s.metadata().base().lock_comment, "");
+    }
+
+    /// `lock_pi_autolock = false` leaves the PI's `lock_comment` empty.
+    #[tokio::test]
+    async fn load_update_reported_leaves_lock_comment_empty_when_autolock_disabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rrid = "SUSE:PI:1.2:5";
+        let dir = tmp.path().join(rrid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log"), "log\n").unwrap();
+        std::fs::write(
+            dir.join("metadata.json"),
+            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
+        )
+        .unwrap();
+
+        let mut config = config_with_path_refhosts();
+        config.template_dir = tmp.path().to_path_buf();
+        config.lock_pi_autolock = false;
+        let mut s = Session::new(config, false);
+
+        let update = UpdateID::parse(rrid).unwrap();
+        s.load_update(&update, true, UpdateKind::Kernel).await;
+
+        assert_eq!(s.metadata().base().lock_comment, "");
+    }
+
     /// `load_update` for an unloadable RRID (no template, offline `svn`) falls
     /// back to the null report: nothing is registered, empty RRID returned.
     #[tokio::test]
@@ -2094,6 +2223,29 @@ mod tests {
             Target::with_connection("refhost.example", TargetState::Enabled, Box::new(conn));
         // Must not panic / propagate: the foreign lock is suppressed.
         Session::autolock_target(&mut t, "mtui pool SUSE:Maintenance:1:1 alice").await;
+    }
+
+    /// A pool-claimed host connected under a non-empty `lock_comment` (a
+    /// loaded Product Increment) ends up holding **both** the pool claim and
+    /// the operation lock — pinning that the two branches are sequential, not
+    /// the mutually exclusive `if is_pool_claim { .. } else { .. }` that used
+    /// to leave a pool host never PI-locked.
+    #[tokio::test]
+    async fn lock_connected_target_pool_claim_and_pi_lock_are_not_exclusive() {
+        let mut t = mock_target("refhost.example");
+        let ok = Session::lock_connected_target(
+            &mut t,
+            "refhost.example",
+            "SUSE:Maintenance:1:1",
+            "testing of SUSE:Maintenance:1:1",
+            true, // is_pool_claim
+        )
+        .await;
+        assert!(ok, "a free host must be claimable");
+        assert!(
+            t.is_locked().await.expect("is_locked"),
+            "a pool-claimed host must also hold the PI operation lock"
+        );
     }
 
     // --- product-drift verification -----

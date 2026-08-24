@@ -6,7 +6,7 @@ use mtui_datasources::{Osc, Slack, is_ack_reaction};
 use mtui_testreport::{HashCheck, TokioSvnRunner, svn_commit_testreport};
 
 use crate::command::{Command, Scope};
-use crate::commands::apicall::{PiAction, gitea_client, is_gitea_workflow, pi_autolock};
+use crate::commands::apicall::{gitea_client, is_gitea_workflow};
 use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -112,7 +112,6 @@ impl Command for Approve {
                 .map_err(|e| CommandError::Other(format!("osc approve failed: {e}")))?;
         }
 
-        pi_autolock(session, PiAction::Unlock).await;
         session.display.println(&format!("approved {rrid}"));
         Ok(())
     }
@@ -523,7 +522,7 @@ mod tests {
         // so the guard passes and gitea.approve runs. The comments GET reports
         // the acting user assigned to the group (and no decision yet), so the
         // approval posts its LGTM and succeeds, exercising the gitea success
-        // branch + pi_autolock(Unlock) + the success confirmation.
+        // branch + the success confirmation.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"/comments$"))

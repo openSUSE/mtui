@@ -4,31 +4,21 @@
 //! loaded report's own [`UpdateSource`] — resolved
 //! at load from the template's `gitea_commit_hash`, not inferred from the
 //! RRID's shape (issue #433: the SL-Micro 6.0/6.1 cutover shares the
-//! `SLFO:1.1` id space between both workflows) — and, for a Product Increment
-//! with `lock_pi_autolock`, locks/unlocks the reference hosts around the
-//! action. `approve` lives in [`approve`](super::approve) and reuses the
-//! dispatch helpers here.
+//! `SLFO:1.1` id space between both workflows). A Product Increment's
+//! reference-host lock is bracketed around the loaded report, not this
+//! module's review actions — see `Session::load_update_reported` (seeds
+//! `lock_comment`) and `Target::close` (releases on unload/quit). `approve`
+//! lives in [`approve`](super::approve) and reuses the dispatch helpers here.
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen};
-use mtui_types::{RequestKind, UpdateSource};
+use mtui_types::UpdateSource;
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
-
-/// The PI host-lock action a command performs around its backend call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PiAction {
-    /// Lock reference hosts (e.g. `assign`).
-    Lock,
-    /// Unlock reference hosts (e.g. `unassign`/`reject`).
-    Unlock,
-    /// Neither (e.g. `comment`).
-    None,
-}
 
 /// Whether the loaded report is handled by the Gitea backend.
 ///
@@ -98,36 +88,6 @@ pub(crate) fn teregen_client(session: &Session) -> Result<TeReGen, CommandError>
         .http_client()
         .map_err(|e| CommandError::Other(format!("could not build TeReGen client: {e}")))?;
     Ok(TeReGen::with_client(http, &session.config.teregen_api))
-}
-
-/// Locks/unlocks the reference hosts around a PI action.
-///
-/// No-op unless the request is a PI, `lock_pi_autolock` is enabled, and the
-/// command declares a lock/unlock action.
-pub(crate) async fn pi_autolock(session: &mut Session, action: PiAction) {
-    if action == PiAction::None || !session.config.lock_pi_autolock {
-        return;
-    }
-    let Some(rrid) = session.metadata().rrid().cloned() else {
-        return;
-    };
-    if rrid.kind != RequestKind::Pi {
-        return;
-    }
-    match action {
-        PiAction::Lock => {
-            let comment = format!("testing of {rrid}");
-            session.metadata_mut().base_mut().lock_comment = comment.clone();
-            tracing::info!("Locking reference hosts for {rrid}");
-            session.targets_mut().lock(&comment).await;
-        }
-        PiAction::Unlock => {
-            tracing::info!("Unlocking reference hosts for {rrid}");
-            session.targets_mut().unlock().await;
-            session.metadata_mut().base_mut().lock_comment = String::new();
-        }
-        PiAction::None => {}
-    }
 }
 
 /// Prints best-effort TeReGen context for the loaded update.
@@ -280,7 +240,6 @@ impl Command for Assign {
                 .await
                 .map_err(|e| CommandError::Other(format!("osc assign failed: {e}")))?;
         }
-        pi_autolock(session, PiAction::Lock).await;
         show_priority_deadline(session, &rrid).await;
         session.display.println(&format!("assigned {rrid}"));
         Ok(())
@@ -325,7 +284,6 @@ impl Command for Unassign {
                 .await
                 .map_err(|e| CommandError::Other(format!("osc unassign failed: {e}")))?;
         }
-        pi_autolock(session, PiAction::Unlock).await;
         session.display.println(&format!("unassigned {rrid}"));
         Ok(())
     }
@@ -405,7 +363,6 @@ impl Command for Reject {
                 .await
                 .map_err(|e| CommandError::Other(format!("osc reject failed: {e}")))?;
         }
-        pi_autolock(session, PiAction::Unlock).await;
         session.display.println(&format!("rejected {rrid}"));
         Ok(())
     }
@@ -574,42 +531,11 @@ mod tests {
         assert!(matches!(err, CommandError::Other(m) if m.contains("comment is required")));
     }
 
-    #[tokio::test]
-    async fn pi_autolock_locks_and_unlocks_pi_hosts() {
-        // A PI request with lock_pi_autolock enabled locks on Lock and clears
-        // the comment on Unlock; a None action is a no-op.
-        let (mut session, _buf) = session_with_hosts("SUSE:PI:1.2:5", &["h1"], "ok");
-        session.config.lock_pi_autolock = true;
-        session.metadata_mut().base_mut().rrid = "SUSE:PI:1.2:5".parse().ok();
-
-        pi_autolock(&mut session, PiAction::None).await;
-        assert_eq!(session.metadata().base().lock_comment, "");
-
-        pi_autolock(&mut session, PiAction::Lock).await;
-        assert_eq!(
-            session.metadata().base().lock_comment,
-            "testing of SUSE:PI:1.2:5"
-        );
-
-        pi_autolock(&mut session, PiAction::Unlock).await;
-        assert_eq!(session.metadata().base().lock_comment, "");
-    }
-
-    #[tokio::test]
-    async fn pi_autolock_skips_non_pi_and_disabled() {
-        // Not a PI → no-op even with a lock action.
-        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.config.lock_pi_autolock = true;
-        pi_autolock(&mut session, PiAction::Lock).await;
-        assert_eq!(session.metadata().base().lock_comment, "");
-
-        // PI but the knob is off → no-op.
-        let (mut session, _buf) = session_with_hosts("SUSE:PI:1.2:5", &["h1"], "ok");
-        session.config.lock_pi_autolock = false;
-        session.metadata_mut().base_mut().rrid = "SUSE:PI:1.2:5".parse().ok();
-        pi_autolock(&mut session, PiAction::Lock).await;
-        assert_eq!(session.metadata().base().lock_comment, "");
-    }
+    // The PI reference-host lock bracket moved off `assign`/`unassign`/`reject`/
+    // `approve` onto report load — see
+    // `session::tests::load_update_reported_seeds_pi_lock_comment_when_enabled`
+    // and its siblings, which pin the same three conditions (PI+enabled,
+    // non-PI, disabled) at the new seam.
 
     #[tokio::test]
     #[serial_test::serial(osc_config_env)]

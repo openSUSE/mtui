@@ -10,6 +10,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Product Increment (PI) reference-host locking (`[lock] pi_autolock`) now
+  brackets the loaded report instead of the review workflow: each host is
+  locked as it connects (including a pool-selected host with no `-t`, which
+  was never locked before) and released on `unload`/`quit`, matching how every
+  non-PI report's pool claims already behave. `approve`/`reject`/`unassign` no
+  longer release reference hosts — a tester who approves or rejects and leaves
+  the REPL open now holds the PI's refhosts until `unload` or `quit`.
 - Backup-refhost retries across a report's pool slots (when a chosen host
   fails to connect and a sibling is tried) now share one time budget (`4 *
   connect_timeout`) and stop once it is spent, instead of walking every
