@@ -100,7 +100,7 @@ mod tests {
     /// `.tls(TlsMode::danger_accept_invalid_certs())` to
     /// `build_openqa_client_with_transport` fails this assertion.
     ///
-    /// `#[serial(openqa_config_env)]`-guarded: `ruoqa` 0.2 also resolves
+    /// `#[serial(openqa_config_env)]`-guarded: `ruoqa` 0.3 also resolves
     /// `$OPENQA_API_KEY`/`$OPENQA_API_SECRET`, and exactly one set in the
     /// ambient environment (rather than a matched pair, or neither) would
     /// turn this build into an `Err`.
