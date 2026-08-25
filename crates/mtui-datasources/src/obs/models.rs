@@ -104,7 +104,7 @@ fn parse_err(context: &str) -> ObsError {
 }
 
 /// Read attribute `key` off a start/empty tag as an owned `String`, if present.
-fn attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
+fn attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
     for a in e.attributes().flatten() {
         if a.key.as_ref() == key {
             // `normalized_value` resolves standard XML character references but
@@ -131,9 +131,9 @@ fn parse_review(
     start: &quick_xml::events::BytesStart<'_>,
 ) -> Result<Review, ObsError> {
     let mut review = Review {
-        state: attr(start, b"state").unwrap_or_default(),
-        by_group: attr(start, b"by_group"),
-        by_user: attr(start, b"by_user"),
+        state: attr(start, "state").unwrap_or_default(),
+        by_group: attr(start, "by_group"),
+        by_user: attr(start, "by_user"),
         history: Vec::new(),
     };
 
@@ -143,18 +143,18 @@ fn parse_review(
             .read_event_into(buf)
             .map_err(|_| parse_err("request"))?
         {
-            Event::Start(e) if e.local_name().as_ref() == b"history" => {
+            Event::Start(e) if e.local_name().as_ref() == "history" => {
                 let ev = parse_history(reader, &mut Vec::new(), &e)?;
                 review.history.push(ev);
             }
-            Event::Empty(e) if e.local_name().as_ref() == b"history" => {
+            Event::Empty(e) if e.local_name().as_ref() == "history" => {
                 review.history.push(HistoryEvent {
-                    who: attr(&e, b"who").unwrap_or_default(),
-                    when: attr(&e, b"when").unwrap_or_default(),
+                    who: attr(&e, "who").unwrap_or_default(),
+                    when: attr(&e, "when").unwrap_or_default(),
                     description: String::new(),
                 });
             }
-            Event::End(e) if e.local_name().as_ref() == b"review" => break,
+            Event::End(e) if e.local_name().as_ref() == "review" => break,
             Event::Eof => return Err(parse_err("request")),
             _ => {}
         }
@@ -169,8 +169,8 @@ fn parse_history(
     start: &quick_xml::events::BytesStart<'_>,
 ) -> Result<HistoryEvent, ObsError> {
     let mut ev = HistoryEvent {
-        who: attr(start, b"who").unwrap_or_default(),
-        when: attr(start, b"when").unwrap_or_default(),
+        who: attr(start, "who").unwrap_or_default(),
+        when: attr(start, "when").unwrap_or_default(),
         description: String::new(),
     };
 
@@ -181,17 +181,16 @@ fn parse_history(
             .read_event_into(buf)
             .map_err(|_| parse_err("request"))?
         {
-            Event::Start(e) if e.local_name().as_ref() == b"description" => {
+            Event::Start(e) if e.local_name().as_ref() == "description" => {
                 in_description = true;
             }
             Event::Text(e) if in_description => {
-                let text = e.decode().map_err(|_| parse_err("request"))?;
-                ev.description.push_str(text.as_ref());
+                ev.description.push_str(&e);
             }
-            Event::End(e) if e.local_name().as_ref() == b"description" => {
+            Event::End(e) if e.local_name().as_ref() == "description" => {
                 in_description = false;
             }
-            Event::End(e) if e.local_name().as_ref() == b"history" => break,
+            Event::End(e) if e.local_name().as_ref() == "history" => break,
             Event::Eof => return Err(parse_err("request")),
             _ => {}
         }
@@ -210,7 +209,7 @@ fn parse_request_element(
     start: &quick_xml::events::BytesStart<'_>,
 ) -> Result<Request, ObsError> {
     let mut request = Request {
-        reqid: attr(start, b"id").unwrap_or_default(),
+        reqid: attr(start, "id").unwrap_or_default(),
         state: String::new(),
         src_project: None,
         reviews: Vec::new(),
@@ -223,31 +222,31 @@ fn parse_request_element(
             .read_event_into(buf)
             .map_err(|_| parse_err("request"))?
         {
-            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"state" => {
-                request.state = attr(&e, b"name").unwrap_or_default();
+            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "state" => {
+                request.state = attr(&e, "name").unwrap_or_default();
             }
-            Event::Start(e) if e.local_name().as_ref() == b"action" => in_action = true,
-            Event::End(e) if e.local_name().as_ref() == b"action" => in_action = false,
+            Event::Start(e) if e.local_name().as_ref() == "action" => in_action = true,
+            Event::End(e) if e.local_name().as_ref() == "action" => in_action = false,
             Event::Start(e) | Event::Empty(e)
-                if in_action && e.local_name().as_ref() == b"source" =>
+                if in_action && e.local_name().as_ref() == "source" =>
             {
                 if request.src_project.is_none() {
-                    request.src_project = attr(&e, b"project");
+                    request.src_project = attr(&e, "project");
                 }
             }
-            Event::Start(e) if e.local_name().as_ref() == b"review" => {
+            Event::Start(e) if e.local_name().as_ref() == "review" => {
                 let review = parse_review(reader, &mut Vec::new(), &e)?;
                 request.reviews.push(review);
             }
-            Event::Empty(e) if e.local_name().as_ref() == b"review" => {
+            Event::Empty(e) if e.local_name().as_ref() == "review" => {
                 request.reviews.push(Review {
-                    state: attr(&e, b"state").unwrap_or_default(),
-                    by_group: attr(&e, b"by_group"),
-                    by_user: attr(&e, b"by_user"),
+                    state: attr(&e, "state").unwrap_or_default(),
+                    by_group: attr(&e, "by_group"),
+                    by_user: attr(&e, "by_user"),
                     history: Vec::new(),
                 });
             }
-            Event::End(e) if e.local_name().as_ref() == b"request" => break,
+            Event::End(e) if e.local_name().as_ref() == "request" => break,
             Event::Eof => return Err(parse_err("request")),
             _ => {}
         }
@@ -269,12 +268,12 @@ pub fn parse_request(xml: &str) -> Result<Request, ObsError> {
             .read_event_into(&mut buf)
             .map_err(|_| parse_err("request"))?
         {
-            Event::Start(e) if e.local_name().as_ref() == b"request" => {
+            Event::Start(e) if e.local_name().as_ref() == "request" => {
                 return parse_request_element(&mut reader, &mut Vec::new(), &e);
             }
-            Event::Empty(e) if e.local_name().as_ref() == b"request" => {
+            Event::Empty(e) if e.local_name().as_ref() == "request" => {
                 return Ok(Request {
-                    reqid: attr(&e, b"id").unwrap_or_default(),
+                    reqid: attr(&e, "id").unwrap_or_default(),
                     state: String::new(),
                     src_project: None,
                     reviews: Vec::new(),
@@ -301,12 +300,12 @@ pub fn parse_request_collection(xml: &str) -> Result<Vec<Request>, ObsError> {
             .read_event_into(&mut buf)
             .map_err(|_| parse_err("collection"))?
         {
-            Event::Start(e) if e.local_name().as_ref() == b"request" => {
+            Event::Start(e) if e.local_name().as_ref() == "request" => {
                 requests.push(parse_request_element(&mut reader, &mut Vec::new(), &e)?);
             }
-            Event::Empty(e) if e.local_name().as_ref() == b"request" => {
+            Event::Empty(e) if e.local_name().as_ref() == "request" => {
                 requests.push(Request {
-                    reqid: attr(&e, b"id").unwrap_or_default(),
+                    reqid: attr(&e, "id").unwrap_or_default(),
                     state: String::new(),
                     src_project: None,
                     reviews: Vec::new(),
@@ -334,8 +333,8 @@ pub fn parse_group_directory(xml: &str) -> Result<Vec<String>, ObsError> {
             .read_event_into(&mut buf)
             .map_err(|_| parse_err("group directory"))?
         {
-            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"entry" => {
-                if let Some(name) = attr(&e, b"name") {
+            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == "entry" => {
+                if let Some(name) = attr(&e, "name") {
                     names.push(name);
                 }
             }
@@ -366,15 +365,14 @@ pub fn parse_reject_reason_values(xml: &str) -> Result<Vec<String>, ObsError> {
             .read_event_into(&mut buf)
             .map_err(|_| parse_err("reject reason"))?
         {
-            Event::Start(e) if e.local_name().as_ref() == b"value" => {
+            Event::Start(e) if e.local_name().as_ref() == "value" => {
                 in_value = true;
                 current.clear();
             }
             Event::Text(e) if in_value => {
-                let text = e.decode().map_err(|_| parse_err("reject reason"))?;
-                current.push_str(text.as_ref());
+                current.push_str(&e);
             }
-            Event::End(e) if e.local_name().as_ref() == b"value" => {
+            Event::End(e) if e.local_name().as_ref() == "value" => {
                 let trimmed = current.trim();
                 if !trimmed.is_empty() {
                     values.push(trimmed.to_owned());

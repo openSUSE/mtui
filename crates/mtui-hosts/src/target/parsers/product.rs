@@ -24,9 +24,13 @@ use crate::error::{HostError, Result};
 ///   `"0"`;
 /// * otherwise the `<version>` element is used verbatim.
 ///
+/// Non-UTF-8 bytes are decoded lossily (replacement characters), matching
+/// [`parse_os_release`]'s handling of the same host-supplied-text problem, so
+/// a mojibake `.prod` file degrades rather than newly failing `sysinfo`.
+///
 /// # Errors
-/// Returns [`HostError::Sftp`] with a parse reason when the bytes are not valid
-/// XML.
+/// Returns [`HostError::Sftp`] with a parse reason when the (lossily-decoded)
+/// text is not well-formed XML.
 pub fn parse_product(bytes: &[u8]) -> Result<(String, String, String)> {
     let fields = collect_fields(bytes)?;
 
@@ -98,23 +102,23 @@ pub fn parse_os_release(bytes: &[u8]) -> Result<(String, String, String)> {
 /// occurrence, matching `ElementTree.findtext`'s "first match wins" only
 /// loosely — product files carry each tag once, so the distinction is moot.
 fn collect_fields(bytes: &[u8]) -> Result<std::collections::HashMap<String, String>> {
-    let mut reader = Reader::from_reader(bytes);
+    // Decode lossily rather than let the reader's UTF-8 validation reject the
+    // whole file: see `parse_product`'s doc comment.
+    let text = String::from_utf8_lossy(bytes);
+    let mut reader = Reader::from_str(&text);
     reader.config_mut().trim_text(true);
 
     let mut fields = std::collections::HashMap::new();
-    let mut buf = Vec::new();
     let mut current: Option<String> = None;
 
     loop {
-        match reader.read_event_into(&mut buf) {
+        match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
-                current = Some(name);
+                current = Some(e.local_name().as_ref().to_owned());
             }
             Ok(Event::Text(e)) => {
                 if let Some(tag) = &current {
-                    let value = e.decode().map_err(|err| xml_err(&err))?.into_owned();
-                    fields.entry(tag.clone()).or_insert(value);
+                    fields.entry(tag.clone()).or_insert_with(|| e.to_string());
                 }
             }
             Ok(Event::End(_)) => current = None,
@@ -122,7 +126,6 @@ fn collect_fields(bytes: &[u8]) -> Result<std::collections::HashMap<String, Stri
             Err(e) => return Err(xml_err(&e)),
             _ => {}
         }
-        buf.clear();
     }
 
     Ok(fields)
@@ -198,6 +201,16 @@ mod tests {
         // Mismatched end tag — quick-xml rejects this even at EOF.
         let err = parse_product(b"<product><name>x</wrong></product>").expect_err("should fail");
         assert!(matches!(err, HostError::Sftp { .. }));
+    }
+
+    #[test]
+    fn invalid_utf8_is_decoded_lossily_not_rejected() {
+        // A mojibake `.prod` file (non-UTF-8 bytes in a text node) must degrade
+        // like `parse_os_release` does, not newly fail `sysinfo`.
+        let xml = b"<product><name>SLES\xFF</name></product>";
+        let (name, _, _) = parse_product(xml).expect("should decode lossily, not error");
+        assert!(name.starts_with("SLES"));
+        assert!(name.contains('\u{FFFD}'));
     }
 
     #[test]

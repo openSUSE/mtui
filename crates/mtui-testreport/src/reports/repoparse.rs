@@ -212,8 +212,8 @@ fn xmlparse(xml: &str) -> Vec<(SystemProduct, String)> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) if e.local_name().as_ref() == b"repository" => {
-                repo_name = attr(&e, b"name");
+            Ok(Event::Start(e)) if e.local_name().as_ref() == "repository" => {
+                repo_name = attr(&e, "name");
                 has_update_path = false;
                 release_project = None;
             }
@@ -221,16 +221,16 @@ fn xmlparse(xml: &str) -> Vec<(SystemProduct, String)> {
             // are empty elements; handle both empty and (defensively) start form.
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) if repo_name.is_some() => {
                 match e.local_name().as_ref() {
-                    b"path" if attr(&e, b"repository").as_deref() == Some("update") => {
+                    "path" if attr(&e, "repository").as_deref() == Some("update") => {
                         has_update_path = true;
                     }
-                    b"releasetarget" => {
-                        release_project = attr(&e, b"project");
+                    "releasetarget" => {
+                        release_project = attr(&e, "project");
                     }
                     _ => {}
                 }
             }
-            Ok(Event::End(e)) if e.local_name().as_ref() == b"repository" => {
+            Ok(Event::End(e)) if e.local_name().as_ref() == "repository" => {
                 if let Some(name) = repo_name.take()
                     && has_update_path
                     && !name.contains("DEBUG")
@@ -266,7 +266,7 @@ fn product_from_project(project: &str) -> Option<SystemProduct> {
 }
 
 /// Extracts an attribute value from an XML start/empty element by local name.
-fn attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
+fn attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
     e.attributes().flatten().find_map(|a| {
         (a.key.local_name().as_ref() == key)
             .then(|| a.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok())
