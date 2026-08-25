@@ -33,6 +33,8 @@ jobs:
         with:
           language: rust
           sanitizer: ${{ matrix.sanitizer }}
+          # Without it this step's artifact listing gets a 401.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run fuzzers (${{ matrix.sanitizer }})
         id: run
         uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1  # v1
