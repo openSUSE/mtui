@@ -1115,14 +1115,14 @@ impl HostsGroup {
     /// Returns [`HostError::Update`] when one or more hosts were locked by
     /// another owner or could not be locked/read.
     pub async fn update_lock(&mut self) -> Result<()> {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
 
         // Probe-and-acquire concurrently across the group via the shared
         // fan-out. Each host's probe+acquire is self-contained and
-        // order-independent; a foreign-locked host flips the shared `skipped`
-        // flag. The per-host lock wire semantics are unchanged — only the
-        // fan-out is now concurrent (Contract preserved).
-        let skipped = AtomicBool::new(false);
+        // order-independent; a skipped host pushes its reason onto the shared
+        // `reasons` list. The per-host lock wire semantics are unchanged —
+        // only the fan-out is now concurrent (Contract preserved).
+        let reasons: Mutex<Vec<String>> = Mutex::new(Vec::new());
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
@@ -1131,7 +1131,7 @@ impl HostsGroup {
             Some("update_lock"),
             |_t| true,
             |target| {
-                let skipped = &skipped;
+                let reasons = &reasons;
                 Box::pin(async move {
                     // Load the lock (is_locked) before reading ownership;
                     // is_mine requires a prior load and is order-sensitive. A
@@ -1140,8 +1140,9 @@ impl HostsGroup {
                     let locked = match target.is_locked().await {
                         Ok(v) => v,
                         Err(e) => {
-                            skipped.store(true, Ordering::SeqCst);
-                            tracing::warn!(host = %target.hostname(), error = %e, "update_lock: lock state unreadable; skipping");
+                            let host = target.hostname().to_owned();
+                            tracing::warn!(host = %host, error = %e, "update_lock: lock state unreadable; skipping");
+                            reasons.lock().expect("reasons mutex").push(format!("{host}: lock state unreadable: {e}"));
                             return;
                         }
                     };
@@ -1150,7 +1151,6 @@ impl HostsGroup {
                             .lock_mut()
                             .is_some_and(|l| !l.is_mine().unwrap_or(false));
                     if foreign {
-                        skipped.store(true, Ordering::SeqCst);
                         let hostname = target.hostname().to_owned();
                         let lock = target.lock_mut().expect("foreign implies a built lock");
                         let time = lock.time().await.unwrap_or_default();
@@ -1163,20 +1163,23 @@ impl HostsGroup {
                         if !comment.is_empty() {
                             tracing::info!(host = %hostname, %by, %comment, "lock comment");
                         }
+                        reasons.lock().expect("reasons mutex").push(format!("{hostname}: held by {by} since {time}"));
                     } else {
                         // Any failure to acquire — contention or an SFTP/transport
                         // error — means we do NOT own this host, so the whole
-                        // group must abort. Flip `skipped` on every error, not
+                        // group must abort. Push a reason on every error, not
                         // just `TargetLocked`.
                         match target.lock("").await {
                             Ok(()) => {}
                             Err(HostError::TargetLocked(msg)) => {
-                                skipped.store(true, Ordering::SeqCst);
-                                tracing::debug!(host = %target.hostname(), %msg, "update_lock: held by another owner");
+                                let host = target.hostname().to_owned();
+                                tracing::debug!(host = %host, %msg, "update_lock: held by another owner");
+                                reasons.lock().expect("reasons mutex").push(format!("{host}: {msg}"));
                             }
                             Err(e) => {
-                                skipped.store(true, Ordering::SeqCst);
-                                tracing::warn!(host = %target.hostname(), error = %e, "update_lock: lock failed");
+                                let host = target.hostname().to_owned();
+                                tracing::warn!(host = %host, error = %e, "update_lock: lock failed");
+                                reasons.lock().expect("reasons mutex").push(format!("{host}: {e}"));
                             }
                         }
                     }
@@ -1185,11 +1188,17 @@ impl HostsGroup {
         )
         .await;
 
-        if skipped.into_inner() {
+        let mut reasons = reasons.into_inner().expect("reasons mutex");
+        if !reasons.is_empty() {
             // Release the locks we did take, best-effort (concurrently), then
-            // signal the abort.
+            // signal the abort. Sort first: the fan-out is concurrent, so
+            // collection order is nondeterministic.
+            reasons.sort();
             let _ = self.unlock().await;
-            return Err(HostError::Update("Hosts locked".to_owned()));
+            return Err(HostError::Update(format!(
+                "Hosts locked: {}",
+                reasons.join("; ")
+            )));
         }
         Ok(())
     }
@@ -2892,6 +2901,12 @@ mod tests {
             .await
             .expect_err("non-contention lock failure -> abort");
         assert!(matches!(err, HostError::Update(_)));
+        // The message names the real per-host cause instead of the bare
+        // "Hosts locked" literal.
+        let msg = err.to_string();
+        assert!(msg.starts_with("Hosts locked: "));
+        assert!(msg.contains("h2:"));
+        assert!(msg.contains("scripted exclusive-create failure"));
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
     }
 

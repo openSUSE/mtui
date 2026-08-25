@@ -36,6 +36,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   protocol-level sessions and would break per-client HTTP session isolation.
   `[mcp] max_request_bytes` now also sets rmcp's own request-body ceiling
   (previously a fixed 4 MB), so `0` disables both gates.
+- `update`/`prepare`/`downgrade` aborting because one or more hosts could not
+  be locked now reports `Hosts locked: <host>: <reason>` for every skipped
+  host (e.g. `Hosts locked: h2: held by alice since 2026-...; h3: sftp error
+  on h3: ...`) instead of the bare literal `Hosts locked`, which gave no clue
+  which host or why.
 
 ### Fixed
 
