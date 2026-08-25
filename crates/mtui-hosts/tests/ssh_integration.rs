@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -52,8 +53,15 @@ struct FakeFs {
 type SharedFs = Arc<Mutex<FakeFs>>;
 
 /// Per-request delay knob for the SFTP handler, settable after the server has
-/// started so a test can arm it right before the op under test.
+/// started so a test can arm it right before the op under test. One-shot: the
+/// `open` handler consumes (resets) it the instant it reads a nonzero value,
+/// before sleeping — so a retried request right behind a timed-out one is not
+/// also delayed.
 type SharedDelay = Arc<Mutex<Duration>>;
+
+/// Counts `subsystem_request(name == "sftp")` calls server-side, so a test can
+/// assert exactly how many SFTP handshakes a sequence of client verbs caused.
+type SharedSubsystemCount = Arc<AtomicUsize>;
 
 // ----------------------------------------------------------------------------
 // SSH server: exec + sftp subsystem.
@@ -63,6 +71,7 @@ type SharedDelay = Arc<Mutex<Duration>>;
 struct TestServer {
     fs: SharedFs,
     delay: SharedDelay,
+    subsystem_count: SharedSubsystemCount,
 }
 
 impl russh::server::Server for TestServer {
@@ -72,6 +81,7 @@ impl russh::server::Server for TestServer {
         TestSshSession {
             fs: self.fs.clone(),
             delay: self.delay.clone(),
+            subsystem_count: self.subsystem_count.clone(),
             channels: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "shell")]
             shell_channels: Arc::new(Mutex::new(std::collections::HashSet::new())),
@@ -82,6 +92,7 @@ impl russh::server::Server for TestServer {
 struct TestSshSession {
     fs: SharedFs,
     delay: SharedDelay,
+    subsystem_count: SharedSubsystemCount,
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     /// Channels that requested an interactive shell, so the `data` callback only
     /// echoes keystrokes for shells and leaves SFTP-subsystem data untouched.
@@ -172,6 +183,7 @@ impl russh::server::Handler for TestSshSession {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         if name == "sftp" {
+            self.subsystem_count.fetch_add(1, Ordering::SeqCst);
             let channel = self.channels.lock().await.remove(&channel_id).unwrap();
             session.channel_success(channel_id)?;
             let handler = SftpHandler {
@@ -309,7 +321,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         use russh_sftp::protocol::OpenFlags;
-        let delay = *self.delay.lock().await;
+        // One-shot: consume (reset) the armed delay the instant it is read,
+        // before sleeping, so a retry issued while this call is still asleep
+        // is not also delayed.
+        let delay = std::mem::replace(&mut *self.delay.lock().await, Duration::ZERO);
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
@@ -500,7 +515,19 @@ async fn start_server(fs: SharedFs) -> u16 {
 /// Like [`start_server`], but also returns the [`SharedDelay`] handle so a
 /// test can arm a per-`open`-request delay after the server is up.
 async fn start_server_with_delay(fs: SharedFs) -> (u16, SharedDelay) {
+    let (port, delay, _count) = start_server_with_delay_and_counter(fs).await;
+    (port, delay)
+}
+
+/// Like [`start_server_with_delay`], additionally returning a
+/// [`SharedSubsystemCount`] counting every `subsystem_request(name == "sftp")`
+/// the server has served, so a test can assert how many SFTP handshakes a
+/// sequence of client verbs caused.
+async fn start_server_with_delay_and_counter(
+    fs: SharedFs,
+) -> (u16, SharedDelay, SharedSubsystemCount) {
     let delay: SharedDelay = Arc::new(Mutex::new(Duration::ZERO));
+    let subsystem_count: SharedSubsystemCount = Arc::new(AtomicUsize::new(0));
     let config = Arc::new(russh::server::Config {
         auth_rejection_time: Duration::from_millis(1),
         keys: vec![HOST_KEY.clone()],
@@ -510,10 +537,12 @@ async fn start_server_with_delay(fs: SharedFs) -> (u16, SharedDelay) {
     let port = listener.local_addr().expect("addr").port();
 
     let server_delay = delay.clone();
+    let server_count = subsystem_count.clone();
     tokio::spawn(async move {
         let mut server = TestServer {
             fs,
             delay: server_delay,
+            subsystem_count: server_count,
         };
         // Accept loop: serve every incoming connection.
         loop {
@@ -528,7 +557,7 @@ async fn start_server_with_delay(fs: SharedFs) -> (u16, SharedDelay) {
         }
     });
 
-    (port, delay)
+    (port, delay, subsystem_count)
 }
 
 /// Per-process temp directory holding this test binary's `known_hosts`.
@@ -1254,5 +1283,73 @@ async fn sftp_request_budget_follows_connect_timeout_not_the_hardcoded_ten_secon
     assert!(
         elapsed < Duration::from_millis(1500),
         "request budget did not follow connect_timeout: elapsed {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn sftp_verbs_over_one_connection_share_a_single_subsystem() {
+    // Several different SFTP verbs over one connection must open the
+    // subsystem exactly once — proving `sftp_*` no longer pays a fresh
+    // channel+handshake per call. `close()` tears down the whole SSH session
+    // (not just the cached subsystem), so the very next verb must reconnect
+    // fully and therefore re-handshake the subsystem too.
+    let fs = SharedFs::default();
+    let (port, _delay, count) = start_server_with_delay_and_counter(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    conn.sftp_write(std::path::Path::new("/a"), b"1", false)
+        .await
+        .expect("write a");
+    conn.sftp_open(std::path::Path::new("/a"))
+        .await
+        .expect("open a");
+    conn.sftp_listdir(std::path::Path::new("/"))
+        .await
+        .expect("listdir");
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "three verbs must share one subsystem"
+    );
+
+    conn.close().await.expect("close");
+    conn.sftp_write(std::path::Path::new("/b"), b"2", false)
+        .await
+        .expect("write b after close");
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        2,
+        "close() must force a fresh subsystem on the next verb"
+    );
+}
+
+#[tokio::test]
+async fn sftp_transparently_rehandshakes_after_a_stale_cached_sessions_first_request_times_out() {
+    // A cached subsystem whose first request on a later verb call times out
+    // (modelling a peer that silently dropped it) must be invalidated and
+    // re-handshaked transparently, with the request retried exactly once —
+    // the caller sees success, not the timeout.
+    let fs = SharedFs::default();
+    let (port, delay, count) = start_server_with_delay_and_counter(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(1)).await;
+
+    conn.sftp_write(std::path::Path::new("/a"), b"1", false)
+        .await
+        .expect("first write opens the subsystem");
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+
+    // Arm a one-shot delay exceeding the 1s connect_timeout-derived budget:
+    // the next `open` call (this verb's first request) times out client-side.
+    // The delay is consumed the instant the handler reads it, so the retried
+    // request right behind it is not also delayed.
+    *delay.lock().await = Duration::from_secs(2);
+    conn.sftp_open(std::path::Path::new("/a"))
+        .await
+        .expect("transparently retried after re-handshaking, not surfaced as a timeout");
+
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        2,
+        "the timed-out cached session must be invalidated and re-handshaked exactly once"
     );
 }

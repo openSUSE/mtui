@@ -54,6 +54,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   if it landed with someone else's identity it is correctly refused. Only one
   such reconciliation pass is made per `lock()` call — a second timeout
   propagates as a real error.
+- A connection now opens one SFTP subsystem and reuses it across every
+  `sftp_*` call instead of a fresh channel+handshake per operation — a
+  `lock`/`update` on a high-latency host now costs one SFTP handshake per
+  host instead of one per operation. The shared subsystem is invalidated and
+  transparently re-handshaked (with the failed request retried once) if a
+  request against it times out or hits a transport error, so a session the
+  peer silently dropped is recovered on the next call rather than surfacing
+  as a hard failure.
 
 ### Fixed
 

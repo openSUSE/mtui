@@ -390,6 +390,16 @@ pub struct SshConnection {
     ///
     /// [`with_reboot_budget`]: Self::with_reboot_budget
     reconnect_backoff_base: Duration,
+    /// The SFTP subsystem for this connection, opened lazily and reused
+    /// across every `sftp_*` verb instead of one channel+handshake per call.
+    /// `RusshSftpSession`'s own request/reply routing is by atomically
+    /// allocated id, so concurrent verbs (e.g. `sftp_get_folder`'s
+    /// `buffer_unordered` fan-out) safely share one `Arc` clone each. Cleared
+    /// by [`close`](Connection::close), a successful
+    /// [`reconnect`](Connection::reconnect), and on a session-fatal error (see
+    /// [`invalidate_sftp_if_fatal`](Self::invalidate_sftp_if_fatal)) so the
+    /// next call re-handshakes rather than reusing a dead session.
+    sftp: Option<Arc<RusshSftpSession>>,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -451,6 +461,7 @@ impl SshConnection {
             timeout_prompt: None,
             known_hosts,
             reconnect_backoff_base: Duration::from_secs(10),
+            sftp: None,
         })
     }
 
@@ -500,23 +511,54 @@ impl SshConnection {
         })
     }
 
-    /// Opens the SFTP subsystem on a fresh channel, reconnecting first if the
-    /// link has dropped.
+    /// Returns the cached SFTP subsystem, opening one only when the cache is
+    /// empty (reconnecting first if the link has dropped).
     ///
-    /// The per-request budget (russh-sftp's `Config::request_timeout_secs`,
-    /// default 10s) is derived from `connect_timeout` rather than left at the
-    /// dependency default: `new_with_config` runs the INIT/VERSION handshake
-    /// through the same `request` path, so a fixed 10s bounds every SFTP op —
-    /// including the handshake — regardless of link latency. `new_with_config`
-    /// must be used rather than a post-`new` `set_timeout`, which would land
-    /// after INIT and leave the handshake pinned at 10s. `.max(1)` guards
-    /// against a zero duration (fires instantly); `connect_timeout` is
-    /// validated `> 0` in config but a test `CommandTimeout` can still be
-    /// constructed at zero.
-    async fn sftp(&mut self) -> Result<RusshSftpSession> {
+    /// Every `sftp_*` verb shares this one channel+handshake per connection
+    /// instead of paying a fresh one per call — the `Arc` clone handed back is
+    /// cheap, and `RusshSftpSession`'s own request/reply routing is by
+    /// atomically allocated id, so concurrent verbs may safely hold their own
+    /// clone. The whole open sequence (channel open, subsystem request, and
+    /// the INIT/VERSION handshake) is bounded by `connect_timeout` — the
+    /// channel/subsystem steps have no timeout of their own otherwise.
+    ///
+    /// The per-request budget of the opened session (russh-sftp's
+    /// `Config::request_timeout_secs`, default 10s) is likewise derived from
+    /// `connect_timeout` rather than left at the dependency default:
+    /// `new_with_config` runs the INIT/VERSION handshake through the same
+    /// `request` path, so a fixed 10s would bound every SFTP op — including
+    /// the handshake — regardless of link latency. `new_with_config` must be
+    /// used rather than a post-`new` `set_timeout`, which would land after
+    /// INIT and leave the handshake pinned at 10s. `.max(1)` guards against a
+    /// zero duration (fires instantly); `connect_timeout` is validated `> 0`
+    /// in config but a test `CommandTimeout` can still be constructed at zero.
+    async fn sftp(&mut self) -> Result<Arc<RusshSftpSession>> {
         if !self.is_active() {
             self.reconnect(0, false).await?;
         }
+        if let Some(cached) = &self.sftp {
+            return Ok(Arc::clone(cached));
+        }
+        let hostname = self.hostname.clone();
+        let session = tokio::time::timeout(
+            self.connect_timeout.as_duration(),
+            self.open_sftp_subsystem(),
+        )
+        .await
+        .map_err(|_| HostError::Transport {
+            host: hostname,
+            reason: "sftp subsystem handshake timed out".to_owned(),
+        })??;
+        let session = Arc::new(session);
+        self.sftp = Some(Arc::clone(&session));
+        Ok(session)
+    }
+
+    /// Opens a fresh SFTP subsystem channel: `channel_open_session` +
+    /// `request_subsystem("sftp")` + the `RusshSftpSession` INIT/VERSION
+    /// handshake. Split out of [`sftp`](Self::sftp) so the whole sequence can
+    /// be wrapped in one `tokio::time::timeout`.
+    async fn open_sftp_subsystem(&self) -> Result<RusshSftpSession> {
         let channel = self
             .handle()?
             .channel_open_session()
@@ -533,6 +575,25 @@ impl SshConnection {
         RusshSftpSession::new_with_config(channel.into_stream(), config)
             .await
             .map_err(|e| self.sftp_err(e))
+    }
+
+    /// Drops the cached SFTP subsystem so the next [`sftp`](Self::sftp) call
+    /// re-handshakes, if `err` is session-fatal.
+    ///
+    /// [`HostError::SftpTimeout`] and [`HostError::Transport`] are the two
+    /// buckets a non-`Status` russh-sftp error lands in (see
+    /// [`sftp_err_at_for`] / [`exclusive_create_err`]): both mean the shared
+    /// channel itself is suspect (wedged or gone), so continuing to hand it
+    /// out to later verbs would just repeat the same failure. A `Status`-based
+    /// error (`HostError::Sftp`/`SftpNotFound`/`AlreadyExists`) is a normal
+    /// per-request outcome and leaves the session cached.
+    fn invalidate_sftp_if_fatal(&mut self, err: &HostError) {
+        if matches!(
+            err,
+            HostError::SftpTimeout { .. } | HostError::Transport { .. }
+        ) {
+            self.sftp = None;
+        }
     }
 
     fn sftp_err(&self, e: impl std::fmt::Display) -> HostError {
@@ -570,6 +631,81 @@ impl SshConnection {
         path_str: &str,
     ) -> HostError {
         exclusive_create_err(&self.hostname, e, path_str)
+    }
+
+    /// Like [`sftp_err`](Self::sftp_err), but also invalidates the cached
+    /// subsystem on a session-fatal error. Used by every `sftp_*` verb (as
+    /// opposed to [`sftp`](Self::sftp)'s own handshake, which has nothing
+    /// cached yet to invalidate).
+    fn sftp_verb_err(&mut self, e: impl std::fmt::Display) -> HostError {
+        let err = self.sftp_err(e);
+        self.invalidate_sftp_if_fatal(&err);
+        err
+    }
+
+    /// Like [`sftp_err_at`](Self::sftp_err_at), invalidating on a session-fatal
+    /// error.
+    fn sftp_verb_err_at(&mut self, e: russh_sftp::client::error::Error, path: &Path) -> HostError {
+        let err = self.sftp_err_at(e, path);
+        self.invalidate_sftp_if_fatal(&err);
+        err
+    }
+
+    /// Like [`exclusive_create_err`](Self::exclusive_create_err), invalidating
+    /// on a session-fatal error.
+    fn sftp_verb_exclusive_create_err(
+        &mut self,
+        e: russh_sftp::client::error::Error,
+        path_str: &str,
+    ) -> HostError {
+        let err = self.exclusive_create_err(e, path_str);
+        self.invalidate_sftp_if_fatal(&err);
+        err
+    }
+
+    /// Runs a verb's *first* SFTP request (`open`/`read`/`read_dir`/
+    /// `read_link`/`open_with_flags` — i.e. before anything has been written)
+    /// with one retry against a freshly-handshaked session, but only when the
+    /// failed attempt used a session pulled from the cache.
+    ///
+    /// A long-lived shared subsystem can be silently closed by the peer (an
+    /// idle timeout, a restarted sshd) between calls; the *first* request on
+    /// such a session is safe to retry because nothing has been written yet.
+    /// A session opened fresh in this same call failing immediately is a
+    /// different, likely permanent, problem and is not retried — and no
+    /// request past this first one is retried by this helper, since retrying
+    /// a write/append could duplicate a remote-history row (the append-only
+    /// contract).
+    ///
+    /// Returns the session alongside the successful result so the caller can
+    /// issue further requests (e.g. `write_all`/`shutdown` on the opened
+    /// file) against the same subsystem without invalidation risk.
+    async fn sftp_first_request<T, ReqFut>(
+        &mut self,
+        req: impl Fn(Arc<RusshSftpSession>) -> ReqFut,
+        map_err: impl Fn(&mut Self, russh_sftp::client::error::Error) -> HostError,
+    ) -> Result<(Arc<RusshSftpSession>, T)>
+    where
+        ReqFut: Future<Output = std::result::Result<T, russh_sftp::client::error::Error>>,
+    {
+        let from_cache = self.sftp.is_some();
+        let sftp = self.sftp().await?;
+        match req(Arc::clone(&sftp)).await {
+            Ok(v) => Ok((sftp, v)),
+            Err(e) if from_cache => {
+                tracing::debug!(
+                    host = %self.hostname, error = %e,
+                    "stale cached sftp session on first request; re-handshaking and retrying once"
+                );
+                self.sftp = None;
+                let sftp = self.sftp().await?;
+                match req(Arc::clone(&sftp)).await {
+                    Ok(v) => Ok((sftp, v)),
+                    Err(e) => Err(map_err(self, e)),
+                }
+            }
+            Err(e) => Err(map_err(self, e)),
+        }
     }
 
     fn transport_err(&self, e: impl std::fmt::Display) -> HostError {
@@ -970,13 +1106,13 @@ pub(crate) fn validate_sftp_component<'a>(name: &'a str, host: &str) -> Result<&
 /// A batched SFTP session over one russh channel+subsystem, returned by
 /// [`SshConnection::sftp_session`].
 ///
-/// Holds a single live [`RusshSftpSession`] and the hostname (for error
-/// context). Each read verb runs against the *same* session — no per-op
-/// handshake — and routes failures through the shared
-/// [`sftp_err_for`]/[`sftp_err_at_for`] mappers so the error surface is
-/// identical to the per-op [`Connection`] path.
+/// Holds a clone of the connection's shared [`RusshSftpSession`] (see
+/// [`SshConnection::sftp`]) and the hostname (for error context). Each read
+/// verb runs against the *same* subsystem — no per-op handshake — and routes
+/// failures through the shared [`sftp_err_for`]/[`sftp_err_at_for`] mappers so
+/// the error surface is identical to the per-op [`Connection`] path.
 struct SshSftpSession {
-    sftp: RusshSftpSession,
+    sftp: Arc<RusshSftpSession>,
     hostname: String,
 }
 
@@ -1006,10 +1142,12 @@ impl SftpSession for SshSftpSession {
     }
 
     async fn close(&mut self) -> Result<()> {
-        self.sftp
-            .close()
-            .await
-            .map_err(|e| sftp_err_for(&self.hostname, e))
+        // The subsystem is shared with the owning `SshConnection`'s cache
+        // (and possibly other in-flight `SshSftpSession`/verb handles);
+        // dropping this `Arc` clone releases only this handle's share. Real
+        // teardown happens via `SshConnection::close`/`reconnect`, or
+        // invalidation on a session-fatal error.
+        Ok(())
     }
 }
 
@@ -1023,13 +1161,14 @@ impl Connection for SshConnection {
         // russh 0.62's `Handle` is neither `Clone` nor cheaply shareable across
         // the reconnect-swap that `reconnect`/`close` perform, so we cannot
         // hand out the *same* live channel here. Instead we clone the connection
-        // *identity* (host/policy/timeout) with an empty handle; the first SFTP
-        // op the clone performs opens its own session via `sftp()`'s
-        // `reconnect`-if-inactive path. This means a `TargetLock` built from the
-        // clone uses a second short-lived session to the same host for its
-        // (rare) force-unlock safeguard — functionally correct, at the cost of
-        // one extra channel on that path only. The mock double shares state via
-        // `Arc`, so offline unit tests still observe the lock's SFTP ops.
+        // *identity* (host/policy/timeout) with an empty handle and no cached
+        // SFTP subsystem; the first SFTP op the clone performs opens its own via
+        // `sftp()`'s `reconnect`-if-inactive path. This means a `TargetLock`
+        // built from the clone uses a second long-lived subsystem to the same
+        // host for its (rare) force-unlock safeguard — functionally correct, at
+        // the cost of one extra channel on that path only. The mock double
+        // shares state via `Arc`, so offline unit tests still observe the
+        // lock's SFTP ops.
         Box::new(Self {
             hostname: self.hostname.clone(),
             resolved: self.resolved.clone(),
@@ -1041,6 +1180,7 @@ impl Connection for SshConnection {
             timeout_prompt: self.timeout_prompt.clone(),
             known_hosts: self.known_hosts.clone(),
             reconnect_backoff_base: self.reconnect_backoff_base,
+            sftp: None,
         })
     }
 
@@ -1196,6 +1336,9 @@ impl Connection for SshConnection {
     }
 
     async fn close(&mut self) -> Result<()> {
+        // Drop the cached SFTP subsystem along with the channel it lives on —
+        // dropping the last `Arc` ends russh-sftp's `run()` task.
+        self.sftp = None;
         if let Some(handle) = self.handle.take() {
             let _ = handle
                 .disconnect(russh::Disconnect::ByApplication, "", "")
@@ -1208,6 +1351,8 @@ impl Connection for SshConnection {
         if self.is_active() {
             return Ok(());
         }
+        // A new SSH session invalidates any subsystem cached on the old one.
+        self.sftp = None;
         let mut count = 0usize;
         let mut rtimeout = self.reconnect_backoff_base;
         let mut last_err = None;
@@ -1289,75 +1434,90 @@ impl Connection for SshConnection {
         use russh_sftp::protocol::OpenFlags;
         use tokio::io::AsyncWriteExt;
 
-        let sftp = self.sftp().await?;
-
         // Create parent directories (best-effort; "already exists" is success).
-        let remote_str = remote.to_string_lossy();
-        let parts: Vec<&str> = remote_str.split('/').collect();
-        let mut path = String::new();
-        for subdir in &parts[..parts.len().saturating_sub(1)] {
-            if subdir.is_empty() {
+        let remote_str = remote.to_string_lossy().to_string();
+        {
+            let sftp = self.sftp().await?;
+            let parts: Vec<&str> = remote_str.split('/').collect();
+            let mut path = String::new();
+            for subdir in &parts[..parts.len().saturating_sub(1)] {
+                if subdir.is_empty() {
+                    path.push('/');
+                    continue;
+                }
+                path.push_str(subdir);
                 path.push('/');
-                continue;
+                let _ = sftp.create_dir(path.clone()).await;
             }
-            path.push_str(subdir);
-            path.push('/');
-            let _ = sftp.create_dir(path.clone()).await;
         }
 
         // Open explicitly with CREATE so a fresh (non-existent) remote path is
         // created; the russh-sftp `write` convenience opens WRITE-only, which
         // returns SSH_FX_NO_SUCH_FILE for a not-yet-existing file.
-        let mut file = sftp
-            .open_with_flags(
-                remote_str.to_string(),
-                OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+        let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
+        let open_path = remote_str.clone();
+        let (sftp, mut file) = self
+            .sftp_first_request(
+                move |sftp| {
+                    let open_path = open_path.clone();
+                    async move { sftp.open_with_flags(open_path, flags).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, remote),
             )
+            .await?;
+        file.write_all(data)
             .await
-            .map_err(|e| self.sftp_err_at(e, remote))?;
-        file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
-        file.shutdown().await.map_err(|e| self.sftp_err(e))?;
+            .map_err(|e| self.sftp_verb_err(e))?;
+        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
         // Make executable (0770) after the transfer.
-        if let Ok(mut meta) = sftp.metadata(remote_str.to_string()).await {
+        if let Ok(mut meta) = sftp.metadata(remote_str.clone()).await {
             meta.permissions = Some(0o770);
-            let _ = sftp.set_metadata(remote_str.to_string(), meta).await;
+            let _ = sftp.set_metadata(remote_str, meta).await;
         }
-        let _ = sftp.close().await;
         Ok(())
     }
 
     async fn sftp_get(&mut self, remote: &Path, local: &Path) -> Result<()> {
-        let sftp = self.sftp().await?;
         // Stream remote -> local rather than buffering the whole file in memory.
-        let mut src = sftp
-            .open(remote.to_string_lossy().to_string())
-            .await
-            .map_err(|e| self.sftp_err(e))?;
+        let open_path = remote.to_string_lossy().to_string();
+        let (_sftp, mut src) = self
+            .sftp_first_request(
+                move |sftp| {
+                    let open_path = open_path.clone();
+                    async move { sftp.open(open_path).await }
+                },
+                |s, e| s.sftp_verb_err(e),
+            )
+            .await?;
         let mut dst = tokio::fs::File::create(local)
             .await
             .map_err(|e| HostError::Sftp {
                 host: self.hostname.clone(),
                 reason: format!("create {}: {e}", local.display()),
             })?;
-        let copy = tokio::io::copy(&mut src, &mut dst)
+        tokio::io::copy(&mut src, &mut dst)
             .await
             .map_err(|e| HostError::Sftp {
                 host: self.hostname.clone(),
                 reason: format!("write {}: {e}", local.display()),
-            });
-        let _ = sftp.close().await;
-        copy.map(|_| ())
+            })?;
+        Ok(())
     }
 
     async fn sftp_get_folder(&mut self, remote: &Path, local: &Path) -> Result<()> {
         use futures::stream::{self, StreamExt};
 
-        let sftp = self.sftp().await?;
         let remote_str = remote.to_string_lossy().to_string();
-        let dir = sftp
-            .read_dir(remote_str.clone())
-            .await
-            .map_err(|e| self.sftp_err(e))?;
+        let list_path = remote_str.clone();
+        let (sftp, dir) = self
+            .sftp_first_request(
+                move |sftp| {
+                    let list_path = list_path.clone();
+                    async move { sftp.read_dir(list_path).await }
+                },
+                |s, e| s.sftp_verb_err(e),
+            )
+            .await?;
 
         // The peer controls entry names; a crafted name (`../x`, `/etc/x`,
         // `a/b`) would escape the download destination. Validate up front and
@@ -1417,30 +1577,43 @@ impl Connection for SshConnection {
             .collect()
             .await;
 
-        let _ = sftp.close().await;
+        // The per-entry futures build errors via the free `sftp_err_for` (they
+        // must not borrow `&mut self`, since they run concurrently), so a
+        // session-fatal failure among them cannot self-invalidate; do it here
+        // once results are back.
+        if let Some(Err(e)) = results.iter().find(|r| r.is_err()) {
+            self.invalidate_sftp_if_fatal(e);
+        }
         // Surface the first transfer error, if any (matches the previous
         // fail-on-first-error semantics of the sequential loop).
         results.into_iter().collect::<Result<Vec<()>>>().map(|_| ())
     }
 
     async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
-        let sftp = self.sftp().await?;
-        let dir = sftp
-            .read_dir(path.to_string_lossy().to_string())
-            .await
-            .map_err(|e| self.sftp_err_at(e, path))?;
-        let entries = dir.map(|e| e.file_name()).collect();
-        let _ = sftp.close().await;
-        Ok(entries)
+        let list_path = path.to_string_lossy().to_string();
+        let (_sftp, dir) = self
+            .sftp_first_request(
+                move |sftp| {
+                    let list_path = list_path.clone();
+                    async move { sftp.read_dir(list_path).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, path),
+            )
+            .await?;
+        Ok(dir.map(|e| e.file_name()).collect())
     }
 
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
-        let sftp = self.sftp().await?;
-        let data = sftp
-            .read(path.to_string_lossy().to_string())
-            .await
-            .map_err(|e| self.sftp_err_at(e, path))?;
-        let _ = sftp.close().await;
+        let read_path = path.to_string_lossy().to_string();
+        let (_sftp, data) = self
+            .sftp_first_request(
+                move |sftp| {
+                    let read_path = read_path.clone();
+                    async move { sftp.read(read_path).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, path),
+            )
+            .await?;
         Ok(data)
     }
 
@@ -1448,10 +1621,9 @@ impl Connection for SshConnection {
         use russh_sftp::protocol::OpenFlags;
         use tokio::io::AsyncWriteExt;
 
-        let sftp = self.sftp().await?;
         let path_str = path.to_string_lossy().to_string();
 
-        if exclusive {
+        let mut file = if exclusive {
             // Atomic exclusive create (O_CREAT | O_EXCL).
             // SFTPv3 has no dedicated "file exists" status, so an O_EXCL
             // collision surfaces as the generic `Failure` status — that (and
@@ -1463,29 +1635,38 @@ impl Connection for SshConnection {
             // is logged at debug for diagnosis.
             let flags =
                 OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE | OpenFlags::EXCLUDE;
-            let mut file = match sftp.open_with_flags(path_str.clone(), flags).await {
-                Ok(f) => f,
-                Err(e) => {
-                    let err = self.exclusive_create_err(e, &path_str);
-                    let _ = sftp.close().await;
-                    return Err(err);
-                }
-            };
-            file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
-            file.shutdown().await.map_err(|e| self.sftp_err(e))?;
+            let open_path = path_str.clone();
+            let (_sftp, file) = self
+                .sftp_first_request(
+                    move |sftp| {
+                        let open_path = open_path.clone();
+                        async move { sftp.open_with_flags(open_path, flags).await }
+                    },
+                    |s, e| s.sftp_verb_exclusive_create_err(e, &path_str),
+                )
+                .await?;
+            file
         } else {
             // Truncating overwrite. Open explicitly with
             // CREATE so a fresh path is created; the `write` convenience opens
             // WRITE-only and fails with NO_SUCH_FILE on a missing file.
             let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE;
-            let mut file = sftp
-                .open_with_flags(path_str, flags)
-                .await
-                .map_err(|e| self.sftp_err_at(e, path))?;
-            file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
-            file.shutdown().await.map_err(|e| self.sftp_err(e))?;
-        }
-        let _ = sftp.close().await;
+            let open_path = path_str;
+            let (_sftp, file) = self
+                .sftp_first_request(
+                    move |sftp| {
+                        let open_path = open_path.clone();
+                        async move { sftp.open_with_flags(open_path, flags).await }
+                    },
+                    |s, e| s.sftp_verb_err_at(e, path),
+                )
+                .await?;
+            file
+        };
+        file.write_all(data)
+            .await
+            .map_err(|e| self.sftp_verb_err(e))?;
+        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
         Ok(())
     }
 
@@ -1493,24 +1674,27 @@ impl Connection for SshConnection {
         use russh_sftp::protocol::OpenFlags;
         use tokio::io::AsyncWriteExt;
 
-        let sftp = self.sftp().await?;
-        let path_str = path.to_string_lossy().to_string();
-
         // Open at end-of-file (O_APPEND), creating the file if it is
         // missing. Each write lands at the current EOF, so
         // concurrent appenders extend the file without a read-modify-write race.
+        // The open is the verb's first request and is safe to retry on a stale
+        // cached session (nothing written yet); the write/shutdown that follow
+        // are not — a retried append would duplicate a remote-history row.
         let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND;
-        let mut file = match sftp.open_with_flags(path_str, flags).await {
-            Ok(f) => f,
-            Err(e) => {
-                let err = self.sftp_err_at(e, path);
-                let _ = sftp.close().await;
-                return Err(err);
-            }
-        };
-        file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
-        file.shutdown().await.map_err(|e| self.sftp_err(e))?;
-        let _ = sftp.close().await;
+        let open_path = path.to_string_lossy().to_string();
+        let (_sftp, mut file) = self
+            .sftp_first_request(
+                move |sftp| {
+                    let open_path = open_path.clone();
+                    async move { sftp.open_with_flags(open_path, flags).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, path),
+            )
+            .await?;
+        file.write_all(data)
+            .await
+            .map_err(|e| self.sftp_verb_err(e))?;
+        file.shutdown().await.map_err(|e| self.sftp_verb_err(e))?;
         Ok(())
     }
 
@@ -1518,8 +1702,7 @@ impl Connection for SshConnection {
         let sftp = self.sftp().await?;
         sftp.remove_file(path.to_string_lossy().to_string())
             .await
-            .map_err(|e| self.sftp_err(e))?;
-        let _ = sftp.close().await;
+            .map_err(|e| self.sftp_verb_err(e))?;
         Ok(())
     }
 
@@ -1534,25 +1717,28 @@ impl Connection for SshConnection {
         }
         sftp.remove_dir(path_str)
             .await
-            .map_err(|e| self.sftp_err(e))?;
-        let _ = sftp.close().await;
+            .map_err(|e| self.sftp_verb_err(e))?;
         Ok(())
     }
 
     async fn sftp_readlink(&mut self, path: &Path) -> Result<String> {
-        let sftp = self.sftp().await?;
-        let target = sftp
-            .read_link(path.to_string_lossy().to_string())
-            .await
-            .map_err(|e| self.sftp_err_at(e, path))?;
-        let _ = sftp.close().await;
+        let link_path = path.to_string_lossy().to_string();
+        let (_sftp, target) = self
+            .sftp_first_request(
+                move |sftp| {
+                    let link_path = link_path.clone();
+                    async move { sftp.read_link(link_path).await }
+                },
+                |s, e| s.sftp_verb_err_at(e, path),
+            )
+            .await?;
         Ok(target)
     }
 
     async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>> {
-        // One channel+subsystem handshake, reused across the returned handle's
-        // reads. `sftp()` already reconnects at entry if the link dropped;
-        // mid-session errors then propagate.
+        // A clone of the connection's shared subsystem, reused across the
+        // returned handle's reads. `sftp()` already reconnects at entry if the
+        // link dropped; mid-session errors then propagate.
         let sftp = self.sftp().await?;
         Ok(Box::new(SshSftpSession {
             sftp,
@@ -1949,6 +2135,7 @@ mod tests {
             timeout_prompt: None,
             known_hosts: None,
             reconnect_backoff_base: Duration::from_secs(10),
+            sftp: None,
         };
         let s = format!("{conn:?}");
         assert!(s.contains("example.host"), "{s}");
@@ -1983,6 +2170,7 @@ mod tests {
             timeout_prompt: None,
             known_hosts: None,
             reconnect_backoff_base: base,
+            sftp: None,
         }
     }
 
