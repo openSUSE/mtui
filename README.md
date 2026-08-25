@@ -80,7 +80,7 @@ cargo run -p mtui-cli -- --help      # run the REPL binary (mtui)
 cargo run -p mtui-mcp --features mcp -- --help   # run the MCP server (mtui-mcp)
 cargo test --workspace               # run tests
 cargo fmt --all --check              # formatting gate
-cargo clippy --workspace --all-targets -- -D warnings   # lint gate
+cargo clippy --workspace --all-targets --all-features -- -D warnings   # lint gate
 ```
 
 ## Runtime dependencies

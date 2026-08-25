@@ -104,7 +104,7 @@ next actionable task before working on a subsystem.
 - Run the REPL: `cargo run -p mtui-cli -- --help`
 - Run the MCP server: `cargo run -p mtui-mcp --features mcp -- --help`
 - Format: `cargo fmt --all`
-- Lint (warnings are errors): `cargo clippy --workspace --all-targets -- -D warnings`
+- Lint (warnings are errors): `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - Docs (broken/private links are errors): `RUSTDOCFLAGS="-D warnings" cargo doc
   --workspace --no-deps --all-features --document-private-items`
 - Test: `cargo test --workspace` — **the cost is compilation, not test
@@ -132,7 +132,7 @@ next actionable task before working on a subsystem.
 ## Definition of Done (hard rules)
 - Run the **full gate on the whole workspace** before claiming done, mirroring
   CI: `cargo fmt --all --check` **and**
-  `cargo clippy --workspace --all-targets -- -D warnings` **and**
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings` **and**
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
   --document-private-items` **and** `cargo test --workspace` (default features)
   **and** `cargo test -p mtui-mcp -F
