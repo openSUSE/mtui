@@ -512,6 +512,12 @@ impl<C: Clock> TargetLock<C> {
         };
         let path = self.filename();
         let line = rl.to_lockfile();
+        // Reconciles a create whose reply timed out at most once per `lock()`
+        // call — the create may well have landed server-side, so the next
+        // load is trusted as authoritative instead of assuming failure. A
+        // *second* timeout is a real, propagating error: this is not another
+        // `RECONCILE_RETRIES`-style budget.
+        let mut timeout_reconciled = false;
 
         for _ in 0..Self::RECONCILE_RETRIES {
             // 1) Atomic exclusive create: on a free host exactly one racer wins.
@@ -528,6 +534,11 @@ impl<C: Clock> TargetLock<C> {
                 Err(HostError::AlreadyExists { .. }) => {
                     // Fall through to reconciliation.
                 }
+                Err(HostError::SftpTimeout { .. }) if !timeout_reconciled => {
+                    timeout_reconciled = true;
+                    // The create may well have landed server-side; re-read
+                    // before giving up.
+                }
                 Err(e) => return Err(e),
             }
 
@@ -538,6 +549,14 @@ impl<C: Clock> TargetLock<C> {
                 continue;
             }
             if self.is_mine()? {
+                if timeout_reconciled {
+                    // The line on the host is the one our timed-out create
+                    // just wrote: adopt it as-is rather than risking a second
+                    // timeout on a redundant re-stamp. The loaded `self.lock`
+                    // is authoritative.
+                    self.held = Some(self.lock.comment.clone());
+                    return Ok(());
+                }
                 // Legitimate re-stamp of our own lock (possibly a new comment).
                 self.connection
                     .sftp_write(&path, line.as_bytes(), false)
@@ -1494,6 +1513,77 @@ mod tests {
         let conn = MockConnection::new("h1").with_exclusive_write_error(TARGET_LOCK_PATH);
         let mut lock = tl(conn, FakeClock::new(now()));
         assert!(matches!(lock.lock("").await, Err(HostError::Sftp { .. })));
+    }
+
+    #[tokio::test]
+    async fn lock_adopts_a_lock_whose_create_timed_out() {
+        // The create's reply timed out, but the mock's fixture landed our own
+        // stamped line server-side (the free path was inserted before the
+        // timeout was raised). `lock()` must reconcile this as a success,
+        // adopting the loaded (our own) line rather than treating the host as
+        // unowned.
+        let conn = MockConnection::new("h1").with_exclusive_write_timeout(TARGET_LOCK_PATH);
+        let handle = conn.clone();
+        let mut lock = tl(conn, FakeClock::new(now()));
+        lock.lock("test comment")
+            .await
+            .expect("adopts the landed lock instead of erroring");
+        assert!(lock.is_mine().unwrap());
+        // Exactly one exclusive write (the timed-out create) and the read that
+        // reconciled it — no redundant re-stamp that could time out again.
+        let ops = handle.sftp_ops();
+        assert_eq!(
+            ops,
+            vec![
+                crate::connection::MockSftpOp::Write {
+                    path: PathBuf::from(TARGET_LOCK_PATH),
+                    exclusive: true,
+                },
+                crate::connection::MockSftpOp::Open(PathBuf::from(TARGET_LOCK_PATH)),
+            ]
+        );
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH).unwrap(),
+            format!("1700000000:testuser:{}:test comment", std::process::id()).into_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_does_not_adopt_a_foreign_lock_after_a_timeout() {
+        // The path was already held by a foreign owner before our create's
+        // reply timed out; the fixture's exclusive-create semantics leave that
+        // foreign line untouched. Fail-closed: never adopted.
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242".to_vec())
+            .with_exclusive_write_timeout(TARGET_LOCK_PATH);
+        let mut lock = tl(conn, FakeClock::new(now()));
+        let err = lock
+            .lock("")
+            .await
+            .expect_err("a foreign lock must never be adopted");
+        assert!(matches!(err, HostError::TargetLocked(msg) if msg.contains("alice")));
+    }
+
+    #[tokio::test]
+    async fn lock_propagates_a_second_timeout() {
+        // The timeout-reconciliation pass is one-shot. A very stale foreign
+        // lock is present, so the first timed-out create's reconciliation load
+        // sees it, reaps it (freeing the retried create's path), and the
+        // *retried* create also times out — this second timeout must
+        // propagate rather than reconciling again.
+        let mut c = reaping_cfg();
+        c.lock_wait = 5;
+        c.lock_wait_poll = 1;
+        let stale = now() - 200_000; // >> reaping_cfg's lock_stale_age (86400)
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, format!("{stale}:alice:4242").into_bytes())
+            .with_exclusive_write_timeout(TARGET_LOCK_PATH);
+        let mut lock = TargetLock::with_clock(Box::new(conn), &c, FakeClock::new(now()));
+        let err = lock
+            .lock("")
+            .await
+            .expect_err("a second timeout propagates");
+        assert!(matches!(err, HostError::SftpTimeout { .. }));
     }
 
     #[tokio::test]

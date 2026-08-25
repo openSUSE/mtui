@@ -192,6 +192,12 @@ pub struct MockConnection {
     /// atomic create (permission denied, transport), which must fail closed
     /// rather than reconcile.
     exclusive_write_errors: HashSet<PathBuf>,
+    /// File paths whose *exclusive* [`sftp_write`](Connection::sftp_write) fails
+    /// with [`HostError::SftpTimeout`] after the bytes have already landed in
+    /// `files` — models the create's reply timing out even though the create
+    /// itself reached the server, so the lock protocol's timeout-adoption path
+    /// can be exercised.
+    exclusive_write_timeouts: HashSet<PathBuf>,
     /// Paths scripted to raise [`HostError::Sftp`] from
     /// [`sftp_append`](Connection::sftp_append), modelling a best-effort append
     /// failure (read-only/full remote fs) that callers such as `add_history`
@@ -265,6 +271,7 @@ impl MockConnection {
             sftp_get_fails: false,
             boot_id_counter: None,
             exclusive_write_errors: HashSet::new(),
+            exclusive_write_timeouts: HashSet::new(),
             sftp_append_errors: HashSet::new(),
             fail_sftp_put: None,
             missing_dirs: HashSet::new(),
@@ -331,6 +338,18 @@ impl MockConnection {
     #[must_use]
     pub fn with_exclusive_write_error(mut self, path: impl Into<PathBuf>) -> Self {
         self.exclusive_write_errors.insert(path.into());
+        self
+    }
+
+    /// Scripts an *exclusive* [`sftp_write`](Connection::sftp_write) to `path` to
+    /// raise [`HostError::SftpTimeout`] — but only after the bytes have already
+    /// been inserted into the mock's `files` map, modelling a create whose
+    /// reply timed out even though the create itself landed server-side.
+    /// Without the insert the fixture could not express that mutation and the
+    /// lock's timeout-adoption path could not be exercised.
+    #[must_use]
+    pub fn with_exclusive_write_timeout(mut self, path: impl Into<PathBuf>) -> Self {
+        self.exclusive_write_timeouts.insert(path.into());
         self
     }
 
@@ -1015,6 +1034,20 @@ impl Connection for MockConnection {
             });
         }
         let mut files = self.files.lock().expect("mock files lock");
+        if exclusive && self.exclusive_write_timeouts.contains(path) {
+            // Model what an O_EXCL create can actually do server-side when
+            // the client never sees the reply: it lands our bytes only if the
+            // path was free, otherwise a pre-existing (possibly foreign) file
+            // is left untouched — exactly as a real exclusive create would
+            // refuse to clobber it.
+            if !files.contains_key(path) {
+                files.insert(path.to_path_buf(), data.to_vec());
+            }
+            return Err(HostError::SftpTimeout {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            });
+        }
         if exclusive && files.contains_key(path) {
             // Atomic exclusive create lost the race: the file already exists.
             return Err(HostError::AlreadyExists {
