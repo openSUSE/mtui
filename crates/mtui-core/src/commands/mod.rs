@@ -684,25 +684,40 @@ pub(crate) mod testkit {
         command: &str,
         stdout: &str,
     ) -> (Session, Buffer) {
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
+        session_scripting_multi(rrid, host, &[(command, stdout)])
+    }
 
-        let conn = MockConnection::new(host)
-            .with_response(command, CommandLog::new(command, stdout, "", 0, 0));
-        let target = Target::with_connection(host, TargetState::Enabled, Box::new(conn));
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(vec![target], false);
-        base.rrid = rrid.parse().ok();
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: false,
-            fail_perform: false,
-            set_repo_enabled: false,
-        }));
-        session.activate(rrid);
-        (session, buf)
+    /// [`session_scripting`] with several `(command, stdout)` pairs, so each log
+    /// entry is attributable to its command.
+    #[must_use]
+    pub(crate) fn session_scripting_multi(
+        rrid: &str,
+        host: &str,
+        cmds: &[(&str, &str)],
+    ) -> (Session, Buffer) {
+        session_scripting_hosts(rrid, &[host], cmds)
+    }
+
+    /// [`session_scripting_multi`] across several hosts, each scripting the same
+    /// `cmds`, so a caller can drive them to differing log lengths.
+    #[must_use]
+    pub(crate) fn session_scripting_hosts(
+        rrid: &str,
+        hosts: &[&str],
+        cmds: &[(&str, &str)],
+    ) -> (Session, Buffer) {
+        let targets = hosts
+            .iter()
+            .map(|host| {
+                let conn = cmds
+                    .iter()
+                    .fold(MockConnection::new(*host), |c, (cmd, out)| {
+                        c.with_response(*cmd, CommandLog::new(*cmd, *out, "", 0, 0))
+                    });
+                Target::with_connection(*host, TargetState::Enabled, Box::new(conn))
+            })
+            .collect();
+        session_with_targets(rrid, targets)
     }
 
     /// An empty (no templates loaded) session with a captured display.

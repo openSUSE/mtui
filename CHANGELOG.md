@@ -115,6 +115,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   budget cut short. A teardown abandoned at the budget can leave the remote
   lock file behind; the fleet's stale-lock reaping covers it, as for any
   crashed session.
+- `show_log` gained `--offset`/`--limit` entry paging (per host, 1-based;
+  windowed output labels each host header with the shown range and total, and
+  `--limit 0` prints only the per-host headers with entry totals) on both the
+  REPL and MCP surfaces. Additive, optional schema change.
 
 ### Security
 

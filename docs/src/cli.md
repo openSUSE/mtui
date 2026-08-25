@@ -575,6 +575,14 @@ Options:
   -t, --target <HOST>
           Host to act on. Can be used multiple times. If omitted all hosts are used
 
+      --offset <N>
+          First log entry to show per host (1-based)
+          
+          [default: 1]
+
+      --limit <N>
+          Max log entries per host (0: headers with entry totals only)
+
   -h, --help
           Print help
 ```
