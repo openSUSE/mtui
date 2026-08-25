@@ -47,6 +47,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the same `connect_timeout` key already used for the SSH handshake; a
   genuinely dead SFTP subsystem now takes up to `connect_timeout` (60s by
   default) to give up rather than 10s.
+- `TargetLock::lock` (and the pool claim, which shares it) now reconciles a
+  lock create whose reply timed out by re-reading the lockfile: if it landed
+  with our own user+PID it is adopted as ours instead of the operation
+  failing and stranding an orphan lock reported elsewhere as `Hosts locked`;
+  if it landed with someone else's identity it is correctly refused. Only one
+  such reconciliation pass is made per `lock()` call — a second timeout
+  propagates as a real error.
 
 ### Fixed
 

@@ -601,6 +601,12 @@ fn sftp_err_at_for(host: &str, e: russh_sftp::client::error::Error, path: &Path)
     use russh_sftp::client::error::Error as SftpError;
     use russh_sftp::protocol::StatusCode;
 
+    if matches!(e, SftpError::Timeout) {
+        return HostError::SftpTimeout {
+            host: host.to_owned(),
+            path: path.to_string_lossy().into_owned(),
+        };
+    }
     if let SftpError::Status(status) = &e
         && status.status_code == StatusCode::NoSuchFile
     {
@@ -625,6 +631,9 @@ fn sftp_err_at_for(host: &str, e: russh_sftp::client::error::Error, path: &Path)
 /// race). Every other case fails **closed** — it propagates as a real error
 /// rather than being mistaken for lost contention:
 ///
+/// * a request timeout → [`HostError::SftpTimeout`] (the create may have
+///   landed server-side despite the client never seeing the reply; the lock
+///   protocol re-reads to check rather than assuming failure),
 /// * [`StatusCode::NoSuchFile`] → [`HostError::SftpNotFound`] (a missing parent
 ///   directory, not a collision),
 /// * every other status (`PermissionDenied`, `OpUnsupported`, `NoConnection`,
@@ -641,6 +650,12 @@ fn exclusive_create_err(
     use russh_sftp::client::error::Error as SftpError;
     use russh_sftp::protocol::StatusCode;
 
+    if matches!(e, SftpError::Timeout) {
+        return HostError::SftpTimeout {
+            host: hostname.to_owned(),
+            path: path_str.to_owned(),
+        };
+    }
     if let SftpError::Status(status) = &e {
         match status.status_code {
             StatusCode::Failure => {

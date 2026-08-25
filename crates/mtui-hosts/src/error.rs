@@ -113,6 +113,23 @@ pub enum HostError {
         reason: String,
     },
 
+    /// An SFTP request exceeded its per-request timeout (russh-sftp's
+    /// `Error::Timeout`, derived from `connect_timeout` — see
+    /// [`SshConnection`](crate::connection::SshConnection)).
+    ///
+    /// Distinguished from the catch-all [`Sftp`](Self::Sftp)/[`Transport`](Self::Transport)
+    /// variants because a timed-out exclusive create may have landed
+    /// server-side despite the client never seeing the reply: the lock
+    /// protocol matches on this variant to re-read the file and adopt it
+    /// rather than treating the whole group as unowned.
+    #[error("sftp request timed out on {host}: {path}")]
+    SftpTimeout {
+        /// The host the request timed out against.
+        host: String,
+        /// The remote path the timed-out request targeted.
+        path: String,
+    },
+
     /// An SFTP operation referenced a path that does not exist
     /// (`SSH_FX_NO_SUCH_FILE`).
     ///
