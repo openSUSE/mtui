@@ -686,7 +686,25 @@ impl HostsGroup {
     /// [`Failed`](LockOutcome::Failed) for a real transport error. Existing
     /// callers that ignore the return value keep compiling.
     pub async fn unlock(&mut self) -> BTreeMap<String, LockOutcome> {
-        self.unlock_where(|_t| true).await
+        self.unlock_collecting(|_t| true).await
+    }
+
+    /// Releases every host's operation lock **including one owned by another
+    /// user or session**, best-effort, otherwise identical to
+    /// [`unlock`](Self::unlock).
+    ///
+    /// The fan-out behind `unlock --force`: a foreign lock is removed rather than
+    /// reported as [`Contended`](LockOutcome::Contended).
+    ///
+    /// Outcomes land in `collected` as each host finishes rather than in a return
+    /// value, because the caller applies the wall-clock budget: a returned map
+    /// would be dropped with the abandoned future, costing the attribution of
+    /// every host that did complete.
+    pub async fn unlock_force(
+        &mut self,
+        collected: &std::sync::Mutex<BTreeMap<String, LockOutcome>>,
+    ) {
+        self.unlock_where(|_t| true, true, collected).await;
     }
 
     /// Releases only the operation locks **this group's own targets took**,
@@ -712,7 +730,7 @@ impl HostsGroup {
     /// indistinguishable, as is an operator's bare `lock` with no comment on a
     /// group that later ran an operation.
     pub async fn unlock_held(&mut self) -> BTreeMap<String, LockOutcome> {
-        self.unlock_where(Target::holds_unmarked_operation_lock)
+        self.unlock_collecting(Target::holds_unmarked_operation_lock)
             .await
     }
 
@@ -726,19 +744,34 @@ impl HostsGroup {
         &mut self,
         names: &std::collections::BTreeSet<String>,
     ) -> BTreeMap<String, LockOutcome> {
-        self.unlock_where(|t| names.contains(t.hostname())).await
+        self.unlock_collecting(|t| names.contains(t.hostname()))
+            .await
     }
 
-    /// Shared implementation for [`unlock`](Self::unlock) /
-    /// [`unlock_selected`](Self::unlock_selected).
-    async fn unlock_where<S>(&mut self, select: S) -> BTreeMap<String, LockOutcome>
+    /// [`unlock_where`](Self::unlock_where) with `force = false` and a local
+    /// map, for the callers that just want the outcomes back.
+    async fn unlock_collecting<S>(&mut self, select: S) -> BTreeMap<String, LockOutcome>
     where
         S: Fn(&Target) -> bool + Send + Sync,
     {
-        use std::sync::Mutex;
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        self.unlock_where(select, false, &collected).await;
+        collected.into_inner().unwrap()
+    }
 
+    /// Shared implementation for [`unlock`](Self::unlock) /
+    /// [`unlock_force`](Self::unlock_force) /
+    /// [`unlock_selected`](Self::unlock_selected). `force` also removes a
+    /// foreign-owned lock; every caller but `unlock_force` passes `false`.
+    async fn unlock_where<S>(
+        &mut self,
+        select: S,
+        force: bool,
+        collected: &std::sync::Mutex<BTreeMap<String, LockOutcome>>,
+    ) where
+        S: Fn(&Target) -> bool + Send + Sync,
+    {
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        let collected: Mutex<BTreeMap<String, LockOutcome>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -748,7 +781,7 @@ impl HostsGroup {
             |t| {
                 let collected = &collected;
                 Box::pin(async move {
-                    let outcome = match t.unlock_reporting(false).await {
+                    let outcome = match t.unlock_reporting(force).await {
                         Ok(()) => LockOutcome::Released,
                         Err(HostError::TargetLocked(_)) => LockOutcome::Contended,
                         Err(e) => LockOutcome::Failed(e.to_string()),
@@ -761,7 +794,6 @@ impl HostsGroup {
             },
         )
         .await;
-        collected.into_inner().unwrap()
     }
 
     /// Releases every host's pool claim, best-effort.
@@ -3148,6 +3180,39 @@ mod tests {
         let outcomes = g.unlock().await;
         assert_eq!(outcomes["h1"], LockOutcome::Released);
         assert_eq!(outcomes["h2"], LockOutcome::Contended);
+    }
+
+    #[tokio::test]
+    async fn unlock_force_removes_a_foreign_lock_unlock_leaves_it() {
+        // The same fixture through both entry points: `force` is what turns a
+        // foreign lock from Contended into a removed file.
+        let foreign = || {
+            MockConnection::new("h1")
+                .with_default(CommandLog::new("", "ok", "", 0, 0))
+                .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec())
+        };
+        let group = |c: MockConnection| {
+            HostsGroup::new(
+                vec![Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    Box::new(c),
+                )],
+                false,
+            )
+        };
+
+        let plain = foreign();
+        let mut g = group(plain.clone());
+        assert_eq!(g.unlock().await["h1"], LockOutcome::Contended);
+        assert!(plain.file_contents(TARGET_LOCK_PATH).is_some());
+
+        let forced = foreign();
+        let mut g = group(forced.clone());
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        g.unlock_force(&collected).await;
+        assert_eq!(collected.into_inner().unwrap()["h1"], LockOutcome::Released);
+        assert!(forced.file_contents(TARGET_LOCK_PATH).is_none());
     }
 
     #[tokio::test]
