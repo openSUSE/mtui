@@ -816,16 +816,19 @@ impl McpSession {
     /// **without** the exit-flag / history-flush tail, since the process keeps
     /// serving other clients.
     ///
-    /// **Every** loaded template's hosts are disconnected, not just the active
-    /// one's: a session may hold several templates at once (each owning its own
-    /// host group), and evicting the session must reap all of them — matching the
-    /// REPL `quit` command.
+    /// **Every** connected host is disconnected, not just the active template's:
+    /// a session may hold several templates at once (each owning its own host
+    /// group), and hosts attached while nothing was loaded live in the session's
+    /// null-report group. Evicting the session must reap all of them — matching
+    /// the REPL `quit` command. See
+    /// [`Session::teardown_handles`](mtui_core::Session::teardown_handles).
     ///
-    /// The whole teardown is best-effort and idempotent: for each template it
+    /// The whole teardown is best-effort and idempotent: for each group it
     /// releases the report's host-arbitration pool claims (in-process ownership +
     /// remote pool locks; a no-op when pool selection was never used) then closes
     /// its host group. A second call re-runs both over already-released claims and
-    /// already-closed targets, both no-ops. The fan-out is bounded by
+    /// already-closed targets, both no-ops — and finds a fresh, empty sentinel.
+    /// The fan-out is bounded by
     /// [`HOST_CLOSE_TIMEOUT`]: a wedged host close is logged and abandoned so
     /// `close()` — and the registry idle-sweep awaiting it — always returns.
     ///
@@ -844,26 +847,13 @@ impl McpSession {
     /// bound the wait to a fraction of a second instead of the full
     /// [`HOST_CLOSE_TIMEOUT`].
     async fn close_with_timeout(&self, timeout: Duration) {
-        // Snapshot every loaded entry's lockable handle under the session lock,
-        // then drop the session guard *before* the teardown awaits: holding the
+        // Snapshot every connected host group under the session lock, then drop
+        // the session guard *before* the teardown awaits: holding the
         // `MutexGuard<Session>` across the per-entry `.await` would force the
         // whole close future to require `Session: Sync` (which it is not — the
-        // display sink is `Send`-only). The `Arc<Mutex<..>>` handles keep each
-        // report alive independently, so teardown needs no `&Session`.
-        let handles: Vec<_> = {
-            let mut session = self.session.lock().await;
-            // Release any lingering active handle before locking entries: a prior
-            // dispatch leaves the active template's entry locked via the session's
-            // per-call guard, and this loop locks *every* entry to tear it down —
-            // which would self-deadlock on the active one otherwise.
-            session.release_active_guard();
-            session
-                .templates
-                .rrids()
-                .into_iter()
-                .filter_map(|rrid| session.templates.handle(&rrid))
-                .collect()
-        };
+        // display sink is `Send`-only). The handles keep each report alive
+        // independently, so teardown needs no `&Session`.
+        let handles = { self.session.lock().await.teardown_handles() };
         let teardown = async {
             for entry in handles {
                 let mut report = entry.lock().await;
@@ -1847,6 +1837,58 @@ mod tests {
         let b = McpSession::new(Config::default());
         assert_ne!(a.id(), b.id(), "distinct sessions must have distinct ids");
         assert_eq!(a.id(), a.id(), "a session's id is stable across calls");
+    }
+
+    /// Direction (a): a host attached with **no template loaded** — what
+    /// `add_host` reaches before any `load_template` — lives in the session's
+    /// null-report group, which no registry walk sees. Evicting the session must
+    /// still disconnect it and release its remote operation lock.
+    #[tokio::test]
+    async fn close_reaps_hosts_attached_with_no_template() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        let probe = MockConnection::new("n1");
+        let mut target =
+            Target::with_connection("n1", TargetState::Enabled, Box::new(probe.clone()));
+        target.lock("").await.expect("operation lock taken");
+        assert!(
+            probe.file_contents(TARGET_LOCK_PATH).is_some(),
+            "fixture must arm the assertion — the remote lock exists before close"
+        );
+
+        let sess = McpSession::new(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            assert!(
+                !guard.metadata().is_loaded(),
+                "fixture must reach the no-template state"
+            );
+            guard.targets_mut().add(target);
+        }
+
+        sess.close().await;
+        assert!(probe.is_closed(), "n1: disconnected on eviction");
+        assert!(
+            probe.file_contents(TARGET_LOCK_PATH).is_none(),
+            "n1: remote operation lock released on eviction"
+        );
+
+        let removes = || {
+            probe
+                .sftp_ops()
+                .iter()
+                .filter(|op| {
+                    matches!(op, MockSftpOp::Remove(p) if p == &PathBuf::from(TARGET_LOCK_PATH))
+                })
+                .count()
+        };
+        assert_eq!(removes(), 1);
+        sess.close().await;
+        // Freshness is not observable here — a repeated `Target::close` skips
+        // unlock either way; the seam test
+        // `teardown_handles_cover_registry_and_null_group_once` pins it.
+        assert_eq!(removes(), 1, "no second lock-file removal");
     }
 
     /// A host whose `close()` never returns must not block `close_with_timeout`.

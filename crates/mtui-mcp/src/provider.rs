@@ -578,6 +578,55 @@ mod tests {
         assert_eq!(reg.live_count(), 0, "stale session must be swept");
     }
 
+    /// The third named teardown path, end-to-end: the idle sweep must reclaim a
+    /// host attached with **nothing loaded** — the class `live_count` alone
+    /// (this file's other oracle) can never see, because the session is evicted
+    /// either way while the host stays connected and locked.
+    #[tokio::test]
+    async fn sweeper_evicts_null_group_hosts() {
+        use mtui_hosts::{MockConnection, TARGET_LOCK_PATH, Target};
+        use mtui_types::enums::TargetState;
+
+        let reg = reg_with_idle(Duration::from_millis(200));
+        let probe = MockConnection::new("n1");
+        let mut target =
+            Target::with_connection("n1", TargetState::Enabled, Box::new(probe.clone()));
+        target.lock("").await.expect("operation lock taken");
+        assert!(
+            probe.file_contents(TARGET_LOCK_PATH).is_some(),
+            "fixture must arm the assertion — the remote lock exists before the sweep"
+        );
+
+        let session = reg.make_session();
+        {
+            let mut guard = session.session().lock().await;
+            assert!(
+                !guard.metadata().is_loaded(),
+                "fixture must reach the no-template state"
+            );
+            guard.targets_mut().add(target);
+        }
+        track(&reg, &session, now_millis());
+
+        let cancel = CancellationToken::new();
+        let sweeper = reg.spawn_sweeper(cancel.clone()).unwrap();
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if reg.live_count() == 0 {
+                break;
+            }
+        }
+        cancel.cancel();
+        let _ = sweeper.await;
+
+        assert_eq!(reg.live_count(), 0, "stale session must be swept");
+        assert!(probe.is_closed(), "n1: disconnected by the sweep");
+        assert!(
+            probe.file_contents(TARGET_LOCK_PATH).is_none(),
+            "n1: remote operation lock released by the sweep"
+        );
+    }
+
     /// A session whose last-touch is refreshed within the TTL is spared.
     #[tokio::test]
     async fn sweeper_spares_freshly_touched_session() {
