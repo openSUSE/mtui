@@ -53,7 +53,9 @@ use mtui_types::hostlog::CommandLog;
 use russh::client::{self, Handle};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
-use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
+use russh::keys::{
+    HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate, load_secret_key,
+};
 use russh::{ChannelMsg, client::Config as ClientConfig};
 use russh_sftp::client::SftpSession as RusshSftpSession;
 use tokio::time::{Duration, timeout};
@@ -217,6 +219,12 @@ async fn on_command_timeout(
 /// policy and reported distinctly. Only an
 /// unknown host falls through to the policy: `auto_add` accepts and persists the
 /// key atomically, `warn` accepts without persisting, and `reject` refuses.
+///
+/// A server-presented certificate is always rejected, fail-closed: mtui never
+/// sets `Preferred::host_key_certificates` (empty by default), so this arm is
+/// unreachable today, but accepting a cert by unwrapping to its embedded key
+/// would silently downgrade a CA trust decision into a TOFU one the first time
+/// certificate advertisement is ever enabled.
 struct ClientHandler {
     hostname: String,
     /// The resolved connect host (post `~/.ssh/config`) used as the
@@ -235,9 +243,22 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> std::result::Result<bool, Self::Error> {
-        Ok(self.verify(server_public_key))
+        let key = match server_public_key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key,
+            PublicKeyOrCertificate::Certificate(cert) => {
+                let ca_fingerprint = cert.signature_key().fingerprint(Default::default());
+                tracing::error!(
+                    host = %self.hostname,
+                    %ca_fingerprint,
+                    "server presented a host certificate; rejecting (fail-closed, \
+                     certificate advertisement is not enabled)",
+                );
+                return Ok(false);
+            }
+        };
+        Ok(self.verify(key))
     }
 }
 

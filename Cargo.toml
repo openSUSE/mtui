@@ -83,7 +83,7 @@ scraper = "0.27"
 # baggage; keeps the single-static-binary contract clean.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 # ssh
-russh = "0.62"
+russh = "0.63"
 russh-sftp = "2"
 async-trait = "0.1"
 # mcp. `server` for the ServerHandler surface + model types;
