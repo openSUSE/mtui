@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<!DOCTYPE lolz [<!ENTITY lol "lol">
+<!ENTITY lol2 "&lol;&lol;&lol;">]>
+<request id="1">&lol2;</request>
