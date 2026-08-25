@@ -363,6 +363,12 @@ pub struct SshConnection {
     /// both by [`connect`](Self::connect) and by [`reconnect`](Connection::reconnect).
     /// Distinct from [`timeout`](Self::timeout), which bounds the per-command
     /// no-output window only.
+    ///
+    /// Also sizes the per-request timeout of each SFTP session opened by
+    /// [`sftp`](Self::sftp) (russh-sftp's `Config::request_timeout_secs`,
+    /// otherwise pinned at its 10s default): a WAN/VPN refhost needs both the
+    /// connect handshake and the SFTP round trip raised together, so one key
+    /// covers both rather than adding a second.
     connect_timeout: CommandTimeout,
     handle: Option<Handle<ClientHandler>>,
     /// Whether a TTY-backed user can answer the command-timeout prompt. `false`
@@ -496,6 +502,17 @@ impl SshConnection {
 
     /// Opens the SFTP subsystem on a fresh channel, reconnecting first if the
     /// link has dropped.
+    ///
+    /// The per-request budget (russh-sftp's `Config::request_timeout_secs`,
+    /// default 10s) is derived from `connect_timeout` rather than left at the
+    /// dependency default: `new_with_config` runs the INIT/VERSION handshake
+    /// through the same `request` path, so a fixed 10s bounds every SFTP op —
+    /// including the handshake — regardless of link latency. `new_with_config`
+    /// must be used rather than a post-`new` `set_timeout`, which would land
+    /// after INIT and leave the handshake pinned at 10s. `.max(1)` guards
+    /// against a zero duration (fires instantly); `connect_timeout` is
+    /// validated `> 0` in config but a test `CommandTimeout` can still be
+    /// constructed at zero.
     async fn sftp(&mut self) -> Result<RusshSftpSession> {
         if !self.is_active() {
             self.reconnect(0, false).await?;
@@ -509,7 +526,11 @@ impl SshConnection {
             .request_subsystem(true, "sftp")
             .await
             .map_err(|e| self.sftp_err(e))?;
-        RusshSftpSession::new(channel.into_stream())
+        let config = russh_sftp::client::Config {
+            request_timeout_secs: self.connect_timeout.as_secs().max(1),
+            ..Default::default()
+        };
+        RusshSftpSession::new_with_config(channel.into_stream(), config)
             .await
             .map_err(|e| self.sftp_err(e))
     }

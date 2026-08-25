@@ -41,6 +41,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   host (e.g. `Hosts locked: h2: held by alice since 2026-...; h3: sftp error
   on h3: ...`) instead of the bare literal `Hosts locked`, which gave no clue
   which host or why.
+- Every SFTP request's per-op timeout (lock/history file operations) now
+  follows `[connection] connect_timeout` (default 60s) instead of a fixed
+  10s. A high-latency link that was tripping spurious SFTP timeouts can raise
+  the same `connect_timeout` key already used for the SSH handshake; a
+  genuinely dead SFTP subsystem now takes up to `connect_timeout` (60s by
+  default) to give up rather than 10s.
 
 ### Fixed
 

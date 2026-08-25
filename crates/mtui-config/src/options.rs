@@ -653,6 +653,10 @@ pub struct Config {
     /// since a dead host should be dropped from a batch quickly rather than
     /// held for a command-sized window. Raise it for a host with a
     /// genuinely slow banner (e.g. a loaded s390x LPAR or a jump-path host).
+    ///
+    /// Also bounds each SFTP request's per-op timeout (the lock/history file
+    /// operations), which otherwise defaults to the underlying library's
+    /// fixed 10s. Raise this alongside a slow banner for a WAN/VPN refhost.
     pub connect_timeout: u64,
     /// Backoff base (seconds) for post-reboot reconnect retries. Sleeps grow
     /// as `2*(reboot_timeout + 5*count)` after the first probe. Upstream

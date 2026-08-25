@@ -60,7 +60,7 @@ Defaults below are the built-in values.
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `connection_timeout` | seconds (>0) | `300` | SSH per-command no-output timeout. Does not bound the connect handshake — see `connect_timeout`. |
-| `connect_timeout` | seconds (>0) | `60` | SSH connect handshake budget (TCP connect, banner, and auth). Raise it for a host with a genuinely slow banner (e.g. a loaded s390x LPAR or a jump-path host); a host slower than this to respond is dropped from a batch with a warning instead of eventually connecting. |
+| `connect_timeout` | seconds (>0) | `60` | SSH connect handshake budget (TCP connect, banner, and auth). Also bounds each SFTP request (lock/history file operations), which otherwise defaults to a fixed 10s. Raise it for a host with a genuinely slow banner or link (e.g. a loaded s390x LPAR, a jump-path host, or a WAN/VPN refhost); a host slower than this to respond is dropped from a batch with a warning instead of eventually connecting. |
 | `reboot_timeout` | seconds (>0) | `10` | Backoff base for reconnecting after a reboot (`prepare`/`reboot`/`update`). Sleeps grow as `2*(reboot_timeout + 5*count)` across attempts. |
 | `reboot_retries` | int (>0) | `10` | Number of post-reboot reconnect attempts beyond the first. With the defaults this gives a rebooting host up to ~12.7 minutes to come back. |
 | `max_parallel` | int (>0) | `50` | Max hosts to fan out to concurrently (SSH/SFTP/lock/connect batches). |
