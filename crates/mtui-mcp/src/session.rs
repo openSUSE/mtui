@@ -981,8 +981,7 @@ impl McpSession {
                 // when the worker future is dropped), and the fork must not
                 // inherit that staleness — installing unconditionally makes
                 // every dispatch self-healing.
-                call_session
-                    .set_cancel_token(cancel.clone().unwrap_or_else(CancellationToken::new));
+                call_session.set_cancel_token(cancel.clone().unwrap_or_default());
                 let argv_owned = argv.to_vec();
                 // Abort-on-drop: if this `run_command` future is cancelled (e.g.
                 // an aborted background-job worker), abort the dispatch task too,
@@ -1021,7 +1020,7 @@ impl McpSession {
                 // token state self-healing: if a hard-aborted worker skips the
                 // restore below, the *next* dispatch's install wipes the stale
                 // cancelled token before its pre-flight check.
-                session.set_cancel_token(cancel.clone().unwrap_or_else(CancellationToken::new));
+                session.set_cancel_token(cancel.clone().unwrap_or_default());
                 let result = dispatch_argv(registry, &mut session, name, argv).await;
                 // Best-effort tidy-up (skipped when the worker future is
                 // dropped mid-dispatch; see the install note above).
