@@ -52,6 +52,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   default transport) there is no per-request connection to drop, so a client
   that just stops waiting is not covered; use `background=true` + `job_cancel`
   for that case.
+- `quit` (including `exit` and `Ctrl-D`), MCP session close, and the MCP
+  idle-eviction sweep now disconnect hosts that were attached while no test
+  report was loaded (`add_host` before any `load_template`), releasing their
+  remote `/var/lock/mtui.lock`. Previously teardown only reached hosts owned by
+  a loaded template, so such a host kept its SSH connection for the life of the
+  process and an operation lock taken on it was never released — not even by
+  process exit. `quit reboot` / `quit poweroff` now apply the boot action to
+  these hosts too. (#478)
 
 ### Added
 

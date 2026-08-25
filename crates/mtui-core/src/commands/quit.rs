@@ -28,11 +28,13 @@ fn close_timeout() -> Duration {
 /// Disconnects from all hosts and exits the interactive session.
 ///
 /// It accepts an optional positional
-/// `bootarg ∈ {reboot, poweroff}` and, on quit, for **every** loaded template:
+/// `bootarg ∈ {reboot, poweroff}` and, on quit, for every connected host group
+/// ([`Session::teardown_handles`](crate::Session::teardown_handles) — every
+/// loaded template *and* hosts attached while nothing was loaded):
 /// releases the report's host-arbitration pool claims (in-process arbiter
 /// ownership + remote pool locks) then closes its host group — rebooting
 /// (`reboot`), powering off (`poweroff` → shell `halt`), or simply
-/// disconnecting when no bootarg is given. Each template's close runs under
+/// disconnecting when no bootarg is given. Each group's close runs under
 /// [`HOST_CLOSE_TIMEOUT`] so a hung host never blocks exit; a host that fails to disconnect
 /// is named (`failed to disconnect from <host>: <err>`) and a host still
 /// disconnecting at the budget is named as a straggler
@@ -87,47 +89,38 @@ impl Command for Quit {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let action: Option<String> = args.get_one::<String>("bootarg").cloned();
 
-        // Iterate every loaded template (not just the active one). Snapshot the
-        // RRIDs first so the mutable per-report borrow below does not conflict
-        // with the registry borrow.
-        let rrids = session.templates.rrids();
         let timeout = close_timeout();
-        // Release the per-call active handle before locking entries: quit locks
-        // *every* loaded entry (incl. the active one) to tear it down, which
-        // would otherwise self-deadlock on the guard this session already holds.
-        session.release_active_guard();
-        for rrid in rrids {
-            if let Some(entry) = session.templates.handle(&rrid) {
-                // Lock the entry to tear it down; uncontended while the outer
-                // session mutex still serialises dispatch (steps 1-3).
-                let mut report = entry.lock().await;
-                // Release arbiter ownership + remote pool locks before
-                // disconnecting (best-effort; a no-op without pooling).
-                report.release_pool_claims().await;
+        // Every connected host group, not just the loaded templates' — see
+        // `Session::teardown_handles`.
+        for entry in session.teardown_handles() {
+            // Lock the unit to tear it down; uncontended while the outer
+            // session mutex still serialises dispatch (steps 1-3).
+            let mut report = entry.lock().await;
+            // Release arbiter ownership + remote pool locks before
+            // disconnecting (best-effort; a no-op without pooling).
+            report.release_pool_claims().await;
 
-                // Snapshot the group's hostnames so a straggler (the whole
-                // close exceeding the budget) can still be named per host.
-                let hosts = report.base_mut().targets.names();
+            // Snapshot the group's hostnames so a straggler (the whole close
+            // exceeding the budget) can still be named per host.
+            let hosts = report.base_mut().targets.names();
 
-                // Close the group under a per-template budget: reboot / halt /
-                // plain disconnect. Never let a hung host block exit.
-                let close = report.base_mut().targets.close(action.as_deref());
-                match tokio::time::timeout(timeout, close).await {
-                    Ok(outcomes) => {
-                        // Name every host that failed to disconnect.
-                        for (host, outcome) in &outcomes {
-                            if let Err(e) = outcome {
-                                tracing::warn!("failed to disconnect from {host}: {e}");
-                            }
+            // Close the group under a per-unit budget: reboot / halt / plain
+            // disconnect. Never let a hung host block exit.
+            let close = report.base_mut().targets.close(action.as_deref());
+            match tokio::time::timeout(timeout, close).await {
+                Ok(outcomes) => {
+                    // Name every host that failed to disconnect.
+                    for (host, outcome) in &outcomes {
+                        if let Err(e) = outcome {
+                            tracing::warn!("failed to disconnect from {host}: {e}");
                         }
                     }
-                    Err(_) => {
-                        // Budget expired: the group is a straggler. Name each
-                        // host.
-                        let secs = timeout.as_secs();
-                        for host in &hosts {
-                            tracing::warn!("still disconnecting from {host} after {secs} seconds");
-                        }
+                }
+                Err(_) => {
+                    // Budget expired: the group is a straggler. Name each host.
+                    let secs = timeout.as_secs();
+                    for host in &hosts {
+                        tracing::warn!("still disconnecting from {host} after {secs} seconds");
                     }
                 }
             }
@@ -142,7 +135,7 @@ impl Command for Quit {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use mtui_hosts::{MockConnection, Target};
+    use mtui_hosts::{MockConnection, TARGET_LOCK_PATH, Target};
     use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
 
@@ -230,6 +223,74 @@ mod tests {
     fn target_with(host: &str, build: impl FnOnce(MockConnection) -> MockConnection) -> Target {
         let conn = build(MockConnection::new(host));
         Target::with_connection(host, TargetState::Enabled, Box::new(conn))
+    }
+
+    /// Builds a locked target over a probe that stays observable after the
+    /// target takes ownership (`MockConnection` shares its state across clones).
+    async fn locked_target(host: &str) -> (Target, MockConnection) {
+        let probe = MockConnection::new(host);
+        let mut target =
+            Target::with_connection(host, TargetState::Enabled, Box::new(probe.clone()));
+        target.lock("").await.expect("operation lock taken");
+        assert!(
+            probe.file_contents(TARGET_LOCK_PATH).is_some(),
+            "{host}: fixture must arm the assertion — the remote lock file exists before quit"
+        );
+        (target, probe)
+    }
+
+    /// Direction (a): hosts attached while **nothing is loaded** live in the
+    /// null-report group, which no registry walk can reach. `quit` must still
+    /// disconnect them and release their remote operation lock.
+    #[tokio::test]
+    async fn quit_closes_hosts_attached_with_no_report_loaded() {
+        let (mut session, _buf) = empty_session();
+        assert!(
+            !session.metadata().is_loaded(),
+            "fixture must reach the no-report state add_host writes into"
+        );
+        let (target, probe) = locked_target("n1").await;
+        session.targets_mut().add(target);
+
+        let args = matches(&Quit, &[]);
+        Quit.call(&mut session, &args).await.unwrap();
+
+        assert!(probe.is_closed(), "n1: connection closed by quit");
+        assert!(
+            probe.file_contents(TARGET_LOCK_PATH).is_none(),
+            "n1: remote operation lock released by quit"
+        );
+        assert!(session.should_exit());
+    }
+
+    /// Both directions at once: widening teardown to the null group must not
+    /// *replace* the registry walk — a template's hosts are still torn down.
+    #[tokio::test]
+    async fn quit_closes_template_and_null_group_hosts() {
+        let (tmpl_target, tmpl_probe) = locked_target("t1").await;
+        let (mut session, _buf) = session_with_targets("SUSE:Maintenance:1:1", vec![tmpl_target]);
+
+        // Plant a host in the sentinel's group: release the per-call guard so
+        // `targets_mut()` falls back to the null report, then restore it so quit
+        // runs from the realistic guard-held state.
+        session.release_active_guard();
+        let (null_target, null_probe) = locked_target("n1").await;
+        session.targets_mut().add(null_target);
+        session.refresh_active_guard();
+
+        let args = matches(&Quit, &[]);
+        Quit.call(&mut session, &args).await.unwrap();
+
+        assert!(tmpl_probe.is_closed(), "t1: template host still closed");
+        assert!(
+            tmpl_probe.file_contents(TARGET_LOCK_PATH).is_none(),
+            "t1: template host's lock still released"
+        );
+        assert!(null_probe.is_closed(), "n1: null-group host closed");
+        assert!(
+            null_probe.file_contents(TARGET_LOCK_PATH).is_none(),
+            "n1: null-group host's lock released"
+        );
     }
 
     #[tokio::test]

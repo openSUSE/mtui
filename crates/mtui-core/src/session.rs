@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::display::CommandPromptDisplay;
 use crate::error::CommandError;
-use crate::template_registry::TemplateRegistry;
+use crate::template_registry::{ReportEntry, TemplateRegistry};
 
 /// Wall-clock budget for a host-close fan-out.
 ///
@@ -61,6 +61,11 @@ pub struct Session {
     active_guard: Option<OwnedMutexGuard<Box<dyn TestReport + Send + Sync>>>,
     /// The null-object fallback [`metadata`](Self::metadata) hands out when
     /// nothing is loaded (no [`active_guard`](Self::active_guard) installed).
+    ///
+    /// It is never registered (its RRID is empty), so hosts attached while
+    /// nothing is loaded are reachable only via
+    /// [`teardown_handles`](Self::teardown_handles) — the enumeration teardown
+    /// uses.
     null: Box<dyn TestReport + Send + Sync>,
     /// Formatted-output sink.
     pub display: CommandPromptDisplay,
@@ -500,6 +505,43 @@ impl Session {
     /// RRID intact, so a survivor can still be promoted afterwards.
     pub fn release_active_guard(&mut self) {
         self.active_guard = None;
+    }
+
+    /// Every host group this session owns, as independently-lockable teardown
+    /// units: one per registry entry, plus the sentinel's group when it holds
+    /// hosts.
+    ///
+    /// The single enumeration teardown walks (`quit`, `McpSession::close`, and
+    /// the MCP idle sweep behind it). The registry alone is not the set of
+    /// connected hosts: `add_host` with nothing loaded writes into the private
+    /// null-object sentinel, whose RRID is empty, so no `rrids()` walk can
+    /// return it.
+    ///
+    /// A non-empty sentinel group is **moved out** — swapped for a fresh
+    /// [`NullReport`] and returned last. That is what lets the unit outlive the
+    /// caller's borrow (`McpSession::close` cannot hold the session mutex across
+    /// its teardown awaits), and it makes handing the same hosts out twice
+    /// impossible.
+    ///
+    /// Releases the per-call active handle first: teardown locks *every* entry
+    /// including the active one, which would self-deadlock on the guard this
+    /// session already holds. The registry's active pointer is left intact.
+    pub fn teardown_handles(&mut self) -> Vec<ReportEntry> {
+        self.release_active_guard();
+        let mut units: Vec<ReportEntry> = self
+            .templates
+            .rrids()
+            .into_iter()
+            .filter_map(|rrid| self.templates.handle(&rrid))
+            .collect();
+        if !self.null.base().targets.is_empty() {
+            let stranded = std::mem::replace(
+                &mut self.null,
+                Box::new(NullReport::new(self.config.clone())),
+            );
+            units.push(std::sync::Arc::new(tokio::sync::Mutex::new(stranded)));
+        }
+        units
     }
 
     /// Re-installs the active handle for the registry's current active pointer.
@@ -1747,6 +1789,74 @@ mod tests {
     #[test]
     fn targets_of_unloaded_session_is_empty() {
         let s = Session::new(config(), true);
+        assert!(s.targets().is_empty());
+    }
+
+    /// Seeds a registry entry under `rrid` owning one mock host, so a teardown
+    /// enumeration can be attributed per unit by hostname.
+    fn seed_report_with_host(session: &mut Session, rrid: &str, host: &str) {
+        let mut report = ObsReport::new(session.config.clone());
+        report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
+        report.base_mut().targets = HostsGroup::new(vec![mock_target(host)], false);
+        session.templates.add(Box::new(report));
+    }
+
+    /// The seam contract: every registry entry **and** the sentinel's stranded
+    /// group, each exactly once. Exactly-once cannot be read off the wire — a
+    /// second `Target::close` is a designed no-op — so it is pinned here, where
+    /// handing the sentinel out twice is observable.
+    #[tokio::test]
+    async fn teardown_handles_cover_registry_and_null_group_once() {
+        let mut s = Session::new(config(), false);
+        seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
+        seed_report_with_host(&mut s, "SUSE:Maintenance:2:2", "t2");
+        s.activate("SUSE:Maintenance:1:1");
+
+        // Plant a host in the sentinel's group (what `add_host` writes into with
+        // nothing loaded), then restore the guard teardown runs under.
+        s.release_active_guard();
+        s.targets_mut().add(mock_target("n1"));
+        s.refresh_active_guard();
+        assert!(
+            s.active_report_is_guarded("SUSE:Maintenance:1:1"),
+            "fixture must hold the active guard, or the release below proves nothing"
+        );
+
+        let handles = s.teardown_handles();
+        assert_eq!(handles.len(), 3, "two registry entries plus the null unit");
+        for (i, a) in handles.iter().enumerate() {
+            for b in &handles[i + 1..] {
+                assert!(!std::sync::Arc::ptr_eq(a, b), "units must be distinct");
+            }
+        }
+        let mut named = Vec::new();
+        for h in &handles {
+            let report = h
+                .try_lock()
+                .expect("the seam released the active guard: no self-deadlock");
+            named.push(report.base().targets.names());
+        }
+        assert_eq!(
+            named,
+            vec![vec!["t1"], vec!["t2"], vec!["n1"]],
+            "registry hosts and null-group hosts land in disjoint units"
+        );
+
+        assert_eq!(
+            s.teardown_handles().len(),
+            2,
+            "the sentinel is handed out once: a re-entrant teardown finds it fresh and empty"
+        );
+    }
+
+    /// The empty case: nothing loaded, no hosts anywhere. Widened enumeration
+    /// must hand out nothing (not an empty null unit) and leave the session
+    /// usable.
+    #[tokio::test]
+    async fn teardown_handles_empty_session_yields_nothing() {
+        let mut s = Session::new(config(), false);
+        assert!(s.teardown_handles().is_empty());
+        assert!(!s.metadata().is_loaded());
         assert!(s.targets().is_empty());
     }
 
