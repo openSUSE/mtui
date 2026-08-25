@@ -52,7 +52,7 @@ directories = "6"
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
 # contract. Verified against every upstream `test_rpm_version` golden vector.
-sandogasa-rpmvercmp = "0.20"
+sandogasa-rpmvercmp = "0.21"
 # http
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
 # The openQA REST API client: signed-request auth (HMAC-SHA1 X-API-Hash),
