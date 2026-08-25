@@ -62,6 +62,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   request against it times out or hits a transport error, so a session the
   peer silently dropped is recovered on the next call rather than surfacing
   as a hard failure.
+- `sysinfo`'s `/etc/products.d/*.prod` parser now decodes non-UTF-8 bytes
+  lossily (replacement characters) instead of failing outright, matching how
+  `/etc/os-release` parsing already handles the same host-supplied-text
+  problem. A host with a mojibake product file now degrades rather than
+  failing `sysinfo` outright.
 
 ### Fixed
 
@@ -110,6 +115,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   budget cut short. A teardown abandoned at the budget can leave the remote
   lock file behind; the fleet's stale-lock reaping covers it, as for any
   crashed session.
+
+### Security
+
+- The lockfile refresh brings `h2` to 0.4.19, fixing `RUSTSEC-2026-0258`
+  (unbounded empty DATA frames can be used to exhaust memory/CPU on an HTTP/2
+  connection).
 
 ## [26.2.1] - 2026-08-21
 
