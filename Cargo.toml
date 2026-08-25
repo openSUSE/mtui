@@ -19,13 +19,13 @@ clap_complete = "4"
 # Man-page generation for both binaries. Used only by the `xtask` dev
 # tool, not by any shipped binary, so it never enters a release build.
 clap_mangen = { version = "0.3", features = ["env"] }
-reedline = "0.50"
+reedline = "0.51"
 # raw-mode terminal + async input/resize stream for the interactive `shell`
-# TTY bridge (mtui-rs-jww). Pinned to reedline 0.50's `crossterm` major so
+# TTY bridge (mtui-rs-jww). Pinned to reedline 0.51's `crossterm` major so
 # the two share one copy; `event-stream` enables the async `EventStream` the
 # bridge selects over (keystrokes + `Event::Resize` → SIGWINCH forwarding).
 crossterm = { version = "0.29", features = ["event-stream"] }
-# terminal styling for the REPL input highlighter; pinned to reedline 0.50's
+# terminal styling for the REPL input highlighter; pinned to reedline 0.51's
 # `nu-ansi-term` major so `StyledText.buffer: Vec<(Style, String)>` types match.
 nu-ansi-term = "0.50"
 # POSIX shell-splitting of a REPL input line into argv (engine line-dispatch),
