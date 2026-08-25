@@ -1449,6 +1449,15 @@ expression: pretty
           },
           "type": "array"
         },
+        "limit": {
+          "description": "Max log entries per host (0: headers with entry totals only)",
+          "type": "integer"
+        },
+        "offset": {
+          "default": 1,
+          "description": "First log entry to show per host (1-based)",
+          "type": "integer"
+        },
         "template": {
           "description": "RRID of a single loaded template to act on",
           "type": "string"

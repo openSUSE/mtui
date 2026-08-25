@@ -416,13 +416,25 @@ impl CommandPromptDisplay {
     ///
     /// Each log entry is
     /// `(cmdline, stdout, stderr, exitcode)`; the sink is called once per output
-    /// line (it appends its own newline).
+    /// line (it appends its own newline). `window` is `Some((1-based first
+    /// entry, total before windowing))` when paged.
     pub(crate) fn show_log(
         hostname: &str,
         hostlog: &[(String, String, String, i32)],
+        window: Option<(usize, usize)>,
         sink: &mut dyn FnMut(&str),
     ) {
-        sink(&format!("log from {hostname}:"));
+        let header = match window {
+            None => format!("log from {hostname}:"),
+            Some((_, total)) if hostlog.is_empty() => {
+                format!("log from {hostname}: (showing entries 0 of {total})")
+            }
+            Some((offset, total)) => format!(
+                "log from {hostname}: (showing entries {offset}-{} of {total})",
+                offset + hostlog.len() - 1
+            ),
+        };
+        sink(&header);
         for (cmdline, stdout, stderr, exitcode) in hostlog {
             sink(&format!("{hostname}:~> {cmdline} [{exitcode}]"));
             sink("stdout:");
@@ -948,6 +960,7 @@ mod tests {
             CommandPromptDisplay::show_log(
                 "test_host",
                 &[("cmd".to_owned(), "out".to_owned(), "err".to_owned(), 0)],
+                None,
                 &mut sink,
             );
         }
@@ -956,6 +969,28 @@ mod tests {
         assert!(joined.contains("test_host:~> cmd [0]"));
         assert!(joined.contains("out"));
         assert!(joined.contains("err"));
+    }
+
+    #[test]
+    fn show_log_windowed_header() {
+        let entry = ("cmd".to_owned(), "out".to_owned(), "err".to_owned(), 0);
+
+        let mut captured: Vec<String> = Vec::new();
+        {
+            let mut sink = |m: &str| captured.push(m.to_owned());
+            CommandPromptDisplay::show_log("test_host", &[entry], Some((2, 5)), &mut sink);
+        }
+        assert_eq!(
+            captured[0],
+            "log from test_host: (showing entries 2-2 of 5)"
+        );
+
+        let mut empty: Vec<String> = Vec::new();
+        {
+            let mut sink = |m: &str| empty.push(m.to_owned());
+            CommandPromptDisplay::show_log("test_host", &[], Some((3, 5)), &mut sink);
+        }
+        assert_eq!(empty[0], "log from test_host: (showing entries 0 of 5)");
     }
 
     #[test]
