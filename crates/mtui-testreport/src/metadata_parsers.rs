@@ -314,20 +314,18 @@ fn parse_patchinfo(content: &str) -> Option<HashMap<String, String>> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) if e.local_name().as_ref() == b"issue" => {
+            Ok(Event::Start(e)) if e.local_name().as_ref() == "issue" => {
                 current_id = issue_id(&e);
             }
             Ok(Event::Text(e)) => {
-                if let Some(id) = &current_id
-                    && let Ok(text) = e.decode()
-                {
-                    let title = text.trim();
+                if let Some(id) = &current_id {
+                    let title = e.trim();
                     if !title.is_empty() {
                         titles.insert(id.clone(), title.to_owned());
                     }
                 }
             }
-            Ok(Event::End(e)) if e.local_name().as_ref() == b"issue" => {
+            Ok(Event::End(e)) if e.local_name().as_ref() == "issue" => {
                 current_id = None;
             }
             Ok(Event::Eof) => break,
@@ -343,7 +341,7 @@ fn parse_patchinfo(content: &str) -> Option<HashMap<String, String>> {
 /// Extracts the trimmed, non-empty `id` attribute of an `<issue>` element.
 fn issue_id(e: &quick_xml::events::BytesStart<'_>) -> Option<String> {
     e.attributes().flatten().find_map(|attr| {
-        if attr.key.local_name().as_ref() == b"id" {
+        if attr.key.local_name().as_ref() == "id" {
             let val = attr
                 .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                 .ok()?;

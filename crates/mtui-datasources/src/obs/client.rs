@@ -92,16 +92,13 @@ fn error_summary(body: &str) -> String {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                if e.local_name().as_ref() == b"summary" {
+                if e.local_name().as_ref() == "summary" {
                     in_summary = true;
                 }
             }
-            Ok(Event::Text(e)) if in_summary => match e.decode() {
-                Ok(text) => summary.push_str(text.as_ref()),
-                Err(_) => return String::new(),
-            },
+            Ok(Event::Text(e)) if in_summary => summary.push_str(&e),
             Ok(Event::End(e)) => {
-                if e.local_name().as_ref() == b"summary" {
+                if e.local_name().as_ref() == "summary" {
                     break;
                 }
             }

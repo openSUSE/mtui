@@ -47,7 +47,7 @@ toml = "1"
 # is not leaked.
 ini = { package = "rust-ini", version = "0.21" }
 # XML parsing for /etc/products.d/*.prod product files (host system parser).
-quick-xml = "0.41"
+quick-xml = "0.42"
 directories = "6"
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps
