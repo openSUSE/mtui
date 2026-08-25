@@ -97,6 +97,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fanning out to several reference hosts stays cancellable via `job_cancel`
   instead of holding the request open for however long a black-hole candidate
   host takes to fail. Additive, optional schema change.
+- `remove_host`, `unlock --force` and `reload_products` no longer hang for
+  minutes per host on a peer that vanished without closing its SSH link
+  (#477). Each now runs under the same 45-second teardown budget that already
+  bounds `quit`, template removal and the MCP idle sweep: `remove_host` and
+  `unlock --force` tear their hosts down concurrently under one budget for the
+  whole call, while `reload_products` applies it per host, so a wedged host is
+  abandoned and the pass continues. `unlock --force` now reports each host's
+  real outcome instead of printing `unlocked` unconditionally, and therefore
+  fails — rather than reporting success — when a host's release itself fails.
+  Both `unlock --force` and `reload_products` fail naming only the hosts the
+  budget cut short. A teardown abandoned at the budget can leave the remote
+  lock file behind; the fleet's stale-lock reaping covers it, as for any
+  crashed session.
 
 ## [26.2.1] - 2026-08-21
 

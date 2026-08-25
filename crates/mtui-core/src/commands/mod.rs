@@ -158,7 +158,51 @@ pub(crate) mod testkit {
     use mtui_types::hostlog::CommandLog;
 
     use crate::display::{ColorMode, CommandPromptDisplay};
-    use crate::session::Session;
+    use crate::session::{HOST_CLOSE_TIMEOUT, Session};
+
+    /// Test-only override for
+    /// [`host_op_budget`](super::support::host_op_budget), in milliseconds.
+    /// `u64::MAX` means "use the production [`HOST_CLOSE_TIMEOUT`]".
+    static HOST_OP_BUDGET_MS: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(u64::MAX);
+    /// Serialises the override: the crate's tests share one process, so a test
+    /// that consumes the budget must not run under another test's shrunk one.
+    static HOST_OP_BUDGET_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    pub(crate) fn host_op_budget_override() -> std::time::Duration {
+        match HOST_OP_BUDGET_MS.load(std::sync::atomic::Ordering::SeqCst) {
+            u64::MAX => HOST_CLOSE_TIMEOUT,
+            ms => std::time::Duration::from_millis(ms),
+        }
+    }
+
+    /// Holds [`HOST_OP_BUDGET_LOCK`] and restores the production budget on drop
+    /// — including while unwinding, where a trailing store would be skipped and
+    /// would leak a shrunk budget into the next test to take the lock.
+    pub(crate) struct HostOpBudgetGuard {
+        _lock: tokio::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for HostOpBudgetGuard {
+        fn drop(&mut self) {
+            HOST_OP_BUDGET_MS.store(u64::MAX, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Claims the budget at its production value, for a test that consumes it.
+    pub(crate) async fn hold_host_op_budget() -> HostOpBudgetGuard {
+        HostOpBudgetGuard {
+            _lock: HOST_OP_BUDGET_LOCK.lock().await,
+        }
+    }
+
+    /// As [`hold_host_op_budget`], shrunk to `ms` so an abandoned dispatch costs
+    /// milliseconds instead of the full budget.
+    pub(crate) async fn shrink_host_op_budget(ms: u64) -> HostOpBudgetGuard {
+        let guard = hold_host_op_budget().await;
+        HOST_OP_BUDGET_MS.store(ms, std::sync::atomic::Ordering::SeqCst);
+        guard
+    }
 
     /// A minimal loaded report with a settable RRID and host group.
     pub struct FakeReport {

@@ -50,7 +50,7 @@ insta.workspace = true
 serial_test.workspace = true
 tempfile = "3"
 wiremock.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 # Captures the fan-out driver's `succeeded` summary field, so the list of
 # templates it names is asserted rather than assumed
 # (`commands::cancellation_seam::succeeded_log`).

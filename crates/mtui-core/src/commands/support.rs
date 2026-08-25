@@ -16,6 +16,29 @@ use mtui_types::{RequestReviewID, UpdateSource};
 use crate::error::CommandError;
 use crate::session::Session;
 
+/// The wall-clock budget a command body applies to remote host work that runs
+/// over an already-established link: `remove_host`'s close fan-out,
+/// `unlock --force`, and `reload_products`.
+///
+/// A peer that vanished without closing its SSH link still reports as active
+/// locally, so those dispatches go into a link that never answers. The value is
+/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT), the budget
+/// `quit`, template removal and the MCP idle sweep already use.
+///
+/// The two concurrent fan-outs spend one budget for the whole call. Serial work
+/// spends one *per host* instead (`reload_products`): sharing a single budget
+/// across a serial pass would tie success to fleet size and start failing
+/// healthy but slow fleets. `testkit` overrides the value in tests, so the
+/// abandon path costs milliseconds rather than the full budget.
+#[cfg(not(test))]
+pub(crate) fn host_op_budget() -> std::time::Duration {
+    crate::session::HOST_CLOSE_TIMEOUT
+}
+#[cfg(test)]
+pub(crate) fn host_op_budget() -> std::time::Duration {
+    crate::commands::testkit::host_op_budget_override()
+}
+
 /// Builds the report's [`QemIncident`] (the shared handle both openQA connectors
 /// build on).
 ///
