@@ -51,6 +51,10 @@ struct FakeFs {
 
 type SharedFs = Arc<Mutex<FakeFs>>;
 
+/// Per-request delay knob for the SFTP handler, settable after the server has
+/// started so a test can arm it right before the op under test.
+type SharedDelay = Arc<Mutex<Duration>>;
+
 // ----------------------------------------------------------------------------
 // SSH server: exec + sftp subsystem.
 // ----------------------------------------------------------------------------
@@ -58,6 +62,7 @@ type SharedFs = Arc<Mutex<FakeFs>>;
 #[derive(Clone)]
 struct TestServer {
     fs: SharedFs,
+    delay: SharedDelay,
 }
 
 impl russh::server::Server for TestServer {
@@ -66,6 +71,7 @@ impl russh::server::Server for TestServer {
     fn new_client(&mut self, _: Option<SocketAddr>) -> Self::Handler {
         TestSshSession {
             fs: self.fs.clone(),
+            delay: self.delay.clone(),
             channels: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "shell")]
             shell_channels: Arc::new(Mutex::new(std::collections::HashSet::new())),
@@ -75,6 +81,7 @@ impl russh::server::Server for TestServer {
 
 struct TestSshSession {
     fs: SharedFs,
+    delay: SharedDelay,
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     /// Channels that requested an interactive shell, so the `data` callback only
     /// echoes keystrokes for shells and leaves SFTP-subsystem data untouched.
@@ -169,6 +176,7 @@ impl russh::server::Handler for TestSshSession {
             session.channel_success(channel_id)?;
             let handler = SftpHandler {
                 fs: self.fs.clone(),
+                delay: self.delay.clone(),
                 listed: HashMap::new(),
                 append: std::collections::HashSet::new(),
             };
@@ -250,6 +258,9 @@ fn scripted_command(cmd: &str) -> (String, String, u32) {
 
 struct SftpHandler {
     fs: SharedFs,
+    /// Sleeps for this long before answering `open` — the delay knob a test
+    /// arms to simulate a slow/high-latency link.
+    delay: SharedDelay,
     /// readdir cursor: handle -> whether already returned entries.
     listed: HashMap<String, bool>,
     /// Handles opened with `O_APPEND`: writes ignore the client offset and land
@@ -298,6 +309,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         use russh_sftp::protocol::OpenFlags;
+        let delay = *self.delay.lock().await;
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         // Honour O_EXCL: an exclusive create against an existing file fails,
         // as a real sshd would — this is what the lock protocol relies on.
         if pflags.contains(OpenFlags::EXCLUDE) {
@@ -479,6 +494,13 @@ static HOST_KEY: LazyLock<PrivateKey> =
 
 /// Starts the in-process server, returning its bound port and the shared FS.
 async fn start_server(fs: SharedFs) -> u16 {
+    start_server_with_delay(fs).await.0
+}
+
+/// Like [`start_server`], but also returns the [`SharedDelay`] handle so a
+/// test can arm a per-`open`-request delay after the server is up.
+async fn start_server_with_delay(fs: SharedFs) -> (u16, SharedDelay) {
+    let delay: SharedDelay = Arc::new(Mutex::new(Duration::ZERO));
     let config = Arc::new(russh::server::Config {
         auth_rejection_time: Duration::from_millis(1),
         keys: vec![HOST_KEY.clone()],
@@ -487,8 +509,12 @@ async fn start_server(fs: SharedFs) -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
     let port = listener.local_addr().expect("addr").port();
 
+    let server_delay = delay.clone();
     tokio::spawn(async move {
-        let mut server = TestServer { fs };
+        let mut server = TestServer {
+            fs,
+            delay: server_delay,
+        };
         // Accept loop: serve every incoming connection.
         loop {
             let Ok((stream, addr)) = listener.accept().await else {
@@ -502,7 +528,7 @@ async fn start_server(fs: SharedFs) -> u16 {
         }
     });
 
-    port
+    (port, delay)
 }
 
 /// Per-process temp directory holding this test binary's `known_hosts`.
@@ -1206,4 +1232,27 @@ async fn lock_reaps_stale_foreign_lock_over_sftp() {
     )
     .unwrap();
     assert!(line.contains(":alice:"), "now owned by alice: {line}");
+}
+
+#[tokio::test]
+async fn sftp_request_budget_follows_connect_timeout_not_the_hardcoded_ten_seconds() {
+    // The server delays its `open` response by 2s; with `connect_timeout` set
+    // to 1s the SFTP request must fail well under the old hardcoded 10s
+    // default (asserted as < 1.5s, comfortably above the 1s budget to absorb
+    // scheduling jitter but far below both 2s and 10s) — proving the
+    // per-request timeout is derived, not pinned.
+    let fs = SharedFs::default();
+    let (port, delay) = start_server_with_delay(fs).await;
+    *delay.lock().await = Duration::from_secs(2);
+    let mut conn = connect(port, CommandTimeout::from_secs(1)).await;
+
+    let start = std::time::Instant::now();
+    conn.sftp_open(std::path::Path::new("/some/path"))
+        .await
+        .expect_err("2s server delay must exceed the 1s connect_timeout-derived budget");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(1500),
+        "request budget did not follow connect_timeout: elapsed {elapsed:?}"
+    );
 }
