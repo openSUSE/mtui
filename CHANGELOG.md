@@ -67,6 +67,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `/etc/os-release` parsing already handles the same host-supplied-text
   problem. A host with a mojibake product file now degrades rather than
   failing `sysinfo` outright.
+- The MCP over-budget truncation notice now also points at `show_log`'s
+  `--offset`/`--limit` paging.
 
 ### Fixed
 

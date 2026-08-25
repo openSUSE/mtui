@@ -67,7 +67,7 @@ pub(crate) fn truncation_notice(dropped: usize, limit: usize) -> String {
     format!(
         "\n…[truncated {dropped} bytes; output exceeded the \
          [mcp] max_output_bytes={limit} budget — use a narrower command, or \
-         the offset/limit paging on testreport reads]"
+         the offset/limit paging on show_log and testreport reads]"
     )
 }
 
@@ -424,6 +424,10 @@ mod tests {
         assert!(out.contains("max_output_bytes=4"), "notice limit: {out:?}");
         // The dropped tail is gone.
         assert!(!out.contains("efghij"), "tail dropped: {out:?}");
+        assert!(
+            out.contains("show_log and testreport reads"),
+            "notice names both paged surfaces: {out:?}"
+        );
     }
 
     #[test]
