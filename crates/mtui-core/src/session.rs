@@ -568,8 +568,16 @@ impl Session {
     ///
     /// The one mutable window onto it — `add_host` uses it to move an automatic
     /// session to manual. Refreshing the REPL prompt string is a separate REPL
-    /// concern.
+    /// concern. With no report loaded it is a no-op: the write would land on the
+    /// long-lived [`NullReport`] sentinel and outlive the load (#484).
     pub(crate) fn set_workflow(&mut self, workflow: Workflow) {
+        if self.active_guard.is_none() {
+            tracing::debug!(
+                ?workflow,
+                "set_workflow with no active report: ignoring, not mutating NullReport sentinel"
+            );
+            return;
+        }
         self.metadata_mut().base_mut().workflow = workflow;
     }
 
@@ -1987,6 +1995,28 @@ mod tests {
         let mut s = Session::new(config_with_path_refhosts(), false);
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         assert_eq!(s.metadata().workflow(), Workflow::Manual);
+        s.set_workflow(Workflow::Auto);
+        assert_eq!(s.metadata().workflow(), Workflow::Auto);
+    }
+
+    /// `set_workflow` with no active report must leave the `NullReport`
+    /// sentinel alone (#484).
+    #[test]
+    fn set_workflow_with_no_active_report_does_not_mutate_sentinel() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        // No active report => null sentinel, default Manual.
+        assert_eq!(s.metadata().workflow(), Workflow::Manual);
+        // Attempt to set Auto with no active report must be a no-op.
+        s.set_workflow(Workflow::Auto);
+        assert_eq!(
+            s.metadata().workflow(),
+            Workflow::Manual,
+            "sentinel must not be mutated"
+        );
+        // A later loaded template must still start Manual, not the Auto we tried.
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        assert_eq!(s.metadata().workflow(), Workflow::Manual);
+        // With an active report, the mutation does apply.
         s.set_workflow(Workflow::Auto);
         assert_eq!(s.metadata().workflow(), Workflow::Auto);
     }
