@@ -93,6 +93,22 @@ impl FromStr for PackageSpec {
     }
 }
 
+/// The `(name, arch)` of an RPM filename entry, or `None` when the entry is not
+/// `<name>-<version>-<release>.<arch>.rpm`.
+///
+/// The arch is whatever the filename itself carries — `noarch`, `src` and a
+/// foreign arch are all parsed, and the caller decides what they mean. Version
+/// and release are stripped right-to-left, since the *name* is the part that
+/// may contain `-` (`python3-pkg-a-1.0-1.noarch.rpm`).
+#[must_use]
+pub fn parse_rpm_filename(entry: &str) -> Option<(&str, &str)> {
+    let stem = entry.strip_suffix(".rpm")?;
+    let (stem, arch) = stem.rsplit_once('.')?;
+    let (stem, _release) = stem.rsplit_once('-')?;
+    let (name, _version) = stem.rsplit_once('-')?;
+    Some((name, arch))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +227,40 @@ mod tests {
     fn display_and_fromstr_round_trip() {
         let spec: PackageSpec = "kernel-default=5.14.21-150500".parse().unwrap();
         assert_eq!(spec.to_string(), "kernel-default=5.14.21-150500");
+    }
+
+    #[test]
+    fn parse_rpm_filename_splits_dashed_names() {
+        // Right-to-left is the whole point: a name may itself contain `-`, so
+        // only the last two dash-separated fields are version and release.
+        assert_eq!(
+            parse_rpm_filename("python3-pkg-a-1.0-1.noarch.rpm"),
+            Some(("python3-pkg-a", "noarch"))
+        );
+        assert_eq!(
+            parse_rpm_filename("libpkg-b8-1.0-1.x86_64.rpm"),
+            Some(("libpkg-b8", "x86_64"))
+        );
+    }
+
+    #[test]
+    fn parse_rpm_filename_reports_the_entry_arch() {
+        // A source RPM and a foreign-arch binary are well-formed filenames, not
+        // corruption: they parse, and the caller judges the arch.
+        assert_eq!(
+            parse_rpm_filename("pkg-a-1.0-1.src.rpm"),
+            Some(("pkg-a", "src"))
+        );
+        assert_eq!(
+            parse_rpm_filename("pkg-a-1.0-1.i586.rpm"),
+            Some(("pkg-a", "i586"))
+        );
+    }
+
+    #[test]
+    fn parse_rpm_filename_rejects_a_non_rpm_entry() {
+        assert_eq!(parse_rpm_filename("pkg-a"), None);
+        assert_eq!(parse_rpm_filename("pkg-a.rpm"), None);
+        assert_eq!(parse_rpm_filename("pkg-a-1.0-1.x86_64.tar.gz"), None);
     }
 }

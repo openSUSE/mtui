@@ -27,7 +27,7 @@ pub use error::{
     Result, RpmVersionParseError, RridParseError,
 };
 pub use oqaresults::{OpenQAResult, OpenQAResults, OverviewResult};
-pub use package_spec::PackageSpec;
+pub use package_spec::{PackageSpec, parse_rpm_filename};
 pub use product::{Addon, Host, Product};
 pub use refhost::load_refhosts;
 pub use repo_url::RepoUrl;

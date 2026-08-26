@@ -10,7 +10,7 @@
 //! parsing [`crate::metadata_parsers`], per-report host-connect logic
 //! [`crate::reports`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use mtui_config::options::Config;
@@ -101,6 +101,12 @@ pub struct TestReportBase {
     pub repository: String,
     /// Update repository URLs.
     pub repositories: HashSet<String>,
+    /// `SystemProduct -> the package names this update composes for it`,
+    /// indexed from the metadata envelope's `binaries` block.
+    ///
+    /// Empty when the report carries no `binaries` block, or when the block
+    /// could not be indexed (`metadata_parsers::index_binaries` owns that rule).
+    pub composed: HashMap<SystemProduct, BTreeSet<String>>,
     /// Nested package map: `product -> { package name -> version }`.
     ///
     /// A report routinely spans multiple products, each shipping its own set
@@ -166,6 +172,7 @@ impl TestReportBase {
             slack_review: None,
             repository: String::new(),
             repositories: HashSet::new(),
+            composed: HashMap::new(),
             packages: HashMap::new(),
             rrid: None,
             rating: None,

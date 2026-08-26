@@ -11,17 +11,19 @@
 //! Repository-URL derivation and product normalization are deliberately *not*
 //! here — they are the report side, in [`crate::reports::repoparse`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use mtui_types::{PackageSpec, RequestReviewID, UpdateSource};
+use mtui_types::{PackageSpec, RequestReviewID, SystemProduct, UpdateSource, parse_rpm_filename};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use regex::Regex;
 use serde::Deserialize;
 use tracing::{debug, error, warn};
 
+use crate::products::{normalize, normalize_16};
+use crate::reports::repoparse::parse_products;
 use crate::testreport::TestReportBase;
 
 /// Placeholder description for bare bug/jira ids from the JSON envelope
@@ -138,6 +140,14 @@ pub struct MetadataEnvelope {
     /// Update repository URLs.
     #[serde(default)]
     repositories: Option<Vec<String>>,
+    /// `"<name>-<version>" -> arch -> ["<name>-<version>-<release>.<arch>.rpm", ...]`:
+    /// the binaries this update composes for each product.
+    ///
+    /// Held untyped and shape-checked in [`index_binaries`]: the block's shape
+    /// is not a contract TeReGen has committed to, and a typed field would turn
+    /// an unexpected one into a whole-report `MetadataInvalid`.
+    #[serde(default)]
+    binaries: Option<serde_json::Value>,
 }
 
 /// A parser for the JSON metadata envelope; stateless, mutating the supplied
@@ -256,7 +266,105 @@ impl JSONParser {
             .clone()
             .map(|r| r.into_iter().collect())
             .unwrap_or_default();
+
+        results.composed = data
+            .binaries
+            .as_ref()
+            .map(|b| index_binaries(&results.products, b))
+            .unwrap_or_default();
     }
+}
+
+/// Indexes the envelope's `binaries` block as
+/// `SystemProduct -> the package names this update composes for it`.
+///
+/// Each `binaries` key is a `"<name>-<version>"` product; `products` supplies
+/// the parse, so a key naming no declared product is skipped. A product's
+/// `noarch` names are unioned across *all* its arch keys before the per-arch
+/// sets are built: a `noarch` binary is composed for every arch, but real
+/// metadata lists it under only some of them.
+///
+/// Every entry that parses as an RPM filename is indexed under its arch *key*,
+/// whatever arch the filename itself carries: a 32-bit compat binary listed
+/// under `x86_64` is installable there, and a source RPM merely names a package
+/// the update ships. Over-inclusion degrades to today's behaviour; dropping a
+/// name silently shortens a host's list, which is what this index exists to
+/// prevent. For the same reason an entry that is *not* an RPM filename abandons
+/// the whole index rather than poisoning one key: the block cannot be trusted.
+///
+/// `binaries` is untyped here because its shape is not a committed contract —
+/// a block of some other shape yields an empty index and a warning, never a
+/// failed report load.
+fn index_binaries(
+    products: &[String],
+    binaries: &serde_json::Value,
+) -> HashMap<SystemProduct, BTreeSet<String>> {
+    let binaries: HashMap<String, HashMap<String, Vec<String>>> =
+        match serde_json::from_value(binaries.clone()) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "metadata's `binaries` block has an unexpected shape; \
+                     preparing without a composition"
+                );
+                return HashMap::new();
+            }
+        };
+
+    let parsed: Vec<SystemProduct> = products.iter().flat_map(|pd| parse_products(pd)).collect();
+
+    let mut out: HashMap<SystemProduct, BTreeSet<String>> = HashMap::new();
+    for (key, arch_map) in &binaries {
+        let Some(product) = parsed
+            .iter()
+            .find(|p| format!("{}-{}", p.name, p.version) == *key)
+        else {
+            debug!(key = %key, "binaries key matches no product");
+            continue;
+        };
+
+        let mut noarch: BTreeSet<String> = BTreeSet::new();
+        let mut per_arch: Vec<(&String, BTreeSet<String>)> = Vec::new();
+        for (arch, entries) in arch_map {
+            let mut names: BTreeSet<String> = BTreeSet::new();
+            for entry in entries {
+                let Some((name, entry_arch)) = parse_rpm_filename(entry) else {
+                    warn!(
+                        product = %key, arch = %arch, entry = %entry,
+                        "unparseable binaries entry; the composition index is abandoned"
+                    );
+                    return HashMap::new();
+                };
+                if entry_arch == "noarch" {
+                    noarch.insert(name.to_owned());
+                } else {
+                    names.insert(name.to_owned());
+                }
+            }
+            per_arch.push((arch, names));
+        }
+
+        for (arch, mut names) in per_arch {
+            names.extend(noarch.iter().cloned());
+            // One key per normalizer the tree's repo parsers use — raw
+            // (`gitrepoparse`/`slrepoparse`), `normalize_16` (`reporepoparse`)
+            // and `normalize` (`obsrepoparse`) — because the host reports
+            // whichever form its own `/etc/products.d` carries. Where two
+            // agree the entry simply merges; where a normalizer's output
+            // collides with another product's raw name the sets union, which
+            // is over-inclusive and so degrades toward today's behaviour.
+            let raw = SystemProduct::new(&product.name, &product.version, arch);
+            for form in BTreeSet::from([
+                normalize_16(raw.clone()),
+                normalize(raw.clone()),
+                raw.clone(),
+            ]) {
+                out.entry(form).or_default().extend(names.iter().cloned());
+            }
+        }
+    }
+    out
 }
 
 /// Maps `issue id -> title` from a checkout's `patchinfo.xml`.

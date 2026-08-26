@@ -11,6 +11,10 @@ mod export_idempotency;
 mod fs_responsiveness;
 #[path = "lifecycle.rs"]
 mod lifecycle;
+// Shared test support rather than a test module: it installs a *global*
+// subscriber, so the whole `it` binary must share one copy.
+#[path = "log_capture.rs"]
+mod log_capture;
 #[path = "metadata_parsers.rs"]
 mod metadata_parsers;
 #[path = "null_report.rs"]
