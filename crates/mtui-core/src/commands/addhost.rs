@@ -23,7 +23,7 @@ use crate::session::Session;
 ///   (`Session::add_testplatform_hosts`).
 ///
 /// Refreshing the REPL prompt string after the workflow switch is a separate,
-/// Phase-6 REPL concern, so this command only mutates the report's workflow.
+/// REPL concern, so this command only mutates the report's workflow.
 pub struct AddHost;
 
 #[async_trait]

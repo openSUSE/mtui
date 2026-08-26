@@ -50,7 +50,7 @@ fn help_lists_real_args_and_exits_zero() {
     assert!(out.status.success(), "--help must exit 0");
     let stdout = String::from_utf8_lossy(&out.stdout);
     // `--auto-review-id` only exists on the real `mtui_core::Args` parser, never
-    // on the old empty Phase-0 `Cli {}` stub — proves the rewiring landed.
+    // on the old empty `Cli {}` stub — proves the rewiring landed.
     assert!(
         stdout.contains("--auto-review-id"),
         "expected real Args flags in --help, got: {stdout:?}"

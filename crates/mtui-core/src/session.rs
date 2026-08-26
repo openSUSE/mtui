@@ -79,21 +79,21 @@ pub struct Session {
     /// the current dispatch returns.
     ///
     /// Rather than routing process-exit through the command error channel,
-    /// `quit` flips this flag and returns `Ok(())`; the Phase-6 REPL checks
+    /// `quit` flips this flag and returns `Ok(())`; the REPL checks
     /// [`should_exit`](Self::should_exit) after each line and breaks its loop.
     /// Headless callers (MCP) ignore it.
     should_exit: bool,
     /// Optional sink for runtime log-level changes.
     ///
     /// `set_log_level` calls this with the requested [`LogLevel`] when present.
-    /// The Phase-6 REPL installs a callback backed by a
+    /// The REPL installs a callback backed by a
     /// `tracing_subscriber::reload` handle; headless callers and tests leave it
     /// `None`, so the command still logs the change but mutates nothing.
     log_level_sink: Option<LogLevelSink>,
     /// Optional sink for best-effort desktop notifications.
     ///
     /// [`notify_user`](Self::notify_user) calls this with the message and an
-    /// error flag when present. The Phase-6 REPL installs a callback backed by
+    /// error flag when present. The REPL installs a callback backed by
     /// `mtui-cli`'s `notification::notify_user` (a headless no-op); headless
     /// callers (`mtui-mcp`) and tests leave it `None`, so a command that fires a
     /// toast silently does nothing — keeping notifications a REPL-only courtesy
@@ -650,7 +650,7 @@ impl Session {
     ///
     /// The one mutable window onto the active report's workflow. `add_host`
     /// (and later `set_workflow`) uses it to move an automatic session to
-    /// manual. Refreshing the REPL prompt string is a separate, Phase-6 REPL
+    /// manual. Refreshing the REPL prompt string is a separate REPL
     /// concern, so the command only mutates the report here.
     pub(crate) fn set_workflow(&mut self, workflow: Workflow) {
         self.metadata_mut().base_mut().workflow = workflow;
@@ -1676,7 +1676,7 @@ impl Session {
 
     /// Requests that the interactive REPL loop exit after the current dispatch.
     ///
-    /// Set by the `quit` command; read by the Phase-6 REPL via
+    /// Set by the `quit` command; read by the REPL via
     /// [`should_exit`](Self::should_exit).
     pub fn request_exit(&mut self) {
         self.should_exit = true;
@@ -1690,7 +1690,7 @@ impl Session {
 
     /// Installs the callback `set_log_level` uses to apply a runtime level change.
     ///
-    /// The Phase-6 REPL wires this to a `tracing_subscriber::reload` handle so
+    /// The REPL wires this to a `tracing_subscriber::reload` handle so
     /// `set_log_level debug` takes effect immediately; headless callers leave it
     /// unset.
     pub fn set_log_level_sink(&mut self, sink: LogLevelSink) {
@@ -1713,7 +1713,7 @@ impl Session {
     /// Installs the callback `notify_user` uses to surface a
     /// desktop notification.
     ///
-    /// The Phase-6 REPL wires this to `mtui-cli`'s `notification::notify_user`;
+    /// The REPL wires this to `mtui-cli`'s `notification::notify_user`;
     /// headless callers (`mtui-mcp`) and tests leave it unset, making
     /// notifications a silent no-op.
     pub fn set_notify_sink(&mut self, sink: NotifySink) {

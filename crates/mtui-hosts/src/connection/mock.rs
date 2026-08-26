@@ -222,7 +222,7 @@ pub struct MockConnection {
     /// The count is shared+mutable so it decrements across `Clone`d handles.
     listdir_transient_failures: Arc<Mutex<HashMap<PathBuf, u32>>>,
     /// Canned bytes served by [`ShellChannel::read`] on a spawned shell, drained
-    /// one chunk per `read` then `0` (EOF). Lets the Phase-6 TTY bridge be
+    /// one chunk per `read` then `0` (EOF). Lets the TTY bridge be
     /// tested offline.
     #[cfg(feature = "shell")]
     shell_output: Vec<Vec<u8>>,
@@ -698,7 +698,7 @@ impl MockConnection {
 }
 
 /// A scriptable in-memory [`ShellChannel`] returned by
-/// [`MockConnection::shell`], so the Phase-6 TTY bridge is testable offline.
+/// [`MockConnection::shell`], so the TTY bridge is testable offline.
 ///
 /// Mirrors the real [`SshShellChannel`](crate::connection::SshConnection)
 /// read semantics: a scripted chunk larger than the caller's buffer is served

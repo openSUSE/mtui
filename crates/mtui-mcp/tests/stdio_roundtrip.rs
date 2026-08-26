@@ -11,7 +11,7 @@
 //!    returns the `User: <user>, app pid: …` banner the command prints.
 //! 3. A deny-listed tool call is rejected (`method_not_found`) — no route exists.
 //!
-//! This is the Phase-7 gating contract test: it demonstrates the hand-written
+//! This is the gating contract test: it demonstrates the hand-written
 //! `ServerHandler` with a runtime-built tool set + schemas works against rmcp 3.x
 //! over a transport.
 
