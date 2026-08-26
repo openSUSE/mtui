@@ -100,6 +100,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   default transport) there is no per-request connection to drop, so a client
   that just stops waiting is not covered; use `background=true` + `job_cancel`
   for that case.
+- `job_cancel` on a force-aborted job now also releases the operation lock of a
+  host that was attached with no test report loaded (`add_host` before any
+  `load_template`). The post-abort unlock walked only the loaded-template
+  registry, so a lock stranded on such a host was left held until the session
+  ended — and the reply's "a host lock may have been left behind" was then
+  literally true. A host whose release outruns the budget is now reported with
+  the bare `list_locks`/`unlock` remedy (the no-report group has no RRID, so
+  `list_locks -T <rrid>` does not apply to it). (#485)
 - `quit` (including `exit` and `Ctrl-D`), MCP session close, and the MCP
   idle-eviction sweep now disconnect hosts that were attached while no test
   report was loaded (`add_host` before any `load_template`), releasing their
