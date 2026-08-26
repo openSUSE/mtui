@@ -110,10 +110,11 @@ impl Command for HostsUnlock {
                         .display
                         .println(&format!("{name}: unlock not confirmed within {secs}s"));
                 }
-                return Err(CommandError::Other(format!(
-                    "unlock timed out on: {}",
-                    stuck.join(", ")
-                )));
+                let mut msg = format!("unlock timed out on: {}", stuck.join(", "));
+                if !failed.is_empty() {
+                    msg.push_str(&format!("; failed on: {}", failed.join(", ")));
+                }
+                return Err(CommandError::Other(msg));
             }
             return verdict(failed);
         }
@@ -284,6 +285,50 @@ mod tests {
             healthy.file_contents(TARGET_LOCK_PATH).is_none(),
             "the reachable host's foreign lock was still force-removed"
         );
+    }
+
+    #[tokio::test]
+    async fn force_unlock_timeout_still_names_a_failed_host() {
+        // `dead` wedges (times out); `broken` has a foreign lock whose remove
+        // genuinely fails; `healthy` releases cleanly. The timeout error must
+        // name both `dead` and `broken`, and neither must name `healthy`.
+        let broken = MockConnection::new("broken")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:otheruser:99999".to_vec())
+            .failing_sftp_remove();
+        let healthy = foreign_lock("healthy");
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![
+                target(
+                    "dead",
+                    MockConnection::new("dead").with_sftp_session_delay(Duration::from_secs(3600)),
+                ),
+                target("broken", broken.clone()),
+                target("healthy", healthy.clone()),
+            ],
+        );
+
+        let args = matches(&HostsUnlock, &["-f"]);
+        let err = testkit::with_shrunk_budget(50, async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                HostsUnlock.call(&mut session, &args),
+            )
+            .await
+            .expect("unlock --force must return despite the wedged host")
+            .expect_err("a wedged and a genuinely failed host must not report success")
+        })
+        .await;
+
+        let CommandError::Other(msg) = &err else {
+            panic!("expected CommandError::Other, got {err}");
+        };
+        assert!(msg.contains("dead"), "{msg}");
+        assert!(msg.contains("broken"), "{msg}");
+        assert!(!msg.contains("healthy"), "{msg}");
+        let out = buf.contents();
+        assert!(out.contains("broken: FAILED"), "{out}");
+        assert!(out.contains("healthy: unlocked"), "{out}");
     }
 
     #[tokio::test]

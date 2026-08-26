@@ -10,6 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `unlock --force` now reports a host whose lock release genuinely failed
+  alongside the hosts that timed out, instead of dropping it from the error.
 - `remove_host` now names only the host whose teardown the 45 s budget
   actually cut short (`still disconnecting from <host> after <secs> seconds;
   abandoning`, printed to the display), instead of warning for every host in
