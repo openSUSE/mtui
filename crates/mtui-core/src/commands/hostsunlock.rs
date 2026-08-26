@@ -205,7 +205,6 @@ mod tests {
     #[tokio::test]
     async fn unlock_force_succeeds() {
         // The lock-free no-op path: nothing to release still reports released.
-        let _budget = testkit::hold_host_op_budget().await;
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &["-f"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
@@ -220,7 +219,6 @@ mod tests {
     async fn force_unlock_clears_foreign_locks_on_all_hosts() {
         // The capability the hand-written serial loop existed for: every host's
         // foreign lock file is really removed, across the fan-out.
-        let _budget = testkit::hold_host_op_budget().await;
         let (c1, c2) = (foreign_lock("h1"), foreign_lock("h2"));
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
@@ -246,8 +244,6 @@ mod tests {
         // budget must abandon the first while the second's lock is really
         // force-removed — and `healthy` must be reported as unlocked, not swept
         // into the timeout's host list.
-        let _budget = testkit::shrink_host_op_budget(50).await;
-
         let healthy = foreign_lock("healthy");
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
@@ -261,13 +257,16 @@ mod tests {
         );
 
         let args = matches(&HostsUnlock, &["-f"]);
-        let err = tokio::time::timeout(
-            Duration::from_secs(5),
-            HostsUnlock.call(&mut session, &args),
-        )
-        .await
-        .expect("unlock --force must return despite the wedged host")
-        .expect_err("a host that never answered must not report success");
+        let err = testkit::with_shrunk_budget(50, async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                HostsUnlock.call(&mut session, &args),
+            )
+            .await
+            .expect("unlock --force must return despite the wedged host")
+            .expect_err("a host that never answered must not report success")
+        })
+        .await;
 
         assert!(
             matches!(&err, CommandError::Other(m) if m.contains("dead")),

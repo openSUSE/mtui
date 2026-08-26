@@ -160,48 +160,39 @@ pub(crate) mod testkit {
     use crate::display::{ColorMode, CommandPromptDisplay};
     use crate::session::{HOST_CLOSE_TIMEOUT, Session};
 
-    /// Test-only override for
-    /// [`host_op_budget`](super::support::host_op_budget), in milliseconds.
-    /// `u64::MAX` means "use the production [`HOST_CLOSE_TIMEOUT`]".
-    static HOST_OP_BUDGET_MS: std::sync::atomic::AtomicU64 =
-        std::sync::atomic::AtomicU64::new(u64::MAX);
-    /// Serialises the override: the crate's tests share one process, so a test
-    /// that consumes the budget must not run under another test's shrunk one.
-    static HOST_OP_BUDGET_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    tokio::task_local! {
+        /// Test-only override for
+        /// [`host_op_budget`](super::support::host_op_budget), in
+        /// milliseconds. Unset means "use the production
+        /// [`HOST_CLOSE_TIMEOUT`]" — the fallback `try_with` takes when no
+        /// test has scoped a shrunk value onto the current task.
+        static HOST_OP_BUDGET_MS: u64;
+    }
 
+    /// Task-local, not a process-global: the crate's tests share one process,
+    /// but a value scoped onto one test's task by
+    /// [`with_shrunk_budget`] can never leak into a sibling test running
+    /// concurrently on another task, so no cross-test lock is needed.
     pub(crate) fn host_op_budget_override() -> std::time::Duration {
-        match HOST_OP_BUDGET_MS.load(std::sync::atomic::Ordering::SeqCst) {
-            u64::MAX => HOST_CLOSE_TIMEOUT,
-            ms => std::time::Duration::from_millis(ms),
-        }
+        HOST_OP_BUDGET_MS
+            .try_with(|ms| std::time::Duration::from_millis(*ms))
+            .unwrap_or(HOST_CLOSE_TIMEOUT)
     }
 
-    /// Holds [`HOST_OP_BUDGET_LOCK`] and restores the production budget on drop
-    /// — including while unwinding, where a trailing store would be skipped and
-    /// would leak a shrunk budget into the next test to take the lock.
-    pub(crate) struct HostOpBudgetGuard {
-        _lock: tokio::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Drop for HostOpBudgetGuard {
-        fn drop(&mut self) {
-            HOST_OP_BUDGET_MS.store(u64::MAX, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    /// Claims the budget at its production value, for a test that consumes it.
-    pub(crate) async fn hold_host_op_budget() -> HostOpBudgetGuard {
-        HostOpBudgetGuard {
-            _lock: HOST_OP_BUDGET_LOCK.lock().await,
-        }
-    }
-
-    /// As [`hold_host_op_budget`], shrunk to `ms` so an abandoned dispatch costs
-    /// milliseconds instead of the full budget.
-    pub(crate) async fn shrink_host_op_budget(ms: u64) -> HostOpBudgetGuard {
-        let guard = hold_host_op_budget().await;
-        HOST_OP_BUDGET_MS.store(ms, std::sync::atomic::Ordering::SeqCst);
-        guard
+    /// Runs `fut` with [`host_op_budget_override`] shrunk to `ms` for its
+    /// duration, so a dispatch it abandons costs milliseconds instead of the
+    /// full production budget.
+    ///
+    /// The scope does not cross a `tokio::spawn` boundary, so `fut` must stay
+    /// on this task end to end — verified safe: `mtui-core`'s only
+    /// `tokio::spawn` is `regenerate.rs:506`, outside the budget path.
+    /// Re-run `rg -n 'tokio::spawn' crates/mtui-core/src` before relying on
+    /// this if a command on the budget path ever grows one; a spawn inside
+    /// `fut` would silently fall back to the production 45 s budget instead
+    /// of erroring, and a test asserting a bounded abandon would then hang
+    /// for tens of seconds rather than going red.
+    pub(crate) async fn with_shrunk_budget<F: std::future::Future>(ms: u64, fut: F) -> F::Output {
+        HOST_OP_BUDGET_MS.scope(ms, fut).await
     }
 
     /// A minimal loaded report with a settable RRID and host group.

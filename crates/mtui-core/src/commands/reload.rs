@@ -112,7 +112,6 @@ mod tests {
 
     #[tokio::test]
     async fn reloads_system_over_live_connection() {
-        let _budget = crate::commands::testkit::hold_host_op_budget().await;
         // A SUSE host whose product XML parses to SLES 15-SP5.
         let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
         let conn = MockConnection::new("h1")
@@ -174,8 +173,6 @@ mod tests {
         // `parse_system`'s first act is opening an SFTP session, so no product
         // scripting is needed (or wanted: an unscripted listing would fail fast
         // instead).
-        let _budget = testkit::shrink_host_op_budget(50).await;
-
         let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
         let good = MockConnection::new("z-good")
             .with_listing("/etc/products.d", ["SLES.prod"])
@@ -191,13 +188,16 @@ mod tests {
         );
 
         let args = matches(&ReloadProducts, &[]);
-        let err = tokio::time::timeout(
-            Duration::from_secs(5),
-            ReloadProducts.call(&mut session, &args),
-        )
-        .await
-        .expect("reload_products must return despite the wedged host")
-        .expect_err("a host that never answered must not report success");
+        let err = testkit::with_shrunk_budget(50, async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                ReloadProducts.call(&mut session, &args),
+            )
+            .await
+            .expect("reload_products must return despite the wedged host")
+            .expect_err("a host that never answered must not report success")
+        })
+        .await;
 
         assert!(
             matches!(&err, CommandError::Other(m) if m.contains("a-dead")),
