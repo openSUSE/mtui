@@ -134,6 +134,14 @@ pub struct TestReportBase {
     pub giteaprapi: Option<String>,
     /// Gitea commit hash (JSON key `gitea_commit_hash`).
     pub giteacohash: Option<String>,
+    /// Source RPM names from `SRCRPMs` (envelope key `SRCRPMs`).
+    pub srcrpms: Vec<String>,
+    /// Generation timestamp from `generated_at` (SLFO only).
+    pub generated_at: Option<String>,
+    /// Product composer map from `product_composer` (SLFO only).
+    pub product_composer: HashMap<String, serde_json::Value>,
+    /// Composed binary map from `binaries` (SLFO, `product -> arch -> [rpm filename]`).
+    pub binaries: HashMap<String, HashMap<String, Vec<String>>>,
     /// Which update workflow mtui drives for this report, resolved once at
     /// load from [`giteacohash`](Self::giteacohash) by
     /// [`JSONParser`]. Defaults to
@@ -190,6 +198,10 @@ impl TestReportBase {
             giteapr: None,
             giteaprapi: None,
             giteacohash: None,
+            srcrpms: Vec::new(),
+            generated_at: None,
+            product_composer: HashMap::new(),
+            binaries: HashMap::new(),
             update_source: UpdateSource::default(),
             product_warnings: HashMap::new(),
             openqa: ReportOpenQA::new(),
@@ -1079,6 +1091,10 @@ mod tests {
         assert!(base.giteapr.is_none());
         assert!(base.giteaprapi.is_none());
         assert!(base.giteacohash.is_none());
+        assert!(base.srcrpms.is_empty());
+        assert!(base.generated_at.is_none());
+        assert!(base.product_composer.is_empty());
+        assert!(base.binaries.is_empty());
         assert_eq!(base.update_source, UpdateSource::Obs);
         assert!(base.product_warnings.is_empty());
     }

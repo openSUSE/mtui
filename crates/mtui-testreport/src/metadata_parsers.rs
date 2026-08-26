@@ -100,6 +100,11 @@ impl ReducedMetadataParser {
 /// treating an absent key as empty. The field names map to the envelope
 /// keys; where a Rust field name would clash with the report's own naming,
 /// `#[serde(rename)]` restores the wire key.
+///
+/// Unmodelled keys are captured via `extra` and logged at `debug` so a
+/// future field addition does not silently vanish (see #445). `deny_unknown_fields`
+/// is intentionally not used — metadata gains fields over time and a hard
+/// failure would break loading on every new field.
 #[derive(Debug, Default, Deserialize)]
 pub struct MetadataEnvelope {
     /// Jira issue ids.
@@ -148,6 +153,21 @@ pub struct MetadataEnvelope {
     /// Update repository URLs.
     #[serde(default)]
     repositories: Option<Vec<String>>,
+    /// Source RPM names (envelope key `SRCRPMs`).
+    #[serde(default, rename = "SRCRPMs")]
+    srcrpms: Option<Vec<String>>,
+    /// Generation timestamp (SLFO only, e.g. `2026-07-21T19:33:33+0200`).
+    #[serde(default)]
+    generated_at: Option<String>,
+    /// Product composer map (SLFO only, `package -> {media, pool_only, shipped}`).
+    #[serde(default)]
+    product_composer: Option<HashMap<String, serde_json::Value>>,
+    /// Composed binary map (SLFO, `product -> arch -> [rpm filename]`).
+    #[serde(default)]
+    binaries: Option<HashMap<String, HashMap<String, Vec<String>>>>,
+    /// Any envelope keys not modelled above, captured for `debug` logging.
+    #[serde(default, flatten)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 /// A parser for the JSON metadata envelope.
@@ -277,6 +297,17 @@ impl JSONParser {
             .clone()
             .map(|r| r.into_iter().collect())
             .unwrap_or_default();
+
+        results.srcrpms = data.srcrpms.clone().unwrap_or_default();
+        results.generated_at = data.generated_at.clone();
+        results.product_composer = data.product_composer.clone().unwrap_or_default();
+        results.binaries = data.binaries.clone().unwrap_or_default();
+        if !data.extra.is_empty() {
+            debug!(
+                unmodelled_keys = ?data.extra.keys().collect::<Vec<_>>(),
+                "metadata envelope contains unmodelled keys"
+            );
+        }
     }
 }
 
@@ -402,5 +433,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(results.update_source, UpdateSource::Git);
+    }
+
+    #[test]
+    fn srcrpms_is_parsed_and_stored() {
+        let mut results = base();
+        JSONParser::parse_str(&mut results, r#"{"SRCRPMs": ["afterburn", "foo"]}"#).unwrap();
+        assert_eq!(results.srcrpms, vec!["afterburn", "foo"]);
+        // Absent key stays empty, not None.
+        let mut empty = base();
+        JSONParser::parse_str(&mut empty, "{}").unwrap();
+        assert!(empty.srcrpms.is_empty());
+    }
+
+    #[test]
+    fn generated_at_product_composer_and_binaries_are_parsed() {
+        let mut results = base();
+        JSONParser::parse_str(
+            &mut results,
+            r#"{
+                "generated_at": "2026-07-21T19:33:33+0200",
+                "product_composer": {"afterburn": {"media": [], "pool_only": false, "shipped": false}},
+                "binaries": {"SL-Micro-6.1": {"x86_64": ["afterburn-1.0-1.x86_64.rpm"]}}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            results.generated_at.as_deref(),
+            Some("2026-07-21T19:33:33+0200")
+        );
+        assert!(results.product_composer.contains_key("afterburn"));
+        assert_eq!(
+            results.binaries["SL-Micro-6.1"]["x86_64"],
+            vec!["afterburn-1.0-1.x86_64.rpm"]
+        );
+    }
+
+    #[test]
+    fn slfo_fixture_fields_are_not_silently_discarded() {
+        // The checked-in SLFO fixture carries SRCRPMs, generated_at and
+        // product_composer; before #445 they were silently discarded (no
+        // trace, no error). This pins they now survive ingestion.
+        let data = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/metadata/slfo_metadata.json"
+        ))
+        .unwrap();
+        let mut results = base();
+        JSONParser::parse_str(&mut results, &data).unwrap();
+        assert_eq!(results.srcrpms, vec!["afterburn"]);
+        assert_eq!(
+            results.generated_at.as_deref(),
+            Some("2026-07-21T19:33:33+0200")
+        );
+        assert!(results.product_composer.contains_key("afterburn"));
+    }
+
+    #[test]
+    fn unknown_metadata_keys_do_not_break_parsing() {
+        // Unknown keys are captured via `extra` and logged at debug, not hard-failed.
+        // `deny_unknown_fields` would break on every new TeReGen field (#445).
+        let mut results = base();
+        JSONParser::parse_str(
+            &mut results,
+            r#"{"SRCRPMs": ["a"], "unknown_future_field": 123, "another": {"x": 1}}"#,
+        )
+        .unwrap();
+        assert_eq!(results.srcrpms, vec!["a"]);
     }
 }
