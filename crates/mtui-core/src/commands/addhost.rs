@@ -64,11 +64,14 @@ impl Command for AddHost {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         // An automatic workflow here almost certainly means the switch to manual
-        // was forgotten.
+        // was forgotten. `set_workflow` is a no-op without an active guard, so it
+        // gates the log: the message must describe a switch that landed.
         let keep_mode = args.get_flag("keep_mode");
-        if session.metadata().workflow() == Workflow::Auto && !keep_mode {
+        if session.metadata().workflow() == Workflow::Auto
+            && !keep_mode
+            && session.set_workflow(Workflow::Manual)
+        {
             info!("add_host: switching from automatic to manual workflow");
-            session.set_workflow(Workflow::Manual);
         }
 
         let hosts: Vec<String> = args

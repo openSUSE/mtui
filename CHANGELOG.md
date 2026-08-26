@@ -87,12 +87,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- `add_host` with no test report loaded no longer writes the workflow switch
-  onto the session's long-lived null-report placeholder. Previously the
-  automatic-to-manual flip landed on that placeholder and persisted for the
-  process lifetime, so a template loaded afterwards could observe a workflow
-  state nothing had asked for; the switch is now a no-op until a report is
-  actually loaded (#484).
 - MCP: a client that sends `notifications/cancelled` for an in-flight
   foreground tool call now actually drops the dispatch and releases the
   `CommandLock` it held, instead of the notification being silently ignored.
