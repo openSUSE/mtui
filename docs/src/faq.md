@@ -136,6 +136,13 @@ run by name.
 - `prepare -u` / `--update` — enable the test-update repositories and install from
   there.
 
+Independently of those switches, on a report whose metadata carries a
+`binaries` block the list is narrowed per host to what that host's products
+actually compose (base product plus addons). A host whose products compose
+none of the list is failed by name rather than sent a list zypper will refuse
+with "capability not found" (104); a host no product of which the metadata
+names keeps the full list and logs a warning.
+
 ## Can I run a command on only some of the connected hosts?
 
 Yes — temporarily disable the rest with `set_host_state`, then re-enable:

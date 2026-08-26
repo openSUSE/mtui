@@ -741,7 +741,9 @@ async fn reboot_transactional(
 /// Runs the prepare step: adds/removes the issue repo, then installs
 /// `packages`.
 ///
-/// `report` is the [`SetRepo`] hook for the issue repos; `packages` the list to
+/// `report` is the [`SetRepo`] hook for the issue repos, and also supplies the
+/// update's composition, which narrows every host's list to what its own
+/// products compose (see [`narrow_to_composed`]); `packages` the list to
 /// prepare. `testing` selects repo-`add` + the testing preparer variant;
 /// `force` toggles `--force-resolution`; `installed_only` narrows the list to
 /// what each host already carries. Every host installs its list in a **single**
@@ -883,9 +885,31 @@ async fn prepare_body(
 
     // Hosts we deliberately did not dispatch to. Each already has its own
     // verdict, so neither the failure scan nor the "no command could be built"
-    // rule below may judge them a second time.
+    // rule below may judge them a second time, and their failures are collected
+    // apart from that scan.
     let mut accounted: BTreeSet<String> = BTreeSet::new();
-    let mut probe_failures: Vec<UpdateError> = Vec::new();
+    let mut accounted_failures: Vec<UpdateError> = Vec::new();
+
+    // Before the `--installed` probe, so a host the update composes nothing
+    // for is never probed either. Skipped on an empty list for the same reason
+    // the probe is: every host would then compose "none of" it, and an empty
+    // list is not a host failure (the warn above owns that case).
+    if !pkgs.is_empty() {
+        for (host, products) in narrow_to_composed(targets, report, &mut lists) {
+            // Named refusal, not a fallback to the full list: the full list is
+            // exactly the `zypper 104` this narrowing exists to prevent, and a
+            // silent skip would let the group's success speak for this host (#396).
+            accounted_failures.push(UpdateError::new(
+                format!(
+                    "this host's products ({products}) compose none of the requested packages \
+                     ({requested}); nothing was installed",
+                    requested = pkgs.join(", ")
+                ),
+                host.clone(),
+            ));
+            accounted.insert(host);
+        }
+    }
 
     // Both checkpoints fall through — never an early return past
     // `reboot_transactional`.
@@ -897,7 +921,7 @@ async fn prepare_body(
             let outcome = narrow_to_installed(targets, registry, &mut lists).await;
             for host in &outcome.dead {
                 accounted.insert(host.clone());
-                probe_failures.push(UpdateError::new("package probe failed", host.clone()));
+                accounted_failures.push(UpdateError::new("package probe failed", host.clone()));
             }
             for host in &outcome.skipped {
                 accounted.insert(host.clone());
@@ -1011,7 +1035,7 @@ async fn prepare_body(
                 .is_some_and(|h| check_failed.contains(h) || accounted.contains(h))
         })
         .collect();
-    failures.extend(probe_failures);
+    failures.extend(accounted_failures);
 
     // A host whose prepare failed must not reboot into the failed transaction,
     // while a healthy peer still must. The skip set is built from the check
@@ -1200,6 +1224,84 @@ fn build_prepare_map(
         }
     }
     map
+}
+
+/// A host's flattened products as one stable `name-version.arch, ...` string.
+fn fmt_products(products: &BTreeSet<mtui_types::SystemProduct>) -> String {
+    products
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Narrows each host's list in `lists` to the packages that host's own products
+/// compose (base plus addons), returning `host -> its products` for the hosts
+/// left with nothing, for the caller to fail by name.
+///
+/// A composition that names none of the host's products keeps the full list and
+/// warns: narrowing on an index that does not describe the host would drop
+/// every package, and keeping it silently would be indistinguishable from
+/// today.
+fn narrow_to_composed(
+    targets: &HostsGroup,
+    report: &dyn SetRepo,
+    lists: &mut BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, String> {
+    let mut refused = BTreeMap::new();
+    let composed = report.composition();
+    // The `!known` fallback below would keep the full list anyway; this returns
+    // early for the *log*, so a report that simply carries no composition does
+    // not warn once per host and drown the case that matters.
+    if composed.is_empty() {
+        return refused;
+    }
+
+    for target in targets.targets() {
+        let host = target.hostname();
+        let Some(list) = lists.get_mut(host) else {
+            continue;
+        };
+        let products = target.system().flatten();
+        let mut known = false;
+        let mut composes: BTreeSet<&String> = BTreeSet::new();
+        for product in &products {
+            if let Some(names) = composed.get(product) {
+                known = true;
+                composes.extend(names);
+            }
+        }
+        if !known {
+            warn!(
+                host = %host,
+                products = %fmt_products(&products),
+                "no product of this host is named in the update's composition; preparing the \
+                 full package list"
+            );
+            continue;
+        }
+
+        let dropped: Vec<String> = list
+            .iter()
+            .filter(|p| !composes.contains(p))
+            .cloned()
+            .collect();
+        list.retain(|p| composes.contains(p));
+        if !dropped.is_empty() {
+            // INFO, not DEBUG: a package installable only through a capability
+            // is dropped here too, and this line is the only thing that makes
+            // that visible.
+            info!(
+                host = %host, dropped = %dropped.join(", "),
+                "these packages are not composed for this host's products; not installing them"
+            );
+        }
+        if list.is_empty() {
+            lists.remove(host);
+            refused.insert(host.to_owned(), fmt_products(&products));
+        }
+    }
+    refused
 }
 
 /// The hosts [`narrow_to_installed`] did not hand on to the install, split by
@@ -2630,6 +2732,423 @@ mod tests {
             assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
             assert!(contents.ends_with(tail), "history line: {contents:?}");
         }
+    }
+
+    // --- prepare's per-host composition (#500) -----------------------------
+
+    /// The seven synthetic package names the composition tests narrow from.
+    fn seven_packages() -> Vec<String> {
+        [
+            "pkg-a", "pkg-b", "pkg-c", "pkg-d", "pkg-e", "pkg-f", "pkg-g",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect()
+    }
+
+    fn names(v: &[&str]) -> BTreeSet<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// A [`SetRepo`] whose `composition()` answers a scripted index and whose
+    /// repo fan-out is inert.
+    #[derive(Default)]
+    struct ComposingRepo(HashMap<SystemProduct, BTreeSet<String>>);
+
+    impl ComposingRepo {
+        fn new(entries: Vec<(SystemProduct, BTreeSet<String>)>) -> Self {
+            Self(entries.into_iter().collect())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SetRepo for ComposingRepo {
+        async fn set_repo(&self, _target: &mut Target, _operation: RepoOp) {}
+
+        fn composition(&self) -> HashMap<SystemProduct, BTreeSet<String>> {
+            self.0.clone()
+        }
+    }
+
+    /// The package tokens of the one prepare command this handle received.
+    ///
+    /// A token *set*, not a substring: `contains("pkg-a pkg-b")` discriminates
+    /// only by accident of `get_package_list`'s sort. Anchored with
+    /// `starts_with`, because the slmicro *updater* script also contains
+    /// `pkg in`.
+    fn prepared_packages(handle: &MockConnection) -> BTreeSet<String> {
+        let cmds = handle.commands();
+        let mut installs = cmds
+            .iter()
+            .filter(|c| c.starts_with("transactional-update -n pkg in -l"));
+        let cmd = installs
+            .next()
+            .unwrap_or_else(|| panic!("no prepare command was dispatched: {cmds:?}"));
+        assert!(
+            installs.next().is_none(),
+            "one transaction per host, not one per package: {cmds:?}"
+        );
+        cmd.split_whitespace()
+            .skip_while(|t| *t != "-l")
+            .skip(1)
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
+    /// An enabled transactional SL-Micro host carrying `product` and `addons`,
+    /// answering every command cleanly.
+    ///
+    /// `with_default` answers every command identically, so this fixture cannot
+    /// attribute a response to the command that drew it: a test that grows an
+    /// `--installed` probe must switch to `with_response` on the exact
+    /// `rpm -qa --qf` string.
+    fn composed_host(
+        hostname: &str,
+        product: SystemProduct,
+        addons: BTreeSet<SystemProduct>,
+    ) -> (Target, MockConnection) {
+        slmicro_target_on(hostname, product, addons, "", "", 0)
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_installs_only_the_packages_composed_for_the_host() {
+        let (t, handle) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = ComposingRepo::new(vec![(
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            names(&["pkg-a", "pkg-b"]),
+        )]);
+
+        perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
+            .await
+            .expect("a host that composes part of the list prepares that part");
+
+        assert_eq!(prepared_packages(&handle), names(&["pkg-a", "pkg-b"]));
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_filters_per_host_and_arch() {
+        // The two arches of one product ship different binary sets, so the
+        // intersection is per host — hoisting it out of the loop would hand
+        // both hosts whichever host was seen first.
+        let (t1, h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (t2, h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a", "pkg-b"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-b", "pkg-c"]),
+            ),
+        ]);
+
+        perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
+            .await
+            .expect("both hosts compose part of the list");
+
+        let (got1, got2) = (prepared_packages(&h1), prepared_packages(&h2));
+        assert_eq!(got1, names(&["pkg-a", "pkg-b"]));
+        assert_eq!(got2, names(&["pkg-b", "pkg-c"]));
+        assert_ne!(got1, got2, "each host gets its own arch's set");
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_unions_an_addons_composition() {
+        // SL-Micro-Extras is unusable as a *base* product (`System::get_release`
+        // has no arm for it), but `System::flatten()` includes addons, so a
+        // package composed only for the addon is still composed for this host.
+        let (t, handle) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            [SystemProduct::new("SL-Micro-Extras", "6.1", "x86_64")]
+                .into_iter()
+                .collect(),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro-Extras", "6.1", "x86_64"),
+                names(&["pkg-b"]),
+            ),
+        ]);
+
+        perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
+            .await
+            .expect("the host composes two of the list");
+
+        assert_eq!(prepared_packages(&handle), names(&["pkg-a", "pkg-b"]));
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_keeps_the_full_list_without_composition() {
+        // A report whose metadata carries no `binaries` block must behave
+        // exactly as before this narrowing existed.
+        let (t, handle) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let (res, logs) = capture_logs(perform_prepare(
+            &mut group,
+            &ComposingRepo::default(),
+            &seven_packages(),
+            false,
+            false,
+            false,
+        ))
+        .await;
+        res.expect("no composition is not a reason to fail a host");
+
+        assert_eq!(
+            prepared_packages(&handle),
+            seven_packages().into_iter().collect::<BTreeSet<_>>()
+        );
+        // Arms the negative below: a capture that recorded nothing would make
+        // "the warning is absent" unfailable.
+        assert!(
+            logs.contains("transactional-update -n pkg in"),
+            "nothing captured: {logs}"
+        );
+        // "There is no composition" is not "the composition does not describe
+        // this host": warning per host on the former would drown the latter.
+        assert!(
+            !logs.contains("no product of this host is named"),
+            "an absent composition must be silent: {logs}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_with_an_empty_list_is_not_a_composition_refusal() {
+        // Every host composes "none of" an empty list, so narrowing it would
+        // turn the existing empty-list no-op into a failure on every host.
+        let (t, handle) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = ComposingRepo::new(vec![(
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            names(&["pkg-a"]),
+        )]);
+
+        perform_prepare(&mut group, &repo, &[], false, false, false)
+            .await
+            .expect("an empty prepare is a no-op Ok, composition or not");
+
+        assert!(
+            !handle
+                .commands()
+                .iter()
+                .any(|c| c.starts_with("transactional-update -n pkg in")),
+            "nothing to install: {:?}",
+            handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_warns_when_no_host_product_keys_into_the_composition() {
+        // The composition describes 6.0; the host is 6.1. Narrowing on an index
+        // that does not describe this host would drop everything, so it keeps
+        // the full list — but silently keeping it makes the whole fix
+        // indistinguishable from today's failure, hence the warning.
+        let (t, handle) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = ComposingRepo::new(vec![(
+            SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+            names(&["pkg-a"]),
+        )]);
+
+        let (res, logs) = capture_logs(perform_prepare(
+            &mut group,
+            &repo,
+            &seven_packages(),
+            false,
+            false,
+            false,
+        ))
+        .await;
+        res.expect("an index that does not describe the host is not a host failure");
+
+        assert_eq!(
+            prepared_packages(&handle),
+            seven_packages().into_iter().collect::<BTreeSet<_>>()
+        );
+        let line = logs
+            .lines()
+            .find(|l| l.contains("no product of this host is named in the update's composition"))
+            .unwrap_or_else(|| panic!("no fallback warning captured: {logs}"));
+        assert!(line.contains("h1"), "names the host: {line}");
+        assert!(line.contains("SL-Micro-6.1.x86_64"), "names it: {line}");
+    }
+
+    #[tokio::test]
+    async fn perform_prepare_refuses_a_host_whose_products_compose_none_of_the_list() {
+        // The refusal, not a fallback to the full list: the full list is
+        // exactly the `zypper 104` this narrowing exists to prevent.
+        let (t, handle) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = ComposingRepo::new(vec![(
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            names(&["pkg-y", "pkg-z"]),
+        )]);
+
+        let err = perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
+            .await
+            .expect_err("a host that composes nothing must be named, not skipped");
+
+        assert_eq!(err.host.as_deref(), Some("h1"), "err: {err:?}");
+        assert!(
+            err.reason
+                .contains("compose none of the requested packages"),
+            "reason: {}",
+            err.reason
+        );
+        assert!(
+            !handle
+                .commands()
+                .iter()
+                .any(|c| c.starts_with("transactional-update -n pkg in")),
+            "nothing may be dispatched: {:?}",
+            handle.commands()
+        );
+        assert!(
+            !handle
+                .fired_commands()
+                .iter()
+                .any(|c| c.contains("systemctl reboot")),
+            "nothing was staged, so nothing to activate: {:?}",
+            handle.fired_commands()
+        );
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "nothing installed, so no row"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_records_each_hosts_own_list_in_history() {
+        // The per-host-composition instance of the rule `--installed` also
+        // pins: a group-wide row names packages a host never installed.
+        let (t1, h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (t2, h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a", "pkg-b"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-b", "pkg-c"]),
+            ),
+        ]);
+
+        perform_prepare(&mut group, &repo, &seven_packages(), false, false, false)
+            .await
+            .expect("both hosts compose part of the list");
+
+        for (handle, tail) in [
+            (&h1, ":prepare:pkg-a pkg-b\n"),
+            (&h2, ":prepare:pkg-b pkg-c\n"),
+        ] {
+            let contents =
+                String::from_utf8(handle.file_contents(HISTORY_LOG).expect("a prepare row"))
+                    .unwrap();
+            assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
+            assert!(contents.ends_with(tail), "history line: {contents:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_update_prepares_with_the_host_list() {
+        // `update`'s embedded prepare reaches the composition through the same
+        // `SetRepo` seam, so it needs no wiring of its own — and a real report
+        // type is used here rather than a stub, to pin that the override
+        // forwards `base.composed`.
+        let (t, handle) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = SlReport::new(Config::default());
+        report.base_mut().composed = [(
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            names(&["pkg-a", "pkg-b"]),
+        )]
+        .into_iter()
+        .collect();
+
+        let _ = perform_update(
+            &mut group,
+            &report,
+            &seven_packages(),
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        let cmds = handle.commands();
+        let prepare = cmds
+            .iter()
+            .find(|c| c.starts_with("transactional-update -n pkg in -l"))
+            .unwrap_or_else(|| panic!("no embedded prepare: {cmds:?}"));
+        let got: BTreeSet<String> = prepare
+            .split_whitespace()
+            .skip_while(|t| *t != "-l")
+            .skip(1)
+            .map(ToOwned::to_owned)
+            .collect();
+        assert_eq!(got, names(&["pkg-a", "pkg-b"]));
+        // Arms the assertion above: an empty `commands()` would make the
+        // `find` panic, but a prepare that ran and an update that never
+        // followed would still let a wrong narrowing look right.
+        assert!(
+            cmds.iter().any(|c| c.contains("-t patch")),
+            "the updater must have followed the prepare: {cmds:?}"
+        );
     }
 
     /// A cancel that lands while the probe fan-out is in flight must stop at
@@ -4258,26 +4777,41 @@ mod tests {
         assert_eq!(p.after().map(ToString::to_string).as_deref(), Some("0.9-1"));
     }
 
-    /// Builds an enabled SL Micro (transactional) target on a mock returning
-    /// `stdout` with `exit` for every command.
-    fn slmicro_target(hostname: &str, stdout: &str, exit: i16) -> (Target, MockConnection) {
-        // A changing boot id models a host that really rebooted; without it the
-        // lifecycle correctly concludes it never went down (see
-        // `RebootFault::WentNowhere`).
+    /// Builds an enabled SL Micro (transactional) target carrying `product` and
+    /// `addons`, on a mock returning `stdout`/`stderr` with `exit` for every
+    /// command.
+    ///
+    /// The general form; the two fixtures below pin the default product.
+    fn slmicro_target_on(
+        hostname: &str,
+        product: SystemProduct,
+        addons: BTreeSet<SystemProduct>,
+        stdout: &str,
+        stderr: &str,
+        exit: i16,
+    ) -> (Target, MockConnection) {
+        // A changing boot id models a host that really rebooted. Without it
+        // both probes read the same and the lifecycle correctly concludes the
+        // host never went down — see `RebootFault::WentNowhere` for that.
         let conn = MockConnection::new(hostname)
-            .with_default(CommandLog::new("", stdout, "", exit, 0))
+            .with_default(CommandLog::new("", stdout, stderr, exit, 0))
             .with_changing_boot_id();
         let handle = conn.clone();
         let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
-        t.set_system(
-            System::new(
-                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
-                BTreeSet::new(),
-                true,
-            ),
-            true,
-        );
+        t.set_system(System::new(product, addons, true), true);
         (t, handle)
+    }
+
+    /// [`slmicro_target_on`] for the default SL-Micro 6.0 x86_64 product.
+    fn slmicro_target(hostname: &str, stdout: &str, exit: i16) -> (Target, MockConnection) {
+        slmicro_target_on(
+            hostname,
+            SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+            BTreeSet::new(),
+            stdout,
+            "",
+            exit,
+        )
     }
 
     /// A transactional SL-Micro target whose commands answer with `stderr`.
@@ -4287,20 +4821,14 @@ mod tests {
     /// and leaving the failure signal entirely in `stderr` — the shape the exit
     /// code alone would miss.
     fn slmicro_target_with_stderr(hostname: &str, stderr: &str) -> (Target, MockConnection) {
-        let conn = MockConnection::new(hostname)
-            .with_default(CommandLog::new("", "", stderr, 0, 0))
-            .with_changing_boot_id();
-        let handle = conn.clone();
-        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
-        t.set_system(
-            System::new(
-                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
-                BTreeSet::new(),
-                true,
-            ),
-            true,
-        );
-        (t, handle)
+        slmicro_target_on(
+            hostname,
+            SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+            BTreeSet::new(),
+            "",
+            stderr,
+            0,
+        )
     }
 
     /// Which of the three reboot failure modes a fixture should exhibit.

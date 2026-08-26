@@ -144,8 +144,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   dropped after validation had already accepted them. The same defect made
   `config_show`'s `attributes` filter a no-op — it always printed all 41
   attributes.
-
-
+- `prepare` now installs only the packages a host's own products actually
+  compose, when the loaded report's metadata says which those are (the
+  `binaries` block). Previously every enabled host was sent the update's whole
+  package list, and a host whose products ship only part of it failed the
+  install with zypper's "capability not found" (104). A host whose products
+  compose none of the list is now failed by name — naming the host, its
+  products and the packages — rather than sent a list zypper will refuse, and
+  a report whose metadata carries no `binaries` block is unaffected.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
