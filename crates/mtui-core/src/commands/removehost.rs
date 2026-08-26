@@ -120,6 +120,30 @@ mod tests {
         Target::with_connection(host, TargetState::Enabled, Box::new(conn))
     }
 
+    /// `remove_host` passes `enabled = false` to `split_targets` precisely so a
+    /// disabled host is still torn down. Nothing else pins that argument: flipping
+    /// it to `true` leaves the rest of the crate's suite green.
+    #[tokio::test]
+    async fn removes_a_disabled_host() {
+        let targets = vec![
+            target_with("h1", MockConnection::new("h1")),
+            Target::with_connection(
+                "h2",
+                TargetState::Disabled,
+                Box::new(MockConnection::new("h2")),
+            ),
+        ];
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", targets);
+        let args = matches(&RemoveHost, &["-t", "h2"]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+        assert!(
+            !session.targets().contains("h2"),
+            "a disabled host must still be removed"
+        );
+        assert!(session.targets().contains("h1"), "the enabled host stays");
+        assert!(buf.contents().contains("Removed h2"), "{}", buf.contents());
+    }
+
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(RemoveHost.name(), "remove_host");
