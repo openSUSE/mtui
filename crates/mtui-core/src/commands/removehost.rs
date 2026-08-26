@@ -5,8 +5,6 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use mtui_hosts::HostsGroup;
-
 use super::support::{add_hosts_arg, host_op_budget, select_names};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -63,13 +61,12 @@ impl Command for RemoveHost {
             .map_err(|e| CommandError::Other(e.to_string()))?;
         // Take the doomed hosts out into their own group and close them there:
         // dropping a target alone never runs `close`, and the group fan-out
-        // tears them all down concurrently.
-        let is_repl = session.targets().is_repl();
-        let live = std::mem::replace(session.targets_mut(), HostsGroup::new(Vec::new(), is_repl));
-        // Unreachable — `select_names` already validated membership. On `Err` the
-        // group stays empty, exactly as `Session::split_targets` documents.
-        let (mut doomed, rest) = live
-            .select_split(Some(&hosts), false)
+        // tears them all down concurrently. `enabled=false` since disabled hosts
+        // must be removed too. Unreachable — `select_names` already validated
+        // membership. On `Err` the group stays empty, exactly as
+        // `Session::split_targets` documents.
+        let (mut doomed, rest) = session
+            .split_targets(Some(&hosts), false)
             .map_err(|e| CommandError::Other(e.to_string()))?;
 
         // Best-effort teardown; a failed shutdown is irrelevant since the target

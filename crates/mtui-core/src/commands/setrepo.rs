@@ -83,7 +83,7 @@ impl Command for SetRepo {
         };
         // Split rather than select: a `-t` subset operation must preserve the
         // unselected hosts in the live report (see `Session::split_targets`).
-        let (mut selected, remainder) = match session.split_targets(names) {
+        let (mut selected, remainder) = match session.split_targets(names, true) {
             Ok(split) => split,
             Err(e) => return Err(CommandError::Other(e.to_string())),
         };
