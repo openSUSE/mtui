@@ -12,7 +12,7 @@
 //! ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)) is wired for
 //! install/uninstall but has no listing consumer.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use mtui_config::options::Config;
 use mtui_datasources::error::GiteaError;
@@ -182,5 +182,9 @@ impl SetRepo for SlReport {
     /// `-n rr`, fanned out over [`TestReportBase::update_repos`].
     async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
         set_repo_with_add_flags(&self.base, target, operation, "-n ar -cfGkn").await;
+    }
+
+    fn composition(&self) -> HashMap<SystemProduct, BTreeSet<String>> {
+        self.base.composed.clone()
     }
 }

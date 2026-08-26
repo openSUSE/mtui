@@ -45,6 +45,14 @@ impl SystemProduct {
     }
 }
 
+/// The operator-facing `name-version.arch` rendering, shared by every
+/// diagnostic that names a product.
+impl std::fmt::Display for SystemProduct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}.{}", self.name, self.version, self.arch)
+    }
+}
+
 /// Error raised when a system's base product name maps to no known release.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error("unknown system: {name}")]

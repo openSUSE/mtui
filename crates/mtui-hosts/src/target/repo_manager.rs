@@ -37,7 +37,7 @@
 //! [`operation`](super::operation) injects its doer/check registries through the
 //! [`OperationGroup`](super::operation::OperationGroup) seam.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use mtui_types::rrid::RequestReviewID;
 use mtui_types::shellquote::quote_args;
@@ -71,7 +71,8 @@ impl RepoOp {
 }
 
 /// The report-side hook a `RepoManager::set` forwards into — the injection
-/// point for `testreport.set_repo(target, operation)`.
+/// point for `testreport.set_repo(target, operation)`, and the seam the update
+/// flow reads the report's composition through.
 ///
 /// Object-safe (`&dyn SetRepo`) and `async` (the report's `set_repo` ultimately
 /// drives async `zypper` fan-out through [`RepoManager::run_zypper`]), matching
@@ -84,6 +85,15 @@ impl RepoOp {
 pub trait SetRepo: Send + Sync {
     /// Add or remove this report's repositories on `target`.
     async fn set_repo(&self, target: &mut Target, operation: RepoOp);
+
+    /// The package names this update composes, per product and architecture.
+    ///
+    /// Empty by default, which is also what a report whose metadata carries no
+    /// composition returns: a consumer reading it must then treat every
+    /// package as composed for every host.
+    fn composition(&self) -> HashMap<SystemProduct, BTreeSet<String>> {
+        HashMap::new()
+    }
 }
 
 /// Adapter that owns the per-target zypper-repo lifecycle for one [`Target`].
@@ -193,12 +203,12 @@ impl<'a> RepoManager<'a> {
                 cmd
             };
             let want: Vec<String> = {
-                let mut v: Vec<String> = repos.keys().map(fmt_product).collect();
+                let mut v: Vec<String> = repos.keys().map(ToString::to_string).collect();
                 v.sort();
                 v
             };
             let have: Vec<String> = {
-                let mut v: Vec<String> = flattened.iter().map(fmt_product).collect();
+                let mut v: Vec<String> = flattened.iter().map(ToString::to_string).collect();
                 v.sort();
                 v
             };
@@ -283,13 +293,6 @@ fn issue_alias(product: &SystemProduct, rrid: &RequestReviewID) -> String {
         "issue-{}:{}:p={}:{}",
         product.name, product.version, rrid.maintenance_id, rrid.review_id
     )
-}
-
-/// Renders a [`SystemProduct`] as a stable, sortable `name-version.arch`
-/// triple for the matched==0 diagnostic, so the warning is legible and
-/// deterministic.
-fn fmt_product(p: &SystemProduct) -> String {
-    format!("{}-{}.{}", p.name, p.version, p.arch)
 }
 
 /// Formats the last exit code for a log line: the numeric code, or `?` when the

@@ -189,6 +189,10 @@ call with the host named.
   report's metadata names no package versions, and when no prepare command
   could be built for a connected host (#396). Automation keying on `prepare`'s
   success no longer sees a false positive on a metadata-empty report.
+- On a report whose metadata carries a `binaries` block, `prepare` narrows the
+  package list per host to what that host's products compose, and fails by name
+  a host whose products compose none of it — rather than sending a list zypper
+  refuses with "capability not found" (104).
 - `export` emits `WARNING: no package version data recorded for <host>...`
   lines in its tool output when a host has no recorded package data and its
   install-result block was therefore left unverified in the report.
