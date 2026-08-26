@@ -437,12 +437,11 @@ mod tests {
     mod rendered_script {
         use std::ffi::OsString;
         use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-        use std::path::Path;
         use std::process::Command;
 
         use super::*;
         use crate::reports::update_flow::parse_downgrade_versions;
+        use crate::update_workflow::actions::sh_harness::{sh_output, write_exe};
 
         /// The start of the line a failed probe prints.
         ///
@@ -518,12 +517,6 @@ exit 0
                     .map(ToOwned::to_owned)
                     .collect()
             }
-        }
-
-        fn write_exe(dir: &Path, name: &str, body: &str) {
-            let p = dir.join(name);
-            fs::write(&p, body).expect("write stub");
-            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).expect("chmod stub");
         }
 
         /// The two downgraders that share `LIST_COMMAND`.
@@ -615,15 +608,14 @@ exit 0
                 .render_list_command(&vars)
                 .expect("safe substitute never fails")
                 .expect("both downgraders carry a list command");
-            let out = Command::new("/bin/sh")
-                .arg("-c")
+            let mut cmd = Command::new("/bin/sh");
+            cmd.arg("-c")
                 .arg(&rendered)
                 .env("PATH", &stubs.path)
                 .env("MTUI_STUB_DIR", stubs.dir.path())
                 .env("MTUI_STUB_SE_EXIT", knobs.se_exit.to_string())
-                .env("MTUI_STUB_SE_ROWS", knobs.rows)
-                .output()
-                .expect("run the rendered list command under /bin/sh");
+                .env("MTUI_STUB_SE_ROWS", knobs.rows);
+            let out = sh_output(&mut cmd);
             Ran {
                 code: out
                     .status

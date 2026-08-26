@@ -564,11 +564,11 @@ mod tests {
     mod rendered_script {
         use std::ffi::OsString;
         use std::fs;
-        use std::os::unix::fs::PermissionsExt;
         use std::path::Path;
         use std::process::Command;
 
         use super::*;
+        use crate::update_workflow::actions::sh_harness::{sh_output, write_exe};
 
         /// The `$repa` selector the scripts are rendered with.
         const REPA: &str = ":p=42:7";
@@ -706,12 +706,6 @@ exit "$MTUI_STUB_PATCH_EXIT"
             }
         }
 
-        fn write_exe(dir: &Path, name: &str, body: &str) {
-            let p = dir.join(name);
-            fs::write(&p, body).expect("write stub");
-            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).expect("chmod stub");
-        }
-
         fn sentinel(p: &Path) -> Vec<String> {
             fs::read_to_string(p)
                 .unwrap_or_default()
@@ -800,8 +794,8 @@ exit "$MTUI_STUB_PATCH_EXIT"
             let rendered = cmds
                 .render_command(&vars(REPA, "pkg-a"))
                 .expect("safe substitute never fails");
-            let out = Command::new("/bin/sh")
-                .arg("-c")
+            let mut cmd = Command::new("/bin/sh");
+            cmd.arg("-c")
                 .arg(&rendered)
                 .env("PATH", &stubs.path)
                 .env("MTUI_STUB_DIR", stubs.dir.path())
@@ -810,9 +804,8 @@ exit "$MTUI_STUB_PATCH_EXIT"
                 .env("MTUI_STUB_PATCH_EXIT", knobs.patch_exit.to_string())
                 .env("MTUI_STUB_CLEANUP_EXIT", knobs.cleanup_exit.to_string())
                 .env("MTUI_STUB_PATCH_ROW", knobs.patch_row)
-                .env("MTUI_STUB_REPO_ROW", knobs.repo_row)
-                .output()
-                .expect("run rendered script under /bin/sh");
+                .env("MTUI_STUB_REPO_ROW", knobs.repo_row);
+            let out = sh_output(&mut cmd);
             Ran {
                 code: out
                     .status
@@ -849,6 +842,9 @@ exit "$MTUI_STUB_PATCH_EXIT"
             // hard failure, not a skip: a skip would be a green result on a
             // host where the acceptance tests proved nothing, which is the
             // shape of every false-green in this repo's history.
+            //
+            // It execs no stub of ours, so it needs no `sh_output` retry. It
+            // still forks, so it is one of the windows that retry exists for.
             let prog = format!("awk -F \"|\" '/{REPA}\\>/ {{ print $2; }}'");
             let out = Command::new("/bin/sh")
                 .arg("-c")
