@@ -10,6 +10,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `mtui-mcp` teardown (idle-session sweep, graceful shutdown, and stdio exit on
+  SIGTERM/EOF) is now bounded end to end: the wait for a busy session is
+  charged against the same 45 s budget as the host disconnects, so a
+  long-running command can no longer keep a shutting-down server alive
+  indefinitely.
 - Product Increment (PI) reference-host locking (`[lock] pi_autolock`) now
   brackets the loaded report instead of the review workflow: each host is
   locked as it connects (including a pool-selected host with no `-t`, which
