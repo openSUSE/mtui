@@ -568,17 +568,27 @@ impl Session {
     ///
     /// The one mutable window onto it — `add_host` uses it to move an automatic
     /// session to manual. Refreshing the REPL prompt string is a separate REPL
-    /// concern. With no report loaded it is a no-op: the write would land on the
-    /// long-lived [`NullReport`] sentinel and outlive the load (#484).
-    pub(crate) fn set_workflow(&mut self, workflow: Workflow) {
+    /// concern.
+    ///
+    /// Applies only while this session holds the active guard; otherwise a no-op
+    /// returning `false`. That is wider than "no report loaded":
+    /// [`release_active_guard`](Self::release_active_guard) (the all-templates
+    /// fan-out, `unload`, the MCP transfer handoff),
+    /// [`take_teardown_units`](Self::take_teardown_units) and
+    /// [`fork_for_call`](Self::fork_for_call) drop the guard with reports still
+    /// registered, so a caller not behind `require_update` must honour the
+    /// return value. Guardless, the write would land on the long-lived
+    /// [`NullReport`] sentinel and outlive the load (#484).
+    pub(crate) fn set_workflow(&mut self, workflow: Workflow) -> bool {
         if self.active_guard.is_none() {
             tracing::debug!(
                 ?workflow,
-                "set_workflow with no active report: ignoring, not mutating NullReport sentinel"
+                "set_workflow with no active guard: ignoring, not mutating NullReport sentinel"
             );
-            return;
+            return false;
         }
         self.metadata_mut().base_mut().workflow = workflow;
+        true
     }
 
     /// The active report's connected targets.
@@ -1999,25 +2009,33 @@ mod tests {
         assert_eq!(s.metadata().workflow(), Workflow::Auto);
     }
 
-    /// `set_workflow` with no active report must leave the `NullReport`
-    /// sentinel alone (#484).
+    /// With no guard held `set_workflow` must leave the `NullReport` sentinel
+    /// alone and report `false`; with one it writes through (#484).
     #[test]
     fn set_workflow_with_no_active_report_does_not_mutate_sentinel() {
         let mut s = Session::new(config_with_path_refhosts(), false);
         // No active report => null sentinel, default Manual.
         assert_eq!(s.metadata().workflow(), Workflow::Manual);
         // Attempt to set Auto with no active report must be a no-op.
-        s.set_workflow(Workflow::Auto);
+        assert!(!s.set_workflow(Workflow::Auto));
         assert_eq!(
             s.metadata().workflow(),
             Workflow::Manual,
             "sentinel must not be mutated"
         );
-        // A later loaded template must still start Manual, not the Auto we tried.
-        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
-        assert_eq!(s.metadata().workflow(), Workflow::Manual);
+        // Seed the sentinel off its default first, so the next no-op is a value
+        // the write would visibly overwrite rather than Manual-over-Manual.
+        s.metadata_mut().base_mut().workflow = Workflow::Auto;
+        assert!(!s.set_workflow(Workflow::Manual));
+        assert_eq!(
+            s.metadata().workflow(),
+            Workflow::Auto,
+            "sentinel must not be mutated"
+        );
         // With an active report, the mutation does apply.
-        s.set_workflow(Workflow::Auto);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        assert_eq!(s.metadata().workflow(), Workflow::Manual, "precondition");
+        assert!(s.set_workflow(Workflow::Auto));
         assert_eq!(s.metadata().workflow(), Workflow::Auto);
     }
 
