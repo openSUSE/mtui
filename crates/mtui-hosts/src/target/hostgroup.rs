@@ -311,6 +311,7 @@ impl HostsGroup {
         // have dropped the cancellation token.
         let max_parallel = self.max_parallel;
         let cancel = self.cancel.clone();
+        let prompter = self.prompter.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
         let selected: Vec<Target> = match hosts {
@@ -337,6 +338,7 @@ impl HostsGroup {
         group.plan_provider = provider;
         group.max_parallel = max_parallel;
         group.cancel = cancel;
+        group.prompter = prompter;
         Ok(group)
     }
 
@@ -362,8 +364,8 @@ impl HostsGroup {
     ///
     /// An unknown hostname is a [`HostError::NotConnected`], as in
     /// [`select`](Self::select). Both returned groups inherit `interactive`, the
-    /// injected [`PlanProvider`], the `max_parallel` bound, and the
-    /// cancellation token.
+    /// injected [`PlanProvider`], the `max_parallel` bound, the cancellation
+    /// token, and the [`Prompter`](crate::Prompter).
     ///
     /// # Errors
     ///
@@ -378,6 +380,7 @@ impl HostsGroup {
         // Carry the pushed-down session state across the split (see `select`).
         let max_parallel = self.max_parallel;
         let cancel = self.cancel.clone();
+        let prompter = self.prompter.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
         if let Some(names) = hosts {
@@ -403,10 +406,12 @@ impl HostsGroup {
         selected.plan_provider = provider.clone();
         selected.max_parallel = max_parallel;
         selected.cancel = cancel.clone();
+        selected.prompter = prompter.clone();
         let mut remainder = HostsGroup::new(remainder, is_repl);
         remainder.plan_provider = provider;
         remainder.max_parallel = max_parallel;
         remainder.cancel = cancel;
+        remainder.prompter = prompter;
         Ok((selected, remainder))
     }
 
@@ -2085,13 +2090,14 @@ mod tests {
     }
 
     #[test]
-    fn select_split_carries_max_parallel_and_cancel_to_both_halves() {
+    fn select_split_carries_max_parallel_and_cancel_and_prompter() {
         // Regression: `select_split` used to copy only `plan_provider`, so a
         // `-t` subset silently reverted `max_parallel` to the fan-out default
         // and would have dropped the cancellation token with it.
         let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
         g.set_max_parallel(7);
         let token = g.cancel_token();
+        g.set_prompter(noop_prompter());
 
         let (sel, rem) = g
             .select_split(Some(&["h1".to_owned()]), true)
@@ -2104,19 +2110,25 @@ mod tests {
         token.cancel();
         assert!(sel.cancel_requested(), "selected half observes the cancel");
         assert!(rem.cancel_requested(), "remainder observes the cancel");
+        // Both halves, not just one: asserting only `sel` would not catch a fix
+        // that carried the prompter to `selected` but dropped it from `remainder`.
+        assert!(sel.prompter.is_some(), "selected half keeps the prompter");
+        assert!(rem.prompter.is_some(), "remainder keeps the prompter");
     }
 
     #[test]
-    fn select_carries_max_parallel_and_cancel() {
+    fn select_carries_max_parallel_and_cancel_and_prompter() {
         let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
         g.set_max_parallel(3);
         let token = g.cancel_token();
+        g.set_prompter(noop_prompter());
 
         let sel = g.select(Some(&["h1".to_owned()]), true).expect("select");
 
         assert_eq!(sel.max_parallel, 3);
         token.cancel();
         assert!(sel.cancel_requested());
+        assert!(sel.prompter.is_some(), "selected group keeps the prompter");
     }
 
     #[test]
