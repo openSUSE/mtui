@@ -10,6 +10,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `unlock --pool` is now bounded by the same 45 s budget as `unlock --force`,
+  so a dead reference host can no longer hold the command open for the full
+  SSH timeout, and it reports an error instead of printing `pool claim removed
+  on` for hosts it never reached.
 - `unlock --force` now reports a host whose lock release genuinely failed
   alongside the hosts that timed out, instead of dropping it from the error.
 - `remove_host` now names only the host whose teardown the 45 s budget

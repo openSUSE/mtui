@@ -815,6 +815,44 @@ impl HostsGroup {
         .await;
     }
 
+    /// Releases every host's pool claim, reporting each outcome, otherwise
+    /// identical to [`pool_unlock`](Self::pool_unlock).
+    ///
+    /// Outcomes land in `collected` as each host finishes rather than in a
+    /// return value, because the caller applies the wall-clock budget: a
+    /// returned map would be dropped with the abandoned future, costing the
+    /// attribution of every host that did complete. Mirrors
+    /// [`unlock_force`](Self::unlock_force).
+    pub async fn pool_unlock_collecting(
+        &mut self,
+        force: bool,
+        collected: &std::sync::Mutex<BTreeMap<String, LockOutcome>>,
+    ) {
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
+        actions::run_fanout(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            Some("pool_unlock"),
+            |_t| true,
+            |t| {
+                let collected = &collected;
+                Box::pin(async move {
+                    let outcome = match t.pool_unlock_reporting(force).await {
+                        Ok(()) => LockOutcome::Released,
+                        Err(HostError::TargetLocked(_)) => LockOutcome::Contended,
+                        Err(e) => LockOutcome::Failed(e.to_string()),
+                    };
+                    collected
+                        .lock()
+                        .unwrap()
+                        .insert(t.hostname().to_owned(), outcome);
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+    }
+
     /// Disconnects every host, optionally rebooting or powering them off.
     ///
     /// The per-host `Target::close(action)` fan-out for `quit`:

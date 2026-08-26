@@ -445,17 +445,40 @@ impl Target {
     /// path never fails. A no-op when the target is not connected (no pool lock
     /// built yet).
     pub async fn pool_unlock(&mut self, force: bool) {
+        let _ = self.pool_unlock_reporting(force).await;
+    }
+
+    /// Releases this target's pool claim, returning the raw outcome so the
+    /// group [`pool_unlock_collecting`](HostsGroup::pool_unlock_collecting)
+    /// fan-out can distinguish a benign foreign claim
+    /// ([`HostError::TargetLocked`]) from a real transport failure. Unlike
+    /// [`pool_unlock`](Self::pool_unlock) — which swallows both — this still
+    /// logs each branch but hands the result back to the caller. Mirrors
+    /// [`unlock_reporting`](Self::unlock_reporting).
+    ///
+    /// `Ok(())` means released (or a no-op: not connected, or nothing to
+    /// release). `Err(HostError::TargetLocked(_))` means the claim is owned by
+    /// another template (benign contention). Any other `Err` is a real
+    /// failure.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`HostError::TargetLocked`] for a foreign-owned claim and any
+    /// transport error from the underlying `PoolLock::unlock`.
+    async fn pool_unlock_reporting(&mut self, force: bool) -> Result<()> {
         let Some(pool) = self.pool_lock.as_mut() else {
             tracing::debug!(host = %self.hostname, "pool_unlock: no pool lock (not connected)");
-            return;
+            return Ok(());
         };
         match pool.unlock(force).await {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(HostError::TargetLocked(msg)) => {
                 tracing::debug!(host = %self.hostname, %msg, "pool_unlock: claim held by another template, ignoring");
+                Err(HostError::TargetLocked(msg))
             }
             Err(e) => {
                 tracing::warn!(host = %self.hostname, error = %e, "pool_unlock failed");
+                Err(e)
             }
         }
     }

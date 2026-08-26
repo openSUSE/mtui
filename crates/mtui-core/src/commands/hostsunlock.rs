@@ -21,8 +21,11 @@ use crate::session::Session;
 /// a dead peer cannot hold the session.
 ///
 /// `-p`/`--pool` removes the host *pool* claim (RRID-based ownership) instead of
-/// the zypper/operation lock, fanning [`HostsGroup::pool_unlock`](mtui_hosts::HostsGroup::pool_unlock) out across the
-/// active group. With `--force` a claim owned by another template is removed too.
+/// the zypper/operation lock, fanning
+/// [`HostsGroup::pool_unlock_collecting`](mtui_hosts::HostsGroup::pool_unlock_collecting)
+/// out across the active group under the same
+/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget as
+/// `--force`. With `--force` a claim owned by another template is removed too.
 ///
 /// Like `lock`, host sub-selection via `-t` is not yet honoured for the fan-out
 /// (whole active group).
@@ -72,15 +75,30 @@ impl Command for HostsUnlock {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let force = args.get_flag("force");
         if args.get_flag("pool") {
-            // Remove the pool claim (RRID-based) instead of the operation lock.
-            // `pool_unlock` is best-effort (no per-host outcome map), so confirm
-            // the fan-out ran rather than leaving it silent.
-            let hosts = session.targets().names().join(", ");
-            session.targets_mut().pool_unlock(force).await;
-            session
-                .display
-                .println(&format!("pool claim removed on: {hosts}"));
-            return Ok(());
+            // `pool_unlock_collecting` reaches the same possibly-dead links as
+            // `unlock_force`, so it gets the same budget and per-host
+            // attribution rather than reporting "removed on: {hosts}"
+            // unconditionally.
+            let names = session.targets().names();
+            let budget = host_op_budget();
+            let collected = std::sync::Mutex::new(BTreeMap::new());
+            let timed_out = tokio::time::timeout(
+                budget,
+                session
+                    .targets_mut()
+                    .pool_unlock_collecting(force, &collected),
+            )
+            .await
+            .is_err();
+            let outcomes = collected.into_inner().unwrap();
+            return bounded_unlock(
+                session,
+                budget,
+                UnlockKind::Pool,
+                names,
+                timed_out,
+                outcomes,
+            );
         }
 
         if force {
@@ -97,48 +115,139 @@ impl Command for HostsUnlock {
                     .await
                     .is_err();
             let outcomes = collected.into_inner().unwrap();
-            let failed = report_outcomes(session, &outcomes);
-
-            let stuck: Vec<String> = names
-                .into_iter()
-                .filter(|n| !outcomes.contains_key(n))
-                .collect();
-            if timed_out && !stuck.is_empty() {
-                let secs = budget.as_secs();
-                for name in &stuck {
-                    session
-                        .display
-                        .println(&format!("{name}: unlock not confirmed within {secs}s"));
-                }
-                let mut msg = format!("unlock timed out on: {}", stuck.join(", "));
-                if !failed.is_empty() {
-                    msg.push_str(&format!("; failed on: {}", failed.join(", ")));
-                }
-                return Err(CommandError::Other(msg));
-            }
-            return verdict(failed);
+            return bounded_unlock(
+                session,
+                budget,
+                UnlockKind::Force,
+                names,
+                timed_out,
+                outcomes,
+            );
         }
 
         let outcomes = session.targets_mut().unlock().await;
-        verdict(report_outcomes(session, &outcomes))
+        verdict(
+            &UnlockKind::Force,
+            report_outcomes(session, &UnlockKind::Force, &outcomes),
+        )
     }
+}
+
+/// Distinguishes `--force`'s and `--pool`'s bounded fan-outs in the messages
+/// [`bounded_unlock`] prints; the fan-out call itself still happens at each
+/// call site since `unlock_force` and `pool_unlock_collecting` are different
+/// methods.
+enum UnlockKind {
+    Force,
+    Pool,
+}
+
+impl UnlockKind {
+    /// The per-stuck-host line's verb phrase, e.g. `"{host}: {phrase} within
+    /// {secs}s"`.
+    fn not_confirmed(&self) -> &'static str {
+        match self {
+            Self::Force => "unlock not confirmed",
+            Self::Pool => "pool claim release not confirmed",
+        }
+    }
+
+    /// The `CommandError`'s leading clause, e.g. `"{clause}: {stuck hosts}"`.
+    fn timed_out_on(&self) -> &'static str {
+        match self {
+            Self::Force => "unlock timed out on",
+            Self::Pool => "pool unlock timed out on",
+        }
+    }
+
+    /// [`LockOutcome::Released`]'s per-host line, e.g. `"{host}: {label}"`.
+    fn released_label(&self) -> &'static str {
+        match self {
+            Self::Force => "unlocked",
+            Self::Pool => "pool claim removed",
+        }
+    }
+
+    /// [`LockOutcome::Contended`]'s per-host line, e.g. `"{host}: {label}"`.
+    fn contended_label(&self) -> &'static str {
+        match self {
+            Self::Force => "locked by another (use --force)",
+            Self::Pool => "pool claim held by another (use --force)",
+        }
+    }
+
+    /// [`verdict`]'s leading clause when a host's release really failed.
+    fn failed_on_label(&self) -> &'static str {
+        match self {
+            Self::Force => "unlock failed on",
+            Self::Pool => "pool unlock failed on",
+        }
+    }
+}
+
+/// Reports `outcomes` and returns the budget's verdict, naming only the hosts
+/// the budget actually cut short.
+///
+/// Shared tail of the `--force` and `--pool` branches: both fan out under
+/// [`host_op_budget`] into a caller-owned outcome map, so a host abandoned
+/// mid-flight is simply absent from `outcomes` rather than losing its slot to
+/// the dropped future. `stuck` is exactly that absence: every requested host
+/// not accounted for. Reported before `failed` (a host that really answered
+/// but whose release errored) so the two lists are never conflated.
+fn bounded_unlock(
+    session: &mut Session,
+    budget: std::time::Duration,
+    kind: UnlockKind,
+    names: Vec<String>,
+    timed_out: bool,
+    outcomes: BTreeMap<String, LockOutcome>,
+) -> CommandResult {
+    let failed = report_outcomes(session, &kind, &outcomes);
+
+    let stuck: Vec<String> = names
+        .into_iter()
+        .filter(|n| !outcomes.contains_key(n))
+        .collect();
+    if timed_out && !stuck.is_empty() {
+        let secs = budget.as_secs();
+        let not_confirmed = kind.not_confirmed();
+        for name in &stuck {
+            session
+                .display
+                .println(&format!("{name}: {not_confirmed} within {secs}s"));
+        }
+        let mut msg = format!("{}: {}", kind.timed_out_on(), stuck.join(", "));
+        if !failed.is_empty() {
+            msg.push_str(&format!("; failed on: {}", failed.join(", ")));
+        }
+        return Err(CommandError::Other(msg));
+    }
+    verdict(&kind, failed)
 }
 
 /// Prints each host's [`LockOutcome`] and returns the hosts whose release really
 /// failed.
 ///
 /// A `Contended` host is a benign foreign lock (skipped without `--force`), not
-/// a failure; only a real transport error (`Failed`) counts. Shared by both
-/// branches so `--force` reports what happened per host instead of claiming
-/// every host was unlocked.
-fn report_outcomes(session: &mut Session, outcomes: &BTreeMap<String, LockOutcome>) -> Vec<String> {
+/// a failure; only a real transport error (`Failed`) counts. `kind` picks the
+/// wording for `Released`/`Contended` (the plain and `--force` branches read
+/// "unlocked"/"locked by another"; `--pool` reads "pool claim removed"/"pool
+/// claim held by another") so a host really unlocked and one whose pool claim
+/// was removed are never reported in each other's words.
+fn report_outcomes(
+    session: &mut Session,
+    kind: &UnlockKind,
+    outcomes: &BTreeMap<String, LockOutcome>,
+) -> Vec<String> {
     let mut failed: Vec<String> = Vec::new();
     for (host, outcome) in outcomes {
         match outcome {
-            LockOutcome::Released => session.display.println(&format!("{host}: unlocked")),
+            LockOutcome::Released => session
+                .display
+                .println(&format!("{host}: {}", kind.released_label())),
             LockOutcome::Contended => session
                 .display
-                .println(&format!("{host}: locked by another (use --force)")),
+                .println(&format!("{host}: {}", kind.contended_label())),
             LockOutcome::Failed(reason) => {
                 session
                     .display
@@ -152,12 +261,13 @@ fn report_outcomes(session: &mut Session, outcomes: &BTreeMap<String, LockOutcom
 }
 
 /// `Ok` unless a host's release really failed.
-fn verdict(failed: Vec<String>) -> CommandResult {
+fn verdict(kind: &UnlockKind, failed: Vec<String>) -> CommandResult {
     if failed.is_empty() {
         Ok(())
     } else {
         Err(CommandError::Other(format!(
-            "unlock failed on: {}",
+            "{}: {}",
+            kind.failed_on_label(),
             failed.join(", ")
         )))
     }
@@ -211,6 +321,58 @@ mod tests {
         HostsUnlock.call(&mut session, &args).await.unwrap();
         assert!(
             buf.contents().contains("h1: unlocked"),
+            "{}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn unlock_reports_a_foreign_lock_as_contended_without_force() {
+        // Without --force a foreign lock is benign contention: left in place,
+        // and not counted as a failure.
+        let foreign = foreign_lock("h1");
+        let (mut session, buf) =
+            session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", foreign.clone())]);
+        let args = matches(&HostsUnlock, &[]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents()
+                .contains("h1: locked by another (use --force)"),
+            "{}",
+            buf.contents()
+        );
+        assert!(foreign.file_contents(TARGET_LOCK_PATH).is_some());
+    }
+
+    /// The wire format of an operation lock this test process itself holds:
+    /// `TargetLock::is_mine` matches on user *and* pid, unlike the pool claim's
+    /// RRID-only check.
+    fn own_op_lock() -> Vec<u8> {
+        let me = mtui_config::Config::default().session_user;
+        let pid = std::process::id();
+        format!("1700000000:{me}:{pid}").into_bytes()
+    }
+
+    #[tokio::test]
+    async fn unlock_reports_a_real_failure_without_timing_out() {
+        // A lock this session owns whose removal errors for real (not
+        // "already gone") propagates as `Failed`, not `Contended` —
+        // `verdict`'s real-failure branch, no wedge involved.
+        let broken = MockConnection::new("broken")
+            .with_file(TARGET_LOCK_PATH, own_op_lock())
+            .failing_sftp_remove();
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![target("broken", broken.clone())],
+        );
+        let args = matches(&HostsUnlock, &[]);
+        let err = HostsUnlock.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("unlock failed on: broken")),
+            "{err}"
+        );
+        assert!(
+            buf.contents().contains("broken: FAILED"),
             "{}",
             buf.contents()
         );
@@ -333,14 +495,15 @@ mod tests {
 
     #[tokio::test]
     async fn pool_unlock_routes_to_pool_branch() {
-        // `--pool` fans HostsGroup::pool_unlock out over the group. On an
-        // unclaimed host this is a clean no-op; the command must succeed
-        // rather than return the old deferred error.
+        // `--pool` fans HostsGroup::pool_unlock_collecting out over the group.
+        // On an unclaimed host this is a clean no-op; the command must succeed
+        // and attribute the release to the host by name, not a whole-group
+        // "removed on: {hosts}" line.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &["-p"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
         assert!(
-            buf.contents().contains("pool claim removed on: h1"),
+            buf.contents().contains("h1: pool claim removed"),
             "{}",
             buf.contents()
         );
@@ -351,6 +514,161 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &["-p", "-f"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
+    }
+
+    /// Wire path of the pool-claim lock file. `mtui_hosts::target::POOL_LOCK_PATH`
+    /// is `pub(crate)`, not reachable from this crate; `/var/lock/mtui.lock`'s
+    /// sibling constant is hardcoded the same way in `commands::run`'s tests.
+    const POOL_LOCK_PATH: &str = "/var/lock/mtui-pool.lock";
+
+    /// A pool claim this session's identity owns: the wire format
+    /// `timestamp:user:pid:mtui pool <rrid> [<owner>]`. `Target::set_rrid` must
+    /// still be called on the built target so `PoolLock::is_mine` recognises it.
+    fn own_pool_claim(rrid: &str) -> Vec<u8> {
+        let me = mtui_config::Config::default().session_user;
+        format!("1700000000:{me}:1:mtui pool {rrid} [{rrid}]").into_bytes()
+    }
+
+    /// A pool claim owned by a different template's RRID than the target's own
+    /// — `PoolLock::is_mine` is RRID-based, so this is foreign regardless of
+    /// which user or pid stamped it.
+    fn foreign_pool_claim() -> Vec<u8> {
+        b"1700000000:alice:4242:mtui pool SUSE:Maintenance:9:9 [alice]".to_vec()
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_reports_a_foreign_claim_as_contended_without_force() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign_pool_claim());
+        let mut h1 = target("h1", conn.clone());
+        h1.set_rrid(rrid);
+        let (mut session, buf) = session_with_targets(rrid, vec![h1]);
+
+        let args = matches(&HostsUnlock, &["-p"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            buf.contents()
+                .contains("h1: pool claim held by another (use --force)"),
+            "{}",
+            buf.contents()
+        );
+        assert!(conn.file_contents(POOL_LOCK_PATH).is_some());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_reports_a_real_failure_without_timing_out() {
+        // A pool claim this session owns whose removal errors for real
+        // exercises `verdict`'s `--pool` wording, no wedge involved.
+        let rrid = "SUSE:Maintenance:1:1";
+        let conn = MockConnection::new("broken")
+            .with_file(POOL_LOCK_PATH, own_pool_claim(rrid))
+            .failing_sftp_remove();
+        let mut broken = target("broken", conn.clone());
+        broken.set_rrid(rrid);
+        let (mut session, buf) = session_with_targets(rrid, vec![broken]);
+
+        let args = matches(&HostsUnlock, &["-p"]);
+        let err = HostsUnlock.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("pool unlock failed on: broken")),
+            "{err}"
+        );
+        assert!(
+            buf.contents().contains("broken: FAILED"),
+            "{}",
+            buf.contents()
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_is_bounded_when_a_host_wedges() {
+        // A wedged pool host must not report success: mutation to catch is
+        // `bounded_unlock`'s `tokio::time::timeout` wrapper being dropped,
+        // which must make this test hang past its own 5s guard instead of
+        // silently passing.
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![target(
+                "dead",
+                MockConnection::new("dead").with_sftp_session_delay(Duration::from_secs(3600)),
+            )],
+        );
+
+        let args = matches(&HostsUnlock, &["-p"]);
+        let err = testkit::with_shrunk_budget(50, async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                HostsUnlock.call(&mut session, &args),
+            )
+            .await
+            .expect("pool unlock must return despite the wedged host")
+            .expect_err("a host that never answered must not report success")
+        })
+        .await;
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("dead")),
+            "{err}"
+        );
+        let out = buf.contents();
+        assert!(!out.contains("pool claim removed on"), "{out}");
+        assert!(
+            out.contains("dead: pool claim release not confirmed"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_timeout_names_only_the_wedged_host() {
+        // `dead` wedges; `healthy` really carries our pool claim. The timeout
+        // error must name only `dead`, and `healthy`'s claim must really be
+        // removed — this requires `POOL_LOCK_PATH` seeded on `healthy` and its
+        // target stamped with the matching RRID, or `is_locked()` short-circuits
+        // to `Ok(false)` before any wedge and the "really removed" half of this
+        // test proves nothing (the same disarm-the-fixture trap as elsewhere).
+        let rrid = "SUSE:Maintenance:1:1";
+        let healthy_conn =
+            MockConnection::new("healthy").with_file(POOL_LOCK_PATH, own_pool_claim(rrid));
+        let mut healthy = target("healthy", healthy_conn.clone());
+        healthy.set_rrid(rrid);
+        let dead = target(
+            "dead",
+            MockConnection::new("dead").with_sftp_session_delay(Duration::from_secs(3600)),
+        );
+        let (mut session, buf) = session_with_targets(rrid, vec![dead, healthy]);
+
+        let args = matches(&HostsUnlock, &["-p"]);
+        let err = testkit::with_shrunk_budget(50, async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                HostsUnlock.call(&mut session, &args),
+            )
+            .await
+            .expect("pool unlock must return despite the wedged host")
+            .expect_err("a wedged host must not report success")
+        })
+        .await;
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("dead")),
+            "{err}"
+        );
+        assert!(
+            !matches!(&err, CommandError::Other(m) if m.contains("healthy")),
+            "the host whose claim really released must not be named as timed out: {err}"
+        );
+        let out = buf.contents();
+        assert!(
+            out.contains("dead: pool claim release not confirmed"),
+            "{out}"
+        );
+        assert!(out.contains("healthy: pool claim removed"), "{out}");
+        assert!(
+            healthy_conn.file_contents(POOL_LOCK_PATH).is_none(),
+            "the reachable host's pool claim was still removed"
+        );
     }
 
     #[test]
