@@ -49,4 +49,4 @@ pub use log_filter::{
 };
 pub use registry::{MCP_DENYLIST, Registry, register_all};
 pub use session::{HOST_CLOSE_TIMEOUT, LogLevel, LogLevelSink, NotifySink, Session};
-pub use template_registry::TemplateRegistry;
+pub use template_registry::{ReportEntry, TemplateRegistry};
