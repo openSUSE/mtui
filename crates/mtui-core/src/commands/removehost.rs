@@ -130,7 +130,6 @@ mod tests {
 
     #[tokio::test]
     async fn removes_named_host() {
-        let _budget = testkit::hold_host_op_budget().await;
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
         let args = matches(&RemoveHost, &["-t", "h1"]);
         RemoveHost.call(&mut session, &args).await.unwrap();
@@ -146,7 +145,6 @@ mod tests {
 
     #[tokio::test]
     async fn removes_all_when_no_target() {
-        let _budget = testkit::hold_host_op_budget().await;
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
         let args = matches(&RemoveHost, &[]);
         RemoveHost.call(&mut session, &args).await.unwrap();
@@ -165,7 +163,6 @@ mod tests {
     async fn removed_pool_host_is_reacquirable_in_process() {
         use mtui_hosts::{HostArbiter, Owner};
 
-        let _budget = testkit::hold_host_op_budget().await;
         // A test-local arbiter leaked to the `&'static` the report field needs,
         // without touching the process-global singleton.
         let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
@@ -202,8 +199,6 @@ mod tests {
         // A wedged teardown must be abandoned on the (shrunk) budget — and the
         // healthy sibling must still really be torn down, which a bound that
         // skipped the work would break.
-        let _budget = testkit::shrink_host_op_budget(50).await;
-
         let gate = Arc::new(tokio::sync::Notify::new());
         let good = MockConnection::new("good");
         let targets = vec![
@@ -216,10 +211,13 @@ mod tests {
         let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", targets);
 
         let args = matches(&RemoveHost, &[]);
-        tokio::time::timeout(Duration::from_secs(5), RemoveHost.call(&mut session, &args))
-            .await
-            .expect("remove_host must return despite the wedged host")
-            .expect("remove_host ok");
+        testkit::with_shrunk_budget(50, async {
+            tokio::time::timeout(Duration::from_secs(5), RemoveHost.call(&mut session, &args))
+                .await
+                .expect("remove_host must return despite the wedged host")
+                .expect("remove_host ok")
+        })
+        .await;
 
         assert!(session.targets().is_empty());
         assert!(good.is_closed(), "the healthy host was really torn down");
@@ -233,9 +231,8 @@ mod tests {
     async fn remove_host_closes_hosts_concurrently() {
         // Three 10s teardowns under the production 45s budget: concurrent is
         // ~10s, the old serial loop 30s. Virtual time (the mock's delay is a
-        // tokio timer), so the wall cost is nil. Holding the budget lock keeps a
-        // concurrently-shrunk budget from abandoning these closes.
-        let _budget = testkit::hold_host_op_budget().await;
+        // tokio timer), so the wall cost is nil. No other test's shrunk budget
+        // can reach this task: the override is task-local.
         let slow = |h: &str| MockConnection::new(h).with_close_delay(Duration::from_secs(10));
         let (c1, c2, c3) = (slow("h1"), slow("h2"), slow("h3"));
         let targets = vec![
@@ -265,8 +262,6 @@ mod tests {
         // The in-process arbiter release must sit outside the budget: it is the
         // one part of teardown that always works, and losing it strands a
         // scarce pool host for the life of the session.
-        let _budget = testkit::shrink_host_op_budget(50).await;
-
         let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let gate = Arc::new(tokio::sync::Notify::new());
@@ -288,10 +283,13 @@ mod tests {
         assert!(!arbiter.try_acquire("dead", &other));
 
         let args = matches(&RemoveHost, &[]);
-        tokio::time::timeout(Duration::from_secs(5), RemoveHost.call(&mut session, &args))
-            .await
-            .expect("remove_host must return despite the wedged host")
-            .expect("remove_host ok");
+        testkit::with_shrunk_budget(50, async {
+            tokio::time::timeout(Duration::from_secs(5), RemoveHost.call(&mut session, &args))
+                .await
+                .expect("remove_host must return despite the wedged host")
+                .expect("remove_host ok")
+        })
+        .await;
 
         assert!(
             arbiter.try_acquire("dead", &other),
