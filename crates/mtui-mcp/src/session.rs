@@ -821,7 +821,7 @@ impl McpSession {
     /// group), and hosts attached while nothing was loaded live in the session's
     /// null-report group. Evicting the session must reap all of them — matching
     /// the REPL `quit` command. See
-    /// [`Session::teardown_handles`](mtui_core::Session::teardown_handles).
+    /// [`Session::take_teardown_units`](mtui_core::Session::take_teardown_units).
     ///
     /// The whole teardown is best-effort and idempotent: for each group it
     /// releases the report's host-arbitration pool claims (in-process ownership +
@@ -853,7 +853,7 @@ impl McpSession {
         // whole close future to require `Session: Sync` (which it is not — the
         // display sink is `Send`-only). The handles keep each report alive
         // independently, so teardown needs no `&Session`.
-        let handles = { self.session.lock().await.teardown_handles() };
+        let handles = { self.session.lock().await.take_teardown_units() };
         let teardown = async {
             for entry in handles {
                 let mut report = entry.lock().await;
@@ -1886,7 +1886,7 @@ mod tests {
         sess.close().await;
         // Freshness is not observable here — a repeated `Target::close` skips
         // unlock either way; the seam test
-        // `teardown_handles_cover_registry_and_null_group_once` pins it.
+        // `take_teardown_units_cover_registry_and_null_group_once` pins it.
         assert_eq!(removes(), 1, "no second lock-file removal");
     }
 
