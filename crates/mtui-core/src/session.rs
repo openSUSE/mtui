@@ -303,6 +303,20 @@ impl Session {
     /// session under the exclusive gate.
     #[must_use]
     pub fn fork_for_call(&self, display: CommandPromptDisplay) -> Self {
+        // Every fork gets its own private `null`: a host added on this fork
+        // while nothing is loaded lands in a sentinel discarded with the fork
+        // at the end of dispatch, reachable by no teardown. Unreachable today
+        // via two mechanisms, both load-bearing (#478):
+        // 1. Nothing loaded → never a fork. `resolve_command_rrids` drops the
+        //    empty null RRID and returns `None`; `command_lock` maps `None` to
+        //    the exclusive arm, which dispatches on the *canonical* session
+        //    instead of forking one.
+        // 2. The exclusive dispatch path releases the canonical session's
+        //    active guard on its way out, so a later fork's `activate` is not
+        //    blocked from re-locking a previously-active entry and falling
+        //    through to its own null instead. This half lives in `mtui-mcp`,
+        //    a higher crate than this one — a `mtui-core` invariant whose
+        //    guard is enforced elsewhere.
         let null: Box<dyn TestReport + Send + Sync> =
             Box::new(NullReport::new(self.config.clone()));
         Self {
