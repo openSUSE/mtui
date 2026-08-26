@@ -2,11 +2,14 @@
 //! [`patchinfo_titles`]. The `*repoparse` helpers are the report side and are
 //! covered by `tests/repoparse.rs`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use mtui_config::options::Config;
 use mtui_testreport::testreport::packages_for_map;
 use mtui_testreport::{JSONParser, ReducedMetadataParser, TestReportBase, patchinfo_titles};
+use mtui_types::SystemProduct;
+
+use super::log_capture;
 
 /// A bare [`TestReportBase`] to parse into.
 fn empty_report() -> TestReportBase {
@@ -588,5 +591,262 @@ fn packages_for_map_second_product_key_disables_standard_branch() {
         pkgs[0].required().map(ToString::to_string).as_deref(),
         Some("3.26.4-150600.4.12.1"),
         "the base-version branch must seed required too"
+    );
+}
+
+// --- the composition index (`binaries`, #500) ------------------------------
+
+/// A minimal envelope carrying just `products` and `binaries`, as JSON.
+///
+/// Hand-built rather than fixture-derived, because the two cases below turn on
+/// product ids the SLFO fixture does not carry.
+fn composition_envelope(products: &[&str], binaries: serde_json::Value) -> String {
+    serde_json::json!({ "products": products, "binaries": binaries }).to_string()
+}
+
+#[test]
+fn json_parser_indexes_binaries_by_product_and_arch() {
+    let mut report = empty_report();
+    JSONParser::parse_str(&mut report, SLFO_METADATA_JSON).unwrap();
+
+    let x86 = report
+        .composed
+        .get(&SystemProduct::new("SL-Micro", "6.1", "x86_64"))
+        .expect("the fixture composes SL-Micro 6.1 for x86_64");
+    let aarch = report
+        .composed
+        .get(&SystemProduct::new("SL-Micro", "6.1", "aarch64"))
+        .expect("the fixture composes SL-Micro 6.1 for aarch64");
+
+    assert_eq!(
+        *x86,
+        BTreeSet::from([
+            "afterburn".to_owned(),
+            "afterburn-dracut".to_owned(),
+            "pkg-a".to_owned(),
+        ])
+    );
+    assert_eq!(
+        *aarch,
+        BTreeSet::from(["afterburn".to_owned(), "pkg-a".to_owned()])
+    );
+    // The point of the two: an index keyed on the product alone would hand
+    // both arches the same list, and every per-arch assertion above would
+    // still pass on whichever list won.
+    assert_ne!(x86, aarch, "the index must discriminate by arch");
+
+    // The fixture's second product: an index that stopped at the first
+    // `binaries` key would pass every assertion above.
+    assert_eq!(
+        report
+            .composed
+            .get(&SystemProduct::new("SL-Micro-Extras", "6.1", "x86_64")),
+        Some(&BTreeSet::from(["afterburn-dracut".to_owned()])),
+        "{:?}",
+        report.composed
+    );
+}
+
+#[test]
+fn binaries_index_unions_noarch_across_the_products_arch_keys() {
+    let mut report = empty_report();
+    JSONParser::parse_str(&mut report, SLFO_METADATA_JSON).unwrap();
+
+    // The fixture lists `pkg-a-1.0-1.noarch.rpm` under `x86_64` only. A noarch
+    // binary is composed for every arch of the product, so indexing each arch
+    // list verbatim drops it from aarch64 — the exact loss a two-arch host pair
+    // hits.
+    for arch in ["x86_64", "aarch64"] {
+        assert!(
+            report
+                .composed
+                .get(&SystemProduct::new("SL-Micro", "6.1", arch))
+                .is_some_and(|s| s.contains("pkg-a")),
+            "the noarch name must reach {arch}: {:?}",
+            report.composed
+        );
+    }
+}
+
+#[test]
+fn json_parser_keys_composition_by_the_normalised_product_and_the_raw_one() {
+    let mut report = empty_report();
+    let json = composition_envelope(
+        &["SLES-SAP 16 (x86_64)"],
+        serde_json::json!({ "SLES-SAP-16": { "x86_64": ["pkg-a-1.0-1.x86_64.rpm"] } }),
+    );
+    JSONParser::parse_str(&mut report, &json).unwrap();
+
+    let expected = BTreeSet::from(["pkg-a".to_owned()]);
+    // The key a host actually reports…
+    assert_eq!(
+        report
+            .composed
+            .get(&SystemProduct::new("SLES_SAP", "16", "x86_64")),
+        Some(&expected),
+        "the normalised key must be present: {:?}",
+        report.composed
+    );
+    // …and the raw one the un-normalising `*repoparse` helpers store under.
+    assert_eq!(
+        report
+            .composed
+            .get(&SystemProduct::new("SLES-SAP", "16", "x86_64")),
+        Some(&expected),
+        "the raw key must be present too: {:?}",
+        report.composed
+    );
+}
+
+#[test]
+fn json_parser_abandons_the_index_on_a_malformed_entry() {
+    let mut report = empty_report();
+    let json = composition_envelope(
+        &["SL-Micro 6.1 (x86_64)"],
+        serde_json::json!({
+            "SL-Micro-6.1": { "x86_64": ["pkg-a-1.0-1.x86_64.rpm", "pkg-b"] }
+        }),
+    );
+    let (_, logs) = log_capture::capture_logs(|| {
+        JSONParser::parse_str(&mut report, &json).unwrap();
+    });
+
+    // All-or-nothing, not "drop the bad entry": a partial index is a silently
+    // shorter list on a host, which is the failure the index exists to remove.
+    assert!(
+        report.composed.is_empty(),
+        "one unparseable entry abandons the whole index: {:?}",
+        report.composed
+    );
+    let warn = logs
+        .lines()
+        .find(|l| l.contains("the composition index is abandoned"))
+        .unwrap_or_else(|| panic!("no abandonment warning captured: {logs}"));
+    assert!(warn.starts_with("WARN"), "must be a WARN: {warn}");
+    for field in ["SL-Micro-6.1", "x86_64", "pkg-b"] {
+        assert!(warn.contains(field), "{field:?} must be named: {warn}");
+    }
+}
+
+#[test]
+fn json_parser_logs_an_unmatched_binaries_key() {
+    let mut report = empty_report();
+    let json = composition_envelope(
+        &["SL-Micro 6.1 (x86_64)"],
+        serde_json::json!({ "SL-Micro-6.0": { "x86_64": ["pkg-a-1.0-1.x86_64.rpm"] } }),
+    );
+    let (_, logs) = log_capture::capture_logs(|| {
+        JSONParser::parse_str(&mut report, &json).unwrap();
+    });
+
+    // The key names no declared product, so nothing can be keyed from it — and
+    // inventing a `SystemProduct` from the key itself would compose a product
+    // this update does not ship for.
+    assert!(
+        report.composed.is_empty(),
+        "an unmatched key composes nothing: {:?}",
+        report.composed
+    );
+    let line = logs
+        .lines()
+        .find(|l| l.contains("binaries key matches no product"))
+        .unwrap_or_else(|| panic!("no unmatched-key line captured: {logs}"));
+    assert!(line.starts_with("DEBUG"), "must be a DEBUG: {line}");
+    assert!(line.contains("SL-Micro-6.0"), "names the key: {line}");
+}
+
+#[test]
+fn binaries_index_keeps_a_foreign_arch_or_source_entry() {
+    let mut report = empty_report();
+    let json = composition_envelope(
+        &["SL-Micro 6.1 (x86_64)"],
+        serde_json::json!({
+            "SL-Micro-6.1": {
+                "x86_64": [
+                    "pkg-a-1.0-1.x86_64.rpm",
+                    "pkg-b-1.0-1.i586.rpm",
+                    "pkg-c-1.0-1.src.rpm",
+                ]
+            }
+        }),
+    );
+    JSONParser::parse_str(&mut report, &json).unwrap();
+
+    // A 32-bit compat binary and a source RPM are well-formed metadata, not
+    // corruption: abandoning the index on one would silently disable the
+    // narrowing for the whole report, and dropping only that name would shorten
+    // the list a host is handed.
+    assert_eq!(
+        report
+            .composed
+            .get(&SystemProduct::new("SL-Micro", "6.1", "x86_64")),
+        Some(&BTreeSet::from([
+            "pkg-a".to_owned(),
+            "pkg-b".to_owned(),
+            "pkg-c".to_owned(),
+        ])),
+        "{:?}",
+        report.composed
+    );
+}
+
+#[test]
+fn binaries_of_an_unexpected_shape_do_not_fail_the_load() {
+    let mut report = empty_report();
+    // The block's shape is not a contract TeReGen has committed to. A typed
+    // field would turn this into `MetadataInvalid` and make a report that loads
+    // today unloadable — dropping `rating` and every other field with it.
+    let json = serde_json::json!({
+        "products": ["SL-Micro 6.1 (x86_64)"],
+        "rating": "important",
+        "binaries": { "SL-Micro-6.1": { "x86_64": { "pkg-a": "1.0-1" } } },
+    })
+    .to_string();
+
+    let (res, logs) = log_capture::capture_logs(|| JSONParser::parse_str(&mut report, &json));
+
+    res.expect("an unexpected `binaries` shape must not fail the load");
+    assert_eq!(report.rating.as_deref(), Some("important"));
+    assert!(report.composed.is_empty(), "{:?}", report.composed);
+    assert!(
+        logs.lines().any(
+            |l| l.starts_with("WARN") && l.contains("`binaries` block has an unexpected shape")
+        ),
+        "no shape warning captured: {logs}"
+    );
+}
+
+#[test]
+fn json_parser_keys_composition_by_the_host_side_product_name() {
+    let mut report = empty_report();
+    // `obsrepoparse` keys with the full `normalize`, which lowercases SLE15
+    // modules — and a host reports the lowercase `.prod` name. Without that key
+    // no classic SLE report's composition can ever match a host.
+    let json = composition_envelope(
+        &["SLE-Module-Python2 15-SP3 (x86_64)"],
+        serde_json::json!({ "SLE-Module-Python2-15-SP3": { "x86_64": ["pkg-a-1.0-1.x86_64.rpm"] } }),
+    );
+    JSONParser::parse_str(&mut report, &json).unwrap();
+
+    let expected = BTreeSet::from(["pkg-a".to_owned()]);
+    assert_eq!(
+        report.composed.get(&SystemProduct::new(
+            "sle-module-python2",
+            "15-SP3",
+            "x86_64"
+        )),
+        Some(&expected),
+        "the host-side key must be present: {:?}",
+        report.composed
+    );
+    assert_eq!(
+        report.composed.get(&SystemProduct::new(
+            "SLE-Module-Python2",
+            "15-SP3",
+            "x86_64"
+        )),
+        Some(&expected),
+        "the raw key must be present too: {:?}",
+        report.composed
     );
 }

@@ -112,10 +112,12 @@ pub fn slrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProdu
         .collect()
 }
 
-/// Parses a product string, dropping (and logging at ERROR) a malformed one so
-/// a single bad entry never poisons the whole `*repoparse` batch — the same
-/// lenient stance as [`validated_url`].
-fn parse_products(product: &str) -> Vec<SystemProduct> {
+/// Parses a product string, dropping (and logging at ERROR) a malformed one so a
+/// single bad entry never poisons the whole `*repoparse` batch.
+///
+/// This is the lenient wrapper the `*repoparse` helpers use, mirroring
+/// [`validated_url`]'s drop-and-log stance for invalid URLs.
+pub(crate) fn parse_products(product: &str) -> Vec<SystemProduct> {
     match parse_product(product) {
         Ok(ps) => ps,
         Err(e) => {

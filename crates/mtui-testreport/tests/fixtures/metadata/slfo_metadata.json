@@ -2,6 +2,26 @@
     "SRCRPMs": [
         "afterburn"
     ],
+    "binaries": {
+        "SL-Micro-6.1": {
+            "aarch64": [
+                "afterburn-5.10.0.git73.b97f772-99999_stage.1.1.aarch64.rpm"
+            ],
+            "x86_64": [
+                "afterburn-5.10.0.git73.b97f772-99999_stage.1.1.x86_64.rpm",
+                "afterburn-dracut-5.10.0.git73.b97f772-99999_stage.1.1.x86_64.rpm",
+                "pkg-a-1.0-1.noarch.rpm"
+            ]
+        },
+        "SL-Micro-Extras-6.1": {
+            "aarch64": [
+                "afterburn-dracut-5.10.0.git73.b97f772-99999_stage.1.1.aarch64.rpm"
+            ],
+            "x86_64": [
+                "afterburn-dracut-5.10.0.git73.b97f772-99999_stage.1.1.x86_64.rpm"
+            ]
+        }
+    },
     "bugs": [
         "1196972",
         "1242665",
