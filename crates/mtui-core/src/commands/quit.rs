@@ -29,7 +29,7 @@ fn close_timeout() -> Duration {
 ///
 /// It accepts an optional positional
 /// `bootarg ∈ {reboot, poweroff}` and, on quit, for every connected host group
-/// ([`Session::teardown_handles`](crate::Session::teardown_handles) — every
+/// ([`Session::take_teardown_units`](crate::Session::take_teardown_units) — every
 /// loaded template *and* hosts attached while nothing was loaded):
 /// releases the report's host-arbitration pool claims (in-process arbiter
 /// ownership + remote pool locks) then closes its host group — rebooting
@@ -91,8 +91,8 @@ impl Command for Quit {
 
         let timeout = close_timeout();
         // Every connected host group, not just the loaded templates' — see
-        // `Session::teardown_handles`.
-        for entry in session.teardown_handles() {
+        // `Session::take_teardown_units`.
+        for entry in session.take_teardown_units() {
             // Lock the unit to tear it down; uncontended while the outer
             // session mutex still serialises dispatch (steps 1-3).
             let mut report = entry.lock().await;

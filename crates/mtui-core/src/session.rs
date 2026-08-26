@@ -64,8 +64,8 @@ pub struct Session {
     ///
     /// It is never registered (its RRID is empty), so hosts attached while
     /// nothing is loaded are reachable only via
-    /// [`teardown_handles`](Self::teardown_handles) — the enumeration teardown
-    /// uses.
+    /// [`take_teardown_units`](Self::take_teardown_units) — the enumeration
+    /// teardown uses.
     null: Box<dyn TestReport + Send + Sync>,
     /// Formatted-output sink.
     pub display: CommandPromptDisplay,
@@ -526,7 +526,19 @@ impl Session {
     /// Releases the per-call active handle first: teardown locks *every* entry
     /// including the active one, which would self-deadlock on the guard this
     /// session already holds. The registry's active pointer is left intact.
-    pub fn teardown_handles(&mut self) -> Vec<ReportEntry> {
+    ///
+    /// # Warning
+    ///
+    /// Dropping the returned `Vec` instead of tearing down every unit in it:
+    ///
+    /// - strands the sentinel's hosts with their remote `/var/lock/mtui.lock`
+    ///   held and unreachable by any later teardown — this call is the only
+    ///   `Arc` created for them;
+    /// - leaves the session with no active guard, so `Session::activate`'s
+    ///   `try_lock_owned` keeps succeeding against the null report while a
+    ///   later scoped dispatch runs against it silently.
+    #[must_use]
+    pub fn take_teardown_units(&mut self) -> Vec<ReportEntry> {
         self.release_active_guard();
         let mut units: Vec<ReportEntry> = self
             .templates
@@ -1806,7 +1818,7 @@ mod tests {
     /// second `Target::close` is a designed no-op — so it is pinned here, where
     /// handing the sentinel out twice is observable.
     #[tokio::test]
-    async fn teardown_handles_cover_registry_and_null_group_once() {
+    async fn take_teardown_units_cover_registry_and_null_group_once() {
         let mut s = Session::new(config(), false);
         seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
         seed_report_with_host(&mut s, "SUSE:Maintenance:2:2", "t2");
@@ -1822,7 +1834,7 @@ mod tests {
             "fixture must hold the active guard, or the release below proves nothing"
         );
 
-        let handles = s.teardown_handles();
+        let handles = s.take_teardown_units();
         assert_eq!(handles.len(), 3, "two registry entries plus the null unit");
         for (i, a) in handles.iter().enumerate() {
             for b in &handles[i + 1..] {
@@ -1843,7 +1855,7 @@ mod tests {
         );
 
         assert_eq!(
-            s.teardown_handles().len(),
+            s.take_teardown_units().len(),
             2,
             "the sentinel is handed out once: a re-entrant teardown finds it fresh and empty"
         );
@@ -1853,9 +1865,9 @@ mod tests {
     /// must hand out nothing (not an empty null unit) and leave the session
     /// usable.
     #[tokio::test]
-    async fn teardown_handles_empty_session_yields_nothing() {
+    async fn take_teardown_units_empty_session_yields_nothing() {
         let mut s = Session::new(config(), false);
-        assert!(s.teardown_handles().is_empty());
+        assert!(s.take_teardown_units().is_empty());
         assert!(!s.metadata().is_loaded());
         assert!(s.targets().is_empty());
     }
