@@ -1,4 +1,4 @@
-//! reedline [`Completer`] adapter over the Phase-5 command surface.
+//! reedline [`Completer`] adapter over the command surface.
 //!
 //! Bridges [`reedline::Completer`] onto the
 //! [`Command::complete`](mtui_core::Command::complete) surface every command

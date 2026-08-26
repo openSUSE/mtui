@@ -105,7 +105,7 @@ impl Registry {
 /// → the in-band transfer tools, #434 — their synthesized forms exchange
 /// server-local paths a remote `--transport http` client cannot reach). (Local
 /// process execution used to be a further category; its `lrun` command was
-/// removed outright rather than merely denied.) The Phase-7 `mtui-mcp` tool
+/// removed outright rather than merely denied.) The `mtui-mcp` tool
 /// synthesiser skips every registry command whose name or alias appears here,
 /// and warns at boot if a deny-list entry no longer resolves (so a
 /// renamed/removed command does not drift silently). Kept here, beside

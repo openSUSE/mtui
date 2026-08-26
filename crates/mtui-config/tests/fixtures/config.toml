@@ -1,7 +1,7 @@
 # Realistic minimal mtui config fixture used by the integration tests to
 # exercise the TOML parser end-to-end (multiple sections, multiple value types).
 #
-# This covers the Phase-1 option subset that `mtui-config` currently models.
+# This covers the option subset that `mtui-config` currently models.
 
 [mtui]
 user = "qauser"
