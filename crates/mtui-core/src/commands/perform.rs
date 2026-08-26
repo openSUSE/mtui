@@ -111,10 +111,11 @@ pub(super) async fn drive(
         }
         _ => None,
     };
-    let (mut selected, remainder): (HostsGroup, HostsGroup) = match session.split_targets(names) {
-        Ok(split) => split,
-        Err(e) => return Err(CommandError::Other(e.to_string())),
-    };
+    let (mut selected, remainder): (HostsGroup, HostsGroup) =
+        match session.split_targets(names, true) {
+            Ok(split) => split,
+            Err(e) => return Err(CommandError::Other(e.to_string())),
+        };
     if selected.is_empty() {
         session.restore_split_targets(selected, remainder);
         return Err(CommandError::NoRefhostsDefined);

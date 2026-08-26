@@ -710,8 +710,11 @@ impl Session {
     ///
     /// `hosts` is the parsed `-t` value: `None` (or `-t all`, which callers pass
     /// as `None`) selects every enabled host with an empty remainder; `Some` names
-    /// exactly those hosts and keeps the rest in the remainder. Selection is
-    /// `enabled`-filtered (disabled hosts land in the remainder, never dropped).
+    /// exactly those hosts and keeps the rest in the remainder. `enabled` gates
+    /// selection the same way it does for
+    /// [`HostsGroup::select_split`](mtui_hosts::HostsGroup::select_split): when
+    /// `true`, a named-but-disabled host lands in the remainder rather than the
+    /// selection (never dropped either way).
     ///
     /// # Errors
     ///
@@ -724,8 +727,9 @@ impl Session {
     pub(crate) fn split_targets(
         &mut self,
         hosts: Option<&[String]>,
+        enabled: bool,
     ) -> mtui_hosts::Result<(HostsGroup, HostsGroup)> {
-        self.take_targets().select_split(hosts, true)
+        self.take_targets().select_split(hosts, enabled)
     }
 
     /// Merges the untouched `remainder` back into the operated `selected` group
@@ -2300,7 +2304,7 @@ mod tests {
         );
         s.restore_targets(taken);
 
-        let (selected, remainder) = s.split_targets(None).expect("split");
+        let (selected, remainder) = s.split_targets(None, true).expect("split");
         assert!(selected.is_repl(), "split selected half must be is_repl");
         assert!(remainder.is_repl(), "split remainder half must be is_repl");
     }
