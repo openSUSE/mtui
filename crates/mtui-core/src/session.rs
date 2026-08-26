@@ -540,12 +540,14 @@ impl Session {
     #[must_use]
     pub fn take_teardown_units(&mut self) -> Vec<ReportEntry> {
         self.release_active_guard();
-        let mut units: Vec<ReportEntry> = self
-            .templates
-            .rrids()
-            .into_iter()
-            .filter_map(|rrid| self.templates.handle(&rrid))
-            .collect();
+        // The sentinel goes first. Under a shared teardown deadline (see
+        // `McpSession::close_with_timeout`) it is the unrecoverable-by-
+        // construction unit: it was just moved out, so the only `Arc` to it
+        // lives in this `Vec` — a caller that drops the vec instead of
+        // finishing teardown strands it with no way to reach it again. It is
+        // also typically the smallest group (hosts attached ad hoc while
+        // nothing was loaded), so closing it first is cheap insurance.
+        let mut units: Vec<ReportEntry> = Vec::new();
         if !self.null.base().targets.is_empty() {
             let stranded = std::mem::replace(
                 &mut self.null,
@@ -553,6 +555,12 @@ impl Session {
             );
             units.push(std::sync::Arc::new(tokio::sync::Mutex::new(stranded)));
         }
+        units.extend(
+            self.templates
+                .rrids()
+                .into_iter()
+                .filter_map(|rrid| self.templates.handle(&rrid)),
+        );
         units
     }
 
@@ -1850,8 +1858,8 @@ mod tests {
         }
         assert_eq!(
             named,
-            vec![vec!["t1"], vec!["t2"], vec!["n1"]],
-            "registry hosts and null-group hosts land in disjoint units"
+            vec![vec!["n1"], vec!["t1"], vec!["t2"]],
+            "the null unit is stranded past a shared deadline, so it goes first"
         );
 
         assert_eq!(

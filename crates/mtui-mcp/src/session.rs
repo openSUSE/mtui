@@ -828,9 +828,10 @@ impl McpSession {
     /// remote pool locks; a no-op when pool selection was never used) then closes
     /// its host group. A second call re-runs both over already-released claims and
     /// already-closed targets, both no-ops — and finds a fresh, empty sentinel.
-    /// The fan-out is bounded by
-    /// [`HOST_CLOSE_TIMEOUT`]: a wedged host close is logged and abandoned so
-    /// `close()` — and the registry idle-sweep awaiting it — always returns.
+    /// The whole call is bounded by [`HOST_CLOSE_TIMEOUT`], including the
+    /// mutex-taking preamble: a session busy past the budget, or a wedged host
+    /// close, is logged and abandoned so `close()` — and the registry
+    /// idle-sweep awaiting it — always returns.
     ///
     /// `HostsGroup::close` (like the REPL `quit`) closes each `Target` but leaves
     /// it in the group with its now-dead connection — the report and its host
@@ -847,15 +848,35 @@ impl McpSession {
     /// bound the wait to a fraction of a second instead of the full
     /// [`HOST_CLOSE_TIMEOUT`].
     async fn close_with_timeout(&self, timeout: Duration) {
+        // Arm the deadline first, mirroring `unlock_after_abort`: the
+        // mutex-taking preamble below must be inside the budget too, not just
+        // the per-entry fan-out that follows it.
+        let deadline = Instant::now() + timeout;
+
         // Snapshot every connected host group under the session lock, then drop
         // the session guard *before* the teardown awaits: holding the
         // `MutexGuard<Session>` across the per-entry `.await` would force the
         // whole close future to require `Session: Sync` (which it is not — the
         // display sink is `Send`-only). The handles keep each report alive
         // independently, so teardown needs no `&Session`.
-        let handles = { self.session.lock().await.take_teardown_units() };
-        let teardown = async {
-            for entry in handles {
+        let preamble = async { self.session.lock().await.take_teardown_units() };
+        let Ok(handles) = tokio::time::timeout(timeout, preamble).await else {
+            // Unlike `unlock_after_abort`'s give-up, this one strands real
+            // work: an exclusive dispatch holding the mutex releases its own
+            // active guard on the way out, but it does not close its hosts.
+            // Giving up here leaves every host this session holds connected,
+            // with its remote `/var/lock/mtui.lock` still held, until some
+            // later call reaches the same session and tries again.
+            tracing::warn!(
+                ?timeout,
+                "close: session busy past the budget; host teardown abandoned entirely"
+            );
+            return;
+        };
+
+        for entry in handles {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let unit = async {
                 let mut report = entry.lock().await;
                 // Release arbiter ownership + remote pool locks before
                 // disconnecting (best-effort; a no-op without pooling).
@@ -864,12 +885,16 @@ impl McpSession {
                 // MCP session eviction, unlike the REPL `quit` bootarg).
                 // Per-host teardown outcomes are irrelevant on eviction.
                 let _ = report.base_mut().targets.close(None).await;
+            };
+            // Never let one wedged host teardown block the rest: each unit
+            // only gets what remains of the shared deadline, so the whole
+            // fan-out stays bounded by `timeout` regardless of unit count.
+            if tokio::time::timeout(left, unit).await.is_err() {
+                tracing::warn!(
+                    ?timeout,
+                    "host disconnect timed out; abandoning this report's teardown"
+                );
             }
-        };
-        // Never let a wedged host teardown block the eviction (and the http
-        // idle-sweep behind it): abandon the fan-out past the budget.
-        if tokio::time::timeout(timeout, teardown).await.is_err() {
-            tracing::warn!("host disconnect timed out after {timeout:?}; abandoning teardown");
         }
     }
 
@@ -1939,6 +1964,48 @@ mod tests {
 
         // Release the abandoned close so its task unwinds and does not linger.
         gate.notify_waiters();
+    }
+
+    /// A busy session mutex — held for the whole duration by another
+    /// dispatch, exactly as an exclusive command holds it — must not block
+    /// `close_with_timeout` past its budget either.
+    ///
+    /// Mutation this must catch: without a timeout around the mutex-taking
+    /// preamble, `close_with_timeout` blocks for as long as the holder keeps
+    /// the mutex, i.e. this test's outer guard fires and the assertion below
+    /// fails loudly instead of the suite hanging.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_with_timeout_returns_when_session_mutex_is_busy() {
+        let sess = McpSession::new(Config::default());
+
+        let lock_acquired = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let holder = tokio::spawn({
+            let session = Arc::clone(sess.session());
+            let lock_acquired = Arc::clone(&lock_acquired);
+            let release = Arc::clone(&release);
+            async move {
+                let _guard = session.lock().await;
+                lock_acquired.notify_one();
+                release.notified().await;
+            }
+        });
+        lock_acquired.notified().await;
+
+        // A generous outer guard: the fix returns in ~0.2s; a regression that
+        // waited on the busy mutex would hit this and fail loudly.
+        let bounded = tokio::time::timeout(
+            Duration::from_secs(15),
+            sess.close_with_timeout(Duration::from_millis(200)),
+        )
+        .await;
+        assert!(
+            bounded.is_ok(),
+            "close_with_timeout did not return while the session mutex was busy"
+        );
+
+        release.notify_one();
+        holder.await.expect("holder task panicked");
     }
 
     /// A fresh session honours the non-interactive contract: no prompter is
