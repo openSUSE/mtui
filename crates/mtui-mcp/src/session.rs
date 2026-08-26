@@ -317,6 +317,11 @@ pub(crate) struct AbortUnlock {
     /// The budget expired in the preamble, before the scope was even resolved:
     /// the pass never ran and no template can be named.
     stalled: bool,
+    /// The budget expired on the **null sentinel's** unlock (hosts attached with
+    /// no report loaded). Tracked separately from `unknown` because that bucket
+    /// names registry RRIDs and its remedy points at `list_locks -T <rrid>` —
+    /// the sentinel has no RRID, so its remedy is a bare `list_locks`/`unlock`.
+    null_group_unknown: bool,
 }
 
 impl AbortUnlock {
@@ -368,6 +373,14 @@ impl AbortUnlock {
                  operation is running on that template",
                 self.unknown.join(", ")
             ));
+        }
+        if self.null_group_unknown {
+            parts.push(
+                "lock state unknown on hosts attached with no report loaded (release \
+                 timed out); check with `list_locks` and release with `unlock` while no \
+                 template is loaded and no operation is running"
+                    .to_owned(),
+            );
         }
         if self.stalled {
             parts.push(
@@ -1493,16 +1506,26 @@ impl McpSession {
             let mut session = self.session.lock().await;
             session.release_active_guard();
             if rrids.is_empty() {
-                session.templates.rrids()
+                // The registry alone is not the set of connected hosts: a host
+                // attached with nothing loaded lives on the null sentinel, whose
+                // RRID is empty and so is never returned by `rrids()` (#485).
+                // Include it when it actually holds hosts, alongside the
+                // registry's RRIDs.
+                let with_null = session.null_group_has_hosts();
+                (session.templates.rrids(), with_null)
             } else {
-                rrids.to_vec()
+                // An explicit RRID scope names templates in the registry; the
+                // null sentinel is not one of them, so it stays out (a scoped
+                // dispatch could not have locked a sentinel host).
+                (rrids.to_vec(), false)
             }
         };
-        let Ok(targets) = tokio::time::timeout(budget, preamble).await else {
-            // Nothing is stranded by giving up: a mutex held that long means a
-            // *live* dispatch owns it, and a live dispatch releases its own
-            // active guard on the way out. The lingering-guard case (an aborted
-            // exclusive job) leaves the mutex free, so it cannot be this branch.
+        let Ok((targets, with_null)) = tokio::time::timeout(budget, preamble).await else {
+            // Nothing is stranded by giving up here: the mutex being held that
+            // long means a *live* dispatch owns it, and a live dispatch releases
+            // its own active guard on the way out. The lingering-guard case (an
+            // aborted exclusive job) leaves the mutex free, so this branch
+            // cannot be that case.
             tracing::warn!(?budget, "post-abort unlock: session busy, release skipped");
             summary.stalled = true;
             return summary;
@@ -1515,6 +1538,30 @@ impl McpSession {
                 Err(_) => {
                     tracing::warn!(rrid = %rrid, ?budget, "post-abort unlock timed out");
                     summary.unknown.push(rrid);
+                }
+            }
+        }
+
+        // The sentinel, after the registry entries. Unlocks its own held locks
+        // only (`unlock_held`); a dispatch that reached it was force-aborted, so
+        // leaving its `/var/lock/mtui.lock` held would otherwise survive until
+        // the session ends (teardown) — which under a long-lived MCP server may
+        // be never. Bounded by the same budget; on timeout the group is reported
+        // as unknown rather than silently omitted.
+        if with_null {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let null_unlock = async {
+                let mut session = self.session.lock().await;
+                session.unlock_null_group_held().await
+            };
+            match tokio::time::timeout(left, null_unlock).await {
+                Ok(outcomes) => summary.absorb(outcomes),
+                Err(_) => {
+                    tracing::warn!(?budget, "post-abort unlock of the null group timed out");
+                    // The sentinel has no RRID, so it does not belong in
+                    // `unknown` (whose remedy points at `list_locks -T <rrid>`);
+                    // it gets its own clause with the bare-tool remedy.
+                    summary.null_group_unknown = true;
                 }
             }
         }
@@ -2886,8 +2933,165 @@ mod tests {
         assert!(still_locked(&shared), "the sibling's lock is gone");
     }
 
-    /// The `run -t <subset>` case: hosts of the job's own group that it did not
-    /// lock are untouched and unmentioned.
+    /// A force-aborted job that locked a host attached with **no report loaded**
+    /// (#485).
+    ///
+    /// The fallback scope (`Job::rrids` empty) used to resolve to
+    /// `templates.rrids()` — the registry only — so the null sentinel, whose
+    /// RRID is empty, was never reached and the lock it stranded survived until
+    /// the session ended. The fix makes the fallback include the sentinel when
+    /// it holds hosts. The host is locked by the *job* (not pre-locked), so the
+    /// sentinel's own `Target` records the hold and `unlock_held` can release it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_releases_a_lock_on_a_host_with_no_report_loaded() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        let null_host = MockConnection::new("null-host");
+        let target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            assert!(
+                !guard.metadata().is_loaded(),
+                "fixture must reach the no-template state"
+            );
+            guard.targets_mut().add(target);
+        }
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+        // `start_job` records no template scope, so the cancel falls back to
+        // "every loaded template" — which must now also mean the null sentinel.
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        // The fan-out lands on the null group's targets and locks the host.
+        await_locked(&null_host, "null-host").await;
+
+        let msg = sess.job_cancel(&job_id).await.expect("cancel succeeds");
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            saw_unlock(&null_host),
+            "null-host's stranded lock was never removed: {msg}"
+        );
+        assert!(
+            !still_locked(&null_host),
+            "null-host is still locked after the force-abort release"
+        );
+    }
+
+    /// The sentinel unlock is bounded by the same budget (#485): a null-group
+    /// host whose lock read outruns it is reported with the *bare-tool* remedy
+    /// (the sentinel has no RRID, so `-T <rrid>` does not apply), and the reply
+    /// does not claim the lock is gone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_unlock_of_null_group_is_bounded_and_says_so_on_expiry() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        // Every SFTP read costs 400ms; the release below gets 200ms.
+        let null_host = MockConnection::new("null-host")
+            .with_sftp_session_delay(Duration::from_millis(400))
+            .with_run_delay(Duration::from_secs(600));
+        let target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            guard.targets_mut().add(target);
+        }
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&null_host, "null-host").await;
+
+        let budget = Duration::from_millis(200);
+        let msg = sess
+            .job_cancel_with_budget(&job_id, budget)
+            .await
+            .expect("cancel succeeds");
+
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            msg.contains("lock state unknown on hosts attached with no report loaded"),
+            "an expired sentinel release must be reported, with the bare-tool remedy: {msg}"
+        );
+        // The RRID-scoped remedy must not be shown for the RRID-less sentinel.
+        assert!(
+            !msg.contains("list_locks -T <rrid>"),
+            "the sentinel has no RRID: {msg}"
+        );
+        assert!(!msg.contains("unlocked:"), "nothing was unlocked: {msg}");
+        assert!(
+            still_locked(&null_host),
+            "null-host's lock is gone after all"
+        );
+    }
+
+    /// A scoped force-cancel must **not** touch the sentinel (#485): an
+    /// explicitly-RRID-scoped job resolves to that template only and could never
+    /// have locked a null-group host, so the sentinel stays out of scope even
+    /// when it holds a (deliberate) lock.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scoped_force_cancel_leaves_the_null_group_lock_alone() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        let alpha = MockConnection::new("host-alpha");
+        let null_host = MockConnection::new("null-host");
+        // The sentinel host is locked *up front* (a deliberate hold) and must
+        // survive the scoped job's cancel.
+        let mut null_target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+        null_target.lock("").await.expect("null-host locked");
+
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            guard.targets_mut().add(null_target);
+        }
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+
+        // Scope to LOCK_RRID_A via start_jobs + `-T`-pinned argv: the recorded
+        // scope is explicit, so `with_null` is false.
+        let ids = sess
+            .start_jobs(
+                Arc::clone(&registry_with_probe(LockAndPark::new(Park::Forever))),
+                "lock_and_park_probe",
+                Vec::new(),
+            )
+            .await
+            .expect("start_jobs succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess.job_cancel(&ids[0]).await.expect("cancel succeeds");
+        assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");
+        assert!(
+            !saw_unlock(&null_host),
+            "the scoped cancel touched the null group's lock: {msg}"
+        );
+        assert!(
+            still_locked(&null_host),
+            "the null group's lock must survive a scoped cancel"
+        );
+    }
+
+    /// Hosts of the job's own group that it did not lock are untouched and
+    /// unmentioned — the `run -t <subset>` case.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn forced_cancel_only_touches_the_hosts_the_job_locked() {
         let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));

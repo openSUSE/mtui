@@ -8,6 +8,7 @@
 //! the active report, so command bodies keep a scalar surface as the registry
 //! grows past one entry.
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,7 @@ use mtui_config::Config;
 use mtui_datasources::HttpError;
 use mtui_datasources::http::{HttpClient, VerifyPolicy, resolve_verify};
 use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
-use mtui_hosts::{HostArbiter, HostError, HostsGroup, Owner, Prompter, Target};
+use mtui_hosts::{HostArbiter, HostError, HostsGroup, LockOutcome, Owner, Prompter, Target};
 use mtui_testreport::{NullReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{TargetState, Workflow};
@@ -491,9 +492,42 @@ impl Session {
         units
     }
 
-    /// Re-installs the active handle for the registry's current active pointer,
-    /// for after a registry mutation repoints `active` without going through
-    /// [`activate`](Self::activate).
+    /// Whether the null sentinel's host group currently holds any hosts.
+    ///
+    /// The sentinel is the only connected-host set the registry walk
+    /// ([`TemplateRegistry::rrids`]) cannot see: hosts attached while nothing
+    /// is loaded land here. Callers that enumerate "every group that could hold
+    /// a lock" (teardown via [`take_teardown_units`](Self::take_teardown_units),
+    /// the MCP post-abort unlock via [`unlock_null_group_held`](Self::unlock_null_group_held))
+    /// use this to include it.
+    #[must_use]
+    pub fn null_group_has_hosts(&self) -> bool {
+        !self.null.base().targets.is_empty()
+    }
+
+    /// Releases the operation locks the null sentinel's own targets took.
+    ///
+    /// The mid-session analogue of [`take_teardown_units`](Self::take_teardown_units)
+    /// for the sentinel (#485): teardown moves the sentinel out (the session is
+    /// ending); a post-abort unlock must not — the session continues — so this
+    /// drives the sentinel's [`HostsGroup::unlock_held`] in place. `unlock_held`
+    /// scopes to locks this group's own targets actually took, so a foreign or
+    /// comment-marked hold on a shared refhost is left untouched.
+    ///
+    /// The caller holds the session mutex across this call (the sentinel is a
+    /// private field, not an `Arc<Mutex<..>>` like a registry entry), so it is
+    /// bounded by the caller's budget; the fan-out's per-host timeouts bound it
+    /// independently.
+    pub async fn unlock_null_group_held(&mut self) -> BTreeMap<String, LockOutcome> {
+        self.null.base_mut().targets.unlock_held().await
+    }
+
+    /// Re-installs the active handle for the registry's current active pointer.
+    ///
+    /// Used after a registry mutation (load) repoints `active` without going
+    /// through [`activate`](Self::activate) — it drops any stale guard and locks
+    /// the (possibly new) active entry, falling back to the null object when
+    /// nothing is loaded.
     pub(crate) fn refresh_active_guard(&mut self) {
         self.active_guard = None;
         self.active_guard = self
