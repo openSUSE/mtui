@@ -35,8 +35,34 @@ jobs:
           persist-credentials: false
       - name: Install clippy
         run: rustup component add clippy
+      # Registry-only: caches downloaded .crate files, not target/. `src` is
+      # skipped since cargo re-extracts it from `cache` (no gain, ~2x size).
+      # One key shared by every compiling job below other than `test`/`macos`
+      # (runner.os already splits macos out) — the .crate set they download is
+      # identical regardless of feature flags or toolchain.
+      - name: Restore cargo registry cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
       - name: Clippy (warnings as errors)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # main-only: PRs restore but never populate, so an untrusted PR cannot
+      # seed a cache that other jobs later consume.
+      - name: Save cargo registry cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
   docs:
     runs-on: ubuntu-latest
     name: MTUI docs
@@ -46,8 +72,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - name: Restore cargo registry cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
       - name: Check rustdoc (warnings as errors)
         run: cargo doc --workspace --no-deps --all-features --document-private-items
+      - name: Save cargo registry cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
   feature-matrix:
     runs-on: ubuntu-latest
     name: MTUI feature matrix (compile-only)
@@ -55,10 +100,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - name: Restore cargo registry cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
       - name: Build with no default features
         run: cargo build --workspace --no-default-features
       - name: Build with all features
         run: cargo build --workspace --all-features
+      - name: Save cargo registry cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
   test:
     runs-on: ubuntu-latest
     name: MTUI tests
@@ -66,6 +130,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      # Full registry + target/ cache. This is the only job carrying it in
+      # Phase A of the CI-caching plan, so its real compressed key size can be
+      # measured before widening to other jobs.
+      - name: Rust dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The SSH integration suite authenticates the client from an identity file;
       # the in-process fixture accepts any key but the runner ships none. Generate
       # a throwaway ed25519 key so the pubkey path is exercised.
@@ -98,6 +169,18 @@ jobs:
           persist-credentials: false
       - name: Install clippy
         run: rustup component add clippy
+      # macOS gets its own key: runner.os already differs from the ubuntu jobs
+      # sharing the cargo-registry key above.
+      - name: Restore cargo registry cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
       # The SSH integration suite authenticates from an identity file; the
       # in-process fixture accepts any key but the runner ships none. Generate a
       # throwaway ed25519 key so the pubkey path is exercised. (svn is omitted:
@@ -112,6 +195,15 @@ jobs:
         run: cargo test --workspace
       - name: Run mtui-mcp tests
         run: cargo test -p mtui-mcp -F mcp
+      - name: Save cargo registry cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
   beta:
     # Early warning on the upcoming compiler: never blocks, but surfaces
     # new-lint and regression noise before beta becomes stable. No fmt leg
@@ -125,6 +217,16 @@ jobs:
           persist-credentials: false
       - name: Install beta toolchain
         run: rustup toolchain install beta --component clippy
+      - name: Restore cargo registry cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
       - name: Clippy (beta)
         run: cargo +beta clippy --workspace --all-targets --all-features -- -D warnings
       # Same fixture as the test job: the SSH integration suite authenticates
@@ -135,6 +237,15 @@ jobs:
           ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
       - name: Test (beta)
         run: cargo +beta test --workspace
+      - name: Save cargo registry cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
   coverage:
     runs-on: ubuntu-latest
     name: MTUI coverage
@@ -142,6 +253,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - name: Restore cargo registry cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
       - name: SSH fixture
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -159,6 +280,15 @@ jobs:
           tool: cargo-llvm-cov
       - name: Generate coverage
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Save cargo registry cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
       - name: Upload coverage to CodeCov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
