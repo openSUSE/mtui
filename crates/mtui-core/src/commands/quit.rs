@@ -265,6 +265,13 @@ mod tests {
 
     /// Both directions at once: widening teardown to the null group must not
     /// *replace* the registry walk — a template's hosts are still torn down.
+    ///
+    /// Also pins the CHANGELOG's `quit reboot` claim (#478): a bootarg must
+    /// reach the null-group host, not just the template one. Planting a host
+    /// in *both* groups matters here — a null-only probe could not tell "the
+    /// bootarg reached the null unit" from "nobody got it". Mutation: `if
+    /// is_null { None } else { action }` at `quit.rs:109` must turn the null
+    /// assertion red while leaving the template one green.
     #[tokio::test]
     async fn quit_closes_template_and_null_group_hosts() {
         let (tmpl_target, tmpl_probe) = locked_target("t1").await;
@@ -278,7 +285,12 @@ mod tests {
         session.targets_mut().add(null_target);
         session.refresh_active_guard();
 
-        let args = matches(&Quit, &[]);
+        // Arm the assertion: `lock("")` writes over SFTP, not
+        // `fire_and_forget`, so both probes start with no fired commands.
+        assert!(tmpl_probe.fired_commands().is_empty());
+        assert!(null_probe.fired_commands().is_empty());
+
+        let args = matches(&Quit, &["reboot"]);
         Quit.call(&mut session, &args).await.unwrap();
 
         assert!(tmpl_probe.is_closed(), "t1: template host still closed");
@@ -290,6 +302,46 @@ mod tests {
         assert!(
             null_probe.file_contents(TARGET_LOCK_PATH).is_none(),
             "n1: null-group host's lock released"
+        );
+        assert_eq!(
+            tmpl_probe.fired_commands(),
+            vec!["reboot"],
+            "t1: template host rebooted"
+        );
+        assert_eq!(
+            null_probe.fired_commands(),
+            vec!["reboot"],
+            "n1: null-group host rebooted too"
+        );
+    }
+
+    /// Sibling of the above for `poweroff`, which maps to the shell `halt`
+    /// command — its own contract, and a separate mutant from `reboot`'s.
+    #[tokio::test]
+    async fn quit_poweroff_closes_template_and_null_group_hosts() {
+        let (tmpl_target, tmpl_probe) = locked_target("t1").await;
+        let (mut session, _buf) = session_with_targets("SUSE:Maintenance:1:1", vec![tmpl_target]);
+
+        session.release_active_guard();
+        let (null_target, null_probe) = locked_target("n1").await;
+        session.targets_mut().add(null_target);
+        session.refresh_active_guard();
+
+        assert!(tmpl_probe.fired_commands().is_empty());
+        assert!(null_probe.fired_commands().is_empty());
+
+        let args = matches(&Quit, &["poweroff"]);
+        Quit.call(&mut session, &args).await.unwrap();
+
+        assert_eq!(
+            tmpl_probe.fired_commands(),
+            vec!["halt"],
+            "t1: template host powered off"
+        );
+        assert_eq!(
+            null_probe.fired_commands(),
+            vec!["halt"],
+            "n1: null-group host powered off too"
         );
     }
 
