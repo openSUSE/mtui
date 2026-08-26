@@ -534,9 +534,11 @@ impl Session {
     /// - strands the sentinel's hosts with their remote `/var/lock/mtui.lock`
     ///   held and unreachable by any later teardown — this call is the only
     ///   `Arc` created for them;
-    /// - leaves the session with no active guard, so `Session::activate`'s
-    ///   `try_lock_owned` keeps succeeding against the null report while a
-    ///   later scoped dispatch runs against it silently.
+    /// - leaves the session with no active guard, so [`metadata`](Self::metadata)
+    ///   and `metadata_mut` fall back to the *fresh*
+    ///   [`NullReport`] this call installed — a later dispatch then reads and
+    ///   writes an empty sentinel while the hosts from the old one are stranded
+    ///   as above.
     #[must_use]
     pub fn take_teardown_units(&mut self) -> Vec<ReportEntry> {
         self.release_active_guard();
