@@ -835,11 +835,22 @@ impl HostsGroup {
     /// [`Target::close`] result is inserted into a shared map inside the fan-out,
     /// so the map is deterministic regardless of completion order.
     pub async fn close(&mut self, action: Option<&str>) -> BTreeMap<String, Result<()>> {
-        use std::sync::Mutex;
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        self.close_collecting(action, &collected).await;
+        collected.into_inner().unwrap()
+    }
 
+    /// As [`close`](Self::close), but outcomes land in `collected` as each host
+    /// finishes rather than in a return value — for the caller that applies a
+    /// wall-clock budget, where a returned map would be dropped with the
+    /// abandoned future. Mirrors [`unlock_force`](Self::unlock_force).
+    pub async fn close_collecting(
+        &mut self,
+        action: Option<&str>,
+        collected: &std::sync::Mutex<BTreeMap<String, Result<()>>>,
+    ) {
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         let action = action.map(str::to_owned);
-        let collected: Mutex<BTreeMap<String, Result<()>>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
             is_repl,
@@ -848,7 +859,6 @@ impl HostsGroup {
             |_t| true,
             |t| {
                 let action = action.clone();
-                let collected = &collected;
                 Box::pin(async move {
                     let hostname = t.hostname().to_owned();
                     let outcome = t.close(action.as_deref()).await;
@@ -857,7 +867,6 @@ impl HostsGroup {
             },
         )
         .await;
-        collected.into_inner().unwrap()
     }
 
     /// Reports the lock state of every host in the group to `sink`.

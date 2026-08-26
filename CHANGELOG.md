@@ -10,6 +10,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `remove_host` now names only the host whose teardown the 45 s budget
+  actually cut short (`still disconnecting from <host> after <secs> seconds;
+  abandoning`, printed to the display), instead of warning for every host in
+  the call.
 - `mtui-mcp` teardown (idle-session sweep, graceful shutdown, and stdio exit on
   SIGTERM/EOF) is now bounded end to end: the wait for a busy session is
   charged against the same 45 s budget as the host disconnects, so a

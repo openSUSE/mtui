@@ -1,5 +1,7 @@
 //! The `remove_host` command.
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use clap::ArgMatches;
 
@@ -21,8 +23,11 @@ use crate::session::Session;
 /// [`TestReport::release_pool_claim`](mtui_testreport::TestReport::release_pool_claim)
 /// (without which a scarce-pool host stays marked busy in the process-global
 /// [`HostArbiter`](mtui_hosts::HostArbiter) for the rest of a long-lived MCP
-/// session) — outside the budget, so an abandoned teardown never skips it. With
-/// no `-t` argument every host is removed.
+/// session) — outside the budget, so an abandoned teardown never skips it. A
+/// host whose close the budget cut short is named on the display (`still
+/// disconnecting from {host} after {secs} seconds; abandoning`) — only that
+/// host, not every host in the call. With no `-t` argument every host is
+/// removed.
 pub struct RemoveHost;
 
 #[async_trait]
@@ -71,21 +76,26 @@ impl Command for RemoveHost {
         // is being dropped anyway, so the budget only bounds how long a dead peer
         // can hold the session.
         let budget = host_op_budget();
-        match tokio::time::timeout(budget, doomed.close(None)).await {
-            Ok(outcomes) => {
-                for (host, outcome) in &outcomes {
-                    if let Err(e) = outcome {
-                        tracing::warn!("failed to disconnect from {host}: {e}");
-                    }
-                }
+        // Caller-owned, so the hosts that finished before the budget expired are
+        // still attributed once the fan-out future is dropped.
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        let timed_out = tokio::time::timeout(budget, doomed.close_collecting(None, &collected))
+            .await
+            .is_err();
+        let outcomes = collected.into_inner().unwrap();
+        for (host, outcome) in &outcomes {
+            if let Err(e) = outcome {
+                tracing::warn!("failed to disconnect from {host}: {e}");
             }
-            Err(_) => {
-                let secs = budget.as_secs();
-                for host in &hosts {
-                    tracing::warn!(
-                        "still disconnecting from {host} after {secs} seconds; abandoning"
-                    );
-                }
+        }
+        // Only the hosts the budget actually cut short — not every host in the
+        // call, which would blame the ones whose close already completed.
+        if timed_out {
+            let secs = budget.as_secs();
+            for host in hosts.iter().filter(|h| !outcomes.contains_key(*h)) {
+                session.display.println(&format!(
+                    "still disconnecting from {host} after {secs} seconds; abandoning"
+                ));
             }
         }
         drop(doomed);
@@ -222,6 +232,20 @@ mod tests {
         assert!(session.targets().is_empty());
         assert!(good.is_closed(), "the healthy host was really torn down");
         assert!(buf.contents().contains("Removed"), "{}", buf.contents());
+        // Only the cut-short host is named as abandoned — `good`'s close
+        // really landed in the outcomes map inside the 50ms budget, so a
+        // regression that warns for every host in the call (not just the ones
+        // the timeout actually cut short) must fail here.
+        assert!(
+            buf.contents().contains("still disconnecting from dead"),
+            "{}",
+            buf.contents()
+        );
+        assert!(
+            !buf.contents().contains("still disconnecting from good"),
+            "{}",
+            buf.contents()
+        );
 
         // Let the abandoned close unwind.
         gate.notify_waiters();
@@ -298,6 +322,40 @@ mod tests {
         assert!(!session.metadata().base().pool_claims.contains("dead"));
 
         gate.notify_waiters();
+    }
+
+    #[tokio::test]
+    async fn close_error_is_warned_not_timed_out() {
+        // A host that errors on close (rather than wedging) must land in the
+        // outcomes map with an `Err`, driving the `Ok(outcomes)` arm's per-host
+        // `tracing::warn!("failed to disconnect from {host}: {e}")` — distinct
+        // from the timeout-abandonment arm B1 covers, which never sees this
+        // host's outcome at all.
+        testkit::log_capture::start();
+        let (mut session, _buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![target_with(
+                "flaky",
+                MockConnection::new("flaky").with_failing_close(),
+            )],
+        );
+
+        let args = matches(&RemoveHost, &[]);
+        RemoveHost.call(&mut session, &args).await.unwrap();
+
+        let logged = testkit::log_capture::take();
+        assert!(
+            logged.iter().any(|c| c
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains("failed to disconnect from flaky"))),
+            "expected a 'failed to disconnect from flaky' warning, got {:?}",
+            logged
+                .iter()
+                .filter_map(|c| c.message.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(session.targets().is_empty());
     }
 
     #[test]

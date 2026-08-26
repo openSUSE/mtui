@@ -195,6 +195,121 @@ pub(crate) mod testkit {
         HOST_OP_BUDGET_MS.scope(ms, fut).await
     }
 
+    /// Captures `tracing` events on the calling thread, so a command's
+    /// log-only output (a `succeeded` summary field, a `warn!` line with no
+    /// named field) can be asserted instead of assumed from its `Result` or
+    /// display output alone. The one shared capture for this test binary —
+    /// see the module doc for why a second one silently disarms itself.
+    ///
+    /// The subscriber is installed **globally and permanently**, not as a
+    /// thread-local default: `tracing` caches callsite interest process-wide,
+    /// so a callsite reached by many other tests in this binary, none of which
+    /// has a subscriber, would otherwise be cached as `Interest::never` and
+    /// stay silent here for good. `set_global_default` rebuilds that cache and
+    /// then keeps interest pinned. Scoping moves to a thread-local sink
+    /// instead, so tests running in parallel on other threads cannot see (or
+    /// pollute) this capture.
+    ///
+    /// Two consequences of that choice, both deliberate:
+    ///
+    /// - **The level ceiling goes to `TRACE` binary-wide.** An unfiltered
+    ///   `Registry` reports no `max_level_hint`, so from the first [`start`]
+    ///   call `LevelFilter::current()` is `TRACE` for the whole `mtui-core` lib
+    ///   test binary: every `debug!`/`trace!` callsite that was dead before now
+    ///   evaluates its formatting arguments (in every parallel test, not just
+    ///   this one). That costs a little time, and a `Display`/`Debug` impl that
+    ///   takes a lock the emitting thread already holds would deadlock rather
+    ///   than stay unevaluated. Nothing in this binary does that today; if a
+    ///   callsite ever pays for it, bound the layer with a `LevelFilter` — that
+    ///   keeps the interest rebuild without the blast radius — rather than
+    ///   going back to a thread-local default.
+    /// - **The capture assumes the logging happens on the arming thread.**
+    ///   `#[tokio::test]` defaults to the current-thread flavour, so the
+    ///   command and its logging run on the thread that called [`start`] and
+    ///   reach its sink. Adding `flavor = "multi_thread"` to a test using this
+    ///   capture would move the event to a worker thread with no sink, silently
+    ///   emptying the buffer — and an assertion built on it would then read as
+    ///   a product bug rather than as the harness change it is.
+    pub(crate) mod log_capture {
+        use std::cell::RefCell;
+        use std::sync::Once;
+
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::Registry;
+
+        /// The fields of one captured event that commands' tests care about.
+        pub(crate) struct Captured {
+            /// The rendered `succeeded` field, if the event carries one (the
+            /// fan-out driver's summary log).
+            pub succeeded: Option<String>,
+            /// The rendered default message, if the event was logged with a
+            /// format string (e.g. `tracing::warn!("disconnect failed: {e}")`).
+            pub message: Option<String>,
+        }
+
+        thread_local! {
+            /// The active capture buffer for this thread, if any.
+            static SINK: RefCell<Option<Vec<Captured>>> = const { RefCell::new(None) };
+        }
+
+        struct CaptureLayer;
+
+        #[derive(Default)]
+        struct CaptureVisitor {
+            succeeded: Option<String>,
+            message: Option<String>,
+        }
+
+        impl Visit for CaptureVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                // Both `succeeded = %…` and a bare format-string message arrive
+                // as `Display` values, which tracing hands to `record_debug`
+                // already rendered.
+                match field.name() {
+                    "succeeded" => self.succeeded = Some(format!("{value:?}")),
+                    "message" => self.message = Some(format!("{value:?}")),
+                    _ => {}
+                }
+            }
+        }
+
+        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                SINK.with(|s| {
+                    if let Some(buf) = s.borrow_mut().as_mut() {
+                        let mut v = CaptureVisitor::default();
+                        event.record(&mut v);
+                        if v.succeeded.is_some() || v.message.is_some() {
+                            buf.push(Captured {
+                                succeeded: v.succeeded,
+                                message: v.message,
+                            });
+                        }
+                    }
+                });
+            }
+        }
+
+        /// Arms the capture for this thread (installing the subscriber once).
+        pub(crate) fn start() {
+            static INSTALL: Once = Once::new();
+            INSTALL.call_once(|| {
+                // A pre-existing global default would leave the capture empty,
+                // which a caller's assertion reports loudly rather than
+                // passing over.
+                let _ =
+                    tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
+            });
+            SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+        }
+
+        /// Every event captured on this thread since [`start`].
+        pub(crate) fn take() -> Vec<Captured> {
+            SINK.with(|s| s.borrow_mut().take()).unwrap_or_default()
+        }
+    }
+
     /// A minimal loaded report with a settable RRID and host group.
     pub struct FakeReport {
         base: TestReportBase,
@@ -1148,101 +1263,6 @@ mod cancellation_seam {
     const RRID_C: &str = "SUSE:Maintenance:3:3";
     const RRID_D: &str = "SUSE:Maintenance:4:4";
 
-    /// Captures the `succeeded` field of the fan-out driver's summary log, so
-    /// the templates it *names* can be asserted and not just assumed from the
-    /// verdict.
-    ///
-    /// The subscriber is installed **globally and permanently**, not as a
-    /// thread-local default: `tracing` caches callsite interest process-wide,
-    /// so the `succeeded` callsite — reached by many other tests in this
-    /// binary, none of which has a subscriber — would otherwise be cached as
-    /// `Interest::never` and stay silent here for good. `set_global_default`
-    /// rebuilds that cache and then keeps interest pinned. Scoping moves to a
-    /// thread-local sink instead, so the tests running in parallel on other
-    /// threads cannot see (or pollute) this capture.
-    ///
-    /// Two consequences of that choice, both deliberate:
-    ///
-    /// - **The level ceiling goes to `TRACE` binary-wide.** An unfiltered
-    ///   `Registry` reports no `max_level_hint`, so from the first [`start`]
-    ///   call `LevelFilter::current()` is `TRACE` for the whole `mtui-core` lib
-    ///   test binary: every `debug!`/`trace!` callsite that was dead before now
-    ///   evaluates its formatting arguments (in every parallel test, not just
-    ///   this one). That costs a little time, and a `Display`/`Debug` impl that
-    ///   takes a lock the emitting thread already holds would deadlock rather
-    ///   than stay unevaluated. Nothing in this binary does that today; if a
-    ///   callsite ever pays for it, bound the layer with a `LevelFilter` — that
-    ///   keeps the interest rebuild without the blast radius — rather than
-    ///   going back to a thread-local default.
-    /// - **The capture assumes the fan-out runs on the arming thread.**
-    ///   `#[tokio::test]` defaults to the current-thread flavour, so the driver
-    ///   and its `info!` run on the thread that called [`start`] and reach its
-    ///   sink. Adding `flavor = "multi_thread"` to a test using this capture
-    ///   would move the event to a worker thread with no sink, silently
-    ///   emptying the buffer — and the caller's exact-equality assertion would
-    ///   then read as a product bug ("the driver named no templates") rather
-    ///   than as the harness change it is.
-    mod succeeded_log {
-        use std::cell::RefCell;
-        use std::sync::Once;
-
-        use tracing::field::{Field, Visit};
-        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-        use tracing_subscriber::registry::Registry;
-
-        thread_local! {
-            /// The active capture buffer for this thread, if any.
-            static SINK: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
-        }
-
-        struct CaptureLayer;
-
-        /// Records the rendered `succeeded` field, if the event carries one.
-        struct SucceededVisitor(Option<String>);
-
-        impl Visit for SucceededVisitor {
-            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                // `succeeded = %…` arrives as a `Display` value, which tracing
-                // hands to `record_debug` already rendered.
-                if field.name() == "succeeded" {
-                    self.0 = Some(format!("{value:?}"));
-                }
-            }
-        }
-
-        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-                SINK.with(|s| {
-                    if let Some(buf) = s.borrow_mut().as_mut() {
-                        let mut v = SucceededVisitor(None);
-                        event.record(&mut v);
-                        if let Some(found) = v.0 {
-                            buf.push(found);
-                        }
-                    }
-                });
-            }
-        }
-
-        /// Arms the capture for this thread (installing the subscriber once).
-        pub fn start() {
-            static INSTALL: Once = Once::new();
-            INSTALL.call_once(|| {
-                // A pre-existing global default would leave the capture empty,
-                // which the caller's exact-equality assertion reports loudly
-                // rather than passing over.
-                let _ =
-                    tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
-            });
-            SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
-        }
-
-        /// Every `succeeded` value logged on this thread since [`start`].
-        pub fn take() -> Vec<String> {
-            SINK.with(|s| s.borrow_mut().take()).unwrap_or_default()
-        }
-    }
-
     /// A fan-out probe that records each template it runs on and cancels the
     /// session's token from inside its first `call`.
     struct CancelAfterFirst {
@@ -1489,12 +1509,15 @@ mod cancellation_seam {
         };
         let args = matches(&cmd, &[]);
 
-        succeeded_log::start();
+        super::testkit::log_capture::start();
         let err = cmd
             .run(&mut session, &args)
             .await
             .expect_err("a failed template must not report success");
-        let logged = succeeded_log::take();
+        let logged: Vec<String> = super::testkit::log_capture::take()
+            .into_iter()
+            .filter_map(|c| c.succeeded)
+            .collect();
 
         // Only A ran to completion: B failed, C stopped mid-body, D was never
         // reached. Exact equality, not `contains` — the whole defect is *extra*
