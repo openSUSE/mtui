@@ -1,17 +1,14 @@
 //! Process-level command-line arguments for the `mtui-mcp` server.
 //!
-//! Deliberately a **subset** of the REPL's
-//! [`mtui_core::Args`]: it declares only the flags `Config` merging + logging
-//! care about (`-c/--config`, `-t/--template-dir`, `-w/--connection-timeout`,
-//! `-g/--gitea-token`, `--color`, `-d/--debug`; clap auto-handles `-V/--version`
-//! and `--help`). The REPL-only update/SUT flags (`-a`/`-k`/`--sut`) are omitted:
-//! the MCP server loads templates and hosts *per session* at runtime via the
-//! `load_template` / `add_host` tools, so it takes no boot-time update/SUT flags.
+//! Deliberately a **subset** of the REPL's [`mtui_core::Args`]: only the flags
+//! `Config` merging and logging care about, plus `--transport`, `--host` and
+//! `--port`. The REPL-only update/SUT flags (`-a`/`-k`/`--sut`) are omitted
+//! because the MCP server loads templates and hosts *per session* at runtime,
+//! via the `load_template` / `add_host` tools.
 //!
-//! Three MCP-server flags are added: `--transport`, `--host`, `--port`. Both
-//! transports are served: `stdio` (default, one process == one client) and
-//! `http` (streamable HTTP with per-client session isolation). `--host`/`--port`
-//! bind the http listener; they are ignored under stdio.
+//! Both transports are served: `stdio` (default, one process == one client) and
+//! `http` (streamable HTTP, per-client session isolation). `--host`/`--port` bind
+//! the http listener and are ignored under stdio.
 
 use std::path::PathBuf;
 
@@ -40,9 +37,8 @@ pub struct McpArgs {
     template_dir: Option<PathBuf>,
 
     /// Override config `mtui.connection_timeout` (seconds).
-    // Rejected at parse time if 0 via the value_parser range: the config-file
-    // loader guards this key with `validated_positive!`, so the CLI must not be
-    // able to express a 0 the file would refuse.
+    // The value_parser range rejects 0 at parse time: the config-file loader
+    // guards this key too, so the CLI must not express what the file refuses.
     #[arg(
         short = 'w',
         long = "connection-timeout",
@@ -93,9 +89,9 @@ impl McpArgs {
     /// Load the config from the file chain (keyed on `--config`) and overlay the
     /// CLI overrides, returning the fully-resolved [`Config`].
     ///
-    /// The file layers first ([`Config::load`]), then the CLI layer on top so a flag
-    /// wins over every config file. `--config`, `--debug`, `--color`, and the
-    /// transport flags are not config keys and are intentionally not merged.
+    /// The file layers first ([`Config::load`]), then the CLI layer on top, so a
+    /// flag wins over every config file. `--config`, `--debug`, `--color` and the
+    /// transport flags are not config keys and are deliberately not merged.
     #[cfg(any(feature = "mcp", test))]
     #[must_use]
     pub(crate) fn resolve_config(&self) -> Config {

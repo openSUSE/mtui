@@ -1,40 +1,33 @@
 //! The process-wide `tracing` filter policy both entrypoints resolve through.
 //!
-//! **Why this lives in `mtui-core`.** `mtui-cli` and `mtui-mcp` are sibling
-//! leaves — neither depends on the other — so the only place they can share a
-//! *security* decision about logging is the composition root they both already
-//! depend on. Keeping the policy here is what makes "raising mtui's verbosity
-//! must not switch on the HTTP transport's `DEBUG`" true of the process by
-//! construction, instead of true of whichever entrypoint remembered.
+//! It lives in `mtui-core` because `mtui-cli` and `mtui-mcp` are sibling leaves:
+//! their only shared place for a *security* decision about logging is the
+//! composition root, which makes "raising mtui's verbosity must not switch on
+//! the HTTP transport's `DEBUG`" true by construction rather than true of
+//! whichever entrypoint remembered.
 //!
-//! The policy is deliberately expressed as **directive strings**, not
-//! `EnvFilter` values: `mtui-core` does not depend on `tracing-subscriber`, and
-//! keeping it that way is the same invariant that stops the subscriber types
-//! leaking into the lower crates. Each binary parses the resolved string itself.
+//! The policy is expressed as **directive strings**, not `EnvFilter` values, so
+//! `mtui-core` need not depend on `tracing-subscriber` — the same invariant that
+//! keeps subscriber types out of the lower crates. Each binary parses the
+//! resolved string itself.
 
 /// The third-party HTTP transport targets whose `DEBUG` output must not be
 /// switched on as a side effect of raising *mtui's* own verbosity (#439).
 ///
-/// `hyper-util`'s connection pool logs its pooled key — `(scheme, authority)`,
-/// and an `http::uri::Authority` retains userinfo — at `DEBUG`. `reqwest`
-/// strips the first-hop userinfo when the client is built but never re-strips a
-/// redirect's `Location: https://user:pass@host/…`, so a hostile redirect puts
-/// a credential-shaped authority into the pool key, where `DEBUG` prints it
-/// verbatim.
+/// `hyper-util`'s connection pool logs its pooled key at `DEBUG` — `(scheme,
+/// authority)`, and an `http::uri::Authority` retains userinfo. `reqwest` strips
+/// the first-hop userinfo at build time but never re-strips a redirect's
+/// `Location: https://user:pass@host/…`, so a hostile redirect puts a
+/// credential-shaped authority into that key.
 ///
-/// `EnvFilter` matches a directive's target as a raw `starts_with` prefix
-/// (`tracing_subscriber`'s `impl Match for Directive`), so `hyper` alone would
-/// already cover `hyper_util::client::legacy::pool`; `hyper_util` is named
-/// anyway so the intent survives a crate rename or a narrowing of the `hyper`
-/// entry.
+/// `EnvFilter` matches a target as a raw `starts_with` prefix, so `hyper` alone
+/// would already cover `hyper_util::client::legacy::pool`; `hyper_util` is named
+/// anyway so the intent survives a rename or a narrowing of the `hyper` entry.
 ///
-/// **These three are the whole surface, not a sample.** `h2` — the fourth crate
-/// in the stack — was checked and does not belong here: its `DEBUG` lines are
-/// frame *shapes* and protocol-error breadcrumbs, and `h2`'s `Debug for Headers`
-/// deliberately omits the header block (h2-0.4.15 `src/frame/headers.rs`, whose
-/// comment there reads "fields and pseudo purposefully not included"), so no
-/// URI, authority or header value is rendered at `DEBUG`; the only
-/// header-bearing lines are `TRACE`.
+/// **These three are the whole surface, not a sample.** `h2` was checked and
+/// does not belong: its `DEBUG` lines are frame shapes and protocol-error
+/// breadcrumbs, and its `Debug for Headers` omits the header block
+/// (h2-0.4.15 `src/frame/headers.rs`), so header-bearing lines are `TRACE` only.
 pub const TRANSPORT_LOG_TARGETS: &[&str] = &["hyper_util", "hyper", "reqwest"];
 
 /// The `EnvFilter` directives that cap [`TRANSPORT_LOG_TARGETS`] at `INFO`.
@@ -44,10 +37,9 @@ pub const TRANSPORT_LOG_TARGETS: &[&str] = &["hyper_util", "hyper", "reqwest"];
 /// [`resolve_log_directives_from`]). `INFO` rather than `WARN`/`OFF` on purpose:
 /// real transport warnings and errors must still reach the operator.
 ///
-/// Spelled out as a literal, and pinned as a literal by the tests, so a
-/// respelling `EnvFilter`'s prefix match would silently absorb (`hyper-util`
-/// for `hyper_util`, swallowed by the `hyper=info` entry) still shows up as a
-/// diff.
+/// A literal, pinned as a literal by the tests, so a respelling `EnvFilter`'s
+/// prefix match would silently absorb (`hyper-util` for `hyper_util`, swallowed
+/// by the `hyper=info` entry) still shows up as a diff.
 pub const TRANSPORT_LOG_CARVE_OUT: &str = "hyper_util=info,hyper=info,reqwest=info";
 
 /// The one-line notice printed at startup when `RUST_LOG` explicitly opts the
@@ -72,11 +64,10 @@ impl LogDirectives {
     /// The startup notice to print on stderr, or `None` when the transport is
     /// capped.
     ///
-    /// Printed rather than `tracing::warn!`-ed by the caller on purpose: the
-    /// opt-in `RUST_LOG` that triggers it is frequently target-scoped
-    /// (`RUST_LOG=hyper_util=debug`), which enables no `mtui_*` target at all —
-    /// a `WARN` event would be filtered out by the very filter it is warning
-    /// about.
+    /// Printed rather than `tracing::warn!`-ed on purpose: the triggering
+    /// `RUST_LOG` is often target-scoped (`RUST_LOG=hyper_util=debug`), enabling
+    /// no `mtui_*` target — a `WARN` would be filtered out by the very filter it
+    /// warns about.
     #[must_use]
     pub fn notice(&self) -> Option<&'static str> {
         self.transport_debug_opt_in
@@ -104,26 +95,18 @@ pub fn resolve_log_directives(defaults: &str) -> LogDirectives {
 ///   operator did not name — but only when their directives carry a *global*
 ///   `debug`/`trace`, which is the only way an unnamed target reaches `DEBUG`.
 ///
-/// The narrow trigger is what keeps the carve-out from becoming a *raise*:
-/// appending `hyper=info` to `RUST_LOG=error`, `RUST_LOG=off` or
-/// `RUST_LOG=mtui_core=trace` would push the transport **up** to `INFO` above
-/// the level the operator chose (or above silence), which is the same trap the
-/// coarser levels of the entrypoints' own default directives avoid. With a
-/// global `debug`/`trace` present the added directive can only ever lower a
-/// target, never raise one.
+/// The narrow trigger keeps the carve-out from becoming a *raise*: appending
+/// `hyper=info` to `RUST_LOG=error`, `off` or `mtui_core=trace` would push the
+/// transport **up** to `INFO`, above the level the operator chose. With a global
+/// `debug`/`trace` present the added directive can only lower a target.
 ///
-/// `RUST_LOG=debug` — the ordinary way anyone turns on debug logging — names no
-/// transport target, so it gets the carve-out and mtui's own `DEBUG` both.
-/// `RUST_LOG=hyper_util=debug` names one, is an informed opt-in, and is left
-/// exactly as written (with [`LogDirectives::notice`] set).
-///
-/// "Named", for standing the cap down, means the operator's target is a prefix
-/// of (or equal to) the transport's — the only shape `EnvFilter`'s longest-match
-/// resolution lets a `<transport>=info` cap *overrule*. So `RUST_LOG=hyper=debug`
-/// hands over the whole hyper stack, `hyper_util` included, rather than having
-/// the cap fight the request; while `RUST_LOG=debug,hyper_util=warn` still gets
-/// `hyper` and `reqwest` capped, because their `hyper_util=warn` is untouched by
-/// a `hyper=info` sitting beside it.
+/// "Named" — which stands the cap down and sets [`LogDirectives::notice`] —
+/// means the operator's target is a prefix of (or equal to) the transport's, the
+/// only shape `EnvFilter`'s longest-match resolution lets a `<transport>=info`
+/// cap *overrule*. So `RUST_LOG=hyper=debug` hands over the whole hyper stack
+/// rather than having the cap fight the request, while
+/// `RUST_LOG=debug,hyper_util=warn` still caps `hyper` and `reqwest` because a
+/// `hyper=info` beside it cannot overrule the longer `hyper_util`.
 #[must_use]
 pub fn resolve_log_directives_from(rust_log: Option<&str>, defaults: &str) -> LogDirectives {
     let Some(user) = rust_log else {
@@ -135,10 +118,9 @@ pub fn resolve_log_directives_from(rust_log: Option<&str>, defaults: &str) -> Lo
 
     let mut verbose_global = false;
     let mut opt_in = false;
-    // Which transport targets the operator's own directives already speak for.
-    // Sized from the list rather than a literal so a target added to
-    // `TRANSPORT_LOG_TARGETS` cannot fall off the end of a `zip` and silently
-    // stop being capped.
+    // Which transport targets the operator's directives already speak for.
+    // Sized from the list, not a literal, so a target added to
+    // `TRANSPORT_LOG_TARGETS` cannot fall off a `zip` and stop being capped.
     let mut named = vec![false; TRANSPORT_LOG_TARGETS.len()];
 
     for chunk in user.split(',') {
@@ -148,25 +130,20 @@ pub fn resolve_log_directives_from(rust_log: Option<&str>, defaults: &str) -> Lo
         }
         let (target, verbose) = parse_directive(chunk);
         let Some(target) = target else {
-            // A target-less directive (`debug`, or a bare `[span]=debug`) is the
-            // only kind that can reach a target the operator never mentioned.
+            // Only a target-less directive can reach an unmentioned target.
             verbose_global |= verbose;
             continue;
         };
         for (slot, transport) in named.iter_mut().zip(TRANSPORT_LOG_TARGETS) {
-            // The cap is `<transport>=info`, and `EnvFilter` resolves an event
-            // through the *longest* matching target. So the cap overrules the
-            // operator only when their target is a prefix of (or equal to) the
-            // transport's — `hyper=debug` against a `hyper_util=info` cap, or
-            // `hyper=warn` against a `hyper=info` cap, which would *raise* it.
-            // That, and only that, stands the cap down; regardless of level,
+            // `EnvFilter` resolves an event through the *longest* matching
+            // target, so a `<transport>=info` cap overrules the operator only
+            // when their target is a prefix of (or equal to) the transport's.
+            // That, and only that, stands the cap down — regardless of level,
             // since the raise direction is the one that surprises.
             *slot |= transport.starts_with(target);
-            // Whether to *warn* is the broader question — does their directive
-            // put any of this transport's events at debug/trace? A longer target
-            // (`hyper_util::client::legacy::pool=debug`) does, and beats the cap
-            // for the events it matches, so it is an opt-in even though the cap
-            // still goes on.
+            // Warning is the broader question: a *longer* target
+            // (`hyper_util::client::legacy::pool=debug`) beats the cap for the
+            // events it matches, so it is an opt-in even though the cap goes on.
             if verbose && (transport.starts_with(target) || target.starts_with(transport)) {
                 opt_in = true;
             }
@@ -193,20 +170,18 @@ pub fn resolve_log_directives_from(rust_log: Option<&str>, defaults: &str) -> Lo
 /// Split one `EnvFilter` directive into `(target, level is more verbose than
 /// INFO)`.
 ///
-/// `None` as the target means the directive carries no target of its own and so
-/// applies to everything: a bare global level (`debug`), or a span-only
-/// directive (`[span]=debug`), which is lumped in with the globals because it
-/// too can match a transport event.
+/// A `None` target means the directive applies to everything: a bare global
+/// level (`debug`), or a span-only directive (`[span]=debug`), lumped in with
+/// the globals because it too can match a transport event.
 ///
-/// Deliberately lenient — this only decides whether to *add* a cap, and the
-/// binary parses the real string afterwards, so an input this misreads is at
-/// worst a cap that was not needed. The one direction that must not be wrong is
-/// treating a verbose directive as non-verbose, hence "no explicit level" is
-/// read as `TRACE`, which is what `EnvFilter` does with it.
+/// Deliberately lenient — it only decides whether to *add* a cap, and the binary
+/// parses the real string afterwards, so a misread input is at worst an
+/// unnecessary cap. The one direction that must not be wrong is reading a
+/// verbose directive as non-verbose, hence "no explicit level" is `TRACE`, which
+/// is what `EnvFilter` does with it.
 fn parse_directive(chunk: &str) -> (Option<&str>, bool) {
-    // `target[span{field=value}]=level`: the level is what follows the *last*
-    // `=`, and only when it is level-shaped — otherwise the `=` belonged to a
-    // field filter and the directive has no explicit level at all.
+    // `target[span{field=value}]=level`: the level follows the *last* `=`, and
+    // only when level-shaped — otherwise the `=` belonged to a field filter.
     let (head, level) = match chunk.rsplit_once('=') {
         Some((head, level)) if is_level(level) => (head, Some(level)),
         _ => (chunk, None),
@@ -259,9 +234,8 @@ fn is_verbose_level(text: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The carve-out string and the target list are two spellings of one
-    /// policy; a target added to only one of them is a hole (the list drives
-    /// the "did the operator name it?" test, the string drives the cap).
+    /// Two spellings of one policy — the list drives the "did the operator name
+    /// it?" test, the string drives the cap — so a target in only one is a hole.
     #[test]
     fn carve_out_string_caps_exactly_the_listed_targets() {
         let rebuilt = TRANSPORT_LOG_TARGETS
@@ -312,9 +286,8 @@ mod tests {
         assert_eq!(resolved.notice(), None);
     }
 
-    /// No global directive means no unnamed target is enabled at all, so there
-    /// is nothing to cap — and appending one would *raise* `hyper`/`reqwest`
-    /// from silent to `INFO`.
+    /// No global directive enables no unnamed target, so there is nothing to cap
+    /// — and appending one would *raise* `hyper`/`reqwest` to `INFO`.
     #[test]
     fn unrelated_target_directive_alone_adds_nothing() {
         let resolved = resolve_log_directives_from(Some("mtui_core=trace"), "info");
@@ -356,10 +329,9 @@ mod tests {
         }
     }
 
-    /// `hyper=debug` asks for the whole hyper stack; `hyper_util` must count as
-    /// named even though the operator spelled the shorter prefix, or the cap
-    /// would silently overrule the request (`hyper_util=info` is the more
-    /// specific directive and wins).
+    /// `hyper=debug` asks for the whole hyper stack, so `hyper_util` counts as
+    /// named too — otherwise the more specific `hyper_util=info` cap would
+    /// silently overrule the request.
     #[test]
     fn a_shorter_prefix_names_the_longer_transport_target() {
         let resolved = resolve_log_directives_from(Some("debug,hyper=debug"), "info");
@@ -367,11 +339,9 @@ mod tests {
         assert_eq!(resolved.notice(), Some(TRANSPORT_DEBUG_NOTICE));
     }
 
-    /// The converse of the case above, and the reason "named" is *not*
-    /// symmetric: `hyper_util=warn` does not speak for `hyper`, so `hyper` is
-    /// still capped — and the `hyper=info` that lands beside it is the shorter
-    /// target, so `EnvFilter`'s longest-match resolution leaves the operator's
-    /// own `hyper_util=warn` in force rather than raising it.
+    /// Why "named" is *not* symmetric: `hyper_util=warn` does not speak for
+    /// `hyper`, so `hyper` is still capped — and being the shorter target, that
+    /// `hyper=info` loses longest-match to the operator's own `hyper_util=warn`.
     #[test]
     fn naming_the_longer_target_does_not_shield_the_shorter_one() {
         let resolved = resolve_log_directives_from(Some("debug,hyper_util=warn"), "info");
@@ -382,9 +352,8 @@ mod tests {
         assert_eq!(resolved.notice(), None);
     }
 
-    /// A target *longer* than the transport's is an opt-in worth announcing —
-    /// it beats the cap for the events it matches — but it does not stand the
-    /// cap down for the rest of the crate.
+    /// A target *longer* than the transport's beats the cap for the events it
+    /// matches — worth announcing, but the rest of the crate stays capped.
     #[test]
     fn a_longer_target_is_announced_and_still_takes_the_cap() {
         let resolved = resolve_log_directives_from(

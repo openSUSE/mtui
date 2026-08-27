@@ -1,12 +1,10 @@
 //! Low-level read-only HTTP client for the QEM Dashboard API.
 //!
-//! Every endpoint is a thin GET-to-JSON wrapper over the shared
-//! [`HttpClient`]. Any transport, non-2xx, or
-//! JSON-parse failure is logged at `debug` and folded into a `None` (for
-//! `incident`)
-//! or an empty `Vec` (for the list endpoints), so a fetch failure never escapes
-//! the client — the caller sees the same "no data" shape whether the dashboard
-//! was unreachable or genuinely empty.
+//! Every endpoint is a thin GET-to-JSON wrapper over the shared [`HttpClient`].
+//! Any transport, non-2xx or JSON-parse failure is logged at `debug` and folded
+//! into `None` (`incident`) or an empty `Vec` (the list endpoints), so the
+//! caller sees the same "no data" shape whether the dashboard was unreachable
+//! or genuinely empty.
 
 use std::time::Duration;
 
@@ -23,15 +21,15 @@ pub(crate) const FAILED_RESULTS: [&str; 3] = ["failed", "incomplete", "timeout_e
 
 /// Wall-clock cap per future in the parallel fan-out.
 ///
-/// Defence-in-depth on top of the shared per-request HTTP timeout: a stuck
-/// worker will not block the whole batch. 60s; consumed by
+/// Defence-in-depth on top of the shared per-request HTTP timeout, so a stuck
+/// worker cannot block the whole batch. Consumed by
 /// [`DashboardAutoOpenQA`](super::DashboardAutoOpenQA).
 pub(crate) const FUTURE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A small read-only client for the QEM Dashboard API.
 ///
-/// It pins the resolved TLS-verify policy
-/// on a shared [`HttpClient`] and exposes one method per dashboard endpoint.
+/// Pins the resolved TLS-verify policy on a shared [`HttpClient`] and exposes
+/// one method per dashboard endpoint.
 #[derive(Debug, Clone)]
 pub struct QemDashboardClient {
     apiurl: String,
@@ -41,8 +39,7 @@ pub struct QemDashboardClient {
 impl QemDashboardClient {
     /// Build a client for `apiurl` with the given TLS-verify `policy`.
     ///
-    /// The trailing slash on `apiurl` is stripped, so callers may pass either
-    /// form.
+    /// A trailing slash on `apiurl` is stripped.
     ///
     /// # Errors
     ///
@@ -55,9 +52,9 @@ impl QemDashboardClient {
 
     /// Build a client from an already-constructed [`HttpClient`].
     ///
-    /// The test/composition seam (mirrors `teregen`/`oqa_search`): callers that
-    /// already hold a shared client — or a test that wants to point the client
-    /// at a mock server — inject it here without a second TLS build.
+    /// The test/composition seam: a caller already holding a shared client, or
+    /// a test aiming at a mock server, injects it here without a second TLS
+    /// build.
     #[must_use]
     pub fn with_client(http: HttpClient, apiurl: impl Into<String>) -> Self {
         Self {
@@ -68,8 +65,8 @@ impl QemDashboardClient {
 
     /// GET `path` and parse the body as JSON, folding any failure into `None`.
     ///
-    /// A transport error, a non-2xx status, or a
-    /// malformed JSON body is logged at `debug` and returns `None`.
+    /// A transport error, non-2xx status or malformed JSON body is logged at
+    /// `debug` and returns `None`.
     async fn get(&self, path: &str) -> Option<Value> {
         let url = format!("{}/{}", self.apiurl, path.trim_start_matches('/'));
         match self.http.get_bytes_capped(&url, MAX_API_BODY).await {
@@ -100,12 +97,11 @@ impl QemDashboardClient {
 
     /// GET `path` and parse the body as JSON, surfacing failures as `Err`.
     ///
-    /// The fallible sibling of [`get`](Self::get): a transport error, a non-2xx
-    /// status, or a malformed JSON body returns [`QemDashboardError::Fetch`]
-    /// instead of being folded to `None`, so a caller can distinguish
-    /// "unreachable" from "empty". A valid-but-`null` body is `Ok(None)`. The
-    /// description is URL-free because the URL is stripped where the
-    /// `reqwest::Error` becomes an [`HttpError`](crate::HttpError) (#431).
+    /// The fallible sibling of [`get`](Self::get): failures become
+    /// [`QemDashboardError::Fetch`] instead of `None`, so a caller can
+    /// distinguish "unreachable" from "empty", while a valid-but-`null` body is
+    /// `Ok(None)`. The description is URL-free because the URL is stripped where
+    /// the `reqwest::Error` becomes an [`HttpError`](crate::HttpError) (#431).
     async fn try_get(&self, path: &str) -> Result<Option<Value>, QemDashboardError> {
         let url = format!("{}/{}", self.apiurl, path.trim_start_matches('/'));
         let bytes = self
@@ -122,10 +118,9 @@ impl QemDashboardClient {
 
     /// GET a list endpoint, surfacing failures as `Err`.
     ///
-    /// The fallible sibling of [`get_list`](Self::get_list): a fetch failure
-    /// returns [`QemDashboardError::Fetch`]. A successful non-array body is
-    /// treated as an empty list (matching `get_list`), so only a real fetch
-    /// failure — not a shape surprise — is an error.
+    /// The fallible sibling of [`get_list`](Self::get_list). A successful
+    /// non-array body is still an empty list, so only a real fetch failure —
+    /// not a shape surprise — is an error.
     async fn try_get_list(&self, path: &str) -> Result<Vec<Value>, QemDashboardError> {
         match self.try_get(path).await? {
             Some(Value::Array(items)) => Ok(items),
@@ -152,8 +147,8 @@ impl QemDashboardClient {
             .await
     }
 
-    /// Fallible sibling of `incident_settings`: a
-    /// fetch failure returns [`QemDashboardError::Fetch`] instead of `[]`.
+    /// Fallible sibling of `incident_settings`, returning
+    /// [`QemDashboardError::Fetch`] instead of `[]`.
     ///
     /// # Errors
     ///
@@ -167,8 +162,8 @@ impl QemDashboardClient {
             .await
     }
 
-    /// Fallible sibling of `update_settings`: a fetch
-    /// failure returns [`QemDashboardError::Fetch`] instead of `[]`.
+    /// Fallible sibling of `update_settings`, returning
+    /// [`QemDashboardError::Fetch`] instead of `[]`.
     ///
     /// # Errors
     ///

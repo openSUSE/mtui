@@ -2,12 +2,10 @@
 //!
 //! `serve_http` mounts rmcp behind an axum `DefaultBodyLimit` derived from
 //! `config.mcp_max_request_bytes`, so an unauthenticated pre-session request
-//! cannot be buffered until memory exhaustion. The end-to-end 413 behavior is a
-//! deferred follow-up (it needs a live-socket + HTTP-client harness); here we
-//! prove the offline property the runner relies on: the same
-//! `DefaultBodyLimit` layer the runner applies composes onto a router carrying a
-//! `tower::Service` fallback (the shape rmcp's `StreamableHttpService` has),
-//! for both the capped and disabled cases.
+//! cannot be buffered until memory exhaustion. End-to-end 413 behaviour needs a
+//! live-socket harness; the offline property proven here is that the runner's
+//! `DefaultBodyLimit` layer composes onto a router carrying a `tower::Service`
+//! fallback (the shape rmcp's `StreamableHttpService` has), capped and disabled.
 
 #![cfg(feature = "mcp")]
 

@@ -12,12 +12,11 @@
 //! success and logging every failure along the way.
 //!
 //! # Testability seams
-//! The clock, the `stat` call, the URL opener, the file writer,
-//! and the `Refhosts` factory are injected as collaborators so the
-//! cache-refresh logic can be driven offline, via small object-safe traits
-//! ([`Clock`], [`FileStat`], [`Fetcher`], [`FileWriter`], [`RefhostsBuilder`]);
-//! production wiring uses [`SystemClock`], [`FsStat`], [`HttpFetcher`],
-//! [`AtomicFileWriter`], and [`PathRefhostsBuilder`].
+//! The clock, `stat`, the URL opener, the file writer and the `Refhosts`
+//! factory are injected as small object-safe traits ([`Clock`], [`FileStat`],
+//! [`Fetcher`], [`FileWriter`], [`RefhostsBuilder`]) so the cache-refresh logic
+//! can be driven offline; production wires [`SystemClock`], [`FsStat`],
+//! [`HttpFetcher`], [`AtomicFileWriter`] and [`PathRefhostsBuilder`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -34,9 +33,9 @@ use crate::http::{HttpClient, VerifyPolicy, resolve_verify};
 
 /// The subset of configuration a [`Resolver`] needs.
 ///
-/// Resolvers take this borrowed view rather than the whole `mtui_config::Config`
-/// so they stay decoupled from the full config surface and are trivial to
-/// construct in tests.
+/// A borrowed view rather than the whole `mtui_config::Config`, so resolvers
+/// stay decoupled from the full config surface and are trivial to construct in
+/// tests.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolveConfig<'a> {
     /// Comma-separated, ordered list of resolver names to try.
@@ -63,10 +62,8 @@ pub trait Clock: Send + Sync {
 
 /// The result of stat-ing the cache file.
 ///
-/// A typed three-state so tests can drive every `_is_refresh_needed` branch
-/// deterministically without real filesystem timing: it
-/// distinguishes "missing → refresh" (`ENOENT`) from "other OSError →
-/// propagate" and "present → compare mtime".
+/// A typed three-state so tests can drive every [`HttpsResolver`] refresh branch
+/// deterministically, without real filesystem timing.
 #[derive(Debug)]
 pub enum StatResult {
     /// The cache file does not exist (`ENOENT`) → force a refresh.
@@ -165,11 +162,9 @@ impl FileStat for FsStat {
 
 /// [`Fetcher`] backed by the shared [`HttpClient`].
 ///
-/// The client's TLS posture is fixed at build time (see [`HttpClient::new`]), so
-/// this fetcher ignores the per-call `verify` argument beyond recording that the
-/// resolver already resolved it — the client it holds was constructed with that
-/// same policy. It is created via `HttpFetcher::new`, which builds the client
-/// from the effective [`VerifyPolicy`].
+/// The client's TLS posture is fixed at build time (see [`HttpClient::new`]) by
+/// `HttpFetcher::new` from the effective [`VerifyPolicy`], so the per-call
+/// `verify` argument is ignored — it names the same policy.
 #[derive(Debug)]
 pub struct HttpFetcher {
     client: HttpClient,
@@ -277,10 +272,9 @@ impl Resolver for PathResolver {
 /// State shared by every refresh of one cache path, guarded by its
 /// [`refresh_lock`].
 ///
-/// `failed_at` remembers when the last download attempt failed, as a monotonic
-/// [`std::time::Instant`] (deliberately not the scriptable [`Clock`] seam: the
-/// comparison is "did that failure happen while *I* was waiting", a monotonic
-/// ordering question, not a cache-age computation).
+/// `failed_at` is a monotonic [`std::time::Instant`], deliberately not the
+/// scriptable [`Clock`] seam: it answers "did that failure happen while *I* was
+/// waiting", an ordering question, not a cache-age computation.
 #[derive(Default)]
 struct RefreshSlot {
     /// When the most recent download attempt failed; cleared on success.
@@ -294,11 +288,9 @@ struct RefreshSlot {
 /// [`RefhostsFactory::production`] is constructed on demand at every call site
 /// (Session autoconnect, `list_refhosts`, `add_host`), so concurrent resolves
 /// each hold their own resolver and would never share an instance field. Keyed
-/// by cache path rather than a single global so unrelated caches (in practice:
-/// per-test temp paths — production configures exactly one
-/// `config.refhosts_path`) never serialise each other; entries are one `Arc` +
-/// one small `Mutex` each and are never removed, which is fine at that
-/// cardinality.
+/// by cache path so unrelated caches (in practice per-test temp paths —
+/// production configures exactly one `config.refhosts_path`) never serialise
+/// each other; entries are never removed, which is fine at that cardinality.
 static REFRESH_LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<RefreshSlot>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -347,9 +339,8 @@ impl HttpsResolver {
 
     /// Whether the cache should be re-downloaded.
     ///
-    /// Missing cache → always refresh (the `ENOENT` branch). A non-"not
-    /// found" stat error propagates. Otherwise refresh iff the cache is older
-    /// than `expiration` seconds.
+    /// A missing cache always refreshes; otherwise refresh iff it is older than
+    /// `expiration` seconds.
     ///
     /// # Errors
     /// Returns [`RefhostError::Io`] if stat-ing the cache fails for a reason
@@ -371,9 +362,9 @@ impl HttpsResolver {
     /// Download `uri` under `verify` and return the bytes, best-effort
     /// persisting them to the cache path.
     ///
-    /// A mirror-write failure (e.g. `refhosts.path` points at a read-only,
-    /// package-managed file) is logged and does not fail the download: the
-    /// caller still gets the freshly fetched bytes to build from in-memory.
+    /// A mirror-write failure (a read-only, package-managed `refhosts.path`) is
+    /// logged but does not fail the download — the caller still gets the fetched
+    /// bytes to build from in memory.
     async fn refresh(&self, uri: &str, verify: VerifyPolicy) -> Result<Vec<u8>, RefhostError> {
         let bytes = self.fetcher.fetch(uri, verify).await?;
         if let Err(e) = self.writer.write(&bytes, &self.cache_path) {
@@ -388,23 +379,20 @@ impl HttpsResolver {
     /// Refresh the cache if it is missing or stale.
     ///
     /// Concurrent resolves **single-flight** the download: the first caller to
-    /// see a stale cache takes the per-cache-path [`refresh_lock`] and fetches;
-    /// callers arriving meanwhile wait on the same lock and then *re-check*
-    /// freshness — the leader's write bumped the cache mtime, so they build
-    /// from the fresh cache instead of stampeding the server with duplicate
-    /// downloads. One concurrent download, not one per caller — and that holds
-    /// on failure too: a waiter that waited through a *failed* download fails
-    /// fast ([`RefhostError::RefreshJustFailed`]) instead of repeating an
-    /// attempt that would almost certainly fail again, so a down server costs
-    /// the group one transport timeout, not one per waiter. A *later* caller
-    /// (one that was not yet waiting when the failure happened) retries
-    /// normally.
+    /// see a stale cache takes the per-cache-path [`refresh_lock`] and fetches,
+    /// and callers arriving meanwhile wait on it, then *re-check* freshness —
+    /// the leader's write bumped the mtime, so they build from the fresh cache
+    /// instead of stampeding the server. That holds on failure too: a waiter
+    /// that waited through a *failed* download fails fast
+    /// ([`RefhostError::RefreshJustFailed`]) rather than repeating an attempt
+    /// that would almost certainly fail again, so a down server costs the group
+    /// one transport timeout, not one per waiter. A caller that was not yet
+    /// waiting when the failure happened retries normally.
     ///
-    /// Returns `Some(bytes)` when this call performed the download (so
-    /// [`resolve`](Resolver::resolve) should build from those bytes rather
-    /// than re-reading a cache that may not have been written), or `None` when
-    /// no download happened (the cache was already fresh, or this task waited
-    /// and found the leader's fresh cache in place).
+    /// Returns `Some(bytes)` when this call performed the download — so
+    /// [`resolve`](Resolver::resolve) builds from those rather than re-reading a
+    /// cache that may not have been written — and `None` when no download
+    /// happened.
     async fn refresh_if_needed(
         &self,
         config: ResolveConfig<'_>,
@@ -416,12 +404,10 @@ impl HttpsResolver {
         let wait_started = std::time::Instant::now();
         let lock = refresh_lock(&self.cache_path);
         let mut slot = lock.lock().await;
-        // Re-check under the lock: the cache may have been refreshed while
-        // this task waited for the leader to finish.
+        // Re-check under the lock: the leader may have refreshed meanwhile.
         if self.is_refresh_needed(config.refhosts_https_expiration)? {
-            // Still stale, so no successful refresh happened meanwhile. If a
-            // download *failed* while this task waited, adopt that outcome
-            // rather than serially re-fetching.
+            // A download that failed while this task waited is adopted rather
+            // than serially re-fetched.
             if slot.failed_at.is_some_and(|failed| failed > wait_started) {
                 return Err(RefhostError::RefreshJustFailed);
             }
@@ -457,14 +443,11 @@ impl Resolver for HttpsResolver {
 
 /// Map the global [`SslVerify`] onto the per-call verify override.
 ///
-/// Upstream passes `config.ssl_verify` (which is `None` when unset) straight to
-/// `resolve_verify(True, ...)`. Here an unset policy is modelled as
-/// [`SslVerify::Enabled`] being the config default, so we only *override* the
-/// per-site `Default(true)` when the user explicitly disabled verification or
-/// named a CA bundle.
+/// An unset policy is [`SslVerify::Enabled`], the config default, so the
+/// per-site `Default(true)` is overridden only when the user explicitly disabled
+/// verification or named a CA bundle.
 fn policy_override(ssl_verify: &SslVerify) -> Option<VerifyPolicy> {
     match ssl_verify {
-        // Verify-by-default is already the per-site default; no override needed.
         SslVerify::Enabled => None,
         other => Some(VerifyPolicy::from_config(other)),
     }
@@ -475,13 +458,11 @@ fn policy_override(ssl_verify: &SslVerify) -> Option<VerifyPolicy> {
 /// to fail — e.g. a read-only, package-managed `refhosts.path`.
 ///
 /// [`AtomicFileWriter`] creates its temp file in that same directory, so the
-/// directory — not the target file itself — is what must be writable. A
-/// missing directory counts as "not writable" here even though
-/// `mtui_config::atomic::write` would try to create it, since a directory
-/// missing at this level (e.g. `/usr/share/qam-metadata`) is typically
-/// root-owned and uncreatable by the caller either way. This is a plain
-/// permission-bit probe (no ACLs/mounts considered), so it only gates a
-/// warning, never a hard failure.
+/// directory — not the target file — is what must be writable. A missing
+/// directory counts as "not writable" even though `mtui_config::atomic::write`
+/// would try to create it, since a directory missing at this level (e.g.
+/// `/usr/share/qam-metadata`) is typically root-owned and uncreatable anyway.
+/// A plain permission-bit probe (no ACLs/mounts), so it gates only a warning.
 fn refhosts_mirror_dir_writable(refhosts_path: &Path) -> bool {
     let Some(parent) = refhosts_path.parent().filter(|p| !p.as_os_str().is_empty()) else {
         return true;
@@ -495,11 +476,9 @@ fn refhosts_mirror_dir_writable(refhosts_path: &Path) -> bool {
 
 /// Dispatches to a configured [`Resolver`] to build a [`Refhosts`].
 ///
-/// `config.refhosts_resolvers` is a
-/// comma-separated, ordered list of resolver names; each is tried in turn.
-/// Unknown names are logged and skipped; a resolver error is logged (with its
-/// cause) and the next resolver is tried. If every resolver is exhausted,
-/// [`RefhostError::ResolveFailed`] is returned.
+/// Each name in `config.refhosts_resolvers` is tried in turn; an unknown name
+/// or a resolver error is logged and the next is tried, and an exhausted list
+/// is [`RefhostError::ResolveFailed`].
 pub struct RefhostsFactory {
     resolvers: Vec<(String, Box<dyn Resolver>)>,
 }
@@ -570,11 +549,7 @@ impl RefhostsFactory {
 
 #[cfg(test)]
 mod tests {
-    //! The mock seams below drive each collaborator and record
-    //! their calls for assertion.
-    //!
-    //! The refresh single-flight tests exercise Rust-specific concurrent-access
-    //! locking that has no single-threaded equivalent.
+    //! The mock seams below drive each collaborator and record their calls.
 
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -788,7 +763,6 @@ default:
 
     #[tokio::test]
     async fn resolve_uses_cache_path_after_refresh_check() {
-        // Fresh cache (delta = 1, expiration 3600) → no fetch, build from cache.
         let fetcher = RecordingFetcher::new(b"");
         let builder = RecordingBuilder::new();
         let built = builder.built.clone();
@@ -820,9 +794,9 @@ default:
 
     // --- HttpsResolver: refresh single-flight ------------------------------
 
-    /// A fetcher that counts calls and dwells long enough for every concurrent
-    /// resolver to pass its unlocked staleness pre-check while the leader is
-    /// still mid-download — the exact window the thundering herd lived in.
+    /// Dwells long enough for every concurrent resolver to pass its unlocked
+    /// staleness pre-check while the leader is mid-download — the exact window
+    /// the thundering herd lived in.
     struct SlowCountingFetcher {
         calls: Arc<AtomicU64>,
         payload: Vec<u8>,
@@ -836,8 +810,8 @@ default:
         }
     }
 
-    /// A fetcher that counts calls, dwells like [`SlowCountingFetcher`], and
-    /// always fails — a down server with a real transport timeout.
+    /// Dwells like [`SlowCountingFetcher`] but always fails — a down server
+    /// with a real transport timeout.
     struct SlowFailingFetcher {
         calls: Arc<AtomicU64>,
     }
@@ -879,10 +853,8 @@ default:
 
     #[tokio::test]
     async fn concurrent_stale_resolves_share_one_fetch() {
-        // Four resolver *instances* over one missing cache file — the shape of
-        // four concurrent sessions each constructing their own factory. Only
-        // one download may happen; the waiters must re-check and build from
-        // the leader's freshly-written cache.
+        // Four resolver *instances* over one missing cache file: the shape of
+        // four concurrent sessions each constructing their own factory.
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
         let calls = Arc::new(AtomicU64::new(0));
@@ -919,10 +891,9 @@ default:
 
     #[tokio::test]
     async fn waiters_fail_fast_after_concurrent_failure() {
-        // Two concurrent resolves against a down server: the leader eats the
-        // full (slow) transport failure; the waiter, having waited through
-        // that failure, must fail fast instead of serially repeating it —
-        // one timeout for the group, not one per waiter.
+        // Against a down server the leader eats the full (slow) transport
+        // failure; the waiter must fail fast rather than repeat it — one
+        // timeout for the group, not one per waiter.
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
         let calls = Arc::new(AtomicU64::new(0));
@@ -965,8 +936,7 @@ default:
 
     #[tokio::test]
     async fn failed_refresh_is_retried_not_latched() {
-        // A failed download must propagate to its caller and leave the next
-        // caller free to retry (no poisoned/latched single-flight state).
+        // No poisoned/latched single-flight state: the next caller may retry.
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("refhosts.yml");
         let calls = Arc::new(AtomicU64::new(0));
@@ -1022,7 +992,6 @@ default:
 
     #[test]
     fn is_refresh_needed_fresh_cache() {
-        // delta = 1; expiration = 3600 → no refresh.
         let r = refresh_probe(1_000_000, ScriptedStat::Mtime(999_999));
         assert!(!r.is_refresh_needed(3600).unwrap());
     }
@@ -1078,8 +1047,6 @@ default:
 
     #[tokio::test]
     async fn refresh_write_failure_is_non_fatal() {
-        // A read-only refhosts.path must not abort the resolve: the download
-        // succeeded, so the store is built from the in-memory bytes.
         let fetcher = RecordingFetcher::new(b"yaml-bytes");
         let builder = RecordingBuilder::new();
         let built_from_bytes = builder.built_from_bytes.clone();
@@ -1146,7 +1113,7 @@ default:
             RecordingBuilder::new(),
             "/x",
         );
-        // ssl_verify unset (Enabled) → per-site default True flows to the opener.
+        // Unset (Enabled): the per-site verify default reaches the fetcher.
         let ssl = SslVerify::Enabled;
         r.refresh_if_needed(cfg(
             "https",
@@ -1320,7 +1287,6 @@ default:
 
     #[test]
     fn system_clock_is_monotonicish() {
-        // Smoke: the system clock returns a plausibly-recent epoch second.
         assert!(SystemClock.now_unix() > 1_600_000_000);
     }
 }

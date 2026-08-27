@@ -1,23 +1,16 @@
-//! The `mtui-types` error hierarchy.
+//! The `mtui-types` error hierarchy: the foundation every later crate imports,
+//! scoped to what the domain types themselves need.
 //!
-//! This is the foundation error module every later crate imports, scoped to
-//! what the domain types actually need.
-//!
-//! Only the RRID / Request-Review-ID parse errors live here — they are
-//! consumed by the RRID parser (see the `rrid` module) and are covered by
-//! golden test vectors. `mtui-hosts` and `mtui-datasources` define their own
-//! error enums (`HostError`, `GiteaError`, and friends) rather than extending
-//! this one via `#[from]`.
+//! Higher crates define their own enums (`HostError`, `GiteaError`, ...) rather
+//! than extending this one via `#[from]`.
 
 use thiserror::Error;
 
 /// Convenience alias for `Result<T, `[`enum@Error`]`>`.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Top-level error type for the `mtui-types` crate.
-///
-/// Sub-errors are wrapped via `#[from]` so callers can use `?` and still match
-/// on the specific failure category.
+/// Top-level error type for the `mtui-types` crate. Sub-errors are wrapped via
+/// `#[from]`, so callers can use `?` and still match the failure category.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -52,11 +45,10 @@ pub enum Error {
 
 /// Error produced when a repository URL fails validation.
 ///
-/// Repository URLs parsed from testreport metadata are interpolated into remote
-/// `zypper ar`/`rr` commands executed as root; a value carrying shell
-/// metacharacters, whitespace, an option-like leading dash, or an unsupported
-/// URI scheme is a command-injection vector. [`RepoUrl`](crate::repo_url::RepoUrl)
-/// rejects such input with a typed error *before* it reaches host execution.
+/// Metadata-supplied URLs are interpolated into remote `zypper ar`/`rr` commands
+/// run as root, so shell metacharacters, whitespace, an option-like leading dash
+/// or an unsupported scheme are a command-injection vector;
+/// [`RepoUrl`](crate::repo_url::RepoUrl) rejects them *before* host execution.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RepoUrlParseError {
@@ -97,11 +89,10 @@ pub enum RepoUrlParseError {
 
 /// Error produced when a package name or `name=version` spec fails validation.
 ///
-/// Package specifiers parsed from testreport metadata are interpolated into
-/// remote commands executed as root; a value carrying shell metacharacters,
-/// whitespace, or an option-like leading dash is a command-injection vector.
-/// [`PackageSpec`](crate::package_spec::PackageSpec) rejects such input with a
-/// typed error *before* it reaches host execution.
+/// Metadata-supplied specs are interpolated into remote commands run as root, so
+/// shell metacharacters, whitespace or an option-like leading dash are a
+/// command-injection vector; [`PackageSpec`](crate::package_spec::PackageSpec)
+/// rejects them *before* host execution.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PackageSpecParseError {
@@ -139,10 +130,8 @@ pub enum PackageSpecParseError {
 
 /// Error produced when a `refhosts.yml` document cannot be parsed.
 ///
-/// A document-level YAML parse failure propagates as this typed error wrapping
-/// the underlying `serde-saphyr` failure. Note: individual *malformed rows* do not
-/// surface here — they are dropped (logged) so one bad row
-/// never aborts the whole load. Only a document-level YAML failure is fatal.
+/// Only a document-level YAML failure is fatal: an individual malformed *row* is
+/// dropped and logged, so one bad row never aborts the whole load.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RefhostsParseError {
@@ -151,11 +140,8 @@ pub enum RefhostsParseError {
     Yaml(#[from] serde_saphyr::Error),
 }
 
-/// Error produced when an RPM version string cannot be parsed.
-///
-/// An empty version string is a typed, fallible parse error rather than a
-/// panic, following the crate's fallible-constructor convention (see
-/// [`RridParseError`]).
+/// Error produced when an RPM version string cannot be parsed. An empty version
+/// is a typed parse error rather than a panic, as everywhere in this crate.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RpmVersionParseError {
@@ -165,8 +151,6 @@ pub enum RpmVersionParseError {
 }
 
 /// Error produced when a request-kind token is not recognised.
-///
-/// The `{raw:?}` debug formatting renders the offending token quoted.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error("unknown request kind: {raw:?}")]
 pub struct RequestKindParseError {
@@ -176,9 +160,8 @@ pub struct RequestKindParseError {
 
 /// Errors produced while parsing an OBS Request Review ID (RRID).
 ///
-/// Every message is rendered with the `"OBS Request Review ID: "` prefix so a
-/// parse failure is self-identifying in a log line or a CI transcript, where the
-/// bare component error would be ambiguous.
+/// Every message carries the `"OBS Request Review ID: "` prefix so a failure is
+/// self-identifying in a log line or CI transcript.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RridParseError {
@@ -275,7 +258,6 @@ mod tests {
     fn from_rrid_parse_error_wraps_and_displays_transparently() {
         let rrid = RridParseError::TooManyComponents { limit: 4 };
         let err: Error = rrid.clone().into();
-        // `#[error(transparent)]` means the wrapper's Display equals the inner's.
         assert_eq!(err.to_string(), rrid.to_string());
         assert!(matches!(err, Error::RridParse(_)));
     }
@@ -283,9 +265,8 @@ mod tests {
     #[test]
     fn transparent_wrapper_delegates_source_to_inner() {
         use std::error::Error as _;
-        // `#[error(transparent)]` forwards `source()` to the inner error. The
-        // inner `RridParseError` is a leaf (no nested source), so the wrapper
-        // reports `None` — proving the wrapper adds no spurious layer.
+        // The inner error is a leaf, so a `None` source proves `transparent`
+        // adds no spurious layer of its own.
         let err: Error = RridParseError::TooManyComponents { limit: 4 }.into();
         assert!(err.source().is_none());
     }

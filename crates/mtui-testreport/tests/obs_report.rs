@@ -1,12 +1,9 @@
-//! Covers the `ObsReport` surface that lands in task nbv.11: `id`, `parser`,
-//! `update_repos_parser` (dispatching to `obsrepoparse` over `report_wd()`), and
-//! `check_hash` (the constant `(true, "", "")`).
+//! Covers the `ObsReport` surface: `id`, `parser`, `update_repos_parser`
+//! (dispatching to `obsrepoparse` over `report_wd()`), `check_hash` (constant)
+//! and `set_repo`.
 //!
-//! Not covered here (deferred by design, mirroring the `SlReport`/`PiReport`
-//! boundary):
-//! * `list_update_commands` doer-rendering — awaits the `OperationGroup` seam;
-//!   only the no-op stub is smoke-checked.
-//! * `_show_yourself_data` — not on the trait skeleton yet.
+//! `list_update_commands` doer-rendering awaits the `OperationGroup` seam; only
+//! the no-op stub is smoke-checked.
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
@@ -71,7 +68,6 @@ fn update_repos_parser_empty_when_no_report_loaded() {
     assert!(r.update_repos_parser().is_empty());
 }
 
-/// Upstream `test_obs_check_hash_always_true`.
 #[tokio::test]
 async fn check_hash_always_true() {
     let mut r = ObsReport::new(config());
@@ -79,8 +75,7 @@ async fn check_hash_always_true() {
     assert_eq!(r.check_hash().await, HashCheck::Ok);
 }
 
-/// Upstream `test_obs_list_update_commands_invokes_display` — the doer-rendering
-/// is deferred, so only smoke-check the no-op stub does not panic.
+/// The doer-rendering is deferred; smoke-check the stub does not panic.
 #[test]
 fn list_update_commands_is_a_noop_stub() {
     let r = ObsReport::new(config());

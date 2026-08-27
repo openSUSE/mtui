@@ -1,20 +1,18 @@
 //! XML parsers for the OBS payloads the native QAM ops need (no `osc`).
 //!
-//! Small, explicit
-//! `quick-xml` parsers over the `withfullhistory=1` request document, the
-//! `group?login` directory, and the `MAINT:RejectReason` attribute envelope.
-//! The request parser exposes each review's NESTED `<history>`
-//! (`withfullhistory` puts the assignment events inside each `<review>`), which
-//! the assignment state machine in [`crate::obs`] inference (G1e) replays.
+//! Small, explicit `quick-xml` parsers over the `withfullhistory=1` request
+//! document, the `group?login` directory and the `MAINT:RejectReason` attribute
+//! envelope. The request parser exposes each review's NESTED `<history>` — with
+//! `withfullhistory` the assignment events sit inside each `<review>` — which
+//! [`crate::obs::inference`] replays.
 //!
 //! **Security (DTD/XXE guard, PR#323):** OBS never sends a `<!DOCTYPE>` /
-//! `<!ENTITY>`, so every parser refuses one *before* parsing. This neutralises
-//! an entity-expansion DoS (billion-laughs / quadratic blowup) from a
-//! compromised or MITM'd (`ssl_verify=false`) response, without pulling in a
-//! third-party XML parser. Defence in depth: `quick-xml` does not expand general
-//! entities anyway (it surfaces them as distinct events), so a DTD-free body
-//! with an entity reference never expands either. This mirrors the guard in
-//! `crate::obs::client::error_summary`.
+//! `<!ENTITY>`, so every parser refuses one *before* parsing, neutralising an
+//! entity-expansion DoS (billion-laughs / quadratic blowup) from a compromised
+//! or MITM'd (`ssl_verify=false`) response without a third-party XML parser.
+//! `quick-xml` does not expand general entities anyway — it surfaces them as
+//! distinct events — so a DTD-free body with an entity reference never expands
+//! either. Same guard as `crate::obs::client::error_summary`.
 //!
 //! The four `parse_*` entry points are `pub` (not `pub(crate)`) solely so the
 //! detached cargo-fuzz harness in `fuzz/` can drive them with arbitrary bytes;
@@ -107,10 +105,9 @@ fn parse_err(context: &str) -> ObsError {
 fn attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
     for a in e.attributes().flatten() {
         if a.key.as_ref() == key {
-            // `normalized_value` resolves standard XML character references but
-            // NOT DTD-defined entities — and the DTD guard has already refused
-            // any `<!ENTITY>`, so an attribute entity-expansion vector cannot
-            // reach here. `XmlVersion::default()` is the implicit 1.0 the OBS
+            // `normalized_value` resolves standard character references but not
+            // DTD-defined entities, and the DTD guard already refused any
+            // `<!ENTITY>`. `XmlVersion::default()` is the implicit 1.0 the OBS
             // API speaks.
             return a
                 .normalized_value(XmlVersion::default())
@@ -469,9 +466,7 @@ mod tests {
 
     #[test]
     fn parse_request_self_closing_history() {
-        // A `withfullhistory` review may carry a self-closing `<history/>`
-        // (attributes only, no `<description>`): the event is recorded with an
-        // empty description.
+        // A self-closing `<history/>` records an event with an empty description.
         let xml = concat!(
             r#"<request id="7">"#,
             r#"<review state="new" by_group="qam-sle">"#,
@@ -487,15 +482,13 @@ mod tests {
 
     #[test]
     fn parse_request_malformed_xml_is_parse_error() {
-        // A truncated/mismatched document surfaces as a typed ObsError::Parse.
         let err = parse_request(r#"<request id="1"><review></request>"#).unwrap_err();
         assert!(err.to_string().contains("malformed OBS request"), "{err}");
     }
 
     #[test]
     fn parse_request_truncated_before_request_close_is_error() {
-        // A request body cut off before `</request>` (dropped connection /
-        // truncated response) must not parse as a partial success.
+        // A body cut off before `</request>` must not be a partial success.
         let err = parse_request(r#"<request id="1"><state name="review"/>"#).unwrap_err();
         assert!(err.to_string().contains("malformed OBS request"), "{err}");
     }
@@ -521,12 +514,11 @@ mod tests {
 
     #[test]
     fn toplevel_parsers_still_tolerate_natural_eof() {
-        // Regression guard: the out-of-scope top-level loops (no single wrapping
-        // element) legitimately end on EOF and must keep parsing cleanly.
+        // The top-level loops have no single wrapping element, so they
+        // legitimately end on EOF and must keep parsing cleanly.
         assert!(parse_group_directory(r#"<directory count="0"/>"#).is_ok());
         assert!(parse_reject_reason_values("<attributes/>").is_ok());
         assert!(parse_request_collection("<collection/>").is_ok());
-        // And a complete, well-formed request still parses.
         assert!(parse_request(REQUEST_XML).is_ok());
     }
 

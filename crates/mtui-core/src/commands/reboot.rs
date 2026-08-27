@@ -10,14 +10,12 @@ use crate::session::Session;
 
 /// Reboots reference hosts and reconnects once they are back up.
 ///
-/// Reboots every connected host
-/// (or only those given with `-t`), dispatching the reboot without waiting (the
-/// SSH connection is expected to drop), then reconnecting each with retries and
-/// backoff. Works for transactional and non-transactional hosts.
+/// Reboots every connected host (or only those given with `-t`), dispatching
+/// without waiting since the SSH connection is expected to drop, then
+/// reconnecting each with retries and backoff. Transactional or not.
 ///
-/// While testing a Product Increment, the per-host testing lock is re-applied
-/// after the reboot (a reboot clears `/var/lock`), so it is not lost — the
-/// report's `lock_comment` carries the relock comment (empty when no PI
+/// A reboot clears `/var/lock`, so a Product Increment's per-host testing lock
+/// is re-applied afterwards from the report's `lock_comment` (empty when no PI
 /// assignment is active).
 pub struct Reboot;
 
@@ -44,11 +42,8 @@ impl Command for Reboot {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // Honour `-t`: reboot only the selected hosts of the active template.
-        // Reject an explicit host that is not connected;
-        // the deprecated `all` sentinel means every connected host. Without `-t`
-        // (or with `all`) every connected host of the fan-out–selected template
-        // is rebooted. An empty group is `NoRefhostsDefined`.
+        // An explicit host that is not connected is rejected; the deprecated
+        // `all` sentinel, like no `-t` at all, means every connected host.
         let targets = session.targets();
         if targets.is_empty() {
             return Err(CommandError::NoRefhostsDefined);
@@ -73,15 +68,11 @@ impl Command for Reboot {
 
         let relock = session.metadata().base().lock_comment.clone();
         let targets = session.targets_mut();
-        // Upstream `targets.reboot` uses the default reboot command; the group's
-        // reboot drops each selected connection, reconnects, and re-applies the
-        // lock (to the selected hosts) when `relock` is non-empty.
         let outcomes = targets.reboot_selected("reboot", &relock, &selected).await;
 
-        // Report each host: `Ok` means it rebooted (boot id changed) and
-        // reconnected; `Err` means the reconnect failed or the boot id was
-        // unchanged (the host never rebooted). Fail if any host failed so an MCP
-        // caller never sees a silent "success" on a host that did not reboot.
+        // `Err` is a failed reconnect *or* an unchanged boot id (the host never
+        // rebooted); either must fail the command, so an MCP caller never sees a
+        // silent success on a host that did not reboot.
         let mut failed: Vec<String> = Vec::new();
         for (host, outcome) in &outcomes {
             match outcome {
@@ -137,7 +128,7 @@ mod tests {
             session_with_reboot_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", true)]);
         let args = matches(&Reboot, &[]);
         Reboot.call(&mut session, &args).await.unwrap();
-        // The group is preserved (reboot mutates in place, does not drop hosts).
+        // Reboot mutates in place and drops no host.
         assert_eq!(session.targets().names(), vec!["h1", "h2"]);
         let out = buf.contents();
         assert!(out.contains("h1: rebooted & reconnected"), "{out}");
@@ -147,14 +138,12 @@ mod tests {
 
     #[tokio::test]
     async fn target_selection_reboots_only_named_host() {
-        // Regression: `-t h1` must reboot only h1 and leave h2
-        // untouched. Both hosts would reboot cleanly if the whole group were
-        // rebooted, so the absence of any h2 line proves h2 was skipped.
+        // Both hosts would reboot cleanly if the whole group were rebooted, so
+        // the absence of any h2 line proves `-t h1` skipped it.
         let (mut session, buf) =
             session_with_reboot_outcomes("SUSE:Maintenance:1:1", &[("h1", true), ("h2", true)]);
         let args = matches(&Reboot, &["-t", "h1"]);
         Reboot.call(&mut session, &args).await.unwrap();
-        // The group is preserved intact (both hosts remain members).
         assert_eq!(session.targets().names(), vec!["h1", "h2"]);
         let out = buf.contents();
         assert!(out.contains("h1: rebooted & reconnected"), "{out}");

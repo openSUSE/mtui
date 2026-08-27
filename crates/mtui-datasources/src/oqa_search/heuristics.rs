@@ -1,9 +1,8 @@
 //! Heuristics shared with the oqa-search tool
 //! (<https://github.com/mjdonis/oqa-search>), preserved verbatim to avoid
-//! behavioural drift when comparing output against it. These
-//! constants drive job-group filtering and the build-check log line extraction;
-//! the golden `.matches` fixtures are the regression signal that they stay in
-//! sync with it.
+//! behavioural drift when comparing output against it. They drive job-group
+//! filtering and build-check log-line extraction; the golden `.matches`
+//! fixtures are the regression signal that they stay in sync.
 
 use std::sync::LazyLock;
 
@@ -140,7 +139,6 @@ mod tests {
             PYTHON_FLAVOR_RE.replace("python3-tornado", "python-"),
             "python-tornado"
         );
-        // Non-flavored names are untouched.
         assert_eq!(PYTHON_FLAVOR_RE.replace("bash", "python-"), "bash");
     }
 }

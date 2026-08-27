@@ -2,21 +2,19 @@
 //!
 //! Commands write human-readable output to [`Session`]'s
 //! [`CommandPromptDisplay`]. The REPL points that at stdout; an MCP tool must
-//! instead *capture* it so it can be returned as the tool result. This module
-//! provides a shared in-memory sink and a `session` constructor that wires it
-//! in via the public [`Session::with_display`] seam.
+//! *capture* it to return it as the tool result, so this module provides a shared
+//! in-memory sink and a `session` constructor wiring it in through the public
+//! [`Session::with_display`] seam.
 //!
 //! ## Write-time cap
 //!
-//! The sink is **bounded**: it accepts at most `limit` bytes and *discards* the
-//! overflow at write time, recording the dropped-byte count. A command that
-//! emits gigabytes (a huge fan-out `run` log) therefore never buffers more than
-//! `limit` bytes of it in memory — the cap applies before allocation, not after.
-//! `SharedBuf::take_with_dropped` returns the captured bytes plus the overflow
-//! count so [`crate::session::McpSession::run_command`] can append the same
-//! truncation notice `crate::slim::cap_output` would (exactly once, with a
-//! correct count). `limit == 0` disables the cap (the buffer is unbounded, the
-//! prior behaviour).
+//! The sink accepts at most `limit` bytes and *discards* the overflow at write
+//! time, counting it: a command emitting gigabytes (a huge fan-out `run` log)
+//! never buffers more than `limit`, because the cap applies before allocation.
+//! `SharedBuf::take_with_dropped` hands back the bytes plus that count, so
+//! [`crate::session::McpSession::run_command`] can append the same truncation
+//! notice `crate::slim::cap_output` would, once and with a correct count.
+//! `limit == 0` disables the cap.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -39,9 +37,8 @@ struct Inner {
 /// A cloneable handle to a command's captured output.
 ///
 /// Backed by an `Arc<Mutex<Inner>>` shared with the [`Session`]'s display sink.
-/// [`take`](SharedBuf::take) / `take_with_dropped`
-/// atomically read and clear it, which is how each `call_tool` isolates its own
-/// output. Writes beyond `limit` are discarded and counted (see the module docs).
+/// [`take`](SharedBuf::take) / `take_with_dropped` atomically read and clear it,
+/// which is how each `call_tool` isolates its own output.
 #[derive(Clone, Default)]
 pub struct SharedBuf(Arc<Mutex<Inner>>);
 
@@ -56,11 +53,8 @@ impl SharedBuf {
         })))
     }
 
-    /// Reads the buffered output as a UTF-8 string and clears the buffer,
-    /// discarding the dropped-byte count.
-    ///
-    /// Invalid UTF-8 is lossily converted (display output is text, so this is a
-    /// defensive fallback rather than an expected path).
+    /// Reads the buffered output as a UTF-8 string (lossily, defensively) and
+    /// clears the buffer, discarding the dropped-byte count.
     #[must_use]
     pub fn take(&self) -> String {
         self.take_with_dropped().0
@@ -69,10 +63,8 @@ impl SharedBuf {
     /// Reads the buffered output plus the number of overflow bytes discarded
     /// since the last take, then clears both.
     ///
-    /// `dropped == 0` means nothing was truncated at write time; a non-zero
-    /// value is the budget overrun (mirrors `cap_output`'s `total − limit`
-    /// accounting), independent of the small extra bytes a codepoint-boundary
-    /// trim may shed.
+    /// A non-zero `dropped` is the budget overrun, mirroring `cap_output`'s
+    /// `total − limit` accounting.
     #[must_use]
     pub(crate) fn take_with_dropped(&self) -> (String, usize) {
         let mut guard = self.0.lock().expect("capture buffer poisoned");
@@ -91,8 +83,8 @@ impl Write for SharedBuf {
         }
         let remaining = guard.limit.saturating_sub(guard.bytes.len());
         if remaining == 0 {
-            // Already at budget: discard the whole write, count it, but report
-            // the bytes as consumed so the writer does not error/retry.
+            // At budget: discard and count, but report the bytes as consumed so
+            // the writer does not error or retry.
             guard.dropped += data.len();
             return Ok(data.len());
         }
@@ -110,8 +102,8 @@ impl Write for SharedBuf {
 /// Builds a headless [`Session`] whose display is captured into a [`SharedBuf`]
 /// bounded to `config.mcp_max_output_bytes`.
 ///
-/// `is_repl` is `false`: this is a non-interactive (MCP) session. Color is
-/// disabled so captured text is plain (an LLM client renders the raw string).
+/// `is_repl` is `false` and color is disabled, so the captured text is the plain
+/// string an LLM client renders.
 #[must_use]
 pub(crate) fn session(config: Config) -> (Session, SharedBuf) {
     let buf = SharedBuf::with_limit(config.mcp_max_output_bytes);
@@ -145,7 +137,6 @@ mod tests {
     #[test]
     fn over_limit_stops_appending_and_counts_overflow() {
         let mut buf = SharedBuf::with_limit(4);
-        // One write straddling the budget: 4 kept, 6 discarded.
         let n = buf.write(b"abcdefghij").unwrap();
         assert_eq!(
             n, 10,
@@ -173,7 +164,6 @@ mod tests {
         buf.write_all(b"abcdef").unwrap();
         let (_, first_dropped) = buf.take_with_dropped();
         assert_eq!(first_dropped, 2);
-        // A fresh call starts clean: no residual bytes or dropped count.
         buf.write_all(b"xy").unwrap();
         let (text, dropped) = buf.take_with_dropped();
         assert_eq!(text, "xy");

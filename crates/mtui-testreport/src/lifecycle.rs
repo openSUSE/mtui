@@ -1,20 +1,16 @@
 //! The test-report construction lifecycle (`make_testreport`).
 //!
 //! Selects the report class by RRID kind (`tr_factory`), runs the checkout +
-//! read cycle, and applies workflow selection + the deferred-autoconnect
-//! flag for the auto/kernel update kinds.
+//! read cycle, and applies workflow selection + the deferred-autoconnect flag
+//! for the auto/kernel update kinds.
 //!
-//! The Rust split keeps this crate free of the host-connect layer:
-//! * The actual host connect is **deferred to the caller** (the composition
-//!   root, `mtui-core::Session::load_update`), which owns the arbiter wiring and
-//!   the refhosts-from-testplatform resolution. `make_testreport` only records
-//!   the intent via [`TestReportBase::autoconnect_pending`](crate::testreport::TestReportBase::autoconnect_pending).
-//! * The QEM Dashboard / auto-openQA enrichment runs inside `make_testreport`
-//!   for the `-a` (auto) kind: it builds the [`QemIncident`], runs
-//!   [`DashboardAutoOpenQA`], and — when the auto result has no install jobs
-//!   (or they failed) — **downgrades the workflow to [`Workflow::Manual`]**
-//!   and defers the reference-host connect (autoconnect only fires on that
-//!   manual-downgrade path).
+//! This crate stays free of the host-connect layer: the connect belongs to the
+//! composition root (`mtui-core::Session::load_update`), which owns the arbiter
+//! wiring and the refhosts-from-testplatform resolution, so `make_testreport`
+//! only records the intent via
+//! [`TestReportBase::autoconnect_pending`](crate::testreport::TestReportBase::autoconnect_pending).
+//! The QEM Dashboard / auto-openQA enrichment does run here, for the `-a` kind,
+//! and autoconnect fires only on its downgrade-to-[`Workflow::Manual`] path.
 
 use mtui_config::options::Config;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
@@ -32,10 +28,8 @@ use crate::testreport::{HashCheck, ReadError, TestReport};
 /// Which update kind produced the report — selects the workflow and whether
 /// autoconnect defaults on.
 ///
-/// The distinction between the `-a` (auto) and `-k` (kernel) update kinds:
-/// the concrete `TestReport` class is chosen by RRID kind (`tr_factory`),
-/// but the *workflow* and *autoconnect default* come from the update kind
-/// the operator named on the command line.
+/// Orthogonal to the RRID kind, which selects the concrete `TestReport` class
+/// (`tr_factory`); this is the kind the operator named on the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateKind {
     /// An automatic OBS update (`load_template -a`). Workflow starts
@@ -70,12 +64,8 @@ fn tr_factory(update: &UpdateID, config: Config) -> Box<dyn TestReport + Send + 
     }
 }
 
-/// A [`NullReport`] carrying the reason its load failed.
-///
-/// The load-failure substitute [`make_testreport`] returns instead of a real
-/// report. The reason is stashed on [`TestReportBase::load_error`](crate::testreport::TestReportBase::load_error) so the caller
-/// (`Session::load_update` → `load_template`) can surface *why* the load failed
-/// rather than a bare "could not load".
+/// A [`NullReport`] carrying the reason its load failed, so
+/// `Session::load_update` can surface *why* rather than "could not load".
 fn null_with_error(config: Config, reason: String) -> NullReport {
     let mut report = NullReport::new(config);
     report.base_mut().load_error = Some(reason);
@@ -85,26 +75,23 @@ fn null_with_error(config: Config, reason: String) -> NullReport {
 /// Builds and populates a [`TestReport`] for `update`.
 ///
 /// 1. Selects the report class by RRID kind (`tr_factory`).
-/// 2. Drives [`checkout_and_read`](crate::checkout::checkout_and_read): reads `template_dir/<rrid>/log`; a missing
-///    template triggers a `svn` checkout and one retry.
+/// 2. Reads `template_dir/<rrid>/log`; a missing template triggers a `svn`
+///    checkout and one retry.
 /// 3. On a load failure returns a [`NullReport`], so the caller can add a
 ///    benign inactive template rather than propagate an error.
-/// 4. Runs the Gitea token + template-hash verification
-///    ([`TestReport::check_hash`]). A missing token, a failed Gitea call, or
-///    a stale template hash logs a message and abandons the load (a
-///    [`NullReport`]). The interactive TeReGen regenerate / force-continue /
-///    delete-checkout handling for a stale hash lands in Phase C.
-/// 5. Sets the workflow from `kind`. For the `-a` (auto) kind, builds the
-///    [`QemIncident`] and runs [`DashboardAutoOpenQA`]; when the auto result
-///    has no install jobs (or the dashboard is unreachable) the workflow is
-///    **downgraded to [`Workflow::Manual`]**.
+/// 4. Verifies the Gitea token + template hash ([`TestReport::check_hash`]): a
+///    missing token or failed call abandons the load; a stale hash goes to the
+///    TeReGen regenerate / force-continue / delete-checkout handling.
+/// 5. Sets the workflow from `kind`. The `-a` (auto) kind builds the
+///    [`QemIncident`] and runs [`DashboardAutoOpenQA`]; with no install jobs
+///    (or an unreachable dashboard) the workflow is **downgraded to
+///    [`Workflow::Manual`]**.
 ///
-/// `autoconnect` is the caller's explicit choice. A reference-host connect is
-/// deferred (via [`TestReportBase::autoconnect_pending`](crate::testreport::TestReportBase::autoconnect_pending), honoured by the
-/// composition root *after* wiring the host arbiter) **only** when
-/// `autoconnect` is `true` **and** the auto load downgraded to `MANUAL`. The
-/// auto happy-path (workflow stays `AUTO`) and the kernel kind never
-/// autoconnect on load.
+/// `autoconnect` is the caller's explicit choice, but the deferred connect (via
+/// [`TestReportBase::autoconnect_pending`](crate::testreport::TestReportBase::autoconnect_pending),
+/// honoured by the composition root *after* wiring the host arbiter) is armed
+/// **only** when it is `true` **and** the auto load downgraded to `MANUAL` —
+/// never on the auto happy path, never for the kernel kind.
 pub async fn make_testreport(
     update: &UpdateID,
     config: Config,
@@ -125,12 +112,8 @@ pub async fn make_testreport(
     let checkout_config = report.base().config.clone();
     let rrid = update.id.clone();
 
-    // `_checkout`: read the template; on ENOENT run `svn co` and retry. The
-    // seam's shape is inlined here (rather than via `checkout_and_read`) because
-    // the `read` step must mutate `report`, which would otherwise clash with the
-    // borrows the closures need — the three-step orchestration is small.
-    // On failure, `Err(reason)` carries the human-readable cause so the caller
-    // (via `NullReport.base().load_error`) can surface *why* the load failed.
+    // Inlined rather than routed through `checkout_and_read`: the `read` step
+    // must mutate `report`, which clashes with the borrows the closures need.
     let loaded: Result<(), String> = match to_outcome(report.read(&trpath)) {
         ReadOutcome::Ok => Ok(()),
         ReadOutcome::Io(e) if !e.is_not_found() => {
@@ -167,16 +150,11 @@ pub async fn make_testreport(
         return Box::new(null_with_error(checkout_config, reason));
     }
 
-    // `read` is sync and `check_hash` is async, so the check fires here
-    // instead — right after a successful read, before the report is handed
-    // back. This is the Gitea token + template-hash verification (missing
-    // token / failed call / stale hash). See
-    // `plans/gitea-hash-check-on-load.md`.
+    // `read` is sync and `check_hash` async, so the Gitea token + template-hash
+    // verification fires here, right after a successful read.
     match report.check_hash().await {
         HashCheck::Ok => {}
         HashCheck::MissingToken => {
-            // The exact operator-facing message, then the load is abandoned
-            // (a null report here signals the failed load).
             let msg = "Gitea API token is not configured. Pass -g/--gitea_token, \
                  set GITEA_TOKEN in your environment, or add a [gitea] token \
                  entry to ~/.mtuirc.";
@@ -192,10 +170,6 @@ pub async fn make_testreport(
             ));
         }
         HashCheck::Mismatch { .. } => {
-            // Offer a TeReGen regeneration, then fall back to the manual
-            // force-continue / delete-checkout prompts. Returns `Some(report)`
-            // when a report (fresh or force-kept-stale) should load, `None`
-            // for the null path.
             match handle_stale_hash(
                 update,
                 &checkout_config,
@@ -209,8 +183,6 @@ pub async fn make_testreport(
             {
                 Some(regenerated) => {
                     if let Some(fresh) = regenerated {
-                        // A regenerated report replaces the stale one. Apply the
-                        // workflow/autoconnect below to the fresh report.
                         report = fresh;
                     }
                     // else: force-continue kept the (stale) `report` as-is.
@@ -229,13 +201,8 @@ pub async fn make_testreport(
 
     report.base_mut().workflow = kind.workflow();
 
-    // The `-a` (auto) kind fetches the QEM-dashboard auto-openQA result at
-    // load time and downgrades the working mode to MANUAL when there are no
-    // install jobs (or they failed). The `-k` (kernel) kind keeps its KERNEL
-    // workflow and never autoconnects.
     if kind == UpdateKind::Auto {
-        // Snapshot config primitives before the awaits (no `&report`/borrow
-        // crosses `.await`).
+        // Snapshot before the awaits: no `&report` borrow may cross `.await`.
         let dashboard_api = report.base().config.qem_dashboard_api.clone();
         let openqa_instance = report.base().config.openqa_instance.clone();
         let max_parallel = report.base().config.max_parallel as usize;
@@ -245,10 +212,6 @@ pub async fn make_testreport(
         );
         let source = report.update_source();
 
-        // Build the incident handle (a failed dashboard fetch folds into
-        // `data = None`, not an error) and run the auto connector. Both are
-        // best-effort — network failure leaves `results = None`, which the
-        // fallback below treats exactly like "no install jobs".
         match QemIncident::new(rrid.clone(), dashboard_api, policy, source).await {
             Ok(incident) => {
                 info!("Getting data from QEM Dashboard");
@@ -258,11 +221,9 @@ pub async fn make_testreport(
                     rrid.clone(),
                     max_parallel,
                 );
-                // Load time is deliberately best-effort: a failed dashboard fetch
-                // is folded to "no results" here (the same as an empty result),
-                // so the workflow downgrades to manual rather than aborting the
-                // report load. The interactive `set_workflow`/`reload_openqa`
-                // commands surface the same failure as `Err` instead.
+                // Best-effort at load: a failed fetch folds to "no results" (→
+                // manual) rather than aborting the load; the interactive
+                // `set_workflow`/`reload_openqa` surface it as `Err` instead.
                 if let Err(e) = auto.run().await {
                     warn!(error = %e, "QEM Dashboard fetch failed; treating as no results");
                 }
@@ -274,18 +235,14 @@ pub async fn make_testreport(
                     info!("Switch mode to manual");
                     report.base_mut().workflow = Workflow::Manual;
                     if autoconnect {
-                        // Defer the connect to the composition root, which wires
-                        // the arbiter first so refhosts_from_tp draws one host
-                        // per slot. This connects only on this manual path.
+                        // The composition root wires the arbiter first, so
+                        // refhosts_from_tp draws one host per slot.
                         report.base_mut().autoconnect_pending = true;
                     }
                 }
             }
             Err(e) => {
-                // Could not even build the dashboard client: treat as no
-                // results (downgrade to manual) — a best-effort fallback so a
-                // missing auto result flips to manual rather than aborting
-                // the load.
+                // No dashboard client at all: same best-effort downgrade.
                 warn!(error = %e, "QEM Dashboard unavailable; switching mode to manual");
                 report.base_mut().workflow = Workflow::Manual;
                 if autoconnect {
@@ -295,14 +252,9 @@ pub async fn make_testreport(
         }
     }
 
-    // Reconcile the report's targets group to the session mode once, at load
-    // time (the group was default-built headless). The session is the single
-    // source of truth for REPL-vs-headless; this is the only place it is set, and
-    // it is never toggled afterwards. Empty group here, so this only sets the flag
-    // that every later `add` / fan-out (spinner prompt) reads.
+    // The session is the single source of truth for REPL-vs-headless: the group
+    // is built headless and reconciled here, once, never toggled afterwards.
     report.base_mut().targets.set_is_repl(is_repl);
-    // Push the configured fan-out bound (`[connection] max_parallel`) onto the
-    // group alongside the session mode, so every later fan-out is bounded.
     report.base_mut().targets.set_max_parallel(max_parallel);
 
     report
@@ -311,16 +263,13 @@ pub async fn make_testreport(
 /// Handles a stale template hash: log, offer TeReGen regeneration, then the
 /// manual force-continue / delete-checkout fallback.
 ///
-/// Returns:
-/// * `Some(Some(fresh))` — TeReGen regenerated a fresh, verified report to use;
-/// * `Some(None)` — the operator chose to force-continue with the stale report
-///   (the caller keeps its existing `report`);
+/// * `Some(Some(fresh))` — TeReGen regenerated a fresh, verified report;
+/// * `Some(None)` — force-continue; the caller keeps its existing stale report;
 /// * `None` — abandon the load (the caller substitutes a [`NullReport`]).
 ///
-/// `prompter` is `Some` only in interactive mode; a non-interactive run never
-/// requests input, so every prompt here is gated on
-/// `interactive && prompter.is_some()` and defaults to the non-interactive
-/// answer otherwise.
+/// `prompter` is `Some` only in interactive mode, so every prompt is gated on
+/// `is_repl && prompter.is_some()` and otherwise takes the non-interactive
+/// answer.
 #[allow(clippy::too_many_arguments)]
 async fn handle_stale_hash(
     update: &UpdateID,
@@ -335,7 +284,6 @@ async fn handle_stale_hash(
     error!("Invalid Gitea hash");
     warn!("TestReport hash differs from the Gitea PR; the template is stale");
 
-    // "Regenerate the template now via TeReGen? [y/N]" (default no).
     let regenerate = match (is_repl, prompter) {
         (true, Some(p)) => {
             p.confirm("Regenerate the template now via TeReGen? [y/N]: ", false)
@@ -358,7 +306,7 @@ async fn handle_stale_hash(
         );
     }
 
-    // Manual fallback: "Force continue loading template ? [y/N]" (default no).
+    // Manual fallback.
     let force_continue = match (is_repl, prompter) {
         (true, Some(p)) => {
             p.confirm("Force continue loading template ? [y/N]: ", false)
@@ -373,7 +321,6 @@ async fn handle_stale_hash(
     }
 
     // Declined: optionally delete the stale checkout, then abandon the load.
-    // "Delete checked out template <dir>? [Y/n]" (default yes).
     let delete = match (is_repl, prompter) {
         (true, Some(p)) if rrid_dir.exists() => {
             p.confirm(
@@ -452,8 +399,7 @@ async fn regenerate_via_teregen(
         return None;
     }
 
-    // Fresh checkout + read of the regenerated template; a still-failing
-    // hash here is a reload failure.
+    // A still-failing hash on the fresh template is a reload failure.
     let mut fresh = tr_factory(update, config.clone());
     let runner = TokioSvnRunner;
     if let Err(e) = crate::checkout::testreport_svn_checkout(&runner, config, svn_path, &rrid).await

@@ -1,12 +1,10 @@
 //! The command-layer error hierarchy.
 //!
-//! The command-relevant error variants. The
-//! `Display` strings are **frozen** — the REPL and MCP surfaces both render
+//! The `Display` strings are **frozen** — the REPL and MCP surfaces both render
 //! them, operators grep for them, and the tests below pin each one, so reword a
-//! variant only deliberately and update its test with it.
-//!
-//! Usage mistakes and program errors are not modelled as separate Rust types:
-//! the distinction only drives logging tone, not control flow.
+//! variant only deliberately and update its test with it. Usage mistakes and
+//! program errors share one type: the distinction drives logging tone, not
+//! control flow.
 
 use thiserror::Error;
 
@@ -26,7 +24,6 @@ pub enum CommandError {
     NoRefhostsDefined,
 
     /// An explicitly named host is not among the connected targets.
-    /// The `!r` repr renders as single quotes.
     #[error("Host '{0}' is not connected")]
     HostNotConnected(String),
 
@@ -38,13 +35,12 @@ pub enum CommandError {
     /// Aggregate raised after a fan-out command failed on one or more templates.
     /// The per-template failures are collected in `failures`, keyed by RRID.
     ///
-    /// Every template got its turn unless `stop` is set: that is the fan-out's
-    /// own stop summary (`stopped after N of M templates`, plus the interrupted
-    /// flow's detail when it has one), carried when a cancel landed but a real
-    /// failure outranked it. The cancel is deliberately *not* a `failures`
-    /// entry — it is not a broken template — but it may not vanish either, or
-    /// the caller reads the templates the stop never reached as having run
-    /// clean. It is rendered as a suffix on the aggregate message.
+    /// Every template got its turn unless `stop` is set: the fan-out's own stop
+    /// summary (`stopped after N of M templates`, plus the interrupted flow's
+    /// detail), carried when a cancel landed but a real failure outranked it.
+    /// The cancel is deliberately not a `failures` entry — it is not a broken
+    /// template — but it may not vanish either, or the caller reads the
+    /// templates the stop never reached as having run clean.
     #[error(
         "fan-out failed on {} ({}){}",
         .failures.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join(", "),
@@ -61,35 +57,27 @@ pub enum CommandError {
     /// The dispatch was cancelled mid-flight (MCP `job_cancel`).
     ///
     /// Raised by [`Session::check_cancelled`](crate::Session::check_cancelled)
-    /// at a cancellation checkpoint — the pre-dispatch check and the
-    /// between-templates check in the [`Command::run`](crate::Command::run)
-    /// fan-out driver — and by a flow that stopped at one of its own
-    /// checkpoints. The payload carries what the flow managed to do before
-    /// stopping (which packages were applied, how many templates ran), so a
-    /// cancel is never a verdict the operator cannot act on. It is empty only
-    /// for the pre-dispatch checkpoint, where nothing had run yet. A genuine
-    /// failure always outranks a cancellation — a broken host is never buried
-    /// behind "cancelled".
+    /// at a checkpoint (pre-dispatch, and between templates in the
+    /// [`Command::run`](crate::Command::run) driver) and by a flow stopping at
+    /// one of its own. The payload carries what the flow managed before
+    /// stopping — which packages were applied, how many templates ran — so a
+    /// cancel is never a verdict the operator cannot act on; it is empty only
+    /// pre-dispatch, where nothing had run. A genuine failure always outranks a
+    /// cancellation: a broken host is never buried behind "cancelled".
     ///
-    /// **Fan-out contract:** this variant coming *out of a command body*
-    /// terminates the fan-out, independent of the session token — the
-    /// [`Command::run`](crate::Command::run) driver breaks at that template
-    /// boundary and never dispatches the remaining templates, keeping the
-    /// payload as its own verdict (or, when a real failure outranks it, as the
-    /// [`FanOut`](Self::FanOut) aggregate's `stop` note). Every producer today
-    /// derives from a genuine session-level cancel, so that is what the break
-    /// means. Raising it for a per-template condition that is *not* a
-    /// session-level stop would therefore silently abandon the templates after
-    /// it; such a condition wants [`Other`](Self::Other) (collected, fan-out
-    /// continues), not this variant.
+    /// **Fan-out contract:** coming *out of a command body* this variant
+    /// terminates the fan-out independent of the session token — the driver
+    /// breaks at that template boundary, keeping the payload as its own verdict
+    /// (or as the [`FanOut`](Self::FanOut) aggregate's `stop` note). Every
+    /// producer derives from a genuine session-level cancel, so that is what the
+    /// break means; a per-template condition that is *not* a session-level stop
+    /// would silently abandon the templates after it and wants
+    /// [`Other`](Self::Other) instead, which is collected and continues.
     #[error("cancelled{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     Cancelled(String),
 
-    /// A command-specific failure whose message the command supplies directly.
-    ///
-    /// Catch-all for command-specific failures not yet given a dedicated
-    /// variant; command bodies map their own
-    /// failure conditions onto this until a dedicated variant is warranted.
+    /// A command-specific failure whose message the command supplies directly:
+    /// the catch-all until a condition warrants its own variant.
     #[error("{0}")]
     Other(String),
 }
@@ -100,12 +88,11 @@ mod tests {
 
     #[test]
     fn cancelled_display_is_pinned() {
-        // The MCP error envelope surfaces this string as stderr; keep it stable.
+        // The MCP error envelope surfaces this string as stderr.
         assert_eq!(
             CommandError::Cancelled(String::new()).to_string(),
             "cancelled"
         );
-        // A flow-level cancel keeps its detail so the operator can act on it.
         assert_eq!(
             CommandError::Cancelled("prepare cancelled after 3/10 packages".to_owned()).to_string(),
             "cancelled: prepare cancelled after 3/10 packages"
@@ -142,8 +129,6 @@ mod tests {
 
     #[test]
     fn fanout_display_has_stable_format() {
-        // Upstream: "fan-out failed on {rrids} ({detail})" where
-        // rrids = ", ".join(rrid) and detail = "; ".join(f"{rrid}: {exc}").
         let e = CommandError::FanOut {
             failures: vec![
                 ("a".into(), CommandError::Other("boom".into())),
@@ -168,9 +153,8 @@ mod tests {
 
     #[test]
     fn fanout_stop_note_is_appended_to_the_aggregate() {
-        // An outranked cancel: the failure list stays at one entry (the cancel
-        // is not a broken template), and the stop summary rides on the end so
-        // the caller cannot read the templates after the break as clean.
+        // An outranked cancel: it is not a `failures` entry, but its summary
+        // rides on the end so the templates after the break do not read clean.
         let e = CommandError::FanOut {
             failures: vec![("h1".into(), CommandError::Other("boom".into()))],
             stop: Some("stopped after 1 of 4 templates".to_owned()),

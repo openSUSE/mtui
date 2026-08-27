@@ -11,11 +11,10 @@ use crate::session::Session;
 
 /// Adds or removes an issue repository to or from hosts.
 ///
-/// The mutually-exclusive
-/// (and required) `-A/--add` vs `-R/--remove` selects the operation, which is
-/// fanned out over the selected hosts via
-/// [`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup) driven by the active
-/// report's [`SetRepo`](mtui_hosts::SetRepo) impl.
+/// The required, mutually-exclusive `-A/--add` vs `-R/--remove` picks the
+/// operation, fanned out via
+/// [`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup) and driven by the
+/// active report's [`SetRepo`](mtui_hosts::SetRepo) impl.
 pub struct SetRepo;
 
 #[async_trait]
@@ -56,8 +55,7 @@ impl Command for SetRepo {
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
-        // Upstream groups add/remove as one synonym tuple, so typing any of the
-        // four drops all four from further suggestions.
+        // One synonym tuple, so typing any of the four drops all four.
         complete_fanout(
             session,
             &[&["-A", "--add", "-R", "--remove"]],
@@ -81,8 +79,8 @@ impl Command for SetRepo {
             }
             _ => None,
         };
-        // Split rather than select: a `-t` subset operation must preserve the
-        // unselected hosts in the live report (see `Session::split_targets`).
+        // Split rather than select, so a `-t` subset preserves the unselected
+        // hosts in the live report.
         let (mut selected, remainder) = match session.split_targets(names, true) {
             Ok(split) => split,
             Err(e) => return Err(CommandError::Other(e.to_string())),
@@ -91,16 +89,14 @@ impl Command for SetRepo {
             session.restore_split_targets(selected, remainder);
             return Err(CommandError::NoRefhostsDefined);
         }
-        // The active report must be able to set repos (SL/PI/OBS). The null
-        // report cannot.
+        // SL/PI/OBS can set repos; the null report cannot.
         let has_set_repo = session.metadata().as_set_repo().is_some();
         let result = if has_set_repo {
             let set_repo = session.metadata().as_set_repo().expect("checked above");
             selected.fanout_set_repo(operation, set_repo).await;
             // `last_repo()` aggregates the whole per-host `zypper ar/rr` +
-            // refresh run (P3a-1). Report each host's verdict and fail if any
-            // host's run recorded an error, so an MCP call never silently
-            // "succeeds" on a repo that failed to apply.
+            // refresh run; any recorded error must fail the command, so an MCP
+            // call never silently succeeds on a repo that failed to apply.
             let mut lines: Vec<String> = Vec::new();
             let mut failed: Vec<String> = Vec::new();
             for name in selected.names() {
@@ -150,7 +146,6 @@ mod tests {
             assert!(out.contains(&f.to_owned()), "missing {f}: {out:?}");
         }
         assert!(out.contains(&"h1".to_owned()), "{out:?}");
-        // Typing -A drops the whole add/remove synonym group.
         let after = SetRepo.complete(&session, "-", "set_repo -A ");
         assert!(
             !after
@@ -168,7 +163,6 @@ mod tests {
     #[test]
     fn operation_group_is_required() {
         let base = clap::Command::new("set_repo").no_binary_name(true);
-        // Neither -A nor -R → required group rejects.
         assert!(
             SetRepo
                 .configure(base)
@@ -198,8 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn report_without_set_repo_capability_errors() {
-        // FakeReport does not implement `as_set_repo` (returns None), mirroring
-        // the null/unloaded report.
+        // FakeReport's `as_set_repo` is None, as the null/unloaded report's is.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&SetRepo, &["-A"]);
         let err = SetRepo.call(&mut session, &args).await.unwrap_err();
@@ -240,8 +233,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_repo_t_subset_keeps_unselected_host() {
-        // A `-t` subset must not drop the unselected host, even when the op
-        // itself no-ops on the capability miss: split+merge preserves h2.
+        // The split+merge must preserve h2 even when the op itself no-ops on the
+        // capability miss.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
         let args = matches(&SetRepo, &["-A", "-t", "h1"]);
         let _ = SetRepo.call(&mut session, &args).await;

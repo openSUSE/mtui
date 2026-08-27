@@ -37,8 +37,8 @@ fn config_fan_out() {
 }
 
 /// Snapshot the synthesised surface — tool name + read_only flag — plus the job
-/// tools, so an accidental deny/rename/hint change surfaces in review. Full-schema
-/// goldens are `slim_profile.rs`'s job; this pins names + hints only.
+/// tools, so an accidental deny/rename/hint change surfaces in review. The
+/// full-schema goldens are `slim_profile.rs`'s job.
 #[test]
 fn tool_surface_snapshot() {
     let mut rows: Vec<String> = build_tools(&register_all())
@@ -61,10 +61,9 @@ fn tool_surface_snapshot() {
     insta::assert_snapshot!(rendered);
 }
 
-/// Every advertised tool schema — synthesised command tools, the job tools, and
-/// the hand-written testreport tools — must be strict (`additionalProperties:
-/// false`), so a client cannot silently pass a misspelled field. A drift guard:
-/// a future tool that regresses to an open schema fails here.
+/// Every advertised tool schema — synthesised, job and hand-written testreport
+/// alike — must be strict (`additionalProperties: false`), so a client cannot
+/// silently pass a misspelled field. A tool regressing to an open schema fails here.
 #[test]
 fn every_tool_schema_rejects_unknown_properties() {
     let all = build_tools(&register_all())

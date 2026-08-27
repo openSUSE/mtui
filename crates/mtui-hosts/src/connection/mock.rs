@@ -1,11 +1,10 @@
 //! A scriptable [`Connection`] test double.
 //!
-//! Per the workspace testing conventions, host access is mocked rather than
-//! hitting real sshd: unit tests drive a [`MockConnection`] entirely offline.
-//! It records every command issued (so callers can assert ordering / fan-out),
-//! serves canned [`CommandLog`] responses keyed by command (with a default),
-//! and can be scripted to fail a specific command so the retry / timeout paths
-//! in reconnect and parallel fan-out are testable.
+//! Host access is mocked rather than hitting real sshd, so unit tests run
+//! entirely offline. [`MockConnection`] records every command issued (for
+//! ordering / fan-out assertions), serves canned [`CommandLog`] responses keyed
+//! by command, and can be scripted to fail one so the retry / timeout paths are
+//! testable.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -41,10 +40,9 @@ pub enum MockSftpOp {
         /// The remote destination path.
         remote: PathBuf,
     },
-    /// `sftp_put_bytes(data, remote)` — records the payload length, the
-    /// payload bytes, and the destination, so a fan-out read-once test can
-    /// assert that N hosts each received the byte-identical shared payload
-    /// (length alone cannot catch a same-length corrupted buffer).
+    /// `sftp_put_bytes(data, remote)`. Records the bytes as well as the length,
+    /// so a fan-out read-once test can assert every host got the *identical*
+    /// payload — length alone cannot catch a same-length corrupted buffer.
     PutBytes {
         /// The number of bytes dispatched.
         len: usize,
@@ -90,11 +88,9 @@ pub enum MockSftpOp {
 
 /// A scriptable, in-memory [`Connection`] implementation for tests.
 ///
-/// Construct with [`MockConnection::new`], script responses with
-/// [`with_response`](MockConnection::with_response) /
-/// [`with_default`](MockConnection::with_default) /
-/// `with_timeout`, then inspect issued commands
-/// via [`commands`](MockConnection::commands).
+/// Construct with [`MockConnection::new`], script responses with the `with_*`
+/// builders, then inspect issued commands via
+/// [`commands`](MockConnection::commands).
 #[derive(Debug, Clone)]
 pub struct MockConnection {
     hostname: String,
@@ -102,31 +98,20 @@ pub struct MockConnection {
     responses: HashMap<String, Outcome>,
     /// Fallback outcome when a command has no scripted response.
     default: Outcome,
-    /// Artificial per-`run` delay so a test can model a long-running command
-    /// (e.g. a multi-second `zypper` update) and observe the fan-out TTY spinner
-    /// paint across the await. Zero (the default) is an instant response.
+    /// See [`with_run_delay`](Self::with_run_delay).
     run_delay: std::time::Duration,
     /// Whether the transport reports as active.
     active: bool,
-    /// Commands issued, in order (shared so `Clone`d handles observe the same
-    /// log — a `Box<dyn Connection>` may be moved but tests keep a handle).
+    /// Commands issued, in order. Shared so `Clone`d handles observe the same
+    /// log: a `Box<dyn Connection>` may be moved but tests keep a handle.
     issued: Arc<Mutex<Vec<String>>>,
     /// Set once [`close`](Connection::close) has been called.
     closed: Arc<Mutex<bool>>,
-    /// When set, [`close`](Connection::close) blocks until the [`Notify`](tokio::sync::Notify) is
-    /// fired before completing — models a wedged teardown (a dead peer
-    /// with no RST) so a caller's bounded close budget can be exercised. Shared
-    /// across `Clone`d handles so the test fires the same notify. Never set by
-    /// default (an instant close).
+    /// See [`with_blocking_close`](Self::with_blocking_close).
     block_close: Option<Arc<tokio::sync::Notify>>,
-    /// When set, [`close`](Connection::close) sleeps this long before completing,
-    /// modelling a slow (but eventually-returning) host teardown. Unlike
-    /// [`block_close`](Self::block_close) it needs no external release, so a
-    /// fixed per-close cost can be timed. Never set by default (an instant close).
+    /// See [`with_close_delay`](Self::with_close_delay).
     close_delay: Option<std::time::Duration>,
-    /// When `true`, [`close`](Connection::close) returns an error, modelling a
-    /// host that fails to disconnect cleanly so `quit`'s per-host failure
-    /// naming can be exercised.
+    /// See [`with_failing_close`](Self::with_failing_close).
     close_fails: bool,
     /// Number of times [`reconnect`](Connection::reconnect) has been called.
     reconnects: Arc<Mutex<usize>>,
@@ -135,103 +120,59 @@ pub struct MockConnection {
     fire_and_forget_fails: bool,
     /// The `(retry, backoff)` args of the most recent
     /// [`reconnect`](Connection::reconnect) call, so a test can assert the
-    /// caller passed the expected budget (e.g. the reboot lifecycle's
-    /// `(config.reboot_retries, true)` vs. a fast-path `(0, false)`).
+    /// caller passed the expected budget (reboot's `(retries, true)` vs. a
+    /// fast-path `(0, false)`).
     last_reconnect_args: Arc<Mutex<Option<(usize, bool)>>>,
     /// Commands dispatched via [`fire_and_forget`](Connection::fire_and_forget).
     fired: Arc<Mutex<Vec<String>>>,
     /// SFTP operations observed, in order.
     sftp_ops: Arc<Mutex<Vec<MockSftpOp>>>,
-    /// Number of batched SFTP sessions opened via
-    /// [`sftp_session`](Connection::sftp_session). Shared across `Clone`d
-    /// handles so a test observes every session regardless of which handle
-    /// opened it — this is the handshake-count oracle
-    /// (`parse_system` must open exactly one).
+    /// Batched SFTP session opens, shared across `Clone`s so a test observes
+    /// every one regardless of which handle opened it.
     sftp_sessions: Arc<Mutex<usize>>,
-    /// Artificial delay charged **once per SFTP session open** (the
-    /// channel+subsystem handshake). Models a high-latency host so a bench can
-    /// show batching (one handshake) beat per-op (one handshake per read). Zero
-    /// (the default) opens instantly.
+    /// See [`with_sftp_session_delay`](Self::with_sftp_session_delay).
     sftp_session_delay: std::time::Duration,
     /// Canned directory listings keyed by remote path (for `sftp_listdir` /
     /// `sftp_get_folder`).
     listings: HashMap<PathBuf, Vec<String>>,
-    /// File contents keyed by remote path (for `sftp_open` / `sftp_write`).
-    ///
-    /// Shared + mutable so `sftp_write` can create/overwrite entries and a
-    /// later `sftp_open` observes them — this is what makes the lock protocol
-    /// (exclusive create, reconcile, read-back) testable end-to-end against the
-    /// mock. `Clone`d handles share the same table.
+    /// File contents keyed by remote path. Shared + mutable so `sftp_write`
+    /// creates/overwrites entries a later `sftp_open` observes, which is what
+    /// makes the lock protocol (exclusive create, reconcile, read-back)
+    /// testable end-to-end.
     files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
     /// Canned symlink targets keyed by remote path (for `sftp_readlink`).
     links: HashMap<PathBuf, String>,
-    /// When `true`, [`sftp_remove`](Connection::sftp_remove) fails with a generic
-    /// [`HostError::Sftp`], exercising a caller's directory-removal fallback
-    /// (e.g. `Target::sftp_remove`) or the fail-closed unlock path (a non-gone
-    /// removal error must propagate).
+    /// See [`failing_sftp_remove`](Self::failing_sftp_remove).
     sftp_remove_fails: bool,
-    /// When `true`, [`sftp_remove`](Connection::sftp_remove) fails with
-    /// [`HostError::SftpNotFound`] (the file is already gone), so the unlock
-    /// "ignore only already-missing" path can be exercised.
+    /// See `not_found_sftp_remove`.
     sftp_remove_not_found: bool,
-    /// When `true`, [`sftp_get`](Connection::sftp_get) /
-    /// [`sftp_get_folder`](Connection::sftp_get_folder) fail with a generic
-    /// [`HostError::Sftp`], so a caller's per-host download outcome tracking can
-    /// be exercised. The op is still recorded before failing.
+    /// See [`failing_sftp_get`](Self::failing_sftp_get).
     sftp_get_fails: bool,
-    /// When `Some`, the boot-id probe (`cat /proc/sys/kernel/random/boot_id`)
-    /// returns a *fresh* value on every call (`boot-<n>`, incrementing across
-    /// `Clone`d handles), modelling a host that actually rebooted (the pre- and
-    /// post-reboot reads differ). `None` (the default) leaves the boot-id command
-    /// answered by the normal response/default map, so scripting the same fixed
-    /// id both times models a host that did *not* reboot.
+    /// See [`with_changing_boot_id`](Self::with_changing_boot_id); `None`
+    /// leaves the probe on the normal response map.
     boot_id_counter: Option<Arc<Mutex<u64>>>,
-    /// File paths whose *exclusive* [`sftp_write`](Connection::sftp_write) fails
-    /// with a generic [`HostError::Sftp`] instead of the contention
-    /// [`HostError::AlreadyExists`] — models a non-collision failure of the
-    /// atomic create (permission denied, transport), which must fail closed
-    /// rather than reconcile.
+    /// See [`with_exclusive_write_error`](Self::with_exclusive_write_error).
     exclusive_write_errors: HashSet<PathBuf>,
-    /// File paths whose *exclusive* [`sftp_write`](Connection::sftp_write) fails
-    /// with [`HostError::SftpTimeout`] after the bytes have already landed in
-    /// `files` — models the create's reply timing out even though the create
-    /// itself reached the server, so the lock protocol's timeout-adoption path
-    /// can be exercised.
+    /// See [`with_exclusive_write_timeout`](Self::with_exclusive_write_timeout).
     exclusive_write_timeouts: HashSet<PathBuf>,
-    /// Paths scripted to raise [`HostError::Sftp`] from
-    /// [`sftp_append`](Connection::sftp_append), modelling a best-effort append
-    /// failure (read-only/full remote fs) that callers such as `add_history`
-    /// swallow.
+    /// See [`with_sftp_append_error`](Self::with_sftp_append_error).
     sftp_append_errors: HashSet<PathBuf>,
-    /// When `Some`, [`sftp_put`](Connection::sftp_put) /
-    /// [`sftp_put_bytes`](Connection::sftp_put_bytes) fail with
-    /// [`HostError::Sftp`] carrying this reason, so a caller's per-host upload
-    /// outcome tracking can be exercised. `None` (the default) keeps both `Ok`.
+    /// See [`with_sftp_put_failure`](Self::with_sftp_put_failure).
     fail_sftp_put: Option<String>,
-    /// Directory paths scripted to raise [`HostError::SftpNotFound`] from
-    /// `sftp_listdir` (e.g. a host with no `/etc/products.d`). Distinct from
-    /// unscripted paths, which return an empty listing.
+    /// See [`with_missing_dir`](Self::with_missing_dir).
     missing_dirs: HashSet<PathBuf>,
-    /// File paths scripted to raise a generic [`HostError::Sftp`] (non
-    /// not-found) from `sftp_open`, mirroring a dangling symlink whose target
-    /// product file open raises `OSError` rather than `FileNotFoundError`.
+    /// See [`with_open_error`](Self::with_open_error).
     sftp_open_errors: HashSet<PathBuf>,
-    /// Directory paths scripted to raise a *transient* [`HostError::Sftp`] on
-    /// the first N `sftp_listdir` calls, then succeed — models a flaky SFTP
-    /// session (e.g. a connect-time timeout) that a bounded retry recovers from.
-    /// The count is shared+mutable so it decrements across `Clone`d handles.
+    /// See `with_transient_listdir_failures`. The count is shared, so it
+    /// decrements across `Clone`d handles.
     listdir_transient_failures: Arc<Mutex<HashMap<PathBuf, u32>>>,
-    /// Canned bytes served by [`ShellChannel::read`] on a spawned shell, drained
-    /// one chunk per `read` then `0` (EOF). Lets the TTY bridge be
-    /// tested offline.
+    /// See [`with_shell_output`](Self::with_shell_output).
     #[cfg(feature = "shell")]
     shell_output: Vec<Vec<u8>>,
-    /// PTY sizes requested via [`shell`](Connection::shell), in order, so a
-    /// caller can assert the spawn dimensions.
+    /// PTY sizes requested via [`shell`](Connection::shell), in order.
     #[cfg(feature = "shell")]
     shell_spawns: Arc<Mutex<Vec<(u32, u32)>>>,
-    /// Bytes written to spawned shells via [`ShellChannel::write`], concatenated
-    /// across all channels, so a caller can assert the keystrokes sent.
+    /// Bytes written to spawned shells, concatenated across all channels.
     #[cfg(feature = "shell")]
     shell_input: Arc<Mutex<Vec<u8>>>,
     /// Resize requests observed via [`ShellChannel::resize`], in order.
@@ -289,9 +230,8 @@ impl MockConnection {
     }
 
     /// Makes [`sftp_remove`](Connection::sftp_remove) fail with a generic
-    /// [`HostError::Sftp`] so a caller's directory-removal fallback path, or the
-    /// fail-closed unlock path (a non-gone removal error must propagate), can be
-    /// exercised.
+    /// [`HostError::Sftp`], exercising a caller's directory-removal fallback or
+    /// the fail-closed unlock path (a non-gone removal error must propagate).
     #[must_use]
     pub fn failing_sftp_remove(mut self) -> Self {
         self.sftp_remove_fails = true;
@@ -299,8 +239,8 @@ impl MockConnection {
     }
 
     /// Makes [`sftp_remove`](Connection::sftp_remove) fail with
-    /// [`HostError::SftpNotFound`] (the file is already gone), so the unlock
-    /// "ignore only already-missing" path can be exercised.
+    /// [`HostError::SftpNotFound`], exercising unlock's "ignore only
+    /// already-missing" path.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn not_found_sftp_remove(mut self) -> Self {
@@ -310,52 +250,48 @@ impl MockConnection {
 
     /// Makes [`sftp_get`](Connection::sftp_get) /
     /// [`sftp_get_folder`](Connection::sftp_get_folder) fail with a generic
-    /// [`HostError::Sftp`], so a caller's per-host download outcome tracking
-    /// ([`Target::sftp_get`](crate::Target::sftp_get)) can be exercised. The op is still recorded before
-    /// failing.
+    /// [`HostError::Sftp`], exercising per-host download outcome tracking
+    /// ([`Target::sftp_get`](crate::Target::sftp_get)). The op is still
+    /// recorded before failing.
     #[must_use]
     pub fn failing_sftp_get(mut self) -> Self {
         self.sftp_get_fails = true;
         self
     }
 
-    /// Makes the boot-id probe return a *fresh* value on every call, modelling a
-    /// host that actually rebooted (the pre- and post-reboot reads differ) so the
-    /// group reboot's boot-id verification records success. Without it, scripting
-    /// a fixed boot id both times models a host that did *not* reboot (unchanged
-    /// id ⇒ recorded failure).
+    /// Makes the boot-id probe return a *fresh* value on every call, so the
+    /// group reboot's boot-id verification records success. Without it, a fixed
+    /// scripted id models a host that did *not* reboot.
     #[must_use]
     pub fn with_changing_boot_id(mut self) -> Self {
         self.boot_id_counter = Some(Arc::new(Mutex::new(0)));
         self
     }
 
-    /// Scripts an *exclusive* [`sftp_write`](Connection::sftp_write) to `path` to
-    /// fail with a generic [`HostError::Sftp`] — a non-collision failure of the
-    /// atomic create (e.g. permission denied). Unlike a real collision (which
-    /// returns [`HostError::AlreadyExists`]), this must fail closed and
-    /// propagate, not reconcile.
+    /// Scripts an *exclusive* [`sftp_write`](Connection::sftp_write) to `path`
+    /// to fail with a generic [`HostError::Sftp`]: a non-collision create
+    /// failure, which must propagate rather than reconcile the way a real
+    /// [`HostError::AlreadyExists`] collision does.
     #[must_use]
     pub fn with_exclusive_write_error(mut self, path: impl Into<PathBuf>) -> Self {
         self.exclusive_write_errors.insert(path.into());
         self
     }
 
-    /// Scripts an *exclusive* [`sftp_write`](Connection::sftp_write) to `path` to
-    /// raise [`HostError::SftpTimeout`] — but only after the bytes have already
-    /// been inserted into the mock's `files` map, modelling a create whose
-    /// reply timed out even though the create itself landed server-side.
-    /// Without the insert the fixture could not express that mutation and the
-    /// lock's timeout-adoption path could not be exercised.
+    /// Scripts an *exclusive* [`sftp_write`](Connection::sftp_write) to `path`
+    /// to raise [`HostError::SftpTimeout`] — but only after inserting the bytes
+    /// into `files`. Without that insert the fixture cannot express a create
+    /// that landed server-side while its reply timed out, and the lock's
+    /// timeout-adoption path could not be exercised.
     #[must_use]
     pub fn with_exclusive_write_timeout(mut self, path: impl Into<PathBuf>) -> Self {
         self.exclusive_write_timeouts.insert(path.into());
         self
     }
 
-    /// Scripts `path`'s [`sftp_append`](Connection::sftp_append) calls to raise a
-    /// [`HostError::Sftp`], modelling a best-effort append failure (read-only or
-    /// full remote fs) that a caller such as `add_history` swallows.
+    /// Scripts `path`'s [`sftp_append`](Connection::sftp_append) to raise
+    /// [`HostError::Sftp`]: a best-effort append failure (read-only/full remote
+    /// fs) that a caller such as `add_history` swallows.
     #[must_use]
     pub fn with_sftp_append_error(mut self, path: impl Into<PathBuf>) -> Self {
         self.sftp_append_errors.insert(path.into());
@@ -364,8 +300,8 @@ impl MockConnection {
 
     /// Scripts [`sftp_put`](Connection::sftp_put) /
     /// [`sftp_put_bytes`](Connection::sftp_put_bytes) to fail with a
-    /// [`HostError::Sftp`] carrying `msg`, so a caller's per-host upload outcome
-    /// tracking can be exercised. The op is still recorded before failing.
+    /// [`HostError::Sftp`] carrying `msg`. The op is still recorded before
+    /// failing.
     #[must_use]
     pub fn with_sftp_put_failure(mut self, msg: impl Into<String>) -> Self {
         self.fail_sftp_put = Some(msg.into());
@@ -373,9 +309,9 @@ impl MockConnection {
     }
 
     /// Scripts `path`'s first `count` [`sftp_listdir`](Connection::sftp_listdir)
-    /// calls to raise a transient [`HostError::Sftp`] before succeeding, so a
-    /// caller's bounded retry (e.g. `Target::connect`'s system-parse retry) can
-    /// be exercised against a flaky session.
+    /// calls to raise a transient [`HostError::Sftp`], exercising a bounded
+    /// retry (e.g. `Target::connect`'s system-parse retry) against a flaky
+    /// session.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn with_transient_listdir_failures(
@@ -413,8 +349,8 @@ impl MockConnection {
         self
     }
 
-    /// Adds an artificial delay to every [`run`](Connection::run) so a test can
-    /// model a long-running command and observe the fan-out TTY spinner painting
+    /// Adds an artificial delay to every [`run`](Connection::run), modelling a
+    /// long-running command so the fan-out TTY spinner can be observed painting
     /// across the await.
     #[must_use]
     pub fn with_run_delay(mut self, delay: std::time::Duration) -> Self {
@@ -422,10 +358,9 @@ impl MockConnection {
         self
     }
 
-    /// Adds an artificial delay charged **once per SFTP session open**, modelling
-    /// a high-latency host's channel+subsystem handshake so a bench can contrast
-    /// batching (one handshake for a whole probe) against per-op reads (one
-    /// handshake each).
+    /// Adds an artificial delay charged **once per SFTP session open**,
+    /// modelling a high-latency handshake so a bench can contrast batching
+    /// (one handshake per probe) against per-op reads (one each).
     #[must_use]
     pub fn with_sftp_session_delay(mut self, delay: std::time::Duration) -> Self {
         self.sftp_session_delay = delay;
@@ -440,30 +375,29 @@ impl MockConnection {
         self
     }
 
-    /// Makes [`close`](Connection::close) block until `gate` is notified, modelling
-    /// a wedged host teardown (a dead peer whose close never returns). A caller's
-    /// bounded close budget (e.g. `McpSession::close`) can then be shown to still
-    /// return; the test fires `gate` afterwards so the abandoned close unwinds.
+    /// Makes [`close`](Connection::close) block until `gate` is notified: a
+    /// wedged teardown against which a bounded close budget (e.g.
+    /// `McpSession::close`) can be shown to still return. The test fires `gate`
+    /// afterwards so the abandoned close unwinds.
     #[must_use]
     pub fn with_blocking_close(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
         self.block_close = Some(gate);
         self
     }
 
-    /// Makes [`close`](Connection::close) sleep `delay` before completing,
-    /// modelling a slow-but-eventually-returning host teardown. Unlike
+    /// Makes [`close`](Connection::close) sleep `delay`: a slow but
+    /// eventually-returning teardown. Unlike
     /// [`with_blocking_close`](Self::with_blocking_close) it self-releases, so a
     /// fixed per-close cost can be timed (e.g. proving the idle sweeper tears
-    /// stale sessions down concurrently rather than serially).
+    /// stale sessions down concurrently, not serially).
     #[must_use]
     pub fn with_close_delay(mut self, delay: std::time::Duration) -> Self {
         self.close_delay = Some(delay);
         self
     }
 
-    /// Scripts [`close`](Connection::close) to fail, modelling a host that does
-    /// not disconnect cleanly so `quit`'s per-host failure naming
-    /// (`failed to disconnect from <host>`) can be exercised.
+    /// Scripts [`close`](Connection::close) to fail, exercising `quit`'s
+    /// per-host failure naming (`failed to disconnect from <host>`).
     #[must_use]
     pub fn with_failing_close(mut self) -> Self {
         self.close_fails = true;
@@ -481,13 +415,11 @@ impl MockConnection {
     /// Scripts [`fire_and_forget`](Connection::fire_and_forget) to fail,
     /// **without** tearing the link down.
     ///
-    /// That combination is the point: the real
-    /// `SshConnection::fire_and_forget` closes the local link only as its last
-    /// statement, after the channel open and `exec` have both succeeded, so a
-    /// failed dispatch leaves the session active — and the reconnect that
-    /// follows returns `Ok(())` immediately off `is_active()`. A double that
-    /// closed the link here would make the reconnect do real work and hide the
-    /// very bug this reproduces.
+    /// That combination is the point: the real `SshConnection::fire_and_forget`
+    /// closes the local link only after channel open *and* `exec` succeed, so a
+    /// failed dispatch leaves the session active and the follow-up reconnect
+    /// returns `Ok(())` straight off `is_active()`. A double that closed the
+    /// link here would hide the very bug this reproduces.
     #[must_use]
     pub fn failing_fire_and_forget(mut self) -> Self {
         self.fire_and_forget_fails = true;
@@ -529,10 +461,9 @@ impl MockConnection {
             .cloned()
     }
 
-    /// Returns every path currently present in the in-memory file table (seeded
-    /// via [`with_file`](Self::with_file) or written by an SFTP operation), so a
-    /// test can assert on the *complete set* of writes — e.g. that a folder
-    /// download produced no key outside its intended destination.
+    /// Returns every path in the in-memory file table, so a test can assert on
+    /// the *complete set* of writes — e.g. that a folder download produced no
+    /// key outside its intended destination.
     #[must_use]
     pub fn file_paths(&self) -> Vec<PathBuf> {
         self.files
@@ -551,9 +482,8 @@ impl MockConnection {
     }
 
     /// Scripts a directory `path` to raise [`HostError::SftpNotFound`] from
-    /// [`sftp_listdir`](Connection::sftp_listdir), mirroring a host whose
-    /// directory does not exist. Without this, unscripted directories return
-    /// an empty listing.
+    /// [`sftp_listdir`](Connection::sftp_listdir). Without this, unscripted
+    /// directories return an empty listing rather than erroring.
     #[must_use]
     pub fn with_missing_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.missing_dirs.insert(path.into());
@@ -561,9 +491,9 @@ impl MockConnection {
     }
 
     /// Scripts a file `path` to raise a generic (non not-found)
-    /// [`HostError::Sftp`] from [`sftp_open`](Connection::sftp_open), mirroring a
-    /// dangling symlink whose target product file open raises `OSError` rather
-    /// than `FileNotFoundError`.
+    /// [`HostError::Sftp`] from [`sftp_open`](Connection::sftp_open), mirroring
+    /// a dangling symlink whose target open raises `OSError` rather than
+    /// `FileNotFoundError`.
     #[must_use]
     pub fn with_open_error(mut self, path: impl Into<PathBuf>) -> Self {
         self.sftp_open_errors.insert(path.into());
@@ -611,12 +541,10 @@ impl MockConnection {
         self.sftp_ops.lock().expect("mock sftp lock").clone()
     }
 
-    /// Returns how many batched SFTP sessions were opened via
-    /// [`sftp_session`](Connection::sftp_session).
+    /// Returns how many batched SFTP sessions were opened.
     ///
-    /// The handshake-count oracle: a multi-read probe
-    /// (`parse_system`) that batches correctly opens exactly **one** session
-    /// regardless of how many files it reads.
+    /// The handshake-count oracle: a multi-read probe (`parse_system`) that
+    /// batches correctly opens exactly **one**, however many files it reads.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn sftp_session_count(&self) -> usize {
@@ -628,9 +556,8 @@ impl MockConnection {
     }
 
     /// The file-lookup body of `sftp_open` **without** the per-op handshake
-    /// delay: records the op and returns the scripted bytes/error. Used by the
-    /// batched [`SftpSession`] (which already paid the handshake once at session
-    /// open) so a batch of reads pays one handshake, not one per read.
+    /// delay, for the batched [`SftpSession`] — which already paid it once at
+    /// session open, so a batch of reads pays one handshake, not one per read.
     fn open_no_handshake(&self, path: &Path) -> Result<Vec<u8>> {
         self.record_sftp(MockSftpOp::Open(path.to_path_buf()));
         if self.sftp_open_errors.contains(path) {
@@ -650,10 +577,9 @@ impl MockConnection {
             })
     }
 
-    /// Scripts one chunk of shell output served by
-    /// [`ShellChannel::read`] on a
-    /// spawned shell. Chunks are drained in order, one per `read`, then `read`
-    /// returns `0` (EOF) — the bridge loop's stop condition.
+    /// Scripts one chunk of shell output served by [`ShellChannel::read`].
+    /// Chunks are drained one per `read`, then `read` returns `0` (EOF) — the
+    /// bridge loop's stop condition.
     #[cfg(feature = "shell")]
     #[must_use]
     pub fn with_shell_output(mut self, chunk: impl Into<Vec<u8>>) -> Self {
@@ -700,10 +626,8 @@ impl MockConnection {
 /// A scriptable in-memory [`ShellChannel`] returned by
 /// [`MockConnection::shell`], so the TTY bridge is testable offline.
 ///
-/// Mirrors the real [`SshShellChannel`](crate::connection::SshConnection)
-/// read semantics: a scripted chunk larger than the caller's buffer is served
-/// in pieces across successive `read`s (leftover carryover) rather than
-/// truncated, so the mock stays a faithful double for the CLI bridge tests.
+/// Mirrors the real channel's read semantics: a chunk larger than the caller's
+/// buffer is served in pieces across successive `read`s rather than truncated.
 #[cfg(feature = "shell")]
 struct MockShellChannel {
     /// Canned output chunks, drained front-to-back.
@@ -766,11 +690,9 @@ impl ShellChannel for MockShellChannel {
 /// A batched [`SftpSession`] over a [`MockConnection`], returned by
 /// [`MockConnection::sftp_session`].
 ///
-/// Holds a `Clone` of the parent mock (which shares its scripted state via
-/// `Arc`) and delegates each read verb to the parent's per-op `sftp_*` method,
-/// so the batched and per-op read paths honor identical scripting, error
-/// injection, and op-recording — there is exactly one source of truth for mock
-/// SFTP-read behaviour.
+/// Delegates each read verb to the parent mock's per-op `sftp_*` method (state
+/// is shared via `Arc`), so scripting, error injection and op-recording have
+/// exactly one source of truth across the batched and per-op paths.
 struct MockSftpSession {
     conn: MockConnection,
 }
@@ -802,9 +724,8 @@ impl Connection for MockConnection {
     }
 
     fn clone_box(&self) -> Box<dyn Connection> {
-        // `MockConnection` is `Clone` and shares its scripted state (issued
-        // commands, files, sftp ops) via `Arc`, so the clone observes the same
-        // log — a lock built from it force-unlocks against the same mock.
+        // The clone shares scripted state via `Arc`, so a lock built from it
+        // force-unlocks against the same mock.
         Box::new(self.clone())
     }
 
@@ -818,8 +739,7 @@ impl Connection for MockConnection {
             tokio::time::sleep(self.run_delay).await;
         }
 
-        // A changing boot-id models a host that actually rebooted: each probe
-        // returns a fresh value, so the pre- and post-reboot reads differ.
+        // A fresh value per probe models a host that actually rebooted.
         if command == "cat /proc/sys/kernel/random/boot_id"
             && let Some(counter) = &self.boot_id_counter
         {
@@ -843,9 +763,8 @@ impl Connection for MockConnection {
     }
 
     async fn close(&mut self) -> Result<()> {
-        // Model a wedged teardown: block until the test releases the gate. A
-        // caller with a bounded close budget abandons the await before this
-        // returns; `closed` is only set once (if) the gate fires.
+        // A wedged teardown: a caller with a bounded close budget abandons the
+        // await, so `closed` is only set once (if) the gate fires.
         if let Some(gate) = self.block_close.clone() {
             gate.notified().await;
         }
@@ -890,7 +809,6 @@ impl Connection for MockConnection {
             .lock()
             .expect("mock fired lock")
             .push(command.to_owned());
-        // Dispatch, then tear down the local link.
         self.active = false;
         *self.closed.lock().expect("mock closed lock") = true;
         Ok(())
@@ -950,13 +868,9 @@ impl Connection for MockConnection {
                 reason: "scripted sftp_get_folder failure".to_owned(),
             });
         }
-        // Mirror the real `SshConnection::sftp_get_folder` loop so the
-        // path-traversal trust boundary is exercised end-to-end: iterate the
-        // canned listing, validate each server-supplied name through the *same*
-        // helper the ssh impl uses (single source of truth), skip rejects, and
-        // for accepted names copy the remote file bytes into the local target
-        // key (`<local><name>.<hostname>`). Accepted vs rejected is then
-        // observable via `file_contents` / the `files` table.
+        // Mirrors the real loop through the *same* validation helper, so the
+        // path-traversal trust boundary is exercised end-to-end and accept vs
+        // reject is observable in the `files` table.
         let remote_str = remote.to_string_lossy().to_string();
         let names = self.listings.get(remote).cloned().unwrap_or_default();
         for name in names {
@@ -984,8 +898,7 @@ impl Connection for MockConnection {
 
     async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
         self.record_sftp(MockSftpOp::Listdir(path.to_path_buf()));
-        // Transient-failure script: fail the first N calls for this path, then
-        // fall through to the normal listing so a retry recovers.
+        // Fail the first N calls, then fall through so a retry recovers.
         {
             let mut pending = self
                 .listdir_transient_failures
@@ -1011,9 +924,9 @@ impl Connection for MockConnection {
     }
 
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
-        // The per-op path opens its own SFTP session per call (real ssh:
-        // `self.sftp()`), so charge the handshake delay here — this is the
-        // once-per-read cost the 0mop.3 batched path amortizes to once-per-probe.
+        // The per-op path opens its own session per call, so it pays the
+        // handshake here — the once-per-read cost the 0mop.3 batched path
+        // amortizes to once-per-probe.
         if !self.sftp_session_delay.is_zero() {
             tokio::time::sleep(self.sftp_session_delay).await;
         }
@@ -1026,8 +939,7 @@ impl Connection for MockConnection {
             exclusive,
         });
         if exclusive && self.exclusive_write_errors.contains(path) {
-            // Non-collision failure of the atomic create (e.g. permission
-            // denied): must fail closed and propagate, not reconcile.
+            // A non-collision create failure must propagate, not reconcile.
             return Err(HostError::Sftp {
                 host: self.hostname.clone(),
                 reason: format!("scripted exclusive-create failure: {}", path.display()),
@@ -1035,11 +947,9 @@ impl Connection for MockConnection {
         }
         let mut files = self.files.lock().expect("mock files lock");
         if exclusive && self.exclusive_write_timeouts.contains(path) {
-            // Model what an O_EXCL create can actually do server-side when
-            // the client never sees the reply: it lands our bytes only if the
-            // path was free, otherwise a pre-existing (possibly foreign) file
-            // is left untouched — exactly as a real exclusive create would
-            // refuse to clobber it.
+            // What an O_EXCL create does server-side when the client never sees
+            // the reply: the bytes land only if the path was free, since a real
+            // exclusive create would refuse to clobber a pre-existing file.
             if !files.contains_key(path) {
                 files.insert(path.to_path_buf(), data.to_vec());
             }
@@ -1049,7 +959,6 @@ impl Connection for MockConnection {
             });
         }
         if exclusive && files.contains_key(path) {
-            // Atomic exclusive create lost the race: the file already exists.
             return Err(HostError::AlreadyExists {
                 host: self.hostname.clone(),
                 path: path.display().to_string(),
@@ -1060,15 +969,14 @@ impl Connection for MockConnection {
     }
 
     async fn sftp_append(&mut self, path: &Path, data: &[u8]) -> Result<()> {
-        // Record the attempt before anything can fail, so the op log keeps
-        // meaning "an append was tried" even when nothing is persisted — the
-        // oracle `add_history_swallows_append_failure` relies on.
+        // Recorded before anything can fail, so the op log still means "an
+        // append was tried" when nothing is persisted — the oracle
+        // `add_history_swallows_append_failure` relies on that.
         self.record_sftp(MockSftpOp::Append(path.to_path_buf()));
-        // Reconnect at entry if inactive, mirroring `sftp_session` and the ssh
-        // impl (whose `sftp()` does exactly this). Without it the mock accepted
-        // an append on a host that had gone away — so a host lost to its reboot
-        // still "wrote" its history row here, and any test for that regression
-        // would pass however the flow ordered the write.
+        // Reconnect at entry as the ssh impl's `sftp()` does. Without it the
+        // mock accepts an append on a host that has gone away, and the "a host
+        // lost to its reboot still wrote its history row" tests pass whichever
+        // side of the reboot the write lands on.
         if !self.active {
             self.reconnect(0, false).await?;
         }
@@ -1078,7 +986,7 @@ impl Connection for MockConnection {
                 reason: format!("scripted append failure: {}", path.display()),
             });
         }
-        // Additive: create-if-missing, then extend at EOF. No truncation and no
+        // Create-if-missing then extend at EOF: no truncation, no
         // read-modify-write window, so concurrent appenders never lose entries.
         let mut files = self.files.lock().expect("mock files lock");
         files
@@ -1102,9 +1010,9 @@ impl Connection for MockConnection {
                 reason: "scripted sftp_remove failure".to_owned(),
             });
         }
-        // Actually drop the file so a later `sftp_open` reflects the removal —
-        // this makes the lock lifecycle (lock → unlock → is_locked) observable
-        // end-to-end against the mock, not just via the recorded op log.
+        // Really drop the file so a later `sftp_open` reflects the removal, and
+        // the lock lifecycle (lock → unlock → is_locked) is observable
+        // end-to-end rather than only through the op log.
         self.files.lock().expect("mock files lock").remove(path);
         Ok(())
     }
@@ -1116,11 +1024,9 @@ impl Connection for MockConnection {
 
     async fn sftp_readlink(&mut self, path: &Path) -> Result<String> {
         self.record_sftp(MockSftpOp::Readlink(path.to_path_buf()));
-        // An unscripted path models a missing symlink on a real host, which the
-        // SFTP layer reports as `SftpNotFound` (not a generic error) — matching
-        // `sftp_open`'s missing-file semantics. `parse_system` relies on this to
-        // degrade a missing `baseproduct` to a dangling base rather than a hard
-        // parse failure.
+        // An unscripted path is a missing symlink, which the SFTP layer reports
+        // as `SftpNotFound` rather than a generic error; `parse_system` relies
+        // on that to degrade a missing `baseproduct` to a dangling base.
         self.links
             .get(path)
             .cloned()
@@ -1131,9 +1037,8 @@ impl Connection for MockConnection {
     }
 
     async fn sftp_session(&mut self) -> Result<Box<dyn SftpSession + '_>> {
-        // Model the per-batch handshake: count one session open. Reconnect at
-        // entry if inactive, mirroring the ssh impl (and `parse_system`'s
-        // reconnect-then-retry expectations under `Target::connect`).
+        // Reconnect at entry as the ssh impl does, which is what
+        // `parse_system`'s reconnect-then-retry under `Target::connect` expects.
         if !self.active {
             self.reconnect(0, false).await?;
         }
@@ -1141,10 +1046,8 @@ impl Connection for MockConnection {
             tokio::time::sleep(self.sftp_session_delay).await;
         }
         *self.sftp_sessions.lock().expect("mock sftp sessions lock") += 1;
-        // The handle shares this mock's scripted state via `Arc` (clone), so its
-        // reads record into the same `sftp_ops` log and honor the same
-        // file/listing/link/error scripting as the per-op methods — no behaviour
-        // divergence between the batched and per-op read paths.
+        // The handle shares scripted state via `Arc`, so batched reads record
+        // into the same op log under the same scripting as the per-op methods.
         Ok(Box::new(MockSftpSession { conn: self.clone() }))
     }
 
@@ -1445,13 +1348,11 @@ mod tests {
 
     #[tokio::test]
     async fn sftp_append_on_a_dead_link_reconnects_first() {
-        // Mirrors `SshConnection::sftp()`, which reconnects when the link is
-        // inactive. Without this the mock accepts an append on a host that has
-        // gone away — which silently makes the "a host lost to its reboot
-        // still gets its history row" tests in `mtui-testreport` vacuous: they
-        // would pass with the write on either side of the reboot. This test
-        // exists so removing that guard fails *here*, visibly, rather than
-        // quietly disarming tests in another crate.
+        // Pins the mock's reconnect-at-entry guard. Without it the mock accepts
+        // an append on a host that has gone away, which silently makes
+        // `mtui-testreport`'s "a host lost to its reboot still gets its history
+        // row" tests vacuous — they would pass with the write on either side of
+        // the reboot. Removing the guard must fail *here*, visibly.
         let mut conn = MockConnection::new("h1").failing_reconnect();
         conn.fire_and_forget("systemctl reboot")
             .await
@@ -1521,8 +1422,8 @@ mod tests {
 
     #[tokio::test]
     async fn sftp_session_batches_reads_and_counts_one_open() {
-        // One `sftp_session()` open serves several reads; the per-read ops are
-        // recorded through the shared log exactly as the per-op methods would.
+        // One open serves several reads, recorded through the shared log
+        // exactly as the per-op methods would.
         let mut conn = MockConnection::new("h1")
             .with_listing("/d", ["a", "b"])
             .with_file("/d/a", b"A".to_vec());
@@ -1547,13 +1448,12 @@ mod tests {
 
     #[tokio::test]
     async fn cloned_handle_shares_transport_state() {
-        // `clone_box()` yields a handle that shares the SFTP session counter and
-        // op log via `Arc` — the mock proxy for "reuses the same transport".
-        // This is what lets a `TargetLock`/`PoolLock` built from a target's
-        // clone be observed operating against the *same* connection state in
-        // offline tests. (The real `SshConnection::clone_box` clones identity
-        // with an empty handle and opens its own transport on first use; the
-        // mock deliberately shares so lock behaviour stays observable.)
+        // Sharing the session counter and op log via `Arc` is the mock proxy
+        // for "reuses the same transport", and is what lets a
+        // `TargetLock`/`PoolLock` built from a target's clone be observed
+        // against the *same* connection state offline. The real
+        // `SshConnection::clone_box` instead opens its own transport on first
+        // use; the mock deliberately shares so lock behaviour stays observable.
         let mut conn = MockConnection::new("h1").with_file("/f", b"x".to_vec());
         let mut clone = conn.clone_box();
 
@@ -1594,9 +1494,8 @@ mod tests {
     #[cfg(feature = "shell")]
     #[tokio::test]
     async fn shell_read_carries_over_chunk_larger_than_buffer() {
-        // A chunk larger than the read buffer is served in pieces across
-        // successive reads (leftover carryover), never truncated — matching
-        // the real SSH channel, so no PTY bytes are lost on a short buffer.
+        // A chunk larger than the read buffer is served in pieces, never
+        // truncated, so no PTY bytes are lost on a short buffer.
         let mut conn = MockConnection::new("h1").with_shell_output(b"abcdef".to_vec());
         let mut ch = conn.shell(80, 24).await.expect("spawn");
         let mut buf = [0u8; 3];

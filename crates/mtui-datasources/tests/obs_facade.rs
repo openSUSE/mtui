@@ -1,12 +1,10 @@
 //! Integration tests for the never-raise `OSC(config, rrid)` facade
 //! (`mtui_datasources::obs::facade`).
 //!
-//! Covers the DoD escape hatches: a non-PEM key file, a
-//! no-home `expanduser`, and a lone-surrogate MCP body must each yield a *logged
-//! failure* (a typed `ObsError`), never a panic. Also exercises the happy path
-//! (a comment through a wiremock-backed OBS server via the injectable factory)
-//! and confirms the production `Osc::new` path resolves credentials from a real
-//! oscrc file and reaches the OBS API.
+//! The never-raise escape hatches — a non-PEM key file, a no-home `~` path, a
+//! lone-surrogate MCP body — must each yield a *logged failure* (a typed
+//! `ObsError`), never a panic. Also covers the happy path through the injectable
+//! factory and the production `Osc::new` path against a real oscrc file.
 //!
 //! HTTP is mocked with `wiremock`; oscrc/keys are written to `tempfile` dirs.
 //! `$OSC_CONFIG` (the osc-native oscrc override) is set only inside
@@ -203,11 +201,10 @@ fn write_oscrc(
 // `#[serial(osc_config_env)]` guard makes the mutation exclusive.
 #[allow(unsafe_code)]
 async fn non_pem_key_yields_logged_failure_not_panic() {
-    // Escape hatch #1 (PR#323): a non-PEM key file. The oscrc references an
-    // existing-but-garbage key; on the first authenticated call the wiremock OBS
-    // server returns a 401 Signature challenge, the signer tries to load the key,
-    // and fails with a typed ObsError::Config — never a panic. The oscrc is
-    // discovered via `$OSC_CONFIG` (process-global → `#[serial]`).
+    // Escape hatch #1 (PR#323): the oscrc references an existing-but-garbage
+    // key, so the 401 Signature challenge makes the signer fail loading it with
+    // a typed ObsError::Config rather than panicking. Discovery is via
+    // `$OSC_CONFIG` (process-global → `#[serial]`).
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/request/56789"))
@@ -242,13 +239,11 @@ async fn non_pem_key_yields_logged_failure_not_panic() {
 // `#[serial(osc_config_env)]` guard makes the mutation exclusive.
 #[allow(unsafe_code)]
 async fn expanduser_oscrc_yields_logged_failure_not_panic() {
-    // Escape hatch #2 (PR#323): a `~`-relative oscrc path through expanduser().
-    // `$OSC_CONFIG` (the osc-native override) is honoured verbatim and `~`-expanded;
-    // whether or not `$HOME` is set, the reader never panics on the `~` path: it
-    // expands (or leaves `~` in place with no home) and the resulting missing file
-    // surfaces as a typed ObsError::Config. (The no-home invariant — that
-    // expanduser leaves `~` in place rather than panicking — is unit-tested in
-    // `obs::oscrc`; this asserts the facade folds that path into a logged Err.)
+    // Escape hatch #2 (PR#323): `$OSC_CONFIG` is honoured verbatim and
+    // `~`-expanded, and with or without `$HOME` the reader never panics — it
+    // expands, or leaves `~` in place, and the missing file becomes a typed
+    // ObsError::Config. The no-home half is unit-tested in `obs::oscrc`; this
+    // asserts the facade folds it into a logged Err.
     let config = Config::default();
     // SAFETY: serialised via `#[serial(osc_config_env)]`.
     unsafe { std::env::set_var("OSC_CONFIG", "~/.oscrc-mtui-rs-facade-test-does-not-exist") };
@@ -261,14 +256,10 @@ async fn expanduser_oscrc_yields_logged_failure_not_panic() {
 
 #[test]
 fn lone_surrogate_body_is_rejected_at_the_json_boundary() {
-    // Escape hatch #3 (PR#323): a lone surrogate in the request body from MCP
-    // JSON input. In Python a lone surrogate can live in a `str` and blows up
-    // only at encode time; in Rust a `String`/`&str` cannot hold one at all, and
-    // serde_json rejects it at the MCP JSON boundary — so it can never reach the
-    // facade to panic on encode. This proves that boundary guarantee.
-    //
-    // A JSON string with a lone high surrogate (\ud800 with no low surrogate)
-    // is invalid; serde_json refuses to decode it into a Rust String.
+    // Escape hatch #3 (PR#323): a lone surrogate in an MCP-supplied body cannot
+    // reach the facade to panic on encode — `String`/`&str` cannot hold one and
+    // serde_json refuses to decode `\ud800` without a low surrogate. This pins
+    // that boundary guarantee.
     let json = r#""\ud800""#;
     let decoded: Result<String, _> = serde_json::from_str(json);
     assert!(

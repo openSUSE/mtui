@@ -1,26 +1,19 @@
 //! The `request_review` command — ask for review of the loaded update in Slack.
 //!
-//! Posts a review request naming the update's RRID into the configured channel,
-//! records the resulting message in the testreport template so the request is
-//! traceable afterwards, and optionally watches the message for reviewer
-//! reactions.
+//! Posts a request naming the update's RRID into the configured channel, records
+//! the resulting message in the testreport template so the request is traceable
+//! afterwards, and optionally watches it for reviewer reactions. Three
+//! deliberate departures:
 //!
-//! Three design decisions are worth stating, because each departs from the
-//! obvious reading:
-//!
-//! * **The watch is opt-in (`--watch`), not the default.** A watch runs for up
-//!   to an hour, and the same command has to behave sanely over MCP, where a
-//!   blocking call that outlives the client's timeout is indistinguishable from
-//!   a hang. Posting is fast and total; watching is the long-running extra the
-//!   caller asks for, and over MCP it belongs in a background job.
-//! * **The marker is committed, not just written.** `approve` gates on it, and
-//!   the reviewer who approves is often not the person who asked: the marker
-//!   has to be visible from another checkout, so it goes to SVN immediately
-//!   rather than waiting for a later `commit`.
-//! * **Rate limiting is not failure.** Slack throttles routinely; a `429`
-//!   leaves the watch running rather than counting against it, or a busy
-//!   channel would end the watch early and report "no reaction" when the truth
-//!   is "we were not allowed to look".
+//! * **The watch is opt-in (`--watch`).** It runs for up to an hour, and over
+//!   MCP a blocking call outliving the client's timeout is indistinguishable
+//!   from a hang; posting is fast and total, watching belongs in a job.
+//! * **The marker is committed, not just written.** `approve` gates on it and
+//!   the approver is often someone else, so it must be visible from another
+//!   checkout rather than waiting for a later `commit`.
+//! * **Rate limiting is not failure.** A `429` leaves the watch running;
+//!   counting it would end a busy channel's watch early and report "no
+//!   reaction" when the truth is "we were not allowed to look".
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -42,18 +35,14 @@ const DEFAULT_BACKOFF: Duration = Duration::from_secs(30);
 /// cannot park the watch for hours.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-/// Lower bound on any single back-off.
-///
-/// A `Retry-After: 0` — from a buggy proxy, or a server trying to make us
-/// misbehave — would otherwise mean a zero-length sleep, turning the back-off
-/// into a tight loop that hammers the very endpoint that just asked us to slow
-/// down. Backing off by less than a second is never what a 429 means.
+/// Lower bound on any single back-off: a `Retry-After: 0` would otherwise be a
+/// tight loop hammering the endpoint that just asked us to slow down, and
+/// sub-second is never what a 429 means.
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
 
-/// Consecutive hard failures tolerated before the watch gives up.
-///
-/// Transient errors happen; a persistent one (the message was deleted, the
-/// token was revoked) should end the watch rather than spin until timeout.
+/// Consecutive hard failures tolerated before the watch gives up: a persistent
+/// error (deleted message, revoked token) must end it rather than spin until
+/// timeout.
 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 
 /// How a watch ended, so the summary can say something true.
@@ -71,11 +60,9 @@ enum WatchOutcome {
     Failed(String),
 }
 
-/// Spread a poll interval by ±15% so several mtui instances watching the same
-/// channel do not converge on the same request times.
-///
-/// Uses the clock's sub-second noise rather than pulling in a random-number
-/// dependency: the goal is decorrelation between processes, not unpredictability.
+/// Spread a poll interval by ±15% so several mtui instances watching one
+/// channel do not converge on the same request times. Uses clock noise rather
+/// than a RNG dependency: the goal is decorrelation, not unpredictability.
 fn jittered(base: Duration) -> Duration {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -85,11 +72,9 @@ fn jittered(base: Duration) -> Duration {
     Duration::from_millis(base.as_millis() as u64 * factor / 100)
 }
 
-/// The message posted to Slack.
-///
-/// The RRID appears verbatim so the request can be traced back to the update
-/// from Slack alone, and so any later verification can bind to this exact
-/// message rather than to "some review request".
+/// The message posted to Slack. The RRID appears verbatim so the request traces
+/// back to the update from Slack alone, and later verification binds to this
+/// exact message.
 fn review_message(rrid: &str, category: &str, note: Option<&str>) -> String {
     let mut msg = format!("Please review {rrid}");
     if !category.is_empty() {
@@ -106,8 +91,7 @@ fn review_message(rrid: &str, category: &str, note: Option<&str>) -> String {
 /// to command errors that say what to do about them.
 fn slack_client(session: &Session) -> Result<Slack, CommandError> {
     Slack::new(&session.config).map_err(|e| match e {
-        // The common case for anyone not using the integration: say so plainly
-        // rather than making them read it as a failure.
+        // The common case for anyone not using the integration; not a failure.
         SlackError::Disabled => CommandError::Other(
             "Slack integration is disabled; enable it with `config set slack_enabled true` \
              or the `[slack] enabled` config key"
@@ -135,12 +119,10 @@ fn resolve_channel(session: &Session, args: &ArgMatches) -> Result<String, Comma
 
 /// Poll `posted` until a verdict, the deadline, or a cancellation.
 ///
-/// `cancel` is the session's cancellation seam: the REPL fires it on Ctrl-C and
-/// the MCP job layer on `job_cancel`, and either stops the watch at its next
-/// sleep with [`WatchOutcome::Interrupted`].
-///
-/// Returns the outcome rather than printing it, so the caller owns all display
-/// and the loop stays testable.
+/// `cancel` is the session's cancellation seam — the REPL fires it on Ctrl-C,
+/// the MCP job layer on `job_cancel` — and either stops the watch at its next
+/// sleep with [`WatchOutcome::Interrupted`]. Returns the outcome rather than
+/// printing it, so the caller owns all display.
 async fn watch(
     slack: &Slack,
     posted: &PostedMessage,
@@ -153,8 +135,8 @@ async fn watch(
     let mut failures: u32 = 0;
 
     loop {
-        // Poll before sleeping, so an already-acked request is recognised
-        // immediately and an elapsed deadline still gets exactly one look.
+        // Poll before sleeping, so an already-acked request is recognised at
+        // once and an elapsed deadline still gets exactly one look.
         match slack.reactions(&posted.channel, &posted.ts).await {
             Ok(reactions) => {
                 failures = 0;
@@ -182,8 +164,7 @@ async fn watch(
                         .flat_map(|r| r.users.clone())
                         .collect::<Vec<_>>(),
                 );
-                // A rejection is checked first: if a reviewer left both, the
-                // objection is the one that must not be silently outvoted.
+                // Checked first: an objection must not be silently outvoted.
                 if !nacked.is_empty() {
                     return WatchOutcome::Rejected(nacked);
                 }
@@ -225,19 +206,14 @@ async fn watch(
 }
 
 /// Sleep for `dur` (never past `deadline`), returning `true` if `cancel` fired.
+/// Interrupting the sleep rather than letting the press kill the process is what
+/// tells the user their request *was* posted — only the watching stopped.
 ///
-/// The point of interrupting the sleep rather than letting the press kill the
-/// process is that the user must learn their review request *was* posted —
-/// only the watching stopped.
-///
-/// This selects the session's cancellation token rather than
-/// `tokio::signal::ctrl_c` directly, so the watch has one interrupt source
-/// instead of two, and that source is *attributable*: the REPL forwards Ctrl-C
-/// onto the token it installed for this dispatch, and an MCP `job_cancel`
-/// reaches the watch too. The old signal branch could not be reached from a
-/// headless tool call (which has no terminal of its own) — and where a stdio
-/// server did share the operator's terminal, a Ctrl-C fired *every* listener at
-/// once, interrupting a watch that nobody had asked to stop.
+/// Selects the session's cancellation token, never `tokio::signal::ctrl_c`: one
+/// *attributable* interrupt source, reached by the REPL's forwarded Ctrl-C and
+/// an MCP `job_cancel` alike. A raw signal branch is unreachable from a headless
+/// tool call, and on a stdio server sharing the operator's terminal it fires
+/// every listener at once, stopping watches nobody asked to stop.
 async fn sleep_or_interrupt(cancel: &CancellationToken, dur: Duration, deadline: Instant) -> bool {
     let remaining = deadline.saturating_duration_since(Instant::now());
     let dur = dur.min(remaining);
@@ -247,13 +223,11 @@ async fn sleep_or_interrupt(cancel: &CancellationToken, dur: Duration, deadline:
     }
 }
 
-/// Write the marker into the template and commit it to SVN.
-///
-/// The commit matters because the marker is what `approve` gates on: a
-/// reviewer approving from a different checkout needs to see that a review was
-/// actually requested. Mirrors `approve`'s `record_reviewer`, including its
-/// ordering — the in-memory field is only set once the write succeeded, so a
-/// caller that treats a failure as fatal cannot proceed believing otherwise.
+/// Write the marker into the template and commit it to SVN — the commit matters
+/// because `approve` gates on the marker and the approver may be in a different
+/// checkout. Mirrors `approve`'s `record_reviewer` including its ordering: the
+/// in-memory field is set only once the write succeeded, so a caller treating
+/// failure as fatal cannot proceed otherwise.
 async fn record_marker(
     session: &mut Session,
     marker: &SlackReviewMarker,
@@ -340,8 +314,8 @@ impl Command for RequestReview {
         let slack = slack_client(session)?;
         let channel = resolve_channel(session, args)?;
 
-        // Validate the token before posting, so a bad one is reported as such
-        // rather than as a confusing failure on the post itself.
+        // Validate first, so a bad token is reported as such rather than as a
+        // confusing failure on the post.
         let bot_id = match slack.auth_test().await {
             Ok(id) => Some(id),
             Err(e) => {
@@ -360,9 +334,8 @@ impl Command for RequestReview {
             .await
             .map_err(|e| CommandError::Other(format!("failed to post review request: {e}")))?;
 
-        // Record the message before anything else can fail: from here on the
-        // request exists in Slack, and the template should say so even if the
-        // watch below is interrupted.
+        // From here on the request exists in Slack; the template must say so
+        // even if the watch below is interrupted.
         let marker = SlackReviewMarker {
             channel: posted.channel.clone(),
             ts: posted.ts.clone(),
@@ -371,10 +344,9 @@ impl Command for RequestReview {
             match record_marker(session, &marker, &rrid.to_string(), &TokioSvnRunner).await {
                 Ok(()) => true,
                 Err(e) => {
-                    // The request is already posted; failing the whole command here
-                    // would misreport a real, visible message as not sent. But the
-                    // approval gate reads this marker, so an un-recorded request
-                    // will later refuse the approval — say so now, loudly.
+                    // Failing here would misreport a real, visible message as
+                    // not sent; but the approval gate reads this marker, so say
+                    // now that approve will refuse.
                     let msg = session.display.yellow(&format!(
                         "warning: review request posted, but recording it failed: {e}\n\
                      approve will not see this request; re-run request_review once fixed"
@@ -399,8 +371,8 @@ impl Command for RequestReview {
 
         let poll = Duration::from_secs(session.config.slack_poll_interval);
         let timeout = Duration::from_secs(session.config.slack_watch_timeout);
-        // Both interrupt sources, because both surfaces read this line: Ctrl-C
-        // in the REPL, `job_cancel` over MCP (where there is no Ctrl-C at all).
+        // Both surfaces read this line: Ctrl-C in the REPL, `job_cancel` over
+        // MCP, where there is no Ctrl-C at all.
         session.display.println(&format!(
             "watching for reactions (up to {}s, Ctrl-C / job_cancel to stop)",
             timeout.as_secs()
@@ -410,8 +382,8 @@ impl Command for RequestReview {
         let outcome = watch(&slack, &posted, poll, timeout, bot_id.as_deref(), &cancel).await;
         report(session, &rrid.to_string(), &outcome);
 
-        // A failed watch is a failed command: over MCP the caller needs a
-        // failed tool call, not a success whose text happens to say otherwise.
+        // Over MCP the caller needs a failed tool call, not a success whose
+        // text happens to say otherwise.
         if let WatchOutcome::Failed(e) = outcome {
             return Err(CommandError::Other(format!("Slack watch failed: {e}")));
         }
@@ -495,8 +467,7 @@ mod tests {
 
     #[test]
     fn review_message_names_the_rrid_verbatim() {
-        // The RRID must survive into the message text: it is what ties a Slack
-        // thread back to an update.
+        // The RRID ties the Slack thread back to an update.
         let msg = review_message("SUSE:Maintenance:1:2", "recommended", None);
         assert!(msg.contains("SUSE:Maintenance:1:2"), "{msg}");
         assert!(msg.contains("recommended"), "{msg}");
@@ -543,8 +514,8 @@ mod tests {
         assert!(server.received_requests().await.unwrap().is_empty());
     }
 
-    /// An `SvnRunner` that records argv and replays a fixed outcome, so the
-    /// commit step can be driven both ways without a real working copy.
+    /// Records argv and replays a fixed outcome, driving the commit step both
+    /// ways without a real working copy.
     #[derive(Debug)]
     struct StubSvn {
         succeed: bool,
@@ -582,8 +553,8 @@ mod tests {
         }
     }
 
-    /// A loaded report backed by a real template file, so the marker can be
-    /// written; returns the template path for assertions.
+    /// A loaded report backed by a real template file (returned for
+    /// assertions), so the marker can be written.
     fn report_with_template(session: &mut Session, dir: &tempfile::TempDir) -> std::path::PathBuf {
         let path = dir.path().join("log");
         std::fs::write(&path, "Test Plan Reviewer: bob\n").unwrap();
@@ -607,8 +578,8 @@ mod tests {
             .await
             .unwrap();
 
-        // The canonical channel from the post response is what gets recorded,
-        // not the configured name.
+        // The post response's canonical channel is recorded, not the
+        // configured name.
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(
             written.contains(&format!("Slack Review: {CHANNEL} {TS}")),
@@ -618,8 +589,8 @@ mod tests {
             session.metadata().base().slack_review.as_ref().unwrap().ts,
             TS
         );
-        // The commit really happened, and its message names the update — this
-        // is what makes the marker visible from another reviewer's checkout.
+        // The commit is what makes the marker visible from another reviewer's
+        // checkout, so its message must name the update.
         let argv = svn.argv();
         assert!(!argv.is_empty(), "svn was invoked");
         let ci = argv.iter().find(|a| a.first().is_some_and(|s| s == "ci"));
@@ -662,9 +633,8 @@ mod tests {
 
         let out = buf.contents();
         assert!(out.contains("requested review"), "{out}");
-        // The marker reaches the template even though the real `svn ci` cannot
-        // succeed here (the tempdir is not a working copy) — the write is what
-        // must not depend on the commit.
+        // The write must not depend on the commit: the real `svn ci` cannot
+        // succeed against a tempdir that is not a working copy.
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(
             written.contains(&format!("Slack Review: {CHANNEL} {TS}")),
@@ -784,20 +754,15 @@ mod tests {
         assert!(!out.contains("approved"), "{out}");
     }
 
-    /// A cancel stops the watch at its next sleep and says so: the request
-    /// itself was posted and stays posted, so this is not a failure — the
-    /// command still succeeds.
-    ///
-    /// The cancel is the session's own token, which is what a REPL Ctrl-C (now
-    /// forwarded onto it) and an MCP `job_cancel` both fire. Nothing raises a
-    /// real signal here: the old `tokio::signal::ctrl_c` branch could only have
-    /// been tested that way, which is why this branch had no test at all.
+    /// A cancel stops the watch at its next sleep and says so, but the command
+    /// still succeeds: the request was posted and stays posted. The cancel is
+    /// the session's own token, which both a REPL Ctrl-C and an MCP
+    /// `job_cancel` fire — nothing raises a real signal here.
     #[tokio::test]
     async fn a_cancel_stops_the_watch_but_keeps_the_request_posted() {
         let server = MockServer::start().await;
         mount_post_path(&server).await;
-        // A message nobody has reacted to: without the cancel this would poll
-        // until the (long) timeout.
+        // Nobody reacted: without the cancel this polls until the timeout.
         mount(
             &server,
             "reactions.get",
@@ -805,14 +770,12 @@ mod tests {
         )
         .await;
         let (mut session, buf) = slack_session(&server);
-        // The poll interval is far longer than the deadline, so the one sleep
-        // this watch takes is bounded by the deadline: a watch that ignored the
-        // cancel would time out a few seconds later instead of stopping now.
+        // The interval exceeds the deadline, so the one sleep is deadline-
+        // bounded: ignoring the cancel would time out seconds later, not stop.
         session.config.slack_watch_timeout = 5;
         session.config.slack_poll_interval = 60;
-        // Cancelled before the call, so the first inter-poll sleep is the one
-        // that observes it — no timing race, and the poll before it still gets
-        // its one honest look at the message.
+        // Cancelled before the call, so the first inter-poll sleep observes it
+        // — no timing race, and the poll before it still gets one honest look.
         session.cancel_token().cancel();
 
         let args = matches(&RequestReview, &["--watch"]);
@@ -827,9 +790,8 @@ mod tests {
         assert!(!out.contains("no review reaction"), "not a timeout: {out}");
     }
 
-    /// The rate-limit branch takes its own sleep, so it needs its own interrupt
-    /// arm: a 429 can park the watch for up to a minute, and a Ctrl-C that had
-    /// to wait that out would look exactly like a hang.
+    /// The rate-limit branch takes its own sleep, so it needs its own
+    /// interrupt arm: a Ctrl-C waiting out a minute-long 429 looks like a hang.
     #[tokio::test]
     async fn a_cancel_interrupts_the_rate_limit_backoff() {
         let server = MockServer::start().await;
@@ -846,9 +808,8 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
 
-        // The bound is the assertion: the back-off is clamped to at least
-        // MIN_BACKOFF and here asks for 60s, so a branch that ignored the token
-        // could not possibly return this quickly.
+        // The bound is the assertion: this back-off asks for 60s, so a branch
+        // ignoring the token could not return this quickly.
         let outcome = tokio::time::timeout(
             Duration::from_secs(2),
             watch(
@@ -914,7 +875,7 @@ mod tests {
         let err = RequestReview.call(&mut session, &args).await.unwrap_err();
 
         // A watch that could never see the message is a failed command, so an
-        // MCP caller gets a failed tool call rather than a hopeful summary.
+        // MCP caller gets a failed tool call, not a hopeful summary.
         assert!(err.to_string().contains("message_not_found"), "{err}");
         assert!(
             buf.contents().contains("repeated errors"),
@@ -936,8 +897,8 @@ mod tests {
             ts: TS.to_owned(),
         };
 
-        // Deadline well inside MAX_CONSECUTIVE_FAILURES worth of polls: if
-        // throttling counted as failure the outcome would be Failed.
+        // Deadline well inside MAX_CONSECUTIVE_FAILURES worth of polls, so
+        // throttling counting as failure would show up as Failed.
         let outcome = watch(
             &slack,
             &posted,
@@ -966,10 +927,9 @@ mod tests {
             ts: TS.to_owned(),
         };
 
-        // A zero timeout puts the deadline at the loop's own start, so it is
-        // already reached by the time the first poll returns — no matter how
-        // fast the machine. A small non-zero timeout would race: if the mock
-        // answers inside it, the loop sleeps ~0 and polls a second time.
+        // Zero puts the deadline at the loop's start, already reached when the
+        // first poll returns however fast the machine. A small non-zero one
+        // races: answered inside it, the loop sleeps ~0 and polls again.
         let outcome = watch(
             &slack,
             &posted,
@@ -981,18 +941,16 @@ mod tests {
         .await;
 
         assert_eq!(outcome, WatchOutcome::TimedOut);
-        // Exactly one look, even though the deadline had already passed: the
-        // loop polls before it sleeps, so an expired watch still reports what
-        // the message looks like rather than nothing at all.
+        // The loop polls before it sleeps, so an already-expired watch still
+        // reports what the message looks like rather than nothing.
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn a_zero_retry_after_does_not_become_a_tight_loop() {
         let server = MockServer::start().await;
-        // A server that says "rate limited, retry after 0 seconds". Taken
-        // literally that is a zero-length back-off, and the watch would spin
-        // against the endpoint that just asked it to slow down.
+        // "Retry after 0 seconds" taken literally is a zero-length back-off,
+        // spinning against the endpoint that asked us to slow down.
         Mock::given(path("/reactions.get"))
             .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "0"))
             .mount(&server)
@@ -1015,8 +973,7 @@ mod tests {
 
         assert_eq!(outcome, WatchOutcome::TimedOut);
         // The floor holds the second poll past the deadline, so the quarter
-        // second buys one request, not hundreds. Without MIN_BACKOFF this runs
-        // into the thousands.
+        // second buys one request; without MIN_BACKOFF, thousands.
         let polls = server.received_requests().await.unwrap().len();
         assert!(
             polls <= 2,

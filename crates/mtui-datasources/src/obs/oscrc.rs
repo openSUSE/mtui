@@ -1,15 +1,15 @@
 //! Native reader for OBS/IBS credentials from oscrc (no `osc` subprocess).
 //!
-//! Parses the user's
-//! existing oscrc (genuine INI) and resolves the credentials for one apiurl (the
-//! fixed `https://api.suse.de`) into a small [`ObsCredentials`]. The oscrc is
-//! located exactly like `osc` itself (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc`
-//! → `~/.oscrc`), so mtui reads the same file `osc` does without importing it.
-//! mtui authenticates with SSH-signature auth, so this reader deliberately does
-//! **not** read `pass`/`passx` for that Signature-only target — pulling a
-//! plaintext password into memory for a code path that never fires would be pure
-//! exposure. Every failure is a typed, fail-closed [`ObsError::Config`] that
-//! names the real oscrc file/section; there is no interactive prompt.
+//! Parses the user's existing oscrc (genuine INI) and resolves the credentials
+//! for one apiurl into a small [`ObsCredentials`]. The file is located exactly
+//! like `osc` itself (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` →
+//! `~/.oscrc`), so mtui reads the same one without importing it.
+//!
+//! mtui authenticates by SSH signature, so this reader deliberately does **not**
+//! read `pass`/`passx` for that Signature-only target: pulling a plaintext
+//! password into memory for a code path that never fires would be pure exposure.
+//! Every failure is a typed, fail-closed [`ObsError::Config`] naming the real
+//! oscrc file/section, and there is no interactive prompt.
 
 use std::path::{Path, PathBuf};
 
@@ -18,9 +18,8 @@ use tracing::warn;
 
 use super::errors::ObsError;
 
-/// An `sshkey` value like `SHA256:abc…` names a key held by the ssh agent by
-/// fingerprint rather than a file on disk; the native backend resolves it
-/// through the agent at signing time (matches `^[A-Z0-9]+:`).
+/// An `sshkey` like `SHA256:abc…` names an ssh-agent key by fingerprint rather
+/// than a file, resolved through the agent at signing time (`^[A-Z0-9]+:`).
 fn is_fingerprint(value: &str) -> bool {
     match value.find(':') {
         // At least one leading char, all of them ASCII-uppercase or digit.
@@ -39,11 +38,10 @@ const UNSUPPORTED_MGR: [&str; 2] = ["keyring", "transient"];
 
 /// Resolved OBS Signature-auth credentials for one apiurl.
 ///
-/// Exactly one of `sshkey_path` (a private-key file on disk) or
-/// `sshkey_fingerprint` (an ssh-agent key's `SHA256:…` fingerprint) identifies
-/// the signing key. Carries **no password by construction**: the native backend
-/// uses SSH signature auth against api.suse.de, so `pass`/`passx` are never read
-/// for that target.
+/// Exactly one of `sshkey_path` (a private-key file) or `sshkey_fingerprint`
+/// (an ssh-agent key's `SHA256:…` fingerprint) identifies the signing key.
+/// Carries **no password by construction** — `pass`/`passx` are never read for
+/// this Signature-only target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObsCredentials {
     /// The OBS API URL these credentials authenticate against.
@@ -60,8 +58,8 @@ pub struct ObsCredentials {
 
 /// Expand a leading `~` / `~/` in a path against `$HOME` (best effort).
 ///
-/// Behaves like Python's `Path.expanduser`: a path without a leading `~` is
-/// returned unchanged; a missing `$HOME` leaves the `~` in place.
+/// A path without a leading `~` is returned unchanged; a missing `$HOME` leaves
+/// the `~` in place.
 fn expanduser(raw: &str) -> PathBuf {
     if raw == "~" {
         if let Some(home) = home_dir() {
@@ -84,11 +82,10 @@ fn home_dir() -> Option<PathBuf> {
 
 /// The XDG config base directory, resolved like `osc`/`xdg.BaseDirectory`.
 ///
-/// `$XDG_CONFIG_HOME` if set and non-empty, else `$HOME/.config`. Resolved
-/// directly from the environment (not via the `directories` crate) so the result
-/// matches `osc` on every platform — `directories` diverges on macOS
-/// (`~/Library/Application Support`), which would make mtui read a different
-/// oscrc than `osc` itself.
+/// `$XDG_CONFIG_HOME` if set and non-empty, else `$HOME/.config`. Read straight
+/// from the environment rather than via `directories`, which diverges on macOS
+/// (`~/Library/Application Support`) and would make mtui read a different oscrc
+/// than `osc` itself.
 fn xdg_config_home() -> PathBuf {
     if let Some(v) = std::env::var_os("XDG_CONFIG_HOME")
         && !v.is_empty()
@@ -196,11 +193,10 @@ fn warn_loose_permissions(_path: &Path) {}
 /// [`default_conffile`]): `$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` →
 /// `~/.oscrc`.
 ///
-/// Returns the resolved [`ObsCredentials`] (user + signing key). Errors with
-/// [`ObsError::Config`] for any fault — missing/unreadable oscrc, missing
-/// section/user/sshkey, an unsupported credentials manager, or a missing key
-/// file. The message names the real failing file/section. Never prompts, never
-/// leaks the offending source line.
+/// Errors with [`ObsError::Config`] for any fault — missing/unreadable oscrc,
+/// missing section/user/sshkey, an unsupported credentials manager, a missing
+/// key file — naming the real failing file/section. Never prompts, never leaks
+/// the offending source line.
 pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
     let path = default_conffile();
 
@@ -214,9 +210,9 @@ pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
 
     warn_loose_permissions(&path);
 
-    // Never interpolate the parser error: rust-ini's ParseError message is a
-    // fixed "line:col expecting …" string (no source content), but staying with
-    // a fixed message keeps the secret-leak guarantee independent of the parser.
+    // Never interpolate the parser error: rust-ini's message carries no source
+    // content today, but a fixed message keeps the secret-leak guarantee
+    // independent of the parser.
     let ini = Ini::load_from_file(&path)
         .map_err(|_| ObsError::Config(format!("could not parse oscrc {}", path.display())))?;
 
@@ -261,16 +257,14 @@ pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
         return Err(ObsError::Config(format!("oscrc [{apiurl}] has no 'user'")));
     }
 
-    // Resolve the ssh key FIRST and ignore `credentials_mgr_class` entirely when
-    // one is configured: osc disables its password path for the transient manager
-    // and orders Signature ahead of Basic, so an oscrc carrying both authenticates
-    // by signature under osc too. Rejecting it up front turned a working
-    // configuration into a hard failure.
+    // Resolve the ssh key FIRST and ignore `credentials_mgr_class` when one is
+    // configured: osc disables its password path for the transient manager and
+    // orders Signature ahead of Basic, so an oscrc carrying both authenticates
+    // by signature there too. Rejecting it up front breaks a working config.
     let sshkey = inherited("sshkey");
     if sshkey.is_empty() {
-        // Only now does the credentials manager matter. Unlike 'sshkey', osc does
-        // not inherit `credentials_mgr_class` from [general], so read it from the
-        // host section only.
+        // Unlike `sshkey`, osc does not inherit `credentials_mgr_class` from
+        // [general], so read it from the host section only.
         let mgr = ini
             .get_from(Some(section_name.as_str()), "credentials_mgr_class")
             .unwrap_or("")
@@ -292,8 +286,7 @@ pub fn read_credentials(apiurl: &str) -> Result<ObsCredentials, ObsError> {
              auth is not supported)"
         )));
     }
-    // NB: 'pass'/'passx' are intentionally never read for this Signature-only
-    // target — see the module docstring.
+    // `pass`/`passx` are never read here — see the module doc.
 
     let (key_path, fingerprint) = resolve_sshkey(&sshkey)?;
     if let Some(ref kp) = key_path

@@ -1,21 +1,11 @@
 //! Per-template concurrency behaviours of the MCP session registry.
 //!
-//! Four behaviours:
-//!
-//! * `unscoped_serialises_via_exclusive_gate` — unscoped calls (no real
-//!   template) take the exclusive registry gate and never overlap.
-//! * `same_rrid_serialises` — two calls scoped to the *same* template do not
-//!   overlap.
-//! * `different_rrids_run_concurrently` — two calls scoped to *different*
-//!   templates overlap in time.
-//! * `do_not_clobber_each_others_stdout` — overlapping different-RRID runs each
-//!   capture only their own output.
-//!
-//! The first two assert the **lock discipline**: unscoped and same-RRID calls
-//! serialise. The last two assert **genuine wall-clock concurrency / per-call
-//! output isolation** — `run_command` dispatches a single-real-RRID call on a
-//! forked session rather than holding one session-wide mutex, so different-RRID
-//! calls overlap and each captures only its own output.
+//! Two halves. The **lock discipline**: unscoped calls (no real template) take
+//! the exclusive registry gate, and same-RRID calls share one per-RRID lock, so
+//! neither overlaps. Then **genuine wall-clock concurrency and per-call output
+//! isolation** — `run_command` dispatches a single-real-RRID call on a forked
+//! session rather than holding one session-wide mutex, so different-RRID calls
+//! overlap in time and each captures only its own output.
 
 #![cfg(feature = "mcp")]
 
@@ -63,8 +53,7 @@ impl Command for Probe {
         if self.print_output {
             session.display.println(&format!("{rrid}:first"));
         }
-        // Blocking sleep is fine: the point is to hold whatever lock the caller
-        // acquired for a measurable window.
+        // Blocking is the point: hold the caller's lock for a measurable window.
         let start = Instant::now();
         std::thread::sleep(self.hold);
         let end = Instant::now();
@@ -88,8 +77,7 @@ fn session() -> Arc<McpSession> {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.template_dir = tmp.path().to_path_buf();
-    // Leak the tempdir guard: the session outlives this fn and only reads the
-    // path; the OS reclaims it at process exit.
+    // Leaked: the session outlives this fn and only reads the path.
     std::mem::forget(tmp);
     McpSession::new(config)
 }
@@ -175,12 +163,9 @@ async fn same_rrid_serialises() {
     assert_serial(&seen);
 }
 
-/// Two calls scoped to *different* templates overlap in time.
-///
-/// Genuine wall-clock concurrency: each call
-/// forks a per-call `Session` sharing only its own template's per-entry report
-/// lock, so different-RRID dispatch no longer serialises on a session-wide
-/// mutex.
+/// Two calls scoped to *different* templates overlap in time: each forks a
+/// per-call `Session` sharing only its own template's per-entry report lock, so
+/// different-RRID dispatch never serialises on a session-wide mutex.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn different_rrids_run_concurrently() {
     let seen: Intervals = Arc::new(Mutex::new(Vec::new()));
@@ -212,13 +197,10 @@ async fn different_rrids_run_concurrently() {
     assert!(s1 < e2, "expected overlap, got {ivals:?}");
 }
 
-/// Overlapping different-RRID runs each capture only their own output.
-///
-/// Per-call output isolation: `run_command` swaps a
-/// fresh capture buffer + display onto the session for each dispatch, so even
-/// interleaved calls each return exactly their own stdout. (This does not require
-/// wall-clock parallelism, which the sibling `different_rrids_run_concurrently`
-/// proves independently.)
+/// Overlapping different-RRID runs each capture only their own output:
+/// `run_command` swaps a fresh capture buffer + display onto the session per
+/// dispatch. This needs no wall-clock parallelism, which
+/// `different_rrids_run_concurrently` proves separately.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn do_not_clobber_each_others_stdout() {
     let seen: Intervals = Arc::new(Mutex::new(Vec::new()));

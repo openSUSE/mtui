@@ -1,8 +1,7 @@
 //! Integration tests for the shared [`HttpClient`] GET-to-bytes path.
 //!
-//! Exercises the `get_bytes`
-//! group against a real HTTP transport (`wiremock`) instead of a fake session:
-//! a 2xx returns the body bytes, and a non-2xx status is surfaced as an error.
+//! Exercises the `get_bytes` group against a real HTTP transport (`wiremock`):
+//! a 2xx returns the body bytes, a non-2xx surfaces as an error.
 
 use mtui_datasources::{HttpClient, HttpError, VerifyPolicy};
 use wiremock::matchers::{method, path};
@@ -45,11 +44,10 @@ async fn get_bytes_raises_on_http_error_status() {
         .await
         .expect_err("404 is an error");
 
-    // reqwest surfaces the non-2xx as a status error wrapped in HttpError.
     // Braced `{ .. }`, not `(_)`: the variant is `#[non_exhaustive]` so no crate
-    // outside this one can build it and bypass the URL strip (#431), and that
-    // also makes its tuple-pattern form unnameable here. Matching stays
-    // possible via the braced form, which is what this pins.
+    // outside this one can build it and bypass the URL strip (#431), which also
+    // makes its tuple-pattern form unnameable. This pins that matching stays
+    // possible via the braced form.
     assert!(
         matches!(err, mtui_datasources::HttpError::Request { .. }),
         "expected HttpError::Request, got {err:?}"
@@ -73,7 +71,7 @@ async fn get_bytes_returns_empty_body() {
     assert!(out.is_empty());
 }
 
-// --- Bounded response bodies (th4o.9) ---
+// --- Bounded response bodies ---
 
 #[tokio::test]
 async fn get_bytes_capped_accepts_body_at_the_limit() {
@@ -96,8 +94,7 @@ async fn get_bytes_capped_accepts_body_at_the_limit() {
 #[tokio::test]
 async fn get_bytes_capped_rejects_oversized_content_length_early() {
     let server = MockServer::start().await;
-    // An honest Content-Length (wiremock sets it from the body) larger than the
-    // cap must be rejected before the body is read: seen = Some(len).
+    // An honest Content-Length over the cap is rejected before any read.
     let body = vec![b'x'; 1024];
     Mock::given(method("GET"))
         .and(path("/big"))
@@ -122,8 +119,8 @@ async fn get_bytes_capped_rejects_oversized_content_length_early() {
 #[tokio::test]
 async fn get_bytes_capped_rejects_chunked_over_limit_mid_stream() {
     let server = MockServer::start().await;
-    // Transfer-Encoding: chunked with no Content-Length: reqwest reports an
-    // unknown length, so the cap must trip while streaming (seen = None).
+    // Chunked with no Content-Length: unknown length, so the cap must trip
+    // while streaming.
     let body = vec![b'x'; 1024];
     Mock::given(method("GET"))
         .and(path("/chunked"))
@@ -179,22 +176,20 @@ async fn body_too_large_error_message_carries_no_url() {
 }
 
 /// #431, the credential vector: reqwest scrubs userinfo out of the URL only at
-/// `RequestBuilder` construction (`extract_authority` moves it into a Basic-auth
-/// header), and never again. A `Location` header therefore puts credentials
+/// `RequestBuilder` construction, never again, so a `Location` header puts it
 /// straight back into the `Response`'s URL — which `error_for_status` copies
-/// verbatim into its `reqwest::Error` — so a hostile or compromised datasource
-/// can force mtui to render `user:pass@host` out of a plain non-2xx.
-///
-/// The failure must stay a failure: only the URL is dropped, not the status.
+/// verbatim into its `reqwest::Error`. A hostile datasource can thereby force
+/// mtui to render `user:pass@host` out of a plain non-2xx. The failure must
+/// stay a failure: only the URL is dropped, not the status.
 #[tokio::test]
 async fn credentialed_redirect_target_never_reaches_a_status_error() {
     let target = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/moved"))
         .respond_with(ResponseTemplate::new(404))
-        // The redirect hop must actually be served: if a future reqwest stripped
-        // userinfo from a `Location`, the credential half of this test would go
-        // vacuous rather than fail.
+        // The redirect hop must actually be served: were a future reqwest to
+        // strip userinfo from a `Location`, the credential half of this test
+        // would go vacuous rather than fail.
         .expect(1)
         .mount(&target)
         .await;

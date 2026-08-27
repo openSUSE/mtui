@@ -9,10 +9,8 @@ use crate::session::Session;
 
 /// Lists the commands mtui would invoke to apply the update on the hosts.
 ///
-/// The
-/// [`TestReport::list_update_commands`](mtui_testreport::TestReport) emits the
-/// per-host update commands itself (a no-op for the null report); concrete
-/// reports (SL/PI/OBS) render their updater command lines.
+/// [`TestReport::list_update_commands`](mtui_testreport::TestReport) emits them
+/// itself: a no-op for the null report, the updater command lines for SL/PI/OBS.
 pub struct ListUpdateCommands;
 
 #[async_trait]
@@ -30,14 +28,12 @@ impl Command for ListUpdateCommands {
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
-        // The report reads the group to render each host's update command line.
-        // Snapshot-free: `list_update_commands` takes `&HostsGroup` and does not
-        // touch the display, so no borrow conflict arises.
+        // Snapshot-free: it takes `&HostsGroup` and never touches the display,
+        // so there is no borrow conflict.
         let targets = session.targets();
         session.metadata().list_update_commands(targets);
-        // `list_update_commands` is a no-op across every report type today:
-        // the delegate emits nothing, so print an explicit placeholder
-        // instead of returning empty success.
+        // The delegate is a no-op for every report type today, so print a
+        // placeholder rather than return an empty success.
         session
             .display
             .println("list_update_commands: not yet implemented");

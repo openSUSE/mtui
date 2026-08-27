@@ -11,13 +11,12 @@ use crate::session::Session;
 
 /// Locks hosts for exclusive usage (the operation/zypper lock).
 ///
-/// Locks all repository
-/// transactions on the target hosts with a `timestamp:user:pid[:comment]`
-/// remote lock. Enabled locks are removed automatically on session exit; a
-/// comment (`-c`) keeps the lock effective against other sessions too.
+/// Locks all repository transactions on the target hosts with a
+/// `timestamp:user:pid[:comment]` remote lock, removed automatically on session
+/// exit; a `-c` comment keeps the lock effective against other sessions too.
 ///
-/// `-t` host sub-selection is not yet honoured for the lock fan-out — the whole
-/// active group is locked, matching Wave-1 `run`'s group-lock behaviour.
+/// `-t` host sub-selection is not yet honoured for the fan-out — the whole
+/// active group is locked, as with `run`'s group lock.
 pub struct HostLock;
 
 #[async_trait]
@@ -62,9 +61,8 @@ impl Command for HostLock {
             .unwrap_or_default();
         let outcomes = session.targets_mut().lock(&comment).await;
 
-        // Report each host's lock verdict. `Contended` is benign (the lock is
-        // held by another owner), so it is *not* a failure; only a real
-        // transport error (`Failed`) fails.
+        // `Contended` is benign — another owner holds the lock — so only a real
+        // transport error (`Failed`) fails the command.
         let mut failed: Vec<String> = Vec::new();
         for (host, outcome) in &outcomes {
             match outcome {
@@ -108,7 +106,6 @@ mod tests {
     async fn lock_without_comment_succeeds() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostLock, &[]);
-        // Best-effort fan-out over mock hosts must not error.
         HostLock.call(&mut session, &args).await.unwrap();
         assert!(buf.contents().contains("h1: locked"), "{}", buf.contents());
     }
@@ -134,7 +131,7 @@ mod tests {
     #[tokio::test]
     async fn lock_with_multiword_comment_joins_it() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        // The comment is joined with spaces; a REMAINDER-style multi-word value.
+        // A REMAINDER-style multi-word value, joined with spaces.
         let args = matches(&HostLock, &["-c", "under", "test"]);
         HostLock.call(&mut session, &args).await.unwrap();
     }

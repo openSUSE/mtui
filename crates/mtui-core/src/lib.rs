@@ -10,20 +10,16 @@
 //!   [`TemplateRegistry`] and [`CommandPromptDisplay`].
 //! * The explicit command [`Registry`] and the line-dispatch [`engine`], the
 //!   single machinery both the REPL and MCP dispatch through.
-//! * [`args`] — the top-level process argument parser (`clap`), distinct
-//!   from the per-command parsers the engine synthesises.
-//! * [`log_filter`] — the `tracing` filter policy (the HTTP-transport
-//!   carve-out and how it composes with `RUST_LOG`), shared by both
-//!   entrypoints because neither can see the other.
-//! * The [`display`] surface: the full `list_*`
-//!   family, `show_log`, the three-way
+//! * [`args`] — the top-level process argument parser (`clap`), distinct from
+//!   the per-command parsers the engine synthesises.
+//! * [`log_filter`] — the `tracing` filter policy (the HTTP-transport carve-out
+//!   and how it composes with `RUST_LOG`), shared by both entrypoints because
+//!   neither can see the other.
+//! * The [`display`] surface: the `list_*` family, `show_log`, the three-way
 //!   [`ColorMode`], and the `page` pager.
-//!
-//! [`entrypoint`] is the process [`ExitStatus`] contract distinct
-//! from the top-level [`Args`] parser (Layer 1) and the per-command engine
-//! (Layer 2), and from the MCP schema synthesis (Layer 3). Both
-//! process entrypoints, `mtui`'s REPL and `mtui-mcp`, exit through it; neither
-//! has a headless single-command CLI mode.
+//! * [`entrypoint`] — the process [`ExitStatus`] contract. Both `mtui`'s REPL
+//!   and `mtui-mcp` exit through it; neither has a headless single-command CLI
+//!   mode.
 
 pub mod args;
 pub mod command;

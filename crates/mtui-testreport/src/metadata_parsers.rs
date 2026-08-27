@@ -2,17 +2,14 @@
 //!
 //! * [`ReducedMetadataParser`] — line-based parser for the template's `hosts`
 //!   field; extracts reference hostnames plus jira/bug ids and their titles.
-//!   Registered under the `"hosts"` key in every concrete report's parser table
-//!   (SL/PI/OBS), so it is a live part of template loading.
 //! * [`JSONParser`] — extracts metadata from the JSON envelope produced by the
 //!   build pipeline and populates a [`TestReportBase`].
 //! * [`patchinfo_titles`] — best-effort `issue id -> title` map read from a
 //!   checkout's `patchinfo.xml`, used to enrich the bare bug/jira ids the JSON
 //!   envelope carries.
 //!
-//! The `*repoparse`/`normalize` helpers are intentionally **not** ported here:
-//! the repository-URL derivation and product normalization belong to the
-//! products/report tasks, not to metadata parsing.
+//! Repository-URL derivation and product normalization are deliberately *not*
+//! here — they are the report side, in [`crate::reports::repoparse`].
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -47,25 +44,19 @@ static BUGS_RE: LazyLock<Regex> =
 
 /// A line-based parser for the template's `hosts` field.
 ///
-/// Registered under the `"hosts"` key in each concrete report's parser
-/// table; the report feeds it the field's lines one at a time. Each line is
-/// matched against three patterns, in order, and the first match wins:
-///
-/// * a reference-host line adds a hostname (skipping placeholders containing
-///   `?`);
-/// * a `Jira ID ("title"):` line records the jira id and its title;
-/// * a `Bug ID ("title"):` line records the bug id and its title.
-///
-/// Lines matching none of the patterns are ignored.
+/// Registered under the `"hosts"` key in each concrete report's parser table;
+/// the report feeds it the field's lines one at a time. Each line is matched
+/// first-wins against the reference-host (placeholders containing `?` are
+/// skipped), `Jira ID ("title"):` and `Bug ID ("title"):` patterns; a line
+/// matching none of them is ignored.
 pub struct ReducedMetadataParser;
 
 impl ReducedMetadataParser {
     /// Parses a single line and records any hostname / jira / bug it carries
     /// into `results`.
     pub fn parse(results: &mut TestReportBase, line: &str) {
-        // First-wins, like every other arm here: if a template somehow carries
-        // several markers, the first is authoritative and the writer collapses
-        // the rest, so read and write agree on which message the gate checks.
+        // First marker wins, matching the writer's collapse, so read and write
+        // agree on which message the gate checks.
         if line.starts_with("Slack Review:") {
             if results.slack_review.is_none()
                 && let Some(marker) = crate::testreport::SlackReviewMarker::parse_line(line)
@@ -96,10 +87,9 @@ impl ReducedMetadataParser {
 
 /// The JSON metadata envelope produced by the build pipeline.
 ///
-/// Every field is optional so a partial envelope parses without error,
-/// treating an absent key as empty. The field names map to the envelope
-/// keys; where a Rust field name would clash with the report's own naming,
-/// `#[serde(rename)]` restores the wire key.
+/// Every field is optional so a partial envelope parses without error, an
+/// absent key meaning empty; `#[serde(rename)]` restores the wire key wherever
+/// the Rust name would clash with the report's own naming.
 #[derive(Debug, Default, Deserialize)]
 pub struct MetadataEnvelope {
     /// Jira issue ids.
@@ -150,17 +140,15 @@ pub struct MetadataEnvelope {
     repositories: Option<Vec<String>>,
 }
 
-/// A parser for the JSON metadata envelope.
-///
-/// Stateless; `parse` mutates the supplied
+/// A parser for the JSON metadata envelope; stateless, mutating the supplied
 /// [`TestReportBase`] in place.
 pub struct JSONParser;
 
 impl JSONParser {
     /// Parses a raw JSON string into a [`MetadataEnvelope`] and applies it.
     ///
-    /// Convenience wrapper over `parse` for the common case
-    /// of loading straight from a `metadata.json`.
+    /// Convenience wrapper over `parse` for loading straight from a
+    /// `metadata.json`.
     ///
     /// # Errors
     ///
@@ -174,18 +162,13 @@ impl JSONParser {
 
     /// Applies a parsed [`MetadataEnvelope`] to `results`.
     ///
-    /// Applies the envelope fields to `results`:
-    ///
     /// * jira/bugs ids are seeded with the [`NO_DESCRIPTION`] placeholder;
-    /// * `rrid` is parsed via [`RequestReviewID`] (an absent or malformed value
-    ///   leaves the field `None`, degrading gracefully rather than panicking
-    ///   on bad input);
+    /// * `rrid` is parsed via [`RequestReviewID`]; absent or malformed leaves
+    ///   the field `None` rather than panicking on bad input;
     /// * scalar fields map straight through;
-    /// * each package entry `"<name> <op> <version>"` — real metadata ships
-    ///   `"afterburn = 5.10.0.git73.b97f772-99999_stage.1.1"` — is split on
-    ///   whitespace, taking the first token as the package name and the third
-    ///   as the version. The middle token is discarded, so the operator itself
-    ///   is not significant.
+    /// * each package entry `"<name> <op> <version>"` is split on whitespace,
+    ///   taking token 1 as the name and token 3 as the version — the operator
+    ///   is discarded, so it is not significant.
     fn parse(results: &mut TestReportBase, data: &MetadataEnvelope) {
         for id in data.jira.iter().flatten() {
             results.jira.insert(id.clone(), NO_DESCRIPTION.to_owned());
@@ -223,8 +206,6 @@ impl JSONParser {
         for (prod, pkgvers) in data.packages.iter().flatten() {
             let mut pkgs = HashMap::new();
             for entry in pkgvers {
-                // `"<name> <op> <version>"`: first token is the package name,
-                // third the version, middle token discarded.
                 let mut tokens = entry.split_whitespace();
                 match (tokens.next(), tokens.next(), tokens.next()) {
                     (Some(pkg), Some(_), Some(ver)) => {
@@ -234,10 +215,8 @@ impl JSONParser {
                                 "package entry has trailing tokens; using the first as name and third as version"
                             );
                         }
-                        // Package names are interpolated into root remote
-                        // commands. Reject anything that is not a valid RPM
-                        // name at ingestion (lenient-load: log and skip, never
-                        // hard-fail the load).
+                        // These are interpolated into root remote commands, so
+                        // reject non-RPM names at ingestion (log, never fail).
                         if let Err(e) = PackageSpec::parse(pkg) {
                             error!(package = %pkg, error = %e, "skipping invalid package name in metadata");
                             continue;
@@ -252,9 +231,9 @@ impl JSONParser {
                     ),
                 }
             }
-            // An empty sub-map must not be inserted: it makes `base.packages`
-            // non-empty while the flattened `get_package_list()` is empty,
-            // defeating every "is anything to install?" guard downstream (#396).
+            // An empty sub-map makes `base.packages` non-empty while the
+            // flattened `get_package_list()` stays empty, defeating every
+            // downstream "is anything to install?" guard (#396).
             if pkgs.is_empty() {
                 error!(
                     product = %prod,
@@ -282,14 +261,11 @@ impl JSONParser {
 
 /// Maps `issue id -> title` from a checkout's `patchinfo.xml`.
 ///
-/// The JSON metadata envelope carries only bare bug/jira *ids* (their
-/// descriptions are the `NO_DESCRIPTION` placeholder); the human-readable
-/// titles live in the checkout's `patchinfo.xml` as
-/// `<issue tracker="bnc" id="123">title</issue>` elements.
-///
-/// Best-effort: a missing or unparseable `patchinfo.xml` yields an empty map —
-/// not every report kind ships one, and a malformed file must never break
-/// loading.
+/// The JSON envelope carries only bare bug/jira *ids* (descriptions are the
+/// `NO_DESCRIPTION` placeholder); the human-readable titles live in
+/// `<issue tracker="bnc" id="123">title</issue>` elements. Best-effort: not
+/// every report kind ships the file and a malformed one must never break
+/// loading, so both yield an empty map.
 #[must_use]
 pub fn patchinfo_titles(directory: &Path) -> HashMap<String, String> {
     let pi = directory.join("patchinfo.xml");
@@ -299,10 +275,8 @@ pub fn patchinfo_titles(directory: &Path) -> HashMap<String, String> {
     parse_patchinfo(&content).unwrap_or_default()
 }
 
-/// Parses `patchinfo.xml` content into an `id -> title` map.
-///
-/// Returns `None` on any XML error so the caller can degrade to an empty
-/// map.
+/// Parses `patchinfo.xml` content into an `id -> title` map; `None` on any XML
+/// error, so the caller can degrade to an empty map.
 fn parse_patchinfo(content: &str) -> Option<HashMap<String, String>> {
     let mut reader = Reader::from_str(content);
     reader.config_mut().trim_text(true);
@@ -389,10 +363,9 @@ mod tests {
         }
     }
 
-    /// F8: a `SUSE:SLFO:1.1:*` envelope carrying the hash resolves to `Git` —
-    /// the dual-served case, where the RRID looks classic (`1.1`) and only the
-    /// metadata tells the true story. This is the executable statement of the
-    /// precedence rule; without it, the rule lives only in a doc comment.
+    /// The dual-served case: the RRID looks classic (`1.1`) and only the
+    /// metadata tells the true story. The executable statement of the
+    /// [`UpdateSource`] precedence rule.
     #[test]
     fn dual_served_slfo_1_1_with_hash_resolves_to_git() {
         let mut results = base();

@@ -149,7 +149,6 @@ mod tests {
 
     #[test]
     fn package_is_required() {
-        // No positional package → clap rejects (mirrors nargs="+").
         let base = clap::Command::new("install").no_binary_name(true);
         assert!(
             Install
@@ -167,12 +166,10 @@ mod tests {
 
     #[tokio::test]
     async fn install_over_loaded_report_succeeds() {
-        // FakeReport's perform_install returns Ok; the command plumbing
-        // (selection, restore) is exercised here, plus the success confirmation.
+        // Exercises the plumbing — selection, restore, success confirmation.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Install, &["pkg"]);
         Install.call(&mut session, &args).await.unwrap();
-        // Group restored after the op.
         assert_eq!(session.targets().names(), vec!["h1"]);
         assert!(
             buf.contents().contains("install completed on h1"),
@@ -183,8 +180,7 @@ mod tests {
 
     #[tokio::test]
     async fn install_failure_errors_and_names_host() {
-        // perform_install returns Err naming h1 → drive maps it onto CommandError
-        // and does not print a false success.
+        // `drive` must map the failure onto a CommandError, not a false success.
         let (mut session, buf) = session_with_failing_perform("SUSE:Maintenance:1:1", &["h1"]);
         let args = matches(&Install, &["pkg"]);
         let err = Install.call(&mut session, &args).await.unwrap_err();
@@ -209,8 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn install_with_no_hosts_is_no_refhosts_defined() {
-        // Loaded report but no hosts: passes the requires_update guard, then the
-        // empty selection yields NoRefhostsDefined.
+        // Past the requires_update guard, the empty selection is the error.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
         let args = matches(&Install, &["pkg"]);
         let err = Install.call(&mut session, &args).await.unwrap_err();
@@ -219,7 +214,6 @@ mod tests {
 
     #[tokio::test]
     async fn install_no_template_loaded_errors() {
-        // No report loaded → requires_update guard fires first.
         let (mut session, _buf) = empty_session();
         let args = matches(&Install, &["pkg"]);
         let err = Install.call(&mut session, &args).await.unwrap_err();
@@ -228,9 +222,8 @@ mod tests {
 
     #[tokio::test]
     async fn install_hosts_present_no_template_refuses() {
-        // Regression: hosts present but no report loaded must NOT silently
-        // succeed via the null report's no-op perform_install; the guard
-        // must fire and map to CommandError::Other.
+        // Hosts but no report must not silently succeed through the null
+        // report's no-op perform_install.
         let (mut session, _buf) = session_host_no_template(&["h1"], "ok");
         let args = matches(&Install, &["pkg"]);
         let err = Install.call(&mut session, &args).await.unwrap_err();
@@ -239,9 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn install_t_subset_keeps_unselected_host() {
-        // The bead's required regression: `install -t h1` on a two-host report
-        // must leave h2 in the live report afterwards (the split+merge
-        // preserves the unselected host).
+        // The split+merge must leave the unselected h2 in the live report.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
         let args = matches(&Install, &["-t", "h1", "pkg"]);
         Install.call(&mut session, &args).await.unwrap();

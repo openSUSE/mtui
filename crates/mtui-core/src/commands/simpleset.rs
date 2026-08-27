@@ -1,9 +1,7 @@
 //! Simple "set" commands (`set_log_level`, `set_workflow`).
 //!
-//! `set_timeout` already lives in
-//! [`settimeout`](super::settimeout); the two "set" commands that remain here are
-//! [`SetLogLevel`] and [`SetWorkflow`] (the latter reconstructs the report's
-//! openQA results state when switching workflow).
+//! `set_timeout` lives in [`settimeout`](super::settimeout); [`SetWorkflow`]
+//! here also reconstructs the report's openQA results state.
 
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
@@ -22,11 +20,9 @@ const WORKFLOWS: &[&str] = &["auto", "manual", "kernel"];
 /// The log levels offered for completion / validation.
 const LEVELS: &[&str] = &["info", "warning", "error", "debug"];
 
-/// Changes the current mtui log level.
-///
-/// Sets the level on the session's installed log-level sink (the REPL wires this
-/// to a `tracing_subscriber::reload` handle; headless callers still log the
-/// change). Setting `debug` surfaces per-command tracing in real time.
+/// Changes the current mtui log level via the session's log-level sink (the REPL
+/// wires a `tracing_subscriber::reload` handle; headless callers still log the
+/// change). `debug` surfaces per-command tracing in real time.
 pub struct SetLogLevel;
 
 #[async_trait]
@@ -68,18 +64,15 @@ impl Command for SetLogLevel {
     }
 }
 
-/// Sets the workflow and reloads data from openQA.
+/// Sets the workflow and reloads data from openQA, reconstructing the report's
+/// openQA holder:
 ///
-/// Reconstructs the report's openQA holder for the requested workflow:
-///
-/// * `kernel` — rebuild the "auto" result and the two per-instance kernel
-///   results.
-/// * `auto` — rebuild the "auto" result; if it has no install jobs (or they
-///   failed) the workflow is auto-downgraded to `manual`.
+/// * `kernel` — rebuild the "auto" result and the two per-instance kernel ones.
+/// * `auto` — rebuild the "auto" result; with no install jobs (or failed ones)
+///   the workflow is auto-downgraded to `manual`.
 /// * `manual` — refresh the "auto" result and clear the kernel results.
 ///
-/// When the requested workflow equals the current one, the existing results are
-/// merely refreshed. Requires a loaded update.
+/// Requesting the current workflow merely refreshes. Requires a loaded update.
 pub struct SetWorkflow;
 
 #[async_trait]
@@ -220,11 +213,10 @@ impl Command for SetWorkflow {
     }
 }
 
-/// Prints the report's resulting workflow to the session display, so the caller
-/// (REPL/MCP) sees the outcome rather than an empty success. A *failed* openQA /
-/// dashboard fetch now surfaces as `Err` from the connectors' `run()`, so a
-/// network failure aborts before this point; an empty-but-successful `auto`
-/// result still auto-downgrades the workflow to `manual`.
+/// Prints the resulting workflow, so the caller sees an outcome rather than an
+/// empty success. A failed fetch surfaces as `Err` from the connectors' `run()`
+/// and never reaches here; an empty-but-successful `auto` result does, having
+/// downgraded the workflow to `manual`.
 fn print_workflow(session: &mut Session) {
     let workflow = session.metadata().workflow();
     session
@@ -244,14 +236,9 @@ fn openqa_fetch_err(e: mtui_datasources::OpenQAError) -> CommandError {
     CommandError::Other(format!("could not fetch openQA data: {e}"))
 }
 
-/// Refreshes the report's "auto" openQA result in place, building a fresh one
-/// when the holder is empty.
-///
-/// Upstream's same-workflow branches call `metadata.openqa.auto.run()`
-/// unconditionally, assuming `auto` was populated at load time. The Rust holder
-/// starts empty, so this guards the `None` case by building and running a fresh
-/// connector (the "get" semantics) rather than panicking. A fetch failure is
-/// propagated as `Err` so the caller can surface it.
+/// Refreshes the report's "auto" openQA result in place. The holder starts empty
+/// rather than being populated at load, so a `None` here builds and runs a fresh
+/// connector instead of panicking; a fetch failure propagates as `Err`.
 async fn refresh_auto(
     session: &mut Session,
     incident: &mtui_datasources::qem_dashboard::incident::QemIncident,
@@ -357,8 +344,8 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
-    /// Mounts the three QEM-dashboard endpoints the auto path touches, each
-    /// returning an empty-but-valid body.
+    /// The three QEM-dashboard endpoints the auto path touches, each returning
+    /// an empty-but-valid body.
     async fn dashboard_server(incident_number: &str) -> wiremock::MockServer {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -396,7 +383,7 @@ mod tests {
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
         assert!(session.metadata().openqa().auto.is_some());
         assert!(session.metadata().openqa().kernel.is_empty());
-        // The downgrade and the resulting workflow reach the display, not just logs.
+        // The downgrade and the workflow reach the display, not just the logs.
         let out = buf.contents();
         assert!(out.contains("switching mode to manual"), "{out}");
         assert!(out.contains("Workflow set to 'manual'"), "{out}");
@@ -404,8 +391,8 @@ mod tests {
 
     #[tokio::test]
     async fn auto_fetch_failure_returns_err() {
-        // Dashboard settings endpoints 500 (no mounts -> unreachable): switching
-        // workflow must surface the failure as Err, not silently downgrade.
+        // An unreachable dashboard (no mounts) must surface as Err, not
+        // silently downgrade.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Manual);
         let server = wiremock::MockServer::start().await;
@@ -440,9 +427,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_same_workflow_refreshes_auto() {
-        // Same-workflow manual: only refreshes `auto` and returns
-        // (kernel is left untouched). refresh_auto builds a fresh auto when the
-        // holder was empty.
+        // Same-workflow manual refreshes `auto` only, leaving kernel untouched.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Manual);
         let server = dashboard_server("1").await;
@@ -452,18 +437,17 @@ mod tests {
         SetWorkflow.call(&mut session, &args).await.unwrap();
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
         assert!(session.metadata().openqa().auto.is_some());
-        // Same-workflow branch still reports the resulting workflow to display.
         assert!(buf.contents().contains("Workflow set to 'manual'"));
     }
 
     #[tokio::test]
     async fn switch_to_manual_from_auto_clears_kernel() {
-        // Transitioning INTO manual (not same-workflow) clears kernel results.
+        // Transitioning *into* manual clears the kernel results.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Auto);
         let server = dashboard_server("1").await;
         point_at(&mut session, &server);
-        // Pre-seed a kernel result to prove it gets cleared.
+        // Pre-seeded to prove it gets cleared.
         let rrid = session.metadata().rrid().unwrap().clone();
         let dashboard_api = session.config.qem_dashboard_api.clone();
         let host = session.config.openqa_instance.clone();

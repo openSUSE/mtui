@@ -3,24 +3,15 @@
 //! Keys its identity on the parsed [`RequestReviewID`] and derives its
 //! update-repo map by parsing the OBS/IBS checkout's `project.xml` via
 //! [`obsrepoparse`], reading the checkout under
-//! [`report_wd`](TestReportBase::report_wd). OBS is checked out with
-//! `osc qam` / SVN (not Gitea), so there is no git commit to verify —
-//! [`check_hash`](TestReport::check_hash) is the constant `(true, "", "")`.
+//! [`report_wd`](TestReportBase::report_wd). OBS is checked out with `osc qam`
+//! / SVN, not Gitea, so there is no git commit to verify and
+//! [`check_hash`](TestReport::check_hash) is constant.
 //!
-//! ## Scope (task nbv.11)
-//!
-//! Mirrors the `SlReport`/`PiReport` boundaries:
-//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`](mtui_hosts::RepoManager::run_zypper)) is
-//!   implemented here (task nbv.fly): add uses the OBS-specific
-//!   `-n ar -ckn` (note: no `fG`, unlike SL/PI), remove uses `-n rr`.
-//! * `list_update_commands` would render per-host commands via the doer seam
-//!   ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)), which is wired
-//!   for install/uninstall but has no listing consumer yet — this is a
-//!   documented no-op stub.
-//! * `_show_yourself_data` is not on the trait skeleton yet (same deferral as
-//!   `SlReport`/`PiReport`).
-//! * `id()` returns `""` when no RRID is loaded; this matches the graceful
-//!   path chosen for the sibling reports.
+//! `set_repo` adds with the OBS-specific `-n ar -ckn` — no `fG`, unlike SL/PI.
+//! `list_update_commands` is a documented no-op stub: the doer seam
+//! ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)) is wired for
+//! install/uninstall but has no listing consumer. `id()` returns `""` when no
+//! RRID is loaded, matching the sibling reports.
 
 use std::collections::HashMap;
 
@@ -41,9 +32,6 @@ pub struct ObsReport {
 
 impl ObsReport {
     /// Builds an [`ObsReport`] from `config`.
-    ///
-    /// [`TestReportBase::new`] already seeds the rating/realid envelope
-    /// fields to empty, so this simply wraps a fresh base.
     #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
@@ -72,9 +60,8 @@ impl TestReport for ObsReport {
     }
 
     fn parser(&self) -> HashMap<String, String> {
-        // The skeleton trait models the table's *keys* as strings; the concrete
-        // parser dispatch lives in the loader (a later task). Values are the
-        // parser names so callers can branch on them.
+        // The trait models the table's *keys* as strings; the values are the
+        // parser names, so callers can branch on them.
         HashMap::from([
             ("hosts".to_string(), "ReducedMetadataParser".to_string()),
             ("json".to_string(), "JSONParser".to_string()),
@@ -82,9 +69,8 @@ impl TestReport for ObsReport {
     }
 
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
-        // Degrades to an empty map when no report is loaded (or the checkout
-        // dir can't be resolved), matching the graceful style of the sibling
-        // reports rather than panicking.
+        // Degrades to an empty map when no report is loaded or the checkout dir
+        // cannot be resolved, rather than panicking.
         match self.base.report_wd() {
             Ok(dir) => obsrepoparse(&self.base.repository, &dir),
             Err(e) => {
@@ -95,11 +81,8 @@ impl TestReport for ObsReport {
     }
 
     fn list_update_commands(&self, _targets: &HostsGroup) {
-        // This would render per-host `updater` commands for display; the
-        // bespoke `perform_update` flow that runs them is implemented below.
-        // The read-only listing is a documented no-op stub across every
-        // report — the `list_update_commands` command calls this but only
-        // ever prints a placeholder.
+        // `perform_update` below runs the per-host `updater` commands; the
+        // read-only listing command only ever prints a placeholder.
         debug!("list_update_commands: no-op stub, not yet implemented");
     }
 
@@ -157,8 +140,7 @@ impl TestReport for ObsReport {
     }
 
     async fn check_hash(&self) -> HashCheck {
-        // Upstream OBS always returns (True, "", "") — OBS/IBS checkout is via
-        // osc qam / SVN, so there is no git commit hash to verify.
+        // OBS/IBS checks out via osc qam / SVN, so there is no hash to verify.
         HashCheck::Ok
     }
 }

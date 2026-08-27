@@ -2,12 +2,10 @@
 //!
 //! An RRID is the `project:kind:maintenance_id:review_id` identifier that names
 //! a maintenance request across the SUSE ecosystem. Its grammar and parse errors
-//! are an interop **Contract** (see `AGENTS.md`): RRIDs are minted by OBS/IBS,
-//! and the rendered form becomes the on-disk testreport directory name, so what
-//! parses and what fails is not ours to choose. Loosening the grammar admits
-//! identifiers the rest of the ecosystem will reject; tightening it strands
-//! checkouts already on disk. Either way it is a breaking change, not a local
-//! refactor.
+//! are an interop **Contract** (see `AGENTS.md`): RRIDs are minted by OBS/IBS
+//! and the rendered form becomes the on-disk testreport directory name, so
+//! loosening the grammar admits identifiers the ecosystem rejects and tightening
+//! it strands checkouts already on disk — either way a breaking change.
 //!
 //! ## Grammar
 //!
@@ -38,11 +36,9 @@ use crate::enums::RequestKind;
 use crate::error::RridParseError;
 
 /// The exact number of components a well-formed RRID must have
-/// (`project:kind:maintenance_id:review_id`).
-///
-/// This is enforced as two bounds: more than this many tokens is rejected as
-/// too many components, and fewer than this many leaves trailing parsers with
-/// no token, each raising a missing-component error.
+/// (`project:kind:maintenance_id:review_id`). Enforced as two bounds: more
+/// tokens is rejected as too many, fewer leaves trailing parsers with no token
+/// and each raises a missing-component error.
 const REQUIRED_COMPONENTS: usize = 4;
 
 /// A parsed OBS Request Review ID.
@@ -75,12 +71,11 @@ impl RequestReviewID {
     /// [`ComponentParse`](RridParseError::ComponentParse) for a component that
     /// fails its parser (unknown project/kind, or a non-integer review ID).
     pub fn parse(rrid: &str) -> Result<Self, RridParseError> {
-        // Split on ':' and drop empty tokens (so leading/trailing/doubled
-        // colons are ignored).
+        // Dropping empty tokens ignores leading/trailing/doubled colons.
         let tokens: Vec<&str> = rrid.split(':').filter(|t| !t.is_empty()).collect();
 
-        // Fewer than the required count is not rejected here — the trailing
-        // components come back absent below and each raises `MissingComponent`.
+        // Too few is not rejected here: the trailing components come back
+        // absent below and each raises `MissingComponent`.
         if tokens.len() > REQUIRED_COMPONENTS {
             return Err(RridParseError::TooManyComponents {
                 limit: REQUIRED_COMPONENTS,
@@ -101,8 +96,8 @@ impl RequestReviewID {
     }
 }
 
-/// Returns the token at `idx`, or `None` when it is absent (a missing
-/// component): a short input yields `None` for the trailing parsers.
+/// The token at `idx`, or `None` when absent — a short input yields `None` for
+/// the trailing parsers.
 fn component<'a>(tokens: &[&'a str], idx: usize) -> Option<&'a str> {
     tokens.get(idx).copied()
 }
@@ -131,10 +126,9 @@ fn parse_kind(token: Option<&str>, index: usize) -> Result<RequestKind, RridPars
     })
 }
 
-/// Component 3 — maintenance ID. Accepts any non-empty token (an integer, or a
-/// string fallback), so the only failure is absence. Stored as the raw token to
-/// preserve the int-vs-string distinction downstream code depends on (`1` vs
-/// `1.1`).
+/// Component 3 — maintenance ID. Any non-empty token parses, so the only
+/// failure is absence. Stored raw to preserve the int-vs-string distinction
+/// downstream code depends on (`1` vs `1.1`).
 fn parse_maintenance_id(token: Option<&str>, index: usize) -> Result<String, RridParseError> {
     let raw = require(token, index, "an integer or string")?;
     Ok(raw.to_owned())

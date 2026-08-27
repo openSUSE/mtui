@@ -1,25 +1,19 @@
 //! The bespoke (non-template) update flows: `perform_prepare`,
 //! `perform_downgrade`, `perform_update`.
 //!
-//! ## Design
+//! Unlike install/uninstall (which route through the shared [`Operation`]
+//! template), these three are deliberately open-coded: they have per-package
+//! loops, `set_repo` add/remove fan-outs, package-version comparison, and (for
+//! `update`) a two-phase try/finally that cleans the test repos up on success
+//! while **keeping** them on failure for retry/diagnosis.
 //!
-//! Unlike install/uninstall (which route through the shared
-//! [`Operation`] template), these three are deliberately
-//! open-coded — they have per-package loops, `set_repo` add/remove
-//! fan-outs, package-version comparison, and (for `update`) a two-phase
-//! try/finally that guarantees repo cleanup on success while **keeping** the
-//! test repos on failure for retry/diagnosis.
-//!
-//! ## Crate boundary
-//!
-//! These flows need `get_package_list` / `set_repo`, which in the Rust split
-//! live in `mtui-testreport`. Putting the flows here (as the concrete reports'
-//! `perform_*` bodies, alongside `perform_install`) keeps `mtui-hosts` free of a
-//! `mtui-testreport` dependency and reuses the report's own [`SetRepo`] hook and
-//! package list. The flows resolve each host's command templates directly from
-//! the [`WorkflowRegistry`] (`ActionCommands` + `CheckFn`) — the same tables the
-//! `PlanProvider` adapter uses — keyed on `(system.get_release(),
-//! transactional)`.
+//! They live here — as the concrete reports' `perform_*` bodies, alongside
+//! `perform_install` — because they need `get_package_list` / `set_repo`, which
+//! keeps `mtui-hosts` free of a `mtui-testreport` dependency and reuses the
+//! report's own [`SetRepo`] hook and package list. Each host's command
+//! templates come straight from the [`WorkflowRegistry`] (`ActionCommands` +
+//! `CheckFn`) — the same tables the `PlanProvider` adapter uses — keyed on
+//! `(system.get_release(), transactional)`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -41,132 +35,84 @@ type UpdateMaps = (BTreeMap<String, String>, BTreeMap<String, String>);
 
 /// Why an update did not apply.
 ///
-/// The variants exist to answer exactly one question — **can a group-wide
-/// downgrade repair any host that failed?** — because that is what
-/// [`perform_update_with_rollback`] has to decide, and the rollback reverts
-/// *every* host in the group, not just the one that reported. `Check` and
-/// `RebootNotTaken` answer yes and roll back; every other variant answers no
-/// and re-surfaces the error untouched.
-///
-/// "No" is not one situation, and the variants keep the differences because an
-/// operator needs them: no update patch was ever dispatched, so there is
-/// nothing for a downgrade to undo (`MissingUpdater`, `Prepare`, `Cancelled`,
-/// `ProbeFailed`), or the patch may well have applied but the flow cannot
-/// reach the host to undo it (`Reboot`), or it is unknown whether it did
-/// (`NotRun`). All of them collapse to a single [`UpdateError`] at the command
+/// The variants answer one question — **can a group-wide downgrade repair any
+/// host that failed?** — because that is what [`perform_update_with_rollback`]
+/// has to decide, and the rollback reverts *every* host in the group. `Check`
+/// and `RebootNotTaken` answer yes; the rest answer no for reasons an operator
+/// needs kept apart. All collapse to a single [`UpdateError`] at the command
 /// boundary.
 ///
-/// "No patch was dispatched" is not the same as "the host is untouched": an
-/// abort that follows a *completed* `prepare` — the pre-dispatch cancel gate
-/// and `MissingUpdater` — leaves that prepare's packages installed. That is
-/// still a "no" for the rollback, which exists to undo a patch that never ran
-/// here, but the host did change, so the prepare writes its own
-/// `/var/log/mtui.log` row rather than leaving the abort silent (#407).
+/// "No patch was dispatched" is not "the host is untouched": an abort after a
+/// *completed* `prepare` leaves that prepare's packages installed, so the
+/// prepare writes its own `/var/log/mtui.log` row (#407).
 #[derive(Debug, PartialEq, Eq)]
 pub enum UpdateFailure {
     /// One or more hosts failed the `updater` check after the command ran.
     Check(UpdateError),
     /// The pre-update `prepare` step could not run: no preparer for a host's
     /// key, the operation lock was contended, or the issue repo could not be
-    /// set.
-    ///
-    /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback,
-    /// but for a different reason: no update patch was dispatched, so there
-    /// is no update for a downgrade to undo. `--noprepare` is the opt-out for
-    /// a caller that wants to patch anyway. A prepare that ran but only
-    /// reported a per-host package-manager failure does **not** reach this
-    /// variant — see `PrepareFailure` — it warns and the update proceeds.
+    /// set. No patch was dispatched, so no rollback; `--noprepare` is the
+    /// opt-out. A prepare that *ran* and only reported a package-manager
+    /// failure warns and lets the update proceed (see `PrepareFailure`).
     Prepare(UpdateError),
-    /// A concrete target has no updater doer; mtui treats this as a hard
-    /// failure (rather than logging and returning as if successful) so a
-    /// target that cannot be updated never reports "finished".
+    /// A concrete target has no updater doer; a hard failure rather than a
+    /// logged success, so a target that cannot be updated never reports
+    /// "finished".
     MissingUpdater(UpdateError),
     /// Cooperative cancellation was requested (MCP `job_cancel`) and the flow
-    /// stopped at a step boundary.
-    ///
-    /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback:
-    /// a rollback is itself a multi-minute downgrade, so rolling back on a
-    /// cancel would *extend* the work the caller just asked to stop.
+    /// stopped at a step boundary. Skips the rollback: a rollback is itself a
+    /// multi-minute downgrade, so it would *extend* the work the caller just
+    /// asked to stop.
     Cancelled(UpdateError),
     /// A transactional host rebooted after a successful patch and did not
-    /// reconnect.
-    ///
-    /// Like [`MissingUpdater`](Self::MissingUpdater) this skips the rollback:
-    /// the host is unreachable, so a downgrade cannot run on it — and the
-    /// rollback is group-wide, so running it would revert the *healthy* hosts
-    /// on behalf of one that cannot be reached either way.
+    /// reconnect. Skips the rollback: the host is unreachable, and the rollback
+    /// is group-wide, so running it would revert the *healthy* hosts on behalf
+    /// of one that cannot be reached either way.
     Reboot(UpdateError),
-    /// A transactional host was patched but its reboot never took effect, and
-    /// the host is **still reachable**: the command was never dispatched, or
-    /// the host answered with an unchanged boot id.
-    ///
-    /// Unlike [`Reboot`](Self::Reboot) this *does* roll back. The host is up,
-    /// serving from the old snapshot while the rest of the group runs the new
-    /// packages — the split-brain the rollback exists to undo — and, being
-    /// reachable, it is a host the downgrade can actually reach.
+    /// A transactional host was patched but its reboot never took effect while
+    /// the host stayed **reachable**: the command was never dispatched, or the
+    /// host answered with an unchanged boot id. Unlike [`Reboot`](Self::Reboot)
+    /// this *does* roll back — it is up, serving the old snapshot while the
+    /// group runs the new packages (the split-brain the rollback undoes), and
+    /// the downgrade can reach it.
     RebootNotTaken(UpdateError),
     /// The update command never ran to completion on any host that failed —
     /// it timed out, or the connection dropped part-way (`Target::run`'s `-1`).
     ///
-    /// Like [`Reboot`](Self::Reboot) this skips the rollback — but not by the
-    /// reboot arm's reachability argument, because `-1` is a sentinel, not a
-    /// liveness verdict. It covers two situations, and each vetoes the
-    /// rollback on its own:
+    /// Skips the rollback, but not by [`Reboot`](Self::Reboot)'s reachability
+    /// argument: `-1` is a sentinel, not a liveness verdict. Either the flow
+    /// lost the host, and a group-wide downgrade would revert the *healthy*
+    /// hosts on behalf of one it cannot reach either way; or the command
+    /// outlived its timeout on a host that is up, and since rpm masks signals
+    /// inside its transaction, dispatching the downgrade now fires a second
+    /// transaction at the one host whose first was never observed to end.
+    /// Either way the state is unknown, not known-bad as under
+    /// [`Check`](Self::Check).
     ///
-    /// * **The flow lost the host** (connection dropped mid-command, or never
-    ///   connected). A group-wide downgrade would revert the *healthy* hosts
-    ///   on behalf of one it cannot reach either way.
-    /// * **The command outlived its timeout on a host that is up.** The
-    ///   timeout closes the SSH channel, which asks the remote side to
-    ///   reclaim the process — but rpm masks signals inside its transaction,
-    ///   so the patch may have died, finished after the flow stopped
-    ///   watching, or still be holding the package-manager lock. Dispatching
-    ///   the group-wide downgrade now fires a second transaction at the one
-    ///   host whose first was never observed to end, and reverts every
-    ///   healthy host to do it.
-    ///
-    /// Both stay distinct from [`Check`](Self::Check) for the same reason: a
-    /// check failure means "the patch ran and produced a bad verdict" — a
-    /// half-applied state the rollback repairs — whereas `-1` is the absence
-    /// of a verdict. The host's state is unknown, not known-bad; it needs
-    /// eyes on it, not an automated second transaction.
-    ///
-    /// Used when **no** failed host is one the rollback could repair: every
-    /// one of them is `-1`, or a mix of `-1` and
-    /// [`ProbeFailed`](Self::ProbeFailed) hosts (`-1` is the more
-    /// conservative of the two labels, and its "state unknown" claim is true
-    /// of at least one host in such a run). A run mixing either with a real
-    /// check failure still rolls back, on behalf of the host the rollback can
-    /// genuinely repair.
+    /// Used when **no** failed host is repairable and at least one is `-1`,
+    /// including a mix with [`ProbeFailed`](Self::ProbeFailed) hosts, since
+    /// this is the more conservative label. A mix with a real check failure
+    /// still rolls back, on behalf of the repairable host.
     NotRun(UpdateError),
-    /// The update command ran on every host that failed, and each reported
-    /// that it could not work out what to patch — so none of them dispatched
-    /// a patch (`checks::update`'s `probe_failure`).
+    /// Every failed host ran the update command and reported that it could not
+    /// work out what to patch, so none dispatched a patch
+    /// (`checks::update`'s `probe_failure`).
     ///
-    /// Skips the rollback, and for a *stronger* reason than
-    /// [`NotRun`](Self::NotRun)'s: this is not the absence of a verdict but a
-    /// definite one. The host said it never patched, so its packages are
-    /// exactly what they were before the flow started. There is nothing
-    /// half-applied for a downgrade to repair, and the rollback is group-wide
-    /// — running it would revert every healthy peer over a probe that broke on
-    /// one host.
-    ///
-    /// It is the operator's `zypper` view that needs attention (a host with no
-    /// repositories, a ZYpp lock, a broken awk), not the host's package state.
-    ///
-    /// Only used when **every** failed host is in that state. A run mixing one
-    /// with a `-1` host is labelled [`NotRun`](Self::NotRun) — also
-    /// non-rolling, and the more conservative of the two claims, since one host
-    /// in such a run really is in an unknown state.
+    /// Skips the rollback for a *stronger* reason than
+    /// [`NotRun`](Self::NotRun)'s: a definite verdict, not the absence of one.
+    /// Nothing is half-applied, so the group-wide rollback would revert every
+    /// healthy peer over a probe that broke on one host. It is the operator's
+    /// `zypper` view that needs attention (no repositories, a ZYpp lock, a
+    /// broken awk), not the packages. A run mixing one of these with a `-1`
+    /// host is labelled [`NotRun`](Self::NotRun).
     ProbeFailed(UpdateError),
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
 /// and `$repa` selector (`maintenance_id` / `review_id`) off the report's RRID.
 ///
-/// This is the shared body behind every report's `perform_update` override;
-/// keeping it here means SL / PI / OBS each delegate in one line rather than
-/// duplicating the RRID/package-list plumbing. `report` supplies both the
+/// The shared body behind every report's `perform_update` override, so SL / PI
+/// / OBS each delegate in one line. `report` supplies both the
 /// [`TestReport`](crate::testreport::TestReport) metadata (RRID, package list)
 /// and the [`SetRepo`] repo hook.
 pub async fn perform_update_from_report<R>(
@@ -207,16 +153,12 @@ where
 /// that did not take effect on a host still reachable
 /// ([`UpdateFailure::RebootNotTaken`]).
 ///
-/// Every other failure installed nothing — no updater for a host's key, a
-/// prepare that could not run, a cancel before dispatch, a host the flow lost,
-/// or a host that could not determine what to patch — so each re-surfaces
-/// without a rollback attempt. The rollback is best-effort, but not because it
-/// cannot fail: [`perform_downgrade`] returns a `Result`, and a host whose
-/// version probe never answered raises it (#451). The precedence is enforced at
-/// the call site, which logs that error at WARN and re-surfaces the original
-/// update error, so a failed rollback can never bury the failure it was trying
-/// to repair — do not simplify the call away, or a broken rollback goes silent
-/// again.
+/// Every other failure installed nothing, so each re-surfaces without a
+/// rollback attempt. The rollback is best-effort, but it *can* fail —
+/// [`perform_downgrade`] returns a `Result`, and a host whose version probe
+/// never answered raises it (#451). The call site logs that error at WARN and
+/// re-surfaces the original update error, so a failed rollback can never bury
+/// the failure it was trying to repair; do not simplify the call away.
 pub async fn perform_update_with_rollback<R>(
     report: &R,
     targets: &mut HostsGroup,
@@ -230,9 +172,6 @@ where
     match perform_update_from_report(report, targets, noprepare, newpackage, diagnostics).await {
         Ok(()) => Ok(()),
         Err(UpdateFailure::Prepare(e)) => {
-            // Prepare could not run (missing preparer, contended lock, or the
-            // issue repo could not be set): no update patch was dispatched,
-            // so there is no update for a downgrade to undo.
             error!(
                 error = %e,
                 "update aborted: prepare could not run (rerun with --noprepare to patch anyway)"
@@ -240,35 +179,18 @@ where
             Err(e)
         }
         Err(UpdateFailure::MissingUpdater(e)) => {
-            // Hard fail, but nothing was installed → no rollback.
             error!(error = %e, "update failed");
             Err(e)
         }
         Err(UpdateFailure::Cancelled(e)) => {
-            // Cancelled *before* the update command was dispatched, so the
-            // update itself never ran and there is nothing to roll back.
-            // Anything an earlier `prepare` step installed is left as-is (see
-            // `UpdateFailure::Cancelled`).
             info!(reason = %e, "update cancelled");
             Err(e)
         }
         Err(UpdateFailure::Reboot(e) | UpdateFailure::NotRun(e)) => {
-            // Either the patch succeeded and the host never came back, or the
-            // command never ran to completion in the first place. Both mean
-            // the flow lost contact with every host that failed, so a
-            // group-wide downgrade cannot repair them and would only revert
-            // the healthy ones.
             error!(error = %e, "update failed");
             Err(e)
         }
         Err(UpdateFailure::ProbeFailed(e)) => {
-            // Every failed host reported that it could not work out what to
-            // patch, so none of them ran a patch: there is nothing
-            // half-applied for a downgrade to undo, and the rollback is
-            // group-wide — it would revert every healthy peer over a probe
-            // that broke on one host. The test repos are kept, as on any
-            // failure, so the operator can look at the repo state the probe
-            // complained about.
             error!(error = %e, "update failed: could not determine what to patch");
             Err(e)
         }
@@ -277,14 +199,12 @@ where
             warn!("Error while updating. Rolling back changes");
             let pkgs = report.get_package_list();
             let id = report.base().rrid.as_ref().map(ToString::to_string);
-            // Suspend cancellation for the rollback. The update has already
-            // been applied, so this recovery is what prevents a half-applied
-            // state; letting the downgrade's own per-package checkpoint see a
-            // cancel that landed during the run phase would abort the rollback
-            // at package 0 and leave exactly the state it exists to undo.
+            // The downgrade's own per-package checkpoint must not see a cancel
+            // that landed during the run phase: it would abort the rollback at
+            // package 0 and leave exactly the half-applied state it undoes.
             let token = targets.suspend_cancellation();
-            // Rollback is best-effort; a failed downgrade must never bury the
-            // original update error, so its result is logged, not returned.
+            // Best-effort: a failed downgrade must never bury the original
+            // update error, so its result is logged, not returned.
             if let Err(de) = perform_downgrade(targets, report, &pkgs, id.as_deref()).await {
                 warn!(error = %de, "rollback downgrade failed");
             }
@@ -301,12 +221,9 @@ where
 /// does not come back can no longer be written to.
 ///
 /// `id_field` carries the RRID for the ops that log one (`update`,
-/// `downgrade`) and is `None` for `prepare`, whose row is just the label and
-/// the package set. The op label and package list complete the colon-joined
-/// line written by [`HostsGroup::add_history`]. `install`/`uninstall` write a
-/// row of the same shape, but from `OperationGroup::run` rather than through
-/// here — so this function's callers are not the full list of ops that appear
-/// in `/var/log/mtui.log`.
+/// `downgrade`) and is `None` for `prepare`. `install`/`uninstall` write a row
+/// of the same shape from `OperationGroup::run` instead, so this function's
+/// callers are not the full list of ops in `/var/log/mtui.log`.
 pub async fn add_op_history(
     targets: &mut HostsGroup,
     op: &str,
@@ -319,11 +236,10 @@ pub async fn add_op_history(
 
 /// [`add_op_history`], written to `hosts` only.
 ///
-/// For an op whose fan-out did not reach the whole group. `prepare` builds a
-/// per-host command map and drops a host whose release key does not resolve or
-/// whose template does not render; that host is failed with "nothing was
-/// installed", so a group-wide row would contradict its own verdict in a file
-/// other tools parse (#407).
+/// For an op whose fan-out did not reach the whole group. `prepare` drops a
+/// host whose release key does not resolve or whose template does not render,
+/// and fails it with "nothing was installed", so a group-wide row would
+/// contradict its own verdict in a file other tools parse (#407).
 pub async fn add_op_history_for(
     targets: &mut HostsGroup,
     hosts: &BTreeSet<String>,
@@ -354,11 +270,10 @@ fn repa_for(maintenance_id: &str, review_id: &str) -> String {
 /// may still proceed.
 ///
 /// `host_command_failures` counts any stderr as a failure, and
-/// `transactional-update` writes progress to stderr on a *successful* run
-/// (see `prepare_body`'s own note on the reboot gate) — so a per-host
-/// package-manager complaint is too noisy to hard-abort `update` on. Whether
-/// prepare could even *run* (a preparer, a lock, an issue repo) is a
-/// different, reliable signal.
+/// `transactional-update` writes progress to stderr on a *successful* run (see
+/// `prepare_body`'s note on the reboot gate), so a per-host package-manager
+/// complaint is too noisy to hard-abort `update` on. Whether prepare could even
+/// *run* is a different, reliable signal.
 enum PrepareFailure {
     /// Prepare never ran: no preparer for a host's key, the operation lock
     /// was contended, or the issue repo could not be set. Nothing was
@@ -432,14 +347,13 @@ fn build_reboot_map(
 /// sections to `diagnostics`.
 ///
 /// The check reads each host's `last*` snapshot after the command ran. Only the
-/// `update` check currently emits diagnostics; the other roles append nothing.
+/// `update` check currently emits diagnostics.
 ///
 /// Every host in the group is judged. A caller that fans out to a *subset* —
 /// the per-package `prepare` and `downgrade` loops — must use
 /// [`run_checks_where`] instead of filtering the returned list: a check logs
-/// its own ERROR breadcrumb before returning `Err`, so a verdict discarded
-/// afterwards has already been printed, for a host whose `last*` snapshot
-/// belongs to some earlier phase.
+/// its own ERROR breadcrumb before returning `Err`, so a discarded verdict has
+/// already been printed, for a host whose snapshot belongs to another phase.
 fn run_checks(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -451,12 +365,12 @@ fn run_checks(
 
 /// [`run_checks`] restricted to the hosts `allowed` accepts.
 ///
-/// The predicate is applied *before* the check runs, not to its verdict. That
-/// is the whole point: a check calls
-/// [`log_failed`](crate::update_workflow::checks) on the way to its `Err`, so a
-/// post-filter still emits an operator-facing ERROR for a host whose verdict is
-/// then thrown away — once per package under `prepare --installed-only`, each
-/// time against a snapshot from a fan-out that host was not part of.
+/// The predicate is applied *before* the check runs, not to its verdict: a
+/// check calls [`log_failed`](crate::update_workflow::checks) on the way to its
+/// `Err`, so a post-filter still emits an operator-facing ERROR for a host whose
+/// verdict is then thrown away — once per package under
+/// `prepare --installed-only`, against a snapshot from a fan-out that host was
+/// not part of.
 fn run_checks_where(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -495,12 +409,11 @@ fn run_checks_where(
     failures
 }
 
-/// Collapses a list of per-host [`UpdateError`]s into a single `Result`,
-/// mirroring [`update_run_phase`]'s aggregation: no failures → `Ok`, one →
-/// verbatim, many → a summary naming the operation (`op`) plus every failed host
-/// (sorted) and the joined detail. Shared by the prepare/downgrade/install/
-/// uninstall flows so they all report failures the same way `perform_update`
-/// does.
+/// Collapses a list of per-host [`UpdateError`]s into a single `Result`: no
+/// failures → `Ok`, one → verbatim, many → a summary naming the operation
+/// (`op`) plus every failed host (sorted) and the joined detail. Shared by the
+/// prepare/downgrade/install/uninstall flows so they all report failures the
+/// same way `perform_update` does.
 fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), UpdateError> {
     if failures.is_empty() {
         Ok(())
@@ -509,19 +422,14 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
     } else {
         let mut hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
         hosts.sort();
-        // One name per host: the same host legitimately contributes two
-        // failures with two distinct causes (`downgrade_body` seeds its list
-        // from the issue-repo removal scan and then adds that same host's
-        // downgrade-check verdict), and "downgrade failed on h1, h1" reads as
-        // two hosts. The `detail` list still carries both causes — this dedups
-        // the roll-call, not the diagnosis.
-        //
-        // Not the place to fix *one* signal reported by two rules: that
-        // duplication has to be resolved before it reaches here, because
-        // arriving at all means the verbatim branch above was skipped and the
-        // `host` field is already lost. `prepare_body` and `downgrade_body`
-        // each drop their coarse exit-code entry for a host whose check has
-        // already named it, for exactly that reason.
+        // One host can contribute two failures with two distinct causes
+        // (`downgrade_body` seeds its list from the issue-repo removal scan,
+        // then adds that host's check verdict), and "failed on h1, h1" reads as
+        // two hosts. `detail` still carries both causes. Not the place to fix
+        // one signal reported by two rules: arriving here means the verbatim
+        // branch was skipped and `host` is already lost, which is why
+        // `prepare_body` and `downgrade_body` each drop their coarse exit-code
+        // entry for a host their check already named.
         hosts.dedup();
         let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
         let mut aggregate = UpdateError::reason_only(format!(
@@ -529,41 +437,27 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
             hosts.join(", "),
             detail.join("; ")
         ));
-        // The typed flags survive the summary. `all`, not `any`: each says
-        // something about *the run*, and a summary that claimed "no patch was
-        // dispatched" while one host had dispatched one would be worse than no
-        // claim at all. The single-failure path above returns the error
-        // verbatim, so without this the flags would exist on one path and
-        // vanish on the other — and they are the declared routing contract,
-        // not a detail of who reads them today.
+        // The typed flags are the declared routing contract, so they must
+        // survive the summary as well as the verbatim branch. `all`, not `any`:
+        // a summary claiming "no patch was dispatched" while one host had
+        // dispatched one would be worse than no claim at all.
         aggregate.probe_failed = failures.iter().all(|e| e.probe_failed);
-        // `cancelled` is deliberately NOT propagated here. Where
-        // `probe_failed` above is both representable and produced, `cancelled`
-        // is representable and *unproduced* — THE AUTHORITATIVE STATEMENT OF
-        // THAT CLAIM LIVES HERE, at the omission it justifies:
-        // `perform_operation_with` builds
-        // `UpdateError { cancelled: failure.cancelled, .. }` straight from
-        // `report.check_failures`, so a cancelled check does cross the
-        // `Operation` seam into a `failures` list — but no check in
-        // `update_workflow::checks` emits `CheckFailure::cancelled` (checks
-        // are pure verdicts over a captured transcript), and this module's own
-        // cancellations are early `return Err`s that never reach an aggregate.
-        // Empty by producer, not by type: do not read the emptiness as a
-        // structural guarantee the way the pre-`CheckFailure` seam allowed.
+        // `cancelled` is deliberately NOT propagated — THE AUTHORITATIVE
+        // STATEMENT OF THAT CLAIM LIVES HERE, at the omission it justifies.
+        // `perform_operation_with` builds `UpdateError { cancelled:
+        // failure.cancelled, .. }` from `report.check_failures`, so a cancelled
+        // check *can* cross the `Operation` seam into a `failures` list — but
+        // no check in `update_workflow::checks` emits `CheckFailure::cancelled`
+        // and this module's own cancellations are early `return Err`s. Empty by
+        // producer, not by type: do not read that as a structural guarantee.
         //
-        // A lone cancelled failure keeps its flag regardless: the
-        // single-failure branch above returns the error verbatim. Only the
-        // summary drops it, and for the mixed case that *is* the outranking
+        // A lone cancelled failure keeps its flag via the verbatim branch; only
+        // the summary drops it, which for the mixed case *is* the outranking
         // rule — a real host failure collected beside a cancel must not be
         // re-routed to `CommandError::Cancelled` and excused as "the operator
-        // stopped it" (see `commands/perform.rs::map_flow_error`). The flag
-        // routes *reporting* (`map_flow_error` is its only non-test reader);
-        // it does not route the rollback, which follows the `UpdateFailure`
-        // variant `update_run_phase` picks from `repairable`/`probe_failed`.
-        //
-        // The all-cancelled case also loses the flag, unlike `probe_failed`'s
-        // `all()` above: with no producer there is no all-cancelled population
-        // to summarise, so that asymmetry costs nothing today.
+        // stopped it" (`commands/perform.rs::map_flow_error`, the flag's only
+        // non-test reader). It routes *reporting*, not the rollback, which
+        // follows the `UpdateFailure` variant `update_run_phase` picks.
         Err(aggregate)
     }
 }
@@ -572,10 +466,9 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
 /// (non-empty stderr or a non-zero exit) and returns one [`UpdateError`] per
 /// failed host, keyed on `reason`.
 ///
-/// This is the report-flow analogue of [`run_checks`] for the flows that have no
-/// registry check of their own (the shared install/uninstall template and the
-/// prepare/downgrade repo/command fan-outs): a per-host `lasterr()`/`lastexit()`
-/// read after the command ran, per bead P3a-1's stable outcome accessors.
+/// The analogue of [`run_checks`] for the flows with no registry check of their
+/// own: the shared install/uninstall template and the prepare/downgrade
+/// repo/command fan-outs.
 fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError> {
     let mut failures = Vec::new();
     for target in targets.targets() {
@@ -593,13 +486,11 @@ fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError>
 /// The shared body behind every report's `perform_install`. Injects the
 /// [`WorkflowRegistry`] as the group's
 /// [`PlanProvider`](mtui_hosts::PlanProvider) and drives the
-/// [`InstallOperation`] template, whose own
-/// per-host [`Check`](mtui_hosts::Check) — also adapted from this registry —
-/// now produces the verdict, before the (possible) reboot.
+/// [`InstallOperation`] template, whose own per-host
+/// [`Check`](mtui_hosts::Check) produces the verdict before the reboot.
 ///
 /// Injecting here rather than where the group is built is deliberate:
-/// [`OperationGroup::plans`] has exactly one
-/// consumer — the template these two functions drive — so this is the one place
+/// [`OperationGroup::plans`] has exactly one consumer, so this is the one place
 /// that cannot forget. Construction sites can: for the whole life of the Rust
 /// port none of them injected a provider, so `plans()` failed with
 /// `NoPlanProvider`, the template logged and returned, and `install` reported
@@ -619,10 +510,9 @@ pub async fn perform_install(
 
 /// Uninstalls `packages` from every host in `targets`.
 ///
-/// See [`perform_install`]; the only differences are the role (and so the
-/// command table) and the label on the aggregated summary. Uninstall shares the
-/// *install* check table — a removal is judged by the same package-manager
-/// outcomes — which [`CheckProvider`] encodes.
+/// See [`perform_install`]; only the role and the summary label differ.
+/// Uninstall shares the *install* check table ([`CheckProvider`]) — a removal
+/// is judged by the same package-manager outcomes.
 ///
 /// # Errors
 ///
@@ -653,28 +543,21 @@ async fn perform_operation(
 /// [`perform_operation`] with the [`PlanProvider`](mtui_hosts::PlanProvider)
 /// spelled out as a parameter, so a test can script the check seam.
 ///
-/// Production must not reach this except through [`perform_operation`], which
-/// passes the real [`WorkflowRegistry`] — the parameter changes nothing about
-/// what runs on a host. It exists because there is no other way in: the
-/// injection below overwrites unconditionally
-/// (`HostsGroup::set_plan_provider`), so a provider installed on the group
-/// beforehand never survives to [`OperationGroup::plans`]. On what does and
-/// does not produce a cancelled check failure, see the `cancelled` comment in
-/// [`aggregate_failures`] — the authoritative statement lives there.
-///
-/// The single `set_plan_provider` call site stays in this body, which is what
-/// the inject-at-the-point-of-use rule on [`perform_install`] is about: there
-/// is still exactly one place that cannot forget to wire the provider.
+/// Production must not reach this except through [`perform_operation`]. The
+/// parameter exists because there is no other way in: the injection below
+/// overwrites unconditionally (`HostsGroup::set_plan_provider`), so a provider
+/// installed on the group beforehand never survives to
+/// [`OperationGroup::plans`]. That single call site stays in this body, keeping
+/// [`perform_install`]'s inject-at-the-point-of-use rule intact. On cancelled
+/// check failures see the `cancelled` comment in [`aggregate_failures`].
 async fn perform_operation_with(
     targets: &mut HostsGroup,
     role: Role,
     packages: &[String],
     provider: Arc<dyn mtui_hosts::PlanProvider>,
 ) -> Result<(), UpdateError> {
-    // Matched exhaustively on purpose: a `_ =>` arm defaulting to install would
-    // quietly run the wrong package-manager command if a role were ever added,
-    // which is the same shape of silent-wrong-default this function exists to
-    // fix. Only the two template roles reach here.
+    // Exhaustive on purpose: a `_ =>` arm defaulting to install would quietly
+    // run the wrong package-manager command if a role were ever added.
     let op = match role {
         Role::Install => "install",
         Role::Uninstall => "uninstall",
@@ -686,8 +569,7 @@ async fn perform_operation_with(
         }
     };
 
-    // Entry gate: nothing has run yet, so a cancel here is a clean no-op,
-    // mirroring `perform_update`'s own entry gate.
+    // Entry gate: nothing has run yet, so a cancel here is a clean no-op.
     if targets.cancel_requested() {
         return Err(UpdateError::cancelled(format!(
             "cancelled before the {op} started"
@@ -708,9 +590,8 @@ async fn perform_operation_with(
         }
     };
 
-    // The template ran nothing at all — a missing doer, or a host held by
-    // another tester. Report it instead of falling through to a verdict that
-    // would read stale `last*` values and call it success.
+    // The template ran nothing at all (missing doer, or a host held by another
+    // tester). Falling through would read stale `last*` values as success.
     let report = match outcome {
         Err(e) => {
             return Err(UpdateError::reason_only(describe_start_failure(
@@ -720,21 +601,17 @@ async fn perform_operation_with(
         Ok(report) => report,
     };
 
-    // Deliberately no history write here: `Operation::run` writes the row
-    // itself, between the command fan-out and the reboot, because a row
-    // written after this call returns would be lost on exactly the
-    // transactional hosts that never came back.
+    // No history write here: `Operation::run` writes the row itself, between
+    // the fan-out and the reboot, because a row written after this call returns
+    // would be lost on the transactional hosts that never came back.
 
     // A stranded operation lock does not turn a good install/uninstall into a
-    // failed one — it warns, naming the hosts and the manual remedy, rather
-    // than joining `failures` below.
+    // failed one — warn rather than joining `failures` below.
     if !report.unlock_failures.is_empty() {
         warn!("{}", unlock_failure_message(op, &report.unlock_failures));
     }
 
-    // A host whose post-run check failed, and any transactional host that
-    // rebooted and never reconnected, both fail the operation by name. A
-    // failed check already excluded its host from the reboot map (see
+    // A failed check already excluded its host from the reboot map (see
     // `Operation::run`), so the two lists never double-name the same host.
     let mut failures: Vec<UpdateError> = report
         .check_failures
@@ -771,8 +648,7 @@ fn unlock_failure_message(op: &str, unlock_failures: &[(String, String)]) -> Str
 /// `install`/`uninstall`.
 ///
 /// [`LockOutcome::Contended`] is excluded — benign, another tester owns the
-/// lock — so this only warns on a real transport/SFTP error, the same bar fix
-/// 3 already set for `install`/`uninstall`.
+/// lock — so this only warns on a real transport/SFTP error.
 fn warn_on_unlock_failures(op: &str, outcomes: &BTreeMap<String, LockOutcome>) {
     let failures: Vec<(String, String)> = outcomes
         .iter()
@@ -791,8 +667,6 @@ fn warn_on_unlock_failures(op: &str, outcomes: &BTreeMap<String, LockOutcome>) {
 /// The three causes deliberately read differently: they send an operator to
 /// opposite places. "Did not come back" means go find the machine; "never
 /// rebooted" means it is right there, still serving, with an inert snapshot.
-/// A single "reconnect after reboot failed" message was accurate for only one
-/// of the three.
 fn reboot_error(failure: RebootFailure) -> UpdateError {
     let what = match failure.cause {
         RebootFailureCause::Unreachable => "did not come back after the reboot",
@@ -802,15 +676,14 @@ fn reboot_error(failure: RebootFailure) -> UpdateError {
     UpdateError::new(format!("{what} ({})", failure.reason), failure.host)
 }
 
-/// Turns an [`Operation::run`] start failure into a
-/// message that names the hosts responsible.
+/// Turns an [`Operation::run`] start failure into a message that names the
+/// hosts responsible.
 ///
 /// `plans()` aborts on the first host it cannot resolve and reports only the
 /// role and release — and a host whose product never parsed has no release, so
-/// the bare error reads `Missing Installer for ` with nothing actionable in it.
-/// Since the whole group is aborted, re-resolve every host here and name each
-/// one that has no command, so the tester knows which refhost to fix rather than
-/// which of them to guess.
+/// the bare error reads `Missing Installer for `, with nothing actionable in
+/// it. The whole group is aborted, so re-resolve every host here and name each
+/// one that has no command.
 fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> String {
     if !matches!(
         err,
@@ -850,7 +723,7 @@ fn describe_start_failure(err: &HostError, role: Role, targets: &HostsGroup) -> 
 /// Reboots the transactional hosts named in `reboot`, returning one
 /// [`RebootFailure`] per host whose reboot did not demonstrably take effect.
 ///
-/// Such a host must fail the flow by name, not vanish into a discarded `()` —
+/// Such a host must fail the flow by name, not vanish into a discarded `()`;
 /// the caller renders these through [`reboot_error`] into its own failure list
 /// before aggregating. The cause is carried rather than flattened to a string
 /// because `update` routes its rollback on it.
@@ -898,8 +771,7 @@ pub async fn perform_prepare(
 /// never ran ([`PrepareFailure::DidNotRun`]) from one that ran and reported a
 /// host failure ([`PrepareFailure::HostReported`]) — the split
 /// [`perform_update`] gates its abort on. [`perform_prepare`] flattens both
-/// (and [`PrepareFailure::Cancelled`]) back to a plain [`UpdateError`], so the
-/// standalone `prepare` command's observable behaviour is unchanged.
+/// (and [`PrepareFailure::Cancelled`]) back to a plain [`UpdateError`].
 async fn perform_prepare_classified(
     targets: &mut HostsGroup,
     report: &dyn SetRepo,
@@ -930,7 +802,7 @@ async fn perform_prepare_classified(
         )));
     }
 
-    // The body runs, then we always unlock, matching a try/finally.
+    // try/finally: the body runs, then we always unlock.
     let result = prepare_body(
         targets,
         &registry,
@@ -959,8 +831,7 @@ async fn prepare_body(
 ) -> Result<(), PrepareFailure> {
     targets.fanout_set_repo(operation, report).await;
 
-    // Abort early if adding/removing the issue repo failed on any host: the
-    // issue repo could not be set, so prepare never ran.
+    // The issue repo could not be set on some host, so prepare never ran.
     let repo_failures = host_command_failures(targets, "failed to set issue repo");
     if !repo_failures.is_empty() {
         for target in targets.targets() {
@@ -976,32 +847,28 @@ async fn prepare_body(
         return aggregate_failures("prepare", repo_failures).map_err(PrepareFailure::DidNotRun);
     }
 
-    // Every host that actually received a prepare command, and the hosts a
-    // package failed on. Both are accumulated *inside* the loop below: it runs
-    // one fan-out per package, so a single post-loop read of `lastexit()` sees
-    // only the last package — and under `--installed-only` the last package is
-    // very often a no-op `if rpm -q ...` that exits 0, which would mask an
-    // earlier failure and let the host reboot into it.
+    // Hosts a prepare command reached, and hosts a package failed on. Both are
+    // accumulated *inside* the loop below, which runs one fan-out per package:
+    // a single post-loop read of `lastexit()` sees only the last package, and
+    // under `--installed-only` that is very often a no-op `if rpm -q …` exiting
+    // 0, masking an earlier failure and letting the host reboot into it.
     let mut dispatched: BTreeSet<String> = BTreeSet::new();
     let mut inert: BTreeSet<String> = BTreeSet::new();
-    // The check verdicts, accumulated in the same place and for the same
-    // reason: `run_checks` reads the `last*` snapshot too, so a single
-    // post-loop call would judge only the last package's transcript. The
-    // exit-code half of that hole was closed by `note_dispatch`; the marker
-    // half needs this, or an exit-`0` lock message on package 1 of 2 is
-    // overwritten by package 2's clean run and the host reboots into it
-    // (#406). `check_failed` keeps it to one verdict per host — a second entry
-    // would push `aggregate_failures` out of its single-failure verbatim
-    // branch, where `host` is `Some`.
+    // The check verdicts, per fan-out for the same reason: `run_checks` reads
+    // the `last*` snapshot too. `note_dispatch` closes the exit-code half of
+    // that hole; this closes the marker half, or an exit-`0` lock message on
+    // package 1 of 2 is overwritten by package 2's clean run and the host
+    // reboots into it (#406). `check_failed` keeps it to one verdict per host —
+    // a second entry would push `aggregate_failures` out of its single-failure
+    // verbatim branch, where `host` is `Some`.
     let mut check_failed: BTreeSet<String> = BTreeSet::new();
     let mut check_failures: Vec<UpdateError> = Vec::new();
 
-    // Parity with perform_downgrade: an empty list is not a host failure, but
-    // it must never be a silent success either — only the issue repositories
-    // were touched (#396). Above the branch so the `installed_only` path (zero
-    // loop iterations) warns too; the operator-facing refusal lives in the
-    // `prepare`/`update` command pre-flights, this covers embedded callers
-    // (the update flow's newpackage prepare).
+    // An empty list is not a host failure, but it must never be a silent
+    // success either — only the issue repositories were touched (#396). Above
+    // the branch so the `installed_only` path (zero iterations) warns too; the
+    // operator-facing refusal lives in the `prepare`/`update` command
+    // pre-flights, this covers embedded callers.
     if pkgs.is_empty() {
         warn!("no packages to prepare");
     }
@@ -1010,14 +877,10 @@ async fn prepare_body(
     if installed_only {
         // Conditional per-package install — inherently one package at a time.
         for (i, pkg) in pkgs.iter().enumerate() {
-            // Package boundary = cancellation checkpoint. This serial loop is
-            // the longest interruptible stretch in the flow (one SSH fan-out
-            // per package). `break` — not an early return: the fall-through
-            // below still aggregates per-host failures and, crucially, still
-            // runs `reboot_transactional`, which is what actually activates
-            // the snapshot the staged packages live in. Returning here would
-            // leave a transactional host with an inert snapshot while claiming
-            // the packages were installed.
+            // Package boundary = cancellation checkpoint; this serial loop is
+            // the longest interruptible stretch in the flow. `break`, not an
+            // early return: the fall-through still runs `reboot_transactional`,
+            // which activates the snapshot the staged packages live in.
             if targets.cancel_requested() {
                 cancelled_at = Some(i);
                 break;
@@ -1035,8 +898,7 @@ async fn prepare_body(
             );
         }
     } else if !pkgs.is_empty() {
-        // Install every package in a SINGLE transaction (one snapshot for
-        // transactional hosts). Quote each name for the root command line.
+        // A SINGLE transaction, so transactional hosts get one snapshot.
         let joined = quote_args(pkgs);
         let cmd = build_prepare_map(targets, registry, Some(&joined), false);
         targets.run(Command::PerHost(cmd.clone())).await;
@@ -1050,42 +912,19 @@ async fn prepare_body(
         );
     }
 
-    // A prepare *installs packages*, so it owes its own history row — the
-    // record every other dispatching op already writes. Placed here for the
-    // same two reasons as `update`'s and `downgrade`'s rows: after the
-    // dispatch, so no row ever claims work that never started, and before
-    // `reboot_transactional`, because a host that does not come back can no
-    // longer be written to. On a transactional host that placement means the
-    // row records what was *staged*, not what is active — deliberate, because
-    // a host that never returns from its reboot would otherwise leave the
-    // packages it holds in a snapshot entirely unrecorded.
+    // A prepare installs packages, so it owes its own history row — and it is
+    // what closes #407 for `update`, whose post-prepare aborts correctly write
+    // no `update` row while this prepare's packages stay on every host. Placed
+    // after the dispatch (no row may claim work that never started) and before
+    // `reboot_transactional` (a host that does not come back can no longer be
+    // written to), so on a transactional host it records what was *staged*
+    // rather than leaving those packages unrecorded entirely.
     //
-    // It is also what closes #407 for `update`: both of that flow's
-    // post-prepare aborts (the pre-dispatch cancel gate and the missing-updater
-    // abort) return without an `update` row — correctly, since no updater
-    // command dispatched — but the packages this prepare installed stay on
-    // every host. Writing the row where the side effect is produced records
-    // them for the standalone `prepare`, the initial prepare inside `update`,
-    // and the `--newpackage` prepare alike.
-    //
-    // Two things keep the row from over-claiming, both instances of "a row
-    // claiming an install that never started is worse than no row":
-    //
-    // * **Per host, not group-wide.** `dispatched` is a per-host set and
-    //   `build_prepare_map` drops a host whose release key does not resolve or
-    //   whose template does not render — the very hosts the block below fails
-    //   with "nothing was installed". A group-wide fan-out would hand exactly
-    //   those hosts a `:prepare:` row contradicting their own verdict, in a
-    //   file the project treats as an interop contract, so the write is scoped
-    //   to the hosts a command actually reached.
-    // * **The dispatched subset, not the whole set.** A cancel at package `i`
-    //   of the `--installed-only` loop dispatched `pkgs[..i]` and nothing
-    //   after, so that is what the row names. The error message names the
-    //   progress too, but it is transient; the log line is what an operator
-    //   coming back to the host later reconstructs from.
-    //
-    // An empty list, a cancel before the first package, or a prepare for which
-    // no command could be built for any host therefore leaves no row at all.
+    // Scoped per *host*, because `build_prepare_map` drops a host whose release
+    // key does not resolve or whose template does not render — the very hosts
+    // the block below fails with "nothing was installed" — and per *package*,
+    // because a cancel at `i` dispatched only `pkgs[..i]`. An empty list or a
+    // cancel before the first package therefore leaves no row at all.
     let recorded: &[String] = match cancelled_at {
         Some(i) => &pkgs[..i],
         None => pkgs,
@@ -1094,64 +933,39 @@ async fn prepare_body(
         add_op_history_for(targets, &dispatched, "prepare", None, recorded).await;
     }
 
-    // Surface any per-host command failure from the install fan-out; the
-    // prepare check's own failures were collected per fan-out above.
-    //
-    // A host the check already named is dropped here: the two rules overlap on
-    // one signal. `Target::run` records exit `-1` for a timeout, a dropped
-    // connection or an unconnected host, which trips this scan's
-    // `lastexit() != 0` *and* the `("slmicro", true)` / `("YUM", false)`
-    // checks' never-ran gate; a lock message on stderr trips the stderr half
-    // and the marker check. Both would name one host twice, which pushes
-    // `aggregate_failures` out of its single-failure verbatim branch into the
-    // summary — where `host` becomes `None` and the MCP client loses the one
-    // field that says *which* refhost to go and look at. The check's verdict
-    // is the one kept because it is the more specific of the two ("timed out
-    // or failed to run" and "update stack locked" both say more than "prepare
-    // command failed"); dropping the check's instead would trade attribution
-    // back for a coarser diagnosis. `downgrade_body` resolves the identical
-    // overlap the identical way — its `failed_downgrade.insert` gates the
-    // exit-code entry behind the check's verdict for the same host.
+    // Minus the hosts the check already named: the two rules overlap on one
+    // signal (exit `-1` trips this scan and the checks' never-ran gate; a lock
+    // message on stderr trips the stderr half and the marker check), and naming
+    // one host twice pushes `aggregate_failures` out of its verbatim branch,
+    // where `host` becomes `None` and an MCP client loses which refhost to look
+    // at. The check's verdict is the more specific of the two.
+    // `downgrade_body` resolves the same overlap via `failed_downgrade.insert`.
     let mut failures: Vec<UpdateError> = host_command_failures(targets, "prepare command failed")
         .into_iter()
         .filter(|e| !e.host.as_ref().is_some_and(|h| check_failed.contains(h)))
         .collect();
 
     // A host whose prepare failed must not reboot into the failed transaction,
-    // mirroring the install/uninstall template's per-host gate: activating the
-    // snapshot would hide the failure behind a healthy-looking boot, while a
-    // healthy host in the same group still reboots so its own snapshot
-    // activates. The skip set is built from the check verdicts and non-zero
-    // exit codes only — never from the stderr rule `host_command_failures`
-    // also applies, because `transactional-update` writes progress to stderr
-    // on a *successful* run and skipping such a host's reboot would leave its
-    // healthy staged snapshot silently inert. The prepare templates are single
-    // commands, so the recorded exit code is genuinely the prepare command's
-    // own.
+    // while a healthy peer still must. The skip set is built from the check
+    // verdicts and non-zero exit codes only — never from the stderr rule
+    // `host_command_failures` also applies, because `transactional-update`
+    // writes progress to stderr on a *successful* run and skipping that host's
+    // reboot would leave a healthy snapshot silently inert. The prepare
+    // templates are single commands, so the exit code is the prepare's own.
     //
-    // The check verdicts are the other half of the gate, and on
-    // ("slmicro", true) they are what makes it complete: a prepare that
-    // reported a locked update stack, a dependency prompt or an RPM error and
-    // still exited `0` is invisible to the exit-code rule above, and its
-    // reboot would activate the failed transaction. A marker-failed prepare
-    // therefore skips its reboot, while a host whose only stderr is progress
-    // still gets one (#406) — for *any* package it failed on, not just the
-    // last, which is why `check_failed` is filled per fan-out.
+    // The check verdicts complete the gate on ("slmicro", true), where a locked
+    // update stack, a dependency prompt or an RPM error can still exit `0`
+    // (#406) — for *any* package it failed on, which is why `check_failed` is
+    // filled per fan-out.
     inert.extend(check_failed.iter().cloned());
     failures.extend(check_failures);
 
-    // `host_command_failures` reads one post-loop snapshot, so on the
-    // per-package path it only ever sees the last package. Name every host a
-    // package failed on, deduped against the hosts already reported — a second
-    // entry for one host would push `aggregate_failures` out of its
-    // single-failure verbatim branch into the summary, which drops `host` to
-    // `None` and breaks callers that read it.
-    // A host the fan-out never reached must fail by name, not ride the
-    // group's success (#396): `build_prepare_map` drops a host whose release
-    // key does not resolve or whose template does not render (e.g. no
-    // installed-only variant), and nothing else records that. Skipped when the
-    // flow was cancelled before the first fan-out (nothing was expected to
-    // dispatch) and when the list was empty (the warn above owns that case).
+    // A host the fan-out never reached must fail by name, not ride the group's
+    // success (#396): `build_prepare_map` drops a host whose release key does
+    // not resolve or whose template does not render (e.g. no installed-only
+    // variant), and nothing else records that. Skipped on a cancel before the
+    // first fan-out (nothing was expected to dispatch) and on an empty list
+    // (the warn above owns that case).
     if !pkgs.is_empty() && cancelled_at != Some(0) {
         for target in targets.targets() {
             if target.state() != mtui_types::TargetState::Enabled {
@@ -1177,10 +991,9 @@ async fn prepare_body(
     let reboot: BTreeMap<String, String> = reboot
         .into_iter()
         .filter(|(host, _)| {
-            // A host nothing was dispatched to staged nothing, so there is no
-            // snapshot to activate and the reboot would be gratuitous — and in
-            // the `update` rollback path it would activate whatever the failed
-            // update left staged.
+            // Nothing staged, nothing to activate — and in the `update`
+            // rollback path a reboot would activate whatever the failed update
+            // left staged.
             if !dispatched.contains(host) {
                 warn!(host = %host, "no prepare command was staged; skipping reboot");
                 return false;
@@ -1198,8 +1011,8 @@ async fn prepare_body(
             .into_iter()
             .map(reboot_error),
     );
-    // A genuine host failure outranks the cancellation: reporting only
-    // "cancelled" would bury a broken host the operator must still see.
+    // A genuine host failure outranks the cancellation, which would otherwise
+    // bury a broken host the operator must still see.
     if !failures.is_empty() {
         return aggregate_failures("prepare", failures).map_err(PrepareFailure::HostReported);
     }
@@ -1225,10 +1038,10 @@ async fn prepare_body(
 /// Records which hosts a prepare fan-out reached, and which of them it failed
 /// on, into the two sets the reboot gate consults.
 ///
-/// Called after *every* fan-out rather than once at the end, because the
-/// per-package `--installed-only` loop runs one fan-out per package and
-/// `lastexit()` keeps only the last. Scoped to `cmd`'s keys so a host outside
-/// this fan-out is never judged on another phase's record.
+/// Called after *every* fan-out, not once at the end: the per-package
+/// `--installed-only` loop runs one fan-out per package and `lastexit()` keeps
+/// only the last. Scoped to `cmd`'s keys so a host outside this fan-out is
+/// never judged on another phase's record.
 fn note_dispatch(
     targets: &HostsGroup,
     cmd: &BTreeMap<String, String>,
@@ -1250,32 +1063,19 @@ fn note_dispatch(
 /// Runs the prepare check over the hosts *this* fan-out reached and records the
 /// first failure per host.
 ///
-/// The companion to [`note_dispatch`], and called from the same places for the
-/// same reason: [`run_checks`] reads the `last*` snapshot, which the next
-/// package's fan-out overwrites. A single post-loop call therefore judges only
-/// the last package — and under `--installed-only` that is very often a clean
-/// no-op, so an exit-`0` lock message on an earlier package would be masked and
-/// the host would reboot into it (#406).
-///
-/// Scoped to `cmd`'s keys, again like `note_dispatch`: a host outside this
-/// fan-out still carries an earlier phase's record (the `set_repo` fan-out, or
-/// a package it was skipped for), and judging that as a prepare would invent a
-/// verdict. First-failure-wins per host keeps `aggregate_failures` in its
+/// The companion to [`note_dispatch`], for the same reason: [`run_checks`]
+/// reads the `last*` snapshot, so a single post-loop call would judge only the
+/// last package — under `--installed-only` very often a clean no-op, masking an
+/// exit-`0` lock message on an earlier one and letting the host reboot into it
+/// (#406). First-failure-wins per host keeps `aggregate_failures` in its
 /// single-failure verbatim branch, where `host` survives.
 ///
-/// The scope is imposed through [`run_checks_where`], so an out-of-fan-out host
-/// is never *judged*, rather than judged and then filtered: a check logs its
-/// own ERROR breadcrumb before it returns `Err`, and a discarded verdict has
-/// still been printed to the operator — once per package under
-/// `--installed-only`.
-///
-/// A consequence worth naming because it is intended, not incidental: a host
-/// [`build_prepare_map`] dropped (unresolved release key, or a template with no
-/// `--installed-only` variant) is in no `cmd` map, so it is never check-judged
-/// on its stale snapshot. It is not thereby excused — `prepare_body`'s dispatch
-/// accounting fails it by name with "no prepare command could be built for this
-/// host" (#396), which is a truthful verdict where a check's would have been an
-/// invented one.
+/// Scoped to `cmd`'s keys through [`run_checks_where`], so an out-of-fan-out
+/// host is never *judged* on an earlier phase's record rather than judged and
+/// then filtered after its ERROR breadcrumb has fired. A host
+/// [`build_prepare_map`] dropped is therefore never check-judged, but it is not
+/// excused: `prepare_body`'s dispatch accounting fails it by name with "no
+/// prepare command could be built for this host" (#396).
 fn note_check(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
@@ -1324,10 +1124,8 @@ fn build_prepare_map(
         if let Some(cmd) = rendered {
             map.insert(target.hostname().to_owned(), cmd);
         } else {
-            // A dropped render (error, or a family with no installed-only
-            // variant) leaves the host out of the fan-out; the dispatch
-            // accounting in `prepare_body` turns that into a named failure,
-            // this log says why (#396).
+            // `prepare_body`'s dispatch accounting turns the drop into a named
+            // failure; this log says why (#396).
             error!(
                 host = %target.hostname(), release = %release,
                 "prepare: no command rendered for this host; nothing will be installed on it"
@@ -1347,10 +1145,9 @@ pub async fn perform_downgrade(
     packages: &[String],
     id: Option<&str>,
 ) -> Result<(), UpdateError> {
-    // Nothing to downgrade: return before locking or touching repos.
-    // The guard also keeps the probe template from rendering with an
-    // empty package list — `zypper se` without names would list the entire
-    // repository catalog.
+    // Return before locking or touching repos. Also keeps the probe template
+    // from rendering with no package names, where `zypper se` would list the
+    // entire repository catalog.
     if packages.is_empty() {
         warn!("no packages to downgrade");
         return Ok(());
@@ -1384,13 +1181,13 @@ async fn downgrade_body(
 ) -> Result<(), UpdateError> {
     targets.fanout_set_repo(RepoOp::Remove, report).await;
 
-    // Collected per-host failures (repo removal + per-package/combined checks),
-    // aggregated at the end so a downgrade failure surfaces rather than only
+    // Per-host failures (repo removal + per-package/combined checks) are
+    // aggregated at the end, so a downgrade failure surfaces rather than only
     // being logged.
     let mut failures = host_command_failures(targets, "failed to remove issue repo");
 
-    // Run the list_command to discover each host's available downgrade
-    // versions, then parse `name = version` lines, keeping the highest per pkg.
+    // Discover each host's available downgrade versions, keeping the highest
+    // per package.
     let joined = quote_args(packages);
     let list_map = {
         let mut m = BTreeMap::new();
@@ -1413,28 +1210,23 @@ async fn downgrade_body(
         targets.run(Command::PerHost(list_map.clone())).await;
     }
 
-    // A dead probe must abort that host's downgrade, not degrade it. When the
-    // probe dies its stdout carries no versions, the version map below stays
-    // empty, and the flow would "complete" having run zero downgrade commands —
-    // leaving every package at the update version behind a success-looking run.
+    // A dead probe must abort that host's downgrade, not degrade it: its stdout
+    // carries no versions, so the flow would "complete" having run zero
+    // downgrade commands and left every package at the update version.
     //
-    // Non-zero is the whole signal, and the template is what makes it
-    // trustworthy in both directions (#451). It guards the commands that
+    // Non-zero is the whole signal, and the guarded template is what makes it
+    // trustworthy in both directions (#451): it guards the commands that
     // *produce* the list and exits with the failed tool's own status, so a
-    // non-zero status here is either SSH-level death (the `-1` sentinel) or the
-    // guard passing zypper's or awk's status through — never "package not
-    // found", which the guard accepts as `104` and reports as `0`. And zero now
-    // genuinely means the probe answered: an empty list at `0` is a host
-    // carrying none of these packages, not a probe that failed unnoticed. Left
-    // as one pipeline the status was the *last* stage's — awk's, and awk
-    // succeeds on empty input — so a failed `zypper se` recorded `0` and this
-    // gate could only ever catch the `-1`.
+    // non-zero status is SSH-level death (the `-1` sentinel) or zypper's/awk's
+    // own — never "package not found", which the guard accepts as `104` and
+    // reports as `0`. And `0` genuinely means the probe answered. (As one
+    // pipeline the status was awk's, which succeeds on empty input, so a failed
+    // `zypper se` recorded `0`.)
     //
-    // Handled per host: the healthy hosts still roll back (and transactional
-    // ones still reboot), because this downgrade is often the repair for an
-    // update that already failed on the group, and aborting it over one host's
-    // broken zypper would strand the healthy peers half-applied. The error for
-    // the dead ones is raised at the end. All probes dead aborts immediately.
+    // Handled per host: this downgrade is often the repair for an update that
+    // already failed on the group, so aborting over one host's broken zypper
+    // would strand the healthy peers half-applied. They still roll back (and
+    // reboot); the dead ones are raised at the end. All probes dead aborts now.
     let dead_probes: std::collections::BTreeSet<String> = list_map
         .keys()
         .filter(|hn| {
@@ -1454,19 +1246,12 @@ async fn downgrade_body(
         );
     }
     if !dead_probes.is_empty() && dead_probes.len() == list_map.len() {
-        // The abort still leaves side effects behind: `fanout_set_repo(Remove)`
-        // above has already stripped the issue repo from every host, and this
-        // path fires most often *during the update rollback*, when
-        // reconstructing what was done to a refhost matters most. Record the
-        // row before returning — the site below is unreachable from here, so
-        // there is no double write.
-        //
-        // The `lastexit != 0` gate above catches more than SSH-level death:
-        // the probe template guards its own producing stages and exits with
-        // the failing tool's own status (#451), so a refused `zypper se`
-        // reaches here as well as the `-1` sentinel. Every one of those is an
-        // abort that left the host with its issue repo removed and nothing
-        // rolled back, which is precisely the state this row exists to record.
+        // The abort still leaves side effects: `fanout_set_repo(Remove)` above
+        // has already stripped the issue repo from every host, and this path
+        // fires most often during the update rollback, where reconstructing
+        // what was done to a refhost matters most. Record the row before
+        // returning — the site below is unreachable from here, so there is no
+        // double write.
         add_op_history(targets, "downgrade", id, packages).await;
         return Err(UpdateError::new(
             "package version probe failed",
@@ -1498,9 +1283,8 @@ async fn downgrade_body(
     let mut cancelled_at: Option<usize> = None;
     for (i, package) in packages.iter().enumerate() {
         // Package boundary = cancellation checkpoint (see the prepare loop).
-        // `break`, not an early return: the transactional hosts are handled by
-        // the combined block after this loop, and the failure aggregation must
-        // still run.
+        // `break`, not an early return: the combined transactional block and
+        // the failure aggregation after this loop must still run.
         if targets.cancel_requested() {
             cancelled_at = Some(i);
             break;
@@ -1536,12 +1320,11 @@ async fn downgrade_body(
         }
         if !cmd.is_empty() {
             targets.run(Command::PerHost(cmd.clone())).await;
-            // Check only the hosts that actually ran this command: a host
-            // outside `cmd` (e.g. a dead-probe host) still carries its previous
-            // record, whose stale -1 would trip the timeout gate and cancel
-            // the healthy hosts' rollback. Scoped through `run_checks_where`,
-            // so such a host is not judged at all — a post-filter would still
-            // have emitted its ERROR breadcrumb, once per package.
+            // Only the hosts that ran this command: a host outside `cmd` (e.g.
+            // a dead-probe one) still carries a stale `-1` that would trip the
+            // timeout gate and cancel the healthy hosts' rollback. Scoped
+            // through `run_checks_where` so it is not judged at all — a
+            // post-filter would still emit its breadcrumb, once per package.
             let judged = run_checks_where(
                 targets,
                 registry,
@@ -1588,9 +1371,7 @@ async fn downgrade_body(
     let mut failed_downgrade: BTreeSet<String> = BTreeSet::new();
     if !combined.is_empty() {
         targets.run(Command::PerHost(combined.clone())).await;
-        // Same scoping as the per-package loop, and imposed the same way: a
-        // host outside `combined` is not judged, rather than judged and then
-        // dropped after its breadcrumb has already been logged.
+        // Same scoping as the per-package loop, and for the same reason.
         let judged = run_checks_where(
             targets,
             registry,
@@ -1604,14 +1385,13 @@ async fn downgrade_body(
             failed_downgrade.insert(host);
             failures.push(e);
         }
-        // The transactional check only gates "timed out or failed to run"; the
-        // downgrade template is a single command, so a non-zero exit is
-        // genuinely the downgrade's own status and the host must not reboot
-        // into the failed transaction. It is also pushed as a failure — a
-        // skipped reboot behind an `Ok` would be a quiet no-op — but only when
-        // the check did not already report this host (`insert` is `false` for
-        // the `-1` case the check covers). (Scoped to `combined`: hosts
-        // outside it carry a stale record.)
+        // The transactional check only gates "timed out or failed to run", but
+        // the downgrade template is a single command, so a non-zero exit is the
+        // downgrade's own status and the host must not reboot into the failed
+        // transaction. Pushed as a failure too — a skipped reboot behind an
+        // `Ok` would be a quiet no-op — unless the check already named this
+        // host (`insert` is `false` for the `-1` case it covers). Scoped to
+        // `combined`, since hosts outside it carry a stale record.
         for hostname in combined.keys() {
             let exit = targets.get(hostname).and_then(mtui_hosts::Target::lastexit);
             if exit.is_some_and(|c| c != 0) && failed_downgrade.insert(hostname.clone()) {
@@ -1623,21 +1403,18 @@ async fn downgrade_body(
         }
     }
 
-    // Reboot the healthy transactional hosts first (their staged snapshots must
-    // still activate), then surface the dead probes as the command's failure.
-    // A host whose combined downgrade failed is skipped too: rebooting it would
-    // activate the snapshot of the failed transaction.
+    // Reboot the healthy transactional hosts first — their staged snapshots
+    // must still activate — then surface the dead probes as the command's
+    // failure. A host whose combined downgrade failed is skipped too:
+    // rebooting it would activate the failed transaction's snapshot.
     let healthy_reboot: BTreeMap<String, String> = reboot
         .into_iter()
         .filter(|(h, _)| {
-            // Nothing staged, nothing to activate. A transactional host drops
-            // out of `combined` when the version probe resolved no versions
-            // for it (a `versions` miss, or every spec filtered out) — both
-            // reachable with an exit-0 probe, so `dead_probes` does not cover
-            // them. Rebooting anyway is not merely gratuitous: when this
-            // downgrade *is* the `update` rollback, the host would boot into
-            // the snapshot the failed update left staged, which is exactly
-            // what suppressing the update's own reboot had avoided.
+            // Nothing staged. A transactional host drops out of `combined`
+            // when the probe resolved no versions for it, which an exit-0 probe
+            // can do, so `dead_probes` does not cover it. When this downgrade
+            // *is* the `update` rollback, rebooting would activate the snapshot
+            // the failed update left staged.
             if !combined.contains_key(h) {
                 warn!(host = %h, "no downgrade was staged; skipping reboot");
                 return false;
@@ -1649,11 +1426,9 @@ async fn downgrade_body(
             !dead_probes.contains(h)
         })
         .collect();
-    // The downgrade commands have now dispatched, whatever the verdict: record
-    // the history row here — after the run started, but *before* the reboot.
-    // A transactional host that never comes back cannot be written to
-    // afterwards, and the row would be lost on exactly the host whose state an
-    // operator most needs to reconstruct.
+    // Recorded after the run started but *before* the reboot: a transactional
+    // host that never comes back cannot be written to afterwards, and that is
+    // the host whose state an operator most needs to reconstruct.
     add_op_history(targets, "downgrade", id, packages).await;
 
     failures.extend(
@@ -1668,8 +1443,7 @@ async fn downgrade_body(
     // A per-host check failure aborts first (matches the pre-#336 aggregation).
     aggregate_failures("downgrade", failures)?;
 
-    // Then the dead probes: the healthy hosts have rolled back and rebooted, so
-    // now name the hosts whose probe died as the command's failure.
+    // Then the dead probes, now that the healthy hosts have rolled back.
     if !dead_probes.is_empty() {
         return Err(UpdateError::new(
             "package version probe failed",
@@ -1677,19 +1451,16 @@ async fn downgrade_body(
         ));
     }
 
-    // Finally the honest verdict: any package still at or above the update's
-    // shipped version means the rollback did not complete. `downgrade_verdict`
-    // has already logged the per-host detail at ERROR; fail the command so a
-    // caller (REPL or MCP) can't mistake a half-rollback for success.
+    // `downgrade_verdict` has already logged the per-host detail; fail so a
+    // caller cannot mistake a half-rollback for success.
     if !not_downgraded.is_empty() {
         return Err(UpdateError::reason_only("downgrade not completed"));
     }
 
-    // Cancellation is reported last: a real verdict above outranks it. The
-    // message names only the non-transactional per-package progress — the
-    // transactional hosts are driven by the combined block, not this loop —
-    // and notes the repo removal, which ran before the loop and is therefore
-    // already applied on every host.
+    // Cancellation last: a real verdict above outranks it. The message names
+    // only the non-transactional per-package progress (transactional hosts go
+    // through the combined block) and notes the repo removal, which ran before
+    // the loop and so applies to every host.
     if let Some(i) = cancelled_at {
         let done: Vec<&str> = packages[..i].iter().map(String::as_str).collect();
         let left: Vec<&str> = packages[i..].iter().map(String::as_str).collect();
@@ -1714,50 +1485,35 @@ async fn downgrade_body(
 
 /// Emits the post-downgrade "done" / "downgrade not completed" verdict.
 ///
-/// Re-queries each host, rotates `before = after; after = current` per
-/// package, then compares each package's re-queried `current` against the
-/// update's `required` version. Every
-/// package still `current >= required` did **not** roll back; it is named per
-/// host, at ERROR, with versions — with no short-circuit, so the bookkeeping
-/// still advances for the packages that did move. New packages (no released
-/// version to go back to) and multiversion packages (e.g. the kernel, whose
-/// update version legitimately stays installed alongside older ones) always
-/// appear here; re-running `downgrade` will not clear them.
+/// Re-queries each host, rotates `before = after; after = current` per package,
+/// then names every package still `current >= required` at ERROR — with no
+/// short-circuit, so the bookkeeping advances for the ones that did move. New
+/// packages (no released version to go back to) and multiversion packages (e.g.
+/// the kernel) always appear here; re-running `downgrade` will not clear them.
 ///
 /// Returns the `hostname -> ["name (at <current>, update ships <required>)", …]`
-/// map of packages still at or above the update version — empty on a fully
-/// completed rollback. Iterated in sorted hostname order (the group's own
-/// ordering) so the log is deterministic.
+/// map, empty on a completed rollback, in sorted hostname order.
 ///
-/// `probe_dead` names the hosts whose version probe never answered, and the
-/// all-clear is withheld while it is non-empty. Nothing was downgraded on those
-/// hosts, and this verdict cannot speak for them either: it flags a package only
-/// when the loaded report carries a `required` version to compare against, so on
-/// a standalone `downgrade` — or for a package outside the report's list — an
-/// unmeasured host produces the same empty map a completed rollback does.
-/// Logging `done` over it is the silent success of issue #451 restated one layer
-/// up. The hosts are named at WARN instead; the command's own failure is raised
-/// by the caller.
+/// The all-clear is withheld while `probe_dead` is non-empty: this verdict
+/// flags a package only when the report carries a `required` version, so on a
+/// standalone `downgrade` an unmeasured host yields the same empty map a
+/// completed rollback does, and logging `done` over it would restate #451's
+/// silent success one layer up. Those hosts are named at WARN instead.
 async fn downgrade_verdict(
     targets: &mut HostsGroup,
     probe_dead: &BTreeSet<String>,
 ) -> BTreeMap<String, Vec<String>> {
-    // Query every host's versions concurrently via the shared fan-out, then
-    // run the pure verdict scan below.
     targets.query_versions().await;
 
     let mut not_downgraded: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for target in targets.targets_mut() {
         let hostname = target.hostname().to_owned();
         for pkg in target.packages_mut() {
-            // #396: rotate the whole check, not just its version — a
-            // never-checked after slot must not land in the before slot as
-            // "checked, not installed", or a standalone downgrade (no prior
-            // update) exports "is not installed" for a slot nobody looked at.
+            // Rotate the whole check, not just its version: a never-checked
+            // slot must not land in the next one as "checked, not installed",
+            // or a standalone downgrade exports "is not installed" for a slot
+            // nobody looked at (#396, and #437 for `current` -> `after`).
             pkg.set_before_check(pkg.after_check().clone());
-            // #437: same for `current` -> `after` — a host the re-query never
-            // answered for must not land in `after` as "checked, not
-            // installed" either.
             pkg.set_after_check(pkg.current_check().clone());
             if let (Some(current), Some(required)) = (pkg.current(), pkg.required())
                 && current >= required
@@ -1782,8 +1538,8 @@ async fn downgrade_verdict(
     }
 
     if not_downgraded.is_empty() {
-        // Only when every host was actually measured. A dead probe leaves this
-        // map empty for the same reason a completed rollback does.
+        // Only when every host was measured: a dead probe leaves this map empty
+        // for the same reason a completed rollback does.
         if probe_dead.is_empty() {
             tracing::info!("done");
         }
@@ -1812,8 +1568,7 @@ async fn downgrade_verdict(
 /// accepted-status notes print to this same stream — see
 /// [`crate::update_workflow::actions::downgrade`] § "The notes share a stream
 /// with the parser". `pub(crate)` so the test pinning that coupling can put the
-/// real script's real output through the real parser, instead of
-/// re-implementing the rule and then pinning its copy.
+/// real script's output through the real parser.
 pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
     use mtui_types::rpmver::RPMVersion;
 
@@ -1847,17 +1602,12 @@ pub(crate) fn parse_downgrade_versions(output: &str) -> HashMap<String, String> 
 /// Runs the full update: prepare, patch, check, reboot, and repo cleanup.
 ///
 /// `packages` is the report's package list; `maintenance_id`/`review_id` build
-/// the `$repa` selector. `id` is the RRID string recorded in the remote
-/// history line once the update has dispatched a command (`None` when no RRID
-/// is available, e.g. a direct call with no report). `noprepare` skips the
-/// initial prepare; `newpackage` runs a testing prepare after the update.
-/// `prepare` is the closure the caller uses to run [`perform_prepare`] (the
-/// report drives it so this module does not need to know the report type).
-/// `diagnostics` collects the update check's recognised-but-non-fatal output
-/// sections for the command layer to render.
-// Plain positional args plus the diagnostic sink threaded from the
-// display-owning command layer; grouping them into a struct would only
-// obscure the call site for no real gain.
+/// the `$repa` selector. `id` is the RRID recorded in the remote history line
+/// once a command has dispatched (`None` for a direct call with no report).
+/// `noprepare` skips the initial prepare; `newpackage` runs a testing prepare
+/// after the update. `diagnostics` collects the update check's
+/// recognised-but-non-fatal output sections for the command layer.
+// Grouping these into a struct would only obscure the call site.
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_update(
     targets: &mut HostsGroup,
@@ -1880,12 +1630,10 @@ pub async fn perform_update(
     }
 
     if !noprepare {
-        // Runs prepare with default flags (remove-repo prepare). A prepare
-        // that could not run (missing preparer, contended lock, or the issue
-        // repo could not be set) aborts here rather than patching hosts on a
-        // broken premise; `--noprepare` opts out. A prepare that ran but only
-        // reported a host failure is too noisy to gate on (see
-        // `PrepareFailure`), so it warns and the update proceeds.
+        // Default flags (remove-repo prepare). A prepare that could not run
+        // aborts rather than patching hosts on a broken premise; `--noprepare`
+        // opts out. One that ran and only reported a host failure is too noisy
+        // to gate on (see `PrepareFailure`), so it warns and the update goes on.
         match perform_prepare_classified(targets, report, packages, false, false, false).await {
             Ok(()) => {}
             Err(PrepareFailure::DidNotRun(e)) => return Err(UpdateFailure::Prepare(e)),
@@ -1911,31 +1659,25 @@ pub async fn perform_update(
     let (commands, reboot) = match build_update_maps(targets, &registry, &repa, &joined) {
         Ok(maps) => maps,
         Err(e) => {
-            // A missing updater doer: remove the repo we just added and abort.
-            // Treated as a hard failure (rather than logged and returned as
-            // success) so it never reports "finished".
+            // Remove the repo we just added and abort. A hard failure rather
+            // than a logged success, so it never reports "finished".
             targets.fanout_set_repo(RepoOp::Remove, report).await;
             warn_on_unlock_failures("update", &targets.unlock().await);
             return Err(UpdateFailure::MissingUpdater(e));
         }
     };
 
-    // Last checkpoint before the point of no return: past this line the patch
-    // command is dispatched and a cancel could leave a half-applied
-    // transaction, so cancellation is NOT checked again inside or after the run
-    // phase — the flow finishes its bookkeeping instead. Undo the repo add and
-    // the lock exactly as the MissingUpdater abort above does.
+    // Last checkpoint before the point of no return: past this line a cancel
+    // could leave a half-applied transaction, so cancellation is NOT checked
+    // again inside or after the run phase — the flow finishes its bookkeeping
+    // instead. Fan-outs are never interrupted part-way, so the cleanup below
+    // genuinely undoes the repo add and the lock.
     if targets.cancel_requested() {
         tracing::info!("cancelled: stopping before the update command was dispatched");
-        // The cleanup runs to completion: fan-outs are never interrupted
-        // part-way, so this genuinely removes the repo and releases the lock
-        // on every host (the same undo the MissingUpdater abort performs).
         targets.fanout_set_repo(RepoOp::Remove, report).await;
         warn_on_unlock_failures("update", &targets.unlock().await);
-        // True of the *update command* — but with a prepare behind us the host
-        // is not untouched, and saying only "nothing was dispatched" reads as
-        // if it were. The repo add is undone above; a completed prepare's
-        // packages are not, and its own history row is the record of them.
+        // With a prepare behind us the host is not untouched: the repo add is
+        // undone, a completed prepare's packages are not.
         return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
             if noprepare {
                 "cancelled before the update command was dispatched".to_owned()
@@ -1949,8 +1691,8 @@ pub async fn perform_update(
     }
 
     // Two-phase: run + check + reboot under the lock (unlock always), then the
-    // repo cleanup only on success. The history row is written inside, between
-    // the fan-out and the reboot — see `update_run_phase`.
+    // repo cleanup only on success. The history row is written inside
+    // `update_run_phase`, between the fan-out and the reboot.
     let update_result = update_run_phase(
         targets,
         &registry,
@@ -1963,7 +1705,6 @@ pub async fn perform_update(
     .await;
 
     if let Err(e) = update_result {
-        // KEEP the test update repositories in place for retry/diagnosis.
         warn!(
             "update did not complete; leaving the test update repositories in place \
              for retry/diagnosis (remove later with `set_repo --remove`)"
@@ -1987,7 +1728,7 @@ pub async fn perform_update(
 ///
 /// Best-effort: a lock failure here does not turn a successful update into a
 /// failed one, so it warns — naming the error, that the repos are left
-/// configured, and the manual remedy — rather than failing the update.
+/// configured, and the manual remedy.
 async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
     if let Err(e) = targets.update_lock().await {
         warn!(
@@ -1999,10 +1740,9 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
         return;
     }
     targets.fanout_set_repo(RepoOp::Remove, report).await;
-    // The lock succeeded but the removal command itself may still have failed
-    // on a host — issue #409's actual complaint (a stale test repo) can happen
-    // silently here too, not only on a lock failure. The noisy stderr rule is
-    // fine for a warn, unlike the gate `PrepareFailure` avoids it for.
+    // The lock succeeded but the removal command may still have failed on a
+    // host — #409's complaint (a stale test repo) can happen silently here too,
+    // not only on a lock failure. The noisy stderr rule is fine for a warn.
     let failures = host_command_failures(targets, "failed to remove the test update repo");
     if !failures.is_empty() {
         let hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
@@ -2020,18 +1760,12 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
 ///
 /// Returns `Ok(())` when every host's check passed and every transactional
 /// host's reboot took effect — reconnecting is not sufficient, since a host can
-/// answer without ever having gone down. Otherwise `Err` with the aggregated
-/// failure: a check failure (packages may be half-applied) is
-/// [`UpdateFailure::Check`] and **suppresses the reboot entirely** — unless no
-/// failed host is one a rollback could repair, which is
-/// [`UpdateFailure::ProbeFailed`] when every one of them reported that it
-/// could not determine what to patch and [`UpdateFailure::NotRun`] when the
-/// command never completed there (`lastexit()` of `-1`); both skip the
-/// rollback. A reboot
-/// failure is [`UpdateFailure::Reboot`] when the host is unreachable and
-/// [`UpdateFailure::RebootNotTaken`] when every failed host is still reachable,
-/// which is what decides whether the group-wide rollback runs. A single failure is returned verbatim; more than
-/// one is summarised into `"update failed on {hosts} ({detail})"`.
+/// answer without ever having gone down.
+///
+/// Otherwise `Err` with the aggregated failure, which **suppresses the reboot
+/// entirely** on a check failure. The [`UpdateFailure`] variant is what routes
+/// the caller's rollback; a single failure is returned verbatim, more than one
+/// is summarised into `"update failed on {hosts} ({detail})"`.
 async fn update_run_phase(
     targets: &mut HostsGroup,
     registry: &WorkflowRegistry,
@@ -2043,11 +1777,9 @@ async fn update_run_phase(
 ) -> Result<(), UpdateFailure> {
     targets.run(Command::PerHost(commands)).await;
 
-    // The updater command has now dispatched, whatever the verdict: record the
-    // history row here — after the run started, but *before* the reboot. A
-    // transactional host that never comes back cannot be written to
-    // afterwards, and the row would be lost on exactly the host whose state an
-    // operator most needs to reconstruct.
+    // Recorded after the run started but *before* the reboot: a transactional
+    // host that never comes back cannot be written to afterwards, and that is
+    // the host whose state an operator most needs to reconstruct.
     add_op_history(targets, "update", id, packages).await;
 
     let failures = run_checks(targets, registry, Role::Update, diagnostics);
@@ -2068,32 +1800,16 @@ async fn update_run_phase(
     // A check failure keeps precedence and suppresses the reboot entirely: a
     // transactional host whose patch failed must not be rebooted into it.
     let result = if !failures.is_empty() {
-        // Route on *why* the check failed, as the reboot arm below routes on
-        // why the reboot failed — though not by its reachability probe: `-1`
-        // is a sentinel, not a liveness verdict. `Target::run` records it for
-        // a dropped connection, an unconnected target, *and* a timeout on a
-        // host that is up the whole time. The first two are hosts a group-wide
-        // rollback cannot repair, so it would only revert the healthy ones on
-        // their behalf; the third is a host whose transaction was never
-        // observed to end, where a downgrade dispatched now races whatever is
-        // left of it for the package-manager lock. All three veto the
-        // rollback — `UpdateFailure::NotRun` carries the full argument.
+        // `-1` and a probe failure both veto the rollback
+        // (`UpdateFailure::NotRun` / `ProbeFailed` carry the arguments). The
+        // probe verdict is a typed flag rather than re-derived here; matching
+        // the reason string would be the first place in the tree where control
+        // flow read a message's text.
         //
-        // A probe failure is the third non-rolling cause, and the one the
-        // rollback is *least* entitled to fire on: the host ran the update
-        // command and reported that it could not work out what to patch, so it
-        // never dispatched a patch at all. Its packages are what they were
-        // before the flow started. It is carried as a typed flag on the error
-        // rather than re-derived here — the alternative, matching the reason
-        // string, would be the first place in the tree where control flow
-        // depended on a reason's text.
-        //
-        // The rollback question is one bit — "can a group-wide downgrade
-        // repair any host that failed?" — so it is asked that way: `any`
-        // repairable host routes `Check`, exactly as before (a run that mixes
-        // a lost host with a genuine check failure still rolls back, on behalf
-        // of the host the rollback can actually repair). Only the *label* on
-        // the non-repairable runs is split further.
+        // The rollback question is one bit — "can a group-wide downgrade repair
+        // *any* host that failed?" — so a run mixing a lost host with a genuine
+        // check failure still rolls back, on behalf of the repairable host.
+        // Only the label on the non-repairable runs is split further.
         let repairable = |e: &UpdateError| {
             !e.probe_failed
                 && e.host
@@ -2112,17 +1828,8 @@ async fn update_run_phase(
         aggregate_failures("update", failures).map_err(wrap)
     } else {
         let reboot_failures = reboot_transactional(targets, reboot).await;
-        // Route the rollback on *why* the reboot failed, not on the fact that
-        // it did. A host that never came back cannot be downgraded, and the
-        // rollback is group-wide — running it would revert the healthy hosts on
-        // behalf of one this flow cannot reach. A host that is still up, on the
-        // other hand, is running the un-activated snapshot while the rest of the
-        // group moved on, and that is precisely the split-brain the rollback
-        // undoes.
-        //
-        // Mixed causes take the *conservative* route. `all`, not `any`: the
-        // rollback reverts the whole group, so it is only worth running when
-        // every failed host can actually be repaired by it. With one host
+        // Route on *why* the reboot failed, not on the fact that it did (see
+        // `Reboot` vs `RebootNotTaken`). `all`, not `any`: with one host
         // unreachable and one merely inert, rolling back cannot reach the
         // first, leaves the second needing manual work anyway, and reverts the
         // hosts that did everything right. Both are still named in the error.
@@ -2337,9 +2044,8 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_surfaces_missing_preparer() {
-        // A transactional host whose (release, transactional) key has no preparer
-        // doer makes build_reboot_map fail, so prepare returns Err rather than
-        // swallowing.
+        // No preparer doer for this key makes `build_reboot_map` fail, so
+        // prepare returns Err rather than swallowing.
         let mut group = HostsGroup::new(vec![missing_doer_target("h1")], false);
         let res = perform_prepare(
             &mut group,
@@ -2360,8 +2066,7 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_surfaces_per_host_command_failure() {
-        // The preparer install exits 104 on the host; the failure is returned,
-        // not just logged.
+        // The failure is returned, not just logged.
         let (t, _h) = sles_target_with_exit("h1", "", 104);
         let mut group = HostsGroup::new(vec![t], false);
         let res = perform_prepare(
@@ -2391,9 +2096,9 @@ mod tests {
 
     #[tokio::test]
     async fn perform_install_surfaces_a_missing_installer() {
-        // A host whose (release, transactional) key has no installer doer: the
-        // template runs nothing at all. Reporting Ok here is what made `install`
-        // print "install completed" for hosts it never touched.
+        // No installer doer for this key, so the template runs nothing at all.
+        // Reporting Ok here is what made `install` print "install completed"
+        // for hosts it never touched.
         let mut group = HostsGroup::new(vec![missing_doer_target("h1")], false);
         let err = perform_install(&mut group, &["pkg-a".to_owned()])
             .await
@@ -2404,8 +2109,7 @@ mod tests {
             err.reason
         );
         // The bare error names only the role and release, and a host whose
-        // product never parsed has no release — so the message must name the
-        // host the tester has to go fix.
+        // product never parsed has no release.
         assert!(
             err.reason.contains("h1"),
             "the offending host must be named: {}",
@@ -2416,8 +2120,7 @@ mod tests {
     #[tokio::test]
     async fn perform_install_names_the_unresolvable_host_and_product() {
         // An unparsed system yields `MissingInstaller { release: "" }`, whose
-        // Display is "Missing Installer for " — nothing actionable. The whole
-        // group aborts, so the message must say which host caused it.
+        // Display is "Missing Installer for " — nothing actionable.
         let conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
         let t = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
         let (ok, _h) = sles_target("h1", "");
@@ -2495,18 +2198,15 @@ mod tests {
 
     #[tokio::test]
     async fn perform_install_surfaces_a_failed_command() {
-        // A host whose install command exits 104 is reported by the template's
-        // own check — over the same host's post-run snapshot the removed
-        // `install_verdict` used to read *after* the template returned.
+        // The verdict comes from the template's own check.
         let (t, _h) = sles_target_with_exit("h1", "", 104);
         let mut group = HostsGroup::new(vec![t], false);
         let err = perform_install(&mut group, &["pkg-a".to_owned()])
             .await
             .expect_err("non-zero exit surfaces as Err");
         assert_eq!(err.host.as_deref(), Some("h1"));
-        // 104 is zypper's ZYPPER_EXIT_INF_CAP_NOT_FOUND, which the install check
-        // table classifies. The verdict reports *what* went wrong, not just that
-        // the exit was non-zero.
+        // 104 is zypper's ZYPPER_EXIT_INF_CAP_NOT_FOUND: the verdict reports
+        // *what* went wrong, not just that the exit was non-zero.
         assert_eq!(err.reason, "package not found");
     }
 
@@ -2514,9 +2214,8 @@ mod tests {
     /// a cancellation checkpoint.
     ///
     /// The only way to put a cancelled `CheckFailure` on the input of
-    /// `perform_operation_with`, the install/uninstall shared body: the real
-    /// check tables never emit one, so scripting a `MockConnection` cannot
-    /// express this state. Mirrors the provider in
+    /// `perform_operation_with`: the real check tables never emit one, so a
+    /// `MockConnection` cannot express this state. Mirrors the provider in
     /// `crates/mtui-hosts/tests/operation_group.rs`, which pins the same flag
     /// one layer down, at `OperationReport`.
     struct CancellingProvider;
@@ -2541,14 +2240,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_cancelled_check_failure_reaches_the_update_error_with_the_flag_intact() {
-        // The flow half of the seam widening: `OperationReport` carrying the
-        // flag is worth nothing if the map in `perform_operation_with` — the
-        // shared body of `perform_install` / `perform_uninstall` — drops it on
-        // the way into `UpdateError`, which is what it did (hardcoded `false`)
-        // before this branch. One host and an always-cancelling check means
-        // exactly one failure, so `aggregate_failures` takes the verbatim
-        // branch and the flag reaches the caller untouched — the summary
-        // branch deliberately does not carry it.
+        // `OperationReport` carrying the flag is worth nothing if
+        // `perform_operation_with`'s map drops it on the way into
+        // `UpdateError`. One host and an always-cancelling check means exactly
+        // one failure, so `aggregate_failures` takes the verbatim branch — the
+        // summary branch deliberately does not carry the flag.
         let (t, _h) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -2565,9 +2261,8 @@ mod tests {
             err.is_cancelled(),
             "the check stopped at a checkpoint, so the error must say cancelled: {err:?}"
         );
-        // Not just the flag: the rest of the failure has to survive the same
-        // map, or an assertion on `is_cancelled` alone would pass on an error
-        // synthesised anywhere else in the flow.
+        // Not just the flag: an assertion on `is_cancelled` alone would pass on
+        // an error synthesised anywhere else in the flow.
         assert_eq!(err.host.as_deref(), Some("h1"));
         assert_eq!(err.reason, "stopped at a checkpoint");
     }
@@ -2607,10 +2302,9 @@ mod tests {
             res.is_ok(),
             "a stranded lock must not turn a good install into a failure: {res:?}"
         );
-        // `Target::unlock_reporting` already emits its own "unlock failed" WARN
-        // naming `host="h1"` on this exact path, so a bare `logs.contains("h1")`
-        // would pass even if `unlock_failure_message` were never reached — find
-        // this warn's own line and assert on it.
+        // `Target::unlock_reporting` emits its own WARN naming `host="h1"` on
+        // this path, so a bare `logs.contains("h1")` would pass even if
+        // `unlock_failure_message` were never reached.
         let unlock_line = logs
             .lines()
             .find(|l| l.contains("operation lock did not release"))
@@ -2627,8 +2321,7 @@ mod tests {
 
     #[tokio::test]
     async fn install_stops_at_the_entry_gate_when_cancelled() {
-        // install/uninstall had no cancellation checkpoint of their own; a
-        // cancel requested before the run must stop it before any command
+        // A cancel requested before the run must stop it before any command
         // reaches a host, exactly like `perform_update`'s entry gate.
         let (t, handle) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
@@ -2716,13 +2409,13 @@ mod tests {
     }
 
     /// A host lost to its post-operation reboot must still carry its history
-    /// row: the row is the operator's only record that the command ran there,
-    /// and it is needed most on exactly the host that did not come back.
+    /// row: it is the operator's only record that the command ran there, and it
+    /// is needed most on exactly the host that did not come back.
     ///
-    /// This is only observable because `MockConnection::sftp_append` now
-    /// reconnects at entry like the real `SshConnection::sftp()` — before that
-    /// the mock accepted an append on a dead host, so this test would have
-    /// passed whichever side of the reboot the write happened on.
+    /// Only observable because `MockConnection::sftp_append` reconnects at
+    /// entry like the real `SshConnection::sftp()`; a mock that accepted an
+    /// append on a dead host would pass whichever side of the reboot the write
+    /// happened on.
     #[tokio::test]
     async fn install_records_history_for_a_host_lost_to_its_reboot() {
         let (t, handle) = slmicro_target_failing_reconnect("h1");
@@ -2783,9 +2476,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
-        // This call passes `id: None`, so the row carries no RRID field: the
-        // shape is `{ts}:{user}:update:{packages}`. Anchoring on the tail also
-        // pins the package list, which a bare `contains(":update:")` did not.
+        // `id: None`, so the row is `{ts}:{user}:update:{packages}`. Anchoring
+        // on the tail also pins the package list.
         assert!(
             contents.ends_with(":update:pkg-a\n"),
             "history line: {contents:?}"
@@ -2815,9 +2507,8 @@ mod tests {
 
     #[tokio::test]
     async fn downgrade_rollback_still_records_history() {
-        // perform_update_with_rollback's best-effort rollback dispatches a
-        // real downgrade; it must record its own history row like a
-        // directly-invoked downgrade would.
+        // The best-effort rollback dispatches a real downgrade, so it must
+        // record its own history row like a directly-invoked one would.
         let probe = {
             let cmds = crate::update_workflow::actions::downgrade::downgrader("15", false).unwrap();
             let vars: std::collections::HashMap<&str, &str> =
@@ -2897,8 +2588,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
-        // Anchored on the tail: it pins the label *and* the package list. A
-        // bare `contains("prepare")` would also match a package named
+        // Anchored on the tail so it pins the label *and* the package list; a
+        // bare `contains("prepare")` would match a package named
         // `prepare-something` or the `:update:` row's payload.
         assert!(
             contents.ends_with(":prepare:pkg-a pkg-b\n"),
@@ -2942,11 +2633,10 @@ mod tests {
     #[tokio::test]
     async fn prepare_records_history_only_on_the_hosts_it_dispatched_to() {
         // Per host, not group-wide. `build_prepare_map` drops a host whose
-        // release key does not resolve, and `prepare_body` then fails exactly
-        // that host with "nothing was installed". A group-wide history fan-out
-        // would hand the same host a `:prepare:` row — a false entry in a
-        // format the project treats as an interop contract, and one that
-        // contradicts the host's own verdict in the same run.
+        // release key does not resolve and `prepare_body` fails exactly that
+        // host with "nothing was installed", so a group-wide history fan-out
+        // would hand it a `:prepare:` row contradicting its own verdict — in a
+        // format the project treats as an interop contract.
         let (good, good_handle) = sles_target("h1", "");
         // h2: enabled, answers commands, but has no parsed system — so
         // `host_key` resolves nothing and no command is ever built for it.
@@ -2965,15 +2655,14 @@ mod tests {
         )
         .await
         .expect_err("the dropped host must fail the flow");
-        // The contradiction this test exists to prevent, stated from the other
-        // side: h2 is told nothing was installed on it.
+        // The other side of the contradiction: h2 is told nothing was
+        // installed on it.
         assert_eq!(err.host.as_deref(), Some("h2"), "{err}");
         assert!(
             err.to_string().contains("nothing was installed"),
             "cause stated: {err}"
         );
 
-        // The host that was actually dispatched to is on record.
         let contents = String::from_utf8(
             good_handle
                 .file_contents(HISTORY_LOG)
@@ -2986,8 +2675,6 @@ mod tests {
             "history line: {contents:?}"
         );
 
-        // The dropped one is not. Mock-level proof it was never dispatched to,
-        // so the row would be a claim about work that never started.
         assert!(
             bad_handle.commands().is_empty(),
             "no command reached h2: {:?}",
@@ -3006,12 +2693,10 @@ mod tests {
     /// packages that were dispatched, not the whole prepare set.
     ///
     /// Deterministic without a wall clock: under `start_paused` the runtime
-    /// only advances the timer when every task is idle, so the interleaving is
-    /// fixed. Each package's fan-out takes 10ms of virtual time and the
-    /// canceller fires at 15ms: package 0 completes at 10ms, package 1's
-    /// checkpoint passes (the cancel is still 5ms away), the cancel lands at
-    /// 15ms, package 1 completes at 20ms, and package 2's checkpoint breaks the
-    /// loop. Two of four packages dispatched.
+    /// advances the timer only when every task is idle, so the interleaving is
+    /// fixed. Each fan-out takes 10ms of virtual time and the canceller fires
+    /// at 15ms, so package 1's checkpoint still passes and package 2's breaks
+    /// the loop: two of four packages dispatched.
     #[tokio::test(start_paused = true)]
     async fn prepare_cancelled_mid_loop_records_only_the_dispatched_packages() {
         let conn = MockConnection::new("h1")
@@ -3042,9 +2727,8 @@ mod tests {
             .await
             .expect_err("a cancelled prepare reports an error");
         assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
-        // Pins the interleaving itself, so a change that moved the cancel to a
-        // different package would fail here rather than silently re-aiming the
-        // assertion below.
+        // Pins the interleaving, so a change that moved the cancel to another
+        // package fails here rather than re-aiming the assertion below.
         assert_eq!(
             err.reason,
             "prepare cancelled after 2/4 packages; applied: [pkg-a, pkg-b]; \
@@ -3065,8 +2749,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
-        // The whole point: `pkg-c`/`pkg-d` were never attempted, so naming them
-        // would be the same over-claim as a row for a prepare that never ran.
+        // `pkg-c`/`pkg-d` were never attempted, so naming them would be the
+        // same over-claim as a row for a prepare that never ran.
         assert!(
             contents.ends_with(":prepare:pkg-a pkg-b\n"),
             "the row must name only the dispatched packages: {contents:?}"
@@ -3125,11 +2809,10 @@ mod tests {
     ///
     /// The only `RepoOp::Add` in `perform_update` happens after the initial
     /// prepare has dispatched and before the pre-dispatch cancel gate, so this
-    /// reproduces "`job_cancel` during a multi-minute prepare" deterministically,
-    /// with no timing.
+    /// reproduces "`job_cancel` during a multi-minute prepare" with no timing.
     struct CancellingRepo {
         /// Cancels the group's token. A boxed closure rather than the token
-        /// itself so the test double needs no `tokio-util` dependency here.
+        /// itself, so the double needs no `tokio-util` dependency here.
         cancel: Box<dyn Fn() + Send + Sync>,
         ops: std::sync::Mutex<Vec<RepoOp>>,
     }
@@ -3173,8 +2856,8 @@ mod tests {
         let Err(UpdateFailure::Cancelled(err)) = res else {
             panic!("a cancel at the pre-dispatch gate is Err(Cancelled): {res:?}");
         };
-        // Discriminating: the entry gate says "before the update started", so
-        // this pins the *pre-dispatch* gate, the one that runs after prepare.
+        // The entry gate says "before the update started", so this pins the
+        // *pre-dispatch* gate, the one that runs after prepare.
         assert!(
             err.reason
                 .contains("before the update command was dispatched"),
@@ -3199,8 +2882,7 @@ mod tests {
             contents.ends_with(":prepare:pkg-a\n"),
             "history line: {contents:?}"
         );
-        // A row claiming the *update* ran would be worse than none: the update
-        // command never dispatched.
+        // A row claiming the *update* ran would be worse than none.
         assert!(
             !contents.contains(":update:"),
             "no update row may be written when no updater command ran: {contents:?}"
@@ -3210,7 +2892,6 @@ mod tests {
             "the updater command must not have dispatched: {:?}",
             handle.commands()
         );
-        // The undo still runs: the repo the gate added is removed again.
         let ops = repo.ops.lock().unwrap().clone();
         assert!(
             ops.contains(&RepoOp::Add) && ops.last() == Some(&RepoOp::Remove),
@@ -3220,9 +2901,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_cancelled_at_the_gate_under_noprepare_records_nothing() {
-        // Same gate, `--noprepare`: nothing was installed and no updater
-        // command dispatched, so this abort owes no row — and its message must
-        // not invent a prepare residue that cannot exist here.
+        // Same gate under `--noprepare`: this abort owes no row, and its
+        // message must not invent a prepare residue that cannot exist here.
         let (t, handle) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
         let token = group.cancel_token();
@@ -3300,11 +2980,10 @@ mod tests {
 
     #[tokio::test]
     async fn perform_install_accepts_zyppers_informational_exit_codes() {
-        // zypper exits 100-103/106 to mean "update needed", "reboot needed",
-        // "restart needed", "repo skipped" — all *successful* installs. Exit 102
-        // (reboot needed) is routine after a kernel update, so a bare
-        // `lastexit() != 0` scan would report a false failure on a perfectly
-        // good install.
+        // 100-103/106 mean "update needed", "reboot needed", "restart needed",
+        // "repo skipped" — all *successful* installs. 102 is routine after a
+        // kernel update, so a bare `lastexit() != 0` scan would report a false
+        // failure on a perfectly good install.
         for exit in [100, 101, 102, 103, 106] {
             let (t, _h) = sles_target_with_exit("h1", "", exit);
             let mut group = HostsGroup::new(vec![t], false);
@@ -3318,17 +2997,13 @@ mod tests {
 
     #[tokio::test]
     async fn perform_install_reports_the_check_verdict_on_formerly_uncovered_keys() {
-        // The slmicro and YUM keys used to have *no* install check, so they
-        // fell through to the `PlanProvider` adapter's exit-code-only fallback
-        // and every failure read "install command failed" — the same sentence
-        // for a locked update stack, a failed RPM transaction and a command
-        // that never ran (#406). Both keys now carry a check, so the verdict
-        // comes from it.
-        //
-        // Both host shapes are driven because they take different routes into
-        // the same table: SL Micro is transactional (its check shares the
-        // update check's classifier), RHEL is not (its check judges the exit
-        // code alone).
+        // Without an install check these keys fell through to the
+        // `PlanProvider` adapter's exit-code-only fallback, so a locked update
+        // stack, a failed RPM transaction and a command that never ran all read
+        // "install command failed" (#406). Both host shapes are driven because
+        // they take different routes into the same table: SL Micro is
+        // transactional (its check shares the update check's classifier), RHEL
+        // is not (its check judges the exit code alone).
         for (product, version, transactional) in [("SL-Micro", "6.0", true), ("rhel", "9", false)] {
             let conn = MockConnection::new("h1")
                 .with_default(CommandLog::new("t-u", "", "", 1, 0))
@@ -3343,9 +3018,7 @@ mod tests {
                 transactional,
             );
             let key = host_key(&t).expect("resolvable key");
-            // The guard this test used to carry asserted the *absence* of the
-            // check — it pinned the hole. Inverted: the verdict below is only
-            // the check's if there is one.
+            // The verdict below is only the check's if there is one.
             assert!(
                 WorkflowRegistry::default()
                     .check(Role::Install, &key.0, key.1)
@@ -3367,20 +3040,13 @@ mod tests {
 
     #[tokio::test]
     async fn perform_install_names_the_host_of_an_install_that_never_ran() {
-        // The install/uninstall twin of `perform_prepare_names_the_host_of_a_
-        // prepare_that_never_ran`, and the answer to "does this path double a
-        // `-1` too?": it does not, and this pins that it stays that way.
-        //
-        // The two flows collect failures differently. `prepare_body` runs its
-        // own `host_command_failures` scan alongside the check, so the two
-        // overlap on `-1` and the flow has to suppress one. This path collects
-        // *only* what the `Operation` template reports: exactly one
-        // `check_failures` entry per host plan
-        // (`mtui-hosts::target::operation`, one `push` per plan), plus
-        // `reboot_failures` — which cannot add a second entry for the same
-        // host, because a host whose check failed is removed from the reboot
-        // map before the reboot runs. No exit-code scan runs here at all, so
-        // there is nothing to double with.
+        // The install/uninstall twin of
+        // `perform_prepare_names_the_host_of_a_prepare_that_never_ran`, pinning
+        // that this path does *not* double a `-1`: it collects only what the
+        // `Operation` template reports — one `check_failures` entry per host
+        // plan (`mtui-hosts::target::operation`) plus `reboot_failures`, which
+        // cannot double a host because a failed check removes it from the
+        // reboot map first. Unlike `prepare_body`, no exit-code scan runs here.
         for (product, version, transactional) in [("SL-Micro", "6.0", true), ("rhel", "9", false)] {
             let conn = MockConnection::new("h1")
                 .with_default(CommandLog::new("", "", "", -1, 0))
@@ -3411,15 +3077,12 @@ mod tests {
 
     #[test]
     fn aggregate_failures_carries_the_typed_flags_through_the_summary() {
-        // The single-failure path returns the error verbatim, flags and all;
-        // the summary path builds a fresh one, so without care the flags exist
-        // on one path and vanish on the other. They are the declared routing
-        // contract — `reports::update_flow` routes on `probe_failed`, and the
-        // command layer reports `cancelled` — so a summary that drops them is a
-        // summary that lies about the run.
-        //
-        // `all`, not `any`: a summary claiming "no patch was dispatched" while
-        // one host had dispatched one would be worse than no claim.
+        // The summary path builds a fresh error, so without care the flags
+        // exist on the verbatim path and vanish on this one. They are the
+        // declared routing contract (`reports::update_flow` routes on
+        // `probe_failed`, the command layer reports `cancelled`). `all`, not
+        // `any`: a summary claiming "no patch was dispatched" while one host
+        // had dispatched one would be worse than no claim.
         let err = aggregate_failures(
             "update",
             vec![
@@ -3446,11 +3109,9 @@ mod tests {
             "one host that did dispatch a patch clears the flag: {mixed:?}"
         );
 
-        // `cancelled` is deliberately not summarised: a lone cancelled failure
-        // routes verbatim with the flag, a summary drops it, so a cancel
-        // cannot mask a real failure collected beside it. On what does and
-        // does not produce one, see the `cancelled` comment in
-        // `aggregate_failures` — the authoritative statement lives there.
+        // `cancelled` is deliberately not summarised, so a cancel cannot mask
+        // a real failure collected beside it. On what does and does not produce
+        // one, see the `cancelled` comment in `aggregate_failures`.
         let cancelled = aggregate_failures(
             "update",
             vec![
@@ -3483,12 +3144,11 @@ mod tests {
     fn aggregate_failures_names_each_host_once() {
         // One host can legitimately contribute two failures with two distinct
         // causes: `downgrade_body` seeds its list from the issue-repo removal
-        // scan and then adds that same host's downgrade-check verdict.
-        // Undeduped, the roll-call read "downgrade failed on h1, h1", which
-        // names one host as two. (The prepare flow's own overlap — one signal,
-        // two rules — is resolved upstream of here instead, in `prepare_body`:
-        // deduping a roll-call would not have restored the `host` field the
-        // summary branch drops.)
+        // scan and then adds that host's downgrade-check verdict. Undeduped the
+        // roll-call reads "downgrade failed on h1, h1". (The prepare flow's own
+        // overlap — one signal, two rules — is resolved upstream in
+        // `prepare_body` instead: deduping a roll-call would not restore the
+        // `host` field the summary branch drops.)
         let err = aggregate_failures(
             "downgrade",
             vec![
@@ -3504,8 +3164,8 @@ mod tests {
             "one host, named once: {}",
             err.reason
         );
-        // Both causes still reach the operator — this dedups the roll-call,
-        // not the diagnosis.
+        // Both causes still reach the operator: this dedups the roll-call, not
+        // the diagnosis.
         assert!(
             err.reason.contains("h1: failed to remove issue repo")
                 && err
@@ -3514,8 +3174,7 @@ mod tests {
             "both causes survive: {}",
             err.reason
         );
-        // And distinct hosts are still listed separately: a dedup that
-        // collapsed them would hide a host.
+        // A dedup that collapsed distinct hosts would hide one.
         let err = aggregate_failures(
             "prepare",
             vec![
@@ -3554,9 +3213,8 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        // noprepare=true keeps the flow to update + checks; the report drives the
-        // repo fan-out through its own (real) set_repo, which no-ops with an
-        // empty update_repos map.
+        // noprepare=true keeps the flow to update + checks; the report's real
+        // `set_repo` no-ops with an empty `update_repos` map.
         let res = perform_update(
             &mut group,
             &report,
@@ -3571,7 +3229,6 @@ mod tests {
         .await;
         assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
-        // The updater command interpolates the `$repa` selector `:p=42:7`.
         let cmds = handle.commands();
         assert!(
             cmds.iter().any(|c| c.contains(":p=42:7")),
@@ -3581,9 +3238,8 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_aborts_cleanly_when_no_updater_doer() {
-        // An unknown release has no updater doer. mtui treats this as a hard
-        // fail: Err(MissingUpdater), no updater command issued, and the repo the
-        // flow added is removed on the abort path.
+        // An unknown release has no updater doer: a hard fail, no updater
+        // command issued, and the repo the flow added removed on the abort path.
         let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
         let handle = conn.clone();
         let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
@@ -3634,9 +3290,8 @@ mod tests {
             ops.contains(&RepoOp::Remove),
             "abort removes the repo: {ops:?}"
         );
-        // #407's other half: this abort is *correct* to stay silent. With
-        // `noprepare` nothing was installed and no updater command dispatched,
-        // so the fix must not make this path write a row either.
+        // #407's other half: with `noprepare` nothing was installed and no
+        // updater command dispatched, so this abort is correct to stay silent.
         assert!(
             handle.file_contents(HISTORY_LOG).is_none(),
             "an abort that dispatched nothing must leave no row: {:?}",
@@ -3648,8 +3303,6 @@ mod tests {
 
     #[tokio::test]
     async fn perform_downgrade_resolves_version_and_issues_per_package_command() {
-        // The list_command output feeds the version resolver; the downgrade then
-        // targets the resolved version.
         let (t, handle) = sles_target("h1", "pkg-a = 1.0-1\n");
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -3682,8 +3335,7 @@ mod tests {
 
     #[tokio::test]
     async fn perform_downgrade_dead_probe_aborts() {
-        // A dead version probe (exit -1 for every command) aborts instead of
-        // "completing" with zero downgrade commands run.
+        // Aborts instead of "completing" with zero downgrade commands run.
         let (t, handle) = sles_target_with_exit("h1", "", -1);
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -3691,7 +3343,6 @@ mod tests {
         let err = res.expect_err("a dead probe must abort");
         assert_eq!(err.reason, "package version probe failed");
         assert_eq!(err.host.as_deref(), Some("h1"));
-        // No downgrade command was built (only the failing probe ran).
         assert!(
             !handle.commands().iter().any(|c| c.contains("--oldpackage")),
             "no downgrade command may run after a dead probe: {:?}",
@@ -3711,7 +3362,6 @@ mod tests {
         let err = res.expect_err("a partial dead probe still fails the command");
         assert_eq!(err.reason, "package version probe failed");
         assert_eq!(err.host.as_deref(), Some("h2"));
-        // The healthy host rolled back to the resolved version.
         assert!(
             h1.commands()
                 .iter()
@@ -3719,16 +3369,13 @@ mod tests {
             "healthy host must roll back: {:?}",
             h1.commands()
         );
-        // The dead host built no downgrade command.
         assert!(
             !h2.commands().iter().any(|c| c.contains("--oldpackage")),
             "dead host must build no downgrade command: {:?}",
             h2.commands()
         );
-        // Not every probe died, so the all-dead abort must not fire: the flow
-        // reaches the single post-dispatch history site and writes exactly one
-        // downgrade row. An abort-site write that escaped its `if` would show
-        // up here as two.
+        // Not every probe died, so the all-dead abort must not fire: exactly one
+        // downgrade row. An abort-site write that escaped its `if` shows as two.
         let contents = String::from_utf8(
             h1.file_contents(HISTORY_LOG)
                 .expect("the healthy host's row"),
@@ -3766,17 +3413,11 @@ mod tests {
     /// A SLES 15 target whose **version probe** answers `exit`, with the
     /// marker line the guarded template prints on stdout.
     ///
-    /// That pairing is what the rendered probe actually produces when
-    /// `zypper -n se` fails — pinned end-to-end against a real `/bin/sh` in
-    /// `actions::downgrade`'s `rendered_script` module, which is where it *can*
-    /// be pinned: `MockConnection` scripts one outcome per command string and
-    /// cannot run a shell. Replaying it here is what lets the flow's *routing*
-    /// be tested.
-    ///
-    /// Scripted per command rather than through `with_default`, so the failure
-    /// is attributable to the probe: a mock answering every command alike would
-    /// leave nothing to attribute, and every other command on this host answers
-    /// cleanly.
+    /// That pairing is what the rendered probe produces when `zypper -n se`
+    /// fails; `MockConnection` cannot run a shell, so it is pinned end-to-end
+    /// in `actions::downgrade`'s `rendered_script` module and only replayed
+    /// here, to test the flow's *routing*. Scripted per command rather than
+    /// through `with_default`, so the failure is attributable to the probe.
     fn sles_target_with_probe_exit(
         hostname: &str,
         packages: &[String],
@@ -3812,18 +3453,14 @@ mod tests {
 
     #[tokio::test]
     async fn perform_downgrade_probe_nonzero_exit_is_a_dead_probe() {
-        // Issue #451. Before the guard, a refused `zypper -n se` status could
-        // not reach this gate at all: the probe was a pipeline, so the recorded
-        // status was awk's, and awk exits 0 on empty input. Now the template
-        // exits with the failed tool's own status, and *any* non-zero status is
-        // a dead probe — the `-1` SSH sentinel the two tests above use is only
-        // one of its values, so a predicate narrowed to `c == -1` would still
-        // pass them.
+        // #451: the guarded template exits with the failed tool's own status,
+        // so *any* non-zero status is a dead probe. The `-1` SSH sentinel the
+        // two tests above use is only one of its values, so a predicate
+        // narrowed to `c == -1` would still pass them.
         //
-        // Per host, deliberately: h1 is what the rollback exists for. Aborting
-        // the whole group over h2's broken zypper would strand every healthy
-        // peer half-applied — the opposite of the update's own probe failure,
-        // where nothing had been applied yet.
+        // Per host, deliberately: aborting the whole group over h2's broken
+        // zypper would strand every healthy peer half-applied — the opposite of
+        // the update's own probe failure, where nothing had been applied yet.
         let packages = vec!["pkg-a".to_owned()];
         let (t1, h1) = sles_target("h1", "pkg-a = 1.0-1\n");
         let (t2, h2, list) = sles_target_with_probe_exit("h2", &packages, 7);
@@ -3840,7 +3477,6 @@ mod tests {
         let err = res.expect_err("a probe that refused its status must fail the command");
         assert_eq!(err.reason, "package version probe failed");
         assert_eq!(err.host.as_deref(), Some("h2"));
-        // The healthy host still rolled back — that is what the recovery is for.
         assert!(
             h1.commands()
                 .iter()
@@ -3857,12 +3493,10 @@ mod tests {
 
     #[tokio::test]
     async fn downgrade_verdict_withholds_done_when_a_probe_died() {
-        // The all-clear must be unreachable on a host where no downgrade
-        // command ran. `downgrade_verdict` names a package only when the report
-        // carries a `required` version to compare against; on a standalone
-        // downgrade there is none, so with a dead probe the map came back empty
-        // and `done` was logged over a host nobody had measured — while the
-        // command failed. An operator reading the transcript saw both.
+        // `downgrade_verdict` names a package only when the report carries a
+        // `required` version; on a standalone downgrade there is none, so a
+        // dead probe leaves the map empty and `done` would be logged over a
+        // host nobody measured — while the command failed.
         let packages = vec!["pkg-a".to_owned()];
         let (t1, _h1) = sles_target("h1", "pkg-a = 1.0-1\n");
         let (t2, _h2, _list) = sles_target_with_probe_exit("h2", &packages, 7);
@@ -3873,9 +3507,8 @@ mod tests {
 
         let err = res.expect_err("a dead probe still fails the command");
         assert_eq!(err.reason, "package version probe failed");
-        // The capture layer renders a message unquoted, so this is `== "done"`
-        // and not `contains("\"done\"")` — which would have matched nothing at
-        // all and passed however the code behaved.
+        // The capture layer renders a message unquoted, so this is `== "done"`;
+        // `contains("\"done\"")` would match nothing and pass regardless.
         assert!(
             !logs.lines().any(|l| l == "done"),
             "the all-clear must be withheld while a host's state is unverified: {logs}"
@@ -3888,10 +3521,9 @@ mod tests {
             unverified.contains("h2"),
             "the warning must name the host whose state is unknown: {unverified}"
         );
-        // And the per-host ERROR says what happened to the host, not what the
-        // flow did next: "skipping downgrade on this host" reads as a step that
-        // was omitted, where the operator needs to know this host still carries
-        // the update.
+        // The per-host ERROR says what happened to the host, not what the flow
+        // did next: the operator needs to know this host still carries the
+        // update, not that a step was omitted.
         let named = logs
             .lines()
             .find(|l| l.contains("was not downgraded"))
@@ -3904,9 +3536,8 @@ mod tests {
 
     #[tokio::test]
     async fn downgrade_verdict_names_packages_still_at_update_version() {
-        // Re-query returns pkg-a still at 1.5-1, which is the update's `required`
-        // version ⇒ current >= required ⇒ named as not-downgraded. The
-        // bookkeeping still rotates before/after for it.
+        // current >= required ⇒ named as not-downgraded, while the bookkeeping
+        // still rotates before/after for it.
         let (mut t, _h) = sles_target("h1", "pkg-a 1.5-1\n");
         let mut pkg = mtui_types::package::Package::new("pkg-a");
         pkg.set_required(Some("1.5-1")).unwrap();
@@ -3920,7 +3551,6 @@ mod tests {
             not_downgraded.get("h1").map(Vec::as_slice),
             Some(&["pkg-a (at 1.5-1, update ships 1.5-1)".to_owned()][..])
         );
-        // Bookkeeping advanced: before <- old after, after <- re-queried current.
         let p = &group.get("h1").unwrap().packages()[0];
         assert_eq!(
             p.before().map(ToString::to_string).as_deref(),
@@ -3931,11 +3561,9 @@ mod tests {
 
     #[tokio::test]
     async fn downgrade_verdict_rotation_keeps_an_unchecked_slot_unchecked() {
-        // #396: on a standalone downgrade there was no prior `update`, so the
-        // after slot was never checked. Rotating it into the before slot must
-        // carry that across — turning it into "checked, not installed" would
-        // make the export claim the package was absent before a rollback
-        // nobody measured.
+        // #396: with no prior `update` the after slot was never checked, and
+        // rotating it in as "checked, not installed" would make the export
+        // claim the package was absent before a rollback nobody measured.
         let (mut t, _h) = sles_target("h1", "pkg-a 0.9-1\n");
         let mut pkg = mtui_types::package::Package::new("pkg-a");
         pkg.set_required(Some("1.5-1")).unwrap();
@@ -3978,8 +3606,7 @@ mod tests {
 
     #[tokio::test]
     async fn downgrade_verdict_no_short_circuit_names_every_host() {
-        // Two hosts each still at the update version: BOTH are named, not
-        // just the first — there is no short-circuit.
+        // BOTH are named, not just the first — there is no short-circuit.
         let (mut t1, _h1) = sles_target("h1", "pkg-a 2.0-1\n");
         let mut p1 = mtui_types::package::Package::new("pkg-a");
         p1.set_required(Some("2.0-1")).unwrap();
@@ -3998,8 +3625,7 @@ mod tests {
 
     #[tokio::test]
     async fn downgrade_verdict_done_when_below_required() {
-        // Re-query returns 0.9-1, below the update's required 1.5-1 ⇒ rolled back
-        // ⇒ not named; the map is empty ⇒ "done".
+        // 0.9-1 is below the required 1.5-1 ⇒ rolled back ⇒ not named ⇒ "done".
         let (mut t, _h) = sles_target("h1", "pkg-a 0.9-1\n");
         let mut pkg = mtui_types::package::Package::new("pkg-a");
         pkg.set_required(Some("1.5-1")).unwrap();
@@ -4010,7 +3636,6 @@ mod tests {
         let not_downgraded = downgrade_verdict(&mut group, &BTreeSet::new()).await;
 
         assert!(not_downgraded.is_empty(), "{not_downgraded:?}");
-        // Bookkeeping still advanced.
         let p = &group.get("h1").unwrap().packages()[0];
         assert_eq!(
             p.before().map(ToString::to_string).as_deref(),
@@ -4022,9 +3647,9 @@ mod tests {
     /// Builds an enabled SL Micro (transactional) target on a mock returning
     /// `stdout` with `exit` for every command.
     fn slmicro_target(hostname: &str, stdout: &str, exit: i16) -> (Target, MockConnection) {
-        // A changing boot id models a host that really rebooted. Without it
-        // both probes read the same and the lifecycle correctly concludes the
-        // host never went down — see `RebootFault::WentNowhere` for that.
+        // A changing boot id models a host that really rebooted; without it the
+        // lifecycle correctly concludes it never went down (see
+        // `RebootFault::WentNowhere`).
         let conn = MockConnection::new(hostname)
             .with_default(CommandLog::new("", stdout, "", exit, 0))
             .with_changing_boot_id();
@@ -4043,10 +3668,10 @@ mod tests {
 
     /// A transactional SL-Micro target whose commands answer with `stderr`.
     ///
-    /// The update check for `("slmicro", true)` reads the stdout/stderr markers
-    /// *and* the exit code; this fixture exercises the marker half, so it
-    /// answers exit `0` and leaves the failure signal entirely in `stderr` —
-    /// which is also the shape of the failure the exit code alone would miss.
+    /// The `("slmicro", true)` check reads the stdout/stderr markers *and* the
+    /// exit code; this fixture exercises the marker half by answering exit `0`
+    /// and leaving the failure signal entirely in `stderr` — the shape the exit
+    /// code alone would miss.
     fn slmicro_target_with_stderr(hostname: &str, stderr: &str) -> (Target, MockConnection) {
         let conn = MockConnection::new(hostname)
             .with_default(CommandLog::new("", "", stderr, 0, 0))
@@ -4079,11 +3704,10 @@ mod tests {
     /// A transactional SL-Micro target whose reboot fails in one of the three
     /// distinguishable ways, wired so a rollback *would* render if one ran.
     ///
-    /// The stdout matters: a mock answering `""` makes the downgrade version
-    /// probe yield nothing, so `combined` stays empty and **no downgrade
-    /// command is ever built** — which silently turns any "assert no
-    /// `--oldpackage`" into a test that cannot fail. Answering with a parseable
-    /// `pkg = version` line is what makes those assertions real.
+    /// The stdout matters: a mock answering `""` makes the version probe yield
+    /// nothing, so `combined` stays empty, **no downgrade command is ever
+    /// built**, and any "assert no `--oldpackage`" becomes a test that cannot
+    /// fail. A parseable `pkg = version` line is what makes those real.
     fn slmicro_reboot_failure(hostname: &str, how: RebootFault) -> (Target, MockConnection) {
         let conn = MockConnection::new(hostname).with_default(CommandLog::new(
             "",
@@ -4118,9 +3742,8 @@ mod tests {
 
     #[tokio::test]
     async fn perform_install_reports_a_transactional_host_that_never_reconnects() {
-        // The install itself succeeds (exit 0), but the post-reboot reconnect
-        // never comes back: the whole point of this fix is that mtui must not
-        // report success on a host it lost.
+        // The install succeeds but the post-reboot reconnect never comes back:
+        // mtui must not report success on a host it lost.
         let (t, _handle) = slmicro_target_failing_reconnect("h1");
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -4133,8 +3756,7 @@ mod tests {
             "reason: {}",
             err.reason
         );
-        // Discriminating: the two reachable causes must not be claimed for a
-        // host that genuinely went away — they route the rollback differently.
+        // Not the reachable causes: they route the rollback differently.
         assert!(
             !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
@@ -4156,8 +3778,7 @@ mod tests {
             "reason: {}",
             err.reason
         );
-        // Discriminating: the two reachable causes must not be claimed for a
-        // host that genuinely went away — they route the rollback differently.
+        // Not the reachable causes: they route the rollback differently.
         assert!(
             !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
@@ -4185,8 +3806,7 @@ mod tests {
             "reason: {}",
             err.reason
         );
-        // Discriminating: the two reachable causes must not be claimed for a
-        // host that genuinely went away — they route the rollback differently.
+        // Not the reachable causes: they route the rollback differently.
         assert!(
             !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
@@ -4208,8 +3828,7 @@ mod tests {
             "reason: {}",
             err.reason
         );
-        // Discriminating: the two reachable causes must not be claimed for a
-        // host that genuinely went away — they route the rollback differently.
+        // Not the reachable causes: they route the rollback differently.
         assert!(
             !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
@@ -4220,9 +3839,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_reports_a_host_that_never_came_back_and_skips_the_rollback() {
-        // A successful patch followed by a dead reconnect must fail as
-        // `UpdateFailure::Reboot` and must NOT trigger the rollback downgrade:
-        // the host is unreachable, so a downgrade cannot run on it.
+        // A successful patch followed by a dead reconnect must NOT trigger the
+        // rollback: the host is unreachable, so a downgrade cannot run on it.
         let (t, handle) = slmicro_target_failing_reconnect("h1");
         let mut group = HostsGroup::new(vec![t], false);
         let mut report = crate::reports::SlReport::new(Config::default());
@@ -4237,18 +3855,16 @@ mod tests {
             "reason: {}",
             err.reason
         );
-        // Discriminating: the two reachable causes must not be claimed for a
-        // host that genuinely went away — they route the rollback differently.
+        // Not the reachable causes: they route the rollback differently.
         assert!(
             !err.reason.contains("never rebooted") && !err.reason.contains("never received"),
             "reason: {}",
             err.reason
         );
 
-        // No downgrade (rollback) command was issued. The fixture answers the
-        // version probe with a parseable line, so a rollback that *did* run
-        // would render `--oldpackage` here — without that, this assertion would
-        // pass no matter how the failure was routed.
+        // The fixture answers the version probe with a parseable line, so a
+        // rollback that *did* run would render `--oldpackage`; without that
+        // this assertion would pass however the failure was routed.
         assert!(
             !handle.commands().iter().any(|c| c.contains("--oldpackage")),
             "a dead host must not trigger a rollback downgrade: {:?}",
@@ -4294,14 +3910,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_timeout_does_not_roll_back_healthy_hosts() {
-        // `Target::run` records -1 for a timeout, a mid-command connection
-        // loss, and an unconnected target — i.e. "the flow could not talk to
-        // this host", not "the patch went wrong". Routing that into the
-        // group-wide rollback would revert every host that patched cleanly on
-        // behalf of one the downgrade cannot reach anyway, which is exactly
-        // what the reboot arm already refuses to do.
-        //
-        // h1's patch times out; h2 patches cleanly.
+        // `-1` means "the flow could not talk to this host", not "the patch
+        // went wrong". Routing it into the group-wide rollback would revert
+        // every host that patched cleanly (h2) on behalf of one the downgrade
+        // cannot reach anyway (h1).
         let (t1, lost_handle) = slmicro_target_with_lost_update("h1");
         let (t2, healthy) = slmicro_target("h2", "pkg-a = 1.0-1\n", 0);
         let mut group = HostsGroup::new(vec![t1, t2], false);
@@ -4324,7 +3936,6 @@ mod tests {
             Some(-1),
             "h1's patch must have recorded the never-ran sentinel"
         );
-        // The point of the test: h2 patched cleanly and must keep its update.
         assert!(
             !healthy
                 .commands()
@@ -4342,10 +3953,9 @@ mod tests {
             lost_handle.commands()
         );
 
-        // And the variant itself, which the rollback wrapper above collapses
-        // to a bare `UpdateError`. Without this the routing is observed only
-        // through its consequence, and `NotRun` could be replaced by any other
-        // non-rolling variant with the whole suite still green.
+        // The variant itself, which the rollback wrapper above collapses to a
+        // bare `UpdateError`: without this `NotRun` could be swapped for any
+        // other non-rolling variant with the suite still green.
         let (t, _) = slmicro_target_with_lost_update("h1");
         let mut group = HostsGroup::new(vec![t], false);
         let report = report_with_rrid();
@@ -4372,10 +3982,9 @@ mod tests {
     #[tokio::test]
     async fn update_rolls_back_when_the_host_never_went_down() {
         // The inverse of the test above, and the reason the cause is carried
-        // rather than flattened: this host is *reachable*. Its patch was staged
-        // into a snapshot that never activated, so it is serving the old
-        // packages while the rest of the group moved on — the split-brain the
-        // rollback exists to undo, and a host the downgrade can actually reach.
+        // rather than flattened: this host is *reachable*, serving the old
+        // packages from a snapshot that never activated while the group moved
+        // on — the split-brain the rollback exists to undo.
         let (t, handle) = slmicro_reboot_failure("h1", RebootFault::WentNowhere);
         let mut group = HostsGroup::new(vec![t], false);
         let mut report = crate::reports::SlReport::new(Config::default());
@@ -4390,8 +3999,8 @@ mod tests {
             "reason: {}",
             err.reason
         );
-        // Discriminating: this is NOT the unreachable case, which skips the
-        // rollback. Asserting the positive alone would pass on either routing.
+        // NOT the unreachable case, which skips the rollback: asserting the
+        // positive alone would pass on either routing.
         assert!(
             !err.reason.contains("did not come back"),
             "reason: {}",
@@ -4406,10 +4015,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_skips_the_rollback_when_any_failed_host_is_unreachable() {
-        // Mixed causes: h1 is gone, h2 is up but never rebooted. The rollback
-        // is group-wide, so running it could not repair h1, would leave h2
-        // needing manual work anyway, and would revert every healthy host in
-        // the group. `all`, not `any` — and both hosts are still named.
+        // Mixed causes: h1 is gone, h2 is up but never rebooted. A group-wide
+        // rollback could not repair h1, would leave h2 needing manual work
+        // anyway, and would revert every healthy host. `all`, not `any` — and
+        // both hosts are still named.
         let (t1, h1) = slmicro_reboot_failure("h1", RebootFault::Unreachable);
         let (t2, h2) = slmicro_reboot_failure("h2", RebootFault::WentNowhere);
         let mut group = HostsGroup::new(vec![t1, t2], false);
@@ -4478,9 +4087,7 @@ mod tests {
         .await;
         assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
-        // The slmicro updater is transactional, so a reboot command is fired
-        // on success; reboot uses fire-and-forget, recorded separately from
-        // the run log.
+        // The reboot is fire-and-forget, recorded separately from the run log.
         let fired = handle.fired_commands();
         assert!(
             fired.iter().any(|c| c.contains("systemctl reboot")),
@@ -4490,20 +4097,13 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_fails_a_transactional_host_whose_stack_is_locked() {
-        // `("slmicro", true)` had an *updater* but no *check*, so `run_checks`
-        // hit its `else { continue }` and the host contributed no verdict at
-        // all: `update` reported success however the patch went. This is the
-        // end-to-end proof the newly registered check is actually reached —
-        // registering it in the table alone would not show that.
-        //
-        // The marker is scripted onto the **patch command specifically**, not
-        // via `with_default`. `perform_update` runs other commands first (the
-        // repo add's trailing `... -n ref`), and a default answering every
-        // command with the marker makes this test pass even with the patch
-        // fan-out deleted — the check then reads the refresh's snapshot. This
-        // test had exactly that hole; verified by deleting
-        // `targets.run(Command::PerHost(commands))` from `update_run_phase`
-        // and watching the old version stay green.
+        // End-to-end proof that the `("slmicro", true)` check is reached:
+        // without one, `run_checks` hits its `else { continue }` and `update`
+        // reports success however the patch went. The marker is scripted onto
+        // the **patch command specifically** because `perform_update` runs
+        // other commands first (the repo add's trailing `… -n ref`), so a
+        // `with_default` marker keeps the test green even with the patch
+        // fan-out deleted — the check then reads the refresh's snapshot.
         let report = report_with_rrid();
         let packages = report.get_package_list();
         let patch = WorkflowRegistry::default()
@@ -4564,11 +4164,8 @@ mod tests {
             "the patch command must have been dispatched: {cmds:?}"
         );
 
-        // And the check failure must suppress the reboot: activating the new
+        // The check failure must suppress the reboot: activating the new
         // snapshot would hide the failed patch behind a healthy-looking boot.
-        // Before the check existed this branch was unreachable for a
-        // transactional host, so #385's "a check failure suppresses the reboot
-        // entirely" comment described a path nothing could take.
         let fired = handle.fired_commands();
         assert!(
             !fired.iter().any(|c| c.contains("systemctl reboot")),
@@ -4596,17 +4193,15 @@ mod tests {
 
     /// A SLES 15 target whose *patch command specifically* answers `exit`.
     ///
-    /// Every other command answers cleanly. This is the fixture shape the
-    /// exit-code rules require: the update template now captures the patch's
-    /// status and re-exits with it, so an exit code scripted via `with_default`
-    /// would be one on *every* command — a state no shell produces, and one
-    /// that keeps a test green with the patch fan-out deleted, because the
-    /// check then reads the repo refresh's snapshot instead.
+    /// Every other command answers cleanly. The update template captures the
+    /// patch's status and re-exits with it, so an exit code scripted via
+    /// `with_default` would be one on *every* command — a state no shell
+    /// produces, and one that keeps a test green with the patch fan-out
+    /// deleted, because the check then reads the repo refresh's snapshot.
     ///
-    /// The default stdout is a resolvable version line so the rollback
-    /// downgrade's version probe succeeds and a rollback, if one is routed,
-    /// actually renders an `--oldpackage` command. Without that, "assert no
-    /// rollback happened" would pass however the failure was routed.
+    /// The default stdout is a resolvable version line, so a routed rollback
+    /// renders an `--oldpackage` command; without it "assert no rollback
+    /// happened" would pass however the failure was routed.
     fn sles_target_with_patch_exit(
         hostname: &str,
         packages: &[String],
@@ -4636,17 +4231,15 @@ mod tests {
     /// marker line on stdout, and the failed probe's own status as the
     /// script's.
     ///
-    /// That pairing is what the rendered template actually produces when
-    /// `zypper -n patches` fails — pinned end-to-end against a real `/bin/sh`
-    /// in `actions::update`'s `rendered_script` module, which is where it can
-    /// be pinned: `MockConnection` scripts one outcome per command string and
-    /// cannot run a shell. Replaying it here is what lets the *routing* be
-    /// tested, and the marker comes from the same constant the check greps
-    /// for, so the two cannot drift apart silently.
+    /// That pairing is what the rendered template produces when
+    /// `zypper -n patches` fails; `MockConnection` cannot run a shell, so it is
+    /// pinned end-to-end in `actions::update`'s `rendered_script` module and
+    /// only replayed here, to test the *routing*. The marker comes from the
+    /// same constant the check greps for, so the two cannot drift silently.
     ///
     /// The default stdout is a resolvable version line, so a rollback that did
-    /// run would render an `--oldpackage` command — without that, "assert no
-    /// rollback happened" would pass however the failure was routed.
+    /// run renders an `--oldpackage` command; without it "assert no rollback
+    /// happened" would pass however the failure was routed.
     fn sles_target_with_probe_failure(
         hostname: &str,
         packages: &[String],
@@ -4681,15 +4274,11 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_routes_a_probe_failure_away_from_the_rollback() {
-        // Issue #447's routing decision. A host that could not work out what
-        // to patch never ran a patch, so its packages are exactly what they
-        // were: there is nothing half-applied for the group-wide rollback
-        // downgrade to repair, and firing it would revert every healthy peer.
-        //
-        // The variant *and* the reason: `ProbeFailed` is the only non-rolling
-        // route reachable from a check failure other than `NotRun`, and the
-        // reason is what tells an operator to look at the repo state rather
-        // than at the host's packages.
+        // #447's routing decision: a host that could not work out what to patch
+        // never ran one, so nothing is half-applied for the group-wide rollback
+        // to repair and firing it would revert every healthy peer. Asserting
+        // the variant *and* the reason — the reason is what tells an operator
+        // to look at the repo state rather than at the host's packages.
         let report = report_with_rrid();
         let packages = report.get_package_list();
         let (t, handle, update) = sles_target_with_probe_failure("h1", &packages);
@@ -4733,11 +4322,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_probe_failure_does_not_roll_back_a_healthy_peer() {
-        // The same decision seen where its blast radius is: through the
-        // rollback wrapper, with a healthy peer in the group. `perform_update_
-        // with_rollback` hands the downgrade the *whole* group, so a probe
-        // failure routed to `Check` would revert h2 — a host that patched
-        // perfectly — on behalf of h1's broken repo configuration.
+        // The same decision where its blast radius is: `perform_update_with_
+        // rollback` hands the downgrade the *whole* group, so a probe failure
+        // routed to `Check` would revert h2 — which patched perfectly — on
+        // behalf of h1's broken repo configuration.
         let mut report = crate::reports::SlReport::new(Config::default());
         seed_rrid_and_package(&mut report);
         let packages = report.get_package_list();
@@ -4766,16 +4354,11 @@ mod tests {
 
     #[tokio::test]
     async fn update_mixed_probe_failure_and_lost_host_routes_not_run_and_skips_the_rollback() {
-        // The case the routing rewrite silently changed, and the one nothing
-        // observed. At HEAD the rule was `all(lastexit == -1)`, so a run mixing
-        // a probe failure with a lost host answered "not every host is `-1`" →
-        // `Check` → the group-wide rollback fired. It should not: neither host
-        // is one a downgrade can repair — h1 never ran a patch, and h2 cannot
-        // be reached.
-        //
-        // The label is `NotRun` rather than `ProbeFailed`: it is the more
-        // conservative of the two, and its claim ("the host's state is
-        // unknown") is true of h2.
+        // Neither host is one a downgrade can repair — h1 never ran a patch,
+        // h2 cannot be reached — so the group-wide rollback must not fire. A
+        // rule of `all(lastexit == -1)` would answer "not every host is `-1`"
+        // and route `Check`. The label is `NotRun` rather than `ProbeFailed`:
+        // the more conservative claim ("state unknown"), which is true of h2.
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
@@ -4798,21 +4381,18 @@ mod tests {
         let Err(UpdateFailure::NotRun(e)) = res else {
             panic!("a probe failure mixed with a lost host returns Err(NotRun): {res:?}");
         };
-        // Both hosts are named — the label is the conservative one, but
-        // neither failure is swallowed.
         assert!(
             e.reason.contains("h1") && e.reason.contains("h2"),
             "both failed hosts are named: {}",
             e.reason
         );
-        // The aggregate does not claim "no patch was dispatched" for a run in
-        // which one host's state is unknown.
+        // No "no patch was dispatched" claim for a run in which one host's
+        // state is unknown.
         assert!(
             !e.probe_failed,
             "a mixed run must not carry the probe-failure flag: {e:?}"
         );
 
-        // And through the rollback wrapper: neither host is downgraded.
         let (t1, h1, _) = sles_target_with_probe_failure("h1", &packages);
         let (t2, h2) = slmicro_target_with_lost_update("h2");
         let mut group = HostsGroup::new(vec![t1, t2], false);
@@ -4833,11 +4413,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_still_rolls_back_when_a_probe_failure_rides_with_a_real_one() {
-        // The other side of the routing rule, and the reason it asks "is *any*
-        // failed host repairable?" rather than "did they all fail the same
-        // way?". h2's patch ran and returned 104, which is the half-applied
-        // state the rollback exists to undo; h1's probe failure must not
-        // downgrade the *verdict* and strand h2 with a failed transaction.
+        // Why the rule asks "is *any* failed host repairable?" rather than "did
+        // they all fail the same way?": h2's 104 is the half-applied state the
+        // rollback exists to undo, and h1's probe failure must not downgrade
+        // the verdict and strand h2 with a failed transaction.
         let mut report = crate::reports::SlReport::new(Config::default());
         seed_rrid_and_package(&mut report);
         let packages = report.get_package_list();
@@ -4849,7 +4428,6 @@ mod tests {
             .perform_update(&mut group, true, false, &mut Vec::new())
             .await
             .expect_err("two failed hosts must not report success");
-        // Both hosts are named, neither reason is swallowed.
         assert!(
             err.reason.contains("could not determine what to patch")
                 && err.reason.contains("package not found"),
@@ -4872,23 +4450,17 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_keeps_repos_on_check_failure() {
-        // exit 104 on the patch command ⇒ the update check flags "package not
-        // found"; the flow must NOT issue a repo-remove (repos kept for retry).
-        //
-        // The 104 is scripted onto the patch alone. It used to ride on
-        // `with_default`, i.e. on every command — which the shell could not
-        // produce even before #400 (the script's status was the cleanup loop's)
-        // and cannot produce now either (it is the patch's).
+        // 104 on the patch ⇒ the check flags "package not found"; the flow must
+        // NOT issue a repo-remove (repos kept for retry). Scripted onto the
+        // patch alone, since the shell cannot produce that status on every
+        // command.
         let report = report_with_rrid();
         let packages = report.get_package_list();
         let (t, handle, patch) = sles_target_with_patch_exit("h1", &packages, 104);
         let mut group = HostsGroup::new(vec![t], false);
 
-        // A recording repo so we can assert no Remove followed the Add.
         let repo = RecordingRepo::default();
 
-        // Drive perform_update with the recording repo as the SetRepo hook by
-        // calling the module fn directly (SlReport delegates to it).
         let res = perform_update(
             &mut group,
             &repo,
@@ -4904,9 +4476,8 @@ mod tests {
         let Err(UpdateFailure::Check(e)) = res else {
             panic!("a failed patch returns Err(Check): {res:?}");
         };
-        // The reason, not just the variant: `Check` is reached by every marker
-        // too, so asserting the variant alone would not show that the *exit
-        // code* was read.
+        // The reason too: `Check` is reached by every marker, so the variant
+        // alone would not show that the *exit code* was read.
         assert_eq!(e.reason, "package not found");
         assert_eq!(e.host.as_deref(), Some("h1"));
 
@@ -4926,15 +4497,13 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_passes_a_host_that_only_needs_a_reboot() {
-        // The carve-out that makes reading the exit code safe at all, asserted
-        // where the blast radius lives. zypper exits 102
-        // (`ZYPPER_EXIT_INF_REBOOT_NEEDED`) after patching a kernel — the
-        // routine outcome of the thing mtui exists to do. Under a bare `!= 0`
-        // rule that host would fail its check, and a check failure hands
-        // `perform_update_with_rollback` the *whole* group: it removes every
-        // host's issue repos, downgrades every host, and rewrites the report's
-        // before/after version slots. One host's healthy 102 would revert the
-        // fleet.
+        // The carve-out that makes reading the exit code safe at all. zypper
+        // exits 102 (`ZYPPER_EXIT_INF_REBOOT_NEEDED`) after patching a kernel —
+        // the routine outcome of the thing mtui exists to do. Under a bare
+        // `!= 0` rule that host would fail its check, and a check failure hands
+        // the rollback the *whole* group: one host's healthy 102 would remove
+        // every host's issue repos, downgrade every host, and rewrite the
+        // report's before/after slots.
         let mut report = crate::reports::SlReport::new(Config::default());
         seed_rrid_and_package(&mut report);
         let packages = report.get_package_list();
@@ -4956,16 +4525,11 @@ mod tests {
             res.is_ok(),
             "exit 102 is 'reboot needed', not a failure: {res:?}"
         );
-        // And nothing was rolled back. `perform_update_with_rollback` hands the
-        // downgrade the *whole* group, so the healthy peer is where a false
-        // failure shows up as collateral damage — h2 is asserted **first** for
-        // exactly that reason. The fixture answers the version probe with a
-        // parseable line, so a rollback that did run would render
-        // `--oldpackage` here.
-        //
-        // Two assertions rather than a loop over both hosts: in a loop the
-        // first host to fail hides the other, and the peer host is the one this
-        // test exists for.
+        // Nothing was rolled back. The healthy peer is where a false failure
+        // shows up as collateral damage, so h2 is asserted **first** and not in
+        // a loop, where the first host to fail would hide it. The fixture
+        // answers the version probe with a parseable line, so a rollback that
+        // did run would render `--oldpackage` here.
         assert!(
             !h2.commands().iter().any(|c| c.contains("--oldpackage")),
             "the healthy peer h2 must not be rolled back on h1's behalf: {:?}",
@@ -4980,8 +4544,6 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_aggregates_multiple_host_failures_and_keeps_repos() {
-        // Two hosts both fail the update check (exit 104) ⇒ the flow aggregates
-        // the failures and keeps the repos.
         let (t1, _h1) = sles_target_with_exit("h1", "", 104);
         let (t2, _h2) = sles_target_with_exit("h2", "", 104);
         let mut group = HostsGroup::new(vec![t1, t2], false);
@@ -5005,7 +4567,6 @@ mod tests {
             Err(UpdateFailure::Check(e)) => e,
             other => panic!("multi-host failure returns Err(Check): {other:?}"),
         };
-        // Aggregated message names both hosts (sorted).
         let msg = err.to_string();
         assert!(
             msg.contains("update failed on h1, h2"),
@@ -5022,13 +4583,10 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_with_rollback_downgrades_on_check_failure() {
-        // A check failure (exit 104) drives the rollback wrapper: it re-surfaces
-        // the original UpdateError AND issues a downgrade (rollback). The mock
-        // returns a resolvable version line so the downgrade command renders.
-        //
-        // The downgrade version probe must exit 0 (a non-zero probe exit is a
-        // dead-probe abort); the shared `sles_target_with_exit` would apply
-        // 104 to the probe too, so script the probe explicitly.
+        // The mock returns a resolvable version line so the downgrade command
+        // renders. The probe must exit 0 (a non-zero probe exit is a dead-probe
+        // abort) and `sles_target_with_exit` would apply 104 to it too, so
+        // script the probe explicitly.
         let probe = {
             let cmds = crate::update_workflow::actions::downgrade::downgrader("15", false).unwrap();
             let vars: std::collections::HashMap<&str, &str> =
@@ -5060,7 +4618,6 @@ mod tests {
             .await;
         assert!(res.is_err(), "check failure surfaces as Err: {res:?}");
 
-        // The downgrade list_command / downgrade command ran as part of rollback.
         let cmds = handle.commands();
         assert!(
             cmds.iter()
@@ -5101,9 +4658,8 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_warns_when_the_operation_lock_does_not_release() {
-        // A stranded operation lock does not turn a good update into a
-        // failure — but the fan-out's own `LockOutcome` map must still reach a
-        // warn, the same swallow fix 3 closed for install/uninstall.
+        // A stranded operation lock does not turn a good update into a failure,
+        // but the fan-out's own `LockOutcome` map must still reach a warn.
         let conn = MockConnection::new("h1")
             .with_default(CommandLog::new("zypper", "", "", 0, 0))
             .failing_sftp_remove();
@@ -5152,46 +4708,26 @@ mod tests {
     /// event's message and fields synchronously into an in-memory buffer,
     /// returning `fut`'s output paired with the joined records.
     ///
-    /// The subscriber is **global and installed once**, and only the sink is
-    /// scoped to the calling thread. That is not a style choice: `tracing`
-    /// caches callsite *interest* process-wide, so a callsite first reached
-    /// from a thread with no subscriber installed is cached as
-    /// `Interest::never()` and stays silent for every later capture. With the
-    /// suite running in parallel that is a race, and it is not hypothetical —
-    /// under `tracing::subscriber::set_default`'s thread-local guard,
-    /// `downgrade_verdict_withholds_done_when_a_probe_died` failed about one
-    /// run in three with a capture holding a single line, because its sibling
-    /// `perform_downgrade_probe_nonzero_exit_is_a_dead_probe` drives the same
-    /// `warn!`/`error!` callsites with no subscriber and whichever test reached
-    /// them first decided the cache. `mtui-datasources`' `teregen` capture hit
-    /// the same race and is fixed the same way. An always-installed subscriber
-    /// keeps interest pinned to `always`.
+    /// The subscriber is **global and installed once**; only the sink is
+    /// thread-scoped. `tracing` caches callsite *interest* process-wide, so a
+    /// callsite first reached from a thread with no subscriber is cached
+    /// `Interest::never()` and stays silent for every later capture — under
+    /// `set_default`'s thread-local guard that race made
+    /// `downgrade_verdict_withholds_done_when_a_probe_died` fail about one run
+    /// in three. Thread-scoping the sink loses nothing: `#[tokio::test]` is
+    /// single-threaded.
     ///
-    /// Scoping via the thread-local sink captures exactly what the guard did:
-    /// the fan-out is `buffer_unordered` on the test's own task and
-    /// `#[tokio::test]` is single-threaded, so no event under test is emitted
-    /// off this thread.
+    /// **Blast radius, accepted knowingly.** The unfiltered `Registry` reports
+    /// no `max_level_hint`, so `LevelFilter::current()` becomes `TRACE` for the
+    /// whole lib test binary and every `debug!`/`trace!` evaluates its
+    /// arguments before being dropped for want of a sink. Bound the layer with
+    /// a `LevelFilter` if the suite ever slows noticeably.
     ///
-    /// **Blast radius, accepted knowingly.** The `Registry` is unfiltered, so
-    /// it reports no `max_level_hint`; `set_global_default` reads that as "no
-    /// maximum" and `LevelFilter::current()` becomes `TRACE` for the *whole*
-    /// `mtui-testreport` lib test binary from the first capture onward. Every
-    /// `debug!`/`trace!` in the crate — previously dead, and none of them under
-    /// test here — then evaluates its formatting arguments and dispatches into
-    /// `CaptureLayer`, which drops it for want of a sink. The cost is argument
-    /// evaluation in tests only, and it buys the interest cache the race above
-    /// needs. Bounding the layer with a `LevelFilter` would keep the pinned
-    /// interest without the blast radius, and is the change to make if the lib
-    /// suite ever slows down noticeably.
-    ///
-    /// **This is the workspace's third copy of the pattern** — the others are
+    /// **The workspace's third copy of the pattern** — see
     /// `mtui-datasources`' `tests/log_capture.rs` (the fullest write-up) and
-    /// `mtui-datasources::teregen`'s test module, and `mtui-core` gains a
-    /// fourth in #404/PR #459. They are copies rather than one helper because
-    /// each is a `#[cfg(test)]` module in a different crate and target
-    /// (unit-test modules cannot share an integration test's file); the
-    /// standing note in `AGENTS.md` § "Testing conventions" is what keeps the
-    /// next one from re-deriving the race from scratch.
+    /// `mtui-datasources::teregen`'s test module; `mtui-core` gains a fourth in
+    /// #404/PR #459. Copies rather than one helper because a `#[cfg(test)]`
+    /// module cannot share an integration test's file.
     async fn capture_logs<T>(fut: impl std::future::Future<Output = T>) -> (T, String) {
         install_capture_subscriber();
         CAPTURE_SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
@@ -5251,9 +4787,8 @@ mod tests {
 
     #[tokio::test]
     async fn remove_test_repos_names_the_error_when_it_cannot_lock() {
-        // A foreign lock makes update_lock fail on the only host, so the
-        // cleanup cannot run; it must warn (naming the error and the remedy)
-        // rather than removing the repos.
+        // A foreign lock makes `update_lock` fail on the only host, so the
+        // cleanup must warn (naming the error and the remedy) instead.
         let foreign = MockConnection::new("h1")
             .with_default(CommandLog::new("", "", "", 0, 0))
             .with_file(
@@ -5271,10 +4806,9 @@ mod tests {
             !ops.contains(&RepoOp::Remove),
             "cleanup must not run when the lock fails: {ops:?}"
         );
-        // The cleanup's own warning must carry both the lock error and the
-        // remedy in the same line: `update_lock`'s internal fanout also logs
-        // WARNs about the individual foreign-locked host, so a
-        // `logs.contains` across every captured line would still pass with
+        // Both the lock error and the remedy must be on the *same* line:
+        // `update_lock`'s internal fan-out also WARNs about the foreign-locked
+        // host, so a `logs.contains` across every captured line would pass with
         // the error field dropped from this warning.
         let cleanup_line = logs
             .lines()
@@ -5292,9 +4826,8 @@ mod tests {
 
     #[tokio::test]
     async fn remove_test_repos_warns_when_the_removal_command_fails_on_a_host() {
-        // The lock succeeds but the repo-removal command itself fails on the
-        // host: issue #409's actual complaint (a stale test repo) can happen
-        // silently here too, not only on a lock failure.
+        // #409's complaint (a stale test repo) can arise from the removal
+        // command failing, not only from a lock failure.
         let conn = MockConnection::new("h1").with_default(CommandLog::new("zypper", "", "", 1, 0));
         let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
         t.set_system(
@@ -5338,8 +4871,7 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        // noprepare=false ⇒ the initial prepare runs (a preparer install) before
-        // the updater command.
+        // noprepare=false ⇒ the initial prepare install runs before the patch.
         let res = perform_update(
             &mut group,
             &report,
@@ -5364,10 +4896,10 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_continues_when_prepare_only_reports_host_noise() {
-        // h1's prepare command exits 0 but writes to stderr: prepare ran and
-        // merely reported host noise (`host_command_failures` counts any
-        // stderr, and `transactional-update` writes progress to stderr on a
-        // successful run), so the update must proceed rather than hard-abort.
+        // Exit 0 with stderr is host noise, not "prepare could not run"
+        // (`host_command_failures` counts any stderr, and
+        // `transactional-update` writes progress there on success), so the
+        // update must proceed rather than hard-abort.
         let conn =
             MockConnection::new("h1").with_default(CommandLog::new("zypper", "", "warning", 0, 0));
         let handle = conn.clone();
@@ -5412,10 +4944,9 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_aborts_when_the_prepare_could_not_run() {
-        // A foreign lock makes `update_lock` fail before prepare's body ever
-        // runs: this is "prepare could not run", not "prepare ran and
-        // failed", so it must still hard-abort the update before the lock,
-        // the issue repo add, or the patch command.
+        // A foreign lock makes `update_lock` fail before prepare's body runs:
+        // "prepare could not run", not "prepare ran and failed", so the update
+        // hard-aborts before the lock, the repo add, or the patch command.
         let foreign = MockConnection::new("h1")
             .with_default(CommandLog::new("", "", "", 0, 0))
             .with_file(
@@ -5460,8 +4991,7 @@ mod tests {
 
     #[test]
     fn unlock_failure_message_names_hosts_reasons_and_remedy() {
-        // Full-string, not a substring match: pins the shape (no "succeeded",
-        // each host named exactly once) rather than just its presence.
+        // Full-string: pins the shape (no "succeeded", each host named once).
         let msg = unlock_failure_message(
             "install",
             &[
@@ -5479,7 +5009,6 @@ mod tests {
 
     #[tokio::test]
     async fn perform_downgrade_transactional_host_combines_into_one_command() {
-        // A transactional host downgrades ALL packages in a single command.
         let (t, handle) = slmicro_target("h1", "pkg-a = 1.0-1\npkg-b = 2.0-1\n", 0);
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -5493,15 +5022,12 @@ mod tests {
         assert!(res.is_ok(), "a clean downgrade returns Ok: {res:?}");
 
         let cmds = handle.commands();
-        // The combined downgrade names both packages at their resolved versions
-        // in one command.
         assert!(
             cmds.iter()
                 .any(|c| c.contains("pkg-a=1.0-1") && c.contains("pkg-b=2.0-1")),
             "expected a single combined transactional downgrade: {cmds:?}"
         );
-        // And a clean combined downgrade still reboots: the gate must not
-        // withhold the reboot from a host whose transaction succeeded.
+        // The gate must not withhold the reboot from a succeeded transaction.
         let fired = handle.fired_commands();
         assert!(
             fired.iter().any(|c| c.contains("systemctl reboot")),
@@ -5511,10 +5037,9 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_skips_the_reboot_of_a_host_whose_prepare_failed() {
-        // The per-host reboot gate (mirrors the install/uninstall template):
-        // h1's prepare command exits non-zero, h2's succeeds. h1 must not be
-        // rebooted into the failed transaction, while h2 — a healthy host in
-        // the same group — still must, or its staged snapshot stays inert.
+        // The per-host reboot gate: h1 must not reboot into its failed
+        // transaction, while healthy h2 still must, or its staged snapshot
+        // stays inert.
         let (t1, h1) = slmicro_target("h1", "", 1);
         let (t2, h2) = slmicro_target("h2", "", 0);
         let mut group = HostsGroup::new(vec![t1, t2], false);
@@ -5529,10 +5054,9 @@ mod tests {
         )
         .await
         .expect_err("a failed prepare must not report success");
-        // Exact, not `to_string().contains("h1")`: the aggregated summary names
-        // every failed host, so a substring match would also pass if h2 had
-        // wrongly joined the failure set — which is half of what this test is
-        // about. A single failure is returned verbatim, so `host` is `Some`.
+        // Exact, not `to_string().contains("h1")`: a substring match would also
+        // pass if h2 had wrongly joined the failure set, which is half of what
+        // this test is about.
         assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
 
         let fired1 = h1.fired_commands();
@@ -5549,13 +5073,10 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_judges_every_package_not_just_the_last() {
-        // `--installed-only` runs one fan-out per package, and its template is
-        // `if $(rpm -q pkg ...); then ...; fi` — which exits 0 when the
-        // package is absent. So the *last* package is very often a no-op
-        // success. Reading `lastexit()` once after the loop would see that 0
-        // and reboot the host into the transaction an earlier package broke.
-        //
-        // pkg-a fails; pkg-b is a clean no-op after it.
+        // `--installed-only`'s template is `if $(rpm -q pkg …); then …; fi`,
+        // which exits 0 when the package is absent, so the *last* package is
+        // very often a no-op success: reading `lastexit()` once after the loop
+        // would see that 0 and reboot into the transaction pkg-a broke.
         let failing = "if $(rpm -q pkg-a &>/dev/null); \
                        then transactional-update -n pkg in -l  pkg-a ; fi";
         let conn = MockConnection::new("h1")
@@ -5600,15 +5121,12 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_judges_the_markers_of_every_package_not_just_the_last() {
-        // The marker half of the test above, and the half the first cut of
-        // #406 left open: every command here exits `0`, so `note_dispatch`'s
-        // exit-code rule and `host_command_failures`' stderr rule (which reads
-        // only the post-loop snapshot — pkg-b's clean run) see nothing at all.
-        // The ONLY mechanism that can fail h1 or keep it out of the reboot map
-        // is the `("slmicro", true)` prepare check's verdict on pkg-a — and
-        // with the check run once after the loop it judged pkg-b's clean
-        // transcript instead, so the host rebooted into the locked
-        // transaction while the flow reported success.
+        // The marker half of the test above (#406). Every command here exits
+        // `0`, so `note_dispatch`'s exit-code rule and `host_command_failures`'
+        // stderr rule (post-loop only — pkg-b's clean run) see nothing: the
+        // only mechanism that can fail h1 or keep it out of the reboot map is
+        // the prepare check's verdict on pkg-a, which a single post-loop call
+        // would miss.
         let locked = "if $(rpm -q pkg-a &>/dev/null); \
                       then transactional-update -n pkg in -l  pkg-a ; fi";
         let conn = MockConnection::new("h1")
@@ -5628,8 +5146,7 @@ mod tests {
             ),
             true,
         );
-        // h2 is clean throughout: it keeps the reboot assertion honest in the
-        // positive direction, so an empty `fired` list cannot fake h1's red.
+        // h2 is clean throughout, so an empty `fired` list cannot fake h1's red.
         let (t2, h2) = slmicro_target("h2", "", 0);
         let mut group = HostsGroup::new(vec![t1, t2], false);
 
@@ -5655,9 +5172,8 @@ mod tests {
             "pkg-b must have run after it, overwriting the snapshot: {cmds:?}"
         );
 
-        // The reboot before the verdict, as in `perform_prepare_skips_the_
-        // reboot_of_an_exit_zero_lock_message_prepare`: it is the consequence
-        // the issue is about, so it must own the red when both regress.
+        // The reboot is asserted before the verdict: it is the consequence the
+        // issue is about, so it must own the red when both regress.
         let fired1 = h1.fired_commands();
         assert!(
             !fired1.iter().any(|c| c.contains("systemctl reboot")),
@@ -5669,9 +5185,8 @@ mod tests {
             "healthy h2 must still reboot so its snapshot activates: {fired2:?}"
         );
 
-        // Exact, not `contains`: only h1 failed, so the single failure is
-        // returned verbatim and keeps its host. A second entry would collapse
-        // `host` to `None` via the aggregate summary.
+        // Exact, not `contains`: a second entry for h1 would collapse `host` to
+        // `None` via the aggregate summary.
         let err = res.expect_err("a locked stack on any package must fail the prepare");
         assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
         assert_eq!(err.reason, "update stack locked", "err: {err}");
@@ -5679,11 +5194,10 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_does_not_reboot_a_host_with_nothing_staged() {
-        // An empty package list dispatches no prepare command at all, but the
-        // reboot map is built from the host's transactional flag and does not
-        // know that. Rebooting stages-nothing is gratuitous on its own, and in
-        // the `update` rollback path it would activate whatever the failed
-        // update left staged.
+        // The reboot map is built from the host's transactional flag and does
+        // not know an empty package list dispatched nothing. In the `update`
+        // rollback path a reboot would activate whatever the failed update left
+        // staged.
         let (t, handle) = slmicro_target("h1", "", 0);
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -5726,8 +5240,7 @@ mod tests {
         .await;
 
         let err = res.expect_err("the dropped host must fail the flow");
-        // Robust attribution: a single failure keeps its host verbatim; a
-        // second (h1-blaming) entry would collapse `host` to `None` via the
+        // A second (h1-blaming) entry would collapse `host` to `None` via the
         // aggregate summary.
         assert_eq!(err.host.as_deref(), Some("h2"), "{err}");
         let msg = err.to_string();
@@ -5735,15 +5248,13 @@ mod tests {
             msg.contains("no prepare command could be built"),
             "cause stated: {msg}"
         );
-        // Mock-level proof: the dropped host was never sent ANY command —
-        // being both dispatched-to and reported not-installed would be #396's
+        // Being both dispatched-to and reported not-installed would be #396's
         // dishonesty inverted.
         assert!(
             bad_handle.commands().is_empty(),
             "{:?}",
             bad_handle.commands()
         );
-        // The healthy host still received its prepare command.
         assert!(
             good_handle
                 .commands()
@@ -5756,11 +5267,10 @@ mod tests {
 
     #[tokio::test]
     async fn perform_downgrade_does_not_reboot_a_host_with_nothing_staged() {
-        // The version probe resolves nothing, so no downgrade command is built
-        // and nothing is staged. The host must not be rebooted: when this
-        // downgrade is the `update` rollback, a reboot would activate whatever
-        // the failed update left staged — undoing the update flow's own
-        // decision to suppress that reboot.
+        // The probe resolves nothing, so nothing is staged. When this downgrade
+        // is the `update` rollback, a reboot would activate whatever the failed
+        // update left staged — undoing the update flow's own decision to
+        // suppress that reboot.
         let (t, handle) = slmicro_target("h1", "", 0);
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -5780,12 +5290,11 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_still_reboots_a_host_that_only_wrote_to_stderr() {
-        // `transactional-update` writes progress and warnings to stderr on a
-        // *successful* run, so stderr alone must not gate the reboot — the
-        // staged snapshot is healthy and leaving it inert would reintroduce
-        // the quiet-no-op bug from the other direction. (The stderr rule still
-        // fails the verdict via `host_command_failures`; that is pre-existing
-        // and separate from the action taken here.)
+        // `transactional-update` writes progress to stderr on a *successful*
+        // run, so stderr alone must not gate the reboot: the staged snapshot is
+        // healthy and leaving it inert is the quiet no-op from the other
+        // direction. (The stderr rule still fails the verdict via
+        // `host_command_failures`; that is separate from the action here.)
         let (t, handle) = slmicro_target_with_stderr("h1", "1 issue found. see the log");
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -5808,16 +5317,12 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_skips_the_reboot_of_an_exit_zero_lock_message_prepare() {
-        // The failure #406 names: `transactional-update` reported a locked
-        // update stack and still exited `0`. The exit-code half of the reboot
-        // gate cannot see that, and the stderr half deliberately must not
-        // (progress on stderr is routine — see the test above), so before the
-        // `("slmicro", true)` prepare check existed the host rebooted straight
-        // into the failed transaction.
-        //
-        // The inverse of `perform_prepare_still_reboots_a_host_that_only_wrote_
-        // _to_stderr`, and the pair is the whole rule: stderr gates nothing,
-        // a *recognised marker* on stderr gates the reboot.
+        // #406: `transactional-update` reported a locked update stack and still
+        // exited `0`, which the exit-code half of the reboot gate cannot see
+        // and the stderr half deliberately must not (progress on stderr is
+        // routine — see the test above). Together the pair is the whole rule:
+        // stderr gates nothing, a *recognised marker* on stderr gates the
+        // reboot.
         let (t, handle) = slmicro_target_with_stderr("h1", "System management is locked");
         let mut group = HostsGroup::new(vec![t], false);
 
@@ -5831,35 +5336,30 @@ mod tests {
         )
         .await
         .expect_err("a locked update stack must not report success");
-        // The reboot first: it is the consequence the issue is about, and
-        // asserting it before the message keeps the message assert from
-        // masking it when both regress together.
+        // The reboot first: it is the consequence the issue is about, so the
+        // message assert must not mask it when both regress together.
         let fired = handle.fired_commands();
         assert!(
             !fired.iter().any(|c| c.contains("systemctl reboot")),
             "a host whose prepare reported a locked stack must not be rebooted: {fired:?}"
         );
         // Exact reason *and* host: the stderr rule in `host_command_failures`
-        // fires on this transcript too, so the host is a candidate to be named
-        // twice — which would put `aggregate_failures` in its summary branch,
-        // where `host` is `None` and the diagnosis is buried in the reason
-        // string. `prepare_body` drops its own coarse entry for a host the
-        // check named, so the specific verdict is returned verbatim and keeps
-        // its host.
+        // fires on this transcript too, so h1 is a candidate to be named twice,
+        // which would put `aggregate_failures` in its summary branch where
+        // `host` is `None`. `prepare_body` drops its coarse entry for a host
+        // the check named, so the specific verdict survives verbatim.
         assert_eq!(err.reason, "update stack locked", "err: {err}");
         assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
     }
 
     #[tokio::test]
     async fn run_checks_where_never_judges_a_host_outside_the_predicate() {
-        // The scoping has to happen *before* the check runs, not after it
-        // returns: a check calls `log_failed` on its way to `Err`, so a
-        // verdict filtered out afterwards has already printed an operator- and
-        // MCP-visible ERROR for a host whose `last*` snapshot belongs to some
-        // other fan-out — once per package on the `--installed-only` path.
-        //
-        // Both hosts here carry the same failing transcript, so the only thing
-        // that can separate them is the predicate.
+        // Scoping must happen *before* the check runs: a check calls
+        // `log_failed` on its way to `Err`, so a verdict filtered out
+        // afterwards has already printed an operator-visible ERROR for a host
+        // whose snapshot belongs to another fan-out — once per package on the
+        // `--installed-only` path. Both hosts carry the same failing
+        // transcript, so only the predicate can separate them.
         let (t1, _h1) = slmicro_target_with_stderr("h1", "System management is locked");
         let (t2, _h2) = slmicro_target_with_stderr("h2", "System management is locked");
         let mut group = HostsGroup::new(vec![t1, t2], false);
@@ -5882,17 +5382,14 @@ mod tests {
         })
         .await;
 
-        // h1 is in scope: it is judged, it fails, and it says so.
         assert_eq!(failures.len(), 1, "only the in-scope host is judged");
         assert_eq!(failures[0].host.as_deref(), Some("h1"));
         assert!(
             logs.contains("h1"),
             "the in-scope host's breadcrumb still fires: {logs}"
         );
-        // h2 is out of scope: not judged at all, so nothing about it is
-        // logged. This is the assertion a post-filter cannot satisfy — the
-        // verdict would be dropped from the returned list, but `log_failed`
-        // would already have named h2.
+        // The assertion a post-filter cannot satisfy: the verdict would be
+        // dropped from the list, but `log_failed` would already have named h2.
         assert!(
             !logs.contains("h2"),
             "an out-of-scope host must not be judged, so it must not be logged: {logs}"
@@ -5901,19 +5398,12 @@ mod tests {
 
     #[tokio::test]
     async fn perform_prepare_names_the_host_of_a_prepare_that_never_ran() {
-        // `-1` is `Target::run`'s sentinel for a timeout, a dropped connection
-        // or a host that was never connected, and it is the one signal both
-        // new prepare checks raise on. `host_command_failures` raises on the
-        // *same* exit code (`bad_exit = lastexit() != 0`), so unless the flow
-        // suppresses its own coarse entry one host contributes TWO failures,
-        // `aggregate_failures` leaves its single-failure verbatim branch, and
-        // `host` — the field an MCP client reads to know which refhost to go
-        // look at — collapses to `None`.
-        //
-        // Before #406 these keys had no prepare check at all, so a timed-out
-        // prepare returned a single verbatim error carrying its host. Keeping
-        // that attribution while gaining the sharper reason is the point;
-        // losing it would be a regression on exactly the path #406 adds.
+        // Both prepare checks raise on `-1`, and `host_command_failures` raises
+        // on the same exit code, so unless the flow suppresses its coarse entry
+        // one host contributes TWO failures, `aggregate_failures` leaves its
+        // verbatim branch, and `host` — the field an MCP client reads to know
+        // which refhost to look at — collapses to `None`. Keeping that
+        // attribution while gaining #406's sharper reason is the point.
         for (product, version, transactional) in [("SL-Micro", "6.0", true), ("rhel", "9", false)] {
             let conn = MockConnection::new("h1")
                 .with_default(CommandLog::new("", "", "", -1, 0))
@@ -5950,9 +5440,8 @@ mod tests {
             );
             assert_eq!(err.host.as_deref(), Some("h1"), "{product}: {err}");
             // Exact, not `contains`: "prepare command failed" is
-            // `host_command_failures`' coarse wording for this very exit code,
-            // and the whole point is that the check's sharper verdict is the
-            // one that survives — and survives *alone*.
+            // `host_command_failures`' coarse wording for this exit code, and
+            // the check's sharper verdict must survive *alone*.
             assert_eq!(
                 err.reason, "prepare command timed out or failed to run",
                 "{product}"
@@ -5962,9 +5451,8 @@ mod tests {
 
     #[tokio::test]
     async fn perform_downgrade_skips_the_reboot_of_a_failed_transactional_downgrade() {
-        // The combined transactional downgrade exits non-zero — which the
-        // `("slmicro", true)` check deliberately does not gate (it catches
-        // only `-1`) — so this exercises the exit-code half of the gate: no
+        // The `("slmicro", true)` check catches only `-1`, so a non-zero
+        // combined downgrade exercises the exit-code half of the gate: no
         // reboot into the failed transaction, and the failure is reported
         // rather than leaving a skipped reboot behind an `Ok`.
         let combined_cmd = format!(
@@ -5994,8 +5482,8 @@ mod tests {
             .await
             .expect_err("a failed combined downgrade must not report success");
         assert_eq!(err.host.as_deref(), Some("h1"));
-        // Exact: a single failure is returned verbatim, so `contains` would
-        // also accept the multi-failure summary, whose text embeds this one.
+        // Exact: `contains` would also accept the multi-failure summary, whose
+        // text embeds this one.
         assert_eq!(err.reason, "downgrade command failed");
 
         let fired = handle.fired_commands();
@@ -6110,8 +5598,7 @@ mod tests {
         let report = crate::reports::PiReport::new(Config::default());
         let packages = vec!["pkg-a".to_owned(), "pkg-b".to_owned()];
 
-        // Cancel before the loop so it stops at package 0; the point under
-        // test is that control still reaches the post-loop fall-through.
+        // Cancel before the loop so it stops at package 0.
         group.cancel_token().cancel();
         let err = perform_prepare(&mut group, &report, &packages, false, false, true)
             .await
@@ -6125,8 +5612,6 @@ mod tests {
             "must not claim packages were installed when a transactional \
              snapshot may be inert: {msg}"
         );
-        // No package command was dispatched (cancelled at index 0), proving
-        // the loop stopped rather than running to completion.
         assert!(
             handle.commands().is_empty(),
             "cancelled at package 0, so no package command may run: {:?}",
@@ -6150,8 +5635,6 @@ mod tests {
         let res = perform_prepare(&mut group, &report, &packages, false, false, false).await;
 
         if let Err(e) = res {
-            // Whatever the verdict, it must not be a bare cancellation that
-            // hides the host's own outcome.
             assert!(
                 !e.is_cancelled() || !e.to_string().is_empty(),
                 "a cancellation must never be an empty verdict: {e:?}"
@@ -6187,8 +5670,6 @@ mod tests {
         let mut report = PiReport::new(Config::default());
         seed_rrid_and_package(&mut report);
 
-        // Drive the report's own trait method (not the free fn) to prove PI
-        // inherits the flow.
         let res = report
             .perform_update(&mut group, true, false, &mut Vec::new())
             .await;

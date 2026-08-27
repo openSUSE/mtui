@@ -13,9 +13,8 @@ use crate::session::{HOST_CLOSE_TIMEOUT, Session};
 /// for completion.
 const BOOT_ACTIONS: [&str; 2] = ["reboot", "poweroff"];
 
-/// Resolves the per-template close budget. In tests it is overridable (via
-/// `tests::set_close_timeout`) so the straggler path can be exercised without
-/// waiting the full budget; in production it is always [`HOST_CLOSE_TIMEOUT`].
+/// The per-template close budget: always [`HOST_CLOSE_TIMEOUT`] in production,
+/// overridable in tests so the straggler path need not wait it out.
 #[cfg(not(test))]
 fn close_timeout() -> Duration {
     HOST_CLOSE_TIMEOUT
@@ -27,27 +26,20 @@ fn close_timeout() -> Duration {
 
 /// Disconnects from all hosts and exits the interactive session.
 ///
-/// It accepts an optional positional
-/// `bootarg ∈ {reboot, poweroff}` and, on quit, for every connected host group
-/// ([`Session::take_teardown_units`](crate::Session::take_teardown_units) — every
-/// loaded template *and* hosts attached while nothing was loaded):
-/// releases the report's host-arbitration pool claims (in-process arbiter
-/// ownership + remote pool locks) then closes its host group — rebooting
-/// (`reboot`), powering off (`poweroff` → shell `halt`), or simply
-/// disconnecting when no bootarg is given. Each group's close runs under
-/// [`HOST_CLOSE_TIMEOUT`] so a hung host never blocks exit; a host that fails to disconnect
-/// is named (`failed to disconnect from <host>: <err>`) and a host still
-/// disconnecting at the budget is named as a straggler
-/// (`still disconnecting from <host> after <secs> seconds`). Afterwards it
-/// flips
-/// [`Session::request_exit`](crate::Session::request_exit) and returns `Ok(())`
-/// (the REPL checks [`should_exit`](crate::Session::should_exit) after each line
-/// and breaks its loop).
+/// For every connected host group
+/// ([`Session::take_teardown_units`](crate::Session::take_teardown_units) —
+/// every loaded template *and* hosts attached while nothing was loaded) it
+/// releases the pool claims (arbiter ownership + remote pool locks), then closes
+/// the group per the optional positional `bootarg ∈ {reboot, poweroff}`
+/// (`poweroff` → shell `halt`), or just disconnects. Each close runs under
+/// [`HOST_CLOSE_TIMEOUT`] so a hung host never blocks exit, and one that fails
+/// or is still disconnecting at the budget is named. It then flips
+/// [`Session::request_exit`](crate::Session::request_exit), which the REPL reads
+/// via [`should_exit`](crate::Session::should_exit) to break its loop.
 ///
-/// It runs exactly once ([`Scope::Single`]) and is REPL-only — on the MCP
-/// deny-list (a headless client has no session loop to quit). The aliases
-/// `exit`/`EOF` dispatch to this same command, so `exit reboot` and the `Ctrl-D`
-/// path inherit the bootarg + close behaviour.
+/// [`Scope::Single`] and REPL-only — on the MCP deny-list, a headless client
+/// having no session loop to quit. The aliases `exit`/`EOF` dispatch here, so
+/// `exit reboot` and `Ctrl-D` inherit the bootarg + close behaviour.
 pub struct Quit;
 
 #[async_trait]
@@ -90,26 +82,19 @@ impl Command for Quit {
         let action: Option<String> = args.get_one::<String>("bootarg").cloned();
 
         let timeout = close_timeout();
-        // Every connected host group, not just the loaded templates' — see
-        // `Session::take_teardown_units`.
         for entry in session.take_teardown_units() {
-            // Lock the unit to tear it down; uncontended while the outer
-            // session mutex still serialises dispatch (steps 1-3).
+            // Uncontended: the outer session mutex still serialises dispatch.
             let mut report = entry.lock().await;
-            // Release arbiter ownership + remote pool locks before
-            // disconnecting (best-effort; a no-op without pooling).
+            // Best-effort, and a no-op without pooling.
             report.release_pool_claims().await;
 
-            // Snapshot the group's hostnames so a straggler (the whole close
-            // exceeding the budget) can still be named per host.
+            // Snapshotted before the close so a straggling group can still be
+            // named per host.
             let hosts = report.base_mut().targets.names();
 
-            // Close the group under a per-unit budget: reboot / halt / plain
-            // disconnect. Never let a hung host block exit.
             let close = report.base_mut().targets.close(action.as_deref());
             match tokio::time::timeout(timeout, close).await {
                 Ok(outcomes) => {
-                    // Name every host that failed to disconnect.
                     for (host, outcome) in &outcomes {
                         if let Err(e) = outcome {
                             tracing::warn!("failed to disconnect from {host}: {e}");
@@ -117,7 +102,6 @@ impl Command for Quit {
                     }
                 }
                 Err(_) => {
-                    // Budget expired: the group is a straggler. Name each host.
                     let secs = timeout.as_secs();
                     for host in &hosts {
                         tracing::warn!("still disconnecting from {host} after {secs} seconds");
@@ -144,10 +128,9 @@ mod tests {
         empty_session, fake_report, matches, session_with_hosts, session_with_targets,
     };
 
-    /// Test-only override for [`close_timeout`], in milliseconds. `u64::MAX`
-    /// means "use the production [`HOST_CLOSE_TIMEOUT`]". Serialised by
-    /// [`CLOSE_TIMEOUT_LOCK`] so a shrunk budget never leaks into a concurrent
-    /// test.
+    /// Override for [`close_timeout`] in milliseconds; `u64::MAX` means the
+    /// production [`HOST_CLOSE_TIMEOUT`]. Serialised by [`CLOSE_TIMEOUT_LOCK`] so
+    /// a shrunk budget never leaks into a concurrent test.
     static CLOSE_TIMEOUT_MS: AtomicU64 = AtomicU64::new(u64::MAX);
     static CLOSE_TIMEOUT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -176,7 +159,6 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_unknown_bootarg() {
-        // clap enforces the choice set at parse time.
         let cmd = Quit.configure(clap::Command::new("quit"));
         assert!(cmd.try_get_matches_from(["quit", "restart"]).is_err());
     }
@@ -192,7 +174,6 @@ mod tests {
 
     #[tokio::test]
     async fn quit_closes_all_loaded_templates_without_reboot() {
-        // Two loaded templates, each with hosts. `quit` (no arg) closes both.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
         session
             .templates
@@ -225,8 +206,8 @@ mod tests {
         Target::with_connection(host, TargetState::Enabled, Box::new(conn))
     }
 
-    /// Builds a locked target over a probe that stays observable after the
-    /// target takes ownership (`MockConnection` shares its state across clones).
+    /// A locked target over a probe that stays observable after the target takes
+    /// ownership (`MockConnection` shares state across clones).
     async fn locked_target(host: &str) -> (Target, MockConnection) {
         let probe = MockConnection::new(host);
         let mut target =
@@ -239,9 +220,9 @@ mod tests {
         (target, probe)
     }
 
-    /// Direction (a): hosts attached while **nothing is loaded** live in the
-    /// null-report group, which no registry walk can reach. `quit` must still
-    /// disconnect them and release their remote operation lock.
+    /// Hosts attached while nothing is loaded live in the null-report group,
+    /// which no registry walk reaches; `quit` must still disconnect them and
+    /// release their remote operation lock.
     #[tokio::test]
     async fn quit_closes_hosts_attached_with_no_report_loaded() {
         let (mut session, _buf) = empty_session();
@@ -270,9 +251,8 @@ mod tests {
         let (tmpl_target, tmpl_probe) = locked_target("t1").await;
         let (mut session, _buf) = session_with_targets("SUSE:Maintenance:1:1", vec![tmpl_target]);
 
-        // Plant a host in the sentinel's group: release the per-call guard so
-        // `targets_mut()` falls back to the null report, then restore it so quit
-        // runs from the realistic guard-held state.
+        // Releasing the per-call guard makes `targets_mut()` fall back to the
+        // null report; restoring it leaves quit in the realistic held state.
         session.release_active_guard();
         let (null_target, null_probe) = locked_target("n1").await;
         session.targets_mut().add(null_target);
@@ -295,9 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn quit_names_host_that_fails_to_disconnect() {
-        // One host fails to close, one closes cleanly. `quit` still sets exit
-        // (best-effort) and the failing host surfaces an `Err` in the group's
-        // teardown outcome map — the same map `quit` names failures from.
+        // A failing host must not stop quit setting exit.
         let targets = vec![
             target_with("good", |c| {
                 c.with_default(CommandLog::new("", "ok", "", 0, 0))
@@ -310,12 +288,9 @@ mod tests {
         Quit.call(&mut session, &args).await.unwrap();
         assert!(session.should_exit());
 
-        // Re-close the group directly to assert the per-host outcome `quit`
-        // reads: the failing host is named with an `Err`, the healthy one `Ok`.
-        // (The first close already tore the group down; a second close on the
-        // now-closed mocks still reports the scripted failure deterministically.)
-        // `quit` released the active handle, so re-lock the entry directly to
-        // assert the per-host outcome it read.
+        // `quit` released the active handle, so re-lock the entry to read the
+        // outcome map it named failures from — a second close on the now-closed
+        // mocks still reports the scripted failure deterministically.
         let entry = session
             .templates
             .handle("SUSE:Maintenance:1:1")
@@ -328,9 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn quit_returns_promptly_when_a_host_straggles() {
-        // A wedged host whose close never returns must not block quit past the
-        // (shrunk) per-template budget; quit still sets exit and names the
-        // straggler. Serialise the timeout override so it does not leak.
+        // Serialised so the shrunk budget does not leak into another test.
         let _guard = CLOSE_TIMEOUT_LOCK.lock().await;
         CLOSE_TIMEOUT_MS.store(50, Ordering::SeqCst);
 
@@ -343,8 +316,8 @@ mod tests {
 
         let args = matches(&Quit, &[]);
         let start = std::time::Instant::now();
-        // A generous outer bound: if the per-template budget were ignored this
-        // would hang, so cap the whole call well under the 45s production value.
+        // Well under the 45s production budget: ignoring the per-template one
+        // would hang here.
         tokio::time::timeout(Duration::from_secs(5), Quit.call(&mut session, &args))
             .await
             .expect("quit must return despite the wedged host")
@@ -355,7 +328,6 @@ mod tests {
             "quit returned within the shrunk budget, not the 45s production value"
         );
 
-        // Let the abandoned close unwind and reset the override for other tests.
         gate.notify_waiters();
         CLOSE_TIMEOUT_MS.store(u64::MAX, Ordering::SeqCst);
     }

@@ -10,9 +10,8 @@ use crate::session::Session;
 
 /// The configuration attributes exposed to `show`, each with a value renderer.
 ///
-/// The Rust [`Config`] is a typed struct (no reflection), so the
-/// attribute↔value mapping is spelled out here — the single place `show`/`set`
-/// and completion agree on the attribute surface.
+/// [`Config`] is a typed struct with no reflection, so this mapping is spelled
+/// out — the one place `show`/`set` and completion agree on the surface.
 fn attr_value(config: &Config, attr: &str) -> Option<String> {
     let v = match attr {
         "template_dir" => config.template_dir.display().to_string(),
@@ -40,9 +39,7 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "openqa_instance" => config.openqa_instance.clone(),
         "openqa_instance_baremetal" => config.openqa_instance_baremetal.clone(),
         "openqa_install_distri" => config.openqa_install_distri.clone(),
-        // A secret: never render the token verbatim (it lands in scrollback and
-        // logs). Show only whether one is set, mirroring how `show` should treat
-        // credentials while still confirming presence.
+        // Never verbatim: it would land in scrollback and logs.
         "gitea_token" => {
             if config.gitea_token.is_empty() {
                 String::new()
@@ -51,7 +48,7 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
             }
         }
         "gitea_url" => config.gitea_url.clone(),
-        // Also a secret, masked on the same terms as the Gitea token.
+        // Also a secret.
         "slack_token" => {
             if config.slack_token.is_empty() {
                 String::new()
@@ -77,21 +74,18 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
     Some(v)
 }
 
-/// The placeholder shown in place of a set secret value, so a credential never
-/// reaches the display buffer (terminal scrollback or MCP output) via `show` or
-/// `set`.
+/// Stands in for a set secret, so a credential never reaches the display buffer
+/// (terminal scrollback or MCP output) via `show` or `set`.
 const SECRET_MASK: &str = "<set>";
 
-/// Whether `attr` names a secret configuration field whose value must never be
-/// echoed. The single source of truth for `show`'s mask and `set`'s redacted
-/// acknowledgement; add a new secret field here to cover both paths at once.
+/// Whether `attr` names a secret whose value must never be echoed. The single
+/// source of truth for `show`'s mask and `set`'s redacted acknowledgement.
 fn is_secret_attr(attr: &str) -> bool {
     matches!(attr, "gitea_token" | "slack_token")
 }
 
-/// Render an [`SslVerify`] back to the string form `config set`/the config file
-/// accept, so `show` round-trips into `set`: `"true"`/`"false"` for the
-/// enabled/disabled postures, or the CA-bundle path verbatim.
+/// Renders an [`SslVerify`] back to the form `config set` and the config file
+/// accept, so `show` round-trips into `set`.
 fn ssl_verify_to_string(v: &SslVerify) -> String {
     match v {
         SslVerify::Enabled => "true".to_owned(),
@@ -157,12 +151,8 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         s.parse::<u64>()
             .map_err(|e| format!("invalid integer: {e}"))
     };
-    // Positive-only variant for the keys the config-file loader guards with
-    // `validated_positive!` (0 is rejected there, falling back to the default).
-    // Runtime `set` must reject 0 too, so it cannot store a value the file would
-    // refuse — the guarantee this command's doc comment makes. Keys the loader
-    // accepts 0 for (`lock_stale_age`, `lock_wait`, via `unwrap_or`) keep the
-    // plain `parse_u64`.
+    // For the keys the loader guards with `validated_positive!`: runtime `set`
+    // must reject 0 too, or it could store a value the file would refuse.
     let parse_positive_u64 = |s: &str| match s.parse::<u64>() {
         Ok(0) => Err("expected a positive integer greater than 0".to_owned()),
         Ok(value) => Ok(value),
@@ -191,9 +181,8 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "slack_enabled" => config.slack_enabled = parse_bool(raw)?,
         "slack_poll_interval" => config.slack_poll_interval = parse_positive_u64(raw)?,
         "slack_watch_timeout" => config.slack_watch_timeout = parse_positive_u64(raw)?,
-        // Goes through the same coercion as config-file loading (a boolean
-        // spelling toggles verification, anything else is a CA-bundle path), so
-        // a runtime `set` cannot store a value the file would reject.
+        // The same coercion as config-file loading, so a runtime `set` cannot
+        // store a value the file would reject.
         "ssl_verify" => config.ssl_verify = SslVerify::parse(raw),
         "chdir_to_template_dir" => config.chdir_to_template_dir = parse_bool(raw)?,
         "lock_reap_stale" => config.lock_reap_stale = parse_bool(raw)?,
@@ -216,11 +205,10 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
 
 /// Shows or sets runtime configuration values.
 ///
-/// `config show [attr ...]` prints the current values (all when none named);
-/// `config set <attr> <value>` updates one, going through value
-/// parsing/validation at least as strict as config-file loading, so a runtime
-/// `set` cannot store a value the file would reject. Self-describing, so it
-/// runs once ([`Scope::Single`]).
+/// `config show [attr ...]` prints the current values (all when none named).
+/// `config set <attr> <value>` validates at least as strictly as config-file
+/// loading, so it cannot store a value the file would reject. Self-describing,
+/// so it runs once ([`Scope::Single`]).
 pub struct ConfigCmd;
 
 #[async_trait]
@@ -285,9 +273,7 @@ impl Command for ConfigCmd {
                 let attr = sub.get_one::<String>("attribute").expect("required");
                 let value = sub.get_one::<String>("value").expect("required");
                 set_attr(&mut session.config, attr, value).map_err(CommandError::Other)?;
-                // Never echo a secret's value back to the display buffer (which
-                // reaches terminal scrollback and MCP output); confirm the set
-                // with the mask instead.
+                // Never echo a secret back to the display buffer.
                 let shown = if is_secret_attr(attr) {
                     SECRET_MASK
                 } else {
@@ -334,9 +320,7 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("template_dir"));
         assert!(out.contains("lock_wait_poll"));
-        // Regression: ssl_verify and the later-phase datasource options must be
-        // visible in `show` (they load and are honored, but were missing from
-        // the command's attribute table).
+        // These load and are honored, so they must appear in the table too.
         assert!(out.contains("ssl_verify"));
         assert!(out.contains("qem_dashboard_api"));
         assert!(out.contains("teregen_api"));
@@ -349,7 +333,6 @@ mod tests {
     #[tokio::test]
     async fn show_ssl_verify_renders_enum_forms() {
         let (mut session, buf) = empty_session();
-        // Default posture renders as "true".
         session.config.ssl_verify = SslVerify::Enabled;
         ConfigCmd
             .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
@@ -358,7 +341,6 @@ mod tests {
         assert!(buf.contents().contains("ssl_verify"));
         assert!(buf.contents().contains("\"true\""));
 
-        // Disabled renders as "false".
         let (mut session, buf) = empty_session();
         session.config.ssl_verify = SslVerify::Disabled;
         ConfigCmd
@@ -367,7 +349,6 @@ mod tests {
             .unwrap();
         assert!(buf.contents().contains("\"false\""));
 
-        // A CA bundle path is shown verbatim.
         let (mut session, buf) = empty_session();
         session.config.ssl_verify = SslVerify::CaBundle(std::path::PathBuf::from("/etc/ca.pem"));
         ConfigCmd
@@ -380,7 +361,6 @@ mod tests {
     #[tokio::test]
     async fn set_ssl_verify_bool_and_path() {
         let (mut session, _buf) = empty_session();
-        // Boolean spelling disables verification.
         ConfigCmd
             .call(
                 &mut session,
@@ -390,7 +370,7 @@ mod tests {
             .unwrap();
         assert_eq!(session.config.ssl_verify, SslVerify::Disabled);
 
-        // A non-boolean value becomes a CA-bundle path (config-file coercion).
+        // A non-boolean value becomes a CA-bundle path.
         ConfigCmd
             .call(
                 &mut session,
@@ -435,7 +415,6 @@ mod tests {
             .await
             .unwrap();
         let out = buf.contents();
-        // The secret is never rendered verbatim; presence is confirmed instead.
         assert!(!out.contains("secret123"));
         assert!(out.contains("<set>"));
     }
@@ -450,7 +429,7 @@ mod tests {
             )
             .await
             .unwrap();
-        // The value is still stored, but never echoed to the display buffer.
+        // Stored, but never echoed.
         assert_eq!(session.config.gitea_token, "secret123");
         let out = buf.contents();
         assert!(out.contains("gitea_token"));
@@ -544,9 +523,8 @@ mod tests {
 
     #[tokio::test]
     async fn set_zero_rejected_for_positive_only_keys() {
-        // These keys are guarded by `validated_positive!` in the config-file
-        // loader, so runtime `set` must reject 0 too — otherwise it could store a
-        // value the file would refuse, breaking the command's own contract.
+        // `validated_positive!` in the loader guards these, so runtime `set`
+        // must reject 0 too.
         for attr in [
             "connection_timeout",
             "connect_timeout",
@@ -576,11 +554,9 @@ mod tests {
 
     #[tokio::test]
     async fn set_zero_allowed_for_keys_the_loader_also_accepts() {
-        // `lock_stale_age` / `lock_wait` are taken via `unwrap_or` in the loader
-        // (0 is a valid value there), so the positive-only guard must not
-        // over-reach to keys the file format permits. Set a non-zero value first,
-        // then 0, so the final assertion proves 0 was actually stored (lock_wait's
-        // default is already 0, which would otherwise mask a no-op).
+        // The loader takes these via `unwrap_or`, so 0 is valid and the
+        // positive-only guard must not over-reach. A non-zero value is set first
+        // so `lock_wait`'s already-0 default cannot mask a no-op.
         for attr in ["lock_stale_age", "lock_wait"] {
             let (mut session, _buf) = empty_session();
             ConfigCmd
@@ -608,8 +584,6 @@ mod tests {
 
     #[tokio::test]
     async fn set_pool_reap_keys_roundtrip() {
-        // The pool-claim reap knobs are settable: a boolean toggle and a u64 age
-        // (0 allowed, matching the loader's `unwrap_or`).
         let (mut session, _buf) = empty_session();
         ConfigCmd
             .call(
@@ -633,7 +607,7 @@ mod tests {
             attr_value(&session.config, "pool_stale_age").as_deref(),
             Some("3600")
         );
-        // 0 disables reaping and must be accepted (loader takes it via unwrap_or).
+        // 0 disables reaping and must be accepted.
         ConfigCmd
             .call(
                 &mut session,
@@ -649,8 +623,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_non_numeric_on_positive_key_is_invalid_integer_not_range_error() {
-        // A non-numeric value must surface the parse error, not the positive-only
-        // rejection — the two failure modes stay distinct.
+        // The two failure modes stay distinct.
         let (mut session, _buf) = empty_session();
         let args = matches(&ConfigCmd, &["set", "max_parallel", "abc"]);
         let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();

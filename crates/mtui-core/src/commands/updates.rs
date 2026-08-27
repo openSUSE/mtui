@@ -19,13 +19,11 @@ const STATUS_ALL: &str = "all";
 /// Lists the update queue (unassigned + in-testing by default), fetched live
 /// from the TeReGen API.
 ///
-/// The default view is the actionable pickup queue: **unassigned** updates
-/// that are **in testing**.
-/// `--assignee`/`--mine`/`--all-assignees` pick another assignment view (and
-/// drop the unassigned default); `--status all` widens to every status. This is
-/// a session-global query, so it runs once per invocation ([`Scope::Single`])
-/// rather than fanning out per template — though it may issue one TeReGen
-/// query per `--review-group`.
+/// The default view is the actionable pickup queue: **unassigned** updates that
+/// are **in testing**. `--assignee`/`--mine`/`--all-assignees` pick another
+/// assignment view (dropping the unassigned default); `--status all` widens to
+/// every status. Session-global, so [`Scope::Single`] rather than a per-template
+/// fan-out — though it may issue one TeReGen query per `--review-group`.
 pub struct Updates;
 
 #[async_trait]
@@ -125,9 +123,8 @@ impl Command for Updates {
 
     fn complete(&self, _session: &Session, text: &str, line: &str) -> Vec<String> {
         // Right after `-F`/`--field`, offer the field names, not more flags.
-        // Empty tokens are dropped: a trailing space otherwise reads as an
-        // empty "previous token" and hides the field names exactly when the
-        // user has just typed `-F `.
+        // Empty tokens are dropped: a trailing space would otherwise read as an
+        // empty "previous token" and hide the names just as `-F ` was typed.
         let tokens: Vec<&str> = line.split(' ').filter(|t| !t.is_empty()).collect();
         let prev = if text.is_empty() {
             tokens.last().copied()
@@ -148,9 +145,8 @@ impl Command for Updates {
                 .filter(|c| c.starts_with(text))
                 .collect();
         }
-        // `-G`/`-F` are repeatable, so they ride in `extra`, which
-        // `complete_choices` never suppresses — a synonym group would stop
-        // offering them the moment they first appear on the line.
+        // `-G`/`-F` are repeatable, so they ride in `extra`: a synonym group
+        // would stop offering them once they first appear on the line.
         super::support::complete_choices(
             &[
                 &["--status"],
@@ -169,8 +165,7 @@ impl Command for Updates {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // Dedup repeated identical groups (order-preserving) so `-G a -G a`
-        // takes the single-query path instead of firing two identical queries.
+        // Dedup so `-G a -G a` takes the single-query path.
         let review_groups: Vec<String> = {
             let mut seen = HashSet::new();
             args.get_many::<String>("review_group")
@@ -198,8 +193,7 @@ impl Command for Updates {
             args.get_one::<String>("assignee").cloned()
         };
 
-        // '--status all' is the escape hatch: widen to every status by sending
-        // no status filter (the server returns released updates too).
+        // '--status all' widens by sending no status filter at all.
         let status_all = status_arg == STATUS_ALL;
         let status = if status_all { None } else { Some(status_arg) };
 
@@ -210,12 +204,10 @@ impl Command for Updates {
         // Show the assignee column whenever assignment is part of the view.
         let want_assignment = assignee.is_some() || unassigned || all_assignees;
 
-        // Refuse assignment-derived fields in a view that cannot carry
-        // assignment data (`--status all` with no assignment flag): without
-        // `with_assignment` TeReGen omits assignee/assignees on SLFO rows, so
-        // rendering would show a false "unassigned" for an assigned row. And
-        // forcing the parameter is no fix — it implies status=testing
-        // server-side, contradicting `--status all`.
+        // Without `with_assignment` TeReGen omits assignee/assignees on SLFO
+        // rows, so an assignment-derived field would render a false
+        // "unassigned"; forcing it implies status=testing server-side,
+        // contradicting `--status all`.
         if !want_assignment && let Some(spec) = specs.iter().find(|s| s.needs_assignment) {
             return Err(CommandError::Other(format!(
                 "field '{}' needs assignment data, which TeReGen omits under \
@@ -226,8 +218,8 @@ impl Command for Updates {
         }
 
         let teregen = teregen_client(session)?;
-        // A closure cannot tie its return's lifetime to its argument's, so
-        // this is a named fn: one query shape, group varying per call.
+        // A named fn, not a closure: a closure cannot tie its return's
+        // lifetime to its argument's.
         fn query_for<'a>(
             group: Option<&'a str>,
             status: Option<&'a str>,
@@ -245,11 +237,10 @@ impl Command for Updates {
             }
         }
 
-        // One query per group; no `-G` at all is one ungrouped query. Multiple
-        // groups fan out because TeReGen has no OR semantics for a repeated
-        // `review_group` param (the last one wins), and the filter cannot be
-        // replicated client-side — the server matches SLFO rows against a
-        // group without ever serialising `review_groups` on them.
+        // One query per group (none = one ungrouped query): TeReGen has no OR
+        // semantics for a repeated `review_group` param (the last wins), and the
+        // filter cannot be replicated client-side — the server matches SLFO rows
+        // against a group without serialising `review_groups` on them.
         let groups: Vec<Option<&str>> = if review_groups.is_empty() {
             vec![None]
         } else {
@@ -268,20 +259,14 @@ impl Command for Updates {
                 )
             })
             .collect();
-        // Bounded fan-out: a handful of groups is the norm, but a scripted
-        // thirty-`-G` call should not open thirty connections at once.
-        // `buffered` preserves input order, so per-group batches arrive in
-        // `-G` order regardless of completion order. (The futures are
-        // materialised eagerly: a lazy `map` closure trips a
-        // higher-ranked-lifetime limit under `buffered`.)
+        // Bounded so a scripted thirty-`-G` call does not open thirty
+        // connections; `buffered` keeps batches in `-G` order. Materialised
+        // eagerly: a lazy `map` closure trips a higher-ranked-lifetime limit.
         let futures: Vec<_> = queries.iter().map(|q| teregen.updates(q)).collect();
         let results: Vec<_> = stream::iter(futures).buffered(4).collect().await;
 
-        // `teregen.updates` returns a Result: `Err` on any transport/API
-        // failure (surfaced to the caller), `Ok(None)` on a successful response
-        // missing the `updates` key, and `Ok(Some(json))` on success. Only a
-        // genuinely-empty *successful* result is an empty queue; a fetch
-        // failure is never conflated with one.
+        // `Err` (transport/API failure) is surfaced, `Ok(None)` (no `updates`
+        // key) skipped: only a *successful* empty result is an empty queue.
         let mut rows: Vec<Value> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         for result in results {
@@ -295,9 +280,8 @@ impl Command for Updates {
                 CommandError::Other("Update queue query returned a malformed response".to_owned())
             })?;
             for row in batch {
-                // Dedup by id — a row can sit in several groups. A row without
-                // an id is kept, never silently dropped. Pointless (and
-                // skipped) for a single query, which cannot repeat a row.
+                // A row can sit in several groups. One without an id is kept,
+                // never silently dropped. A single query cannot repeat a row.
                 let fresh = !multi
                     || match row.get("id").and_then(Value::as_str) {
                         Some(id) => seen.insert(id.to_owned()),
@@ -309,8 +293,8 @@ impl Command for Updates {
             }
         }
         if multi {
-            // The server returns each group priority-descending; restore that
-            // order across the merged set (stable, so ties keep server order).
+            // Restore the server's priority-descending order across the merge
+            // (stable, so ties keep server order).
             rows.sort_by_key(|r| {
                 std::cmp::Reverse(
                     r.get("priority")
@@ -337,8 +321,8 @@ impl Command for Updates {
         };
 
         if as_json {
-            // The raw rows, nothing discarded — the scripting path. No count
-            // header: stdout is the JSON document.
+            // The raw rows, nothing discarded, and no count header: stdout is
+            // the JSON document.
             let doc = Value::Array(shown.to_vec());
             session.display.println(
                 &serde_json::to_string_pretty(&doc)
@@ -374,17 +358,15 @@ struct FieldSpec {
     /// Extra accepted spellings (pre-normalized), beyond the canonical name.
     aliases: &'static [&'static str],
     /// Whether the value only exists when the query sends `with_assignment`.
-    /// Without it TeReGen omits `assignee`/`assignees` on SLFO rows, so the
-    /// field would render a false "unassigned" for a genuinely assigned row —
-    /// requesting such a field in a view that cannot carry assignment
-    /// (`--status all` without an assignment flag) is refused, not blanked.
+    /// Requesting it in a view that cannot carry assignment is refused rather
+    /// than blanked: the omission would render a false "unassigned".
     needs_assignment: bool,
     extract: fn(&serde_json::Map<String, Value>) -> String,
 }
 
-/// The fields the TeReGen queue listing can serve today. osc-qam names are
-/// canonical so existing `osc qam list -F` muscle memory transfers; the raw
-/// TeReGen key is an alias where it differs.
+/// The fields the TeReGen queue listing can serve. osc-qam names are canonical
+/// so `osc qam list -F` muscle memory transfers; the raw TeReGen key is an
+/// alias where it differs.
 static FIELDS: &[FieldSpec] = &[
     FieldSpec {
         canonical: "ReviewRequestID",
@@ -466,9 +448,8 @@ static FIELDS: &[FieldSpec] = &[
     },
 ];
 
-/// osc-qam fields the TeReGen queue listing does not carry (yet) — named so
-/// the error can say "known, but not available here" instead of "unknown".
-/// Tracked in #415.
+/// osc-qam fields the listing does not carry yet (#415), named so the error can
+/// say "known, but not available here" instead of "unknown".
 static UNAVAILABLE_FIELDS: &[&str] = &[
     "Products",
     "SRCRPMs",
@@ -488,9 +469,8 @@ fn normalize_field(name: &str) -> String {
         .collect()
 }
 
-/// Resolves a `-F` name to its spec, or a self-explanatory error: a known
-/// osc-qam field the listing cannot serve names the gap (#415); anything else
-/// lists what is available.
+/// Resolves a `-F` name to its spec, or an error naming the #415 gap for a
+/// known-but-unservable osc-qam field and listing what is available otherwise.
 fn resolve_field(name: &str) -> Result<&'static FieldSpec, CommandError> {
     let norm = normalize_field(name);
     if let Some(spec) = FIELDS
@@ -556,27 +536,22 @@ fn extract_assigned_roles(obj: &serde_json::Map<String, Value>) -> String {
     }
 }
 
-/// `Unassigned Roles`: `review_groups` minus the groups present in
-/// `assignees`. TeReGen serialises `review_groups` only on classic
-/// Maintenance rows — SLFO rows omit it (while still matching a
-/// `review_group` filter server-side), so there the honest answer is `n/a`,
-/// not an empty list.
+/// `Unassigned Roles`: `review_groups` minus the groups in `assignees`. TeReGen
+/// serialises `review_groups` only on classic Maintenance rows — SLFO rows omit
+/// it while still matching a `review_group` filter server-side — so there the
+/// honest answer is `n/a`, not an empty list.
 fn extract_unassigned_roles(obj: &serde_json::Map<String, Value>) -> String {
     let Some(groups) = obj.get("review_groups").and_then(Value::as_array) else {
         return "n/a".to_owned();
     };
-    // The subtraction needs the assignees map. Its key being absent means the
-    // view carried no assignment data (TeReGen omits it without
-    // `with_assignment`) — indistinguishable from "nobody assigned", so the
-    // honest render is `n/a`, not a list claiming every group is still open.
-    // Live (2026-08-03) `review_groups` and `assignees` travel together on
-    // every row, so this arm is unreachable today; the guard is for the day
+    // An absent `assignees` key means no assignment data, indistinguishable
+    // from "nobody assigned", so `n/a` beats a list claiming every group is
+    // open. Live the two keys travel together; the guard is for the day
     // they don't.
     let Some(assignee_map) = obj.get("assignees").and_then(Value::as_object) else {
         return "n/a".to_owned();
     };
-    // A group only counts as assigned when it has at least one entry — a
-    // `{"qam-sle": []}` group has nobody on it and must stay unassigned, not
+    // A `{"qam-sle": []}` group has nobody on it: it must stay unassigned, not
     // vanish from both role lists.
     let assigned: HashSet<&str> = assignee_map
         .iter()
@@ -618,9 +593,8 @@ fn render_row(u: &serde_json::Value, want_assignment: bool) -> String {
             .map(json_scalar)
             .unwrap_or_else(|| "?".to_owned())
     };
-    // deadline is normally an ISO timestamp; the date alone is enough for a
-    // row. Stringify first so shape drift (a non-string value) shows its raw
-    // form rather than crashing or vanishing the whole row.
+    // The date part of the ISO timestamp is enough. Stringify first so shape
+    // drift shows its raw form rather than vanishing the row.
     let deadline = obj.get("deadline").filter(|v| !is_falsy(v)).map_or_else(
         || "-".to_owned(),
         |v| json_scalar(v).chars().take(10).collect(),
@@ -698,7 +672,6 @@ mod tests {
         ] {
             assert!(all.contains(&f.to_owned()), "missing {f}: {all:?}");
         }
-        // Prefix filter.
         assert_eq!(
             Updates.complete(&session, "--r", "updates --r"),
             vec!["--review-group"]
@@ -707,8 +680,8 @@ mod tests {
 
     #[test]
     fn complete_still_offers_repeatable_flags_after_first_use() {
-        // --review-group/-F became repeatable; a synonym group would suppress
-        // them once typed, so they must survive prior use on the line.
+        // Repeatable flags must survive prior use on the line; a synonym
+        // group would suppress them once typed.
         let (session, _buf) = empty_session();
         assert_eq!(
             Updates.complete(&session, "--r", "updates --review-group qam-sle --r"),
@@ -729,12 +702,10 @@ mod tests {
         assert_eq!(names.len(), FIELDS.len(), "{names:?}");
         assert_eq!(names[0], "ReviewRequestID");
         assert!(names.contains(&"Assigned Roles".to_owned()), "{names:?}");
-        // Prefix narrows.
         assert_eq!(
             Updates.complete(&session, "Rat", "updates -F Rat"),
             vec!["Rating"]
         );
-        // Long form too.
         assert_eq!(
             Updates.complete(&session, "Cat", "updates --field Cat"),
             vec!["Category"]
@@ -754,7 +725,6 @@ mod tests {
                 .try_get_matches_from(["--mine", "--all-assignees"])
                 .is_err()
         );
-        // A single assignment view parses fine.
         assert!(cmd.try_get_matches_from(["--mine"]).is_ok());
     }
 
@@ -823,8 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_failure_returns_err_not_empty_queue() {
-        // A 5xx from TeReGen is surfaced as `Err` by the datasource; the command
-        // must propagate that, distinct from a genuinely-empty queue.
+        // A 5xx must propagate, distinct from a genuinely-empty queue.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -846,8 +815,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_updates_key_is_empty_queue_not_err() {
-        // A successful response with no `updates` key is Ok(None): the command
-        // prints the empty-queue message rather than erroring.
+        // No `updates` key is Ok(None): the empty-queue message, not an error.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -904,9 +872,8 @@ mod tests {
 
     #[tokio::test]
     async fn multi_group_queries_each_group_merges_and_dedups() {
-        // Two -G values → exactly one server query per group (TeReGen has no
-        // OR for a repeated param); rows merged priority-descending and the
-        // row present in both groups appears once.
+        // One query per group, rows merged priority-descending, and the row
+        // present in both groups appearing once.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -948,7 +915,7 @@ mod tests {
         // Three unique rows, not four.
         assert!(out.contains("Update queue (3):"), "{out}");
         assert_eq!(out.matches("row-both").count(), 1, "{out}");
-        // Merged order is priority-descending across groups: a(10), c(7), both(5).
+        // Priority-descending across groups: a(10), c(7), both(5).
         let (pa, pc, pb) = (
             out.find("row-a").unwrap(),
             out.find("row-c").unwrap(),
@@ -991,8 +958,8 @@ mod tests {
 
     // ------------------------------------------------------- field selection
 
-    /// A row with a distinct value in every servable field, so a swapped
-    /// extractor mapping cannot pass.
+    /// A distinct value in every servable field, so a swapped extractor
+    /// mapping cannot pass.
     fn distinct_row() -> serde_json::Value {
         serde_json::json!({
             "id": "SUSE:Maintenance:77:707",
@@ -1023,8 +990,7 @@ mod tests {
             .await;
 
         let (mut session, buf) = teregen_session(&server);
-        // Names in mixed spellings: canonical, raw-key alias, separator/case
-        // variants — all must resolve.
+        // Canonical, raw-key alias, separator/case variants must all resolve.
         let args = matches(
             &Updates,
             &[
@@ -1056,8 +1022,7 @@ mod tests {
         );
         Updates.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        // Each value sits on its canonical field's line — a swapped mapping
-        // would pair a value with the wrong name.
+        // A swapped mapping would pair a value with the wrong name.
         for line in [
             "ReviewRequestID: SUSE:Maintenance:77:707",
             "Incident Priority: 421",
@@ -1116,7 +1081,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_field_errors_before_any_query() {
         // The expect(0) mock pins "before any query" independently of the
-        // error text (a resolve-after-fetch refactor would trip it).
+        // error text: a resolve-after-fetch refactor trips it.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -1136,8 +1101,8 @@ mod tests {
 
     #[tokio::test]
     async fn subset_selection_renders_only_requested_fields_in_request_order() {
-        // The mutation this kills: iterating the full FIELDS registry instead
-        // of the requested specs (render-everything passes the all-12 test).
+        // Kills the mutation of iterating the full FIELDS registry instead of
+        // the requested specs, which passes the all-12 test.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -1168,9 +1133,8 @@ mod tests {
 
     #[tokio::test]
     async fn assignment_fields_with_status_all_are_refused() {
-        // Without with_assignment TeReGen omits assignee/assignees on SLFO
-        // rows; printing "unassigned" there would be false data. The expect(0)
-        // mock pins that the refusal happens before any query.
+        // Printing "unassigned" for an SLFO row TeReGen served without
+        // assignment data would be false. expect(0) pins the pre-query refusal.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -1227,8 +1191,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_group_input_collapses_to_one_query() {
-        // `-G a -G a` must fire exactly one query (input dedup routes it onto
-        // the single-group path), not two identical ones.
+        // `-G a -G a` fires one query, not two identical ones.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -1273,9 +1236,8 @@ mod tests {
 
     #[tokio::test]
     async fn merge_keeps_idless_rows_and_skips_missing_updates_key() {
-        // Two branches in one fixture: a group whose body has no `updates` key
-        // (Ok(None) → skipped, not fatal) and a row without an `id` (kept, not
-        // silently dropped).
+        // Two branches: a body with no `updates` key (skipped, not fatal) and
+        // a row without an `id` (kept, not silently dropped).
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -1330,8 +1292,7 @@ mod tests {
         let args = matches(&Updates, &["-G", "g1", "-G", "g2", "--limit", "1"]);
         Updates.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        // The limit keeps the highest-priority row across BOTH groups — a
-        // slice taken before the merge-sort would keep "low".
+        // A slice taken before the merge-sort would keep "low".
         assert!(out.contains("Update queue (1):"), "{out}");
         assert!(out.contains("high"), "{out}");
         assert!(!out.contains("low"), "{out}");
@@ -1363,8 +1324,8 @@ mod tests {
 
     #[tokio::test]
     async fn json_dumps_full_rows_untouched() {
-        // A key the renderer knows nothing about must survive into --json:
-        // the flag is the everything-the-server-sent path.
+        // --json is the everything-the-server-sent path, so a key the renderer
+        // knows nothing about must survive.
         let mut row = distinct_row();
         row.as_object_mut()
             .unwrap()
@@ -1394,13 +1355,10 @@ mod tests {
 
     #[tokio::test]
     async fn unassigned_roles_without_assignment_data_is_na_not_all_open() {
-        // The reviewer's scenario: a classic row served in a view that carries
-        // no assignment data (`--status all`) has `review_groups` but no
-        // `assignees` key. Rendering every group as open would be false data
-        // indistinguishable from the truth; the honest answer is n/a. (Live,
-        // the two keys travel together — this pins the guard for server
-        // drift.) `Unassigned Roles` stays *allowed* under `--status all`
-        // precisely because of this per-row degradation.
+        // A classic row under `--status all` has `review_groups` but no
+        // `assignees`; rendering every group as open would be indistinguishable
+        // from the truth, so n/a — the per-row degradation that keeps
+        // `Unassigned Roles` allowed under `--status all`.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -1420,8 +1378,7 @@ mod tests {
         assert!(out.contains("Unassigned Roles: n/a"), "{out}");
         assert!(!out.contains("qam-sle"), "false open-group list: {out}");
 
-        // With the assignees key PRESENT (even empty), the derivation runs:
-        // every review group is genuinely open.
+        // With the assignees key present (even empty) the derivation runs.
         let obj = serde_json::json!({
             "assignees": {},
             "review_groups": ["qam-sle", "qam-openqa"],
@@ -1434,8 +1391,7 @@ mod tests {
 
     #[test]
     fn empty_assignee_entry_list_counts_as_unassigned() {
-        // {"qam-sle": []} has nobody on it: it must appear in Unassigned
-        // Roles, not vanish from both role lists.
+        // {"qam-sle": []} must appear in Unassigned Roles, not vanish.
         let obj = serde_json::json!({
             "assignees": {"qam-sle": []},
             "review_groups": ["qam-sle", "qam-openqa"],

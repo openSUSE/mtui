@@ -3,26 +3,23 @@
 //! Posts a review request for a loaded update into a configured channel, then
 //! reads back the reactions and threaded replies reviewers leave on it. The
 //! surface is deliberately small — post, react, reply, identity — because the
-//! review *policy* (which reaction counts as an ack, which reviewer is allowed
-//! to ack) belongs to the command, not the transport.
+//! review *policy* (which reaction acks, which reviewer may ack) belongs to the
+//! command, not the transport.
 //!
-//! Two Slack-specific behaviours shape the code here and are worth stating
-//! up front, because neither matches the other connectors in this crate:
+//! Two Slack-specific behaviours shape the code, neither matching the other
+//! connectors in this crate:
 //!
-//! * **Application errors arrive as HTTP 200.** A refused call still returns
-//!   `200 OK`, carrying `{"ok": false, "error": "channel_not_found"}`. Checking
-//!   the status is therefore *not* enough — `Slack::request` inspects the
-//!   `ok` field on every response and converts a false one into
-//!   [`SlackError::Api`].
-//! * **Rate limiting is routine, not exceptional.** Tier-3 methods allow
-//!   roughly 50 requests a minute, and a watch loop polling several templates
-//!   will meet a `429` eventually. That is modelled as its own
-//!   [`SlackError::RateLimited`] variant so a caller can back off and keep
+//! * **Application errors arrive as HTTP 200**, carrying `{"ok": false,
+//!   "error": "channel_not_found"}`, so the status is not enough —
+//!   `Slack::request` inspects `ok` on every response and converts a false one
+//!   into [`SlackError::Api`].
+//! * **Rate limiting is routine.** Tier-3 methods allow roughly 50 requests a
+//!   minute, so a watch loop polling several templates will meet a `429`; the
+//!   dedicated [`SlackError::RateLimited`] lets a caller back off and keep
 //!   watching instead of counting throttling as a failure.
 //!
-//! Like the other connectors, the constructor pair splits config-reading
-//! ([`Slack::new`]) from the injectable seam ([`Slack::with_client`]) so tests
-//! can aim the client at a `wiremock` server.
+//! As with the other connectors, [`Slack::new`] reads config and
+//! [`Slack::with_client`] is the injectable seam tests aim at `wiremock`.
 
 use mtui_config::Config;
 use reqwest::Method;
@@ -37,9 +34,9 @@ use crate::http::{
 
 /// Maximum `conversations.replies` pages walked before giving up.
 ///
-/// A review thread is a handful of messages; a cursor that keeps yielding
-/// pages past this many means either a pathological thread or a server-side
-/// loop, and either way the watch should not spin forever on one poll.
+/// A review thread is a handful of messages, so a cursor still yielding pages
+/// past this means a pathological thread or a server-side loop — either way the
+/// watch must not spin forever on one poll.
 const MAX_REPLY_PAGES: usize = 10;
 
 /// Reaction names that count as an approval ack, after skin-tone stripping.
@@ -50,10 +47,10 @@ const NACK_REACTIONS: &[&str] = &["-1", "thumbsdown", "x", "no_entry"];
 
 /// A message this client posted, identified the way Slack wants it referenced.
 ///
-/// The `channel` is Slack's **canonical** channel ID from the post response,
-/// not whatever was configured. Those differ whenever the config names a
-/// channel by `#name`, and every later `reactions.get` / `conversations.replies`
-/// call must use the canonical form, so it is what gets persisted.
+/// The `channel` is Slack's **canonical** ID from the post response, not the
+/// configured value: those differ when the config names a channel by `#name`,
+/// and every later `reactions.get` / `conversations.replies` needs the
+/// canonical form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostedMessage {
     /// The canonical channel ID Slack resolved the post to.
@@ -93,10 +90,9 @@ pub struct Reply {
 
 /// Strip a trailing `::skin-tone-N` modifier from a Slack reaction name.
 ///
-/// Slack reports `+1::skin-tone-4` as a distinct reaction from `+1`, so a
-/// literal comparison would silently ignore an ack from anyone who has set a
-/// default skin tone. Normalising at the transport edge means every consumer
-/// compares against the base name and cannot forget this.
+/// Slack reports `+1::skin-tone-4` as distinct from `+1`, so a literal
+/// comparison would silently ignore an ack from anyone with a default skin tone.
+/// Normalising at the transport edge means no consumer can forget it.
 #[must_use]
 fn normalize_reaction(name: &str) -> &str {
     match name.split_once("::skin-tone-") {
@@ -129,11 +125,10 @@ fn is_loopback(host: &str) -> bool {
 
 /// Whether `url` may carry the bearer token: `https`, or `http` to loopback.
 ///
-/// Unlike the Gitea connector — whose PR URL comes from attacker-influenceable
-/// checked-out metadata and so needs a full origin comparison — the Slack base
-/// is only ever read from the user's own config. The remaining risk is a
-/// misconfiguration that would put the token on the wire in clear text, which
-/// this refuses outright.
+/// A weaker check than the Gitea connector's full origin comparison, because
+/// the Slack base is only ever read from the user's own config, never from
+/// attacker-influenceable metadata. The remaining risk is a misconfiguration
+/// putting the token on the wire in clear text, which this refuses outright.
 fn is_token_safe_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
@@ -158,8 +153,8 @@ fn is_token_safe_url(url: &str) -> bool {
 
 /// Percent-encode `params` into a query string, without a leading `?`.
 ///
-/// reqwest's `query` feature is disabled workspace-wide, so query strings are
-/// hand-rolled here exactly as the TeReGen connector does.
+/// reqwest's `query` feature is disabled workspace-wide, so this is hand-rolled
+/// as in the TeReGen connector.
 fn build_query(params: &[(&str, &str)]) -> String {
     params
         .iter()
@@ -187,9 +182,9 @@ pub struct Slack {
 impl Slack {
     /// Build a client from the session configuration.
     ///
-    /// The integration is opt-in, so the common case is that this refuses: an
-    /// mtui with no `[slack]` configuration gets [`SlackError::Disabled`], not
-    /// an authentication failure several calls later.
+    /// The integration is opt-in, so the common case is a refusal:
+    /// [`SlackError::Disabled`] up front, rather than an authentication failure
+    /// several calls later.
     ///
     /// # Errors
     ///
@@ -214,8 +209,8 @@ impl Slack {
 
     /// Build a client over an existing [`HttpClient`] against `api_base`.
     ///
-    /// The injectable seam the other connectors use: tests point `api_base` at
-    /// a `wiremock` server, which is permitted because it is loopback.
+    /// The injectable seam: tests point `api_base` at a `wiremock` server,
+    /// permitted because it is loopback.
     ///
     /// # Errors
     ///
@@ -236,9 +231,8 @@ impl Slack {
     /// Issue a Slack Web API call and return its decoded envelope.
     ///
     /// Folds the three failure shapes — transport, HTTP status, and the
-    /// `ok: false` application error that arrives as HTTP 200 — into typed
-    /// errors, and lifts `429` into [`SlackError::RateLimited`] before any of
-    /// them so a caller can back off rather than fail.
+    /// `ok: false` application error arriving as HTTP 200 — into typed errors,
+    /// lifting `429` into [`SlackError::RateLimited`] ahead of all of them.
     async fn request(
         &self,
         method: Method,
@@ -273,8 +267,8 @@ impl Slack {
                     tracing::error!("{}", ssl_verification_hint(None));
                     tracing::debug!("Slack TLS error detail: {}", ssl_error_detail(&e));
                 } else {
-                    // On this arm the sanitized URL is the line's only host
-                    // context, reqwest's having been dropped.
+                    // The sanitized URL is the only host context here,
+                    // reqwest's having been dropped.
                     tracing::warn!("API call to Slack {} failed: {e}", sanitize_url(&url));
                 }
                 return Err(SlackError::FailedCall(format!(
@@ -286,8 +280,8 @@ impl Slack {
 
         let status = response.status();
         if status.as_u16() == 429 {
-            // Slack sends the backoff in seconds; a malformed or absent header
-            // leaves the decision to the caller's own default.
+            // Seconds; a malformed or absent header leaves the backoff to the
+            // caller's own default.
             let retry_after = response
                 .headers()
                 .get("retry-after")
@@ -331,9 +325,9 @@ impl Slack {
 
     /// Verify the token and return the bot's own user ID.
     ///
-    /// Called before posting so a bad token is reported as such, up front,
-    /// instead of surfacing as a confusing failure on the post itself. The
-    /// returned ID also lets the caller ignore the bot's own reactions.
+    /// Called before posting so a bad token is reported as such rather than as
+    /// a confusing post failure. The ID also lets a caller ignore the bot's own
+    /// reactions.
     ///
     /// # Errors
     ///
@@ -367,9 +361,8 @@ impl Slack {
                 Some(json!({ "channel": channel, "text": text })),
             )
             .await?;
-        // Persist what Slack echoes back, not what was asked for: a `#name`
-        // channel resolves to an ID here, and only the ID works for the
-        // reaction/reply reads that follow.
+        // Persist what Slack echoes back: a `#name` resolves to an ID here,
+        // and only the ID works for the reaction/reply reads that follow.
         let canonical = data
             .get("channel")
             .and_then(Value::as_str)
@@ -390,10 +383,10 @@ impl Slack {
 
     /// Read a message's body and reactions in one call.
     ///
-    /// `reactions.get` returns the message itself alongside its reactions, so
-    /// a caller that must confirm *which* message it is looking at — an
-    /// approval gate verifying a stored marker still points at a review
-    /// request for the update in hand — gets both from a single request.
+    /// `reactions.get` returns the message alongside its reactions, so a caller
+    /// that must confirm *which* message it is looking at — an approval gate
+    /// checking a stored marker still points at this update's review request —
+    /// needs only one request.
     ///
     /// # Errors
     ///
@@ -446,8 +439,7 @@ impl Slack {
     /// Read the reactions currently on the message identified by `channel`/`ts`.
     ///
     /// Reaction names come back skin-tone-normalised. An absent `reactions`
-    /// field means nobody has reacted yet, which is an empty list rather than
-    /// an error.
+    /// field is an empty list, not an error: nobody has reacted yet.
     ///
     /// # Errors
     ///
@@ -460,8 +452,8 @@ impl Slack {
     /// Read the threaded replies to the message identified by `channel`/`ts`.
     ///
     /// Follows Slack's cursor pagination, bounded by `MAX_REPLY_PAGES`. The
-    /// parent message is excluded: Slack returns it as the first element of
-    /// the first page, and it is the request itself, not a reply to it.
+    /// parent is excluded — Slack returns it first, and it is the request
+    /// itself, not a reply.
     ///
     /// # Errors
     ///
@@ -537,13 +529,11 @@ mod tests {
     fn normalize_reaction_strips_skin_tone() {
         assert_eq!(normalize_reaction("+1::skin-tone-4"), "+1");
         assert_eq!(normalize_reaction("thumbsup::skin-tone-2"), "thumbsup");
-        // A bare name is returned untouched.
         assert_eq!(normalize_reaction("+1"), "+1");
     }
 
     #[test]
     fn ack_and_nack_recognise_skin_toned_variants() {
-        // The whole point of normalising: a toned thumbs-up still acks.
         assert!(is_ack_reaction("+1::skin-tone-6"));
         assert!(is_ack_reaction("white_check_mark"));
         assert!(!is_ack_reaction("eyes"));
@@ -561,22 +551,18 @@ mod tests {
     #[test]
     fn with_client_accepts_https_and_loopback_http() {
         assert!(client("https://slack.com/api").is_ok());
-        // wiremock serves plain HTTP on loopback; tests depend on this.
         assert!(client("http://127.0.0.1:8080/api").is_ok());
         assert!(client("http://localhost:9999").is_ok());
     }
 
     #[test]
     fn with_client_refuses_to_put_the_token_in_clear_text() {
-        // Plain HTTP to a non-loopback host would leak the bearer token.
         let err = client("http://slack.example.com/api").unwrap_err();
         assert!(matches!(err, SlackError::UntrustedOrigin(_)), "{err:?}");
-        // Userinfo means credentials in the URL itself.
         assert!(matches!(
             client("https://user:pw@slack.com/api").unwrap_err(),
             SlackError::UntrustedOrigin(_)
         ));
-        // A non-HTTP scheme is not a Slack API base.
         assert!(matches!(
             client("ftp://slack.com/api").unwrap_err(),
             SlackError::UntrustedOrigin(_)
@@ -600,21 +586,19 @@ mod tests {
     fn new_refuses_when_disabled_or_tokenless() {
         let mut config = Config::default();
 
-        // The out-of-the-box state: nothing configured, so nothing is posted.
         assert!(matches!(
             Slack::new(&config).unwrap_err(),
             SlackError::Disabled
         ));
 
-        // Disabled wins even with a token present, so the reason is
-        // unambiguous when a site has switched the feature off on purpose.
+        // Disabled outranks a present token, so a deliberately switched-off
+        // site gets an unambiguous reason.
         config.slack_token = "xoxb-test".to_owned();
         assert!(matches!(
             Slack::new(&config).unwrap_err(),
             SlackError::Disabled
         ));
 
-        // Enabled but tokenless is the out-of-the-box state.
         config.slack_enabled = true;
         config.slack_token = String::new();
         assert!(matches!(
@@ -626,7 +610,6 @@ mod tests {
     #[test]
     fn build_query_percent_encodes() {
         assert_eq!(build_query(&[("channel", "C1")]), "channel=C1");
-        // A `#name` channel and a `.`-bearing ts must survive encoding.
         assert_eq!(
             build_query(&[("channel", "#qam review"), ("ts", "1700000000.000100")]),
             "channel=%23qam%20review&ts=1700000000.000100"

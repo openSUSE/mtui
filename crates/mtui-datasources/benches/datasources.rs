@@ -1,25 +1,20 @@
 //! Perf baselines for datasource hot paths.
 //!
-//! Measurement-only, fully offline. Covers the pure/deterministic hot paths the
-//! remediation beads target:
+//! Measurement-only, fully offline, over the pure/deterministic hot paths:
 //! - `refhosts/parse`: `load_refhosts` (YAML parse + location-flatten + dedup)
-//!   over synthetic documents of growing size — the parse/lookup hot path
-//!   (0mop.12).
-//! - `refhosts/search`: `Refhosts::search` over a large host set — the O(attrs ×
-//!   hosts) scan (0mop.12).
-//! - `http/client_new`: constructing an `HttpClient` (which builds a fresh
-//!   `reqwest::Client`, i.e. a new connection pool + TLS config each time) — the
-//!   baseline for reusing one client across commands (0mop.13).
+//!   over synthetic documents of growing size.
+//! - `refhosts/search`: `Refhosts::search` over a large host set — the
+//!   O(attrs × hosts) scan.
+//! - `http/client_new`: constructing an `HttpClient`, i.e. a fresh
+//!   `reqwest::Client` with a new connection pool + TLS config each time — the
+//!   baseline for reusing one client across commands.
 //!
-//! The oqa-search fan-out's authoritative regression gate is the request-count
-//! and order oracle in `tests/oqa_search.rs` (a count/order is the honest signal
-//! for parallelize, 0mop.7). `oqa/single_incidents` is timed here as a
-//! supplementary high-latency signal contrasting a serial bound with a parallel
-//! bound: with a per-response delay the sequential curve is additive while the
-//! bounded-parallel curve is ~flat. The gitea approval flow (`gitea/approve`) is
-//! the analogous supplementary signal for 0mop.8. Bench wall-clock is dominated
-//! by the mock server's simulated latency, so the count oracles remain the gate.
-//! See `plans/perf-baseline-0mop1.md`.
+//! The authoritative gate for the oqa-search fan-out and the gitea approval flow
+//! is the request-count and order oracle in `tests/oqa_search.rs`;
+//! `oqa/single_incidents` and `gitea/approve` are timed here only as
+//! supplementary high-latency signals, contrasting a serial bound (additive)
+//! with a parallel one (~flat). Bench wall-clock is dominated by the mock
+//! server's simulated latency.
 
 use std::hint::black_box;
 
@@ -86,9 +81,9 @@ fn bench_refhosts_search(c: &mut Criterion) {
 
 /// Parse a representative SMELT `testplatform` string in a tight loop.
 ///
-/// Isolates the `Attributes::from_testplatform` grammar parse (0mop.12 lever 3):
-/// the two internal regexes are now cached in `LazyLock` statics, so this no
-/// longer pays a per-call `Regex::new` compilation.
+/// Isolates the `Attributes::from_testplatform` grammar parse. The two internal
+/// regexes are cached in `LazyLock` statics, so this pays no per-call
+/// `Regex::new`.
 fn bench_from_testplatform(c: &mut Criterion) {
     let tp = "base=sles(major=15,minor=5);arch=[x86_64,aarch64];addon=ha(major=15,minor=5)";
     c.bench_function("refhosts/from_testplatform", |b| {
@@ -98,9 +93,9 @@ fn bench_from_testplatform(c: &mut Criterion) {
 
 /// Repeated `host_by_name` lookups over a growing store.
 ///
-/// 0mop.12 lever 2: the lookup is now a `HashMap` index (O(1)) instead of a
-/// linear scan (O(hosts)). Looks up the last host (worst case for the scan) so
-/// the O(1) vs O(n) contrast shows if it clears measurement noise.
+/// The lookup is a `HashMap` index, not a linear scan. Looks up the last host —
+/// worst case for a scan — so the O(1) vs O(n) contrast shows if it clears
+/// measurement noise.
 fn bench_host_by_name(c: &mut Criterion) {
     let mut g = c.benchmark_group("refhosts/host_by_name");
     for &n in HOST_COUNTS {
@@ -125,8 +120,8 @@ fn bench_http_client_new(c: &mut Criterion) {
 }
 
 /// Simulated per-response latency for the gitea approval bench, so the
-/// round-trip *count* (the thing 0mop.8 changes) shows up in wall-clock. Small
-/// enough to keep the bench quick; the count oracle is the real gate.
+/// round-trip *count* shows up in wall-clock. Small enough to keep the bench
+/// quick; the count oracle is the real gate.
 const GITEA_RESPONSE_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Mount a mock Gitea PR whose comments show the session user assigned (so a
@@ -177,9 +172,9 @@ async fn gitea_approve_fixture(server: &MockServer) -> Gitea {
     .expect("gitea client builds")
 }
 
-/// Time one happy-path `approve` against a latency-injecting mock server. Fewer
-/// comment fetches (0mop.8: 2->1) means fewer round trips at `GITEA_RESPONSE_DELAY`
-/// each. Supplementary to the request-count oracle.
+/// Time one happy-path `approve` against a latency-injecting mock server: each
+/// saved comment fetch is one fewer `GITEA_RESPONSE_DELAY` round trip.
+/// Supplementary to the request-count oracle.
 fn bench_gitea_approve(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -198,8 +193,8 @@ fn bench_gitea_approve(c: &mut Criterion) {
 }
 
 /// Per-response latency for the oqa-search bench, so the serial-vs-parallel
-/// fan-out difference (0mop.7) shows up in wall-clock. The request-count/order
-/// oracle in `tests/oqa_search.rs` is the real gate.
+/// fan-out difference shows up in wall-clock. The request-count/order oracle in
+/// `tests/oqa_search.rs` is the real gate.
 const OQA_RESPONSE_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Number of versions to fan out over in the oqa-search bench.

@@ -1,6 +1,6 @@
 //! The MCP round-trip contract test.
 //!
-//! It connects an rmcp client to the production [`McpServer`] over an in-memory
+//! Connects an rmcp client to the production [`McpServer`] over an in-memory
 //! duplex transport (no subprocess, no socket) and proves the runtime-synthesis
 //! wiring end to end:
 //!
@@ -10,10 +10,6 @@
 //! 2. `call_tool("whoami")` routes through the *same* engine the REPL uses and
 //!    returns the `User: <user>, app pid: …` banner the command prints.
 //! 3. A deny-listed tool call is rejected (`method_not_found`) — no route exists.
-//!
-//! This is the gating contract test: it demonstrates the hand-written
-//! `ServerHandler` with a runtime-built tool set + schemas works against rmcp 3.x
-//! over a transport.
 
 #![cfg(feature = "mcp")]
 
@@ -44,8 +40,7 @@ where
     F: FnOnce(rmcp::service::RunningService<rmcp::RoleClient, ()>) -> Fut,
     Fut: std::future::Future<Output = T>,
 {
-    // In-memory bidirectional transport: a single duplex gives two ends that
-    // talk to each other (no subprocess, no socket).
+    // A single duplex gives two ends that talk to each other.
     let (server_io, client_io) = tokio::io::duplex(4096);
 
     let server = build_server().await;
@@ -54,7 +49,7 @@ where
         running.waiting().await.expect("server run");
     });
 
-    // `()` is the no-op ClientHandler; `serve` performs the client half of the
+    // `()` is the no-op ClientHandler; `serve` does the client half of the
     // handshake and returns a peer to drive requests.
     let client = ().serve(client_io).await.expect("client serve/initialize");
     let out = body(client).await;
@@ -191,10 +186,9 @@ async fn transfer_tools_are_served_and_dispatched() {
             );
         }
 
-        // Dispatch reaches the transfer arm: with no report loaded the tool
-        // refuses with its own message (method_not_found would mean the
-        // dispatch arm is missing; a path in the output would mean the old
-        // synthesized command answered).
+        // With no report loaded the tool refuses with its own message:
+        // method_not_found would mean the dispatch arm is missing, and a path in
+        // the output that the old synthesised command answered.
         let out = client
             .call_tool(
                 CallToolRequestParams::new("get").with_arguments(

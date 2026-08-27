@@ -1,12 +1,9 @@
 //! Secure atomic local file writes.
 //!
-//! The single implementation of mtui's temp-file + rename write. It is the
-//! shared home for a pattern that previously existed in three drifted copies
-//! (the known-hosts persist path in `mtui-hosts`, the testreport exporter in
-//! `mtui-testreport`, and the refhosts cache writer in `mtui-datasources`).
-//! Consolidating it here — the lowest crate that already performs filesystem
-//! I/O and is depended on by all three writers — means the security guarantees
-//! below can never drift between call sites again.
+//! The single implementation of mtui's temp-file + rename write, shared by the
+//! known-hosts persist path (`mtui-hosts`), the testreport exporter
+//! (`mtui-testreport`) and the refhosts cache writer (`mtui-datasources`) so the
+//! guarantees below cannot drift between call sites.
 //!
 //! ## Guarantees
 //!
@@ -21,9 +18,9 @@
 //! * **Restrictive permissions.** On unix the temp is opened `0o600`.
 //! * **Durability.** The temp is `fsync`ed before the rename, so a crash never
 //!   leaves a torn or empty destination.
-//! * **Atomic replacement.** The temp lives in the same directory as the
-//!   destination, so the final [`rename`](std::fs::rename) stays intra-filesystem
-//!   and is atomic; a reader never observes a half-written file.
+//! * **Atomic replacement.** The temp is a sibling of the destination, so the
+//!   final [`rename`](std::fs::rename) stays intra-filesystem and atomic; a
+//!   reader never observes a half-written file.
 //! * **Clean failure.** Any write/fsync/rename error removes the temp file, so
 //!   no partial temp leaks beside the destination.
 
@@ -35,11 +32,9 @@ use std::path::{Path, PathBuf};
 /// Creates the destination's parent directory if absent (cache locations such
 /// as `~/.cache/mtui` may not exist on a fresh checkout), writes `data` to a
 /// unique same-directory temp file opened with `create_new` (and `0o600` on
-/// unix), fsyncs it, then renames it over `path`. See the [module
-/// docs](self) for the full set of guarantees.
-///
-/// Callers assemble the final bytes themselves (e.g. read-existing + append)
-/// and hand the complete buffer here.
+/// unix), fsyncs it, then renames it over `path`; see the [module docs](self)
+/// for the full guarantees. Callers hand over the complete buffer — assembling
+/// it (e.g. read-existing + append) is theirs.
 ///
 /// # Errors
 ///
@@ -79,11 +74,10 @@ pub fn write(data: &[u8], path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// A unique temp path in `dir` derived from `target`'s file name plus the PID
-/// (cross-process uniqueness), a nanosecond timestamp, and a
-/// process-lifetime-monotonic counter (intra-process uniqueness across threads
-/// racing within the same nanosecond), so concurrent writers never collide on
-/// the `create_new` open.
+/// A unique temp path in `dir` from `target`'s file name plus the PID
+/// (cross-process), a nanosecond timestamp and a monotonic counter
+/// (intra-process, for threads racing within one nanosecond), so concurrent
+/// writers never collide on the `create_new` open.
 fn unique_temp_path(dir: &Path, target: &Path) -> PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -154,10 +148,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cleanup_and_no_partial_on_rename_failure() {
-        // A destination whose parent is read-only makes create_new succeed
-        // (the temp is created before the dir is locked)… so instead force the
-        // failure by making the *destination itself* a directory: rename of a
-        // file over a non-empty dir fails, exercising the cleanup path.
+        // Renaming a file over a non-empty directory fails, which is the only
+        // reliable way to reach the cleanup path (a read-only parent does not:
+        // the temp is created before the directory is locked).
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("dest");
         std::fs::create_dir(&dest).unwrap();
@@ -165,7 +158,6 @@ mod tests {
 
         let err = write(b"data", &dest).unwrap_err();
         assert!(err.kind() != io::ErrorKind::NotFound, "unexpected: {err}");
-        // Destination is untouched (still the directory) and no temp leaked.
         assert!(dest.is_dir());
         assert!(
             tmp_files_in(dir.path()).is_empty(),
@@ -176,8 +168,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlink_at_destination_is_replaced_not_followed() {
-        // A pre-existing symlink at the destination must be replaced by the
-        // rename, not followed to clobber its link target.
+        // The rename must replace the symlink, not follow it to its target.
         let dir = tempfile::tempdir().unwrap();
         let outside = dir.path().join("outside.txt");
         std::fs::write(&outside, b"original").unwrap();
@@ -187,7 +178,6 @@ mod tests {
 
         write(b"new", &dest).unwrap();
 
-        // The symlink target is untouched; the destination is now a regular file.
         assert_eq!(std::fs::read(&outside).unwrap(), b"original");
         assert!(
             !std::fs::symlink_metadata(&dest)
@@ -211,7 +201,6 @@ mod tests {
         for h in handles {
             h.join().unwrap().unwrap();
         }
-        // Exactly one payload wins; every write landed atomically.
         let final_content = std::fs::read_to_string(&*path).unwrap();
         assert!(
             final_content.starts_with("writer-"),

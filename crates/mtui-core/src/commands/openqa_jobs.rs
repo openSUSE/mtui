@@ -15,13 +15,12 @@ use crate::session::Session;
 const PASSING: &[&str] = &["passed", "softfailed"];
 /// openQA results that are neutral (neither pass nor fail).
 const NEUTRAL: &[&str] = &["obsoleted", "skipped"];
-/// openQA job states that mean the job has finished; any other state
-/// (`scheduled`, `assigned`, `setup`, `running`, `uploading`, ...) is pending
-/// and its `result` is not yet meaningful.
+/// The finished job states; in any other (`scheduled`, `running`, ...) the
+/// `result` is not yet meaningful.
 const TERMINAL_STATES: &[&str] = &["done", "cancelled"];
 
-/// Whether an openQA job has not finished yet. Pending jobs must not be counted
-/// as failures by `--failed`, and are surfaced separately as "N still pending".
+/// Whether a job has not finished. `--failed` must not count these as failures;
+/// they are surfaced separately as "N still pending".
 fn is_pending(job: &oqa::JobResult) -> bool {
     !TERMINAL_STATES.contains(&job.state.as_str())
 }
@@ -133,8 +132,8 @@ impl Command for OpenQAJobs {
         )
         .map_err(|e| CommandError::Other(format!("could not build openQA client: {e}")))?;
 
-        // incident_id is maintenance_id (int for Maintenance, "1.2" for SLFO);
-        // fall back to the review id in the SLFO case — mirrors openqa_overview.
+        // The incident id is the maintenance id, but SLFO's is not an integer
+        // ("1.2"), so fall back to the review id there. As `openqa_overview`.
         let effective_incident_id = if rrid.maintenance_id.parse::<i64>().is_ok() {
             rrid.maintenance_id.clone()
         } else {
@@ -162,8 +161,8 @@ impl Command for OpenQAJobs {
         if let Some(arch) = &arch_filter {
             jobs.retain(|j| &j.arch == arch);
         }
-        // Count unfinished jobs before any --failed filtering so the "still
-        // pending" message reflects reality regardless of the active filter.
+        // Counted before `--failed` filters them out, so the message reflects
+        // reality regardless of the active filter.
         let pending_count = jobs.iter().filter(|j| is_pending(j)).count();
         if only_failed {
             jobs.retain(|j| {
@@ -332,8 +331,8 @@ mod tests {
         assert!(!out.contains("install"), "{out}");
     }
 
-    /// `--failed` must not list unfinished jobs (openQA `result:none`,
-    /// non-terminal `state`) as failures, and must report them as pending.
+    /// `--failed` must not list unfinished jobs (`result:none`, non-terminal
+    /// `state`) as failures, and must report them as pending.
     #[tokio::test]
     async fn failed_filter_excludes_pending_and_reports_count() {
         let server = server_with_jobs(serde_json::json!({
@@ -358,15 +357,12 @@ mod tests {
         );
         OpenQAJobs.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        // Only the genuinely failed job survives the filter.
         assert!(out.contains("boot"), "{out}");
         assert!(out.contains("failed=1"), "{out}");
-        // The pending job is neither counted as failed nor listed.
         assert!(
             !out.contains("kdump"),
             "pending job must not be listed as failed: {out}"
         );
-        // ... but it is reported as pending.
         assert!(out.contains("1 still pending"), "{out}");
     }
 
@@ -394,8 +390,7 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
-    /// A 5xx on the openQA jobs query (after a successful dashboard lookup) also
-    /// surfaces as Err.
+    /// The same for a 5xx on the openQA jobs query itself.
     #[tokio::test]
     async fn openqa_jobs_failure_returns_err() {
         let server = MockServer::start().await;
@@ -426,9 +421,9 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
-    /// In the default listing a pending job (`result:none`) is still shown and
-    /// the pending count is surfaced. Color is stripped under `ColorMode::Never`,
-    /// so the yellow-vs-red branch is exercised for coverage but not asserted on.
+    /// In the default listing a pending job is still shown and counted. Color is
+    /// stripped under `ColorMode::Never`, so the yellow-vs-red branch runs for
+    /// coverage but is not asserted on.
     #[tokio::test]
     async fn pending_job_listed_and_counted_in_default_listing() {
         let server = server_with_jobs(serde_json::json!({
@@ -454,13 +449,10 @@ mod tests {
         assert!(out.contains("1 still pending"), "{out}");
     }
 
-    /// Clears `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` for the guard's
-    /// lifetime, restoring their prior value on drop. `ruoqa` 0.2 resolves
-    /// this pair *ahead of* `client.conf`, so a test asserting a specific
-    /// `client.conf` credential must not see an ambient pair from the
-    /// developer's or CI's shell. Must only be used inside
-    /// `#[serial(openqa_config_env)]` tests: `std::env` mutation is
-    /// process-global.
+    /// Clears `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` for the guard's lifetime:
+    /// `ruoqa` 0.2 resolves that pair *ahead of* `client.conf`, so a test
+    /// asserting a `client.conf` credential must not see an ambient shell one.
+    /// Only valid inside `#[serial(openqa_config_env)]`.
     struct ApiEnvGuard {
         prev_key: Option<std::ffi::OsString>,
         prev_secret: Option<std::ffi::OsString>,
@@ -471,8 +463,7 @@ mod tests {
         fn new() -> Self {
             let prev_key = std::env::var_os("OPENQA_API_KEY");
             let prev_secret = std::env::var_os("OPENQA_API_SECRET");
-            // SAFETY: guarded by `#[serial(openqa_config_env)]`, so no other
-            // test reads/writes these vars concurrently.
+            // SAFETY: guarded by `#[serial(openqa_config_env)]`.
             unsafe {
                 std::env::remove_var("OPENQA_API_KEY");
                 std::env::remove_var("OPENQA_API_SECRET");
@@ -501,13 +492,12 @@ mod tests {
         }
     }
 
-    /// Proves Phase 2 of the ruoqa migration: `openqa_jobs` authenticates when
-    /// `client.conf` has credentials for the instance, not just when openQA
-    /// happens to accept an unauthenticated GET.
+    /// `openqa_jobs` authenticates when `client.conf` has credentials for the
+    /// instance, rather than relying on openQA accepting an unauthenticated GET.
     #[tokio::test]
     #[serial_test::serial(openqa_config_env)]
-    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
-    // `#[serial(openqa_config_env)]` guard makes the mutation exclusive.
+    // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes the
+    // process-global mutation exclusive.
     #[allow(unsafe_code)]
     async fn authenticates_against_an_instance_requiring_x_api_hash() {
         let _env = ApiEnvGuard::new();
@@ -549,7 +539,7 @@ mod tests {
             ],
         );
         let result = OpenQAJobs.call(&mut session, &args).await;
-        // SAFETY: still inside the `#[serial(openqa_config_env)]` critical section.
+        // SAFETY: still inside that critical section.
         unsafe { std::env::remove_var("OPENQA_CONFIG") };
         result.unwrap();
         assert!(

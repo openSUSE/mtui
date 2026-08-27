@@ -3,36 +3,29 @@
 //! Two token-budget concerns live here, co-located:
 //!
 //! * `cap_output` — the per-tool-result byte bound.
-//! * `slim_tool_schema` — the JSON-Schema slimming pass that drops
-//!   redundant `title` keys, flattens `anyOf: [{type: X}, {type: null}]` unions,
-//!   and terse-rewrites the long shared `help` strings before the tool list goes
-//!   on the wire.
+//! * `slim_tool_schema` — the JSON-Schema pass that drops redundant `title`
+//!   keys, flattens `anyOf: [{type: X}, {type: null}]` unions and terse-rewrites
+//!   the long shared `help` strings before the tool list goes on the wire.
 //!
-//! The schema is built directly from `clap` by `crate::schema`, so it never
-//! emits a `title` key and renders a nullable scalar as the
-//! `anyOf: [{type: X}, {type: null}]` shape via
-//! `crate::schema::command_input_schema`'s `wrap_nullable`. The `title`-drop is
-//! therefore mostly defensive here; the substantive wins are the nullable
-//! flatten and the terse descriptions. The transforms run on the plain
+//! `crate::schema` builds the schema straight from `clap`, so it never emits a
+//! `title` and the `title`-drop is mostly defensive; the substantive wins are the
+//! nullable flatten and the terse descriptions. The transforms run on the plain
 //! [`ToolDescriptor`](crate::tools::ToolDescriptor) schema `Value`s in
-//! [`crate::server::McpServer::new`] before conversion to `rmcp::model::Tool`.
+//! [`crate::server::McpServer::new`], before conversion to `rmcp::model::Tool`.
 
 use serde_json::{Map, Value};
 
 /// Truncate `text` to at most `limit` bytes (UTF-8), appending a notice.
 ///
 /// A single tool result — a `run` over many hosts, a multi-thousand-line install
-/// log — can dwarf the rest of the client's context. When the UTF-8 length of
-/// `text` exceeds `limit` the **tail** is dropped (the head usually carries the
-/// command echo and the first, most diagnostic output) and a one-line
-/// `…[truncated N bytes; …]` notice is appended pointing at the paged readers.
+/// log — can dwarf the rest of the client's context. Over `limit` the **tail** is
+/// dropped, the head usually carrying the command echo and the most diagnostic
+/// output, and a `…[truncated N bytes; …]` notice points at the paged readers.
 ///
-/// `limit == 0` disables the cap and returns `text` unchanged. Under-cap text is
-/// returned byte-identical. The cut is made on a `char` boundary so the result
-/// is always valid UTF-8 even when the byte cut would split a codepoint.
-///
-/// The reported dropped-byte count is `total − limit` (the budget overrun),
-/// independent of the small extra bytes a codepoint-boundary trim may shed.
+/// `limit == 0` disables the cap and under-cap text is returned byte-identical.
+/// The cut lands on a `char` boundary, so the result is always valid UTF-8. The
+/// reported count is the budget overrun `total − limit`, independent of the few
+/// extra bytes a codepoint-boundary trim may shed.
 #[must_use]
 pub(crate) fn cap_output(text: String, limit: usize) -> String {
     if limit == 0 {
@@ -42,8 +35,7 @@ pub(crate) fn cap_output(text: String, limit: usize) -> String {
     if total <= limit {
         return text;
     }
-    // Largest char boundary at or below `limit`, dropping a split trailing
-    // codepoint entirely.
+    // Largest char boundary at or below `limit`.
     let cut = (0..=limit)
         .rev()
         .find(|&i| text.is_char_boundary(i))
@@ -57,11 +49,10 @@ pub(crate) fn cap_output(text: String, limit: usize) -> String {
 
 /// The one-line truncation notice appended when output is capped.
 ///
-/// Shared by [`cap_output`] (post-hoc string truncation) and the write-time
+/// Shared by [`cap_output`] and the write-time
 /// [`SharedBuf`](crate::capture::SharedBuf) path in
-/// [`McpSession::run_command`](crate::session::McpSession::run_command) so both
-/// emit byte-identical text. `dropped` is the budget overrun (bytes discarded),
-/// `limit` the `[mcp] max_output_bytes` budget.
+/// [`McpSession::run_command`](crate::session::McpSession::run_command), so both
+/// emit byte-identical text. `dropped` is the budget overrun.
 #[must_use]
 pub(crate) fn truncation_notice(dropped: usize, limit: usize) -> String {
     format!(
@@ -77,13 +68,10 @@ pub(crate) fn truncation_notice(dropped: usize, limit: usize) -> String {
 ///
 /// Keys are matched **exactly** against a field's `description`, so a key must
 /// stay byte-identical to the `help` its source arg builds: a drifted key
-/// silently stops firing and the verbose text then ships un-slimmed. The
-/// `terse_mappings_are_all_live` test guards against that. Only genuinely
-/// verbose shared help earns an entry — the `-T/--template` and `--all-templates`
-/// descriptions were trimmed at the source (see `commands::support` /
-/// `engine::base_subcommand`) and are already terse, so their former entries had
-/// drifted dead and are dropped rather than revived (reviving would only
-/// *lengthen* the wire copy).
+/// silently stops firing and the verbose text ships un-slimmed. The
+/// `terse_mappings_are_all_live` test guards that. Only genuinely verbose shared
+/// help earns an entry — help already terse at the source (`-T/--template`,
+/// `--all-templates`) must not get one, which would only *lengthen* the wire copy.
 const TERSE_DESCRIPTIONS: &[(&str, &str)] = &[(
     "Host to act on. Can be used multiple times. If omitted all hosts are used",
     "Host to act on (repeatable; default: all hosts)",
@@ -103,22 +91,17 @@ const NAME_MAPS: &[&str] = &["properties", "patternProperties", "$defs", "defini
 /// * drop every `title` schema keyword;
 /// * collapse `anyOf: [{type: X}, {type: null}]` to a flat `{type: X}` (hoisting
 ///   the surviving arm's keys, e.g. `items` for arrays) via [`flatten_nullable`];
-/// * replace a known-verbose `description` with its terse form from
-///   [`TERSE_DESCRIPTIONS`].
+/// * replace a known-verbose `description` with its [`TERSE_DESCRIPTIONS`] form.
 ///
-/// The input is not mutated; a new [`Value`] is returned. The keys of a
-/// `properties`/`$defs`-style map are *names*, not schema keywords, so the
-/// transforms are suspended for that one level.
+/// The input is not mutated; a new [`Value`] is returned. Under a [`NAME_MAPS`]
+/// key the transforms are suspended for one level.
 #[must_use]
 fn slim_tool_schema(schema: &Value) -> Value {
     slim(schema, false)
 }
 
-/// Slim a `Map`-shaped tool input schema in place, returning the new map.
-///
-/// Convenience wrapper for [`crate::tools::ToolDescriptor::input_schema`], which
-/// is a [`Map`] rather than a [`Value`]. Equivalent to
-/// `slim_tool_schema(&Value::Object(map))` unwrapped back to the object.
+/// Slim a [`crate::tools::ToolDescriptor::input_schema`], which is a [`Map`]
+/// rather than the [`Value`] the recursive pass takes.
 #[must_use]
 pub fn slim_input_schema(schema: &Map<String, Value>) -> Map<String, Value> {
     match slim_tool_schema(&Value::Object(schema.clone())) {
@@ -134,11 +117,10 @@ pub fn slim_input_schema(schema: &Map<String, Value>) -> Map<String, Value> {
 
 /// Collapse a two-member `anyOf: [{type: X}, {type: null}]` union in `node`.
 ///
-/// The `null` arm is redundant for the model (a `default` already signals the
-/// field is optional), so the non-null arm's `type` (and any sibling keys it
-/// carries, e.g. `items`) is hoisted to node level and the `anyOf` is dropped.
-/// Only the exact two-member `[T, null]` shape is touched; genuine multi-type
-/// unions are left alone.
+/// The `null` arm is redundant for the model — a `default` already signals the
+/// field is optional — so the non-null arm's `type` and sibling keys (`items`)
+/// are hoisted to node level. Only the exact two-member `[T, null]` shape is
+/// touched; genuine multi-type unions are left alone.
 fn flatten_nullable(node: &mut Map<String, Value>) {
     let Some(Value::Array(any_of)) = node.get("anyOf") else {
         return;
@@ -164,8 +146,7 @@ fn flatten_nullable(node: &mut Map<String, Value>) {
     }
     let arm = arm.clone();
     node.remove("anyOf");
-    // Hoist the surviving arm's keys without clobbering node-level metadata
-    // (description/default/title live on the node, not the arm).
+    // Without clobbering node-level metadata (description/default/title).
     for (key, value) in arm {
         node.entry(key).or_insert(value);
     }

@@ -17,15 +17,11 @@
 //! them directly: [`get_incident_info`] (build name + affected versions from the
 //! Dashboard) and [`incident_jobs`] (the individual openQA jobs for a build).
 //!
-//! The module is split along these submodule seams:
-//!
-//! * `heuristics` — the constants / blocklists that drive
-//!   group filtering and log-line extraction.
-//! * [`results`] — the public result shapes.
-//! * [`search`] — the fetch layer, the pure helpers, and the entry points.
-//! * [`render`] — the plain-text renderer (`render_overview`) and the
-//!   `OVERVIEW_*` block markers shared by the command layer and the export
-//!   injector.
+//! Submodule seams: `heuristics` (the constants / blocklists driving group
+//! filtering and log-line extraction), [`results`] (the public result shapes),
+//! [`search`] (the fetch layer, pure helpers and entry points) and [`render`]
+//! (the plain-text renderer plus the `OVERVIEW_*` block markers the command
+//! layer and the export injector share).
 
 pub(crate) mod heuristics;
 pub mod render;

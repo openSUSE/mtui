@@ -1,24 +1,15 @@
 //! Startup seeding: the pre-REPL work the `mtui` binary does before entering the
 //! interactive loop.
 //!
-//! The argv-driven startup sequence that runs *before* the interactive loop
-//! starts:
+//! First an `-a`/`-k` update via [`Session::load_update`] — an explicitly
+//! requested one resolving to a null report exits `1` rather than dropping into
+//! an empty session — then the `--sut` hosts through the shared engine's
+//! `add_host`, best-effort.
 //!
-//! 1. **`-a`/`-k` update** → [`Session::load_update`]. An explicitly requested
-//!    update that resolves to a null report exits the process with code `1`
-//!    rather than dropping into an empty session.
-//! 2. **`--sut` hosts** → the `add_host` command dispatched through the shared
-//!    engine, best-effort: a bad host is logged and skipped.
-//!
-//! There is **no single-command / non-interactive mode**: mtui has only two
-//! surfaces — the REPL and `mtui-mcp` — and neither takes a positional
-//! command. This module therefore only *seeds* the session; the binary always
-//! enters the REPL afterwards.
-//!
-//! [`seed_session`] is the testable seam: it takes an already-built [`Session`]
-//! and the parsed [`Args`], performs the seeding, and returns [`ControlFlow`] so
-//! `main` can map a fatal outcome to a process exit without this module ever
-//! calling [`std::process::exit`] itself.
+//! This module only *seeds*; the binary always enters the REPL afterwards, since
+//! mtui has no single-command mode. [`seed_session`] is the testable seam: it
+//! returns [`ControlFlow`] so `main` maps a fatal outcome to a process exit and
+//! this module never calls [`std::process::exit`] itself.
 
 use std::ops::ControlFlow;
 
@@ -28,19 +19,14 @@ use mtui_types::Workflow;
 
 /// Seeds `session` from the top-level `args` before the REPL starts.
 ///
-/// * If `args.update()` is set (`-a`/`-k`), loads it via
-///   [`Session::load_update`]. Autoconnect is requested iff no `--sut` override
-///   was given. If the load yields an empty RRID — a null report for an
-///   *explicitly requested* update — the user-facing "does not exist" message
-///   has already been logged, so this returns [`ControlFlow::Break`] with
-///   [`ExitStatus::Failure`] rather than entering an empty REPL.
-/// * For each `--sut` entry, dispatches `add_host <fragment>` through the shared
-///   engine, logging any failure and continuing — one bad host never aborts
-///   startup.
+/// `args.update()` (`-a`/`-k`) loads via [`Session::load_update`], autoconnecting
+/// iff no `--sut` override was given; an empty RRID back means a null report for
+/// an explicitly requested update, so it breaks with [`ExitStatus::Failure`]
+/// rather than entering an empty REPL. Each `--sut` entry then dispatches
+/// `add_host <fragment>`, logging any failure and continuing.
 ///
 /// Returns [`ControlFlow::Continue`] when the session is ready for the REPL, or
-/// [`ControlFlow::Break`] with the [`ExitStatus`] the process should exit with
-/// instead.
+/// [`ControlFlow::Break`] with the [`ExitStatus`] to exit with instead.
 pub async fn seed_session(
     registry: &Registry,
     session: &mut Session,
@@ -56,9 +42,7 @@ pub async fn seed_session(
         };
         let rrid = session.load_update(&update.id, autoconnect, kind).await;
         if rrid.is_empty() {
-            // Null report for an explicitly requested update: the "does not
-            // exist" message was already logged by the load path. Exit rather
-            // than drop into an empty interactive session.
+            // The load path already logged "does not exist".
             tracing::error!(update = %update.id, "requested update could not be loaded");
             return ControlFlow::Break(ExitStatus::Failure);
         }
@@ -67,8 +51,7 @@ pub async fn seed_session(
     for sut in &args.sut {
         let line = format!("add_host {}", sut.print_args());
         if let Err(err) = dispatch_line(registry, session, &line).await {
-            // Best-effort: log and keep going so one malformed `--sut` never
-            // blocks the REPL.
+            // One malformed `--sut` must not block the REPL.
             tracing::error!(%err, sut = ?sut.hosts(), "failed to add SUT host(s)");
         }
     }
@@ -117,11 +100,9 @@ mod tests {
         }
     }
 
-    /// Builds a session whose SVN checkout is guaranteed to fail **offline**:
-    /// `svn_path` points at a bogus `file://` repo and `template_dir` at a
-    /// non-existent temp dir, so a missing template triggers `svn co file://…`
-    /// which fails instantly with no network — keeping the update-load test
-    /// hermetic and fast (the `AGENTS.md` "unit tests run offline" rule).
+    /// A session whose SVN checkout fails instantly **offline**: `svn_path` is a
+    /// bogus `file://` repo and `template_dir` does not exist, so the missing
+    /// template triggers an `svn co` that fails with no network.
     fn session_with_buffer() -> (Session, Arc<Mutex<Vec<u8>>>) {
         let buf = Arc::new(Mutex::new(Vec::new()));
         let display = CommandPromptDisplay::with_sink(
@@ -145,8 +126,8 @@ mod tests {
         assert_eq!(flow, ControlFlow::Continue(()));
     }
 
-    /// An explicitly requested update that cannot be loaded (offline `svn`, no
-    /// on-disk template) yields a null report → exit 1, not an empty REPL.
+    /// An unloadable explicit update yields a null report and exit 1, not an
+    /// empty REPL.
     #[tokio::test]
     async fn explicit_update_that_fails_to_load_exits_one() {
         let registry = register_all();
@@ -158,7 +139,7 @@ mod tests {
     }
 
     /// A `--sut` host that cannot connect is logged and skipped; seeding still
-    /// continues to the REPL (best-effort, one bad host never aborts startup).
+    /// continues to the REPL.
     #[tokio::test]
     async fn sut_host_failure_is_skipped_and_continues() {
         let registry = register_all();
@@ -167,7 +148,6 @@ mod tests {
         a.sut = vec!["unreachable.invalid".parse().unwrap()];
         let flow = seed_session(&registry, &mut session, &a).await;
         assert_eq!(flow, ControlFlow::Continue(()));
-        // The unreachable host could not connect, so it was not added.
         assert!(
             !session
                 .targets()

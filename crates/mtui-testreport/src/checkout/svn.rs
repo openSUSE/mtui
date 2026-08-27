@@ -11,12 +11,11 @@ use super::runner::SvnRunner;
 
 /// Checks out a test report template from SVN.
 ///
-/// Ensures `config.template_dir` exists, then runs `svn co <path>/<rrid>`
-/// with `cwd = template_dir` (the URI is absolute, so we set `cwd` rather
-/// than mutating the process-global working directory). `svn`'s stderr is
-/// captured so its cryptic `E170000: URL ... doesn't exist` line is surfaced
-/// only at debug; the caller sees a clear, actionable
-/// [`CheckoutError::SvnCheckoutFailed`] pointing at the log URL.
+/// Ensures `config.template_dir` exists, then runs `svn co <path>/<rrid>` with
+/// `cwd = template_dir` (the URI is absolute, so `cwd` is set rather than the
+/// process-global working directory being mutated). `svn`'s stderr is captured
+/// so its cryptic `E170000: URL ... doesn't exist` surfaces only at debug and
+/// the caller gets an actionable [`CheckoutError::SvnCheckoutFailed`].
 ///
 /// # Errors
 ///
@@ -32,9 +31,8 @@ pub async fn testreport_svn_checkout(
 ) -> Result<(), CheckoutError> {
     let template_dir = &config.template_dir;
 
-    // A template_dir that cannot be created (permission denied, a plain file in
-    // the way, …) would otherwise escape as a raw I/O error; surface it as one
-    // clear error naming the option.
+    // Would otherwise escape as a raw I/O error; surface one clear error
+    // naming the offending config option instead.
     if let Err(e) = std::fs::create_dir_all(template_dir) {
         return Err(CheckoutError::TemplateDirNotUsable {
             path: template_dir.display().to_string(),
@@ -42,8 +40,7 @@ pub async fn testreport_svn_checkout(
         });
     }
 
-    // The base repo path is a URI, so a plain string join (not a filesystem
-    // `Path` join) is used here.
+    // The base repo path is a URI, so this is a string join, not a `Path` join.
     let uri = format!("{}/{}", path.trim_end_matches('/'), rrid);
 
     let outcome = runner
@@ -82,8 +79,8 @@ fn svn_checkout_failed(config: &Config, rrid: &RequestReviewID) -> CheckoutError
 
 /// Adds the testreport artifacts to SVN and commits the working copy.
 ///
-/// The reusable core of the `commit` command, shared so other commands
-/// (e.g. `approve -r`) can commit the testreport too. The argv sequence:
+/// The reusable core of the `commit` command, shared so other commands (e.g.
+/// `approve -r`) can commit the testreport too. The argv sequence:
 ///
 /// 1. `svn add --force <install_logs>`
 /// 2. `svn add --force results` — only if a `results` dir exists
@@ -166,8 +163,8 @@ async fn run_checked(
 }
 
 /// A generic commit failure. The commit path has no RRID/log-URL context, so it
-/// reuses [`CheckoutError::SvnCheckoutFailed`] with empty context — the caller
-/// (the `commit` command wrapper, a later task) logs the actionable detail.
+/// reuses [`CheckoutError::SvnCheckoutFailed`] with empty context; the caller
+/// logs the actionable detail.
 fn commit_failed() -> CheckoutError {
     CheckoutError::SvnCheckoutFailed {
         rrid: String::new(),

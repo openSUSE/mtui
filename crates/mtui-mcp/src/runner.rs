@@ -1,9 +1,8 @@
 //! The `mtui-mcp` boot sequence: parse args → resolve config → serve.
 //!
-//! It parses [`McpArgs`], initialises a stderr `tracing` subscriber (under
-//! stdio, stdout is the JSON-RPC transport), resolves the [`mtui_config::Config`] the way
-//! the REPL does, and
-//! serves the runtime-synthesised tool surface on the chosen transport:
+//! Parses [`McpArgs`], initialises a stderr `tracing` subscriber (stdout is the
+//! JSON-RPC transport under stdio), resolves the [`mtui_config::Config`] the way
+//! the REPL does, and serves the runtime-synthesised tool surface:
 //!
 //! * **stdio** (default) — one process == one client: a single [`McpSession`]
 //!   built via [`StdioProvider`] serves the [`McpServer`] over `(stdin, stdout)`
@@ -57,17 +56,13 @@ async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
 
     tracing::info!("mtui-mcp: serving on stdio");
 
-    // `serve` runs the initialize handshake then the request loop over
-    // (stdin, stdout). stdout is the transport — logging goes to stderr only.
     let running = server
         .serve((tokio::io::stdin(), tokio::io::stdout()))
         .await?;
 
-    // Block until the peer disconnects (stdin EOF — e.g. the MCP parent exits or
-    // `/exit`) or the process is signalled (Ctrl-C / SIGTERM), then run the
-    // teardown so the loaded template's remote pool claims are released and its
-    // hosts disconnected. Without this the `waiting()` future simply returns and
-    // the claims leak until a manual `unlock -f -p` (or the pool stale-reap).
+    // Block until stdin EOF or a signal, then tear down: without this the
+    // loaded template's remote pool claims leak until a manual `unlock -f -p`
+    // (or the pool stale-reap).
     tokio::select! {
         r = running.waiting() => { r?; }
         () = shutdown_signal() => {
@@ -82,10 +77,9 @@ async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
 /// Resolves when the process receives a termination signal (Ctrl-C or, on unix,
 /// SIGTERM).
 ///
-/// The stdio serve loop races this against the transport's `waiting()` future so
-/// a `kill <pid>` (SIGTERM) or Ctrl-C triggers the same graceful teardown as a
-/// clean stdin EOF. SIGKILL cannot be caught in any language; the pool-claim
-/// stale-reap (`[lock] pool_stale_age`) is the recovery for that.
+/// Raced against the transport's `waiting()` future so a SIGTERM or Ctrl-C
+/// triggers the same graceful teardown as a clean stdin EOF. SIGKILL cannot be
+/// caught; the pool-claim stale-reap (`[lock] pool_stale_age`) covers that.
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -114,9 +108,8 @@ async fn shutdown_signal() {
 /// rmcp's [`StreamableHttpService`] keys clients by `Mcp-Session-Id` and calls
 /// the [`SessionRegistry`] factory once per new session, so each client gets a
 /// **fully isolated** [`McpServer`] (own `targets` / `metadata`). The service is
-/// a `tower::Service`, mounted as an `axum` fallback and bound to
-/// `--host`/`--port`. rmcp defaults `allowed_hosts` to loopback (DNS-rebinding
-/// guard); a non-loopback `--host` is out of scope for this bead.
+/// a `tower::Service`, mounted as an `axum` fallback. rmcp defaults
+/// `allowed_hosts` to loopback (DNS-rebinding guard).
 ///
 /// # Errors
 ///
@@ -140,19 +133,13 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     let registry = Arc::new(register_all());
     let sessions = SessionRegistry::new(registry, config);
 
-    // Start the idle-TTL sweeper (no-op when session_idle_timeout == 0); a
-    // cancellation token lets graceful shutdown stop it cleanly.
+    // No-op when session_idle_timeout == 0.
     let sweeper_cancel = CancellationToken::new();
     let sweeper = sessions.spawn_sweeper(sweeper_cancel.clone());
 
-    // The factory rmcp invokes once per new MCP session: each call yields a
-    // fresh isolated server, or an `Err` (surfaced by rmcp as an internal-error
-    // response) once the session cap is reached — a bounded DoS refusal.
-    //
     // Pin rmcp's session keep-alive (default 300s) to our idle-TTL: its default
-    // is far shorter than our sweeper's horizon and would tear a quiet http
-    // session down mid-conversation. `StreamableHttpServerConfig::default()`'s
-    // 15s SSE ping cadence is kept — it only keeps the stream warm.
+    // is far shorter than the sweeper's horizon and would tear a quiet http
+    // session down mid-conversation. The default 15s SSE ping cadence is kept.
     let factory_sessions = sessions.clone();
     // `LocalSessionManager` / `SessionConfig` are `#[non_exhaustive]`, so build
     // from their defaults and set only the field we override.
@@ -160,12 +147,11 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     session_config.keep_alive = keep_alive;
     let mut session_manager = LocalSessionManager::default();
     session_manager.session_config = session_config;
-    // `legacy_session_mode` is already rmcp's default; set it explicitly so a
-    // future rmcp default flip cannot silently make mtui stateless (mtui's
-    // per-client http isolation depends on the legacy session lifecycle — see
-    // `McpServer::supported_protocol_versions`). `max_request_body_bytes`
-    // governs rmcp's own pre-session body buffering, below the `body_layer`
-    // (axum's `DefaultBodyLimit`) applied further down.
+    // `legacy_session_mode` is already rmcp's default; set explicitly so a future
+    // default flip cannot silently make mtui stateless (per-client http isolation
+    // depends on that session lifecycle — see
+    // `McpServer::supported_protocol_versions`). `max_request_body_bytes` governs
+    // rmcp's own pre-session body buffering, below the `body_layer` below.
     let service = StreamableHttpService::new(
         move || factory_sessions.try_make_server(),
         Arc::new(session_manager),
@@ -174,12 +160,8 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
             .with_max_request_body_bytes(rmcp_body_cap),
     );
 
-    // Cap the inbound request body before rmcp buffers it: an unauthenticated
-    // pre-session request must not be bufferable until memory exhaustion. `0`
-    // fully disables mtui's limit (removing even axum's implicit 2 MB floor,
-    // and raising rmcp's own 4 MB default to `usize::MAX`); any positive value
-    // becomes a hard `413` ceiling and the same cap on rmcp's body gate.
-    // (`body_limit` resolved above, before `config` moved into the registry.)
+    // Cap the inbound body before rmcp buffers it: an unauthenticated
+    // pre-session request must not be bufferable until memory exhaustion.
     tracing::info!(
         request_body_limit =
             body_limit.map_or_else(|| "disabled".to_owned(), |n| format!("{n} bytes")),
@@ -200,16 +182,13 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    // Stop the sweeper and wait for it to unwind before returning.
     sweeper_cancel.cancel();
     if let Some(handle) = sweeper {
         let _ = handle.await;
     }
     // Cancelling the sweeper does not release live sessions (its cancel branch is
     // a bare return, and the registry holds only `Weak` handles whose `Drop`
-    // cannot run the async pool-claim release). Explicitly tear down every
-    // still-live session so a clean Ctrl-C / SIGTERM of a busy server releases
-    // its pool claims and disconnects hosts instead of leaking them.
+    // cannot run the async pool-claim release), so tear them down explicitly.
     tracing::info!("mtui-mcp: shutting down; releasing pool claims and disconnecting hosts");
     sessions.close_all().await;
     Ok(())
@@ -217,11 +196,9 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
 
 /// The rmcp session keep-alive to pin from `idle_timeout_s`.
 ///
-/// Maps the config's `mcp_session_idle_timeout` to rmcp's
-/// [`SessionConfig::keep_alive`]: `0` disables it (matching how the same value
-/// disables our own idle sweeper), any positive value becomes that many seconds.
-/// This overrides rmcp's 300s default, which is shorter than our sweeper horizon
-/// and would otherwise drop a quiet http session.
+/// `0` disables it (matching how the same value disables our own idle sweeper);
+/// any positive value becomes that many seconds, overriding rmcp's 300s default
+/// — shorter than the sweeper horizon, so it would drop a quiet http session.
 fn session_keep_alive(idle_timeout_s: u64) -> Option<Duration> {
     (idle_timeout_s != 0).then(|| Duration::from_secs(idle_timeout_s))
 }
@@ -230,18 +207,15 @@ fn session_keep_alive(idle_timeout_s: u64) -> Option<Duration> {
 ///
 /// `0` means "no mtui-imposed limit" (`None` → the caller disables axum's
 /// `DefaultBodyLimit` entirely, dropping even its implicit 2 MB floor); any
-/// positive value becomes a hard `Some(n)`-byte ceiling enforced before rmcp
-/// buffers the body.
+/// positive value is a hard ceiling enforced before rmcp buffers the body.
 fn resolve_body_limit(max_request_bytes: usize) -> Option<usize> {
     (max_request_bytes != 0).then_some(max_request_bytes)
 }
 
-/// The [`StreamableHttpServerConfig::max_request_body_bytes`] cap to apply,
-/// from the same `config.mcp_max_request_bytes` value `resolve_body_limit`
-/// maps for axum's layer. `0` (mtui's "disabled") becomes `usize::MAX` rather
-/// than `None` — rmcp's field is a plain `usize`, not an `Option` — so the
-/// same knob also lifts rmcp's own 4 MB default; any positive value passes
-/// through unchanged.
+/// The [`StreamableHttpServerConfig::max_request_body_bytes`] cap, from the same
+/// `config.mcp_max_request_bytes` value `resolve_body_limit` maps for axum's
+/// layer. `0` (mtui's "disabled") becomes `usize::MAX`, not `None` — rmcp's field
+/// is a plain `usize` — so the knob also lifts rmcp's own 4 MB default.
 fn rmcp_body_limit(max_request_bytes: usize) -> usize {
     if max_request_bytes == 0 {
         usize::MAX
@@ -252,11 +226,10 @@ fn rmcp_body_limit(max_request_bytes: usize) -> usize {
 
 /// Install a minimal stderr `tracing` subscriber.
 ///
-/// Unlike the REPL's `init_tracing`, this has no runtime-reload handle
-/// (`mtui-mcp` never installs a `set_log_level` sink) and no spinner-aware
-/// writer (there is no interactive TTY spinner). It writes to **stderr** because
-/// stdout carries the MCP JSON-RPC stream. `-d/--debug` and `RUST_LOG` select the
-/// level; ANSI follows the resolved [`ColorMode`].
+/// No runtime-reload handle (`mtui-mcp` never installs a `set_log_level` sink)
+/// and no spinner-aware writer, unlike the REPL's `init_tracing`. Writes to
+/// **stderr** because stdout carries the MCP JSON-RPC stream; `-d/--debug` and
+/// `RUST_LOG` select the level, ANSI follows the resolved [`ColorMode`].
 fn init_tracing(debug: bool, color: ColorMode) {
     let (filter, notice) = startup_filter(debug);
     let _ = tracing_subscriber::fmt()
@@ -266,10 +239,9 @@ fn init_tracing(debug: bool, color: ColorMode) {
         .try_init();
     if let Some(notice) = notice {
         // Straight to stderr, not `tracing::warn!`: the opt-in that triggers
-        // this is typically `RUST_LOG=hyper_util=debug`, which enables no
-        // `mtui_*` target at all, so a `WARN` event would be swallowed by the
-        // very filter it is warning about. stderr is already this binary's log
-        // channel — stdout is the JSON-RPC stream.
+        // this (typically `RUST_LOG=hyper_util=debug`) enables no `mtui_*`
+        // target, so a WARN event would be swallowed by the very filter it
+        // warns about.
         eprintln!("{notice}");
     }
 }
@@ -278,37 +250,32 @@ fn init_tracing(debug: bool, color: ColorMode) {
 /// from `$RUST_LOG` and this process's own [`default_directives`].
 ///
 /// The seam `init_tracing` resolves through, so the `RUST_LOG` composition is
-/// testable without installing a global subscriber. [`resolve_log_directives`]
-/// is the same `mtui-core` helper the REPL uses, so the transport carve-out
-/// cannot hold on one entrypoint and not the other.
+/// testable without a global subscriber. [`resolve_log_directives`] is the same
+/// `mtui-core` helper the REPL uses, so the transport carve-out cannot hold on
+/// one entrypoint and not the other.
 fn startup_filter(debug: bool) -> (EnvFilter, Option<&'static str>) {
     let defaults = default_directives(debug);
     let resolved = resolve_log_directives(&defaults);
     match EnvFilter::try_new(&resolved.directives) {
         Ok(filter) => (filter, resolved.notice()),
-        // A malformed `RUST_LOG` falls back to the defaults, exactly as the
-        // previous `EnvFilter::try_from_default_env()` did — and the defaults
-        // cap the transport, so the opt-in notice falls away with it.
+        // A malformed `RUST_LOG` falls back to the defaults, which cap the
+        // transport — so the opt-in notice falls away with it.
         Err(_) => (EnvFilter::new(&defaults), None),
     }
 }
 
 /// The default `EnvFilter` directive string when `RUST_LOG` is unset.
 ///
-/// Beyond the base level (`debug` under `-d/--debug`, else `info`), this pins
-/// `rmcp::service=warn` so the http transport is not flooded by the client's
-/// post-completion `notifications/cancelled`: opencode (and other
-/// `AbortController`-based streamable-http clients) abort each per-request
-/// controller ~10-30ms *after* a successful `tools/call` result, which rmcp logs
-/// as a no-op `CancelledNotification` at INFO under `rmcp::service`. Silencing
-/// that target to `warn` drops the noise (and rmcp's one-time init breadcrumbs)
-/// while keeping every `mtui_*` INFO line.
+/// Beyond the base level (`debug` under `-d/--debug`, else `info`), pins
+/// `rmcp::service=warn`: `AbortController`-based streamable-http clients abort
+/// each per-request controller ~10-30ms *after* a successful `tools/call`, which
+/// rmcp logs as a no-op `CancelledNotification` at INFO. Silencing that target
+/// drops the noise while keeping every `mtui_*` INFO line.
 ///
-/// Under `-d/--debug` it additionally appends [`TRANSPORT_LOG_CARVE_OUT`], which
-/// holds `hyper_util`/`hyper`/`reqwest` at `INFO`: those log connection details
-/// at `DEBUG`, and hyper-util's pool key carries an authority that a hostile
-/// redirect can load with userinfo (#439). The `info` arm needs no carve-out —
-/// its base level already caps the transport at `INFO`.
+/// Under `-d/--debug` it also appends [`TRANSPORT_LOG_CARVE_OUT`], holding
+/// `hyper_util`/`hyper`/`reqwest` at `INFO`: those log connection details at
+/// `DEBUG`, and hyper-util's pool key carries an authority a hostile redirect can
+/// load with userinfo (#439). The `info` arm's base level already caps them.
 ///
 /// An explicit `RUST_LOG` replaces *these* directives — `rmcp::service=warn`
 /// included — but not the transport cap: [`startup_filter`] layers that back on
@@ -325,14 +292,11 @@ fn default_directives(debug: bool) -> String {
 
 /// Build the runtime-synthesised stdio server from resolved args.
 ///
-/// Resolves the [`Config`](mtui_config::Config) the same way the REPL does (file
-/// chain + CLI overrides), then mints the single headless [`McpSession`] via the
-/// [`StdioProvider`] (stdio = one process = one session) and wires it into an
-/// [`McpServer`]. Factored out of [`run`] so the wiring is testable without the
-/// blocking stdio serve loop.
-///
-/// Returns the server **and** a handle to its session, so the serve loop can run
-/// [`McpSession::close`] (release pool claims + disconnect hosts) on shutdown.
+/// Resolves the [`Config`](mtui_config::Config) the same way the REPL does, then
+/// mints the single headless [`McpSession`] via [`StdioProvider`] and wires it
+/// into an [`McpServer`]. Factored out of [`run`] so the wiring is testable
+/// without the blocking serve loop. Returns the session handle too, so the serve
+/// loop can run [`McpSession::close`] on shutdown.
 async fn build_stdio_server(args: &McpArgs) -> (McpServer, Arc<McpSession>) {
     let config = args.resolve_config();
     let registry = Arc::new(register_all());
@@ -355,7 +319,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_stdio_server_wires_the_synthesised_surface() {
-        // A built server reports tools capability — proving the handler is wired.
+        // The tools capability is only advertised once the handler is wired.
         let (server, _session) = build_stdio_server(&args(&[])).await;
         assert!(
             server.get_info().capabilities.tools.is_some(),
@@ -365,19 +329,16 @@ mod tests {
 
     #[tokio::test]
     async fn build_stdio_server_returns_a_closeable_session() {
-        // The serve loop needs the session handle to run teardown on shutdown;
-        // `close()` on a session with no loaded template is a harmless no-op.
+        // `close()` with no loaded template is a harmless no-op.
         let (_server, session) = build_stdio_server(&args(&[])).await;
         session.close().await;
     }
 
     #[tokio::test]
     async fn stdio_shutdown_close_disconnects_loaded_hosts() {
-        // The teardown the stdio serve loop runs on shutdown must disconnect a
-        // loaded template's hosts (and, in the real path, release its pool
-        // claims). Build a session holding one mock-connected target and assert
-        // `close()` closes it — the connection stdio shutdown would otherwise
-        // leak.
+        // The shutdown teardown must disconnect a loaded template's hosts (and,
+        // in the real path, release its pool claims) — otherwise stdio shutdown
+        // leaks the connection.
         use mtui_config::Config;
         use mtui_hosts::{HostsGroup, MockConnection, Target};
         use mtui_testreport::{ObsReport, TestReport};
@@ -407,10 +368,6 @@ mod tests {
 
     #[test]
     fn default_directives_pin_rmcp_service_warn_and_transport_carve_out() {
-        // The fallback filter (RUST_LOG unset) carries both the base level and
-        // the rmcp::service=warn silencer for the http cancellation noise. Under
-        // `-d` it also carries the third-party transport carve-out (#439) — an
-        // `info` base already caps the transport, so that arm stays bare.
         // Literal strings on purpose: rebuilding them from
         // `TRANSPORT_LOG_CARVE_OUT` would let an emptied constant green both
         // sides at once.
@@ -423,11 +380,8 @@ mod tests {
 
     /// The assembled `-d` directive string must both **parse** and **filter**:
     /// `EnvFilter::new` drops a malformed directive silently, so a string pin
-    /// alone cannot tell a working carve-out from an inert one. Builds the real
-    /// fallback filter with `try_new` (which errors instead of swallowing) and
-    /// asserts the transport's DEBUG pool line — the credential-bearing one from
-    /// hyper-util 0.1.20 — never reaches the writer, while mtui's own DEBUG and
-    /// the transport's INFO both do (#439).
+    /// alone cannot tell a working carve-out from an inert one. Built with
+    /// `try_new`, which errors instead of swallowing (#439).
     #[test]
     fn debug_default_filter_suppresses_transport_debug() {
         let filter =
@@ -448,10 +402,8 @@ mod tests {
         );
     }
 
-    /// The same guarantee for the *other* knob, on the *other* binary:
     /// `RUST_LOG=debug` replaces `mtui-mcp`'s defaults but not the transport cap
-    /// (#439). `startup_filter(false)` — `-d` is not set, so this is purely the
-    /// `RUST_LOG` path.
+    /// (#439). `-d` is not set, so this is purely the `RUST_LOG` path.
     #[test]
     #[serial_test::serial(env)]
     fn rust_log_debug_still_holds_the_transport_at_info() {
@@ -462,8 +414,8 @@ mod tests {
             !out.contains("s3cret"),
             "RUST_LOG=debug must not enable the transport's DEBUG, got: {out:?}"
         );
-        // Anti-vacuity: assertion 1 also passes with the filter stuck at `info`,
-        // i.e. with `RUST_LOG` ignored altogether.
+        // Anti-vacuity: assertion 1 also passes with `RUST_LOG` ignored
+        // altogether, i.e. the filter stuck at `info`.
         assert!(
             out.contains("mtui debug reaches the log"),
             "RUST_LOG=debug must still raise mtui's own targets, got: {out:?}"
@@ -475,8 +427,8 @@ mod tests {
         assert_eq!(notice, None);
     }
 
-    /// The informed opt-in stays open on this binary too, and is announced —
-    /// on **stderr**, which is `mtui-mcp`'s log channel (stdout is JSON-RPC).
+    /// The informed opt-in stays open here too, announced on **stderr** —
+    /// `mtui-mcp`'s log channel, since stdout is the JSON-RPC stream.
     #[test]
     #[serial_test::serial(env)]
     fn rust_log_transport_opt_in_is_honoured_and_announced() {
@@ -511,9 +463,9 @@ mod tests {
         assert_eq!(notice, None);
     }
 
-    /// A `RUST_LOG` `EnvFilter` cannot parse falls back to
-    /// [`default_directives`] — which keeps both the cap and `rmcp::service=warn`
-    /// — and the discarded opt-in is not announced.
+    /// An unparseable `RUST_LOG` falls back to [`default_directives`], keeping
+    /// both the cap and `rmcp::service=warn`, and the discarded opt-in is not
+    /// announced.
     #[test]
     #[serial_test::serial(env)]
     fn malformed_rust_log_falls_back_to_the_capped_defaults() {
@@ -531,11 +483,11 @@ mod tests {
         assert_eq!(notice, None, "a discarded opt-in must not be announced");
     }
 
-    /// Run `body` with `$RUST_LOG` set (or removed), restoring the previous
-    /// value afterwards. Callers must hold `#[serial(env)]`: this crate's unit
-    /// tests share one process, so the variable is a process-global.
-    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
-    // `#[serial(env)]` guard on every caller makes the mutation exclusive.
+    /// Run `body` with `$RUST_LOG` set (or removed), restoring it afterwards.
+    /// Callers must hold `#[serial(env)]`: this crate's unit tests share one
+    /// process, so the variable is a process-global.
+    // `set_var`/`remove_var` are `unsafe` in edition 2024; the `#[serial(env)]`
+    // guard on every caller makes the mutation exclusive.
     #[allow(unsafe_code)]
     fn with_rust_log<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
         let previous = std::env::var("RUST_LOG").ok();
@@ -559,11 +511,10 @@ mod tests {
     }
 
     /// Emit the four probe events under `filter` on a **scoped** subscriber and
-    /// return everything that reached the writer.
-    ///
-    /// The transport line is the leak shape from hyper-util 0.1.20
-    /// (`pool.rs:401`), verbatim; `s3cret` is a token no other line carries, so
-    /// the "must not appear" assertion cannot be satisfied by the wrong record.
+    /// return everything that reached the writer. The transport line is the leak
+    /// shape from hyper-util 0.1.20 (`pool.rs:401`) verbatim; `s3cret` is a token
+    /// no other line carries, so the "must not appear" assertion cannot be
+    /// satisfied by the wrong record.
     fn probe(filter: EnvFilter) -> String {
         use std::io;
         use std::sync::{Arc, Mutex};
@@ -618,8 +569,6 @@ mod tests {
 
     #[test]
     fn body_limit_maps_max_request_bytes() {
-        // A positive cap becomes a hard ceiling; 0 disables mtui's limit
-        // (None → the caller drops even axum's implicit 2 MB floor).
         assert_eq!(resolve_body_limit(10_000_000), Some(10_000_000));
         assert_eq!(resolve_body_limit(1), Some(1));
         assert_eq!(resolve_body_limit(0), None);
@@ -627,8 +576,8 @@ mod tests {
 
     #[test]
     fn rmcp_body_limit_maps_max_request_bytes() {
-        // A positive cap passes through unchanged; 0 (mtui's "disabled")
-        // becomes `usize::MAX` — rmcp's field has no "unlimited" sentinel.
+        // 0 (mtui's "disabled") becomes `usize::MAX`: rmcp's field has no
+        // "unlimited" sentinel.
         assert_eq!(rmcp_body_limit(10_000_000), 10_000_000);
         assert_eq!(rmcp_body_limit(1), 1);
         assert_eq!(rmcp_body_limit(0), usize::MAX);
@@ -636,9 +585,7 @@ mod tests {
 
     #[test]
     fn built_config_carries_the_configured_body_cap_not_rmcps_default() {
-        // The `StreamableHttpServerConfig` `serve_http` builds must carry our
-        // config-derived cap, overriding rmcp's 4 MB default (mirrors
-        // `session_manager_pins_keep_alive_from_config` below).
+        // Mirrors `session_manager_pins_keep_alive_from_config` below.
         let config = StreamableHttpServerConfig::default()
             .with_legacy_session_mode(true)
             .with_max_request_body_bytes(rmcp_body_limit(10_000_000));
@@ -653,7 +600,6 @@ mod tests {
 
     #[test]
     fn keep_alive_maps_idle_timeout() {
-        // A positive idle-TTL becomes that many seconds; 0 disables keep-alive.
         assert_eq!(
             session_keep_alive(14_400),
             Some(Duration::from_secs(14_400))
@@ -664,8 +610,7 @@ mod tests {
 
     #[test]
     fn session_manager_pins_keep_alive_from_config() {
-        // The manager `serve_http` builds carries our config-derived keep-alive,
-        // overriding rmcp's 300s default (the bug that dropped idle sessions).
+        // Overriding rmcp's 300s default is what stops idle sessions dropping.
         let keep_alive = session_keep_alive(14_400);
         let mut session_config = SessionConfig::default();
         session_config.keep_alive = keep_alive;

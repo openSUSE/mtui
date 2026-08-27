@@ -1,13 +1,11 @@
 //! Validated repository URL.
 //!
 //! Repository URLs derived from testreport metadata are placed on remote
-//! `zypper ar`/`rr` command lines run **as root** on reference hosts. Raw
-//! interpolation (naive string formatting) would be a command-injection
-//! vector, so [`RepoUrl`] validates a URL at ingestion — rejecting unsupported
-//! URI schemes and any shell-unsafe character with a typed
-//! [`RepoUrlParseError`] — so a malformed URL never reaches host execution.
-//! The exec-boundary sink additionally shell-quotes every argument
-//! (defense-in-depth).
+//! `zypper ar`/`rr` command lines run **as root**, so raw interpolation is a
+//! command-injection vector: [`RepoUrl`] validates at ingestion, rejecting
+//! unsupported URI schemes and shell-unsafe characters with a typed
+//! [`RepoUrlParseError`] before a URL can reach host execution. The
+//! exec-boundary sink shell-quotes every argument too (defense-in-depth).
 //!
 //! ## Accepted schemes
 //!
@@ -36,10 +34,8 @@ const ALLOWED_SCHEMES: [&str; 12] = [
     "http", "https", "ftp", "cd", "dvd", "dir", "file", "cifs", "smb", "nfs", "hd", "iso",
 ];
 
-/// Returns `true` if `ch` may appear in a repository URL. Rejects whitespace,
-/// control characters, quotes/backslash, and the shell metacharacters that never
-/// legitimately occur in a URL. URL-legitimate metacharacters (`? & = # ~ [ ] *`)
-/// are allowed; the exec-boundary quoting neutralises their shell meaning.
+/// Returns `true` if `ch` may appear in a repository URL (see the [module
+/// docs](self) for what is rejected and why).
 fn is_url_char(ch: char) -> bool {
     if ch.is_whitespace() || ch.is_control() {
         return false;
@@ -170,7 +166,6 @@ mod tests {
 
     #[test]
     fn rejects_shell_metacharacters() {
-        // Shell metacharacters that never legitimately appear in a URL.
         for bad in [
             "https://x/repo;reboot",
             "https://x/repo|sh",
@@ -196,7 +191,6 @@ mod tests {
 
     #[test]
     fn allows_url_legitimate_query_characters() {
-        // `? & = # ~ [ ] *` are URL-legitimate; quoting handles shell safety.
         for ok in [
             "iso:///?iso=name.iso&arch=x86_64",
             "hd:///?device=/dev/sr0",

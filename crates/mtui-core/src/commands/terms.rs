@@ -12,32 +12,23 @@ use crate::session::Session;
 
 /// Spawns terminal screens onto the connected reference hosts.
 ///
-/// With no `termname`, prints the
-/// list of available terminal-launcher scripts; with a name, runs
+/// With no `termname` it lists the available launcher scripts; with one it runs
 /// `term.<name>.sh` from [`terms_path`](mtui_config::terms_path), passing the
-/// selected (sorted) host names as arguments.
+/// selected host names, sorted.
 ///
-/// The available term names are derived **from disk** by globbing `term.*.sh`
-/// in the terms directory, rather than from a config key. The launcher script
-/// spawns its own detached terminal emulators and does not need mtui's
-/// controlling terminal, so — unlike `edit` and `shell` — the spawn runs
-/// directly in [`call`](Terms::call).
-///
-/// The not-found path emits a single clean error rather than an additional
-/// info line.
-///
-/// REPL-oriented — on the MCP deny-list.
+/// The names come from globbing `term.*.sh` on disk, not from a config key. The
+/// launcher spawns its own detached emulators and needs no controlling terminal,
+/// so — unlike `edit` and `shell` — the spawn runs directly in
+/// [`call`](Terms::call). REPL-oriented, on the MCP deny-list.
 pub struct Terms;
 
 /// Prefix and suffix stripped from `term.<name>.sh` to recover `<name>`.
 const TERM_PREFIX: &str = "term.";
 const TERM_SUFFIX: &str = ".sh";
 
-/// Discover the available term names by globbing `term.*.sh` in `dir`.
-///
-/// Strips the `term.` prefix and `.sh` suffix from each match and returns the
-/// names sorted. A missing or unreadable directory yields an empty list
-/// (graceful degrade when the script dir is absent).
+/// Discover the available term names by globbing `term.*.sh` in `dir`, stripped
+/// of prefix and suffix and sorted. A missing or unreadable directory degrades
+/// to an empty list.
 fn discover_term_names(dir: Option<&Path>) -> Vec<String> {
     let Some(dir) = dir else {
         return Vec::new();
@@ -58,17 +49,15 @@ fn discover_term_names(dir: Option<&Path>) -> Vec<String> {
     names
 }
 
-/// Build the argv for a term-script spawn: `[<dir>/term.<name>.sh, <hosts...>]`.
-///
-/// Factored out so the argument construction is unit-testable without spawning.
+/// The argv for a term-script spawn: `[<dir>/term.<name>.sh, <hosts...>]`.
+/// Separate from the spawn so it is unit-testable.
 fn term_script_argv(dir: &Path, name: &str, hosts: &[String]) -> (PathBuf, Vec<String>) {
     let script = dir.join(format!("{TERM_PREFIX}{name}{TERM_SUFFIX}"));
     (script, hosts.to_vec())
 }
 
-/// Render the no-argument listing: a header line followed by the space-joined
-/// term names. Factored out so the exact text is snapshot-testable with
-/// deterministic names.
+/// The no-argument listing: a header line then the space-joined term names.
+/// Separate so the exact text is snapshot-testable with deterministic names.
 fn render_listing(names: &[String]) -> String {
     format!("available terminal scripts:\n{}\n", names.join(" "))
 }
@@ -122,7 +111,6 @@ impl Command for Terms {
         let names = discover_term_names(dir.as_deref());
 
         let Some(termname) = args.get_one::<String>("termname") else {
-            // No name: list the available term scripts.
             session.display.print_eol(&render_listing(&names), "");
             return Ok(());
         };
@@ -206,8 +194,8 @@ mod tests {
 
     #[tokio::test]
     async fn no_termname_lists_available_header() {
-        // The listing pulls from the real (likely absent) terms dir; the header
-        // line is the stable contract regardless of installed scripts.
+        // Against the real (likely absent) terms dir: the header line is the
+        // contract regardless of which scripts are installed.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Terms, &[]);
         Terms.call(&mut session, &args).await.unwrap();
@@ -216,7 +204,6 @@ mod tests {
 
     #[test]
     fn listing_has_stable_two_line_format() {
-        // Deterministic snapshot of the exact no-arg output with seeded names.
         let names = vec!["gnome".to_owned(), "xterm".to_owned()];
         insta::assert_snapshot!(render_listing(&names), @r"
         available terminal scripts:

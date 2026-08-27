@@ -1,39 +1,29 @@
 //! Selectable tool *profiles* for the `mtui-mcp` server.
 //!
-//! The server synthesises one tool per command plus the testreport and job
-//! tools. The full set is sent to the model on every request, which is the
-//! dominant fixed token cost of an MCP session. Many of those tools
-//! (`set_log_level`, `reload_*`, `config_*`, host-bookkeeping verbs) are rarely
-//! needed in a normal maintenance-test workflow.
+//! The whole synthesised set is sent to the model on every request, the dominant
+//! fixed token cost of an MCP session, and many of those tools (`set_log_level`,
+//! `reload_*`, `config_*`, host bookkeeping) are rarely needed in a maintenance
+//! test.
 //!
-//! A *profile* is a named allow-set of tool names. The `full` profile is a no-op
-//! (every synthesised tool stays). The `core` profile keeps only the curated
-//! everyday subset in [`CORE`], removing the rest so they never reach the wire.
-//! An operator selects a profile with `[mcp] profile` and can fine-tune with
-//! `[mcp] tools_allow` / `[mcp] tools_deny` (see `apply_profile`).
-//! Profiles only filter the surface remaining after the permanent MCP deny-list;
-//! `tools_allow` cannot restore a command such as `shell` that was never
-//! synthesised.
-//!
-//! The default is `full` so existing deployments are unchanged; slimming the tool
-//! surface is strictly opt-in.
-//!
-//! The tool surface is built from a plain
-//! `Vec<`[`ToolDescriptor`]`>`, so `apply_profile` simply filters that vec
-//! before it is converted to `rmcp::model::Tool`s.
+//! A *profile* is a named allow-set of tool names, selected with `[mcp] profile`
+//! and fine-tuned with `[mcp] tools_allow` / `[mcp] tools_deny` (see
+//! `apply_profile`): `full` (the default, so existing deployments are unchanged)
+//! keeps every synthesised tool, `core` only the curated everyday subset in
+//! [`CORE`]. Filtering applies to the surface remaining *after* the permanent MCP
+//! deny-list, so `tools_allow` cannot restore a never-synthesised command such as
+//! `shell`.
 
 use std::collections::BTreeSet;
 
 use crate::tools::ToolDescriptor;
 
-/// The curated everyday tool set exposed under `profile = core`. Chosen to cover
-/// load → inspect → run/install → fill report → approve/reject without the long
-/// tail of host-bookkeeping and server-tuning verbs. The hand-written
-/// `testreport_*` and `job_*` tools are always part of core because the slow
-/// background-command flow and report editing depend on them; the hand-written
-/// `get`/`put` transfer tools (#434) are deliberately *not* — they are
-/// full-profile only, like the synthesized commands they replaced
-/// (`tools_allow` can restore them under `core`).
+/// The curated everyday tool set exposed under `profile = core`: load → inspect
+/// → run/install → fill report → approve/reject, without the long tail of
+/// host-bookkeeping and server-tuning verbs. The `testreport_*` and `job_*` tools
+/// are always core, since report editing and the background-command flow depend
+/// on them; the `get`/`put` transfer tools (#434) are deliberately full-profile
+/// only, like the synthesised commands they replaced, and `tools_allow` restores
+/// them under `core`.
 pub const CORE: &[&str] = &[
     // load / inspect
     "load_template",
@@ -83,9 +73,8 @@ fn core_set() -> BTreeSet<String> {
     CORE.iter().map(|s| (*s).to_owned()).collect()
 }
 
-/// Resolve the profile's base allow-set. `full` (and any unknown name) yields
-/// `None` (keep everything); `core` yields the curated set. An unknown name is
-/// the caller's responsibility to warn about — see [`resolve_keep_set`].
+/// Resolve the profile's base allow-set: `None` (keep everything) for `full` and
+/// any unknown name, which [`resolve_keep_set`] is responsible for warning about.
 fn profile_base(profile: &str) -> Option<BTreeSet<String>> {
     match profile {
         "core" => Some(core_set()),
@@ -119,13 +108,11 @@ pub fn resolve_keep_set(
     }
 
     let mut keep: BTreeSet<String> = match profile_base(profile) {
-        // full (or unknown → full): keep everything registered.
         None => registered.clone(),
-        // core: intersect the curated set with what is actually registered.
         Some(base) => registered.intersection(&base).cloned().collect(),
     };
 
-    // Add back allow names that are actually registered (never invent a tool).
+    // Never invent a tool that was not registered.
     for name in allow {
         if registered.contains(name) {
             keep.insert(name.clone());
@@ -138,12 +125,10 @@ pub fn resolve_keep_set(
     keep
 }
 
-/// Filter `descriptors` in place, removing every tool not in the resolved
-/// keep-set. `full` with no overrides is a fast no-op. Returns the sorted list of
-/// tool names that remain.
-///
-/// The registered set is taken from `descriptors` themselves, so the result is
-/// always a subset of what was synthesised.
+/// Filter `descriptors` in place to the resolved keep-set, returning the sorted
+/// names that remain. `full` with no overrides is a fast no-op. The registered
+/// set is taken from `descriptors`, so the result is always a subset of what was
+/// synthesised.
 pub(crate) fn apply_profile(
     descriptors: &mut Vec<ToolDescriptor>,
     profile: &str,
@@ -152,7 +137,6 @@ pub(crate) fn apply_profile(
 ) -> Vec<String> {
     let registered: BTreeSet<String> = descriptors.iter().map(|d| d.name.clone()).collect();
 
-    // full + no overrides: nothing to do.
     if profile == "full" && allow.is_empty() && deny.is_empty() {
         return registered.into_iter().collect();
     }

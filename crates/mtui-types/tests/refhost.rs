@@ -1,10 +1,10 @@
 //! Golden test for the `refhosts.yml` loader against a golden fixture
 //! (`tests/fixtures/refhosts.yml`).
 //!
-//! This locks the `refhosts.yml` data-format contract: the loader must merge
-//! every legacy location group into one flat list and preserve each row's typed
-//! shape. The fixture intentionally spreads five uniquely-named hosts across two
-//! former locations (`default:`, `nuremberg:`) so the merge is exercised.
+//! Locks the `refhosts.yml` data-format contract: every legacy location group is
+//! merged into one flat list with each row's typed shape preserved. The fixture
+//! spreads five uniquely-named hosts across two former locations so the merge is
+//! exercised.
 
 use mtui_types::load_refhosts;
 use mtui_types::version::{Version, VersionField};
@@ -15,7 +15,6 @@ const FIXTURE: &str = include_str!("fixtures/refhosts.yml");
 fn golden_fixture_merges_all_location_groups() {
     let hosts = load_refhosts(FIXTURE).expect("fixture must parse");
 
-    // All five hosts from both former location groups are merged, in order.
     let names: Vec<_> = hosts.iter().map(|h| h.name.as_str()).collect();
     assert_eq!(
         names,

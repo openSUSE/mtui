@@ -1,23 +1,15 @@
 //! Smoke tests for the `mtui` binary.
 //!
-//! These drive the built binary via `CARGO_BIN_EXE_mtui` and assert the
-//! top-level surfaces: `--version` (provenance block), `--help` (real `Args`
-//! flags — not the old empty stub), an unknown-flag usage error, that a bare
-//! invocation enters the interactive REPL, and that a piped (non-TTY) stdin
-//! reaches the REPL and terminates cleanly instead of hanging. Arg-parsing
-//! internals are already covered in `mtui-core::args`; this only exercises the
-//! binary's own wiring. The REPL loop's dispatch logic is unit-tested off the
-//! TTY seam in `repl::tests` (the `step` function), and the startup seeding
-//! logic (`-a`/`-k` update load + `--sut`, incl. the explicit-update exit-1
-//! path) hermetically in `startup::tests` (the `seed_session` function).
+//! These drive the built binary via `CARGO_BIN_EXE_mtui` and assert only its
+//! own top-level wiring: `--version`, `--help`, an unknown-flag usage error, and
+//! that a bare or piped (non-TTY) invocation reaches the REPL and terminates
+//! cleanly. Arg-parsing internals live in `mtui-core::args`, the dispatch loop in
+//! `repl::tests` (the `step` seam), and startup seeding in `startup::tests`.
 //!
-//! There is deliberately **no** non-interactive / single-command CLI mode to
-//! e2e here: the `mtui` binary's one driving surface is the REPL — headless
-//! single-command dispatch is an `mtui-mcp` concern. The closest binary-level
-//! analogue is the piped-stdin path exercised below: it
-//! drives the real `reedline` editor (not the `step` unit seam), so it is the
-//! only test that reaches `repl::Repl::run` itself — the intro banner and the
-//! loop's exit-on-`read_line`-failure arm.
+//! There is deliberately no single-command CLI mode to e2e — headless dispatch
+//! is an `mtui-mcp` concern. The piped-stdin test below is the only one that
+//! drives the real `reedline` editor, so it is the only reach into
+//! `repl::Repl::run` itself.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -31,13 +23,13 @@ fn version_prints_provenance_block_and_exits_zero() {
     let out = mtui().arg("--version").output().expect("run --version");
     assert!(out.status.success(), "--version must exit 0");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // Assert `mtui <crate-version>` without hardcoding the number (tracks bumps).
+    // Not hardcoded, so this tracks version bumps.
     assert!(
         stdout.contains(&format!("mtui {}", env!("CARGO_PKG_VERSION"))),
         "expected version string, got: {stdout:?}"
     );
-    // The provenance block is rendered as `mtui <ver> (<...>)`; assert the paren
-    // is present so this is the mtui-core `Args` version, not a bare stub.
+    // The provenance block renders as `mtui <ver> (<...>)`, so the paren proves
+    // this is the mtui-core `Args` version and not a bare stub.
     assert!(
         stdout.contains('('),
         "expected build-provenance block in --version, got: {stdout:?}"
@@ -49,8 +41,7 @@ fn help_lists_real_args_and_exits_zero() {
     let out = mtui().arg("--help").output().expect("run --help");
     assert!(out.status.success(), "--help must exit 0");
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // `--auto-review-id` only exists on the real `mtui_core::Args` parser, never
-    // on the old empty `Cli {}` stub — proves the rewiring landed.
+    // `--auto-review-id` exists only on the real `mtui_core::Args` parser.
     assert!(
         stdout.contains("--auto-review-id"),
         "expected real Args flags in --help, got: {stdout:?}"
@@ -74,11 +65,9 @@ fn unknown_flag_is_usage_error_exit_two() {
 
 #[test]
 fn no_args_enters_the_interactive_repl() {
-    // A bare invocation now drops into the REPL instead of bailing. The
-    // test harness has no controlling TTY, so `reedline::read_line` fails and
-    // the process exits non-zero — but the DEBUG breadcrumb proves we reached
-    // the REPL entry rather than an earlier error, and stderr must NOT carry the
-    // old "not yet implemented" bail.
+    // The harness has no controlling TTY, so `reedline::read_line` fails and
+    // the process exits non-zero; the DEBUG breadcrumb is what proves the REPL
+    // entry was reached rather than an earlier error.
     let out = mtui()
         .arg("-d")
         .env_remove("RUST_LOG")
@@ -97,23 +86,12 @@ fn no_args_enters_the_interactive_repl() {
 
 #[test]
 fn piped_stdin_reaches_repl_and_exits_without_hanging() {
-    // Drive the real binary with a piped (non-TTY) stdin. This is the only test
-    // that reaches `repl::Repl::run` itself (the unit tests exercise the `step`
-    // seam, which bypasses the `reedline` editor). Two things must hold:
-    //
-    //   1. The REPL is entered — proven by the intro banner
-    //      ("Maintenance Test Update Installer", printed once at the top of
-    //      `run` before the first prompt).
-    //   2. The process terminates on its own — `reedline::read_line` cannot use
-    //      a non-TTY stdin, so it returns an editor I/O error which `run`
-    //      propagates; `main` exits non-zero. The key property is that it does
-    //      NOT hang waiting for a controlling terminal.
-    //
-    // We do not assert a specific exit code: a bare `wait()` after closing the
-    // pipe deadlocks only if the child hangs, so reaching the assertions at all
-    // is itself the liveness proof. (A pty harness would let us drive real input
-    // lines and assert exit 0 on EOF, but that is out of scope here — the
-    // 80% bar is met without adding a pty dependency.)
+    // Two properties: the intro banner proves the REPL was entered, and the
+    // process must terminate on its own rather than hang waiting for a
+    // controlling terminal (`read_line` fails on a non-TTY stdin and `run`
+    // propagates the error). No exit code is asserted — `wait()` after closing
+    // the pipe deadlocks only if the child hangs, so reaching the assertions at
+    // all is the liveness proof. Driving real input lines would need a pty.
     let mut child = mtui()
         .arg("-d")
         .env_remove("RUST_LOG")
@@ -123,7 +101,7 @@ fn piped_stdin_reaches_repl_and_exits_without_hanging() {
         .spawn()
         .expect("spawn mtui with piped stdin");
 
-    // Feed one command line, then close the pipe (EOF).
+    // One command line, then EOF.
     child
         .stdin
         .take()
@@ -149,8 +127,7 @@ fn piped_stdin_reaches_repl_and_exits_without_hanging() {
 
 #[test]
 fn debug_flag_raises_tracing_level() {
-    // Without RUST_LOG, `-d` must surface the DEBUG startup breadcrumb that the
-    // default (info) run suppresses. Clear RUST_LOG so the test is hermetic.
+    // `RUST_LOG` is cleared so the comparison is hermetic.
     let with_debug = mtui()
         .arg("-d")
         .env_remove("RUST_LOG")

@@ -1,13 +1,13 @@
 //! Test-report checkout: SVN backend + the `UpdateID` checkout seam.
 //!
-//! Test reports live in **SVN** — this is the only checkout mechanism, shared by
+//! Test reports live in **SVN** — the only checkout mechanism, shared by
 //! OBS/IBS and SLFO incidents alike. Gitea (SLFO) and the native OBS API
 //! (OBS/IBS) are review-workflow backends (assign/approve/reject/comment) and
 //! never check a template out; see [`runner`] for why this crate keeps its own
 //! `svn` command runner.
 //!
-//! The checkout exceptions and their user-facing messages are colocated here
-//! (rather than in `mtui-types`) to keep `mtui-types` thin.
+//! The checkout errors and their user-facing messages are colocated here rather
+//! than in `mtui-types`, which stays thin.
 
 pub mod runner;
 pub mod svn;
@@ -64,9 +64,8 @@ pub enum CheckoutError {
 
 /// A recoverable I/O error reading a template, carrying its `errno`.
 ///
-/// The checkout seam branches on [`is_not_found`](Self::is_not_found) (an
-/// `errno != ENOENT` check) to decide whether a missing template should
-/// trigger a fresh checkout.
+/// The checkout seam branches on [`is_not_found`](Self::is_not_found) to
+/// decide whether a missing template should trigger a fresh checkout.
 #[derive(Debug, Error)]
 #[error("{message}")]
 pub struct TemplateIoError {
@@ -86,8 +85,7 @@ impl TemplateIoError {
     pub fn from_io(err: &io::Error) -> Self {
         Self {
             errno: err.raw_os_error(),
-            // ENOENT (2) either as a real OS errno or as the `NotFound` kind, so
-            // synthetic errors (tests, in-memory readers) map correctly too.
+            // Also the `NotFound` kind, so synthetic errors map correctly.
             not_found: err.raw_os_error() == Some(ENOENT) || err.kind() == io::ErrorKind::NotFound,
             message: err.to_string(),
         }
@@ -116,9 +114,8 @@ pub struct TestReportNotLoaded;
 /// Outcome of a template read attempt inside the checkout seam.
 ///
 /// The seam is generic over how a report is read, decoupling it from the
-/// [`TestReport::read`](crate::TestReport::read) lifecycle method. It catches
-/// a missing template (→ checkout) and lets other errors from the retry
-/// propagate.
+/// [`TestReport::read`](crate::TestReport::read) lifecycle method: it catches a
+/// missing template (→ checkout) and lets other errors propagate.
 #[derive(Debug)]
 pub enum ReadOutcome {
     /// The template was read successfully.
@@ -136,10 +133,6 @@ pub enum ReadOutcome {
 /// 4. Retry `read` once the template is on disk; a residual read failure also
 ///    surfaces as [`TestReportNotLoaded`].
 ///
-/// The Gitea-token / regeneration (`TeReGen`) outer handling and the
-/// `make_testreport` workflow variants are deferred to their own tasks; this is
-/// the checkout-and-map slice only.
-///
 /// # Errors
 ///
 /// Returns [`TestReportNotLoaded`] when the report cannot be loaded after a
@@ -156,8 +149,7 @@ where
     match read(trpath) {
         ReadOutcome::Ok => Ok(()),
         ReadOutcome::Io(e) if !e.is_not_found() => {
-            // A non-ENOENT read error is not a "needs checkout" signal; it
-            // propagates unchanged.
+            // A non-ENOENT read error is not a "needs checkout" signal.
             Err(CheckoutRunError::Read(e))
         }
         ReadOutcome::Io(_missing) => {
@@ -165,7 +157,6 @@ where
                 error!("{e}");
                 return Err(CheckoutRunError::NotLoaded(TestReportNotLoaded));
             }
-            // Retry the read now that the template is on disk.
             match read(trpath) {
                 ReadOutcome::Ok => Ok(()),
                 ReadOutcome::Io(e) => {

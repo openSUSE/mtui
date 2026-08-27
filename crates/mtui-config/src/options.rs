@@ -1,17 +1,13 @@
 //! Typed configuration options and their defaults.
 //!
-//! Covers every option section mtui understands. Most scalar defaults are
-//! long-standing values operators rely on (pinned by the default-scalars test
-//! below); a handful deviate deliberately, each flagged on its `default_*` fn.
-//!
-//! ## Shape
-//!
 //! The on-disk format is **sectioned TOML** (`[mtui]`, `[connection]`,
 //! `[refhosts]`, `[url]`, `[qem_dashboard]`, `[teregen]`, `[openqa]`, `[svn]`,
-//! `[target]`, `[gitea]`, `[slack]`, `[lock]`, `[mcp]`, `[obs]`). `RawConfig` mirrors that
-//! structure for serde; [`Config`] is the flattened, fully-typed view the rest
-//! of the workspace consumes. Every serde field defaults, so an empty (or
-//! partial) TOML document deserialises into all-defaults.
+//! `[target]`, `[gitea]`, `[slack]`, `[lock]`, `[mcp]`, `[obs]`); `RawConfig`
+//! mirrors it for serde, [`Config`] is the flattened, fully-typed view the rest
+//! of the workspace consumes. Every serde field defaults, so an empty or
+//! partial document deserialises into all-defaults. Scalar defaults are values
+//! operators rely on, pinned by the default-scalars test below; the few
+//! deliberate deviations are flagged on their `default_*` fn.
 
 use std::path::PathBuf;
 
@@ -22,13 +18,10 @@ use crate::paths::expanduser;
 
 /// TLS certificate-verification policy for outbound HTTP.
 ///
-/// Accepts three shapes in TOML, all under `[mtui] ssl_verify`:
-///
-/// * a native boolean — `ssl_verify = true` / `ssl_verify = false`;
-/// * a boolean *spelling* string — `"yes"`, `"no"`, `"on"`, `"off"`, `"1"`,
-///   `"0"`, `"true"`, `"false"` (case-insensitive);
-/// * any other string — treated as a path to a custom CA bundle/certificate,
-///   e.g. `ssl_verify = "/my/own/cert.pem"`.
+/// `[mtui] ssl_verify` accepts three shapes: a native boolean; a boolean
+/// *spelling* string (`"yes"`, `"no"`, `"on"`, `"off"`, `"1"`, `"0"`, `"true"`,
+/// `"false"`, case-insensitive); or any other string, a path to a custom CA
+/// bundle/certificate (`ssl_verify = "/my/own/cert.pem"`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum SslVerify {
     /// Verify certificates against the system trust store (the default).
@@ -41,10 +34,9 @@ pub enum SslVerify {
 }
 
 impl SslVerify {
-    /// Coerce a raw string value from its accepted spellings.
-    ///
-    /// A recognised boolean spelling maps to [`Enabled`](Self::Enabled) /
-    /// [`Disabled`](Self::Disabled); anything else is a CA bundle path.
+    /// Coerce a raw string value: a recognised boolean spelling maps to
+    /// [`Enabled`](Self::Enabled) / [`Disabled`](Self::Disabled), anything else
+    /// is a CA bundle path.
     #[must_use]
     pub fn parse(raw: &str) -> Self {
         let token = raw.trim();
@@ -101,18 +93,17 @@ impl<'de> Deserialize<'de> for SslVerify {
 
 // -- Parse-time validators. ---------------------------------------------------
 //
-// A handful of options are validated at parse time and, on failure, logged at
-// ERROR and fall back to the option's default (per-option, never hard-failing).
-// mtui applies this per-field fallback in `Config::from_raw`. Rust's typed
-// `u64`/`usize` fields already reject non-numeric and negative literals at TOML
-// deserialise time, so the positive-int guard reduces to rejecting `0`.
+// A failing value is logged at ERROR and falls back to that option's default in
+// `Config::from_raw` (per-option, never hard-failing). The typed `u64`/`usize`
+// fields already reject non-numeric and negative literals at TOML deserialise
+// time, so the positive-int guard reduces to rejecting `0`.
 
-/// Validate an `http(s)` endpoint URL.
+/// Validate an `http(s)` endpoint URL: an `http`/`https` scheme, a non-empty
+/// host, and a numeric port if one is present.
 ///
-/// Requires an `http` or `https` scheme, a non-empty host, and — when a port is
-/// present — a numeric one. This is deliberately lenient (a split-based check,
-/// not full RFC 3986): a bad value like `https://openqa.suse.de:44e3`
-/// is rejected, but exotic-yet-usable forms are accepted.
+/// Deliberately lenient (a split-based check, not full RFC 3986) — it rejects a
+/// bad value like `https://openqa.suse.de:44e3` while accepting
+/// exotic-yet-usable forms.
 fn validate_base_url(raw: &str) -> bool {
     let token = raw.trim();
     let Some((scheme, rest)) = token.split_once("://") else {
@@ -154,11 +145,10 @@ fn is_numeric_port(port: &str) -> bool {
     !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok()
 }
 
-/// Validate `[mtui] install_logs` as a single relative directory name.
-///
-/// The value is joined per update as `template_dir / <rrid> / install_logs`;
-/// an empty, absolute, separator-containing, or `.`/`..` value would crash or
-/// silently escape the base path, so it is rejected here.
+/// Validate `[mtui] install_logs` as a single relative directory name: it is
+/// joined per update as `template_dir / <rrid> / install_logs`, so an empty,
+/// absolute, separator-containing or `.`/`..` value would crash or silently
+/// escape the base path.
 fn is_relative_dir_name(raw: &str) -> bool {
     let token = raw.trim();
     !token.is_empty()
@@ -214,32 +204,25 @@ fn default_openqa_instance_baremetal() -> String {
 }
 /// Default trusted Gitea origin the PR-review token may be sent to.
 ///
-/// The trusted origin the PR-review token may be attached to: the token is
-/// only sent on requests whose origin matches this value, so it defaults to the
-/// internal SUSE Gitea (`src.suse.de`) that serves SLFO so the
-/// standard workflow keeps working out-of-the-box; point it elsewhere (e.g.
-/// `https://src.opensuse.org`) for other instances.
+/// The token is only attached to requests whose origin matches this value, so
+/// it defaults to the internal SUSE Gitea (`src.suse.de`) serving SLFO; point
+/// it elsewhere (e.g. `https://src.opensuse.org`) for other instances.
 fn default_gitea_url() -> String {
     "https://src.suse.de".to_owned()
 }
 fn default_openqa_install_distri() -> String {
     "sle".to_owned()
 }
-/// The Slack integration is **opt-in**: off unless a site turns it on.
-///
-/// Posting to a chat workspace is an outward-facing side effect, so it should
-/// never happen because a default said so. Most mtui users have no Slack
-/// integration at all, and for them the feature staying dark — and saying why
-/// when invoked — is the correct behaviour. Turning it on is one explicit
-/// `enabled = true` alongside the token and channel it needs anyway.
+/// The Slack integration is **opt-in**: posting to a chat workspace is an
+/// outward-facing side effect that must never follow from a default, so it
+/// stays dark (and says why when invoked) until an explicit `enabled = true`.
 fn default_slack_enabled() -> bool {
     false
 }
 /// Trusted Slack API origin the [`slack_token`](Config::slack_token) may be
-/// sent to, mirroring the `gitea_url` reasoning: the token is only ever
-/// attached to requests against this base, so pointing it elsewhere is an
-/// explicit, auditable act rather than something a checked-out template can
-/// influence. Overridable mainly so tests can aim at a local mock server.
+/// sent to, mirroring `gitea_url`: the token only ever goes to this base, so
+/// aiming it elsewhere is an explicit, auditable act rather than something a
+/// checked-out template can influence. Overridable mainly for a mock server.
 fn default_slack_api_url() -> String {
     "https://slack.com/api".to_owned()
 }
@@ -249,9 +232,9 @@ fn default_slack_api_url() -> String {
 fn default_slack_poll_interval() -> u64 {
     120
 }
-/// Seconds a `request_review` watch runs before giving up, defaulting to one
-/// hour: long enough for a reviewer to notice, short enough that a forgotten
-/// foreground watch does not pin a terminal indefinitely.
+/// Seconds a `request_review` watch runs before giving up: long enough for a
+/// reviewer to notice, short enough that a forgotten foreground watch does not
+/// pin a terminal indefinitely.
 fn default_slack_watch_timeout() -> u64 {
     3600
 }
@@ -265,8 +248,7 @@ fn default_refhosts_https_expiration() -> u64 {
     3600 * 12
 }
 fn default_refhosts_path() -> PathBuf {
-    // Deliberate design choice: mtui defaults to a per-user path
-    // (rather than a hardcoded /usr/share/qam-metadata/refhosts.yml).
+    // mtui is per-user by design: no system-wide refhosts database path.
     expanduser(&PathBuf::from("~/.local/share/refdb/refhosts.yml"))
 }
 fn default_install_logs() -> PathBuf {
@@ -279,19 +261,16 @@ fn default_ssh_strict_host_key_checking() -> String {
     "auto_add".to_owned()
 }
 fn default_template_dir() -> PathBuf {
-    // Upstream: Path(getenv("TEMPLATE_DIR", ".")).
     std::env::var_os("TEMPLATE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 fn default_local_tempdir() -> PathBuf {
-    // Upstream: Path(getenv("TMPDIR", "/tmp")).
     std::env::var_os("TMPDIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 fn default_session_user() -> String {
-    // Upstream: getpass.getuser(). Fall back to $USER / "unknown".
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "unknown".to_owned())
@@ -330,10 +309,9 @@ fn default_mcp_session_cap() -> usize {
     32
 }
 fn default_mcp_session_idle_timeout() -> u64 {
-    // 4 hours. Chosen higher than a bare keep-alive floor because this value
-    // also pins the rmcp streamable-HTTP session keep-alive (`serve_http`),
-    // whose own
-    // default (300s) tore down idle http sessions mid-conversation.
+    // 4h, above a bare keep-alive floor: this also pins the rmcp
+    // streamable-HTTP session keep-alive, whose own 300s default tore down idle
+    // http sessions mid-conversation.
     14_400
 }
 fn default_mcp_sweep_parallel() -> usize {
@@ -439,9 +417,6 @@ pub(crate) struct TargetSection {
 }
 
 /// `[gitea]` table — credentials for the Gitea PR review workflow.
-///
-/// The `gitea_token` credential lives here as `[gitea] token`. The Gitea
-/// connector refuses to build without it.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct GiteaSection {
@@ -451,10 +426,9 @@ pub(crate) struct GiteaSection {
 
 /// `[slack]` table — the Slack review-request integration.
 ///
-/// Off by default, and gated twice over: `enabled` must be `true`, and
-/// `token`/`channel` must both be set. An unconfigured mtui therefore never
-/// reaches Slack, and `request_review` refuses with the reason rather than
-/// failing somewhere inside the API.
+/// Gated twice over: `enabled` must be `true` *and* `token`/`channel` both set,
+/// so an unconfigured mtui never reaches Slack and `request_review` refuses
+/// with the reason rather than failing somewhere inside the API.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct SlackSection {
@@ -466,10 +440,8 @@ pub(crate) struct SlackSection {
     pub watch_timeout: Option<u64>,
 }
 
-/// `[lock]` table — remote-lock behaviour on target hosts.
-///
-/// The `lock_*` options live under the `[lock]` table: stale-lock reaping on
-/// connect and the host-arbitration pool-claim wait queue.
+/// `[lock]` table — remote-lock behaviour on target hosts: stale-lock reaping
+/// on connect and the host-arbitration pool-claim wait queue.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct LockSection {
@@ -484,15 +456,11 @@ pub(crate) struct LockSection {
 
 /// `[mcp]` table — `mtui-mcp` server behaviour.
 ///
-/// The `mcp_*` options live under the `[mcp]` table. `session_cap` /
-/// `session_idle_timeout` configure the
-/// http transport's per-client session budget, enforced application-side by
+/// `session_cap` / `session_idle_timeout` are the http transport's per-client
+/// session budget, enforced application-side by
 /// `mtui_mcp::provider::SessionRegistry`. `profile` / `tools_allow` /
-/// `tools_deny` select the exposed
-/// tool surface (see `mtui_mcp::profiles`).
-///
-/// Note: the profile key is `profile` under the already tool-scoped `[mcp]`
-/// table. The list keys are native TOML arrays of strings.
+/// `tools_deny` select the exposed tool surface (see `mtui_mcp::profiles`); the
+/// two list keys are native TOML arrays of strings.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct McpSection {
@@ -511,9 +479,7 @@ pub(crate) struct McpSection {
 
 /// `[obs]` table — the native OBS/IBS QAM review backend.
 ///
-/// The `obs_*` options live under the `[obs]` table. mtui uses the native OBS
-/// API backend only, so there is no transitional `backend` selector. No OBS
-/// credentials live here — the oscrc remains the sole credential source (see
+/// No OBS credentials live here: the oscrc is the sole credential source (see
 /// `mtui_datasources::obs::oscrc`).
 ///
 /// * `api_url` is the OBS API mtui acts against; it must equal a section header
@@ -530,10 +496,9 @@ pub(crate) struct ObsSection {
     pub request_timeout: Option<u64>,
 }
 
-/// Raw, deserialised view of a single TOML document.
-///
-/// Every field is optional so a partial file leaves absent options untouched
-/// during the merge; the flattening into [`Config`] applies defaults last.
+/// Raw, deserialised view of a single TOML document. Every field is optional, so
+/// a partial file leaves absent options untouched during the merge and the
+/// flattening into [`Config`] applies defaults last.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct RawConfig {
@@ -624,8 +589,7 @@ impl RawConfig {
 /// Fully-typed configuration consumed by the rest of the workspace.
 ///
 /// Construct via [`Config::load`](crate::Config::load) (file/env/defaults) or
-/// [`Config::default`] (all defaults). Path-typed options have `~`
-/// expanded to the user's home directory via `expanduser`.
+/// [`Config::default`]. Path-typed options have `~` expanded via `expanduser`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Config {
@@ -644,37 +608,28 @@ pub struct Config {
     pub ssl_verify: SslVerify,
 
     // [connection]
-    /// SSH per-command no-output timeout, in seconds. Does not bound the
-    /// initial connect handshake — see [`connect_timeout`](Self::connect_timeout)
-    /// for that.
+    /// SSH per-command no-output timeout, in seconds; the connect handshake is
+    /// bounded by [`connect_timeout`](Self::connect_timeout) instead.
     pub connection_timeout: u64,
-    /// SSH connect handshake budget (TCP connect, banner, and auth), in
-    /// seconds. Kept far tighter than [`connection_timeout`](Self::connection_timeout)
-    /// since a dead host should be dropped from a batch quickly rather than
-    /// held for a command-sized window. Raise it for a host with a
-    /// genuinely slow banner (e.g. a loaded s390x LPAR or a jump-path host).
-    ///
-    /// Also bounds each SFTP request's per-op timeout (the lock/history file
-    /// operations), which otherwise defaults to the underlying library's
-    /// fixed 10s. Raise this alongside a slow banner for a WAN/VPN refhost.
+    /// SSH connect handshake budget (TCP connect, banner, auth), in seconds.
+    /// Far tighter than [`connection_timeout`](Self::connection_timeout) so a
+    /// dead host leaves a batch quickly; raise it for a genuinely slow banner (a
+    /// loaded s390x LPAR, a jump-path host, a WAN/VPN refhost). Also bounds each
+    /// SFTP per-op timeout (the lock/history files), which otherwise takes the
+    /// underlying library's fixed 10s.
     pub connect_timeout: u64,
-    /// Backoff base (seconds) for post-reboot reconnect retries. Sleeps grow
-    /// as `2*(reboot_timeout + 5*count)` after the first probe. Upstream
-    /// `reconnect(timeout=...)`.
+    /// Backoff base (seconds) for post-reboot reconnect retries; sleeps grow as
+    /// `2*(reboot_timeout + 5*count)` after the first probe.
     pub reboot_timeout: u64,
     /// Number of post-reboot reconnect attempts beyond the first probe.
-    /// Upstream `reconnect(retry=...)`.
     pub reboot_retries: u64,
-    /// Maximum number of hosts to fan out to concurrently (SSH command,
-    /// SFTP, lock-probe, and connect batches). Caps peak sockets/tasks/RSS
-    /// and remote load on large fleets; serial-host semantics are unaffected.
-    /// A non-positive value falls back to the default.
+    /// Maximum number of hosts to fan out to concurrently (SSH command, SFTP,
+    /// lock-probe and connect batches), capping peak sockets/tasks/RSS and remote
+    /// load; serial-host semantics are unaffected. `0` falls back to the default.
     pub max_parallel: u64,
-    /// Maximum number of independent openQA/QAM HTTP requests to run
-    /// concurrently in the oqa-search overview (per-version, group×version, and
-    /// per-log fan-out). Kept lower than [`Self::max_parallel`] to stay polite toward
-    /// the shared openQA/QAM hosts. A non-positive value falls back to the
-    /// default.
+    /// Maximum concurrent openQA/QAM HTTP requests in the oqa-search overview
+    /// (per-version, group×version and per-log fan-out). Kept below
+    /// [`Self::max_parallel`] to stay polite toward the shared hosts.
     pub max_oqa_parallel: u64,
     /// SSH host-key checking policy (`auto_add`, `strict`, `warn`, ...).
     pub ssh_strict_host_key_checking: String,
@@ -721,20 +676,17 @@ pub struct Config {
     /// API token for the Gitea PR review workflow. Empty by default; the Gitea
     /// connector refuses to build without it.
     pub gitea_token: String,
-    /// Trusted Gitea origin the [`gitea_token`](Self::gitea_token) may be sent
-    /// to. The Gitea connector attaches the token only to requests whose origin
-    /// (scheme/host/port) matches this; metadata-supplied PR URLs pointing
-    /// anywhere else are refused. Defaults to `https://src.suse.de`.
+    /// Trusted Gitea origin (scheme/host/port) the
+    /// [`gitea_token`](Self::gitea_token) may be sent to; a metadata-supplied PR
+    /// URL pointing anywhere else is refused. Defaults to `https://src.suse.de`.
     pub gitea_url: String,
 
     // [slack]
-    /// Whether the Slack review-request integration is available at all.
-    /// `false` by default — the feature is opt-in, so an unconfigured mtui
-    /// never posts anywhere; `request_review` refuses and says why.
+    /// Whether the Slack review-request integration is available at all. Opt-in,
+    /// so an unconfigured mtui never posts: `request_review` refuses and says why.
     pub slack_enabled: bool,
     /// Bot token for the Slack Web API (scopes: `chat:write`, `reactions:read`,
-    /// `channels:history`). Empty by default; `request_review` refuses without
-    /// it, so the integration stays inert until deliberately configured.
+    /// `channels:history`). Empty by default; `request_review` refuses without it.
     pub slack_token: String,
     /// Channel the review request is posted to (an ID such as `C01234567` or a
     /// `#name`). Empty by default; `request_review` refuses without it.
@@ -759,11 +711,10 @@ pub struct Config {
     /// A non-positive value disables reaping.
     pub lock_stale_age: u64,
     /// On a pool claim attempt, force-remove a pre-existing pool-claim lock older
-    /// than [`pool_stale_age`](Self::pool_stale_age) seconds regardless of owner.
-    /// The pool-claim analogue of [`lock_reap_stale`](Self::lock_reap_stale) — the
-    /// only automatic recovery for a pool claim orphaned by an uncatchable exit
-    /// (SIGKILL / panic / power loss), which the RRID-based pool lock otherwise
-    /// leaves held until a manual `unlock -f -p`.
+    /// than [`pool_stale_age`](Self::pool_stale_age) seconds regardless of owner:
+    /// the only automatic recovery for a claim orphaned by an uncatchable exit
+    /// (SIGKILL / panic / power loss), which otherwise stays held until a manual
+    /// `unlock -f -p`.
     pub pool_reap_stale: bool,
     /// Age (seconds) beyond which a pool-claim lock is considered stale and
     /// reapable. A value of `0` disables pool-claim reaping.
@@ -778,60 +729,47 @@ pub struct Config {
     pub lock_wait_poll: u64,
 
     // [mcp]
-    /// Upper bound (bytes) on a single `mtui-mcp` tool result. Output beyond
-    /// this is truncated at the tail with a notice so one large command result
-    /// (e.g. a fan-out `run`) cannot dwarf the client's context. `0` disables
-    /// the cap. Upstream default is 100_000.
+    /// Upper bound (bytes) on a single `mtui-mcp` tool result, truncated at the
+    /// tail with a notice so one large result (a fan-out `run`) cannot dwarf the
+    /// client's context. `0` disables the cap. Default 100_000.
     pub mcp_max_output_bytes: usize,
     /// Upper bound (bytes) on how much of an on-disk checkout file a
-    /// `testreport_read` MCP tool call will read before stopping. Distinct from
-    /// `mcp_max_output_bytes` (the wire-result cap): this bounds the *source*
-    /// read so a huge or slow file cannot exhaust memory, while still letting a
-    /// caller page through a large log via `offset`/`limit`. Reads past this are
-    /// truncated with a notice (never refused). `0` disables the cap. A
-    /// hardening addition. Default is 10_000_000.
+    /// `testreport_read` call reads. Unlike `mcp_max_output_bytes` this bounds
+    /// the *source* read, so a huge file cannot exhaust memory while a caller
+    /// pages through it via `offset`/`limit`; reads past it truncate with a
+    /// notice, never refuse. `0` disables the cap. Default 10_000_000.
     pub mcp_max_input_bytes: usize,
     /// Upper bound (bytes) on an inbound HTTP request body the `--transport http`
-    /// MCP server will buffer before rejecting it (413). Distinct from
-    /// `mcp_max_input_bytes` (a testreport *source* read budget): this guards the
-    /// http transport itself, so an unauthenticated pre-session request cannot be
-    /// buffered until memory exhaustion. `0` disables mtui's limit entirely
-    /// (`DefaultBodyLimit::disable()`), removing even axum's implicit 2 MB floor.
-    /// A hardening addition. Default is 10_000_000.
+    /// MCP server buffers before rejecting it (413), so an unauthenticated
+    /// pre-session request cannot be buffered until memory exhaustion. `0`
+    /// disables mtui's limit entirely (`DefaultBodyLimit::disable()`), removing
+    /// even axum's implicit 2 MB floor. Default 10_000_000.
     pub mcp_max_request_bytes: usize,
-    /// Ceiling on concurrent (running) background jobs a single `mtui-mcp`
-    /// session may hold (DoS guard). A `start`/`start_jobs` request that would
-    /// exceed this is rejected *before* any worker is spawned. `0` disables the
-    /// cap. Default is 16. A hardening addition.
+    /// Ceiling on concurrent (running) background jobs one `mtui-mcp` session
+    /// may hold (DoS guard); an exceeding `start`/`start_jobs` is rejected
+    /// *before* any worker is spawned. `0` disables the cap. Default 16.
     pub mcp_max_active_jobs: usize,
     /// Ceiling on retained *terminal* (done/failed/cancelled) background-job
-    /// records per session; the oldest-finished records beyond this are evicted
-    /// FIFO so a long-lived session does not accumulate job history unbounded.
-    /// Running jobs are never evicted. `0` disables the cap. Default is 128. A
-    /// hardening addition.
+    /// records per session, evicted oldest-finished-first; running jobs never.
+    /// `0` disables the cap. Default 128.
     pub mcp_max_completed_jobs: usize,
     /// Ceiling on concurrent per-client sessions under `--transport http` (DoS
-    /// guard). Default is 32. Enforced by
-    /// `mtui_mcp::provider::SessionRegistry::try_make_server`, which refuses a
-    /// new session once the cap is reached.
+    /// guard), enforced by
+    /// `mtui_mcp::provider::SessionRegistry::try_make_server`. Default 32.
     pub mcp_session_cap: usize,
-    /// Seconds of inactivity after which an idle http session is swept. `0`
+    /// Seconds of inactivity after which an idle http session is swept; `0`
     /// disables the sweeper. Also pins the rmcp streamable-HTTP session
-    /// keep-alive (`serve_http`) so the transport does not tear a session down
-    /// before this sweeper would. Default is 14400 (4h) — deliberately higher
-    /// than a bare keep-alive floor (a lower value would let rmcp's own 300s
-    /// keep-alive drop idle sessions mid-conversation).
+    /// keep-alive (`serve_http`), whose own 300s default would otherwise drop
+    /// idle sessions mid-conversation. Default 14400 (4h).
     pub mcp_session_idle_timeout: u64,
-    /// Max stale sessions the idle sweeper tears down concurrently in one sweep
-    /// cycle (each teardown is bounded by the per-session disconnect timeout).
-    /// Bounding the fan-out keeps a mass eviction from a host-teardown thundering
-    /// herd while making sweep latency ~independent of stale-session count.
-    /// Default is 4.
+    /// Max stale sessions the idle sweeper tears down concurrently per cycle
+    /// (each bounded by the per-session disconnect timeout): avoids a
+    /// host-teardown thundering herd on mass eviction while keeping sweep latency
+    /// ~independent of stale-session count. Default 4.
     pub mcp_sweep_parallel: usize,
     /// Tool-surface profile the `mtui-mcp` server exposes: `"full"` (default,
     /// every synthesised tool) or `"core"` (the curated everyday subset — see
-    /// `mtui_mcp::profiles`). An unknown name falls back to `full` with a
-    /// warning. Upstream key is `[mcp] tool_profile`; here it is `[mcp] profile`.
+    /// `mtui_mcp::profiles`). An unknown name falls back to `full` with a warning.
     pub mcp_profile: String,
     /// Extra tool names to keep on top of the profile (only those actually
     /// registered are added). Layered before `mcp_tools_deny`.
@@ -840,14 +778,13 @@ pub struct Config {
     pub mcp_tools_deny: Vec<String>,
 
     // [obs]
-    /// The OBS/IBS API URL the native QAM review backend acts against. Must
-    /// equal a section header in the user's oscrc. Upstream default is
-    /// `https://api.suse.de`. The oscrc is located like `osc` itself
-    /// (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`); there is no
-    /// mtui-side path option (set `$OSC_CONFIG` to override).
+    /// The OBS/IBS API URL the native QAM review backend acts against; must
+    /// equal a section header in the user's oscrc. The oscrc is located like
+    /// `osc` itself (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`),
+    /// so there is no mtui-side path option. Default `https://api.suse.de`.
     pub obs_api_url: String,
     /// Coarse wall-clock budget (seconds) for a whole native OBS operation,
-    /// checked *between* its HTTP calls. Upstream default is 180.
+    /// checked *between* its HTTP calls. Default 180.
     pub obs_request_timeout: u64,
 }
 
@@ -914,14 +851,13 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Flatten a merged [`RawConfig`] into a fully-typed `Config`, applying
-    /// defaults for absent options and expanding `~` in path options.
+    /// Flatten a merged [`RawConfig`], applying defaults for absent options and
+    /// expanding `~` in path options.
     pub(crate) fn from_raw(raw: RawConfig) -> Self {
         let d = Config::default();
 
-        // Per-field parse-time validation with fallback to the default (logged
-        // at ERROR). A present-but-invalid value
-        // never invalidates the rest of the file.
+        // Per-field validation falling back to the default (logged at ERROR):
+        // one invalid value never invalidates the rest of the file.
         macro_rules! validated_url {
             ($opt:expr, $field:literal, $default:expr) => {
                 match $opt {
@@ -1151,7 +1087,6 @@ mod tests {
         }
         assert_eq!(c.install_logs, PathBuf::from("install_logs"));
         assert_eq!(c.target_tempdir, PathBuf::from("/tmp"));
-        // [lock] defaults.
         assert!(c.lock_reap_stale);
         assert_eq!(c.lock_stale_age, 86400);
         // Pool-claim reaping defaults match the operation lock's.
@@ -1160,13 +1095,11 @@ mod tests {
         assert!(c.lock_pi_autolock);
         assert_eq!(c.lock_wait, 0);
         assert_eq!(c.lock_wait_poll, 15);
-        // openQA / QEM Dashboard / TeReGen defaults.
         assert_eq!(c.qem_dashboard_api, "http://dashboard.qam.suse.de/api");
         assert_eq!(c.teregen_api, "https://qam.suse.de/api/v1");
         assert_eq!(c.openqa_instance, "https://openqa.suse.de");
         assert_eq!(c.openqa_instance_baremetal, "http://openqa.qam.suse.cz");
         assert_eq!(c.openqa_install_distri, "sle");
-        // [obs] defaults (native-only backend).
         assert_eq!(c.obs_api_url, "https://api.suse.de");
         assert_eq!(c.obs_request_timeout, 180);
     }
@@ -1188,7 +1121,6 @@ mod tests {
 
     #[test]
     fn obs_section_partial_keeps_defaults() {
-        // A partial [obs] table leaves absent keys at their built-in defaults.
         let raw: RawConfig = toml::from_str("[obs]\nrequest_timeout = 90\n").unwrap();
         let c = Config::from_raw(raw);
         assert_eq!(c.obs_request_timeout, 90);
@@ -1236,18 +1168,14 @@ mod tests {
 
     #[test]
     fn gitea_token_defaults_empty_and_parses() {
-        // Default is empty (the connector refuses to build without a token).
         assert_eq!(Config::default().gitea_token, "");
-        // A [gitea] table sets it.
         let raw: RawConfig = toml::from_str("[gitea]\ntoken = \"abc123\"\n").unwrap();
         assert_eq!(Config::from_raw(raw).gitea_token, "abc123");
     }
 
     #[test]
     fn gitea_url_defaults_to_src_suse_de_and_parses() {
-        // Default is the internal SUSE Gitea (the token's only trusted origin).
         assert_eq!(Config::default().gitea_url, "https://src.suse.de");
-        // A [gitea] table overrides it (validated as an http(s) URL).
         let raw: RawConfig =
             toml::from_str("[gitea]\nurl = \"https://src.opensuse.org\"\n").unwrap();
         assert_eq!(Config::from_raw(raw).gitea_url, "https://src.opensuse.org");
@@ -1259,8 +1187,6 @@ mod tests {
     #[test]
     fn slack_is_off_until_explicitly_enabled() {
         let d = Config::default();
-        // Opt-in by default: posting into a chat workspace is an outward-facing
-        // side effect that must never follow from an unconfigured install.
         assert!(!d.slack_enabled);
         assert_eq!(d.slack_token, "");
         assert_eq!(d.slack_channel, "");
@@ -1288,8 +1214,7 @@ mod tests {
 
     #[test]
     fn slack_partial_keeps_defaults() {
-        // Enabling the integration must not disturb the other options, so a
-        // site can switch it on without restating the whole section.
+        // Switching the integration on must not disturb the other options.
         let raw: RawConfig = toml::from_str("[slack]\nenabled = true\n").unwrap();
         let c = Config::from_raw(raw);
         assert!(c.slack_enabled);
@@ -1357,7 +1282,6 @@ mod tests {
 
     #[test]
     fn lock_section_partial_keeps_defaults() {
-        // A partial [lock] table leaves absent keys at their built-in defaults.
         let raw: RawConfig = toml::from_str("[lock]\nwait = 45\n").unwrap();
         let c = Config::from_raw(raw);
         assert_eq!(c.lock_wait, 45);
@@ -1394,8 +1318,7 @@ mod tests {
 
     #[test]
     fn ssl_verify_deserializes_native_bool() {
-        // `ssl_verify = false` (native TOML boolean) must disable verification,
-        // not silently fall back to the default.
+        // A native TOML boolean must disable verification, not fall back.
         let raw: RawConfig = toml::from_str("[mtui]\nssl_verify = false\n").unwrap();
         assert_eq!(raw.mtui.ssl_verify, Some(SslVerify::Disabled));
 
@@ -1405,11 +1328,9 @@ mod tests {
 
     #[test]
     fn ssl_verify_deserializes_string_forms() {
-        // Boolean spelling as a string.
         let raw: RawConfig = toml::from_str("[mtui]\nssl_verify = \"off\"\n").unwrap();
         assert_eq!(raw.mtui.ssl_verify, Some(SslVerify::Disabled));
 
-        // Path to a custom certificate.
         let raw: RawConfig = toml::from_str("[mtui]\nssl_verify = \"/my/own/cert.pem\"\n").unwrap();
         assert_eq!(
             raw.mtui.ssl_verify,
@@ -1429,7 +1350,6 @@ mod tests {
         raw.mtui.chdir_to_template_dir = Some(true);
         raw.url.bugzilla = Some("https://bugzilla.example.com".to_owned());
         let c = Config::from_raw(raw);
-        // Overridden.
         assert_eq!(c.connection_timeout, 450);
         assert_eq!(c.connect_timeout, 90);
         assert_eq!(c.reboot_timeout, 20);
@@ -1438,7 +1358,6 @@ mod tests {
         assert_eq!(c.max_oqa_parallel, 3);
         assert!(c.chdir_to_template_dir);
         assert_eq!(c.bugzilla_url, "https://bugzilla.example.com");
-        // Untouched falls back to default.
         assert_eq!(c.reports_url, "https://qam.suse.de/testreports");
     }
 
@@ -1454,7 +1373,6 @@ mod tests {
         base.merge(over);
         assert_eq!(base.connection.connection_timeout, Some(999));
         assert_eq!(base.connection.reboot_timeout, Some(30));
-        // A key not set in `over` is preserved from base.
         assert_eq!(base.url.bugzilla.as_deref(), Some("base"));
     }
 
@@ -1511,9 +1429,8 @@ mod tests {
         )
         .unwrap();
         let c = Config::from_raw(raw);
-        // Bad URL falls back to the default...
         assert_eq!(c.openqa_instance, "https://openqa.suse.de");
-        // ...while a sibling valid option in the same file still applies.
+        // A sibling valid option in the same file still applies.
         assert_eq!(c.openqa_install_distri, "sle-micro");
     }
 
@@ -1581,9 +1498,8 @@ mod tests {
 
     #[test]
     fn zero_legal_int_options_accept_zero() {
-        // These options use a plain integer; 0 is meaningful and must NOT
-        // be rejected: lock_stale_age (disables reaping), lock_wait (fail fast),
-        // mcp_max_output_bytes (disables the cap).
+        // 0 is meaningful for these and must not be rejected: it disables
+        // reaping, fails fast, and disables the output cap respectively.
         let raw: RawConfig = toml::from_str(
             r#"
             [lock]

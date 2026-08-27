@@ -1,7 +1,6 @@
-//! Covers only the JSON-related surface that survives in the Rust port:
-//! [`JSONParser`] and [`patchinfo_titles`]. `ReducedMetadataParser` (dropped
-//! legacy text-embedding) and the `*repoparse` helpers (which belong to the
-//! products/report tasks) are intentionally not exercised here.
+//! Metadata parser tests: [`ReducedMetadataParser`], [`JSONParser`] and
+//! [`patchinfo_titles`]. The `*repoparse` helpers are the report side and are
+//! covered by `tests/repoparse.rs`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,37 +18,29 @@ const METADATA_JSON: &str = include_str!("fixtures/metadata/metadata.json");
 
 /// Real-metadata fixture: `tests/fixtures/metadata/slfo_metadata.json`.
 ///
-/// Captured from TeReGen's `metadata.json` for `SUSE:SLFO:1.1:418286` on
-/// 2026-08-11. Every field value is **field-for-field** identical to the fetched
-/// record except one substitution: `packager` was replaced with
-/// `someone@suse.com` (a value already used by the lifecycle fixtures) so a
-/// named individual's address is not published in a public repo.
+/// Captured from TeReGen for `SUSE:SLFO:1.1:418286` on 2026-08-11,
+/// **field-for-field** identical to the fetched record but for `packager`,
+/// replaced with `someone@suse.com` so no named individual's address is
+/// published. It is **not** byte-for-byte: the record arrives as one ~950-byte
+/// line and was re-serialized (4-space indent, sorted keys) to match its golden
+/// sibling `metadata.json`, so a diff against a fresh fetch shows a whole-file
+/// reformat. Compare parsed values, not bytes.
 ///
-/// The file is **not** a byte-for-byte copy: the record arrives as a single
-/// ~950-byte line and was re-serialized here (4-space indent, keys sorted, one
-/// array element per line) to match its golden sibling `metadata.json`. Anyone
-/// diffing this against a fresh fetch will see a whole-file reformat — that is
-/// the pretty-printing, not tampering. Compare parsed values, not bytes.
-///
-/// Do not "tidy" any value in it. The whole point of the fixture is that the
-/// domain values are observed rather than guessed: #396 shipped a synthetic
-/// SLFO probe that guessed the map key wrong, and only a real record settles it
-/// (#397).
+/// Do not "tidy" any value: the point is that the domain values are observed
+/// rather than guessed — #396 shipped a synthetic SLFO probe that guessed the
+/// map key wrong, and only a real record settled it (#397).
 const SLFO_METADATA_JSON: &str = include_str!("fixtures/metadata/slfo_metadata.json");
 
 #[test]
 fn reduced_metadata_parser_parses_hosts_jira_bugs() {
     let mut report = empty_report();
 
-    // Hostname line.
     ReducedMetadataParser::parse(&mut report, "some text (reference host: test_host)");
     assert!(report.hostnames.contains("test_host"));
 
-    // Jira line.
     ReducedMetadataParser::parse(&mut report, r#"Jira ABC-123 ("Test Jira issue"):"#);
     assert_eq!(report.jira["ABC-123"], "Test Jira issue");
 
-    // Bug line.
     ReducedMetadataParser::parse(&mut report, r#"Bug 123 ("Test bug"):"#);
     assert_eq!(report.bugs["123"], "Test bug");
 }
@@ -83,9 +74,8 @@ fn reduced_metadata_parser_keeps_the_first_slack_marker() {
 
 #[test]
 fn reduced_metadata_parser_ignores_a_malformed_slack_marker() {
-    // A truncated marker points at no real message. Treating it as absent
-    // makes `approve` refuse (safe); half-parsing it could make the gate check
-    // the wrong message.
+    // A truncated marker points at no real message: treating it as absent makes
+    // `approve` refuse, where half-parsing would check the wrong message.
     let mut report = empty_report();
 
     ReducedMetadataParser::parse(&mut report, "Slack Review: CONLYCHANNEL");
@@ -102,7 +92,7 @@ fn reduced_metadata_parser_ignores_a_malformed_slack_marker() {
 
 #[test]
 fn reduced_metadata_parser_skips_placeholder_host_and_ignores_other_lines() {
-    // Upstream guards `"?" not in match.group(1)`; unmatched lines are no-ops.
+    // A `?` host is a placeholder; unmatched lines are no-ops.
     let mut report = empty_report();
 
     ReducedMetadataParser::parse(&mut report, "text (reference host: ?)");
@@ -116,8 +106,7 @@ fn reduced_metadata_parser_skips_placeholder_host_and_ignores_other_lines() {
 
 #[test]
 fn json_parser_parses_golden_fixture() {
-    // The JSON half: hostnames are out of scope since the reduced text
-    // parser is exercised separately.
+    // Hostnames are out of scope: the reduced text parser is exercised above.
     let mut report = empty_report();
     JSONParser::parse_str(&mut report, METADATA_JSON).expect("valid metadata.json");
 
@@ -225,17 +214,15 @@ fn json_parser_parse_maps_every_field() {
     assert_eq!(report.giteapr.as_deref(), Some("test_gitea_pr"));
     assert_eq!(report.giteaprapi.as_deref(), Some("test_gitea_pr_api"));
     // The two tokens after the name must differ: with `"test_pkg 1.0 1.0"` this
-    // assertion could not tell version-from-token[1] from version-from-token[2],
-    // so it passed under a parser that read the wrong one.
+    // could not tell version-from-token[1] from version-from-token[2].
     assert_eq!(report.packages["test_prod"]["test_pkg"], "2.0");
     assert_eq!(report.repositories, HashSet::from(["test_repo".to_owned()]));
 }
 
 #[test]
 fn json_parser_drops_injection_shaped_package_names() {
-    // A package name carrying shell metacharacters must be dropped at ingestion
-    // (it is interpolated into root remote commands), while valid siblings in
-    // the same product set are retained.
+    // A name with shell metacharacters must be dropped at ingestion (it reaches
+    // root remote commands), while valid siblings in the set are retained.
     let mut report = empty_report();
     let data = r#"{
         "rrid": "SUSE:Maintenance:1:1",
@@ -278,11 +265,9 @@ fn json_parser_tolerates_missing_optional_keys() {
 
 #[test]
 fn json_parser_drops_malformed_rrid() {
-    // `JSONParser::parse` deliberately swallows the RRID parse error
-    // (`RequestReviewID::parse(s).ok()`) so a bad id degrades to `None` instead
-    // of failing the whole load. That leniency was unpinned: nothing asserted
-    // the drop actually happens, nor that the surrounding fields survive it.
-    // One case per failure mode of the RRID grammar (an AGENTS.md Contract).
+    // `JSONParser::parse` swallows the RRID parse error so a bad id degrades to
+    // `None` instead of failing the whole load. One case per failure mode of
+    // the RRID grammar (a Contract).
     for rrid in [
         "SUSE:Maintenance:24993",     // MissingComponent — truncated
         "SUSE:Maintenance:24993:abc", // ComponentParse — non-integer review id
@@ -291,10 +276,9 @@ fn json_parser_drops_malformed_rrid() {
         "SUSE:Maintenance:1:2:3",     // TooManyComponents
         "",                           // MissingComponent — empty
     ] {
-        // Seed a good RRID first: `rrid` defaults to `None`, so parsing into a
-        // fresh report would assert the *initial state* and pass even against a
-        // parser that never touched the field. Starting from `Some` makes the
-        // assertion below prove the malformed value actually replaced it.
+        // Seed a good RRID first: against the `None` default the assertion
+        // below would pin the *initial state* and pass even for a parser that
+        // never touched the field.
         let mut report = empty_report();
         JSONParser::parse_str(&mut report, r#"{"rrid": "SUSE:Maintenance:1:1"}"#)
             .expect("valid json");
@@ -316,8 +300,7 @@ fn json_parser_drops_malformed_rrid() {
 #[test]
 fn json_parser_clears_rrid_when_key_absent() {
     // The other route to `None`: the assignment is unconditional, so a payload
-    // with no `rrid` key clears whatever was there. Seeded first for the same
-    // reason as above — against a fresh report this assertion is vacuous.
+    // with no `rrid` key clears whatever was there. Seeded for the same reason.
     let mut report = empty_report();
     JSONParser::parse_str(&mut report, r#"{"rrid": "SUSE:Maintenance:1:1"}"#).expect("valid json");
     assert!(report.rrid.is_some(), "precondition: seeded a valid rrid");
@@ -329,11 +312,9 @@ fn json_parser_clears_rrid_when_key_absent() {
 
 /// Golden snapshot of the parsed `metadata.json` envelope.
 ///
-/// The field-by-field assertions in `json_parser_parses_golden_fixture` pin
-/// individual values; this freezes the whole parsed view of the fixture as
-/// one stable rendering, so a regression in the JSON envelope -> struct
-/// mapping surfaces as a single reviewable snapshot diff. `HashMap`/`HashSet`
-/// fields are rendered in sorted order to keep the snapshot deterministic.
+/// `json_parser_parses_golden_fixture` pins individual values; this freezes the
+/// whole parsed view, so an envelope→struct mapping regression surfaces as one
+/// reviewable diff. `HashMap`/`HashSet` fields render sorted, for determinism.
 #[test]
 fn parsed_metadata_json_is_stable() {
     let mut report = empty_report();
@@ -420,14 +401,12 @@ fn patchinfo_titles_malformed_is_empty() {
 }
 
 /// #396: a product whose entries all fail to parse must NOT leave an empty
-/// sub-map behind — that state makes `base.packages` non-empty while the
-/// flattened package list is empty, defeating every "anything to install?"
-/// guard downstream.
+/// sub-map behind — that makes `base.packages` non-empty while the flattened
+/// package list is empty, defeating every "anything to install?" guard.
 ///
-/// Key-agnostic and separator-agnostic by design: the parser never inspects
-/// either, so the odd `_` separator is a deliberate probe of that, not a claim
-/// that metadata ships one. See `json_parser_parses_slfo_real_fixture` for the
-/// real shape.
+/// Key- and separator-agnostic by design: the parser inspects neither, so the
+/// odd `_` separator is a deliberate probe of that, not a claim that metadata
+/// ships one (`json_parser_parses_slfo_real_fixture` has the real shape).
 #[test]
 fn json_parser_drops_products_with_no_parsable_entries() {
     let mut results = TestReportBase::new(Config::default());
@@ -444,13 +423,12 @@ fn json_parser_drops_products_with_no_parsable_entries() {
     assert_eq!(results.packages["other"]["afterburn"], "5.9.0-1");
 }
 
-/// One- and two-token entries are dropped (now loudly); three-plus-token
-/// entries keep parsing as first=name, third=version.
+/// One- and two-token entries are dropped (loudly); three-plus-token entries
+/// keep parsing as first=name, third=version.
 ///
-/// The middle token is *discarded*, so an entry's separator is not significant
-/// — the deliberately odd `_` below is the point of the probe, not a claim
-/// about the wire format. Real metadata ships `=`
-/// (`json_parser_parses_slfo_real_fixture`).
+/// The middle token is *discarded*, so the separator is not significant — the
+/// deliberately odd `_` below probes that rather than claiming a wire format.
+/// Real metadata ships `=` (`json_parser_parses_slfo_real_fixture`).
 #[test]
 fn json_parser_drops_short_entries_keeps_three_plus() {
     let mut results = TestReportBase::new(Config::default());
@@ -478,35 +456,29 @@ fn json_parser_empty_packages_envelope_yields_empty_map() {
     assert!(results.packages.is_empty());
 }
 
-/// #397 T1 — the **real** `SUSE:SLFO:1.1:418286` envelope parses, pinning the
+/// #397 — the **real** `SUSE:SLFO:1.1:418286` envelope parses, pinning the
 /// observed shape of an SLFO `packages` map: a single `"standard"` key.
 ///
-/// **Only the key is new.** The rest of the entry grammar — `=` as the
-/// separator, the version as the *third* token — was already pinned against
-/// captured data by `json_parser_parses_golden_fixture`, whose golden
-/// `metadata.json` ships `"sle-module-python2-release = 15.3-150300.59.4.1"`
-/// and is asserted by whole-map equality. #397 adds nothing there; the version
-/// assertions below are belt-and-braces. What no test carried before is a real
-/// record keyed `"standard"`, and that key is what makes `packages_for_map`'s
-/// single-key branch the live path for SLFO (see
+/// **Only the key is new.** The entry grammar — `=` as the separator, the
+/// version as the *third* token — was already pinned against captured data by
+/// `json_parser_parses_golden_fixture`, so the version assertions below are
+/// belt-and-braces. The key is what makes `packages_for_map`'s single-key
+/// branch the live path for SLFO (see
 /// `slfo_real_fixture_seeds_packages_for_any_base_version`).
 ///
-/// **What the key-set assertion is not.** It cannot detect TeReGen changing
-/// shape upstream: production copies the JSON key verbatim (no normalisation
-/// anywhere), so `results.packages.keys()` is definitionally this checked-in
-/// file's own keys. A static fixture observes nothing about a live service. Its
-/// real value is that it pins *this* record — swapping the fixture for a
-/// different update, or losing a field on the way through the parser, fails
-/// loudly here instead of silently weakening everything downstream. That is
-/// what the `rrid` assertion and the version assertions are for too.
+/// The key-set assertion cannot detect TeReGen changing shape upstream:
+/// production copies the JSON key verbatim, so `results.packages.keys()` is
+/// definitionally this checked-in file's own keys. Its value is pinning *this*
+/// record — swapping the fixture for a different update, or losing a field in
+/// the parser, fails loudly here rather than silently weakening everything
+/// downstream. So too the `rrid` and version assertions.
 #[test]
 fn json_parser_parses_slfo_real_fixture() {
     let mut results = empty_report();
     JSONParser::parse_str(&mut results, SLFO_METADATA_JSON).expect("real SLFO metadata parses");
 
     // The whole key set rather than a `contains_key`, so the fixture is pinned
-    // to exactly what was captured — see the note above on what that does and
-    // does not prove.
+    // to exactly what was captured.
     let products: HashSet<&str> = results.packages.keys().map(String::as_str).collect();
     assert_eq!(
         products,
@@ -534,23 +506,18 @@ fn json_parser_parses_slfo_real_fixture() {
     );
 }
 
-/// #397 T2 — the load-bearing one: the **real** fixture, driven through
-/// `packages_for_map`, seeds a host whose `base_version` is deliberately *not*
-/// a key in the map. Product-agnosticism is the entire point of the
-/// single-`"standard"`-key branch, so a `base_version` that coincidentally
-/// matched a key would disarm the test.
+/// #397, the load-bearing one: the **real** fixture driven through
+/// `packages_for_map`, seeding a host whose `base_version` is deliberately
+/// *not* a key in the map. Product-agnosticism is the entire point of the
+/// single-`"standard"`-key branch, so a coincidentally-matching `base_version`
+/// would disarm the test.
 ///
-/// `SL-Micro` / `6.1` is taken from the fixture itself, not minted and not
-/// borrowed from another test's hand-built input: the captured record's
-/// `products` line reads `SL-Micro 6.1 (aarch64, ppc64le, s390x, x86_64)` and
-/// its `testplatform` line `base=SL-Micro(major=6,minor=1);…`. `6.1` is
-/// therefore exactly what a host running this update reports as its
-/// `base_version`.
-///
-/// This is the first test to connect the parser, `packages_for_map`, and a real
-/// envelope: the `"standard"` branch was previously exercised only by a
-/// hand-built single-key map, and every downstream consumer test hand-seeds its
-/// target instead.
+/// `SL-Micro` / `6.1` comes from the fixture itself, not minted: the captured
+/// record's `products` line reads
+/// `SL-Micro 6.1 (aarch64, ppc64le, s390x, x86_64)` and its `testplatform` line
+/// `base=SL-Micro(major=6,minor=1);…`, so `6.1` is exactly what a host running
+/// this update reports. The first test to connect the parser,
+/// `packages_for_map` and a real envelope.
 #[test]
 fn slfo_real_fixture_seeds_packages_for_any_base_version() {
     let mut results = empty_report();
@@ -564,15 +531,13 @@ fn slfo_real_fixture_seeds_packages_for_any_base_version() {
 
     let pkgs = packages_for_map(&results.packages, "6.1");
 
-    // Sorted test-side. `packages_for_map` happens to sort, but leaning on that
-    // would turn a dropped `sort_by` into a ~50% flake instead of a clean
-    // failure — the order is not what this test is about.
+    // Sorted test-side: `packages_for_map` happens to sort, but leaning on that
+    // turns a dropped `sort_by` into a flake instead of a clean failure.
     let mut names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
     names.sort_unstable();
     assert_eq!(names, vec!["afterburn", "afterburn-dracut"], "{names:?}");
-    // `required` too, not just the names: seeding with `required = None` leaves
-    // the names intact while the before/after version checks lose their
-    // baseline entirely.
+    // `required` too, not just the names: seeding it `None` leaves the names
+    // intact while the before/after version checks lose their baseline.
     for p in &pkgs {
         assert_eq!(
             p.required().map(ToString::to_string).as_deref(),
@@ -583,17 +548,15 @@ fn slfo_real_fixture_seeds_packages_for_any_base_version() {
     }
 }
 
-/// #397 T2b — pins the `map.len() == 1` half of `packages_for_map`'s guard,
-/// which the existing single-key test cannot: its map has exactly one key, so
+/// #397 — pins the `map.len() == 1` half of `packages_for_map`'s guard, which
+/// the single-key test cannot: with exactly one key,
 /// `map.len() == 1 && map.contains_key("standard")` and a weakened
 /// `map.contains_key("standard")` behave identically there.
 ///
-/// Hand-built on purpose, and **not** a claim about a real shape: the records
-/// we captured ship `"standard"` alone (n is small — this says nothing about
-/// what SLFO can emit). It is a guard-shape probe — if such a map ever
-/// appeared, the base-version branch must win, because `"standard"` only means
-/// "product-agnostic" when it is the whole map. Its values are ones the tree
-/// already carries.
+/// Hand-built on purpose and **not** a claim about a real shape (the captured
+/// records ship `"standard"` alone). It is a guard-shape probe: if such a map
+/// ever appeared the base-version branch must win, because `"standard"` only
+/// means "product-agnostic" when it is the whole map.
 #[test]
 fn packages_for_map_second_product_key_disables_standard_branch() {
     let map: HashMap<String, HashMap<String, String>> = HashMap::from([
@@ -619,10 +582,8 @@ fn packages_for_map_second_product_key_disables_standard_branch() {
         vec!["hplip"],
         "a second product key must fall through to the base-version branch"
     );
-    // Versions too. Asserting names alone is exactly the weakness this file's
-    // other tests warn about: it survives a mutation that seeds no `required`,
-    // and the base-version branch has to seed one just as the `"standard"`
-    // branch does.
+    // Versions too: asserting names alone survives a mutation that seeds no
+    // `required`, which the base-version branch must do just as `"standard"` does.
     assert_eq!(
         pkgs[0].required().map(ToString::to_string).as_deref(),
         Some("3.26.4-150600.4.12.1"),

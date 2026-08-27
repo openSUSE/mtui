@@ -21,10 +21,9 @@ const EVENTS: [&str; 6] = [
 
 /// Lists the history of mtui events recorded on the reference hosts.
 ///
-/// Fetches the tail of `/var/log/mtui.log` (optionally `grep`-filtered by
-/// `-e/--event`) from each selected host, then renders each host's
-/// `when:who:event` lines through the display's `list_history` sink.
-/// Selection runs with disabled hosts included.
+/// Fetches the tail of `/var/log/mtui.log` from each selected host (optionally
+/// `grep`-filtered by `-e/--event`) and renders its `when:who:event` lines
+/// through `list_history`. Disabled hosts are included.
 pub struct ListHistory;
 
 /// Builds the log-fetch command for `count` entries and optional `events`.
@@ -135,9 +134,8 @@ mod tests {
 
     #[test]
     fn prepare_is_a_selectable_event() {
-        // `prepare` writes its own `/var/log/mtui.log` rows (#407), so it must
-        // be selectable like every other op: the value parser rejects any
-        // event not in `EVENTS`, and `matches` panics on a rejected argv.
+        // `prepare` writes its own `/var/log/mtui.log` rows (#407), so it must be
+        // selectable. `matches` panics on an argv the value parser rejects.
         let args = matches(&ListHistory, &["-e", "prepare"]);
         let events: Vec<String> = args
             .get_many::<String>("event")
@@ -149,8 +147,7 @@ mod tests {
             history_command(10, &["prepare".to_owned()]),
             "tac /var/log/mtui.log | grep -m 10 -e \":prepare\" | tac"
         );
-        // And it is offered by tab-completion, where the prefix is ambiguous
-        // with nothing else in the list.
+        // And it is offered by tab-completion.
         let (session, _buf) = empty_session();
         assert_eq!(
             ListHistory.complete(&session, "prep", "list_history -e prep"),

@@ -1,23 +1,17 @@
 //! Download openQA logs for the auto/kernel exporters.
 //!
-//! Each openQA test maps to a downloader by the first `_`-segment of its
-//! name (`install` → the zypper install log, `ltp` → the result-array JSON),
-//! with an empty-log fallback for everything else. Downloads fan out async
-//! (tokio) with **bounded concurrency**, matching the crate's async-native
-//! mandate.
+//! Each openQA test maps to a downloader by the first `_`-segment of its name
+//! (`install` → the zypper install log, `ltp` → the result-array JSON), with an
+//! empty-log fallback for everything else. Downloads fan out async (tokio) with
+//! bounded concurrency.
 //!
-//! ## Error modes
-//!
-//! * `tolerant` — a failed download *or* a failed local write is logged and
-//!   skipped.
-//! * `full` — a failed download yields a [`ResultsMissingError`], and a failed
-//!   local write (or write-task join failure) yields a [`DownloadError::Write`];
-//!   after the whole batch finishes, the first such error is returned.
-//!
-//! ## Fetch seam
+//! Error modes: `tolerant` logs and skips a failed download *or* local write;
+//! `full` returns the first [`ResultsMissingError`] / [`DownloadError::Write`]
+//! once the whole batch has finished.
 //!
 //! HTTP is abstracted behind the [`BytesFetcher`] trait so the exporters inject
-//! an [`HttpClient`](mtui_datasources::http::HttpClient)-backed fetcher while tests inject a mock.
+//! an [`HttpClient`](mtui_datasources::http::HttpClient)-backed fetcher while
+//! tests inject a mock.
 
 use std::path::{Path, PathBuf};
 
@@ -53,13 +47,10 @@ pub struct ResultsMissingError {
 
 /// A download failure surfaced under [`ErrorMode::Full`].
 ///
-/// Separates a *download* failure (the openQA log could not be fetched) from
-/// a *write* failure (the log was fetched but could not be persisted
-/// locally, or its off-thread write task failed to join), giving callers a
-/// distinct local-write signal.
-///
-/// Not `Clone`/`Eq`: the [`Write`](DownloadError::Write) variant carries a
-/// non-clonable [`std::io::Error`].
+/// Separates a *download* failure from a *write* failure (fetched, but not
+/// persistable locally, or its off-thread write task failed to join), giving
+/// callers a distinct local-write signal. Not `Clone`/`Eq`: the
+/// [`Write`](DownloadError::Write) variant carries a [`std::io::Error`].
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
     /// The openQA log could not be downloaded.
@@ -134,15 +125,13 @@ fn host_tail(host: &str) -> &str {
 /// filename.
 ///
 /// [`plan`] interpolates openQA-controlled strings (`host_tail`, `test.arch`,
-/// `test.name`) into local write paths; a value containing a separator, a `..`
-/// component, or a control byte would let a hostile response escape the export
-/// directories and overwrite arbitrary files. This mirrors
-/// `mtui_hosts::connection::ssh::validate_sftp_component` (ported rather than
-/// shared, as `mtui-testreport` must not depend on the lower `mtui-hosts`).
+/// `test.name`) into local write paths; a separator, a `..` component or a
+/// control byte would let a hostile response escape the export directories and
+/// overwrite arbitrary files. Mirrors
+/// `mtui_hosts::connection::ssh::validate_sftp_component`, ported rather than
+/// shared because `mtui-testreport` must not depend on the lower `mtui-hosts`.
 fn is_safe_component(s: &str) -> bool {
-    // Fast rejects: empty, dot components, separators (both platforms), and any
-    // control byte. `\` is rejected regardless of host OS because the *local*
-    // side may be Windows.
+    // `\` is rejected regardless of host OS: the *local* side may be Windows.
     if s.is_empty()
         || s == "."
         || s == ".."
@@ -152,9 +141,8 @@ fn is_safe_component(s: &str) -> bool {
     {
         return false;
     }
-    // Structural check: the string must resolve to exactly one normal component
-    // identical to the input (catches drive/root prefixes and any separator form
-    // the byte checks above might miss on other platforms).
+    // Must resolve to exactly one normal component identical to the input:
+    // catches drive/root prefixes and platform-specific separator forms.
     let mut comps = Path::new(s).components();
     matches!(
         (comps.next(), comps.next()),
@@ -170,9 +158,7 @@ fn plan(
     installlogsdir: &Path,
 ) -> Option<(String, PathBuf)> {
     let kind = LogKind::for_name(&test.name);
-    // Reject openQA-controlled components that would escape the export dirs
-    // before they reach a local write path. `Empty` has no local path, so skip
-    // the check (and its ERROR log) for it.
+    // `Empty` has no local path, so it needs neither the check nor its ERROR.
     let tail = host_tail(host);
     if kind != LogKind::Empty
         && !(is_safe_component(tail)
@@ -241,10 +227,8 @@ async fn subdl(
     tracing::info!("Downloading log {remote}");
     match fetcher.get_bytes(remote).await {
         Ok(data) => {
-            // Write off the async worker: a slow filesystem (network mount) must
-            // not block a Tokio thread mid-fan-out. Under `Full` a write (or
-            // join) failure is surfaced as `DownloadError::Write`; under
-            // `Tolerant` it is logged and swallowed (unchanged best-effort).
+            // Off the async worker: a slow filesystem (network mount) must not
+            // block a Tokio thread mid-fan-out.
             let local_owned = local.to_path_buf();
             let write =
                 tokio::task::spawn_blocking(move || atomic_write_file(&data, &local_owned)).await;
@@ -295,10 +279,9 @@ pub async fn download_logs(
     installlogsdir: &Path,
     mode: ErrorMode,
 ) -> Result<(), DownloadError> {
-    // Flatten to jobs, keeping only those with a log to fetch. The `Test` is
-    // cloned into each job so the download future owns all its data — a borrow
-    // of `test` across the async block below defeats higher-ranked-lifetime
-    // inference when the whole batch is awaited inside a spawned/boxed future.
+    // The `Test` is cloned into each job so the download future owns its data:
+    // a borrow across the async block defeats higher-ranked-lifetime inference
+    // when the batch is awaited inside a spawned/boxed future.
     let jobs: Vec<(Test, String, PathBuf)> = connectors
         .iter()
         .flat_map(|(host, tests)| {

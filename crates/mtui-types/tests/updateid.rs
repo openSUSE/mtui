@@ -1,17 +1,12 @@
-//! Golden-vector tests for [`UpdateID`].
-//!
-//! `UpdateID` is a thin value wrapper over [`RequestReviewID`], so these tests
-//! lock that the wrapper delegates faithfully: every RRID that parses yields an
-//! `UpdateID` whose inner `id` equals the equivalent `RequestReviewID`, every
-//! malformed RRID fails with the same error category, and `Display` equals the
-//! inner RRID's canonical string (the value used downstream for the per-update
-//! template-directory name).
+//! Golden-vector tests for [`UpdateID`]: the thin wrapper over
+//! [`RequestReviewID`] delegates faithfully — same parses, same error
+//! categories, and a `Display` equal to the inner RRID's canonical string (the
+//! per-update template-directory name downstream).
 
 use mtui_types::{RequestReviewID, RridParseError, UpdateID};
 
-/// Every RRID that [`RequestReviewID::parse`] accepts also parses as an
-/// [`UpdateID`], and the wrapped `id` is byte-for-byte the same RRID. The vector
-/// mirrors the accepted templates in the RRID golden test.
+/// Every RRID [`RequestReviewID::parse`] accepts also parses as an [`UpdateID`]
+/// wrapping byte-for-byte the same RRID.
 #[test]
 fn valid_updateids_wrap_matching_rrid() {
     let cases = [
@@ -32,9 +27,7 @@ fn valid_updateids_wrap_matching_rrid() {
             .unwrap_or_else(|e| panic!("expected {input:?} to parse, got {e}"));
         let rrid = RequestReviewID::parse(&input).unwrap();
 
-        // The wrapper stores exactly the RRID the standalone parser produces.
         assert_eq!(uid.id, rrid, "inner id for {input:?}");
-        // Display forwards to the inner RRID's canonical string.
         assert_eq!(uid.to_string(), rrid.to_string(), "display for {input:?}");
     }
 }

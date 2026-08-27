@@ -1,33 +1,27 @@
 //! The `OSC(config, rrid)` never-raise review seam (native OBS API, no `osc`).
 //!
-//! This is the
-//! final cutover of the native OBS backend: the [`Osc`] seam binds the resolved
-//! [`Config`] and target [`RequestReviewID`] to the five QAM operations
-//! ([`crate::obs::qam`]), reading credentials from the user's oscrc — located
-//! like `osc` (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`)
-//! ([`read_credentials`]) — and authenticating with SSH signature auth
-//! ([`ObsSignatureAuth`]). It replaces the historical shell-out to the external
-//! `osc qam` plugin (the deleted `oscqam` subprocess wrapper).
+//! The [`Osc`] seam binds the resolved [`Config`] and target
+//! [`RequestReviewID`] to the five QAM operations ([`crate::obs::qam`]), reading
+//! credentials from the user's oscrc — located like `osc` (`$OSC_CONFIG` →
+//! `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`) ([`read_credentials`]) — and
+//! authenticating with SSH signature auth ([`ObsSignatureAuth`]).
 //!
 //! ## Never-raise contract
 //!
-//! Callers (`apicall` / `approve`) invoke the seam bare with no guard of
-//! their own, so this seam folds *every* failure — reading oscrc, loading the
-//! key, building the session, the authenticated calls, XML parsing — into a
-//! typed [`ObsError`] instead of a bare bool (the workspace's typed-`Result`
-//! house rule): the seam never `panic!`s / `unwrap`s / `expect`s — every
-//! transport/config/parse fault becomes an `Err(ObsError)` the caller logs.
-//! The escape hatches are covered:
+//! Callers (`apicall` / `approve`) invoke the seam bare with no guard of their
+//! own, so it never `panic!`s / `unwrap`s / `expect`s: every failure — reading
+//! oscrc, loading the key, building the session, the authenticated calls, XML
+//! parsing — becomes an `Err(ObsError)` the caller logs. The escape hatches are
+//! covered:
 //!
-//! * a non-PEM key file → [`ObsError::Config`] from the auth layer (never a
-//!   panic), surfaced when the first authenticated call is challenged;
-//! * `expanduser()` with no home (a headless container) → the oscrc reader
-//!   leaves `~` in place rather than panicking, and any resulting read failure
-//!   is a typed [`ObsError::Config`];
-//! * a lone surrogate in the request body from MCP JSON input → impossible to
-//!   reach this layer: Rust's `String`/`&str` cannot hold a lone surrogate, and
-//!   `serde_json` rejects one at the MCP JSON boundary (see the boundary test),
-//!   so encoding the body to bytes cannot panic.
+//! * a non-PEM key file → [`ObsError::Config`] from the auth layer, surfaced
+//!   when the first authenticated call is challenged;
+//! * no home directory (a headless container) → the oscrc reader leaves `~` in
+//!   place rather than panicking, and a resulting read failure is a typed
+//!   [`ObsError::Config`];
+//! * a lone surrogate in an MCP-supplied request body cannot reach this layer at
+//!   all: `String`/`&str` cannot hold one and `serde_json` rejects it at the MCP
+//!   boundary (see the boundary test), so encoding the body cannot panic.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,18 +43,17 @@ type Built = (ObsClient, String);
 /// The credential-reading + client-building seam.
 ///
 /// The production path ([`build_client`]) reads the osc-located oscrc and
-/// attaches SSH signature auth; tests inject a closure that returns an already-built
-/// wiremock-backed [`ObsClient`] (happy path) or an [`Err`] (never-raise
-/// escape-hatch paths) without touching the real oscrc or a real agent.
+/// attaches SSH signature auth; tests inject a closure returning a
+/// wiremock-backed [`ObsClient`] or an [`Err`], touching neither the real oscrc
+/// nor a real agent.
 type ClientFactory = Arc<dyn Fn(&Config) -> Result<Built, ObsError> + Send + Sync>;
 
 /// The native OBS review backend (approve / assign / unassign / comment /
 /// reject).
 ///
-/// Construct with [`Osc::new`]; construction cannot fail. Each operation reads
-/// credentials, builds an authenticated
-/// client, and runs the corresponding [`crate::obs::qam`] op — folding any
-/// failure into a logged `Err(ObsError)` rather than panicking.
+/// Construction ([`Osc::new`]) cannot fail. Each operation reads credentials,
+/// builds an authenticated client and runs the corresponding
+/// [`crate::obs::qam`] op, folding any failure into a logged `Err(ObsError)`.
 #[derive(Clone)]
 pub struct Osc {
     config: Config,
@@ -84,9 +77,8 @@ impl Osc {
 
     /// Build an [`Osc`] seam with an explicit client factory (the test seam).
     ///
-    /// Lets tests supply an already-built (e.g. wiremock-backed) client, or an
-    /// error, without reading the real `~/.oscrc` or contacting a real
-    /// ssh-agent.
+    /// Lets tests supply an already-built (wiremock-backed) client, or an error,
+    /// without reading the real `~/.oscrc` or contacting a real ssh-agent.
     #[must_use]
     pub fn with_factory(config: Config, rrid: RequestReviewID, factory: ClientFactory) -> Self {
         Self {
@@ -99,10 +91,8 @@ impl Osc {
     /// Run a native OBS operation, folding any failure into a logged `Err`.
     ///
     /// Everything fallible — reading oscrc, building the client, the
-    /// authenticated calls, XML parsing — happens inside here, because callers
-    /// invoke the seam methods bare. Nothing in this path panics: `read_credentials`
-    /// / `ObsClient::new` / the ops all return typed [`ObsError`], and the future
-    /// produced by `op` is awaited without any `unwrap`/`expect`.
+    /// authenticated calls, XML parsing — happens in here, because callers
+    /// invoke the seam methods bare. Nothing in this path panics.
     async fn run<F, Fut>(&self, op: F) -> Result<(), ObsError>
     where
         F: FnOnce(ObsClient, String) -> Fut,

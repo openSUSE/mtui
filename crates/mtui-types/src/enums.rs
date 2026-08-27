@@ -1,15 +1,10 @@
-//! Domain enumerations.
+//! Domain enumerations. Only enums with a live consumer are defined here, so
+//! the crate stays free of dead code under `-D warnings`.
 //!
-//! Only the enums with existing behavioral coverage or a refhost consumer are
-//! included here. The `method` / `assignment` HTTP-layer enums are
-//! intentionally deferred until a caller lands, to keep this crate free of
-//! dead code under `-D warnings`.
-//!
-//! Wire values must be byte-identical strings for the CLI/config/serialized
-//! surface (e.g. `target.state == "enabled"`): `#[serde(rename = ...)]` on
-//! the wire form plus `Display`/`FromStr` that preserve those exact strings
-//! keep that surface a stable contract without leaking a `str`-equality
-//! footgun.
+//! Wire values must be byte-identical strings for the CLI/config/serialised
+//! surface (e.g. `target.state == "enabled"`): `#[serde(rename = ...)]` plus
+//! `Display`/`FromStr` preserving those exact strings keep that a stable
+//! contract without leaking a `str`-equality footgun.
 
 use std::fmt;
 use std::str::FromStr;
@@ -140,11 +135,7 @@ impl RequestKind {
         }
     }
 
-    /// Parse the short or long form of a request kind.
-    ///
-    /// Accepts the single-letter aliases (`S` / `M` / `P`) used on the command
-    /// line and the canonical long forms (`SLFO` / `Maintenance` / `PI`) used
-    /// in the wire format.
+    /// Parse the short (`S` / `M` / `P`) or canonical long form of a kind.
     ///
     /// # Errors
     ///
@@ -167,13 +158,12 @@ impl fmt::Display for RequestKind {
     }
 }
 
-/// Assignment state of a Gitea pull request for a review group.
+/// Assignment state of a Gitea pull request for a review group, derived by
+/// replaying the group's assign/unassign marker comments.
 ///
-/// The Gitea connector derives this by replaying the group's assign/unassign
-/// marker comments; it is the discriminant of the Gitea-side assign-invalid
-/// error message. There is no wire-string contract for this type, so no
-/// serde/`FromStr` is implemented — it exists purely as an in-memory state
-/// signalled between the connector and its error type.
+/// Purely in-memory state between the connector and its error type (it is the
+/// discriminant of the assign-invalid message), so there is no wire-string
+/// contract and no serde/`FromStr`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Assignment {
     /// The PR's group is assigned to the user under consideration.
@@ -198,7 +188,7 @@ pub struct ParseEnumError {
 mod tests {
     use super::*;
 
-    // --- TargetState: string-value contract. ---
+    // --- TargetState. ---
 
     #[test]
     fn target_state_carries_legacy_string_values() {
@@ -283,7 +273,6 @@ mod tests {
         assert_ne!(Assignment::AssignedUser, Assignment::Unassigned);
         assert_ne!(Assignment::AssignedUser, Assignment::AssignedOther);
         assert_ne!(Assignment::Unassigned, Assignment::AssignedOther);
-        // Copy + Eq round-trip.
         let a = Assignment::AssignedUser;
         let b = a;
         assert_eq!(a, b);

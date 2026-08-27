@@ -1,11 +1,10 @@
 //! Integration + golden-fixture tests for the openQA / QAM Dashboard overview
 //! search.
 //!
-//! The HTTP-facing tests use `wiremock`; the
-//! heuristic tests replay the vendored `.log` / `.matches` fixture pairs. The
-//! `.matches` files are the byte-for-byte parity signal for the `TESTSUITE_*`
-//! constants the connector copies verbatim from the oqa-search tool — any
-//! drift fails here.
+//! The HTTP-facing tests use `wiremock`; the heuristic tests replay the
+//! vendored `.log` / `.matches` fixture pairs, which are the byte-for-byte
+//! parity signal for the `TESTSUITE_*` constants copied verbatim from the
+//! oqa-search tool.
 
 use std::path::{Path, PathBuf};
 
@@ -100,9 +99,8 @@ async fn single_incidents_failed_counts_jobs() {
     let server = MockServer::start().await;
     mount_job_groups(&server, vec![job_group(490, "SLE 15 SP5 Core Incidents")]).await;
 
-    // query_version_status hits the overview endpoint twice: running then failed.
-    // wiremock does not preserve registration order, so distinguish by the
-    // state-specific query params the connector adds.
+    // query_version_status hits the overview endpoint twice (running, failed);
+    // wiremock ignores registration order, so distinguish by the state params.
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs/overview"))
         .and(query_param("state", "running"))
@@ -206,10 +204,9 @@ async fn aggregated_updates_finds_matching_build() {
     )
     .await;
 
-    // The "all" per-day query (no result/state filter) returns one job. Give it
-    // the lowest priority so the more-specific running/failed mocks below win
-    // when the connector adds those params (wiremock: lower number = higher
-    // priority; a plain mock defaults to 5).
+    // The unfiltered per-day query gets the lowest priority so the more
+    // specific running/failed mocks below win (wiremock: lower number = higher
+    // priority, default 5).
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs/overview"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"id": 999}])))
@@ -224,9 +221,8 @@ async fn aggregated_updates_finds_matching_build() {
         })))
         .mount(&server)
         .await;
-    // query_version_status: running + failed both empty -> PASSED. These carry
-    // the state/result params, so at default priority (5) they out-rank the
-    // priority-10 "all" mock above.
+    // Both empty -> PASSED. These carry the state/result params, so at the
+    // default priority they out-rank the priority-10 mock above.
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs/overview"))
         .and(query_param("state", "running"))
@@ -298,9 +294,8 @@ async fn aggregated_updates_preserves_group_and_version_order() {
         ],
     )
     .await;
-    // Every per-day query is empty -> every (group, version) resolves to
-    // "missing" after the window; a small delay lets the fan-out overlap so any
-    // ordering regression from out-of-order completion would surface.
+    // Everything resolves to "missing" after the window; the small delay lets
+    // the fan-out overlap so an out-of-order completion would surface.
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs/overview"))
         .respond_with(

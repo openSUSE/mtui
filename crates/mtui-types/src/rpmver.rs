@@ -1,11 +1,9 @@
 //! RPM version comparison.
 //!
 //! The canonical comparison is the C `rpm` library's
-//! `rpm.labelCompare(("1", ver, rel), …)`. To preserve the mtui
-//! single-static-binary / no-runtime-deps contract, this uses the
-//! pure-Rust [`sandogasa_rpmvercmp`] crate, which reimplements the canonical
-//! `rpmvercmp` algorithm (segment/tilde/caret handling). It is verified against
-//! golden vectors of `rpmvercmp` behavior (see `tests/rpmver.rs`).
+//! `rpm.labelCompare(("1", ver, rel), …)`. To keep the single-static-binary /
+//! no-runtime-deps contract this uses the pure-Rust [`sandogasa_rpmvercmp`]
+//! crate, verified against golden `rpmvercmp` vectors (`tests/rpmver.rs`).
 //!
 //! ## Parsing rules
 //! - An empty string is rejected with [`RpmVersionParseError::Empty`];
@@ -28,10 +26,8 @@ use sandogasa_rpmvercmp::rpmvercmp;
 
 use crate::error::RpmVersionParseError;
 
-/// Architecture suffixes that may be appended to a version on SLE 12.
-///
-/// Each is stripped (with its leading `.`) wherever it occurs in the raw
-/// version string.
+/// Architecture suffixes that may be appended to a version on SLE 12; each is
+/// stripped (with its leading `.`) wherever it occurs in the raw string.
 const ARCH_SUFFIXES: [&str; 7] = [
     "noarch", "x86_64", "s390x", "ppc64le", "aarch64", "ia64", "ppc64",
 ];
@@ -49,10 +45,8 @@ pub struct RPMVersion {
 }
 
 impl RPMVersion {
-    /// Parses an RPM `version[-release]` string.
-    ///
-    /// Strips architecture suffixes and splits on the last `-`. Returns
-    /// [`RpmVersionParseError::Empty`] for an empty input.
+    /// Parses an RPM `version[-release]` string, stripping architecture
+    /// suffixes and splitting on the last `-`.
     ///
     /// # Errors
     /// Returns [`RpmVersionParseError::Empty`] when `ver` is empty.
@@ -88,9 +82,7 @@ impl RPMVersion {
 }
 
 impl std::fmt::Display for RPMVersion {
-    /// Renders `ver`, appending `-rel` only when a release is present.
-    ///
-    /// The sentinel release `"0"` is omitted.
+    /// Renders `ver`, appending `-rel` unless it is the sentinel `"0"`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.ver)?;
         if self.rel != "0" {
@@ -101,10 +93,8 @@ impl std::fmt::Display for RPMVersion {
 }
 
 impl Ord for RPMVersion {
-    /// Compares by `rpmvercmp(ver)`, falling back to `rpmvercmp(rel)` on a tie.
-    ///
-    /// Compares as `labelCompare(("1", ver, rel), ("1", ver, rel))` would,
-    /// with a fixed, equal epoch.
+    /// Compares by `rpmvercmp(ver)`, falling back to `rpmvercmp(rel)` on a tie,
+    /// as `labelCompare` would with a fixed, equal epoch.
     fn cmp(&self, other: &Self) -> Ordering {
         match rpmvercmp(&self.ver, &other.ver) {
             Ordering::Equal => rpmvercmp(&self.rel, &other.rel),

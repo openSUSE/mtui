@@ -4,14 +4,10 @@
 //! hosts' package before/after versions and command logs, then runs the base
 //! sequence.
 //!
-//! ## Host input
-//!
-//! Coupling this crate to the concrete `mtui-hosts::Target` (which carries
-//! live connection state) would be the wrong dependency direction, so the
-//! exporter takes a decoupled [`ManualHost`] view capturing exactly the
-//! `hostname`, `system`, `packages`, and `hostlog` fields it needs. The
-//! composition root (`mtui-core`) builds these from the live targets,
-//! mirroring how the downloader takes `(host, tests)` pairs.
+//! Coupling this crate to the concrete `mtui-hosts::Target` (which carries live
+//! connection state) would be the wrong dependency direction, so the exporter
+//! takes a decoupled [`ManualHost`] view of exactly the fields it needs; the
+//! composition root (`mtui-core`) builds these from the live targets.
 
 use std::sync::LazyLock;
 
@@ -37,9 +33,8 @@ pub struct ManualHost {
     pub hostlog: HostLog,
 }
 
-/// Matches a `reference host: <name>` line and captures the hostname. The
-/// template emits a single space after the colon, so the pattern requires at
-/// least one (not two).
+/// Matches a `reference host: <name>` line. The template emits a single space
+/// after the colon, so the pattern requires at least one, not two.
 static REFERENCE_HOST_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"reference host:\s+([^)\s]+)").expect("valid reference-host regex")
 });
@@ -51,10 +46,8 @@ static RESULT_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\s:\s(SUCCEEDED|FAILED|INTERNAL ERROR)").expect("valid result regex")
 });
 
-/// Whether `line` is a per-host verdict result line to be stripped.
-///
-/// Excludes the `PASSED/FAILED` placeholder, since Rust `regex` has no
-/// negative look-behind to do it inline.
+/// Whether `line` is a per-host verdict result line to be stripped; the
+/// `PASSED/FAILED` placeholder is not one.
 fn is_result_line(line: &str) -> bool {
     RESULT_LINE_RE.is_match(line) && !line.contains("PASSED/FAILED")
 }
@@ -65,10 +58,8 @@ pub struct ManualExport {
     pub ctx: ExportContext,
     /// The connected-host views.
     results: Vec<ManualHost>,
-    /// The "auto" openQA connector (for `inject_openqa`), if present.
-    ///
-    /// Only its rendered [`pp`](DashboardAutoOpenQA::pp) block is consumed
-    /// here.
+    /// The "auto" openQA connector, for `inject_openqa`; only its rendered
+    /// [`pp`](DashboardAutoOpenQA::pp) block is consumed here.
     auto: Option<DashboardAutoOpenQA>,
     /// The openqa_overview payload, if the overview command ran.
     overview: Option<OpenQAOverviewResult>,
@@ -134,9 +125,8 @@ impl ManualExport {
         let mut c_host: Option<String> = None;
         let mut tmp: Vec<String> = Vec::with_capacity(self.ctx.template.len());
         for line in &self.ctx.template {
-            // Track which host section we are in so only the *current session's*
-            // hosts get their stale result lines refreshed. The host header line
-            // itself is kept — it is the section header.
+            // Track the current section so only *this session's* hosts get their
+            // stale result lines refreshed. The header line itself is kept.
             if let Some(cap) = REFERENCE_HOST_RE.captures(line) {
                 c_host = Some(cap[1].to_string());
                 tmp.push(line.clone());
@@ -144,11 +134,9 @@ impl ManualExport {
             }
 
             if c_host.is_some() && line.starts_with("comment:") {
-                // End of this host's block (same boundary convention as the
-                // verdict loop below). Without the reset the deletion window
-                // bled past the last host section and ate tester-authored lines
-                // like 'reproducer : FAILED before update' from the
-                // regression-tests notes.
+                // End of this host's block. Without the reset the deletion
+                // window bleeds past the last host section and eats
+                // tester-authored lines from the regression-tests notes.
                 tmp.push(line.clone());
                 c_host = None;
                 continue;
@@ -228,9 +216,8 @@ impl ManualExport {
             };
 
             // #396: with no recorded package data there is nothing honest to
-            // write — leave the scaffold's own lines and its undecided
-            // `=> PASSED/FAILED` marker in place rather than flipping a
-            // verdict over unverified content.
+            // write — keep the scaffold's undecided `=> PASSED/FAILED` marker
+            // rather than flipping a verdict over unverified content.
             if host.packages.is_empty() {
                 tracing::warn!(
                     "no package version data recorded for {hostname}; leaving its \
@@ -302,12 +289,10 @@ impl ManualExport {
                 );
             }
 
-            // Flip the verdict placeholder, bounded by this host's comment line
-            // or the next host block, so an already-set verdict is preserved.
-            // Precedence (#396): a genuine regression flips FAILED even when
-            // other packages are unverified; an unverified block with no
-            // failure keeps the undecided placeholder rather than claiming
-            // PASSED over content nobody checked.
+            // Bounded by this host's comment line or the next host block, so an
+            // already-set verdict is preserved. Precedence (#396): a regression
+            // flips FAILED even when other packages are unverified; an
+            // unverified block with no failure keeps the undecided placeholder.
             if !failed && unverified {
                 tracing::warn!(
                     "installation test result on {hostname} left undecided: some package \

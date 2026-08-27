@@ -1,17 +1,13 @@
 //! Integration tests for the native OBS HTTP transport against a real HTTP
 //! transport (`wiremock`).
 //!
-//! Covers GET/POST
-//! success (headers + XML body), the `<status><summary>` error envelope → typed
-//! [`ObsError::Api`], the empty-summary fallback for a non-XML body, and the
-//! coarse between-calls budget abort. Auth is [`NoAuth`] — the SSH-signature
-//! signer lands in a later subtask (G1c).
+//! Covers GET/POST success (headers + XML body), the `<status><summary>` error
+//! envelope → typed [`ObsError::Api`], the empty-summary fallback for a non-XML
+//! body, and the coarse between-calls budget abort. Auth is [`NoAuth`].
 //!
-//! A mock server can't forge a TLS handshake failure, so there is no test that
-//! forges a TLS error directly. The transport-error branch is instead
-//! covered by pointing the client at an unroutable/closed endpoint so `request`
-//! returns [`ObsError::Http`]; the `is_ssl_verification_error` mapping itself is
-//! unit-tested in `src/http.rs`.
+//! A mock server cannot forge a TLS handshake failure, so the transport-error
+//! branch is driven by pointing the client at a closed endpoint; the
+//! `is_ssl_verification_error` mapping is unit-tested in `src/http.rs`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -149,10 +145,9 @@ async fn between_calls_budget_aborts_next_call() {
 
 #[tokio::test]
 async fn transport_error_maps_to_http_variant() {
-    // Point at the discard/unreachable port on the loopback (port 9, RFC 863),
-    // where nothing listens, so the request fails at the transport layer and
-    // exercises the ObsError::Http path. (A dropped MockServer's port can be
-    // reused by another test, so we use a fixed non-listening address instead.)
+    // Loopback discard port (RFC 863): nothing listens, so the request fails at
+    // the transport layer. A dropped MockServer's port could be reused by
+    // another test, hence the fixed address.
     let client = ObsClient::new(
         "http://127.0.0.1:9",
         Duration::from_secs(180),
@@ -211,12 +206,11 @@ async fn logs_and_api_error_redact_url_credentials() {
 /// stream or the returned `ObsError`, whose `Http` variant is transparent down
 /// to `reqwest::Error`.
 ///
-/// OBS has no origin guard, so a credentialed API base reaches `send`; that is
-/// what makes this the datasource where the credential path is actually
-/// reachable. reqwest strips first-hop userinfo into a Basic-auth header
-/// (`RequestBuilder::new` → `extract_authority`), so the password is already
-/// absent from the error URL — the `s3cret` assertions are belt-and-braces, and
-/// the substring that is genuinely red without the fix is `" for url ("`.
+/// OBS has no origin guard, so a credentialed API base reaches `send` — the one
+/// datasource where the credential path is actually reachable. reqwest strips
+/// first-hop userinfo into a Basic-auth header, so the password is already
+/// absent from the error URL; the `s3cret` assertions are belt-and-braces and
+/// the substring genuinely red without the fix is `" for url ("`.
 #[tokio::test]
 async fn transport_error_logs_and_error_carry_no_reqwest_url() {
     // Loopback discard port (RFC 863): nothing listens, so `send` fails.
@@ -240,12 +234,10 @@ async fn transport_error_logs_and_error_carry_no_reqwest_url() {
     })
     .await;
 
-    // Assert on the *failure* line specifically. The unconditional pre-send
-    // debug line already carries a sanitized URL, so a whole-capture anchor
-    // would stay green even if this line were deleted outright. The selector
-    // names mtui's own line exactly: `capture_logs` records every event on the
-    // thread, including hyper's pool chatter, whose content varies with
-    // connection state.
+    // Assert on the *failure* line specifically: the pre-send debug line
+    // already carries a sanitized URL, so a whole-capture anchor would stay
+    // green even with this line deleted. The selector names mtui's own line
+    // exactly, since `capture_logs` also records hyper's pool chatter.
     let failure = logs
         .lines()
         .find(|l| l.starts_with("OBS GET") && l.contains("failed:"))

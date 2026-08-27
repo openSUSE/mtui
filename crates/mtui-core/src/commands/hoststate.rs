@@ -14,11 +14,8 @@ const STATES: [&str; 2] = ["disabled", "enabled"];
 
 /// Sets the state of a host.
 ///
-/// A host can be:
-/// * `enabled` — runs all issued commands,
-/// * `disabled` — runs nothing.
-///
-/// Selection acts on named hosts (or all, disabled included).
+/// `enabled` runs all issued commands, `disabled` runs nothing. Selection acts
+/// on named hosts, or on all of them, disabled included.
 pub struct HostState;
 
 #[async_trait]
@@ -41,7 +38,6 @@ impl Command for HostState {
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-        // Complete both the state choices and the loaded host names.
         STATES
             .into_iter()
             .map(str::to_owned)
@@ -108,7 +104,7 @@ mod tests {
     #[tokio::test]
     async fn applies_even_to_disabled_hosts() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        // Disable, then re-enable via the command — proves enabled=false.
+        // Disable, then re-enable through the command: proves enabled=false.
         session
             .targets_mut()
             .get_mut("h1")

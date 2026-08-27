@@ -1,11 +1,10 @@
 //! Inject the `openqa_overview` block into a testreport's `log` file.
 //!
-//! The block lives
-//! under the existing `regression tests:` section. On first export it is
-//! appended after any existing content in that section; on subsequent exports a
-//! previously-inserted block is detected via the `OVERVIEW_*` markers and
-//! replaced in place, so the file never accumulates duplicate copies
-//! (**idempotent re-export** — a text-format contract).
+//! The block lives under the existing `regression tests:` section. On first
+//! export it is appended after any existing content there; later exports detect
+//! a previous block via the `OVERVIEW_*` markers and replace it in place, so the
+//! file never accumulates duplicates — **idempotent re-export is a text-format
+//! contract**.
 
 use mtui_datasources::oqa_search::render::{
     OVERVIEW_BEGIN_MARKER, OVERVIEW_END_MARKER, render_overview,
@@ -58,15 +57,12 @@ pub fn inject_overview(
         return false;
     };
 
-    // 1. Strip any previous block, if present.
     remove_existing_block(template, regression_idx);
 
-    // 2. Find the insertion point: end of the regression-tests section.
     let insert_at = section_end(template, regression_idx);
 
-    // 2a. Remove existing trailing blank lines in the section so we control the
-    //     gap ourselves (otherwise the block's trailing `\n` stacks with the
-    //     section's existing trailing `\n`).
+    // Drop the section's trailing blanks so the gap is ours to control;
+    // otherwise the block's trailing `\n` stacks with the section's own.
     let mut trim_end = insert_at;
     while trim_end < template.len() && template[trim_end] == "\n" {
         trim_end += 1;
@@ -75,8 +71,7 @@ pub fn inject_overview(
         template.drain(insert_at..trim_end);
     }
 
-    // 3. Build the new block (markers + rendered lines + trailing blank line for
-    //    breathing room before the next section).
+    // Markers + rendered lines + a trailing blank before the next section.
     let rendered = render_overview(
         single_incidents_rows,
         aggregated_updates_rows,
@@ -89,15 +84,12 @@ pub fn inject_overview(
     block.push(end_line());
     block.push("\n".to_string());
 
-    // 4. Guarantee one blank line between the prior content (e.g. "(put your
-    //    details here)") and our block: `section_end` strips trailing blanks
-    //    before the next section, so without this the block would butt right up
-    //    against the previous line.
+    // `section_end` already stripped the trailing blanks, so without this the
+    // block would butt right up against the prior content.
     if insert_at > 0 && template[insert_at - 1] != "\n" {
         block.insert(0, "\n".to_string());
     }
 
-    // 5. Splice into the template at the insertion point.
     template.splice(insert_at..insert_at, block);
     true
 }
@@ -125,9 +117,8 @@ fn remove_existing_block(template: &mut Vec<String>, search_from: usize) {
     if end_exclusive < template.len() && template[end_exclusive] == "\n" {
         end_exclusive += 1;
     }
-    // Swallow the leading blank line we prepended last time, but only if
-    // removing it would not glue the markers to text we do not own (i.e. there
-    // is still something non-blank above).
+    // Swallow the leading blank we prepended last time, unless doing so would
+    // glue the markers to text we do not own.
     let mut begin_inclusive = begin;
     if begin_inclusive > 0
         && template[begin_inclusive - 1] == "\n"

@@ -9,11 +9,9 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Updates the loaded template's files from SVN (`svn up`).
-///
-/// Runs `svn up` in the report working directory. Requires a loaded report;
-/// with nothing loaded the report has no path and the command reports a
-/// clear error rather than shelling out.
+/// Updates the loaded template's files from SVN (`svn up`) in the report working
+/// directory. With nothing loaded there is no path, so it errors clearly rather
+/// than shelling out.
 pub struct Checkout;
 
 #[async_trait]
@@ -89,9 +87,8 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
-    /// A successful `svn up` prints a confirmation to the display so the MCP
-    /// result is never empty. Drives `call` against a real local SVN repo so the
-    /// happy path (and its display line) is exercised end-to-end.
+    /// A successful `svn up` must print a confirmation, so the MCP result is
+    /// never empty. Driven against a real local SVN repo.
     #[tokio::test]
     async fn success_prints_confirmation_to_display() {
         if std::process::Command::new("svn")

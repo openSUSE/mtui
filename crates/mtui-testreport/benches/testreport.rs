@@ -3,14 +3,13 @@
 //!
 //! Measurement-only, offline. `metadata/parse` measures `JSONParser::parse_str`
 //! populating a fresh `TestReportBase` from the golden `metadata.json` fixture —
-//! the parse hot path on the testreport-download workflow (0mop.12).
+//! the parse hot path on the testreport-download workflow.
 //!
-//! The `fs/*` benches accompany 0mop.9: they measure the heavy filesystem
-//! operations that were moved off the async worker (recursive checkout deletion
-//! and the log-download write fan-out). They are wall-clock advisory — the
-//! deterministic gate for 0mop.9 is the `fs_responsiveness` heartbeat test — but
-//! they quantify the per-op cost on the target host and confirm the off-worker
-//! path adds no throughput regression versus a straight blocking call.
+//! The `fs/*` benches measure the heavy filesystem operations moved off the
+//! async worker (recursive checkout deletion, the log-download write fan-out).
+//! They are wall-clock advisory — the deterministic gate is the
+//! `fs_responsiveness` heartbeat test — but they quantify the per-op cost and
+//! confirm the off-worker path adds no throughput regression.
 
 use std::hint::black_box;
 

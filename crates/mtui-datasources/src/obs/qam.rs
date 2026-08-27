@@ -1,20 +1,17 @@
 //! The five QAM review operations as direct OBS REST calls (no `osc`).
 //!
-//! Each function performs
-//! the OBS calls for one operation and returns `Err` on any failure or refused
-//! precondition; the never-raise `OSC` facade (G1g) wraps every call and folds a
-//! returned error into the `false` its callers expect. Semantics mirror the
-//! `osc qam` plugin exactly, including the awkward parts: single-group
-//! auto-inference, the ">=1 own assignment" unassign guard, the refused
-//! group-approve, `by_user` reject with the `MAINT:RejectReason`
-//! read-modify-write, and the `qam.suse.de` preconditions (skipped for PI/SLFO).
-//! The `[oscqam] ` prefix is applied to approve/reject comments only.
+//! Each function performs the OBS calls for one operation and returns `Err` on
+//! any failure or refused precondition; the never-raise `OSC` facade folds that
+//! into the `false` its callers expect. Semantics mirror the `osc qam` plugin
+//! exactly, including the awkward parts: single-group auto-inference, the
+//! ">=1 own assignment" unassign guard, the refused group-approve, `by_user`
+//! reject with the `MAINT:RejectReason` read-modify-write, and the
+//! `qam.suse.de` preconditions (skipped for PI/SLFO). The `[oscqam] ` prefix
+//! goes on approve/reject comments only.
 //!
-//! These functions take the URL/verify values they need as explicit
-//! parameters, rather than a `Config` — the `[obs]` config table and the
-//! facade that binds these from a resolved `Config` land in G1g. This keeps the
-//! ops self-contained and testable now, mirroring how [`ObsClient`] itself takes
-//! an explicit API URL / timeout / verify posture rather than a `Config`.
+//! Like [`ObsClient`] itself, these functions take explicit URL/verify values
+//! rather than a `Config`, which keeps them self-contained and testable; the
+//! facade binds them from a resolved `Config`.
 
 use mtui_config::SslVerify;
 
@@ -32,7 +29,7 @@ const PREFIX: &str = "[oscqam] ";
 
 /// Whether the request carries no maintenance testreport or `MAINT` attribute,
 /// so the `qam.suse.de` preconditions do not apply. True for **both** PI and
-/// SLFO — the old name (`is_slfo`) claimed otherwise.
+/// SLFO.
 ///
 /// Do **not** fold this into `openqa::base`'s bare `kind == Slfo` test, which it
 /// otherwise resembles: that one excludes PI. Merging them would make PI
@@ -40,11 +37,10 @@ const PREFIX: &str = "[oscqam] ";
 /// openQA `build` param `git` instead of `smelt`.
 ///
 /// **Deliberately keyed on `kind` alone, not `mtui_types::UpdateSource`**
-/// (issue #433, decision 8/site 6): whether a product has a maintenance
-/// testreport on `qam.suse.de` is a property of the *product* — PI and SLFO
-/// never have one — not of which backend serves a given update. A
-/// git-served and an OBS-served `SLFO:1.1` request carry the identical RRID
-/// here and must both skip; see the test below for the explicit pin.
+/// (#433): having a maintenance testreport on `qam.suse.de` is a property of the
+/// *product* — PI and SLFO never have one — not of the backend serving a given
+/// update. A git-served and an OBS-served `SLFO:1.1` request carry the identical
+/// RRID here and must both skip; the test below pins it.
 fn skips_maintenance_testreport(rrid: &RequestReviewID) -> bool {
     matches!(rrid.kind, RequestKind::Pi | RequestKind::Slfo)
 }
@@ -231,8 +227,8 @@ pub async fn assign(
     groups: &[String],
 ) -> Result<(), ObsError> {
     let request = get_request(client, rrid).await?;
-    // Mirror the plugin's Request.OPEN_STATES = ("new", "review"); OBS reports
-    // "new" while a request still has an open review it has not moved on from.
+    // The plugin's Request.OPEN_STATES: OBS reports "new" while a request still
+    // has an open review it has not moved on from.
     if request.state != "new" && request.state != "review" {
         return Err(ObsError::Op(format!(
             "request {} is not open for review (state={:?}); refusing to assign",
@@ -394,17 +390,16 @@ async fn write_reject_reason(
 
 /// Decline the review by user, recording the reject reason attribute.
 ///
-/// `groups` is ignored (native reject is always `by_user`); a non-empty value
-/// is logged at INFO. The reviewer's `message` is a required parameter but, for
-/// parity, is deliberately **not** recorded in the decline comment.
+/// `groups` is ignored (native reject is always `by_user`) and a non-empty value
+/// is logged at INFO. The reviewer's `message` is required but deliberately
+/// **not** recorded in the decline comment.
 ///
 /// # Errors
 ///
 /// Returns [`ObsError::Op`] if the testreport is not `FAILED` or has no comment
 /// (non-SLFO); or a transport/API error.
-// The explicit-params design (no `Config` coupling until the G1g facade)
-// means `reject` carries one arg past clippy's default threshold; the facade
-// will bundle the URL/verify values.
+// The explicit-params design (no `Config` coupling) puts `reject` one arg past
+// clippy's default threshold.
 #[allow(clippy::too_many_arguments)]
 pub async fn reject(
     client: &ObsClient,
@@ -450,11 +445,10 @@ pub async fn reject(
 mod tests {
     use super::*;
 
-    /// Pins the case that separates this predicate from the bare
-    /// `kind == Slfo` test in `openqa::base`: PI skips the preconditions too.
-    /// Without this, folding the two into one shared helper compiles, passes,
-    /// and silently makes PI requests demand a maintenance testreport that PI
-    /// requests never have.
+    /// Pins what separates this predicate from `openqa::base`'s bare
+    /// `kind == Slfo`: PI skips the preconditions too. Without it, folding the
+    /// two into one helper compiles, passes, and silently makes PI requests
+    /// demand a maintenance testreport they never have.
     #[test]
     fn pi_and_slfo_both_skip_the_maintenance_testreport() {
         for id in ["SUSE:PI:1.1:70000", "SUSE:PI:42:99", "SUSE:SLFO:1.1:70000"] {
@@ -466,14 +460,12 @@ mod tests {
         }
     }
 
-    /// Issue #433, decision 8 (site 6): a git-served and an OBS-served
-    /// `SLFO:1.1` update both skip the `qam.suse.de` preconditions — this
-    /// predicate takes no `UpdateSource` because the two sources present the
-    /// *same* RRID here, and the product-level fact ("SLFO has no
-    /// maintenance testreport") does not depend on which backend served this
-    /// particular update. Both branches below happen to construct the same
-    /// RRID for that reason; the point is the explicit doc pin, not a
-    /// behavioral difference this function could observe.
+    /// A git-served and an OBS-served `SLFO:1.1` update both skip the
+    /// `qam.suse.de` preconditions (#433): the predicate takes no
+    /// `UpdateSource` because the two sources present the *same* RRID here, and
+    /// "SLFO has no maintenance testreport" is a product-level fact. Both
+    /// branches below therefore construct the same RRID — the point is the pin,
+    /// not a difference this function could observe.
     #[test]
     fn slfo_1_1_skips_regardless_of_which_backend_served_it() {
         let git_served = RequestReviewID::parse("SUSE:SLFO:1.1:418286").unwrap();

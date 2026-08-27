@@ -18,15 +18,13 @@
 //! * failing jobs are nested under a per-group header with their openQA URLs
 //!   right-aligned by padding the test-name column.
 //!
-//! The exact byte-for-byte layout is pinned by assertions
-//! and `insta` snapshots in the crate tests.
+//! The exact byte-for-byte layout is pinned by `insta` snapshots in the crate
+//! tests.
 //!
-//! ## Async fan-out
-//!
-//! Per-setting fetches use native `tokio` concurrency with a
-//! [`tokio::time::timeout`] per fetch (a 60s per-future cap), preserving both
-//! a fixed ordering (incident settings first, then update settings; jobs in
-//! submission order) and a warn-and-skip-on-timeout behaviour.
+//! Per-setting fetches use `tokio` concurrency with a [`tokio::time::timeout`]
+//! per fetch (a 60s cap), preserving both a fixed ordering (incident settings
+//! first, then update settings; jobs in submission order) and
+//! warn-and-skip-on-timeout.
 
 use std::collections::BTreeMap;
 
@@ -58,9 +56,8 @@ const COUNT_KEYS: [&str; 6] = [
 
 /// A dashboard job normalized to the fields the provider reads.
 ///
-/// A typed structure rather than an untyped map: only
-/// the fields consumed downstream are retained, keeping the pretty-printer and
-/// URL builder honest about their inputs.
+/// Typed rather than an untyped map, and holding only the fields consumed
+/// downstream, so the pretty-printer and URL builder stay honest about inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NormalizedJob {
     /// The openQA job id (`job_id`); `None` when absent.
@@ -92,8 +89,7 @@ impl NormalizedJob {
         let job_str = |key: &str| job.get(key).and_then(Value::as_str);
         let set_str = |key: &str| setting.get(key).and_then(Value::as_str);
 
-        // `distri`/`flavor`/... take the job-level value first, then the
-        // setting-level fallback.
+        // Job-level value first, then the setting-level fallback.
         let pick = |job_key: &str, setting_val: Option<&str>| -> String {
             job_str(job_key)
                 .filter(|v| !v.is_empty())
@@ -167,14 +163,11 @@ impl NormalizedJob {
 
     /// Whether this is a superseded run that must not count toward results.
     ///
-    /// When an openQA job is retriggered the
-    /// dashboard keeps the older run but marks it superseded — either with an
-    /// `obsolete` flag or an `"obsoleted"` result. Both must be dropped so a
-    /// stale failure does not poison the install verdict
-    /// (`has_passed_install_jobs`) or surface as
-    /// a phantom entry in the failed-jobs listing. Matches `oqa_search`'s
-    /// `incident_jobs`, which filters `result == "obsoleted"`; only the current
-    /// run matters.
+    /// A retriggered job leaves the older run on the dashboard marked
+    /// superseded, by an `obsolete` flag or an `"obsoleted"` result. Both must
+    /// be dropped, or a stale failure poisons the install verdict
+    /// (`has_passed_install_jobs`) or shows up as a phantom failed job — the
+    /// same filter `oqa_search::incident_jobs` applies.
     fn is_obsolete(&self) -> bool {
         self.obsolete || self.result == "obsoleted"
     }
@@ -227,13 +220,12 @@ impl Counts {
         }
     }
 
-    /// Whether this group has any non-passing result. Mirrors `_has_problems`.
+    /// Whether this group has any non-passing result.
     fn has_problems(&self) -> bool {
         self.failed != 0 || self.incomplete != 0 || self.timeout_exceeded != 0 || self.other != 0
     }
 
-    /// Render dropping zero entries; `total` is always last. Mirrors
-    /// `_format_counts`.
+    /// Render dropping zero entries; `total` is always last.
     fn format(&self) -> String {
         let mut parts: Vec<String> = COUNT_KEYS
             .iter()
@@ -247,9 +239,9 @@ impl Counts {
 
 /// Dashboard-backed auto-workflow data provider.
 ///
-/// [`run`](Self::run) loads the jobs,
-/// resolves the install-log [`results`](Self::results) when the install jobs
-/// passed, and renders the [`pp`](Self::pp) text block.
+/// [`run`](Self::run) loads the jobs, resolves the install-log
+/// [`results`](Self::results) when the install jobs passed, and renders the
+/// [`pp`](Self::pp) text block.
 #[derive(Debug, Clone)]
 pub struct DashboardAutoOpenQA {
     /// The openQA host (base URL) used in rendered URLs.
@@ -298,12 +290,10 @@ impl DashboardAutoOpenQA {
     ///
     /// # Errors
     ///
-    /// Returns [`QemDashboardError::Fetch`] when the dashboard could not be
-    /// asked at all — i.e. *both* top-level settings fetches hard-failed
-    /// (transport/non-2xx/JSON). A genuinely-empty-but-successful response is
-    /// `Ok` with `results = None`; a partial batch where some per-setting job
-    /// fetches timed out is also `Ok` (the timeouts are warn-and-skipped, a
-    /// best-effort behaviour).
+    /// Returns [`QemDashboardError::Fetch`] only when the dashboard could not be
+    /// asked at all — *both* top-level settings fetches hard-failed. An
+    /// empty-but-successful response is `Ok` with `results = None`, and so is a
+    /// partial batch whose per-setting fetches timed out (warn-and-skipped).
     pub async fn run(&mut self) -> Result<&mut Self, QemDashboardError> {
         self.run_inner(FUTURE_TIMEOUT).await
     }
@@ -333,15 +323,14 @@ impl DashboardAutoOpenQA {
         Ok(self)
     }
 
-    /// Test seam: expose the loaded-and-normalized job test names, so the
-    /// integration tests can assert ordering / timeout-skip behaviour without
-    /// reaching into the private `jobs` field.
+    /// Test seam: the loaded-and-normalized job test names, so integration
+    /// tests can assert ordering / timeout-skip without reaching into `jobs`.
     #[cfg(test)]
     fn job_test_names(&self) -> Vec<String> {
         self.jobs.iter().map(|j| j.test.clone()).collect()
     }
 
-    /// Whether the provider produced any renderable output. Mirrors `__bool__`.
+    /// Whether the provider produced any renderable output.
     #[must_use]
     pub fn is_present(&self) -> bool {
         !self.pp.is_empty() || self.results.as_ref().is_some_and(|r| !r.is_empty())
@@ -349,28 +338,25 @@ impl DashboardAutoOpenQA {
 
     /// Fetch and normalize all incident + aggregate jobs.
     ///
-    /// The two top-level settings lists are fetched concurrently; then the
+    /// The two top-level settings lists are fetched concurrently, then the
     /// per-setting job fetches fan out with bounded concurrency
-    /// (`max_parallel`) while the results are read back in submission order
-    /// (incident settings first, then update settings) so the resulting list
-    /// order is deterministic. Each fetch is guarded by a [`FUTURE_TIMEOUT`] cap.
+    /// (`max_parallel`) and are read back in submission order (incident
+    /// settings first) so the list order is deterministic. Each fetch is capped
+    /// by [`FUTURE_TIMEOUT`].
     ///
     /// # Errors
     ///
     /// Returns [`QemDashboardError::Fetch`] only when *both* top-level settings
-    /// fetches hard-fail (the dashboard could not be asked at all). A single
-    /// settings fetch that fails or times out while the other answers is
-    /// warn-and-tolerated (treated as empty), and a timed-out *per-setting* jobs
-    /// fetch is skipped — so one slow/broken endpoint neither aborts nor
-    /// corrupts an otherwise-answering batch.
+    /// fetches hard-fail. A single failed settings endpoint is warn-tolerated as
+    /// empty and a timed-out per-setting fetch is skipped, so one slow or broken
+    /// endpoint neither aborts nor corrupts an otherwise-answering batch.
     async fn load_jobs(
         &self,
         per_fetch: std::time::Duration,
     ) -> Result<Vec<NormalizedJob>, QemDashboardError> {
         let n = &self.incident_number;
 
-        // Top-level settings: independent, fetched concurrently. Each surfaces a
-        // hard failure, but a batch is only fatal when *both* endpoints fail.
+        // Independent, so fetched concurrently.
         let (incident_res, update_res) = tokio::join!(
             Self::await_settings(
                 self.client.try_incident_settings(n),
@@ -406,11 +392,10 @@ impl DashboardAutoOpenQA {
             return Ok(Vec::new());
         }
 
-        // Fan out per-setting jobs fetches with bounded concurrency, then read
-        // the results back in submission order. `buffer_unordered` yields in
-        // completion order, so each future carries its submission index and the
-        // collected results are re-sorted before consumption — one slow endpoint
-        // no longer serializes the whole batch, and ordering stays deterministic.
+        // `buffer_unordered` yields in completion order, so each future carries
+        // its submission index and the results are re-sorted before use: one
+        // slow endpoint does not serialize the batch, ordering stays
+        // deterministic.
         let fetch_specs: Vec<(usize, bool, i64)> = tasks
             .iter()
             .enumerate()
@@ -466,11 +451,10 @@ impl DashboardAutoOpenQA {
 
     /// Await a top-level settings future under the per-fetch timeout.
     ///
-    /// Mirrors `_await_settings` but preserves the failure: a timeout or a
-    /// hard fetch failure both return `Err`, logged at `warn`. The caller
-    /// tolerates a *single* failed settings endpoint (treating it as empty) and
-    /// only fails the whole load when *both* endpoints err — so a timeout is no
-    /// longer silently indistinguishable from an empty result.
+    /// A timeout and a hard fetch failure both return `Err`, logged at `warn`,
+    /// so neither is silently indistinguishable from an empty result. The caller
+    /// tolerates a *single* failed settings endpoint and fails the load only
+    /// when both err.
     async fn await_settings<F>(
         fut: F,
         label: &str,
@@ -492,25 +476,24 @@ impl DashboardAutoOpenQA {
         }
     }
 
-    /// Whether a result counts as a pass. Mirrors `_normalize_result`.
+    /// Whether a result counts as a pass.
     fn normalize_result(result: &str) -> bool {
         result == "passed" || result == "softfailed"
     }
 
-    /// Whether every incident-install job passed. Mirrors
-    /// `_has_passed_install_jobs`: install jobs are those whose test name
-    /// contains `qam-incidentinstall`; a missing name is tolerated (never
-    /// matches). An empty install-job set is vacuously `true`.
+    /// Whether every incident-install job passed: install jobs are those whose
+    /// test name contains `qam-incidentinstall`, a missing name never matches,
+    /// and an empty install-job set is vacuously `true`.
     fn has_passed_install_jobs(jobs: &[NormalizedJob]) -> bool {
         jobs.iter()
             .filter(|j| j.test.contains(INCIDENT_INSTALL_MARKER))
             .all(|j| Self::normalize_result(&j.result))
     }
 
-    /// Build the install-log URLs for the passing install jobs. Mirrors
-    /// `_get_logs_url`: `None` when there are no jobs, else one [`URLs`] per
-    /// passing install job, with `distri` falling back to
-    /// [`OPENQA_INSTALL_DISTRI`] and the log filename resolved per job name.
+    /// Build the install-log URLs for the passing install jobs: `None` when
+    /// there are no jobs, else one [`URLs`] per passing install job, with
+    /// `distri` falling back to [`OPENQA_INSTALL_DISTRI`] and the log filename
+    /// resolved per job name.
     fn get_logs_url(&self, jobs: &[NormalizedJob]) -> Option<Vec<URLs>> {
         if jobs.is_empty() {
             return None;
@@ -544,7 +527,7 @@ impl DashboardAutoOpenQA {
         )
     }
 
-    /// Render the `Results from openQA jobs` block. Mirrors `_pretty_print`.
+    /// Render the `Results from openQA jobs` block.
     fn pretty_print(host: &str, jobs: &[NormalizedJob]) -> Vec<String> {
         if jobs.is_empty() {
             tracing::debug!("No dashboard jobs - no results");
@@ -561,8 +544,7 @@ impl DashboardAutoOpenQA {
         ret
     }
 
-    /// Render one section (`incident` or `aggregate`). Mirrors
-    /// `_pretty_print_section`.
+    /// Render one section (`incident` or `aggregate`).
     fn pretty_print_section(
         ret: &mut Vec<String>,
         host: &str,
@@ -705,12 +687,10 @@ impl DashboardAutoOpenQA {
                 }
             }
         } else if !problem_keys.is_empty() {
-            // Problem groups exist but none carry a failed/incomplete/
-            // timeout_exceeded job, so `failed_by_group` is empty — their
-            // problems are entirely in the `other` bucket (still-running,
-            // parallel_failed, skipped, ...). The Summary already flags them;
-            // don't claim success (the old bug) and don't print an empty
-            // `Failed jobs:` block.
+            // Problem groups whose problems live entirely in the `other`
+            // bucket (still-running, parallel_failed, skipped, ...). The
+            // Summary already flags them: neither claim success nor print an
+            // empty `Failed jobs:` block.
             ret.push(
                 "  No failed jobs, but some groups need review (see Summary above).\n".to_string(),
             );
@@ -726,16 +706,14 @@ impl OpenQAResult for DashboardAutoOpenQA {
         Self::KIND
     }
 
-    /// Truthy when the
-    /// rendered block or the resolved install-log results are non-empty
-    /// (delegates to [`is_present`](Self::is_present)).
+    /// Truthy when the rendered block or the resolved install-log results are
+    /// non-empty.
     fn has_results(&self) -> bool {
         self.is_present()
     }
 }
 
-/// Coerce a value to a display string, mapping empty to `"unknown"`. Mirrors
-/// `_val`.
+/// Coerce a value to a display string, mapping empty to `"unknown"`.
 fn val(value: &str) -> String {
     if value.is_empty() {
         "unknown".to_string()
@@ -744,7 +722,7 @@ fn val(value: &str) -> String {
     }
 }
 
-/// The 3-tuple group key for a job. Mirrors `_group_key`.
+/// The 3-tuple group key for a job.
 fn group_key(job: &NormalizedJob, source: &str) -> (String, String, String) {
     if source == "aggregate" {
         (
@@ -757,7 +735,7 @@ fn group_key(job: &NormalizedJob, source: &str) -> (String, String, String) {
     }
 }
 
-/// The per-group summary header. Mirrors `_format_group_header`.
+/// The per-group summary header.
 fn format_group_header(
     source: &str,
     key: &(String, String, String),
@@ -775,7 +753,7 @@ fn format_group_header(
     }
 }
 
-/// The folded all-passed header. Mirrors `_format_folded_header`.
+/// The folded all-passed header.
 fn format_folded_header(source: &str, fold_key: &[String], hoisted_build: bool) -> String {
     if source == "aggregate" {
         if hoisted_build {
@@ -788,7 +766,7 @@ fn format_folded_header(source: &str, fold_key: &[String], hoisted_build: bool) 
     }
 }
 
-/// The nested failed-jobs group header. Mirrors `_failed_group_header`.
+/// The nested failed-jobs group header.
 fn failed_group_header(
     source: &str,
     key: &(String, String, String),
@@ -809,9 +787,8 @@ fn failed_group_header(
 
 #[cfg(test)]
 mod tests {
-    //! Pure-helper assertions (pretty-printing and the like). The
-    //! `run`/`load_jobs` wiremock + timeout tests live in
-    //! `tests/qem_dashboard.rs`.
+    //! Pure-helper assertions; the `run`/`load_jobs` wiremock + timeout tests
+    //! live in `tests/qem_dashboard.rs`.
     use super::*;
     use serde_json::json;
 
@@ -998,30 +975,25 @@ mod tests {
 
     #[test]
     fn is_obsolete_flag_and_result() {
-        // The `obsolete` flag alone marks a superseded run.
         let flagged = NormalizedJob::from_normalized(&json!({
             "test": "qam-x", "result": "passed", "obsolete": true,
         }));
         assert!(flagged.is_obsolete());
 
-        // A `result == "obsoleted"` also marks a superseded run.
         let obsoleted = NormalizedJob::from_normalized(&json!({
             "test": "qam-x", "result": "obsoleted",
         }));
         assert!(obsoleted.is_obsolete());
 
-        // A normal current run is not obsolete.
         let current = incident_job(1, "qam-x", "passed");
         assert!(!current.is_obsolete());
     }
 
     #[test]
     fn pretty_print_other_bucket_needs_review_not_all_passed() {
-        // A group whose only problem lives in the `other` bucket (a still-running
-        // `result: none`) is flagged in the Summary (`has_problems`) but carries
-        // no failed/incomplete/timeout job, so `failed_by_group` is empty. The
-        // trailer must NOT claim success and must NOT print an empty Failed jobs
-        // block; it prints the "need review" note instead.
+        // A still-running `result: none` group has problems but no failed
+        // entry, so the trailer must print the "need review" note rather than
+        // claiming success or emitting an empty Failed jobs block.
         let jobs = vec![
             incident_job(1, "qam-pass", "passed"),
             incident_job(2, "qam-running", "none"),
@@ -1314,8 +1286,7 @@ mod tests {
 
     #[test]
     fn snapshot_other_bucket_needs_review() {
-        // Problem group present (an `other`-bucket still-running job) but no
-        // failed job: renders the "need review" note, never "All jobs passed."
+        // Problem group but no failed job: "need review", not "All jobs passed."
         let jobs = vec![
             incident_job(2500, "qam-pass", "passed"),
             incident_job(2501, "qam-running", "none"),
@@ -1325,8 +1296,7 @@ mod tests {
 
     #[test]
     fn snapshot_obsoleted_excluded() {
-        // Obsoleted runs are dropped before rendering; only the current passed
-        // run remains, so the block reports a clean pass with no phantom failure.
+        // Only the current passed run remains — no phantom failure.
         let settings = json!({
             "DISTRI": "sle", "FLAVOR": "Server-DVD-Incidents",
             "ARCH": "x86_64", "VERSION": "15-SP5", "BUILD": ":12358:bash",
@@ -1399,8 +1369,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_jobs_fans_out_and_preserves_order() {
-        // Incident jobs (in setting order) come before aggregate jobs, and each
-        // per-setting URL is hit exactly once.
+        // Incident jobs (in setting order) precede aggregate jobs.
         let server = MockServer::start().await;
         let incident_ids = [11i64, 12, 13];
         let update_ids = [21i64, 22, 23];
@@ -1464,11 +1433,9 @@ mod tests {
 
     #[tokio::test]
     async fn load_jobs_drops_obsoleted_runs_and_keeps_verdict() {
-        // A retriggered install scenario: the dashboard keeps an older superseded
-        // run (an `obsolete` flag on a stale `failed`, and a separate stale run
-        // marked with `status: "obsoleted"`) alongside the current `passed` run.
-        // The obsoleted runs must be dropped so they neither appear in the job
-        // list nor poison the install verdict — `results` must be `Some`.
+        // A retrigger leaves two superseded runs (one flagged `obsolete`, one
+        // with `status: "obsoleted"`) beside the current `passed` one. Both must
+        // be dropped from the job list and from the install verdict.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/12358"))
@@ -1569,9 +1536,8 @@ mod tests {
 
     #[tokio::test]
     async fn load_jobs_both_settings_timeout_is_err() {
-        // Both top-level settings endpoints hang past the timeout: the dashboard
-        // could not be asked at all, so `run` now surfaces the failure rather
-        // than silently resolving to an empty result.
+        // Both top-level endpoints hang: the dashboard could not be asked at
+        // all, so `run` surfaces a failure rather than an empty result.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/12358"))
@@ -1602,9 +1568,8 @@ mod tests {
 
     #[tokio::test]
     async fn load_jobs_one_settings_failure_is_tolerated() {
-        // Incident settings 500s but update settings answers: a single failed
-        // top-level endpoint is warn-and-tolerated (treated as empty), so the
-        // batch is still Ok and the aggregate jobs come through.
+        // One top-level endpoint 500s: warn-tolerated as empty, so the batch is
+        // still Ok and the aggregate jobs come through.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/12358"))
@@ -1635,12 +1600,10 @@ mod tests {
 
     #[tokio::test]
     async fn load_jobs_fans_out_concurrently_and_preserves_order() {
-        // Regression: per-setting fetches must run concurrently
-        // (bounded by max_parallel) yet be consumed in submission order. Four
-        // incident settings each delay their jobs response; the FIRST-submitted
-        // (id 11) gets the LONGEST delay, so a naive completion-order collect
-        // would reorder it last. `dashboard_against` uses max_parallel = 4, so
-        // all four run at once and wall-clock ~= the single longest delay.
+        // Four incident settings delay their jobs response, the FIRST-submitted
+        // (id 11) longest, so a naive completion-order collect would reorder it
+        // last. max_parallel = 4, so all four run at once and wall-clock is
+        // about the single longest delay.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/incident_settings/12358"))
@@ -1692,9 +1655,9 @@ mod tests {
                 "qam-14".to_string(),
             ]
         );
-        // Concurrent: elapsed is near the longest single delay (300ms), far below
-        // the serial sum (650ms). Generous margin to tolerate CI jitter while
-        // still failing the old sequential await (which would take >=650ms).
+        // Near the longest single delay (300ms), far below the serial sum
+        // (650ms); the margin tolerates CI jitter yet still fails a sequential
+        // await.
         assert!(
             elapsed < Duration::from_millis(600),
             "expected concurrent fan-out (~300ms), took {elapsed:?}"

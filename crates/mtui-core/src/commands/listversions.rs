@@ -34,10 +34,9 @@ fn parse_version_line(line: &str) -> Option<(String, String)> {
 
 /// Lists the available versions of packages in the enabled repositories.
 ///
-/// Runs `zypper search -s` per host, parses the `name version` lines, then
-/// aggregates hosts that share the same version set for a package into groups
-/// so the display renders each version ladder once per host-group. Packages
-/// default to the report's package list when none are given via
+/// Runs `zypper search -s` per host and parses the `name version` lines, then
+/// groups hosts sharing a package's version set so each version ladder renders
+/// once per host-group. Packages default to the report's list absent
 /// `-p/--package`.
 pub struct ListVersions;
 
@@ -202,8 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_groups_prints_none_line() {
-        // Host queried but the output has no parseable `name version` line, so
-        // no version groups are built.
+        // Queried, but no parseable `name version` line, so no groups are built.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok\n");
         let args = matches(&ListVersions, &["-p", "bash", "-t", "h1"]);
         ListVersions.call(&mut session, &args).await.unwrap();

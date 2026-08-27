@@ -1,14 +1,12 @@
 //! OBS "Signature" (SSH) authentication for the native OBS backend.
 //!
 //! Implements the OBS Signature challenge/response in-process (no `osc`, no
-//! subprocess): the first
-//! request goes out unauthenticated (the session may already hold a cookie); on
-//! a `401` the `WWW-Authenticate: Signature` realm is read, an SSHSIG over
-//! `(created): <epoch>` is built (see [`crate::obs::sshsig`]), and the request
-//! is resent exactly once with the `Authorization: Signature` header. The
-//! Authorization header and its signature are **never logged** — this module
-//! only ever returns the header value to the transport ([`crate::obs::client`]),
-//! which logs method + URL only.
+//! subprocess): the first request goes out unauthenticated (the session may
+//! already hold a cookie); on a `401` the `WWW-Authenticate: Signature` realm is
+//! read, an SSHSIG over `(created): <epoch>` is built (see
+//! [`crate::obs::sshsig`]), and the request is resent exactly once with the
+//! `Authorization: Signature` header — which is **never logged**, since this
+//! module only returns it to the transport ([`crate::obs::client`]).
 //!
 //! Any OpenSSH key type works — Ed25519, ECDSA, and RSA private-key files, plus
 //! keys held by a running ssh-agent (selected by `SHA256:…` fingerprint or as
@@ -28,8 +26,7 @@ use crate::obs::sshsig;
 
 /// The current wall-clock Unix timestamp, seamed for deterministic tests.
 ///
-/// A signed `i64` matches `chrono`'s epoch type used elsewhere in the crate
-/// and is wide enough for any real clock.
+/// A signed `i64` matches `chrono`'s epoch type used elsewhere in the crate.
 fn now_unix() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -40,9 +37,8 @@ fn now_unix() -> i64 {
 
 /// A minimal ssh-agent surface: list public identities and sign raw bytes.
 ///
-/// Abstracted so the agent-selection logic is unit-testable offline (a mock
-/// holding known keys) without a live ssh-agent; the production implementation
-/// ([`RusshAgent`]) drives russh's agent client over `$SSH_AUTH_SOCK`.
+/// Abstracted so the agent-selection logic is unit-testable offline against a
+/// mock; [`RusshAgent`] drives russh's agent client over `$SSH_AUTH_SOCK`.
 #[async_trait::async_trait]
 pub trait AgentKeys: Send {
     /// The public keys the agent currently holds (fails closed on error).
@@ -116,10 +112,9 @@ impl AgentKeys for RusshAgent {
 
 /// Read the public-key blob from `<path>.pub`, or `None` if absent/malformed.
 ///
-/// Used to identify a passphrase-protected private key's counterpart among the
-/// ssh-agent's loaded keys by comparing public-key data. Any read/parse
-/// failure (absent file, too few fields, non-base64) yields `None` rather than
-/// an error.
+/// Identifies a passphrase-protected private key's counterpart among the
+/// agent's loaded keys by public-key data. Any read/parse failure yields `None`
+/// rather than an error.
 fn pubkey_data(path: &Path) -> Option<KeyData> {
     let pub_path = format!("{}.pub", path.display());
     let text = std::fs::read_to_string(pub_path).ok()?;
@@ -130,9 +125,9 @@ fn pubkey_data(path: &Path) -> Option<KeyData> {
 
 /// The RSA signature-algorithm selector for the agent path.
 ///
-/// Only RSA needs an explicit `rsa-sha2-512`; Ed25519/ECDSA have a single
-/// algorithm. The file-key path handles this inside `ssh-key`'s RSA signer,
-/// which defaults to SHA-512.
+/// Only RSA needs an explicit `rsa-sha2-512`; Ed25519/ECDSA have one algorithm.
+/// The file-key path gets this from `ssh-key`'s RSA signer, which defaults to
+/// SHA-512.
 fn agent_hash_alg(key: &KeyData) -> Option<HashAlg> {
     if key.is_rsa() {
         Some(HashAlg::Sha512)
@@ -184,8 +179,7 @@ impl<A: AgentKeys> ObsSignatureAuth<A> {
 
     /// Build the `Authorization: Signature …` header value for `realm`.
     ///
-    /// The signature is built here and only ever returned to the caller — it is
-    /// never logged.
+    /// The signature is only ever returned to the caller, never logged.
     ///
     /// # Errors
     ///
@@ -416,7 +410,6 @@ mod tests {
         assert!(schemes.contains_key("negotiate"));
         assert!(schemes["negotiate"].is_empty());
         assert!(schemes["signature"].is_empty());
-        // The blank line is skipped, leaving exactly two schemes.
         assert_eq!(schemes.len(), 2);
     }
 
@@ -434,15 +427,11 @@ mod tests {
     fn pubkey_data_none_for_absent_and_malformed() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("k");
-        // Absent .pub.
         assert!(pubkey_data(&base).is_none());
-        // Malformed .pub (not a valid key line).
         std::fs::write(dir.path().join("k.pub"), "only-one-field\n").unwrap();
         assert!(pubkey_data(&base).is_none());
-        // Non-base64 body.
         std::fs::write(dir.path().join("k.pub"), "ssh-rsa @@@not-base64@@@ me\n").unwrap();
         assert!(pubkey_data(&base).is_none());
-        // Valid .pub parses to key data.
         std::fs::write(dir.path().join("k.pub"), format!("{ED25519_PUB}\n")).unwrap();
         assert!(pubkey_data(&base).is_some());
     }

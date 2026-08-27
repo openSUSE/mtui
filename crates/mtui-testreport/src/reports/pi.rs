@@ -1,24 +1,16 @@
 //! The PI [`TestReport`] implementation ([`PiReport`]).
 //!
 //! Keys its identity on the parsed [`RequestReviewID`] and derives its
-//! update-repo map by delegating unconditionally to
-//! [`reporepoparse`] — the simplest of the
-//! concrete reports, reusing the same helper as
+//! update-repo map by delegating unconditionally to [`reporepoparse`] — the
+//! simplest of the concrete reports, reusing the same helper as
 //! [`SlReport`](super::sl::SlReport). PI has no git commit to verify, so
-//! [`check_hash`](TestReport::check_hash) is a constant `(true, "", "")`.
+//! [`check_hash`](TestReport::check_hash) is constant.
 //!
-//! ## Scope (task nbv.12)
-//!
-//! Mirrors the `SlReport` boundaries:
-//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`](mtui_hosts::RepoManager::run_zypper)) is
-//!   implemented here (task nbv.fly): add uses `-n ar -cfGkn` (same as
-//!   SL), remove uses `-n rr`.
-//! * `list_update_commands` would render per-host commands via the doer seam
-//!   ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)), which is wired
-//!   for install/uninstall but has no listing consumer yet — this is a
-//!   documented no-op stub.
-//! * `id()` returns `""` when no RRID is loaded; this matches the graceful
-//!   path chosen for `SlReport`.
+//! `set_repo` adds with `-n ar -cfGkn`, same as SL. `list_update_commands` is a
+//! documented no-op stub: the doer seam
+//! ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)) is wired for
+//! install/uninstall but has no listing consumer. `id()` returns `""` when no
+//! RRID is loaded.
 
 use std::collections::HashMap;
 
@@ -39,10 +31,6 @@ pub struct PiReport {
 
 impl PiReport {
     /// Builds a [`PiReport`] from `config`.
-    ///
-    /// [`TestReportBase::new`] already seeds the rating/realid envelope
-    /// fields to empty and `repositories` to an empty set, so this simply
-    /// wraps a fresh base.
     #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
@@ -71,9 +59,8 @@ impl TestReport for PiReport {
     }
 
     fn parser(&self) -> HashMap<String, String> {
-        // The skeleton trait models the table's *keys* as strings; the concrete
-        // parser dispatch lives in the loader (a later task). Values are the
-        // parser names so callers can branch on them.
+        // The trait models the table's *keys* as strings; the values are the
+        // parser names, so callers can branch on them.
         HashMap::from([
             ("hosts".to_string(), "ReducedMetadataParser".to_string()),
             ("json".to_string(), "JSONParser".to_string()),
@@ -87,11 +74,8 @@ impl TestReport for PiReport {
     }
 
     fn list_update_commands(&self, _targets: &HostsGroup) {
-        // This would render per-host `updater` commands for display; the
-        // bespoke `perform_update` flow that runs them is implemented below.
-        // The read-only listing is a documented no-op stub across every
-        // report — the `list_update_commands` command calls this but only
-        // ever prints a placeholder.
+        // `perform_update` below runs the per-host `updater` commands; the
+        // read-only listing command only ever prints a placeholder.
         debug!("list_update_commands: no-op stub, not yet implemented");
     }
 
@@ -149,7 +133,7 @@ impl TestReport for PiReport {
     }
 
     async fn check_hash(&self) -> HashCheck {
-        // Upstream PI always returns (True, "", "") — nothing to verify.
+        // PI has no git commit, so there is nothing to verify.
         HashCheck::Ok
     }
 }

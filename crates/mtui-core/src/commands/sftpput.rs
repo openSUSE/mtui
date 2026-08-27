@@ -12,17 +12,14 @@ use crate::session::Session;
 
 /// Uploads a local file (or directory tree) to every enabled reference host.
 ///
-/// Files are placed under the
-/// report's remote working directory (`metadata.target_wd(<name>)`); a directory
-/// argument is walked and each contained file uploaded. Only enabled hosts are
-/// contacted.
+/// Files land under the report's remote working directory
+/// (`metadata.target_wd(<name>)`); a directory argument is walked. Only enabled
+/// hosts are contacted.
 ///
 /// The path is taken **literally — shell-style globs are deliberately not
-/// expanded** (#399): `put` pushes to every enabled host in the group, which
-/// is exactly where an over-broad pattern does damage, so a pattern's blast
-/// radius stays the caller's problem (`put` the directory, or let the
-/// invoking shell expand). A path that matches nothing errors
-/// (`File … not found`, pinned by `missing_file_errors`) rather than
+/// expanded** (#399): `put` pushes to every enabled host, which is exactly where
+/// an over-broad pattern does damage, so its blast radius stays the caller's
+/// problem. A path matching nothing errors (`File … not found`) rather than
 /// succeeding vacuously.
 pub struct SftpPut;
 
@@ -70,8 +67,7 @@ impl Command for SftpPut {
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
-        // Upstream `complete_choices_filelist(template_completion(state), …)`:
-        // file paths merged with the template synonym groups + loaded RRIDs.
+        // File paths merged with the template synonym groups + loaded RRIDs.
         complete_choices_filelist(
             &[&["-T", "--template"], &["--all-templates"]],
             session.templates.rrids(),
@@ -86,8 +82,8 @@ impl Command for SftpPut {
             .expect("filename is required")
             .clone();
 
-        // Walk the local tree off the async worker: a deep directory on a slow
-        // filesystem must not block a Tokio thread during this pre-flight scan.
+        // Off the async worker: a deep tree on a slow filesystem must not block
+        // a Tokio thread during this pre-flight scan.
         let scan_path = filename.clone();
         let files = tokio::task::spawn_blocking(move || collect_files(&scan_path))
             .await
@@ -102,10 +98,9 @@ impl Command for SftpPut {
             )));
         }
 
-        // Per-(file, host) outcomes, aggregated as the fan-out proceeds: each
-        // `sftp_put` overwrites every target's `last_upload`, so we must read it
-        // before the next file's transfer clobbers it. `None` outcomes (disabled
-        // or not-attempted hosts) are skipped.
+        // Each `sftp_put` overwrites every target's `last_upload`, so it must be
+        // read before the next file's transfer clobbers it. `None` outcomes
+        // (disabled or not-attempted hosts) are skipped.
         let mut outcomes: Vec<(String, String, Result<(), String>)> = Vec::new();
         for file in &files {
             let name = file
@@ -172,7 +167,7 @@ mod tests {
         std::fs::write(dir.path().join("payload.bin"), "x").unwrap();
         let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
 
-        // Empty tail → template synonym flags + loaded RRID (files need a path).
+        // Empty tail → template synonym flags + loaded RRID; files need a path.
         let flags = SftpPut.complete(&session, "", "put ");
         assert!(flags.contains(&"-T".to_owned()), "{flags:?}");
         assert!(
@@ -180,7 +175,6 @@ mod tests {
             "{flags:?}"
         );
 
-        // A path prefix surfaces matching files.
         let path = format!("{}/pay", dir.path().display());
         let files = SftpPut.complete(&session, &path, &format!("put {path}"));
         assert!(
@@ -214,10 +208,8 @@ mod tests {
 
     #[tokio::test]
     async fn missing_file_errors() {
-        // The message text is documented contract (FAQ: an unexpanded glob
-        // errors with `File … not found`), so pin the words, not just the
-        // variant — a variant-only assert also passes for the scan-task
-        // error path.
+        // The wording is documented contract, and a variant-only assert would
+        // also pass for the scan-task error path.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&SftpPut, &["/no/such/file"]);
         let err = SftpPut.call(&mut session, &args).await.unwrap_err();
@@ -273,7 +265,6 @@ mod tests {
             other => panic!("expected Other, got {other:?}"),
         }
         let out = buf.contents();
-        // Both hosts were attempted: h1 succeeded, h2 failed.
         assert!(out.contains("-> h1: ok"), "{out}");
         assert!(
             out.contains("-> h2: FAILED (") && out.contains("h2 disk full"),

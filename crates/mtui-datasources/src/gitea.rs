@@ -1,8 +1,7 @@
 //! A client for managing Gitea pull requests via a comment-based workflow.
 //!
-//! The [`Gitea`] client
-//! assigns, unassigns, approves, and rejects a PR by posting specially
-//! formatted comments; there is no dedicated state field. It derives the
+//! [`Gitea`] assigns, unassigns, approves and rejects a PR by posting specially
+//! formatted comments; there is no dedicated state field, so it derives the
 //! current state by replaying the PR's comment history:
 //!
 //! * **assignment** — magic marker comments
@@ -14,14 +13,9 @@
 //!   stale decision, so [`Gitea`] only treats the PR as decided when a decision
 //!   comment exists **and** the group is not currently a requested reviewer.
 //!
-//! Notable design points:
-//!
-//! * HTTP methods are represented with [`reqwest::Method`].
-//! * Comment timestamps are parsed with `chrono` as RFC3339 with offset, and
-//!   comments sort by that timestamp.
-//! * TLS posture is fixed when the shared [`HttpClient`] is built (reqwest
-//!   fixes it per-client), so [`Gitea::new`] resolves the verify policy up
-//!   front via [`resolve_verify`] before any request is made.
+//! Comments are ordered by their `updated_at` timestamp (RFC3339 with offset).
+//! reqwest fixes the TLS posture per-client, so [`Gitea::new`] resolves the
+//! verify policy via [`resolve_verify`] before any request is made.
 
 use std::cmp::Ordering;
 
@@ -86,12 +80,10 @@ struct Origin {
     port: u16,
 }
 
-/// Parse an `scheme://[userinfo@]host[:port]` URL into an [`Origin`], rejecting
-/// any URL that carries userinfo (`user:pass@host`) — such a URL could smuggle
-/// a credential and its host is easy to misread, so it is never trusted.
-///
-/// Returns `None` for a non-URL, an empty host, a non-numeric/out-of-range
-/// port, a scheme without a known default port, or any userinfo present.
+/// Parse an `scheme://[userinfo@]host[:port]` URL into an [`Origin`]. Returns
+/// `None` for a non-URL, an empty host, a bad port, a scheme without a known
+/// default port, or userinfo — a `user:pass@host` URL could smuggle a credential
+/// and its host is easy to misread, so it is never trusted.
 fn parse_origin(url: &str) -> Option<Origin> {
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
@@ -141,10 +133,9 @@ fn scheme_ok(o: &Origin) -> bool {
     o.scheme == "https" || (o.scheme == "http" && is_loopback(&o.host))
 }
 
-/// Whether `url` carries no userinfo, has an acceptable scheme, and shares the
-/// exact origin (scheme/host/port) of `trusted`. The single predicate guarding
-/// token attachment; a `None` origin (non-URL, userinfo, bad port) is never
-/// trusted.
+/// Whether `url` has an acceptable scheme and shares the exact origin of
+/// `trusted`. The single predicate guarding token attachment; an unparseable
+/// origin is never trusted.
 fn is_trusted(url: &str, trusted: &Origin) -> bool {
     parse_origin(url).is_some_and(|o| scheme_ok(&o) && &o == trusted)
 }
@@ -155,10 +146,9 @@ fn is_trusted(url: &str, trusted: &Origin) -> bool {
 ///
 /// # Errors
 ///
-/// [`GiteaError::UntrustedOrigin`] (carrying the sanitised URL) if the value is
-/// empty, not a URL, not `https` (and not loopback `http`), carries userinfo, or
-/// has a bad port — so the client can never be built with a trust anchor that
-/// would silently accept a plaintext or credential-bearing endpoint.
+/// [`GiteaError::UntrustedOrigin`] (carrying the sanitised URL) for anything
+/// else, so the client can never be built with a trust anchor that would
+/// silently accept a plaintext or credential-bearing endpoint.
 fn parse_trusted_origin(gitea_url: &str) -> Result<Origin, GiteaError> {
     match parse_origin(gitea_url) {
         Some(o) if scheme_ok(&o) => Ok(o),
@@ -169,10 +159,8 @@ fn parse_trusted_origin(gitea_url: &str) -> Result<Origin, GiteaError> {
 /// Whether any comment records a decision for `group`
 /// (`@<group>-review: LGTM|approve[d]|decline[d]`).
 ///
-/// Pure over an already-fetched comment snapshot. The "does it *still* stand"
-/// question (a pending re-request supersedes a stale decision) is answered by
-/// the caller via [`Gitea::has_review`]; this only reports that a decision
-/// marker exists.
+/// Pure over an already-fetched snapshot: only that a decision marker exists.
+/// Whether it *still* stands is [`Gitea::has_review`]'s question.
 #[must_use]
 fn decision_present(comments: &[Comment], group: &str) -> bool {
     let done = Regex::new(&format!(
@@ -185,9 +173,8 @@ fn decision_present(comments: &[Comment], group: &str) -> bool {
 
 /// A Gitea comment, sortable by its `updated_at` timestamp.
 ///
-/// Ordering and equality are **by date**, so [`sort`](slice::sort)
-/// over a comment slice reproduces the chronological replay order the state
-/// machine depends on.
+/// Ordering and equality are **by date**, so [`sort`](slice::sort) reproduces
+/// the chronological replay order the state machine depends on.
 #[derive(Debug, Clone)]
 pub struct Comment {
     /// The comment body.
@@ -202,8 +189,7 @@ impl Comment {
     /// # Errors
     ///
     /// Returns [`GiteaError::FailedCall`] if `updated_at` is not a parseable
-    /// RFC3339 timestamp (folded into the fetch failure surface, since a
-    /// malformed comment payload aborts the API call).
+    /// RFC3339 timestamp: a malformed comment payload aborts the API call.
     fn parse(body: String, updated_at: &str) -> Result<Self, GiteaError> {
         let date = DateTime::parse_from_rfc3339(updated_at).map_err(|e| {
             GiteaError::FailedCall(format!("unparseable comment timestamp {updated_at:?}: {e}"))
@@ -238,9 +224,7 @@ struct RawComment {
 
 /// A client for managing a Gitea Pull Request via a comment-based workflow.
 ///
-/// Provides methods to assign, unassign, approve, and reject a PR by posting
-/// specially formatted comments; the current state is derived by parsing the
-/// PR's whole comment history. Built once per PR and reused.
+/// Built once per PR and reused; see the module doc for the comment protocol.
 #[derive(Debug, Clone)]
 pub struct Gitea {
     http: HttpClient,
@@ -273,9 +257,7 @@ pub struct Gitea {
 impl Gitea {
     /// Build a Gitea client for the PR at `giteaprapi` (a REST API URL).
     ///
-    /// Reads the token/session user/TLS
-    /// posture from `config`, defaults the group to `DEFAULT_GROUP`, and
-    /// derives the issue-comments endpoint from the PR URL.
+    /// Defaults the group to `DEFAULT_GROUP`.
     ///
     /// # Errors
     ///
@@ -305,18 +287,16 @@ impl Gitea {
     /// Build a client from an already-constructed [`HttpClient`] and explicit
     /// credentials, bypassing [`Config`].
     ///
-    /// The composition-root / test seam: it lets a caller inject a client whose
+    /// The composition-root / test seam, letting a caller inject a client whose
     /// TLS posture (or base host, under `wiremock`) is already fixed. The token
     /// is trusted as non-empty here — [`new`](Self::new) is the guarded entry.
-    ///
-    /// `trusted_gitea_url` is the operator-configured origin (`config.gitea_url`)
-    /// the token may be sent to; requests to any other origin are refused.
+    /// `trusted_gitea_url` is the operator-configured origin the token may be
+    /// sent to; requests to any other origin are refused.
     ///
     /// # Errors
     ///
     /// Returns [`GiteaError::UntrustedOrigin`] if `trusted_gitea_url` is not a
-    /// usable `https` origin (bad URL, userinfo present, non-https, or a
-    /// non-numeric/out-of-range port).
+    /// usable `https` origin.
     pub fn with_client(
         http: HttpClient,
         token: String,
@@ -328,7 +308,6 @@ impl Gitea {
         let trusted_origin = parse_trusted_origin(trusted_gitea_url)?;
         // `.../pulls/<n>` -> `.../issues/<n>/comments`.
         let prissues = format!("{}/comments", giteaprapi.replace("pulls", "issues"));
-        // The API root for endpoints not tied to the PR.
         let api_root = giteaprapi
             .split_once("/api/v1/")
             .map_or(giteaprapi, |(root, _)| root);
@@ -357,7 +336,7 @@ impl Gitea {
     /// A private wrapper for a request to the Gitea API, returning the decoded
     /// JSON body (or [`serde_json::Value::Null`] for `204 No Content`).
     ///
-    /// Folds every failure onto [`GiteaError::FailedCall`], surfacing a concise
+    /// Folds every failure onto [`GiteaError::FailedCall`], surfacing an
     /// actionable hint at ERROR for a TLS certificate failure (detail at DEBUG)
     /// rather than a raw transport error.
     async fn request(
@@ -366,12 +345,10 @@ impl Gitea {
         url: &str,
         body: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, GiteaError> {
-        // Never attach the token to a URL that is not the configured trusted
-        // origin. Metadata (`gitea_pr_api`) is attacker-influenceable, so a
-        // hostile PR URL — or a non-https/userinfo-bearing one — must not
-        // receive the credential. reqwest additionally strips the Authorization
-        // header on any *cross-origin* redirect, so a same-origin request can
-        // never leak the token to another host.
+        // Metadata (`gitea_pr_api`) is attacker-influenceable, so the token
+        // goes only to the configured trusted origin. reqwest additionally
+        // strips the Authorization header on a cross-origin redirect, so a
+        // same-origin request can never leak it to another host.
         if !is_trusted(url, &self.trusted_origin) {
             tracing::warn!(
                 "Refusing to send Gitea token to untrusted URL {}",
@@ -401,8 +378,8 @@ impl Gitea {
                     tracing::error!("{}", ssl_verification_hint(host.as_deref()));
                     tracing::debug!("Gitea TLS error detail: {}", ssl_error_detail(&e));
                 } else {
-                    // On this arm the sanitized URL is the line's only host
-                    // context, reqwest's having been dropped.
+                    // The sanitized URL is the only host context here,
+                    // reqwest's having been dropped.
                     tracing::warn!("API call to Gitea {} failed: {e}", sanitize_url(url));
                 }
                 return Err(GiteaError::FailedCall(format!(
@@ -432,7 +409,6 @@ impl Gitea {
             )));
         }
 
-        // 204 No Content: no body to decode.
         if status.as_u16() == 204 {
             return Ok(serde_json::Value::Null);
         }
@@ -447,15 +423,13 @@ impl Gitea {
 
     /// Resolve the acting user for a write operation.
     ///
-    /// Returns `other` verbatim when supplied. Otherwise returns the login of
-    /// the Gitea account that owns the token, resolved once via
-    /// `GET /api/v1/user` and cached in [`resolved_user`](Self::resolved_user):
-    /// comments are attributed by Gitea to that account, so an assign/approve
-    /// marker must record *its* login rather than the local session user, which
-    /// need not match. If the lookup fails (or the payload has no `login`), it
-    /// falls back to [`session_user`](Self::session_user) so review actions
-    /// still work — with the historical, possibly mismatched, name — and the
-    /// fallback is cached too (a short-lived CLI/MCP action does not retry).
+    /// Returns `other` verbatim when supplied, else the token owner's login
+    /// ([`resolved_user`](Self::resolved_user)): Gitea attributes comments to
+    /// that account, so an assign/approve marker must record *its* login rather
+    /// than the local session user, which need not match. A failed lookup falls
+    /// back to [`session_user`](Self::session_user) so review actions still work
+    /// (with a possibly mismatched name), and caches that too — a short-lived
+    /// CLI/MCP action does not retry.
     async fn acting_user(&self, other: Option<&str>) -> String {
         if let Some(user) = other {
             return user.to_string();
@@ -497,8 +471,8 @@ impl Gitea {
     /// sorted) and return the current assignee for `group`, or `None`.
     ///
     /// The last valid assignment or unassignment marker for the group wins; a
-    /// marker for another group is ignored. Public + static so the state
-    /// machine can be tested without any HTTP.
+    /// marker for another group is ignored. Static so the state machine can be
+    /// tested without any HTTP.
     #[must_use]
     fn assignee_from_comments(&self, comments: &[Comment], group: &str) -> Option<String> {
         let mut assignee: Option<String> = None;
@@ -518,9 +492,8 @@ impl Gitea {
 
     /// Fetch the PR comments once and return them chronologically sorted.
     ///
-    /// The single comment snapshot a write operation derives *all* of its state
-    /// from — assignment ([`assign_state`](Self::assign_state)) and decision
-    /// presence ([`decision_present`]) — so one op issues one comments GET
+    /// The single snapshot a write operation derives *all* of its state from —
+    /// assignment and decision presence — so one op issues one comments GET
     /// instead of refetching per helper.
     async fn load_sorted_comments(&self) -> Result<Vec<Comment>, GiteaError> {
         let mut comments = self.get_all_comments().await?;
@@ -530,9 +503,7 @@ impl Gitea {
 
     /// Return the current assignee for this PR's group, or `None`.
     ///
-    /// Reloads the comments and replays the assign/unassign markers. `None`
-    /// means the group is unassigned (no marker, or the last marker is an
-    /// unassignment).
+    /// Reloads the comments and replays the assign/unassign markers.
     ///
     /// # Errors
     ///
@@ -572,12 +543,10 @@ impl Gitea {
     /// Whether the group's review is decided *and still stands*, derived from an
     /// already-fetched comment snapshot.
     ///
-    /// A decision comment (`@<group>-review: LGTM|approve|decline`) records a
-    /// decision, but the history is append-only: a re-requested review after a
-    /// rebuild supersedes a stale decision. So this only reports "done" when a
-    /// decision comment exists **and** the group is not currently a requested
-    /// reviewer — the latter checked lazily (one PR GET) so no decision means no
-    /// PR fetch at all.
+    /// The history is append-only, so a review re-requested after a rebuild
+    /// supersedes a stale decision comment: "done" needs both a decision marker
+    /// and the group *not* currently a requested reviewer. The latter is checked
+    /// lazily, so no decision means no PR fetch at all.
     async fn is_done_from(&self, comments: &[Comment]) -> Result<bool, GiteaError> {
         if !decision_present(comments, &self.group) {
             return Ok(false);
@@ -775,7 +744,6 @@ mod tests {
         let c2 = comment("second", "2024-01-02T00:00:00+00:00");
         assert!(c1 < c2);
         assert!(c2 > c1);
-        // Equal dates -> equal comments even with different bodies.
         let a = comment("a", "2024-01-01T00:00:00+00:00");
         let b = comment("b", "2024-01-01T00:00:00+00:00");
         assert_eq!(a, b);
@@ -869,8 +837,7 @@ mod tests {
 
     #[test]
     fn decision_present_false_without_decision() {
-        // No comments, a non-decision comment, and a chat mention that is not a
-        // start-anchored decision all read as "no decision".
+        // A mid-line mention is not a start-anchored decision.
         assert!(!decision_present(&[], "qam-sle"));
         let plain = [comment("just a comment", "2024-01-01T00:00:00+00:00")];
         assert!(!decision_present(&plain, "qam-sle"));
@@ -941,7 +908,6 @@ mod tests {
     fn new_refuses_untrusted_gitea_url() {
         let mut cfg = Config::default();
         cfg.gitea_token = "tok".to_string();
-        // A non-https trusted origin (and non-loopback) is refused up front.
         cfg.gitea_url = "http://gitea.example.com".to_string();
         let err = Gitea::new(
             &cfg,
@@ -954,7 +920,6 @@ mod tests {
 
     #[test]
     fn default_config_trusts_src_suse_de() {
-        // The shipped default is https://src.suse.de, so a matching PR URL builds.
         let mut cfg = Config::default();
         cfg.gitea_token = "tok".to_string();
         assert_eq!(cfg.gitea_url, "https://src.suse.de");
@@ -992,13 +957,11 @@ mod tests {
     #[test]
     fn is_trusted_matches_only_exact_https_origin() {
         let trusted = parse_origin("https://src.suse.de").unwrap();
-        // Exact https origin (any path) is trusted.
         assert!(is_trusted(
             "https://src.suse.de/api/v1/repos/o/r/pulls/1",
             &trusted
         ));
         assert!(is_trusted("https://SRC.SUSE.DE/x", &trusted));
-        // Everything hostile is refused.
         for bad in [
             "http://src.suse.de/x",            // plaintext, non-loopback
             "https://evil.example.com/x",      // foreign host

@@ -1,13 +1,9 @@
 //! Update identifier.
 //!
-//! An [`UpdateID`] bundles a [`RequestReviewID`] with a `TestReport` factory and
-//! a VCS-checkout callable; construction parses the RRID string into a
-//! [`RequestReviewID`] and stores it, then wires up the I/O collaborators.
-//!
-//! This is the **value-type slice only**: an [`UpdateID`] wrapping the parsed
-//! [`RequestReviewID`], constructed by parsing an RRID string. The TestReport
-//! factory, the SVN/Gitea checkout and the interactive prompter live in
-//! `mtui-testreport` / `mtui-core` — this crate is I/O-free.
+//! An [`UpdateID`] is the value-type slice of an update: the parsed
+//! [`RequestReviewID`] and nothing else. The TestReport factory, the SVN/Gitea
+//! checkout and the interactive prompter live in `mtui-testreport` /
+//! `mtui-core` — this crate is I/O-free.
 //!
 //! Because the RRID grammar is an interop **Contract** (see `AGENTS.md`),
 //! [`UpdateID::parse`] delegates verbatim to [`RequestReviewID::parse`], and
@@ -22,10 +18,7 @@ use crate::error::RridParseError;
 use crate::rrid::RequestReviewID;
 
 /// A parsed update identifier: a thin wrapper over the update's
-/// [`RequestReviewID`].
-///
-/// Construct one with [`UpdateID::parse`] or via [`FromStr`]. The inner RRID is
-/// normalised on parse (see [`RequestReviewID`]), so structural equality and
+/// [`RequestReviewID`], which is normalised on parse, so structural equality and
 /// hashing have string-identity semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UpdateID {
@@ -35,9 +28,6 @@ pub struct UpdateID {
 
 impl UpdateID {
     /// Parses an update identifier from an RRID string.
-    ///
-    /// Parsing only — the I/O collaborators (TestReport factory, VCS checkout)
-    /// are attached by `mtui-testreport`, keeping this crate I/O-free.
     ///
     /// # Errors
     ///
@@ -78,7 +68,6 @@ mod tests {
         assert_eq!(uid.id.kind, RequestKind::Maintenance);
         assert_eq!(uid.id.maintenance_id, "1");
         assert_eq!(uid.id.review_id, 2);
-        // Display forwards to the inner RRID's canonical string.
         assert_eq!(uid.to_string(), "SUSE:Maintenance:1:2");
     }
 
@@ -95,7 +84,6 @@ mod tests {
     #[test]
     fn from_str_delegates_to_parse() {
         let uid: UpdateID = "S:M:1:2".parse().unwrap();
-        // Short project form normalises via the inner RRID parser.
         assert_eq!(uid.id.project, "SUSE");
         assert_eq!(uid.to_string(), "SUSE:Maintenance:1:2");
     }

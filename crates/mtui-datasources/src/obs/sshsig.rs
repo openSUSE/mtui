@@ -1,21 +1,17 @@
 //! OpenSSH SSHSIG wire-format signer for OBS "Signature" auth.
 //!
-//! Reproduces
-//! `ssh-keygen -Y sign` for any key type (Ed25519, ECDSA, RSA), so mtui
-//! authenticates to the OBS API in-process — no `osc` library and no signing
-//! subprocess. The format is OpenSSH's SSHSIG ([PROTOCOL.sshsig]): the message
-//! `(created): <epoch>` is hashed with `sha512`, wrapped with the namespace
-//! (the challenge realm), signed, and the signature plus public key are packed
-//! into the outer SSHSIG blob, returned **base64-encoded WITHOUT the PEM
-//! armor** — that raw base64 is what the OBS `Authorization: Signature` header
-//! carries.
+//! Reproduces `ssh-keygen -Y sign` for any key type (Ed25519, ECDSA, RSA), so
+//! mtui authenticates to the OBS API in-process — no `osc` library and no
+//! signing subprocess. Per OpenSSH's SSHSIG ([PROTOCOL.sshsig]) the message
+//! `(created): <epoch>` is hashed with `sha512`, wrapped with the namespace (the
+//! challenge realm), signed, and packed with the public key into the outer
+//! blob, returned **base64-encoded WITHOUT the PEM armor** — that raw base64 is
+//! what the OBS `Authorization: Signature` header carries.
 //!
 //! RSA keys are signed with `rsa-sha2-512` (`ssh-key`'s default RSA `Signer`
-//! impl), not the legacy `ssh-rsa` (SHA-1) that modern OpenSSH/OBS reject.
-//! Ed25519 and ECDSA have a single signature
-//! algorithm. The message-hash algorithm in the SSHSIG blob (`sha512`) is
-//! independent of the signature algorithm and stays fixed, matching
-//! `ssh-keygen -Y sign`.
+//! impl), not the legacy `ssh-rsa` (SHA-1) that modern OpenSSH/OBS reject. The
+//! blob's message-hash algorithm (`sha512`) is independent of the signature
+//! algorithm and stays fixed, matching `ssh-keygen -Y sign`.
 //!
 //! Two call paths feed one packer: a file-backed [`PrivateKey`] via
 //! [`sign_created`], and an ssh-agent key via [`agent_signed_data`] +
@@ -37,9 +33,8 @@ const HASH_ALG: HashAlg = HashAlg::Sha512;
 
 /// The message signed under the SSHSIG envelope: OBS's `(created): <epoch>`.
 ///
-/// Kept as a helper so the file-key path (which hashes internally) and the
-/// agent path (which pre-builds the enveloped bytes to hand to the agent) agree
-/// byte-for-byte.
+/// A helper so the file-key path (which hashes internally) and the agent path
+/// (which pre-builds the enveloped bytes) agree byte-for-byte.
 #[must_use]
 pub fn created_message(created: i64) -> Vec<u8> {
     format!("(created): {created}").into_bytes()
@@ -58,8 +53,7 @@ pub fn created_message(created: i64) -> Vec<u8> {
 /// # Errors
 ///
 /// Returns [`ObsError::Config`] if the key's algorithm is unsupported or the
-/// cryptographic backend fails (fail-closed; the message never leaks key
-/// material).
+/// crypto backend fails; fail-closed, and the message never leaks key material.
 pub fn sign_created(key: &PrivateKey, namespace: &str, created: i64) -> Result<String, ObsError> {
     let msg = created_message(created);
     let sig = SshSig::sign(key, namespace, HASH_ALG, &msg)

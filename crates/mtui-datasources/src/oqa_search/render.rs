@@ -1,13 +1,11 @@
 //! Plain-text renderer for the openQA overview and its begin/end markers.
 //!
-//! Renders the overview (version rows and build-check lines, with OBS
-//! timestamps stripped) between `OVERVIEW_*` markers. The output is
-//! markdown-ish plain text (no ANSI): each section gets a `##`/`###` header so
-//! the block stays scannable when pasted into a testreport.
+//! Renders the overview (version rows and build-check lines, OBS timestamps
+//! stripped) as markdown-ish plain text with no ANSI, each section under a
+//! `##`/`###` header so the block stays scannable pasted into a testreport.
 //!
-//! Two consumers share this: the interactive `openqa_overview` command
-//! prints the lines directly, and the export injector
-//! ([`crate::oqa_search`] via `mtui-testreport`) wraps the block with the
+//! The interactive `openqa_overview` command prints the lines directly; the
+//! export injector (via `mtui-testreport`) wraps them in
 //! [`OVERVIEW_BEGIN_MARKER`]/[`OVERVIEW_END_MARKER`] so it can find and replace
 //! its own block on re-export.
 
@@ -40,8 +38,7 @@ fn strip_obs_timestamp(line: &str) -> String {
 /// Renders the overview as a list of plain-text lines (no ANSI, no trailing
 /// newlines on individual entries — the caller joins them as needed).
 ///
-/// The `skip_aggregated` flag suppresses the
-/// aggregated-updates section entirely (the user passed `--no-aggregated`).
+/// `skip_aggregated` suppresses the aggregated-updates section entirely.
 #[must_use]
 pub fn render_overview(
     single_incidents_rows: &[VersionResult],
@@ -63,10 +60,9 @@ pub fn render_overview(
         }
         lines.push(String::new());
     } else if skip_aggregated || aggregated_updates_rows.is_empty() {
-        // Nothing to show in the visible sections -> the "No openQA
-        // builds" hint. When --no-aggregated is in effect we cannot rely on the
-        // aggregated section to convey emptiness, so the hint fires whenever
-        // single incidents is empty.
+        // With --no-aggregated the aggregated section cannot convey emptiness,
+        // so the "No openQA builds" hint fires whenever single incidents is
+        // empty.
         lines.push("_No openQA builds for this incident yet._".to_string());
         lines.push(String::new());
     }
@@ -86,7 +82,7 @@ pub fn render_overview(
                 lines.push(String::new());
             }
         } else if !single_incidents_rows.is_empty() {
-            // Single incidents found something, but aggregated produced no
+            // Single incidents found something but aggregated produced no
             // groups (e.g. all versions excluded).
             lines.push("_No aggregated updates builds available for this incident._".to_string());
             lines.push(String::new());
@@ -179,8 +175,7 @@ fn render_build_check(entry: &BuildCheckResult) -> Vec<String> {
     out
 }
 
-/// Capitalizes the first letter of each whitespace-separated word, matching
-/// Python's `str.title()` for the simple group-name case (ASCII words).
+/// Capitalizes the first letter of each whitespace-separated ASCII word.
 fn title_case(s: &str) -> String {
     s.split(' ')
         .map(|word| {

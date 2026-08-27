@@ -1,31 +1,25 @@
 //! Shell-safe argument quoting for remote command construction.
 //!
 //! Values parsed from testreport metadata (package specifiers, repository URLs
-//! and aliases) are placed on command lines run **as root** on reference hosts.
-//! Joining them raw is a command-injection vector. [`quote_args`] quotes each
-//! token so a value carrying shell metacharacters, whitespace, or a leading dash
-//! reaches the remote shell as a single literal argument.
+//! and aliases) are placed on command lines run **as root**, so [`quote_args`]
+//! quotes each token: one carrying shell metacharacters, whitespace or a leading
+//! dash reaches the remote shell as a single literal argument. This is the
+//! exec-boundary complement to typed ingestion validation (e.g.
+//! [`PackageSpec`](crate::package_spec::PackageSpec)) — defense-in-depth.
 //!
-//! This is the exec-boundary complement to typed ingestion validation
-//! (e.g. [`PackageSpec`](crate::package_spec::PackageSpec)); the two together
-//! give defense-in-depth. The helper is deliberately in `mtui-types` so both
-//! `mtui-hosts` and `mtui-testreport` (and the repository-URL sinks) can reuse
-//! it without a crate cycle.
-//!
-//! Quoting uses [`shlex`], the same crate the REPL uses for `run` argument
-//! joining, so the whole codebase quotes consistently.
+//! It lives in `mtui-types` so `mtui-hosts`, `mtui-testreport` and the
+//! repository-URL sinks can share it without a crate cycle, and uses [`shlex`],
+//! the crate the REPL already uses to join `run` arguments.
 
-/// Quotes each argument and joins them with single spaces.
+/// Quotes each argument and joins them with single spaces, so each survives the
+/// remote POSIX shell as exactly one word.
 ///
-/// Each element is escaped so it survives the remote POSIX shell as exactly one
-/// word. A `NUL` byte (which no shell can carry) causes `shlex` to refuse the
-/// join; such a token is dropped, which is safe: a `NUL`-bearing package name is
-/// never valid and must not reach the command line.
+/// A `NUL` byte (which no shell can carry) makes `shlex` refuse the join; such a
+/// token is dropped, which is safe — a `NUL`-bearing package name is never valid.
 pub fn quote_args<S: AsRef<str>>(args: &[S]) -> String {
     shlex::try_join(args.iter().map(AsRef::as_ref)).unwrap_or_else(|_| {
-        // `try_join` only fails on an interior NUL. Fall back to quoting the
-        // tokens that *can* be quoted, dropping any NUL-bearing token rather
-        // than emitting it unquoted.
+        // Quote the tokens that can be quoted, dropping the NUL-bearing one
+        // rather than emitting it unquoted.
         args.iter()
             .filter_map(|a| shlex::try_quote(a.as_ref()).ok().map(|c| c.into_owned()))
             .collect::<Vec<_>>()
@@ -50,9 +44,8 @@ mod tests {
     #[test]
     fn metacharacters_are_quoted_into_one_word() {
         let out = quote_args(&["foo; rm -rf /"]);
-        // The malicious value must be wrapped so the shell never sees a bare `;`
-        // command separator; shlex single-quotes it. Re-splitting must yield
-        // exactly one literal token.
+        // The shell must never see a bare `;` separator, and the value must
+        // re-split to exactly one literal token.
         assert!(out.starts_with('\''), "not quoted: {out:?}");
         assert_eq!(
             shlex::split(&out).unwrap(),
@@ -69,9 +62,8 @@ mod tests {
 
     #[test]
     fn option_like_arg_survives_as_single_token() {
-        // shlex leaves a leading-dash token bare (a dash is not shell-special);
-        // option-safety is enforced upstream at ingestion by `PackageSpec`. The
-        // quoter's contract is only that the value re-splits to one token.
+        // A dash is not shell-special, so shlex leaves the token bare: the
+        // quoter only promises one token, option-safety is `PackageSpec`'s job.
         let out = quote_args(&["--force"]);
         assert_eq!(shlex::split(&out).unwrap(), vec!["--force".to_owned()]);
     }

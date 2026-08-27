@@ -11,9 +11,9 @@
 //!   [`System`](mtui_types::System) and a `refhosts.yml` [`Host`](mtui_types::Host)
 //!   row, yielding a [`ProductDiff`].
 //!
-//! The `refhosts.yml` *row* schema ([`mtui_types::Host`] etc.) and the pure
-//! document loader ([`mtui_types::load_refhosts`]) live in `mtui-types`; this
-//! module builds the query/search layer on top.
+//! The row schema ([`mtui_types::Host`] etc.) and the pure document loader
+//! ([`mtui_types::load_refhosts`]) live in `mtui-types`; this module is the
+//! query/search layer on top.
 
 pub mod models;
 pub mod resolvers;

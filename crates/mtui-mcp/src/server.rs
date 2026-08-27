@@ -1,28 +1,25 @@
 //! The production MCP server handler.
 //!
-//! A hand-written [`ServerHandler`] whose [`list_tools`](ServerHandler::list_tools)
-//! and [`call_tool`](ServerHandler::call_tool) are built at *runtime* from the
-//! command [`Registry`], built dynamically rather than declared per tool, and
-//! synthesises the **full** tool surface via
-//! [`crate::tools`].
-//!
-//! On construction the server precomputes, once:
+//! A hand-written [`ServerHandler`] whose
+//! [`list_tools`](ServerHandler::list_tools) and
+//! [`call_tool`](ServerHandler::call_tool) surfaces are synthesised at *runtime*
+//! from the command [`Registry`] rather than declared per tool. On construction
+//! it precomputes, once:
 //!
 //! * the `rmcp::model::Tool` list (command tools from [`build_tools`] + the four
 //!   job tools from [`job_tool_descriptors`]), each carrying a `readOnlyHint`;
 //! * the tool-name → [`ToolRoute`] map from `tool_routes`, so a call dispatches
 //!   through the *same* engine entry the REPL uses.
 //!
-//! Deny-listed commands never enter the surface — [`build_tools`]
-//! filters them — so a `call_tool` for e.g. `shell`/`edit` resolves to no route
-//! and returns `method_not_found`.
+//! Deny-listed commands never enter the surface — [`build_tools`] filters them —
+//! so a `call_tool` for e.g. `shell`/`edit` resolves to no route and returns
+//! `method_not_found`.
 //!
-//! Scope: this handler serves **one** [`McpSession`]. Under stdio a single
-//! server instance serves the process's one client; under http the
-//! [`SessionRegistry`](crate::provider::SessionRegistry) mints a fresh server
-//! (hence a fresh isolated session) per MCP session. The testreport tools are
-//! hand-written (not synthesised from the registry); the job tools drive the
-//! session's background-job table.
+//! Scope: this handler serves **one** [`McpSession`]. Under stdio one server
+//! instance serves the process's one client; under http the
+//! [`SessionRegistry`](crate::provider::SessionRegistry) mints a fresh server —
+//! hence a fresh isolated session — per MCP session. The testreport tools are
+//! hand-written; the job tools drive the session's background-job table.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
@@ -54,10 +51,10 @@ use crate::tools::{
 
 /// The runtime-synthesised MCP server backing one [`McpSession`].
 ///
-/// Holds the command [`Registry`], the client's [`McpSession`], and the
+/// Holds the command [`Registry`], the client's [`McpSession`] and the
 /// precomputed tool list + route map. `McpSession` guards the underlying
-/// `Session` behind a mutex (because [`mtui_core::dispatch_argv`] needs
-/// `&mut Session` while `ServerHandler`'s methods take `&self`) and owns the
+/// `Session` behind a mutex — [`mtui_core::dispatch_argv`] needs
+/// `&mut Session` while `ServerHandler`'s methods take `&self` — and owns the
 /// capture sink for a command's display output.
 #[derive(Clone)]
 pub struct McpServer {
@@ -89,22 +86,20 @@ impl McpServer {
     /// Builds the server from a registry and the client's session (as resolved
     /// through a [`crate::provider::SessionProvider`]).
     ///
-    /// Synthesises the full tool surface once: command tools + the four job
-    /// tools, each converted to an `rmcp::model::Tool` with its `readOnlyHint`,
-    /// plus the route map used by [`call_tool`](ServerHandler::call_tool).
+    /// Synthesises the full tool surface once, plus the route map
+    /// [`call_tool`](ServerHandler::call_tool) uses.
     #[must_use]
     pub fn new(registry: Arc<Registry>, session: Arc<McpSession>) -> Self {
-        // Untracked: stdio (one process, one client) and unit tests. No registry
-        // membership, and a private last-touch atomic no sweeper reads.
+        // Untracked: stdio (one process, one client) and unit tests.
         Self::build(registry, session, None, Arc::new(AtomicU64::new(0)))
     }
 
     /// Builds a server tracked by the http [`SessionRegistry`](crate::provider::SessionRegistry).
     ///
-    /// Same synthesis as [`new`](Self::new), but the server carries the
-    /// registry's per-session [`SessionGuard`] (dropping it frees a
-    /// `session_cap` slot) and the shared `last_touch` timestamp the handler
-    /// bumps on every tool call so the idle sweeper only reaps quiet sessions.
+    /// Same synthesis as [`new`](Self::new), but carrying the registry's
+    /// per-session [`SessionGuard`] (dropping it frees a `session_cap` slot) and
+    /// the shared `last_touch` the handler bumps on every tool call, so the idle
+    /// sweeper only reaps quiet sessions.
     #[must_use]
     pub(crate) fn new_tracked(
         registry: Arc<Registry>,
@@ -128,10 +123,9 @@ impl McpServer {
         let transfer_descriptors = crate::transfer_tools::transfer_tool_descriptors();
         let mut routes = tool_routes(&registry);
 
-        // The whole synthesised surface: command tools + the four job tools +
-        // the hand-written testreport tools + the in-band get/put transfer
-        // tools (#434 — their command forms are on MCP_DENYLIST, which is what
-        // makes the same-name reuse here collision-free).
+        // Command tools + the four job tools + the hand-written testreport tools
+        // + the in-band get/put transfer tools (#434 — their command forms are on
+        // MCP_DENYLIST, which makes the same-name reuse here collision-free).
         let mut descriptors: Vec<ToolDescriptor> = command_descriptors
             .into_iter()
             .chain(job_descriptors)
@@ -189,9 +183,8 @@ impl McpServer {
 
     /// Record activity on this session (monotonic millis), for the idle sweeper.
     ///
-    /// Called at the top of the request handlers our server actually sees
-    /// (`call_tool` / `list_tools`). Under stdio / tests the atomic is private
-    /// and unobserved, so the bump is a cheap no-op consequence.
+    /// Called at the top of `call_tool` / `list_tools`; under stdio and tests the
+    /// atomic is private and unobserved.
     fn touch(&self) {
         self.last_touch
             .store(crate::provider::now_millis(), Ordering::Relaxed);
@@ -217,12 +210,10 @@ fn call_arguments(request: &CallToolRequestParams) -> Map<String, Value> {
 /// The rmcp-backed [`ProgressSink`]: sends `notifications/progress` back to the
 /// client for the in-flight tool call.
 ///
-/// Built in [`call_tool`](ServerHandler::call_tool) from the request's
-/// [`RequestContext`] — the cloned [`Peer`] plus the client-supplied
-/// `progressToken`. It exists only when the client actually requested progress
-/// (without a token there is nothing to notify, so we simply do not build the
-/// sink), and it swallows transport failures so a flaky client can
-/// never mask the command's result.
+/// Built in [`call_tool`](ServerHandler::call_tool) from the request's cloned
+/// [`Peer`] plus the client-supplied `progressToken`, so it exists only when the
+/// client actually requested progress. It swallows transport failures: a flaky
+/// client must never mask the command's result.
 struct PeerProgressSink {
     peer: Peer<RoleServer>,
     token: ProgressToken,
@@ -289,11 +280,9 @@ impl ServerHandler for McpServer {
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
 
-        // A slow foreground tool call emits `notifications/progress` heartbeats so
-        // the client does not time out. Build the sink only when the client
-        // supplied a `progressToken` (without one there is nothing to notify, so
-        // the heartbeat costs nothing). Job-control tools are fast and
-        // stay unwrapped.
+        // Heartbeats keep a slow foreground call from timing the client out.
+        // Only built when the client supplied a `progressToken`; job-control
+        // tools are fast and stay unwrapped.
         let sink: Option<PeerProgressSink> =
             context
                 .meta
@@ -309,10 +298,9 @@ impl ServerHandler for McpServer {
             return Ok(render(dispatch_job_tool(&self.session, &name, &kwargs).await).into());
         }
 
-        // A hand-written testreport tool: acts directly on the loaded checkout.
-        // Neither this nor the transfer branch below dispatches through the
-        // engine, so neither can hold `/var/lock/mtui.lock` — a plain drop on
-        // cancel strands nothing, and `cancellable` is the right tool.
+        // Acts directly on the loaded checkout. Neither this nor the transfer
+        // branch below dispatches through the engine, so neither can hold
+        // `/var/lock/mtui.lock`: a plain drop on cancel strands nothing.
         if self.testreport_tools.contains(&name) {
             let Some(result) = cancellable(
                 dispatch_testreport_tool(&self.session, &name, &kwargs, sink),
@@ -322,8 +310,7 @@ impl ServerHandler for McpServer {
             else {
                 return Err(cancelled_error(None));
             };
-            // Serialise the JSON object result to a single text block, matching
-            // the command tools' single-content-block wire shape.
+            // One text block, matching the command tools' wire shape.
             return Ok(render(result.map(|v| v.to_string())).into());
         }
 
@@ -340,11 +327,10 @@ impl ServerHandler for McpServer {
             return Ok(render(result.map(|v| v.to_string())).into());
         }
 
-        // A synthesised command tool: dispatch through the shared engine. This
-        // is the one branch that can hold `/var/lock/mtui.lock` on a real
-        // host, so a plain `cancellable` drop would strand it — `dispatch_tool`
-        // is handed the client's own token and runs the same two-stage
-        // cancel/abort/unlock sequence `job_cancel` uses.
+        // Dispatch through the shared engine. The one branch that can hold
+        // `/var/lock/mtui.lock` on a real host, so a plain `cancellable` drop
+        // would strand it: `dispatch_tool` gets the client's own token and runs
+        // the two-stage cancel/abort/unlock sequence `job_cancel` uses.
         if let Some(route) = self.routes.get(&name) {
             return match dispatch_tool(
                 &self.registry,
@@ -372,20 +358,18 @@ impl ServerHandler for McpServer {
 /// `biased` so a future that is already resolved is never starved by the
 /// cancellation branch. Returns `None` when `ct` fires first.
 ///
-/// This only ever fires for a client that explicitly cancels — on stdio
-/// (mtui-mcp's default transport) there is no per-request connection to drop,
-/// and rmcp's client-disconnect cancellation exists only on the stateless HTTP
-/// paths mtui declines (see `docs/src/mcp.md`). The job-control branch is
-/// deliberately left unwrapped: it is fast, and cancelling `job_cancel` itself
-/// makes no sense.
+/// This only ever fires for a client that explicitly cancels: on stdio there is
+/// no per-request connection to drop, and rmcp's client-disconnect cancellation
+/// exists only on the stateless HTTP paths mtui declines (`docs/src/mcp.md`).
+/// The job-control branch stays unwrapped — it is fast, and cancelling
+/// `job_cancel` makes no sense.
 ///
-/// Used for the testreport and transfer branches only. Neither dispatches
-/// through the engine, so neither can hold `/var/lock/mtui.lock` — dropping
-/// `fut` here strands nothing. The synthesised-command branch *can* hold that
-/// lock and instead routes through
-/// [`McpSession::run_command_client_cancellable`](crate::session::McpSession::run_command_client_cancellable),
-/// which cancels cooperatively, gives the dispatch a grace period, and only
-/// then force-aborts and releases the lock on its behalf.
+/// For the testreport and transfer branches only: neither dispatches through the
+/// engine, so dropping `fut` strands no `/var/lock/mtui.lock`. The
+/// synthesised-command branch *can* hold that lock and routes through
+/// [`McpSession::run_command_client_cancellable`](crate::session::McpSession::run_command_client_cancellable)
+/// instead, which cancels cooperatively, allows a grace period, and only then
+/// force-aborts and releases the lock on the dispatch's behalf.
 async fn cancellable<T>(fut: impl Future<Output = T>, ct: &CancellationToken) -> Option<T> {
     tokio::select! {
         biased;
@@ -396,18 +380,15 @@ async fn cancellable<T>(fut: impl Future<Output = T>, ct: &CancellationToken) ->
 
 /// The error returned in place of a cancelled call's result.
 ///
-/// rmcp has already dropped this request's id from its cancellation-token
-/// pool once the notification arrives, so the caller-visible response is
-/// discarded either way (`service.rs`'s "dropping response for cancelled
-/// request"); returning an explicit error here — rather than fabricating a
-/// success — keeps the code honest about what happened.
+/// rmcp drops this request's id from its cancellation-token pool once the
+/// notification arrives, so the response is discarded either way; an explicit
+/// error rather than a fabricated success keeps the code honest.
 ///
 /// `unlock` is `Some` only for a force-aborted synthesised command tool
 /// (`dispatch_tool` returning [`ToolOutcome::Aborted`]); its
-/// [`forced_abort_note`] is appended so the client learns a host operation
-/// lock may have been left behind, not just that the call was cancelled. The
-/// testreport/transfer branches (which cannot hold that lock) always pass
-/// `None`, leaving the message exactly as it read before this existed.
+/// [`forced_abort_note`] is appended so the client learns a host operation lock
+/// may have been left behind, not merely that the call was cancelled. The
+/// testreport/transfer branches cannot hold that lock and always pass `None`.
 fn cancelled_error(unlock: Option<&AbortUnlock>) -> McpError {
     tracing::info!("MCP tool call cancelled by client notification");
     let message = match unlock {
@@ -451,8 +432,7 @@ mod tests {
 
     #[test]
     fn full_profile_keeps_the_whole_surface() {
-        // Default config == full profile, no overrides: every synthesised tool
-        // plus job + testreport tools is present, and routes/tracking sets match.
+        // Full profile, no overrides: every tool present, routes in lockstep.
         let server = server_with(Config::default());
         let names = tool_names(&server);
         assert!(names.iter().any(|n| n == "run"));
@@ -473,7 +453,7 @@ mod tests {
         let server = server_with(config);
         let names = tool_names(&server);
 
-        // A core command stays; a non-core one is gone from the list *and* its route.
+        // A non-core command is gone from the list *and* its route.
         assert!(names.iter().any(|n| n == "run"), "core tool kept");
         assert!(
             !names.iter().any(|n| n == "set_log_level"),
@@ -526,9 +506,8 @@ mod tests {
     #[test]
     fn supported_protocol_versions_excludes_the_stateless_revision() {
         // 2026-07-28 is served statelessly regardless of `legacy_session_mode`
-        // (rmcp classifies it from the request, not the config), so it must
-        // never be among the versions a client can negotiate to. Anti-vacuity:
-        // also assert the latest legacy revision *is* present, so an
+        // (rmcp classifies it from the request), so it must never be negotiable.
+        // Anti-vacuity: the latest legacy revision must be present, so an
         // accidentally emptied list cannot green this.
         let server = server_with(Config::default());
         let versions = server.supported_protocol_versions();
@@ -538,8 +517,7 @@ mod tests {
 
     #[test]
     fn schemas_are_slimmed_on_the_wire() {
-        // No tool schema carries a `title` keyword or a bare null arm after
-        // construction — the slimming pass ran over the live surface.
+        // The slimming pass ran over the live surface.
         let server = server_with(Config::default());
         for tool in server.tools.iter() {
             let blob = serde_json::to_string(&*tool.input_schema).unwrap();
@@ -556,15 +534,12 @@ mod tests {
         }
     }
 
-    /// The property that matters for `notifications/cancelled` support on a
-    /// synthesised command tool: a body blocked mid host-op that never
-    /// observes the cooperative signal is the **forced** case —
-    /// `run_command_client_cancellable` gives it `CANCEL_GRACE`, then
-    /// force-aborts it, releasing the `CommandLock` it was holding rather than
-    /// stranding it. Drives `McpSession` directly — a real
-    /// `RequestContext<RoleServer>` needs a live `Peer`, which is awkward to
-    /// fake offline; the `call_tool` wiring around this helper is covered by
-    /// inspection.
+    /// The **forced** case of `notifications/cancelled` on a synthesised command
+    /// tool: a body blocked mid host-op never observes the cooperative signal, so
+    /// `run_command_client_cancellable` gives it `CANCEL_GRACE`, then force-aborts
+    /// it, releasing the `CommandLock` rather than stranding it. Drives
+    /// `McpSession` directly, since a real `RequestContext<RoleServer>` needs a
+    /// live `Peer`; the `call_tool` wiring around it is covered by inspection.
     #[tokio::test]
     async fn cancelling_a_dispatch_drops_the_future_and_releases_its_command_lock() {
         use std::sync::Mutex as StdMutex;
@@ -576,9 +551,8 @@ mod tests {
 
         let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
 
-        /// A body blocked mid host-op that never observes any cancellation
-        /// signal itself — only a forced abort (dropping its future) can stop
-        /// it, exactly the shape the forced stage exists to handle.
+        /// A body blocked mid host-op that observes no cancellation signal: only
+        /// a forced abort can stop it, the shape the forced stage exists for.
         struct Stubborn(StdMutex<Option<tokio::sync::oneshot::Sender<()>>>);
         #[async_trait::async_trait]
         impl Command for Stubborn {
@@ -640,9 +614,8 @@ mod tests {
         let err = cancelled_error(Some(&unlock));
         assert!(err.message.contains("forced abort"), "got: {}", err.message);
 
-        // The exclusive-path lock the parked probe held is released once its
-        // future is dropped: a follow-up dispatch completes rather than
-        // queuing forever behind a stranded hold.
+        // Dropping the parked probe's future releases the exclusive-path lock it
+        // held, so a follow-up dispatch completes instead of queuing forever.
         let out = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             session.run_command(&registry, "whoami", &[]),

@@ -1,22 +1,17 @@
 //! Formatted command output (`CommandPromptDisplay`) + color mode + pager.
 //!
-//! The `list_*`
-//! family (bugs, history, host status, locks, sessions, timeout, versions,
-//! products, update repos) plus `show_log`
-//! gives the command bodies their output seam.
-//!
-//! Output is captured through a boxed [`std::io::Write`] sink so tests can
+//! The `list_*` family (bugs, history, host status, locks, sessions, timeout,
+//! versions, products, update repos) plus `show_log` is the command bodies'
+//! output seam. Output goes through a boxed [`std::io::Write`] sink so tests can
 //! snapshot it and the REPL/MCP can point it at stdout or a buffer.
 //!
-//! **Color** is a three-way [`ColorMode`] (`Auto`/`Always`/`Never`) resolved at
-//! call time via [`ColorMode::resolve`], with the precedence: `Always` →
-//! `Never` → `NO_COLOR` → `COLOR=never|always` → `stderr.is_terminal()`.
+//! **Color** is a three-way [`ColorMode`] resolved at call time via
+//! [`ColorMode::resolve`]: `Always` → `Never` → `NO_COLOR` →
+//! `COLOR=never|always` → `stderr.is_terminal()`.
 //!
-//! **Timestamps:** `list_history`
-//! formats timestamps in **UTC** rather than local time. Local time would
-//! require chrono's `clock` feature (pulling `iana-time-zone`, against the
-//! no-runtime-deps goal) and make snapshot output timezone-dependent. UTC
-//! keeps the crate std-only and tests deterministic.
+//! **Timestamps** are **UTC**: local time would need chrono's `clock` feature
+//! (pulling `iana-time-zone`, against the no-runtime-deps goal) and make
+//! snapshot output timezone-dependent.
 
 use std::io::{IsTerminal, Write};
 
@@ -35,11 +30,10 @@ pub(crate) type PackageVersions = (String, Vec<RPMVersion>);
 /// A version-history group: the hosts it covers and their package versions.
 pub(crate) type VersionGroup = (Vec<HostSystem>, Vec<PackageVersions>);
 
-/// Already-resolved lock state for a host, as displayed by
-/// `list_locks`.
+/// Already-resolved lock state for a host, as displayed by `list_locks`.
 ///
-/// The lock accessors are async `&mut self` in `mtui-hosts`; callers do
-/// that I/O and hand the resolved values here so display stays sync and
+/// The lock accessors are async `&mut self` in `mtui-hosts`; callers do that I/O
+/// and hand the resolved values here so display stays sync and
 /// snapshot-testable.
 #[derive(Debug, Clone, Default)]
 pub struct LockStatus {
@@ -55,10 +49,8 @@ pub struct LockStatus {
     pub(crate) comment: String,
 }
 
-/// Whether ANSI color escapes are emitted.
-///
-/// A three-way color choice (`"auto" | "always" |
-/// "never"`). The active decision is made by [`resolve`](ColorMode::resolve).
+/// Whether ANSI color escapes are emitted (`auto`/`always`/`never`); the active
+/// decision is made by [`resolve`](ColorMode::resolve).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorMode {
     /// Emit color iff `stderr` is a TTY, unless overridden by `NO_COLOR` /
@@ -96,7 +88,7 @@ impl ColorMode {
     }
 
     /// Pure decision core for `Auto`, split out so the env/TTY precedence is
-    /// unit-testable without touching process-global state.
+    /// unit-testable without process-global state.
     #[must_use]
     fn resolve_auto(no_color: bool, color: Option<&str>, is_tty: bool) -> bool {
         if no_color {
@@ -128,9 +120,9 @@ impl CommandPromptDisplay {
 
     /// Builds a display writing to stdout.
     ///
-    /// Color defaults to [`ColorMode::Never`]; the REPL flips it to the resolved
-    /// [`ColorMode`] per the `--color` flag via [`set_color`](Self::set_color)
-    /// right after building the session (`mtui-cli::main`).
+    /// Color defaults to [`ColorMode::Never`]; `mtui-cli::main` flips it to the
+    /// `--color`-resolved mode via [`set_color`](Self::set_color) right after
+    /// building the session.
     #[must_use]
     pub(crate) fn stdout() -> Self {
         Self {
@@ -154,10 +146,9 @@ impl CommandPromptDisplay {
     /// swallowed: display helpers never surface stdout write failures.
     ///
     /// The write holds a [`mtui_hosts::suspend`] guard so a live TTY spinner
-    /// erases its current frame first and the output lands on a clean line.
-    /// A strict no-op beyond taking the
-    /// paint lock when no spinner is active (off a TTY, tests), so buffered /
-    /// snapshot output is unaffected.
+    /// erases its frame first and the output lands on a clean line; with no
+    /// spinner active it only takes the paint lock, leaving snapshot output
+    /// unaffected.
     pub fn println(&mut self, msg: &str) {
         let _quiet = mtui_hosts::suspend();
         let _ = writeln!(self.output, "{msg}");
@@ -171,11 +162,10 @@ impl CommandPromptDisplay {
         let _ = write!(self.output, "{msg}{eol}");
     }
 
-    /// Prints a per-template banner used to label fan-out output.
+    /// Prints the per-template banner labelling fan-out output.
     ///
-    /// Printed before each template's output block when a command fans out
-    /// across more than one loaded template, so the user can tell which template
-    /// produced which result. Upstream renders exactly `=== {rrid} ===`.
+    /// Exactly `=== {rrid} ===`, printed before each template's output block so
+    /// the user can tell which template produced which result.
     pub(crate) fn template_banner(&mut self, rrid: &str) {
         self.println(&format!("=== {rrid} ==="));
     }
@@ -222,9 +212,9 @@ impl CommandPromptDisplay {
 
     /// Displays a list of bugs and Jira issues.
     ///
-    /// Formats: sorted ids, the `[""]` empty-sentinel
-    /// ("No bugs…"/"No Jira issues…"), the `Buglist:` query URL, and per-item
-    /// `Bug #{id}: {summary}` / `Jira #{id}: {summary}` blocks with tracker URLs.
+    /// Sorted ids, the `[""]` empty-sentinel ("No bugs…"/"No Jira issues…"), the
+    /// `Buglist:` query URL, and per-item `Bug #{id}: {summary}` /
+    /// `Jira #{id}: {summary}` blocks with tracker URLs.
     pub(crate) fn list_bugs(
         &mut self,
         bugs: &std::collections::BTreeMap<String, String>,
@@ -264,10 +254,9 @@ impl CommandPromptDisplay {
 
     /// Displays the command history for a host.
     ///
-    /// Reverses `lines`, splits each on the
-    /// first two colons (`when:who:event`, colons preserved in `event`), skips
-    /// malformed lines, and formats `when` (epoch seconds) as
-    /// `%A, %d.%m.%Y %H:%M`. See the module doc for the UTC note.
+    /// Reverses `lines`, splits each on the first two colons (`when:who:event`,
+    /// colons preserved in `event`), skips malformed lines, and formats `when`
+    /// (epoch seconds) as `%A, %d.%m.%Y %H:%M` in UTC (see the module doc).
     pub(crate) fn list_history(&mut self, hostname: &str, system: &System, lines: &[String]) {
         self.println(&format!("history from {hostname} ({system}):"));
         for line in lines.iter().rev() {
@@ -293,10 +282,8 @@ impl CommandPromptDisplay {
         self.println("");
     }
 
-    /// Displays the status of a host.
-    ///
-    /// Formats: colored `state` label (green/red),
-    /// `transactional`/`standard` label, and the fixed-width layout line.
+    /// Displays the status of a host: colored `state` label (green/red),
+    /// `transactional`/`standard` label, in a fixed-width layout line.
     pub(crate) fn list_host(
         &mut self,
         hostname: &str,
@@ -321,10 +308,8 @@ impl CommandPromptDisplay {
 
     /// Displays the lock status of a host.
     ///
-    /// Takes an already-resolved [`LockStatus`]
-    /// (the lock accessors are async `&mut self` in `mtui-hosts`;
-    /// callers do the I/O and pass the resolved values in). When
-    /// [`LockStatus::is_mine`] is set, "me" is shown in place of `locked_by`.
+    /// Takes an already-resolved [`LockStatus`]; "me" replaces `locked_by` when
+    /// [`LockStatus::is_mine`] is set.
     pub(crate) fn list_locks(&mut self, hostname: &str, system: &System, lock: &LockStatus) {
         let sys = system.to_string();
         if lock.is_locked {
@@ -356,10 +341,10 @@ impl CommandPromptDisplay {
 
     /// Displays the version history of packages.
     ///
-    /// `hosts_pvs` maps a group of hostnames
-    /// (with their systems) to `(package, versions)` pairs; when more than one
-    /// group is present, each is prefixed with a "version history from:" header.
-    /// Versions are shown newest-first as an indented ladder.
+    /// `hosts_pvs` maps a group of hostnames (with their systems) to
+    /// `(package, versions)` pairs; with more than one group each is prefixed
+    /// with a "version history from:" header. Versions form a newest-first
+    /// indented ladder.
     pub(crate) fn list_versions(&mut self, hosts_pvs: &[VersionGroup]) {
         let multi = hosts_pvs.len() > 1;
         for (hosts, pvs) in hosts_pvs {
@@ -393,10 +378,8 @@ impl CommandPromptDisplay {
         self.println("");
     }
 
-    /// Displays the update repositories.
-    ///
-    /// `repos` pairs a product with its
-    /// repo URL/path string.
+    /// Displays the update repositories; `repos` pairs a product with its repo
+    /// URL/path string.
     pub(crate) fn list_update_repos(&mut self, repos: &[(SystemProduct, String)]) {
         for (p, r) in repos {
             let product = Self::green(self, "Product");
@@ -414,10 +397,9 @@ impl CommandPromptDisplay {
 
     /// Displays the command log for a host through an arbitrary `sink`.
     ///
-    /// Each log entry is
-    /// `(cmdline, stdout, stderr, exitcode)`; the sink is called once per output
-    /// line (it appends its own newline). `window` is `Some((1-based first
-    /// entry, total before windowing))` when paged.
+    /// Each entry is `(cmdline, stdout, stderr, exitcode)`; the sink is called
+    /// once per output line (appending its own newline). `window` is
+    /// `Some((1-based first entry, total before windowing))` when paged.
     pub(crate) fn show_log(
         hostname: &str,
         hostlog: &[(String, String, String, i32)],
@@ -457,18 +439,13 @@ impl Default for CommandPromptDisplay {
 
 /// Displays long text, non-interactively.
 ///
-/// The non-interactive paging contract:
-/// * `interactive == false` and `writer` is `None` → no-op (no output, no
-///   error).
-/// * `interactive == false` and `writer` is `Some` → each line is forwarded to
-///   the writer with trailing `\r`/`\n` stripped (the MCP / headless path).
+/// With no `writer` this is a no-op; with one, every line is forwarded with
+/// trailing `\r`/`\n` stripped (the MCP / headless path).
 ///
 /// `interactive == true` is **not** handled here — the REPL uses the async
-/// [`page_interactive`] driver instead, which reads Enter/`q` through the
-/// session's [`Prompter`](mtui_hosts::Prompter). For safety, if a caller still
-/// passes `interactive == true` with a `writer`, this forwards every line
-/// unpaged (never blocks on a read it cannot perform); with no `writer` it is a
-/// no-op.
+/// [`page_interactive`] driver, which reads Enter/`q` through the session's
+/// [`Prompter`](mtui_hosts::Prompter). Passing it here still forwards unpaged
+/// rather than blocking on a read this function cannot perform.
 pub(crate) fn page(text: &[String], interactive: bool, writer: Option<&mut dyn FnMut(&str)>) {
     let _ = interactive;
     if let Some(w) = writer {
@@ -478,12 +455,11 @@ pub(crate) fn page(text: &[String], interactive: bool, writer: Option<&mut dyn F
     }
 }
 
-/// Removes ANSI escape codes from `text`.
+/// Removes ANSI escape codes from `text`: a bare `ESC` (`\x1b`), the
+/// `[<params>m` / `[<params>A` SGR/cursor sequences, and `[K`.
 ///
-/// Strips a bare `ESC` (`\x1b`), the
-/// `[<params>m` / `[<params>A` SGR/cursor sequences, and the `[K` erase-line
-/// sequence. Applied to each line before it is width-wrapped in the interactive
-/// pager so escape bytes do not inflate the visible column count.
+/// Applied per line before width-wrapping in the interactive pager, so escape
+/// bytes do not inflate the visible column count.
 #[must_use]
 fn filter_ansi(text: &str) -> String {
     use std::sync::OnceLock;
@@ -507,13 +483,11 @@ pub const DEFAULT_TERM_ROWS: u16 = 24;
 
 /// Returns the terminal size as `(cols, rows)`.
 ///
-/// Reads `TIOCGWINSZ` via `ioctl`,
-/// falling back to the `ACCTEST_COLS`/`ACCTEST_ROWS` environment pair (used by
-/// the acceptance harness and by unit tests, which have no controlling TTY).
-///
-/// The tuple order is **`(cols, rows)`** on every path, pinned by test.
-// `ioctl(TIOCGWINSZ)` is the only portable way to read the tty geometry;
-// the block below is the sole `unsafe` use.
+/// Reads `TIOCGWINSZ` via `ioctl`, falling back to the
+/// `ACCTEST_COLS`/`ACCTEST_ROWS` pair used by the acceptance harness and by unit
+/// tests, which have no controlling TTY. The tuple order is **`(cols, rows)`**
+/// on every path, pinned by test.
+// `ioctl(TIOCGWINSZ)` is the only portable way to read the tty geometry.
 #[allow(unsafe_code)]
 #[must_use]
 fn termsize() -> (usize, usize) {
@@ -534,8 +508,8 @@ fn termsize() -> (usize, usize) {
     termsize_from_env().unwrap_or((DEFAULT_TERM_COLS as usize, DEFAULT_TERM_ROWS as usize))
 }
 
-/// Pure `ACCTEST_COLS`/`ACCTEST_ROWS` fallback, split out so the `(cols, rows)`
-/// ordering is unit-testable without a TTY. Returns `None` unless both parse.
+/// The `ACCTEST_COLS`/`ACCTEST_ROWS` fallback, split out so the `(cols, rows)`
+/// ordering is unit-testable without a TTY. `None` unless both parse.
 #[must_use]
 fn termsize_from_env() -> Option<(usize, usize)> {
     let cols = std::env::var("ACCTEST_COLS").ok()?.parse().ok()?;
@@ -555,9 +529,9 @@ enum PageStep {
 /// Prints up to `height - 1` display rows (ANSI-filtered, wrapped to `width`
 /// columns) from `text` via `emit`, and returns the unconsumed remainder.
 ///
-/// Each logical line is `filter_ansi`'d
-/// then hard-wrapped into `width`-column chunks; an empty line still occupies one
-/// row; the screen holds `height - 1` rows (one reserved for the prompt).
+/// Each logical line is `filter_ansi`'d then hard-wrapped into `width`-column
+/// chunks; an empty line still occupies one row; one row is reserved for the
+/// prompt.
 fn page_screen(
     text: &[String],
     width: usize,
@@ -570,7 +544,6 @@ fn page_screen(
 
     while idx < text.len() {
         let line = filter_ansi(text[idx].trim_end_matches(['\r', '\n']));
-        // Wrap into width-column chunks by char boundary; an empty line is one row.
         let mut chunks: Vec<String> = Vec::new();
         let chars: Vec<char> = line.chars().collect();
         let mut c = 0;
@@ -584,7 +557,7 @@ fn page_screen(
         }
 
         if chunks.len() > rows_left {
-            // Print what fits; carry the rest of this same line into the remainder.
+            // Print what fits; carry this line's tail into the remainder.
             for chunk in chunks.iter().take(rows_left) {
                 emit(chunk);
             }
@@ -615,11 +588,10 @@ fn page_screen(
 /// Interactive TTY pager: prints `text` a screen at a time, blocking on
 /// `Press Enter to continue... (q to quit)` between screens.
 ///
-/// Reads the continue/quit answer through the session's serialised
-/// [`Prompter`](mtui_hosts::Prompter) (so a live spinner is suspended and
-/// concurrent host prompts stay serialised); typing `q` stops early. When no
-/// prompter is available (should not happen in the REPL, but keeps the function
-/// total) it prints everything without prompting.
+/// Reads the answer through the session's serialised
+/// [`Prompter`](mtui_hosts::Prompter), so a live spinner is suspended and
+/// concurrent host prompts stay serialised; `q` stops early. With no prompter
+/// (keeping the function total) it prints everything unprompted.
 pub(crate) async fn page_interactive(
     text: &[String],
     display: &mut CommandPromptDisplay,
@@ -641,13 +613,12 @@ pub(crate) async fn page_interactive(
             PageStep::More(rest) => {
                 remaining = rest;
                 let Some(p) = prompter else {
-                    // No TTY read available: dump the rest unpaged and stop.
+                    // No TTY read available: dump the rest unpaged.
                     for line in &remaining {
                         display.println(&filter_ansi(line.trim_end_matches(['\r', '\n'])));
                     }
                     return;
                 };
-                // `q` quits; Enter (or anything else) continues.
                 let answer = p
                     .ask("Press Enter to continue... (q to quit)")
                     .await
@@ -997,7 +968,6 @@ mod tests {
     fn page_non_interactive_no_writer_is_noop() {
         let text = vec!["a".to_owned(), "b".to_owned(), "c".to_owned()];
         page(&text, false, None);
-        // No panic, input untouched (it is borrowed immutably).
         assert_eq!(text, vec!["a", "b", "c"]);
     }
 
@@ -1026,7 +996,6 @@ mod tests {
         assert_eq!(filter_ansi("a\u{1b}b"), "ab");
         assert_eq!(filter_ansi("a\u{1b}[2Ab"), "ab");
         assert_eq!(filter_ansi("a\u{1b}[Kb"), "ab");
-        // Plain text is untouched.
         assert_eq!(filter_ansi("plain"), "plain");
     }
 
@@ -1034,9 +1003,9 @@ mod tests {
     #[serial_test::serial(env)]
     #[allow(unsafe_code)]
     fn termsize_from_env_returns_cols_then_rows() {
-        // The fallback must return (cols, rows) — never the transposed (rows, cols).
-        // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial(env)]`
-        // makes the mutation exclusive.
+        // The fallback must return (cols, rows), never the transposed pair.
+        // `set_var` is `unsafe` in edition 2024; `#[serial(env)]` makes it
+        // exclusive.
         unsafe {
             std::env::set_var("ACCTEST_COLS", "80");
             std::env::set_var("ACCTEST_ROWS", "24");
@@ -1093,9 +1062,8 @@ mod tests {
 
     #[test]
     fn page_screen_carries_overflow_of_a_single_wrapped_line() {
-        // A line longer than one screen's worth of rows carries its tail forward.
-        // width=2, height=3 → 2 rows/screen. "abcdef" = ab|cd|ef → prints ab,cd;
-        // carries "ef".
+        // width=2, height=3 → 2 rows/screen. "abcdef" = ab|cd|ef → prints ab,cd
+        // and carries "ef" forward.
         let text = vec!["abcdef".to_owned()];
         let mut out: Vec<String> = Vec::new();
         let step = page_screen(&text, 2, 3, &mut |l| out.push(l.to_owned()));
@@ -1118,8 +1086,6 @@ mod tests {
     #[allow(unsafe_code)]
     async fn page_interactive_quits_on_q_after_first_screen() {
         // Force a tiny screen so paging actually happens: 2 rows/screen.
-        // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial(env)]`
-        // makes the mutation exclusive.
         unsafe {
             std::env::set_var("ACCTEST_COLS", "80");
             std::env::set_var("ACCTEST_ROWS", "3");
@@ -1144,7 +1110,6 @@ mod tests {
     #[serial_test::serial(env)]
     #[allow(unsafe_code)]
     async fn page_interactive_enter_pages_to_end() {
-        // `set_var`/`remove_var` are `unsafe` in edition 2024; serialised on `env`.
         unsafe {
             std::env::set_var("ACCTEST_COLS", "80");
             std::env::set_var("ACCTEST_ROWS", "3");
@@ -1167,7 +1132,6 @@ mod tests {
     #[serial_test::serial(env)]
     #[allow(unsafe_code)]
     async fn page_interactive_without_prompter_dumps_all() {
-        // `set_var`/`remove_var` are `unsafe` in edition 2024; serialised on `env`.
         unsafe {
             std::env::set_var("ACCTEST_COLS", "80");
             std::env::set_var("ACCTEST_ROWS", "3");

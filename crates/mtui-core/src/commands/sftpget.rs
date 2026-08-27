@@ -45,7 +45,6 @@ impl Command for SftpGet {
             .expect("filename is required")
             .clone();
 
-        // Local target: {report_wd}/downloads/<name>.
         let wd = session
             .metadata()
             .base()
@@ -67,11 +66,10 @@ impl Command for SftpGet {
         let targets = session.targets_mut();
         targets.sftp_get(remote_str, &local).await;
 
-        // Per-host download outcomes: `sftp_get` suffixes the local path with the
-        // hostname (`{local}.{host}`), so report that concrete path and fail if
-        // any enabled host's transfer errored — an MCP call must never silently
-        // "succeed" on a download that never happened. `None` (disabled /
-        // not-attempted) hosts are skipped.
+        // `sftp_get` suffixes the local path with the hostname
+        // (`{local}.{host}`), so report that concrete path. Any errored transfer
+        // must fail the command, so an MCP call never silently succeeds on a
+        // download that never happened; `None` hosts are skipped.
         let local_label = local.display().to_string();
         let mut outcomes: Vec<(String, Result<(), String>)> = Vec::new();
         for host in targets.names() {
@@ -126,8 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_remote_without_filename_errors() {
-        // A root-only remote path has no file name component → clear error
-        // before any transfer is attempted.
+        // No file-name component, so it must error before any transfer.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&SftpGet, &["/"]);
         let err = SftpGet.call(&mut session, &args).await.unwrap_err();
@@ -136,8 +133,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_report_path_errors() {
-        // The fixture report carries no checkout path → report_wd errors →
-        // surfaced clearly rather than attempting a transfer.
+        // No checkout path, so `report_wd` errors before any transfer.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&SftpGet, &["/remote/file.log"]);
         let err = SftpGet.call(&mut session, &args).await.unwrap_err();

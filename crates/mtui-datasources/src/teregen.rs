@@ -8,26 +8,20 @@
 //! `metadata.json` when the API is unreachable or doesn't carry a field.
 //!
 //! Most reads are best-effort: any failure returns `None` so a TeReGen hiccup
-//! never breaks the surrounding command. The exception is
-//! [`updates`](TeReGen::updates), which returns a `Result` so its caller can tell
-//! a genuinely-empty queue apart from an unreachable TeReGen. The base URL comes
-//! from the
-//! `[teregen] api` option (default `https://qam.suse.de/api/v1`);
-//! [`TeReGen::new`] takes the base URL explicitly rather than reading
-//! `config.teregen_api` itself (mirroring the [`Gitea`](crate::gitea) client's
-//! constructor) — callers pass `session.config.teregen_api` at the point of
-//! use.
+//! never breaks the surrounding command. Two exceptions:
+//! [`updates`](TeReGen::updates) returns a `Result`, so its caller can tell a
+//! genuinely-empty queue apart from an unreachable TeReGen; and the write
+//! [`regenerate`](TeReGen::regenerate) returns `None` only when TeReGen is
+//! *unreachable*, `{"error": …}` when the server *refuses*.
 //!
-//! The one documented exception is [`regenerate`](TeReGen::regenerate) (a
-//! write): it returns `None` only when TeReGen is *unreachable*, and
-//! `{"error": …}` when the server *refuses*, so callers can tell the two apart.
+//! The base URL comes from the `[teregen] api` option (default
+//! `https://qam.suse.de/api/v1`), but [`TeReGen::new`] takes it explicitly
+//! rather than reading `config.teregen_api` itself, as the
+//! [`Gitea`](crate::gitea) constructor does.
 //!
-//! ## Interruptible waiting
-//!
-//! `wait_for_template` is `async`, and the
-//! inter-poll wait uses [`tokio::time::sleep`], polling `should_stop` in small
-//! steps so cancellation takes effect promptly rather than after a full
-//! interval.
+//! `wait_for_template`'s inter-poll wait polls `should_stop` in small
+//! [`tokio::time::sleep`] steps, so cancellation takes effect promptly rather
+//! than after a full interval.
 
 use std::time::Duration;
 
@@ -43,15 +37,8 @@ use crate::http::{
 /// [`TeReGen::regenerate_and_wait`]).
 ///
 /// Exactly one of the flags is meaningful at a time; `ok` is the only success.
-/// The fields carry just enough for a caller to message the user and decide
-/// whether to reload:
-///
-/// - `ok`: the job finished and the template is built.
-/// - `unreachable`: TeReGen could not be asked at all.
-/// - `error`: the server refused the request (e.g. the template was edited).
-/// - `state` / `minion_error`: set when the job ran but did not finish (timed
-///   out, was cancelled, or failed).
-/// - `job`: the enqueued job id, for logging.
+/// Carries just enough for a caller to message the user and decide whether to
+/// reload.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RegenOutcome {
     /// The job finished and the template is built.
@@ -79,9 +66,6 @@ impl TeReGen {
     /// Build a client targeting `apiurl`, deriving the TLS posture from
     /// `config.ssl_verify`.
     ///
-    /// The base URL is passed explicitly rather than read from
-    /// `config.teregen_api`; callers pass that field at the point of use.
-    ///
     /// # Errors
     ///
     /// Returns [`HttpError`] if the shared HTTP client cannot be built (e.g. a
@@ -98,7 +82,7 @@ impl TeReGen {
     /// Build a client from an already-constructed [`HttpClient`], bypassing
     /// [`Config`].
     ///
-    /// The composition-root / test seam: it lets a caller inject a client whose
+    /// The composition-root / test seam, letting a caller inject a client whose
     /// TLS posture (or base host, under `wiremock`) is already fixed.
     #[must_use]
     pub fn with_client(http: HttpClient, apiurl: &str) -> Self {
@@ -109,9 +93,7 @@ impl TeReGen {
     }
 
     /// GET `path` and return the decoded JSON body, or `None` on any transport
-    /// failure, non-2xx status, or invalid JSON.
-    ///
-    /// Best-effort, so callers never see an error.
+    /// failure, non-2xx status, or invalid JSON — callers never see an error.
     async fn get(&self, path: &str, query: &[(&str, String)]) -> Option<Value> {
         let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         // Encode the query ourselves: reqwest's `.query()` needs the `query`
@@ -123,10 +105,9 @@ impl TeReGen {
             url.push_str(&qs);
         }
         let request = self.http.inner().get(&url).timeout(HTTP_TIMEOUT.1);
-        // Both arms convert before logging: a raw `reqwest::Error` renders the
-        // request URL verbatim, and `error_for_status`'s carries the
-        // *redirect-followed* URL, which can hold credentials a `Location`
-        // header put back (#431).
+        // Both arms convert before logging: `error_for_status`'s raw error
+        // renders the *redirect-followed* URL, which can hold credentials a
+        // `Location` header put back (#431).
         let response = match request.send().await {
             Ok(r) => r,
             Err(e) => {
@@ -159,12 +140,11 @@ impl TeReGen {
 
     /// GET `path`, surfacing failures as `Err`.
     ///
-    /// The fallible sibling of [`get`](Self::get): a transport failure, a
-    /// non-2xx status, or invalid JSON returns [`TeReGenError::Fetch`] instead
-    /// of being folded to `None`, so a caller can distinguish "unreachable"
-    /// from a genuinely-empty successful response. The description is URL-free
-    /// because every `reqwest::Error` is converted to [`HttpError`] — which
-    /// strips the URL — before it is stringified (#431).
+    /// The fallible sibling of [`get`](Self::get): failures become
+    /// [`TeReGenError::Fetch`] instead of `None`, so a caller can distinguish
+    /// "unreachable" from a genuinely-empty successful response. The description
+    /// is URL-free because every `reqwest::Error` is converted to [`HttpError`]
+    /// — which strips the URL — before it is stringified (#431).
     async fn try_get(&self, path: &str, query: &[(&str, String)]) -> Result<Value, TeReGenError> {
         let mut url = format!("{}/{}", self.base, path.trim_start_matches('/'));
         let qs = build_query_string(query);
@@ -217,29 +197,14 @@ impl TeReGen {
         d.get("checkers").cloned()
     }
 
-    /// The unreleased update queue (live from SMELT).
-    ///
-    /// Optional `review_group` / `status` narrow the queue server-side.
-    ///
-    /// Assignment exposure (each maps to a query param of the same name):
-    ///
-    /// - `assignee`: keep only updates assigned to that user (any qam group);
-    ///   implies server-side `status=testing`.
-    /// - `unassigned`: keep only updates with no assignee; implies
-    ///   `status=testing`.
-    /// - `with_assignment`: include assignment on every row without filtering;
-    ///   implies `status=testing`.
-    /// - `no_cache`: bypass the server's short assignment cache (use for the
-    ///   pickup moment).
-    ///
-    /// Empty string filters and unset flags are omitted from the query.
+    /// The unreleased update queue (live from SMELT). Each [`UpdatesQuery`]
+    /// field maps to a server-side query param of the same name.
     ///
     /// # Errors
     ///
     /// Returns [`TeReGenError::Fetch`] on any transport/status/JSON failure, so
     /// the caller can tell an unreachable TeReGen apart from an empty queue.
-    /// `Ok(None)` is a successful response whose body carried no `updates` key;
-    /// `Ok(Some(v))` is the (possibly-empty) queue value.
+    /// `Ok(None)` is a successful response whose body carried no `updates` key.
     pub async fn updates(&self, opts: &UpdatesQuery<'_>) -> Result<Option<Value>, TeReGenError> {
         let mut params: Vec<(&str, String)> = Vec::new();
         for (name, value) in [
@@ -273,10 +238,10 @@ impl TeReGen {
     /// `ignore_inconsistent` regenerates despite inconsistent metadata (e.g. an
     /// arch list that disagrees with the build).
     ///
-    /// Returns the decoded JSON body: `{"id", "job"}` on success (HTTP 202) or
-    /// `{"error": …}` when the server refuses (HTTP 409, e.g. the template
-    /// already exists or was hand-edited). Returns `None` only when TeReGen is
-    /// unreachable — so callers can tell "refused" apart from "couldn't ask".
+    /// Returns `{"id", "job"}` on success (HTTP 202) or `{"error": …}` when the
+    /// server refuses (HTTP 409: the template already exists or was hand-edited),
+    /// and `None` only when TeReGen is unreachable — so callers can tell
+    /// "refused" apart from "couldn't ask".
     pub async fn regenerate(
         &self,
         rrid: &str,
@@ -299,8 +264,7 @@ impl TeReGen {
         {
             Ok(r) => r,
             Err(e) => {
-                // Convert before logging: reqwest's Display appends the request
-                // URL (#431).
+                // Convert before logging: reqwest's Display appends the URL (#431).
                 tracing::debug!(
                     "TeReGen POST regenerate {rrid} failed: {}",
                     HttpError::from(e)
@@ -328,14 +292,11 @@ impl TeReGen {
     /// Poll [`status`](Self::status) until the latest generate job finishes or
     /// fails, or `timeout` elapses / `should_stop` returns `true`.
     ///
-    /// Polls every `interval`, returning the final status dict once
-    /// `minion_state` is `finished` or `failed`, or the last-seen status (or
-    /// `None`) on timeout. The caller inspects `minion_state` / `minion_error`
-    /// to decide success.
-    ///
-    /// `should_stop` makes the wait interruptible: it is polled before each
-    /// sleep and the inter-poll sleep itself is cancellable in small steps, so a
-    /// caller can abandon the wait promptly and get back the last seen status.
+    /// Returns the final status dict once `minion_state` is `finished` or
+    /// `failed`, else the last-seen status (or `None`) on timeout; the caller
+    /// inspects `minion_state` / `minion_error` to decide success.
+    /// `should_stop` is polled before each sleep *and* inside it, so a caller
+    /// can abandon the wait promptly and still get the last seen status.
     async fn wait_for_template<F>(
         &self,
         rrid: &str,
@@ -360,9 +321,8 @@ impl TeReGen {
             if should_stop() || tokio::time::Instant::now() >= deadline {
                 return last;
             }
-            // Interruptible sleep: poll `should_stop` in small steps so we
-            // re-check and exit promptly instead of waiting out the full
-            // interval.
+            // Small steps so a stop request is honoured without waiting out
+            // the whole interval.
             let step = Duration::from_millis(100);
             let mut waited = Duration::ZERO;
             while waited < interval && !should_stop() {
@@ -375,12 +335,10 @@ impl TeReGen {
 
     /// Enqueue a regeneration and wait for the job to finish.
     ///
-    /// Bundles [`regenerate`](Self::regenerate) +
-    /// `wait_for_template` into the single protocol
-    /// both the `regenerate` command and the stale-template loader share,
-    /// returning a [`RegenOutcome`] the caller maps to its own messaging and
-    /// reload strategy. `should_stop` is forwarded so the wait stays
-    /// interruptible.
+    /// Bundles [`regenerate`](Self::regenerate) + `wait_for_template` into the
+    /// single protocol both the `regenerate` command and the stale-template
+    /// loader share, returning a [`RegenOutcome`] the caller maps to its own
+    /// messaging and reload strategy.
     pub async fn regenerate_and_wait<F>(
         &self,
         rrid: &str,
@@ -442,9 +400,8 @@ impl TeReGen {
 
 /// Build the percent-encoded `key=value&...` query string.
 ///
-/// Uses `application/x-www-form-urlencoded` encoding (space → `+`), matching
-/// reqwest's `.query()` wire form, which this workspace's minimal reqwest build
-/// does not expose.
+/// `application/x-www-form-urlencoded` (space → `+`), matching reqwest's
+/// `.query()` wire form, which this workspace's minimal reqwest build omits.
 fn build_query_string(params: &[(&str, String)]) -> String {
     params
         .iter()
@@ -466,9 +423,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Optional filters for [`TeReGen::updates`].
 ///
-/// All fields
-/// default to unset; empty string filters and `false` flags are omitted from
-/// the request query.
+/// All fields default to unset; empty string filters and `false` flags are
+/// omitted from the request query.
 #[derive(Debug, Clone, Default)]
 pub struct UpdatesQuery<'a> {
     /// Narrow the queue to a single review group (server-side).
@@ -520,15 +476,13 @@ mod tests {
     /// Install — once per test binary — a permissive **global** subscriber that
     /// forwards every event into the calling thread's [`SINK`].
     ///
-    /// Deliberately global rather than `tracing::subscriber::set_default`'s
-    /// thread-local: `tracing` caches callsite *interest* process-wide, so a
-    /// callsite first reached from a thread with no subscriber is cached as
-    /// `Interest::never()` and stays silent for every later capture. With
-    /// tests running in parallel that is a race — it made
-    /// `regenerate_none_when_unreachable` fail ~30% of runs with "no line in
-    /// capture" while the code under test was correct. A subscriber that is
-    /// always installed keeps interest pinned to `always`; scoping moves to the
-    /// thread-local sink instead.
+    /// Global rather than `tracing::subscriber::set_default`'s thread-local
+    /// because `tracing` caches callsite *interest* process-wide: a callsite
+    /// first reached from a thread with no subscriber is cached
+    /// `Interest::never()` and stays silent for every later capture, which made
+    /// `regenerate_none_when_unreachable` flake ~30% of runs. Always installing
+    /// pins interest at `always`; scoping moves to the thread-local sink.
+    /// Canonical copy of the pattern: `tests/log_capture.rs`.
     fn install_capture_subscriber() {
         use std::fmt::Write as _;
         use std::sync::OnceLock;
@@ -820,7 +774,6 @@ mod tests {
 
     #[tokio::test]
     async fn updates_omits_unset_assignment_flags() {
-        // No query params expected at all: match a request with an empty query.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -828,7 +781,6 @@ mod tests {
             .mount(&server)
             .await;
         let _ = client(&server).updates(&UpdatesQuery::default()).await;
-        // Assert the recorded request carried no query string.
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].url.query().is_none());
@@ -844,8 +796,8 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"updates": []})))
             .mount(&server)
             .await;
-        // wiremock's query_param matcher compares decoded values, so a match
-        // proves the raw '&'/space were percent-encoded on the wire.
+        // query_param compares *decoded* values, so a match proves the raw
+        // '&'/space were percent-encoded on the wire.
         let _ = client(&server)
             .updates(&UpdatesQuery {
                 review_group: Some("qam sle&x"),
@@ -870,9 +822,8 @@ mod tests {
 
     #[tokio::test]
     async fn updates_errs_on_error_status() {
-        // A non-2xx status surfaces as Err, distinct from an empty queue. This
-        // is `try_get`'s `error_for_status` arm — the transport arm is a
-        // separate case below, since a mock server cannot refuse a connection.
+        // `try_get`'s `error_for_status` arm; the transport arm is separate
+        // below, since a mock server cannot refuse a connection.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -913,8 +864,7 @@ mod tests {
 
     #[tokio::test]
     async fn updates_ok_none_when_key_absent() {
-        // A successful response missing the `updates` key is Ok(None), not an
-        // error — so the caller can print "no updates" rather than a failure.
+        // Ok(None), not an error: the caller prints "no updates".
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/updates"))
@@ -994,10 +944,8 @@ mod tests {
 
     #[tokio::test]
     async fn regenerate_none_when_unreachable() {
-        // No server: point the client at a closed port so the POST fails to
-        // connect, mapping a connection error to None. The POST send arm is
-        // reachable no other way — every other `regenerate` test drives a
-        // status, not a transport failure.
+        // A closed port is the only way to reach the POST `send` arm; every
+        // other `regenerate` test drives a status, not a transport failure.
         let mut out = Some(json!({}));
         let logs = capture_logs(|| async {
             out = unreachable_client().regenerate(RRID, false, false).await;
@@ -1040,8 +988,7 @@ mod tests {
     #[tokio::test]
     async fn wait_for_template_polls_until_done() {
         let server = MockServer::start().await;
-        // First poll -> running, second -> failed. up_to_n_times bounds the
-        // first stub so the second takes over.
+        // up_to_n_times bounds the first stub so the second takes over.
         Mock::given(method("GET"))
             .and(path(format!("/reports/{RRID}/status")))
             .respond_with(
@@ -1078,8 +1025,7 @@ mod tests {
             )
             .mount(&server)
             .await;
-        // timeout=0 -> the deadline is already reached after the first poll, so
-        // the last seen ("running") status is returned without sleeping.
+        // timeout=0: the deadline is already past after the first poll.
         let status = client(&server)
             .wait_for_template(RRID, Duration::from_millis(1), Duration::ZERO, || false)
             .await;

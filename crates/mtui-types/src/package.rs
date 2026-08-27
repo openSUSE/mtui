@@ -6,24 +6,20 @@
 //! by the update metadata, and the [`current`](Package::current) version actually
 //! installed on a target.
 //!
-//! Each version field is stored as a single typed representation, with
-//! fallible setters that parse a `&str` rather than silently storing an
-//! unparsed string. `before`, `after` and `current` are all [`VersionCheck`]s,
-//! not `Option<`[`RPMVersion`]`>`: all three are *measured* on a target, so
-//! they must be able to say "checked, not installed" and "never checked" apart
-//! (#396, #437 — a host the version query never reached must not read the
-//! same as one it confirmed the package absent on). `required` (declared by
-//! the update metadata, never measured) stays a plain option.
+//! Setters are fallible and parse a `&str` rather than storing it unparsed.
+//! `before`, `after` and `current` are [`VersionCheck`]s rather than
+//! `Option<`[`RPMVersion`]`>` because all three are *measured* on a target: a
+//! host the version query never reached must not read the same as one it
+//! confirmed the package absent on (#396, #437). `required` is declared by the
+//! update metadata, never measured, so it stays a plain option.
 //!
 //! A `Package` hashes and compares **by name only**, so it can live in a
 //! name-keyed set regardless of its version fields.
 
 use crate::rpmver::RPMVersion;
 
-/// A software package and the versions relevant to an update.
-///
-/// Equality and hashing are **by [`name`](Package::name) only**. Two packages
-/// with the same name but different versions are considered equal.
+/// A software package and the versions relevant to an update. Equality and
+/// hashing are **by [`name`](Package::name) only**.
 #[derive(Debug, Clone)]
 pub struct Package {
     /// The package name.
@@ -36,11 +32,9 @@ pub struct Package {
 
 /// The outcome of checking one of a package's versions on a target.
 ///
-/// `Option<RPMVersion>` cannot carry this: it has no way to say *why* it is
-/// empty, and "the check ran and the package was absent" and "no check ever
-/// ran" are different facts the export must render differently (#396). Keeping
-/// both in one field means the value and the fact that it was measured cannot
-/// drift apart.
+/// `Option<RPMVersion>` cannot say *why* it is empty, and the export must render
+/// "the check ran, the package was absent" differently from "no check ran"
+/// (#396). One field keeps the value and the fact it was measured together.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum VersionCheck {
     /// No check has run — the version is simply unknown.
@@ -152,8 +146,7 @@ impl Package {
     ///
     /// # Errors
     /// Returns [`RpmVersionParseError`](crate::error::RpmVersionParseError) only
-    /// for a non-empty string that fails to parse. An empty string is treated
-    /// as "checked, absent" and never errors.
+    /// for a non-empty string that fails to parse.
     pub fn set_before(&mut self, ver: Option<&str>) -> crate::error::Result<()> {
         self.before = parse_opt(ver)?.into();
         Ok(())
@@ -217,10 +210,9 @@ impl Package {
 
 /// Parses an optional version string, treating `None`/empty as "no version".
 ///
-/// The before/after setters feed the result through
-/// [`VersionCheck::from`], which reads that as *checked, not installed*;
-/// [`required`](Package::required) keeps it as a plain absent value, since
-/// metadata declares a requirement rather than observing one.
+/// The before/after setters feed the result through [`VersionCheck::from`],
+/// which reads that as *checked, not installed*;
+/// [`required`](Package::required) keeps it as a plain absent value.
 fn parse_opt(ver: Option<&str>) -> crate::error::Result<Option<RPMVersion>> {
     match ver {
         Some(v) if !v.is_empty() => Ok(Some(RPMVersion::parse(v)?)),
@@ -257,9 +249,8 @@ mod tests {
 
     use super::*;
 
-    /// #396: setting a `None` version records a check that found nothing —
-    /// `NotInstalled` and `NotChecked` must stay distinguishable, and both
-    /// must keep reading as `None` through [`Package::before`]/[`Package::after`].
+    /// #396: `NotInstalled` and `NotChecked` stay distinguishable, while both
+    /// keep reading as `None` through [`Package::before`]/[`Package::after`].
     #[test]
     fn set_version_none_is_not_installed_not_unchecked() {
         let mut p = Package::new("bash");
@@ -328,9 +319,7 @@ mod tests {
         assert!(p.current().is_none());
     }
 
-    /// #437: `current` carries the same tri-state as `before`/`after` — a
-    /// version query that never answered for a package must not read the
-    /// same as one that confirmed it absent.
+    /// #437: `current` carries the same tri-state as `before`/`after`.
     #[test]
     fn current_check_distinguishes_unchecked_from_not_installed() {
         let mut p = Package::new("bash");
@@ -357,12 +346,10 @@ mod tests {
         a.set_before(Some("1.0-1")).unwrap();
         let mut b = Package::new("bash");
         b.set_before(Some("9.9-9")).unwrap();
-        // Same name, different versions ⇒ equal.
         assert_eq!(a, b);
 
         let mut set = HashSet::new();
         set.insert(a);
-        // Inserting the same-named package does not grow the set.
         assert!(!set.insert(b));
         assert_eq!(set.len(), 1);
 
