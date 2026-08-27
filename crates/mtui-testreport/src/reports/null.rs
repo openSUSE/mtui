@@ -1,11 +1,10 @@
 //! The null-object [`TestReport`] implementation.
 //!
-//! Used when no test report is loaded. It is falsy, has an empty ID and empty
-//! parser tables, roots its target working directory directly under
-//! `config.target_tempdir`, and reports a trivially-valid hash.
+//! Used when no test report is loaded. It is falsy, has an empty ID, no report
+//! path and empty parser tables, roots its target working directory directly
+//! under `config.target_tempdir`, and reports a trivially-valid hash.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
@@ -21,16 +20,13 @@ pub struct NullReport {
 impl NullReport {
     /// Builds a [`NullReport`] from `config`.
     ///
-    /// Sets the path to the current directory joined with a `None`
-    /// component — a placeholder path that never resolves to a real
-    /// template. Falls back to `./None` if the current directory cannot be
-    /// determined.
+    /// `path` stays unset so [`TestReportBase::report_wd`] errors rather than
+    /// resolving somewhere a dispatch could act (#524).
     #[must_use]
     pub fn new(config: Config) -> Self {
-        let mut base = TestReportBase::new(config);
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        base.path = Some(cwd.join("None"));
-        Self { base }
+        Self {
+            base: TestReportBase::new(config),
+        }
     }
 }
 

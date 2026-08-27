@@ -10,6 +10,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `get` in a session with no template loaded (`add_host` without a
+  `load_template`) now refuses with `no report working directory` instead of
+  downloading into `<cwd>/downloads/` — the download target is the report
+  working directory, and there is none. Load a template first. REPL-only: the
+  MCP `get` tool is the hand-written in-band transfer tool, which already
+  required a loaded template.
 - The MCP server is now built by default. `cargo build`/`cargo build
   --release` at the repo root now produces both the `mtui` REPL and the
   `mtui-mcp` server binaries with no `--features` flag; a build that only
@@ -114,6 +120,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   The template is left untouched; a partially verified fleet still exports with
   the per-host warning. New `export --allow-unverified` writes the unverified
   scaffold anyway.
+- A command dispatched with nothing loaded — or, under concurrent MCP tool
+  calls, one that lost the race for its template's entry — no longer acts on
+  the process working directory. The no-report sentinel carried a
+  `<cwd>/None` placeholder path, so `analyze_diff`/`show_diff` read
+  `<cwd>/source.diff` (surfacing as `No such file or directory`), `checkout`
+  ran `svn up` in the cwd, and `commit` ran a real `svn add --force
+  install_logs` + `svn ci` there — committing the user's own files to whatever
+  repository the cwd belonged to, if it was an SVN working copy holding an
+  `install_logs/` directory (`[mtui] install_logs` is a relative name by
+  definition, resolved against the checkout dir). They now refuse with `no
+  report working directory`.
 
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of

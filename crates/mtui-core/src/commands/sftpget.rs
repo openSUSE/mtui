@@ -49,7 +49,7 @@ impl Command for SftpGet {
             .metadata()
             .base()
             .report_wd()
-            .map_err(|e| CommandError::Other(format!("no report loaded: {e}")))?;
+            .map_err(|e| CommandError::Other(format!("no report working directory: {e}")))?;
         let name = remote
             .file_name()
             .and_then(|n| n.to_str())

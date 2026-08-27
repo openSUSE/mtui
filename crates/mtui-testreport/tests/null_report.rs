@@ -1,6 +1,6 @@
-//! Pins the null-object contract: falsy, empty ID, empty parser tables,
-//! `target_wd` rooted under `config.target_tempdir`, no-op update-command
-//! listing, and a trivially-valid hash.
+//! Pins the null-object contract: falsy, empty ID, unset report path, empty
+//! parser tables, `target_wd` rooted under `config.target_tempdir`, no-op
+//! update-command listing, and a trivially-valid hash.
 
 use std::path::PathBuf;
 
@@ -30,6 +30,28 @@ fn null_bool_is_false() {
 fn null_id_empty() {
     let (cfg, _) = config_with_tmp("id");
     assert_eq!(NullReport::new(cfg).id(), "");
+}
+
+/// #524: the sentinel must carry no path at all. A `<cwd>/None` placeholder
+/// made `report_wd()` resolve to the process cwd, so a dispatch that fell back
+/// here acted on the cwd instead of refusing.
+#[test]
+fn null_path_is_unset() {
+    let (cfg, _) = config_with_tmp("path");
+    assert_eq!(NullReport::new(cfg).base().path, None);
+}
+
+/// The consequence the `"no report working directory"` `map_err`s all rely on:
+/// catches a placeholder path whose parent happens to exist (the cwd always
+/// does).
+#[test]
+fn null_report_wd_is_not_found() {
+    let (cfg, _) = config_with_tmp("report-wd");
+    let err = NullReport::new(cfg)
+        .base()
+        .report_wd()
+        .expect_err("the null report has no working directory");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
 }
 
 #[test]
