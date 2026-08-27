@@ -324,7 +324,12 @@ pub(crate) async fn dispatch_tool(
         return Err::<String, _>(err).into();
     }
 
-    let argv = crate::argv::kwargs_to_argv(&parser, &kwargs, &route.argv_prefix);
+    // The same layer, or reconstruction drops every kwarg the parent does not
+    // declare: `config set` emitted a bare `["set"]` and clap rejected it for the
+    // missing required positionals, `config show`'s filter vanished. The parent's
+    // own `-T`/`--all-templates` are not lost, because a fanned-out tool's schema
+    // is synthesised from the subcommand too, so they are already refused above.
+    let argv = crate::argv::kwargs_to_argv(arg_source, &kwargs, &route.argv_prefix);
 
     if background {
         return session
@@ -745,6 +750,61 @@ mod tests {
         .expect("config show succeeds");
         assert!(out.contains("session_user"), "got: {out:?}");
         assert!(out.contains("alice"), "got: {out:?}");
+        // The filter has to survive argv reconstruction. Both assertions above
+        // also hold of the unfiltered 41-attribute dump, so only the *absence*
+        // of the other 40 proves `attributes` reached clap.
+        assert!(!out.contains("template_dir"), "got: {out:?}");
+        assert_eq!(
+            out.lines().filter(|l| !l.trim().is_empty()).count(),
+            1,
+            "only the requested attribute: {out:?}"
+        );
+    }
+
+    /// The path a real client takes: `server.rs` calls `dispatch_tool`, which
+    /// reconstructs argv from kwargs. `session.rs` pins the gate through
+    /// `command_lock`/`run_command` on a hand-built argv, so it cannot see a
+    /// reconstruction that drops both positionals (#523).
+    #[tokio::test]
+    async fn dispatch_config_set_mutates_the_canonical_session() {
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+
+        let mut config = Config::default();
+        config.session_user = "before".to_owned();
+        let session = McpSession::new(config);
+        // One loaded template: the state in which the gate's scoped arm forks.
+        {
+            let rrid = "SUSE:Maintenance:1:1";
+            let mut guard = session.session().lock().await;
+            let mut report = ObsReport::new(guard.config.clone());
+            report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
+            guard.templates.add(Box::new(report));
+            guard.templates.set_active(rrid);
+        }
+
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("config_set").expect("config_set route");
+        let kwargs = json!({ "attribute": "session_user", "value": "via-tool" });
+        let out = completed(
+            dispatch_tool(
+                &registry,
+                &session,
+                route,
+                kwargs.as_object().unwrap(),
+                None,
+                None,
+            )
+            .await,
+        )
+        .expect("config set succeeds");
+        assert_eq!(out.trim(), "option: session_user set to value : via-tool");
+        assert_eq!(
+            session.session().lock().await.config.session_user,
+            "via-tool",
+            "the write must survive the call"
+        );
     }
 
     #[tokio::test]
