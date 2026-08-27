@@ -88,11 +88,14 @@ pub trait SetRepo: Send + Sync {
 
     /// The package names this update composes, per product and architecture.
     ///
-    /// Empty by default, which is also what a report whose metadata carries no
-    /// composition returns: a consumer reading it must then treat every
-    /// package as composed for every host.
-    fn composition(&self) -> HashMap<SystemProduct, BTreeSet<String>> {
-        HashMap::new()
+    /// Borrowed, not cloned: a prepare reads the index once and a large
+    /// update's is the whole binaries block.
+    ///
+    /// `None` by default, and a report whose metadata carries no composition
+    /// answers `None` or an empty map; a consumer reading either must treat
+    /// every package as composed for every host.
+    fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
+        None
     }
 }
 

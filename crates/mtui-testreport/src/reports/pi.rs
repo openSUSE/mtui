@@ -146,7 +146,7 @@ impl SetRepo for PiReport {
         set_repo_with_add_flags(&self.base, target, operation, "-n ar -cfGkn").await;
     }
 
-    fn composition(&self) -> HashMap<SystemProduct, BTreeSet<String>> {
-        self.base.composed.clone()
+    fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
+        Some(&self.base.composed)
     }
 }

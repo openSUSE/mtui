@@ -192,7 +192,9 @@ call with the host named.
 - On a report whose metadata carries a `binaries` block, `prepare` narrows the
   package list per host to what that host's products compose, and fails by name
   a host whose products compose none of it — rather than sending a list zypper
-  refuses with "capability not found" (104).
+  refuses with "capability not found" (104). `update` excludes such a host from
+  its patch and reports a failure naming it, instead of patching a host its own
+  prepare established no baseline on.
 - `export` emits `WARNING: no package version data recorded for <host>...`
   lines in its tool output when a host has no recorded package data and its
   install-result block was therefore left unverified in the report.

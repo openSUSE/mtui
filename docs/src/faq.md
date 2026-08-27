@@ -141,7 +141,10 @@ Independently of those switches, on a report whose metadata carries a
 actually compose (base product plus addons). A host whose products compose
 none of the list is failed by name rather than sent a list zypper will refuse
 with "capability not found" (104); a host no product of which the metadata
-names keeps the full list and logs a warning.
+names keeps the full list and logs a warning. `update`'s own prepare narrows
+the same way, and a host it refuses is left out of the patch — no prepare ran
+on it, so there is no package baseline to patch — and named in the update's
+error instead of being patched anyway.
 
 ## Can I run a command on only some of the connected hosts?
 

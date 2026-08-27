@@ -151,7 +151,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   install with zypper's "capability not found" (104). A host whose products
   compose none of the list is now failed by name — naming the host, its
   products and the packages — rather than sent a list zypper will refuse, and
-  a report whose metadata carries no `binaries` block is unaffected.
+  a report whose metadata carries no `binaries` block is unaffected. `update`
+  excludes such a host from its patch, since its prepare established no package
+  baseline there, and reports the failure naming it rather than patching it
+  anyway; the hosts that do compose the update are patched as before.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
