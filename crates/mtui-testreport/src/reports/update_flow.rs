@@ -106,6 +106,15 @@ pub enum UpdateFailure {
     /// broken awk), not the packages. A run mixing one of these with a `-1`
     /// host is labelled [`NotRun`](Self::NotRun).
     ProbeFailed(UpdateError),
+    /// The pre-update `prepare` refused one or more hosts because their
+    /// products compose none of the update's packages, so no package baseline
+    /// was established on them and the patch left them out. The hosts that do
+    /// compose it were patched normally; when every enabled host was refused,
+    /// nothing was dispatched at all.
+    ///
+    /// Skips the rollback: an excluded host received no patch to undo, and the
+    /// group-wide downgrade would revert the peers that updated correctly.
+    Uncomposed(UpdateError),
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
@@ -192,6 +201,10 @@ where
         }
         Err(UpdateFailure::ProbeFailed(e)) => {
             error!(error = %e, "update failed: could not determine what to patch");
+            Err(e)
+        }
+        Err(UpdateFailure::Uncomposed(e)) => {
+            error!(error = %e, "update did not run on every host");
             Err(e)
         }
         Err(UpdateFailure::Check(e) | UpdateFailure::RebootNotTaken(e)) => {
@@ -284,7 +297,17 @@ enum PrepareFailure {
     /// no-command-built failures: `update` intentionally warns there because
     /// `build_update_maps` re-detects the unresolved-key cause moments later
     /// and aborts with `MissingUpdater`.
-    HostReported(UpdateError),
+    ///
+    /// `uncomposed` names, as `host -> its products`, the hosts refused for the
+    /// one reason the "too noisy to gate on" argument does not cover: their
+    /// products compose none of the packages, so nothing was installed on them
+    /// at all. `update` excludes exactly those from its patch — without the
+    /// split it cannot tell them from the package-manager noise this variant
+    /// exists to tolerate.
+    HostReported {
+        error: UpdateError,
+        uncomposed: BTreeMap<String, String>,
+    },
     /// A cancellation checkpoint, not a failure.
     Cancelled(UpdateError),
 }
@@ -342,33 +365,18 @@ fn build_reboot_map(
     Ok(reboot)
 }
 
-/// Runs `role`'s post-run check on every host, returning the recognised
-/// [`UpdateError`]s and appending any recognised-but-non-fatal [`Diagnostic`]
-/// sections to `diagnostics`.
+/// Runs `role`'s post-run check on the hosts `allowed` accepts, returning the
+/// recognised [`UpdateError`]s and appending any recognised-but-non-fatal
+/// [`Diagnostic`] sections to `diagnostics`.
 ///
 /// The check reads each host's `last*` snapshot after the command ran. Only the
 /// `update` check currently emits diagnostics.
 ///
-/// Every host in the group is judged. A caller that fans out to a *subset* —
-/// `prepare`'s per-host command map, `downgrade`'s per-package loop — must use
-/// [`run_checks_where`] instead of filtering the returned list: a check logs
-/// its own ERROR breadcrumb before returning `Err`, so a discarded verdict has
-/// already been printed, for a host whose snapshot belongs to another phase.
-fn run_checks(
-    targets: &HostsGroup,
-    registry: &WorkflowRegistry,
-    role: Role,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<UpdateError> {
-    run_checks_where(targets, registry, role, diagnostics, |_| true)
-}
-
-/// [`run_checks`] restricted to the hosts `allowed` accepts.
-///
-/// The predicate is applied *before* the check runs, not to its verdict: a
-/// check calls [`log_failed`](crate::update_workflow::checks) on the way to its
-/// `Err`, so a post-filter still emits an operator-facing ERROR for a host whose
-/// verdict is then thrown away — once per package under
+/// Every caller fans out to a subset of the group, so the predicate is
+/// mandatory, and it is applied *before* the check runs rather than to its
+/// verdict: a check calls [`log_failed`](crate::update_workflow::checks) on the
+/// way to its `Err`, so a post-filter still emits an operator-facing ERROR for
+/// a host whose verdict is then thrown away — once per package under
 /// `prepare --installed-only`, against a snapshot from a fan-out that host was
 /// not part of.
 fn run_checks_where(
@@ -466,9 +474,9 @@ fn aggregate_failures(op: &str, mut failures: Vec<UpdateError>) -> Result<(), Up
 /// (non-empty stderr or a non-zero exit) and returns one [`UpdateError`] per
 /// failed host, keyed on `reason`.
 ///
-/// The analogue of [`run_checks`] for the flows with no registry check of their
-/// own: the shared install/uninstall template and the prepare/downgrade
-/// repo/command fan-outs.
+/// The analogue of [`run_checks_where`] for the flows with no registry check
+/// of their own: the shared install/uninstall template and the
+/// prepare/downgrade repo/command fan-outs.
 fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError> {
     let mut failures = Vec::new();
     for target in targets.targets() {
@@ -762,7 +770,7 @@ pub async fn perform_prepare(
         Ok(()) => Ok(()),
         Err(
             PrepareFailure::DidNotRun(e)
-            | PrepareFailure::HostReported(e)
+            | PrepareFailure::HostReported { error: e, .. }
             | PrepareFailure::Cancelled(e),
         ) => Err(e),
     }
@@ -855,7 +863,7 @@ async fn prepare_body(
     // 0, masking an earlier failure and letting the host reboot into it.
     let mut dispatched: BTreeSet<String> = BTreeSet::new();
     let mut inert: BTreeSet<String> = BTreeSet::new();
-    // The check verdicts, per fan-out for the same reason: `run_checks` reads
+    // The check verdicts, per fan-out for the same reason: the checks read
     // the `last*` snapshot too. `note_dispatch` closes the exit-code half of
     // that hole; this closes the marker half, or an exit-`0` lock message on
     // package 1 of 2 is overwritten by package 2's clean run and the host
@@ -889,6 +897,10 @@ async fn prepare_body(
     // apart from that scan.
     let mut accounted: BTreeSet<String> = BTreeSet::new();
     let mut accounted_failures: Vec<UpdateError> = Vec::new();
+    // Kept apart from `accounted`, which also holds the `--installed` probe's
+    // dead and skipped hosts: only these have no package baseline, and only
+    // they are excluded from an embedded `update`.
+    let mut uncomposed: BTreeMap<String, String> = BTreeMap::new();
 
     // Before the `--installed` probe, so a host the update composes nothing
     // for is never probed either. Skipped on an empty list for the same reason
@@ -907,7 +919,8 @@ async fn prepare_body(
                 ),
                 host.clone(),
             ));
-            accounted.insert(host);
+            accounted.insert(host.clone());
+            uncomposed.insert(host, products);
         }
     }
 
@@ -1111,14 +1124,16 @@ async fn prepare_body(
     // A genuine host failure outranks the cancellation, which would otherwise
     // bury a broken host the operator must still see.
     if !failures.is_empty() {
-        return aggregate_failures("prepare", failures).map_err(PrepareFailure::HostReported);
+        return aggregate_failures("prepare", failures)
+            .map_err(|error| PrepareFailure::HostReported { error, uncomposed });
     }
     if cancelled {
         return Err(PrepareFailure::Cancelled(UpdateError::cancelled(
             "prepare cancelled before any package was installed",
         )));
     }
-    aggregate_failures("prepare", failures).map_err(PrepareFailure::HostReported)
+    aggregate_failures("prepare", failures)
+        .map_err(|error| PrepareFailure::HostReported { error, uncomposed })
 }
 
 /// Records which hosts a prepare fan-out reached, and which of them it failed
@@ -1149,12 +1164,13 @@ fn note_dispatch(
 /// Runs the prepare check over the hosts *this* fan-out reached and records the
 /// first failure per host.
 ///
-/// The companion to [`note_dispatch`], for the same reason: [`run_checks`]
-/// reads the `last*` snapshot, so a single post-loop call would judge only the
-/// last package — under `--installed-only` very often a clean no-op, masking an
-/// exit-`0` lock message on an earlier one and letting the host reboot into it
-/// (#406). First-failure-wins per host keeps `aggregate_failures` in its
-/// single-failure verbatim branch, where `host` survives.
+/// The companion to [`note_dispatch`], for the same reason:
+/// [`run_checks_where`] reads the `last*` snapshot, so a single post-loop call
+/// would judge only the last package — under `--installed-only` very often a
+/// clean no-op, masking an exit-`0` lock message on an earlier one and letting
+/// the host reboot into it (#406). First-failure-wins per host keeps
+/// `aggregate_failures` in its single-failure verbatim branch, where `host`
+/// survives.
 ///
 /// Scoped to `cmd`'s keys through [`run_checks_where`], so an out-of-fan-out
 /// host is never *judged* on an earlier phase's record rather than judged and
@@ -1249,13 +1265,12 @@ fn narrow_to_composed(
     lists: &mut BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, String> {
     let mut refused = BTreeMap::new();
-    let composed = report.composition();
     // The `!known` fallback below would keep the full list anyway; this returns
     // early for the *log*, so a report that simply carries no composition does
     // not warn once per host and drown the case that matters.
-    if composed.is_empty() {
+    let Some(composed) = report.composition().filter(|c| !c.is_empty()) else {
         return refused;
-    }
+    };
 
     for target in targets.targets() {
         let host = target.hostname();
@@ -1877,6 +1892,7 @@ pub async fn perform_update(
         )));
     }
 
+    let mut uncomposed: BTreeMap<String, String> = BTreeMap::new();
     if !noprepare {
         // Default flags (remove-repo prepare). A prepare that could not run
         // aborts rather than patching hosts on a broken premise; `--noprepare`
@@ -1886,10 +1902,41 @@ pub async fn perform_update(
             Ok(()) => {}
             Err(PrepareFailure::DidNotRun(e)) => return Err(UpdateFailure::Prepare(e)),
             Err(PrepareFailure::Cancelled(e)) => return Err(UpdateFailure::Cancelled(e)),
-            Err(PrepareFailure::HostReported(e)) => {
-                warn!(error = %e, "prepare before update reported a host failure; continuing");
+            Err(PrepareFailure::HostReported {
+                error,
+                uncomposed: refused,
+            }) => {
+                warn!(error = %error, "prepare before update reported a host failure; continuing");
+                uncomposed = refused;
             }
         }
+    }
+
+    // A refused host has no package baseline, so patching it would patch on the
+    // premise the refusal denied. It is dropped from the fan-out below and
+    // named in the verdict — a skip the group's success spoke for is #396
+    // itself, one layer up.
+    let excluded: Vec<UpdateError> = uncomposed
+        .iter()
+        .map(|(host, products)| {
+            UpdateError::new(
+                format!(
+                    "this host's products ({products}) compose none of the update's packages; \
+                     it was excluded from the update"
+                ),
+                host.clone(),
+            )
+        })
+        .collect();
+    if !uncomposed.is_empty()
+        && targets
+            .targets()
+            .filter(|t| t.state() == mtui_types::TargetState::Enabled)
+            .all(|t| uncomposed.contains_key(t.hostname()))
+    {
+        // Nothing left to patch, and nothing locked or added yet. `excluded` is
+        // non-empty here, so this is always the `Err` arm.
+        return aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed);
     }
 
     targets.package_check(false).await;
@@ -1904,7 +1951,7 @@ pub async fn perform_update(
 
     let repa = repa_for(maintenance_id, review_id);
     let joined = quote_args(packages);
-    let (commands, reboot) = match build_update_maps(targets, &registry, &repa, &joined) {
+    let (mut commands, mut reboot) = match build_update_maps(targets, &registry, &repa, &joined) {
         Ok(maps) => maps,
         Err(e) => {
             // Remove the repo we just added and abort. A hard failure rather
@@ -1914,6 +1961,8 @@ pub async fn perform_update(
             return Err(UpdateFailure::MissingUpdater(e));
         }
     };
+    commands.retain(|host, _| !uncomposed.contains_key(host));
+    reboot.retain(|host, _| !uncomposed.contains_key(host));
 
     // Last checkpoint before the point of no return: past this line a cancel
     // could leave a half-applied transaction, so cancellation is NOT checked
@@ -1969,7 +2018,9 @@ pub async fn perform_update(
     targets.package_check(true).await;
 
     remove_test_repos(targets, report).await;
-    Ok(())
+    // `Ok` when nothing was excluded; otherwise the update finished on the
+    // hosts it could reach, and says which it did not.
+    aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed)
 }
 
 /// Removes the test update repositories after a successful update.
@@ -2023,20 +2074,27 @@ async fn update_run_phase(
     id: Option<&str>,
     packages: &[String],
 ) -> Result<(), UpdateFailure> {
+    // The three rules below are scoped to this fan-out's own map, as
+    // `note_dispatch`/`note_check` scope `prepare_body`'s: a host the update
+    // excluded owes no `:update:` row, must not be judged on a snapshot from
+    // another phase, and must not be counted among the successes.
+    let dispatched: BTreeSet<String> = commands.keys().cloned().collect();
     targets.run(Command::PerHost(commands)).await;
 
     // Recorded after the run started but *before* the reboot: a transactional
     // host that never comes back cannot be written to afterwards, and that is
     // the host whose state an operator most needs to reconstruct.
-    add_op_history(targets, "update", id, packages).await;
+    add_op_history_for(targets, &dispatched, "update", id, packages).await;
 
-    let failures = run_checks(targets, registry, Role::Update, diagnostics);
+    let failures = run_checks_where(targets, registry, Role::Update, diagnostics, |h| {
+        dispatched.contains(h)
+    });
     let failed_hosts: std::collections::HashSet<String> =
         failures.iter().filter_map(|e| e.host.clone()).collect();
     let ok_hosts: Vec<String> = targets
         .names()
         .into_iter()
-        .filter(|hn| !failed_hosts.contains(hn))
+        .filter(|hn| dispatched.contains(hn) && !failed_hosts.contains(hn))
         .collect();
     if !ok_hosts.is_empty() {
         info!(hosts = %ok_hosts.join(", "), "update succeeded on");
@@ -2750,23 +2808,35 @@ mod tests {
         v.iter().map(|s| (*s).to_owned()).collect()
     }
 
-    /// A [`SetRepo`] whose `composition()` answers a scripted index and whose
-    /// repo fan-out is inert.
+    /// A [`SetRepo`] whose `composition()` answers a scripted index and which
+    /// records the [`RepoOp`]s its fan-out received.
     #[derive(Default)]
-    struct ComposingRepo(HashMap<SystemProduct, BTreeSet<String>>);
+    struct ComposingRepo {
+        composed: HashMap<SystemProduct, BTreeSet<String>>,
+        ops: std::sync::Mutex<Vec<RepoOp>>,
+    }
 
     impl ComposingRepo {
         fn new(entries: Vec<(SystemProduct, BTreeSet<String>)>) -> Self {
-            Self(entries.into_iter().collect())
+            Self {
+                composed: entries.into_iter().collect(),
+                ops: std::sync::Mutex::default(),
+            }
+        }
+
+        fn ops(&self) -> Vec<RepoOp> {
+            self.ops.lock().unwrap().clone()
         }
     }
 
     #[async_trait::async_trait]
     impl SetRepo for ComposingRepo {
-        async fn set_repo(&self, _target: &mut Target, _operation: RepoOp) {}
+        async fn set_repo(&self, _target: &mut Target, operation: RepoOp) {
+            self.ops.lock().unwrap().push(operation);
+        }
 
-        fn composition(&self) -> HashMap<SystemProduct, BTreeSet<String>> {
-            self.0.clone()
+        fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
+            Some(&self.composed)
         }
     }
 
@@ -3148,6 +3218,178 @@ mod tests {
         assert!(
             cmds.iter().any(|c| c.contains("-t patch")),
             "the updater must have followed the prepare: {cmds:?}"
+        );
+    }
+
+    /// Every command the slmicro updater template dispatches carries this line;
+    /// the prepare template does not, so it tells "patched" from "prepared".
+    fn was_patched(handle: &MockConnection) -> bool {
+        handle
+            .commands()
+            .iter()
+            .any(|c| c.contains("mtui_patch_rows"))
+    }
+
+    #[tokio::test]
+    async fn perform_update_excludes_the_host_its_prepare_refused() {
+        // The refusal reaches the patch, or `update` installs the update on a
+        // host for which the prepare established no package baseline — the
+        // failure the standalone refusal exists to report.
+        let (t1, h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (t2, h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-z"]),
+            ),
+        ]);
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(
+            !was_patched(&h2),
+            "the refused host must not be patched: {:?}",
+            h2.commands()
+        );
+        // Arms the assertion above: excluding every host would satisfy it too.
+        assert!(
+            was_patched(&h1),
+            "the composing host still gets its patch: {:?}",
+            h1.commands()
+        );
+        assert!(
+            h2.file_contents(HISTORY_LOG).is_none(),
+            "nothing ran on it, so no row: {:?}",
+            h2.file_contents(HISTORY_LOG)
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        );
+        let rows = String::from_utf8(h1.file_contents(HISTORY_LOG).expect("h1 has rows")).unwrap();
+        assert!(rows.contains(":update:pkg-a"), "h1 history: {rows:?}");
+        assert!(
+            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            "an excluded host is a failed update, not a silent skip: {res:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_names_the_excluded_host_in_its_error() {
+        // The group's success must not speak for the host left out (#396): the
+        // verdict names it, its products, and that it was excluded.
+        let (t1, _h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (t2, _h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-z"]),
+            ),
+        ]);
+
+        let err = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await
+        .expect_err("an update that skipped a host must not report success");
+
+        let UpdateFailure::Uncomposed(e) = err else {
+            panic!("the exclusion is its own class, not the noisy one: {err:?}");
+        };
+        assert_eq!(e.host.as_deref(), Some("h2"), "err: {e:?}");
+        assert!(
+            e.reason.contains("SL-Micro-6.1.aarch64")
+                && e.reason.contains("excluded from the update"),
+            "reason: {}",
+            e.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_with_every_host_refused_touches_no_repo() {
+        // Nothing left to patch: the update stops before it locks the group and
+        // adds a test repo it would only have to remove again.
+        let (t, handle) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = ComposingRepo::new(vec![(
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            names(&["pkg-z"]),
+        )]);
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(
+            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            "res: {res:?}"
+        );
+        assert!(
+            !was_patched(&handle),
+            "no host composes the update: {:?}",
+            handle.commands()
+        );
+        // The prepare's own `Remove` is expected; an `Add` means the update ran
+        // its repo phase over a group it had already excluded entirely.
+        assert_eq!(
+            repo.ops(),
+            vec![RepoOp::Remove],
+            "only the prepare's repo removal may have run"
         );
     }
 
@@ -5240,7 +5482,7 @@ mod tests {
     #[tokio::test]
     async fn perform_update_fails_a_transactional_host_whose_stack_is_locked() {
         // End-to-end proof that the `("slmicro", true)` check is reached:
-        // without one, `run_checks` hits its `else { continue }` and `update`
+        // without one, the check lookup hits its `else { continue }` and `update`
         // reports success however the patch went. The marker is scripted onto
         // the **patch command specifically** because `perform_update` runs
         // other commands first (the repo add's trailing `… -n ref`), so a

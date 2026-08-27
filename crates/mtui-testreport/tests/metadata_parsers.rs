@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use mtui_config::options::Config;
 use mtui_testreport::testreport::packages_for_map;
 use mtui_testreport::{JSONParser, ReducedMetadataParser, TestReportBase, patchinfo_titles};
-use mtui_types::SystemProduct;
+use mtui_types::{SystemProduct, parse_rpm_filename};
 
 use super::log_capture;
 
@@ -725,6 +725,49 @@ fn json_parser_abandons_the_index_on_a_malformed_entry() {
     assert!(warn.starts_with("WARN"), "must be a WARN: {warn}");
     for field in ["SL-Micro-6.1", "x86_64", "pkg-b"] {
         assert!(warn.contains(field), "{field:?} must be named: {warn}");
+    }
+}
+
+#[test]
+fn json_parser_abandons_the_index_on_a_name_the_package_grammar_rejects() {
+    // An entry whose filename parses but whose *name* cannot be a package name
+    // is the same untrusted block as an unparseable one — and this is the only
+    // gate between the metadata and the index, which is matched against the
+    // names that reach a root command line.
+    for (entry, name) in [
+        ("-rf-1.0-1.x86_64.rpm", "-rf"),
+        ("pkg;rm -rf /-1.0-1.x86_64.rpm", "pkg;rm -rf /"),
+    ] {
+        // Arms the case: an entry rejected by `parse_rpm_filename` would take
+        // the sibling path above and prove nothing about the name check.
+        assert_eq!(
+            parse_rpm_filename(entry).map(|(n, _)| n),
+            Some(name),
+            "{entry:?} must reach the name check"
+        );
+
+        let mut report = empty_report();
+        let json = composition_envelope(
+            &["SL-Micro 6.1 (x86_64)"],
+            serde_json::json!({
+                "SL-Micro-6.1": { "x86_64": ["pkg-a-1.0-1.x86_64.rpm", entry] }
+            }),
+        );
+        let (_, logs) = log_capture::capture_logs(|| {
+            JSONParser::parse_str(&mut report, &json).unwrap();
+        });
+
+        assert!(
+            report.composed.is_empty(),
+            "{entry:?} must abandon the whole index: {:?}",
+            report.composed
+        );
+        let warn = logs
+            .lines()
+            .find(|l| l.contains("names an invalid package"))
+            .unwrap_or_else(|| panic!("no rejection warning for {entry:?}: {logs}"));
+        assert!(warn.starts_with("WARN"), "must be a WARN: {warn}");
+        assert!(warn.contains(entry), "{entry:?} must be named: {warn}");
     }
 }
 
