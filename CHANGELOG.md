@@ -151,18 +151,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   install with zypper's "capability not found" (104). A host whose products
   compose none of the list is now failed by name — naming the host, its
   products and the packages — rather than sent a list zypper will refuse, and
-  a report whose metadata carries no `binaries` block is unaffected. `update`
-  excludes such a host from its patch, since its prepare established no package
-  baseline there, and reports the failure naming it rather than patching it
-  anyway; the hosts that do compose the update are patched as before. That
-  exclusion now happens before `update` takes the group operation lock, adds
-  the test repo and resolves each host's updater, so a refused host can no
-  longer abort its eligible peers with a contended lock or an unsupported
-  updater, nor have its own repositories reconfigured after being reported as
-  excluded. An architecture the metadata's `products` declares but its
-  `binaries` ship nothing for counts as composing nothing, so such a host is
-  refused by name too rather than treated as undescribed and sent the whole
-  list; an architecture the metadata never mentions at all still is.
+  a report whose metadata carries no `binaries` block is unaffected.
+- `update` now excludes such a host — its prepare established no package
+  baseline there — *before* taking the group operation lock, adding the test
+  repo and resolving each host's updater; the `--newpackage` prepare that
+  follows the update is scoped the same way. One refused host can no longer
+  abort the update for the peers that do compose it, whether by a contended
+  lock or an unsupported updater, nor have its own repositories reconfigured —
+  nor be named in a log line — after being reported as excluded.
+- An architecture the metadata's `products` declares but its `binaries` ship
+  nothing for now composes nothing, so a host on it is refused by name instead
+  of falling through to the whole package list. An architecture the metadata
+  never mentions, and a product listing no architecture at all, still fall open.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
