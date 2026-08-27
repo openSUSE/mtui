@@ -1474,13 +1474,13 @@ impl McpSession {
     /// every template in `rrids`.
     ///
     /// An empty `rrids` means the job recorded no scope (see [`Job::rrids`]) and
-    /// falls back to every loaded template **plus the null sentinel**. The whole
-    /// pass is bounded by `budget`, **including the preamble**: a template not
-    /// reached in time is reported unknown rather than waited out, so
-    /// `job_cancel` stays responsive. The sentinel is reserved one group's equal
-    /// share of the budget so a blocked template cannot starve it. Per template
-    /// it does nothing but release the group's own held locks — no disconnect,
-    /// no pool release, no history row.
+    /// falls back to every loaded template, plus the null sentinel when it holds
+    /// hosts. The whole pass is bounded by `budget`, **including the preamble**:
+    /// a template not reached in time is reported unknown rather than waited
+    /// out, so `job_cancel` stays responsive. Within that, the sentinel is
+    /// capped at one group's equal share of what the preamble left, so neither
+    /// side can starve the other. Per template it does nothing but release the
+    /// group's own held locks — no disconnect, no pool release, no history row.
     async fn unlock_after_abort(&self, rrids: &[String], budget: Duration) -> AbortUnlock {
         let mut summary = AbortUnlock::default();
         // Armed before the first await: the preamble takes the canonical session
@@ -1533,44 +1533,25 @@ impl McpSession {
             return summary;
         };
 
-        // One group's equal share of what the preamble left, reserved for the
-        // sentinel; the templates share the rest. Un-reserved, one blocked
-        // template (a wedged host, or a queued writer winning the
-        // writer-preferring gate) eats the whole budget and the sentinel
-        // release is never attempted.
-        let null_reserve = if with_null {
-            let groups = u32::try_from(targets.len().saturating_add(1)).unwrap_or(u32::MAX);
-            deadline.saturating_duration_since(Instant::now()) / groups
-        } else {
-            Duration::ZERO
-        };
-        let templates_deadline = deadline - null_reserve;
-
-        for rrid in targets {
-            let left = templates_deadline.saturating_duration_since(Instant::now());
-            match tokio::time::timeout(left, self.unlock_template(&rrid)).await {
-                Ok(outcomes) => summary.absorb(outcomes),
-                Err(_) => {
-                    tracing::warn!(rrid = %rrid, ?budget, "post-abort unlock timed out");
-                    summary.unknown.push(rrid);
-                }
-            }
-        }
-
-        // The sentinel, on its reserved share plus whatever the templates left
-        // over. Unlocks its own held locks only (`unlock_held`); a dispatch that
+        // The sentinel goes first, *capped* at one group's equal share of what
+        // the preamble left; the templates then get everything unspent, the
+        // cap's remainder included. Deducting the share from the templates
+        // instead charges it even when the sentinel has no lock to release —
+        // `with_null` counts hosts attached with nothing loaded, not locks held.
+        // Unlocks its own held locks only (`unlock_held`); a dispatch that
         // reached it was force-aborted, so leaving its `/var/lock/mtui.lock`
         // held would otherwise survive until the session ends (teardown) —
-        // which under a long-lived MCP server may be never. On timeout the group
-        // is reported as unknown rather than silently omitted.
+        // which under a long-lived MCP server may be never.
+        let mut null_outcomes = BTreeMap::new();
         if with_null {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let groups = u32::try_from(targets.len().saturating_add(1)).unwrap_or(u32::MAX);
+            let share = deadline.saturating_duration_since(Instant::now()) / groups;
             let null_unlock = async {
                 let mut session = self.session.lock().await;
                 session.unlock_null_group_held().await
             };
-            match tokio::time::timeout(left, null_unlock).await {
-                Ok(outcomes) => summary.absorb(outcomes),
+            match tokio::time::timeout(share, null_unlock).await {
+                Ok(outcomes) => null_outcomes = outcomes,
                 Err(_) => {
                     tracing::warn!(?budget, "post-abort unlock of the null group timed out");
                     // The sentinel has no RRID, so it does not belong in
@@ -1580,6 +1561,20 @@ impl McpSession {
                 }
             }
         }
+
+        for rrid in targets {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, self.unlock_template(&rrid)).await {
+                Ok(outcomes) => summary.absorb(outcomes),
+                Err(_) => {
+                    tracing::warn!(rrid = %rrid, ?budget, "post-abort unlock timed out");
+                    summary.unknown.push(rrid);
+                }
+            }
+        }
+
+        // After the loop: `unlocked` is insertion-ordered, templates first.
+        summary.absorb(null_outcomes);
         summary
     }
 
@@ -3217,6 +3212,131 @@ mod tests {
             "both groups must be reported released, templates first: {msg}"
         );
         assert!(!msg.contains("unknown"), "nothing timed out: {msg}");
+    }
+
+    /// The sentinel's slice is a **cap on the sentinel**, not a deduction from
+    /// the templates. `with_null` counts hosts *attached* with nothing loaded,
+    /// not locks *held* (`Session::null_group_has_hosts`), so a sentinel with
+    /// nothing to release must hand its whole share back — charging it would
+    /// cost a template a release it would otherwise have completed, on the very
+    /// ordinary `add_host`-before-`load_template` session shape.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_idle_null_group_hands_its_share_back_to_the_templates() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        // 70% of the budget: inside the whole budget, outside the half an
+        // up-front per-group deduction would leave.
+        let budget = Duration::from_millis(1000);
+        let alpha = MockConnection::new("host-alpha")
+            .with_sftp_session_delay(Duration::from_millis(700))
+            .with_run_delay(Duration::from_secs(600));
+        let null_host = MockConnection::new("null-host");
+        let null_target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            guard.targets_mut().add(null_target);
+        }
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        {
+            let guard = sess.session().lock().await;
+            assert!(
+                guard.null_group_has_hosts(),
+                "fixture must arm the assertion — with no sentinel host there is no share to charge"
+            );
+        }
+        assert!(
+            !still_locked(&null_host),
+            "fixture must arm the assertion — the sentinel holds nothing to release"
+        );
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess
+            .job_cancel_with_budget(&job_id, budget)
+            .await
+            .expect("cancel succeeds");
+
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            !still_locked(&alpha),
+            "the idle sentinel's share was charged to the template: {msg}"
+        );
+        assert!(msg.contains("unlocked: host-alpha"), "got: {msg}");
+        assert!(
+            !msg.contains("unknown"),
+            "nothing timed out, so nothing may be reported unknown: {msg}"
+        );
+    }
+
+    /// The cap read the other way: a sentinel whose own release outruns its
+    /// share is cut off there and reported unknown, and the template still gets
+    /// released inside the same budget. Un-capped, the sentinel running first
+    /// would simply move mimi1vx's starvation onto the templates.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_blocked_null_group_unlock_cannot_starve_the_templates() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        let budget = Duration::from_millis(1000);
+        let alpha = MockConnection::new("host-alpha")
+            .with_sftp_session_delay(Duration::from_millis(350))
+            .with_run_delay(Duration::from_secs(600));
+        // Slower than the whole share, so the cap is what ends it.
+        let null_host =
+            MockConnection::new("null-host").with_sftp_session_delay(Duration::from_millis(800));
+        let mut null_target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+        null_target.lock("").await.expect("null-host locked");
+
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            guard.targets_mut().add(null_target);
+        }
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        assert!(
+            still_locked(&null_host),
+            "fixture must arm the assertion — the sentinel holds a lock before the cancel"
+        );
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess
+            .job_cancel_with_budget(&job_id, budget)
+            .await
+            .expect("cancel succeeds");
+
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            !still_locked(&alpha) && msg.contains("unlocked: host-alpha"),
+            "the blocked sentinel consumed the templates' budget: {msg}"
+        );
+        assert!(
+            msg.contains("lock state unknown on hosts attached with no report loaded"),
+            "the sentinel was cut off at its share, so it must be reported unknown: {msg}"
+        );
+        assert!(
+            still_locked(&null_host),
+            "the reply claimed the sentinel unknown while its lock was in fact released: {msg}"
+        );
     }
 
     /// A scoped force-cancel must **not** touch the sentinel (#485): an
