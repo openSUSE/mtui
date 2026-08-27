@@ -107,7 +107,10 @@ mod tests {
         session
             .templates
             .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
-        session.activate("SUSE:Maintenance:1:1");
+        assert!(
+            session.activate("SUSE:Maintenance:1:1"),
+            "seeded template must activate"
+        );
         let args = matches(&ListTemplates, &[]);
         ListTemplates.call(&mut session, &args).await.unwrap();
         let out = buf.contents();

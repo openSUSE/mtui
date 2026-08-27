@@ -206,6 +206,8 @@ pub(crate) mod testkit {
             pub succeeded: Option<String>,
             /// The rendered message, if the event carried a format string.
             pub message: Option<String>,
+            /// The template id a per-rrid event carried, if present.
+            pub rrid: Option<String>,
         }
 
         thread_local! {
@@ -219,6 +221,7 @@ pub(crate) mod testkit {
         struct CaptureVisitor {
             succeeded: Option<String>,
             message: Option<String>,
+            rrid: Option<String>,
         }
 
         impl Visit for CaptureVisitor {
@@ -228,6 +231,7 @@ pub(crate) mod testkit {
                 match field.name() {
                     "succeeded" => self.succeeded = Some(format!("{value:?}")),
                     "message" => self.message = Some(format!("{value:?}")),
+                    "rrid" => self.rrid = Some(format!("{value:?}")),
                     _ => {}
                 }
             }
@@ -243,6 +247,7 @@ pub(crate) mod testkit {
                             buf.push(Captured {
                                 succeeded: v.succeeded,
                                 message: v.message,
+                                rrid: v.rrid,
                             });
                         }
                     }
@@ -534,7 +539,7 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: false,
         }));
-        session.activate(rrid);
+        assert!(session.activate(rrid), "seeded template must activate");
         (session, buf)
     }
 
@@ -559,7 +564,7 @@ pub(crate) mod testkit {
         }));
         // Install the active handle so direct `command.call()` tests (which
         // bypass the fan-out driver) read the report through `metadata()`.
-        session.activate(rrid);
+        assert!(session.activate(rrid), "seeded template must activate");
         (session, buf)
     }
 
@@ -582,7 +587,7 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: false,
         }));
-        session.activate(rrid);
+        assert!(session.activate(rrid), "seeded template must activate");
         (session, buf)
     }
 
@@ -642,7 +647,7 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: true,
         }));
-        session.activate(rrid);
+        assert!(session.activate(rrid), "seeded template must activate");
         (session, buf)
     }
 
@@ -665,7 +670,7 @@ pub(crate) mod testkit {
             fail_perform: true,
             set_repo_enabled: false,
         }));
-        session.activate(rrid);
+        assert!(session.activate(rrid), "seeded template must activate");
         (session, buf)
     }
 

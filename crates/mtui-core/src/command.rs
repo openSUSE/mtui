@@ -155,19 +155,8 @@ pub trait Command: Send + Sync {
             // registry-mutating command (`load_template`) can re-point/re-lock
             // the active entry from inside `call` without self-deadlocking.
             let target_rrid = resolved.first().map_or("", String::as_str);
-            if !session.activate(target_rrid) && !target_rrid.is_empty() {
-                // A lost `try_lock_owned` race on a *loaded* rrid: `call`
-                // proceeds against the fallback null report below. Harmless
-                // today only because `Session::fork_for_call`'s invariant note
-                // documents two mechanisms that keep it unreached — on a fork
-                // the null is private and discarded with no teardown able to
-                // reach it (#478), worse than the canonical session's own
-                // documented poisoned-state hazard.
-                tracing::error!(
-                    command = self.name(),
-                    rrid = %target_rrid,
-                    "activate failed: dispatching against the private null report"
-                );
+            if !session.activate(target_rrid) {
+                log_activate_failure(self.name(), target_rrid);
             }
             let out = self.call(session, args).await;
             restore_active(session, restore);
@@ -213,7 +202,9 @@ pub trait Command: Send + Sync {
                 skipped.push(rrid.clone());
                 continue;
             }
-            session.activate(rrid);
+            if !session.activate(rrid) {
+                log_activate_failure(self.name(), rrid);
+            }
             session.display.template_banner(rrid);
             match self.call(session, args).await {
                 Ok(()) => completed.push(rrid.as_str()),
@@ -281,6 +272,24 @@ pub trait Command: Send + Sync {
         }
         Ok(())
     }
+}
+
+/// Reports a dispatch that lost [`Session::activate`]'s `try_lock_owned` race
+/// on a resolved, *loaded* rrid and will run against the fallback null report.
+///
+/// An empty rrid is the legitimate nothing-loaded case and stays silent. The
+/// null's `report_wd()` now errors rather than resolving to the process cwd
+/// (#524), so a path-taking body refuses instead of acting there — but a body
+/// that only reads hosts/metadata still answers about nothing, hence the log.
+fn log_activate_failure(command: &'static str, rrid: &str) {
+    if rrid.is_empty() {
+        return;
+    }
+    tracing::error!(
+        command,
+        rrid = %rrid,
+        "activate failed: dispatching against the fallback null report"
+    );
 }
 
 /// Restores the active-template pointer (and its per-call handle) after
@@ -403,6 +412,22 @@ mod tests {
         }
     }
 
+    /// The fan-out counterpart of [`NoopSingle`].
+    struct NoopFanout;
+
+    #[async_trait]
+    impl Command for NoopFanout {
+        fn name(&self) -> &'static str {
+            "noop_fanout_probe"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Fanout
+        }
+        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
     /// A fork racing the canonical session for the same entry (mechanism 2 of
     /// [`Session::fork_for_call`]'s invariant note makes this unreachable via
     /// MCP today, but not by construction): `activate` fails and `run` used to
@@ -432,7 +457,7 @@ mod tests {
 
         assert!(
             logged.iter().any(|c| c.message.as_deref()
-                == Some("activate failed: dispatching against the private null report")),
+                == Some("activate failed: dispatching against the fallback null report")),
             "a lost race on a non-empty rrid must log at ERROR; got: {:?}",
             logged
                 .iter()
@@ -464,6 +489,48 @@ mod tests {
                 .iter()
                 .filter_map(|c| c.message.clone())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    /// The fan-out dispatch site has the same contract as the single-template
+    /// one, and must name the template that lost: an entry locked from outside
+    /// diverts only *its* iteration onto the null report, while its siblings
+    /// activate normally (#524).
+    #[tokio::test]
+    async fn fanout_activate_failure_logs_error_for_the_losing_template() {
+        const OTHER: &str = "SUSE:Maintenance:2:2";
+
+        let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        session
+            .templates
+            .add(crate::commands::testkit::fake_report(OTHER, &["h2"], "ok"));
+        // `run` releases the guard itself before the loop; do it here too so the
+        // entry can be claimed from outside the session.
+        session.release_active_guard();
+        let entry = session.templates.handle(RRID).expect("RRID is loaded");
+        let _held = entry.try_lock_owned().expect("uncontended");
+
+        let cmd = NoopFanout;
+        let args = crate::commands::testkit::matches(&cmd, &[]);
+
+        log_capture::start();
+        cmd.run(&mut session, &args)
+            .await
+            .expect("both templates still dispatch");
+        let logged = log_capture::take();
+
+        let losers: Vec<String> = logged
+            .iter()
+            .filter(|c| {
+                c.message.as_deref()
+                    == Some("activate failed: dispatching against the fallback null report")
+            })
+            .filter_map(|c| c.rrid.clone())
+            .collect();
+        assert_eq!(
+            losers,
+            vec![RRID.to_owned()],
+            "exactly the locked template must be reported"
         );
     }
 }

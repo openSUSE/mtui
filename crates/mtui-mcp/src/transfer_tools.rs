@@ -274,9 +274,10 @@ fn restore_active(session: &mut mtui_core::Session, prev: Option<String>) {
         Some(rrid) => {
             let _ = session.activate(&rrid);
         }
-        // Nothing was active before: clear the pointer again.
+        // Nothing was active before: clear the pointer again. An empty rrid
+        // always reports `false`; there is no guard to want here.
         None => {
-            session.activate("");
+            let _ = session.activate("");
         }
     }
     session.release_active_guard();

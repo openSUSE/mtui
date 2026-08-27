@@ -416,6 +416,10 @@ impl Session {
     /// then suffices, the outer session mutex having serialised dispatch.
     /// Returns `false` (guard cleared) if `rrid` is not loaded; an empty `rrid`
     /// clears pointer and guard so `metadata()` falls back to the null object.
+    ///
+    /// Dropping the `false` is how a lost race silently redirected a whole
+    /// dispatch onto the sentinel (#524), hence `#[must_use]`.
+    #[must_use = "a false activation leaves the dispatch on the null report"]
     pub fn activate(&mut self, rrid: &str) -> bool {
         self.active_guard = None;
         if rrid.is_empty() {
@@ -1669,7 +1673,10 @@ mod tests {
         let mut s = Session::new(config(), false);
         seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
         seed_report_with_host(&mut s, "SUSE:Maintenance:2:2", "t2");
-        s.activate("SUSE:Maintenance:1:1");
+        assert!(
+            s.activate("SUSE:Maintenance:1:1"),
+            "seeded template must activate"
+        );
 
         // Plant a host in the sentinel's group (what `add_host` writes into with
         // nothing loaded), then restore the guard teardown runs under.
@@ -1818,7 +1825,7 @@ mod tests {
         }
         report.base_mut().testplatforms = testplatforms.iter().map(|s| (*s).to_owned()).collect();
         session.templates.add(Box::new(report));
-        session.activate(rrid);
+        assert!(session.activate(rrid), "seeded template must activate");
     }
 
     /// The pre-pool autoconnect host set: reference hosts merged with the
