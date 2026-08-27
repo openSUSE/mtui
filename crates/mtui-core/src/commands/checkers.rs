@@ -113,7 +113,6 @@ mod tests {
         // `state` is the fallback key for status.
         let stated = serde_json::json!({"name": "x", "state": "failed"});
         assert_eq!(checker_fields(&stated).1, "failed");
-        // Scalar entry.
         let scalar = serde_json::json!("bare");
         assert_eq!(checker_fields(&scalar), ("bare".to_owned(), "?".to_owned()));
     }

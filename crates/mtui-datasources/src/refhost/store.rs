@@ -1,29 +1,22 @@
 //! The refhosts **search engine**.
 //!
 //! [`Refhosts`] holds the flattened, de-duplicated list of [`Host`] rows and
-//! answers queries expressed as [`Attributes`]. Parsing of the `refhosts.yml`
-//! document itself is reused from `mtui-types::load_refhosts` (the pure,
-//! I/O-free loader that already handles location-flattening, dedup, and
-//! per-row best-effort degradation); this module adds only the file read and
-//! the matching logic.
-//!
-//! # Scope
-//! This is the *search* surface (`search`, `is_candidate_match`,
-//! `host_by_name`) plus the ad-hoc [`query`](Refhosts::query) filter and the
-//! [`slot_of`](Refhosts::slot_of) test-target key plus the pool-claim helper
-//! [`search_pool_by_query`](Refhosts::search_pool_by_query) that `list_refhosts`
-//! and the host-arbitration pool consume. The resolver chain
-//! (`PathResolver`/`HttpsResolver`/`RefhostsFactory`) lives in
-//! [`super::resolvers`].
+//! answers queries expressed as [`Attributes`]. Parsing the `refhosts.yml`
+//! document is `mtui-types::load_refhosts`' job — the pure, I/O-free loader that
+//! handles location-flattening, dedup and per-row degradation — so this module
+//! adds only the file read and the matching logic: `search`,
+//! `is_candidate_match`, `host_by_name`, the ad-hoc [`query`](Refhosts::query)
+//! filter, the [`slot_of`](Refhosts::slot_of) test-target key and the pool-claim
+//! [`search_pool_by_query`](Refhosts::search_pool_by_query). The resolver chain
+//! lives in [`super::resolvers`].
 
 use std::path::Path;
 
 use mtui_types::version::VersionField;
 use mtui_types::{Addon, Host, Product, Version, load_refhosts};
 
-/// A test-target slot key: `(product, version, arch, sorted addon names)`.
-///
-/// The full identity an update distinguishes (a 4-tuple).
+/// A test-target slot key: `(product, version, arch, sorted addon names)` — the
+/// full identity an update distinguishes.
 pub type Slot = (String, String, String, Vec<String>);
 
 use super::models::Attributes;
@@ -35,8 +28,7 @@ use crate::error::RefhostError;
 pub struct Refhosts {
     data: Vec<Host>,
     /// `name → index into `data`` for O(1) [`host_by_name`](Self::host_by_name)
-    /// lookups. Built once at construction (`data` is immutable afterwards).
-    /// First occurrence wins, mirroring the linear-scan `find` it replaces.
+    /// lookups; built once at construction, first occurrence wins.
     by_name: std::collections::HashMap<String, usize>,
 }
 
@@ -49,8 +41,7 @@ impl Refhosts {
     pub fn from_hosts(data: Vec<Host>) -> Self {
         let mut by_name = std::collections::HashMap::with_capacity(data.len());
         for (i, host) in data.iter().enumerate() {
-            // First occurrence wins (parity with the prior first-match `find`);
-            // `load_refhosts` already de-dups, so this only guards a stray dup.
+            // `load_refhosts` already de-dups; this only guards a stray dup.
             by_name.entry(host.name.clone()).or_insert(i);
         }
         Self { data, by_name }
@@ -58,10 +49,8 @@ impl Refhosts {
 
     /// Load and parse a `refhosts.yml` file into a store.
     ///
-    /// The document is flattened (legacy location groups merged), de-duplicated
-    /// by host name, and malformed rows are dropped with a `warn` log — all via
-    /// `mtui-types::load_refhosts`. A file-read failure or a document-level YAML
-    /// parse failure surfaces as [`RefhostError`].
+    /// `mtui-types::load_refhosts` flattens legacy location groups, de-dups by
+    /// host name and drops malformed rows with a `warn` log.
     ///
     /// # Errors
     /// Returns [`RefhostError::Io`] if `path` cannot be read, or
@@ -77,10 +66,9 @@ impl Refhosts {
 
     /// Parse an already-in-memory `refhosts.yml` document into a store.
     ///
-    /// Same flattening/dedup/degradation as [`from_path`](Self::from_path),
-    /// without the file read — used by [`HttpsResolver`](super::HttpsResolver)
-    /// to build the store from a freshly downloaded payload without re-reading
-    /// the on-disk mirror.
+    /// [`from_path`](Self::from_path) without the file read, so
+    /// [`HttpsResolver`](super::HttpsResolver) can build from a freshly
+    /// downloaded payload rather than re-reading the on-disk mirror.
     ///
     /// # Errors
     /// Returns [`RefhostError::Parse`] if `text` is not a valid `refhosts.yml`
@@ -92,8 +80,8 @@ impl Refhosts {
 
     /// Parse an already-in-memory `refhosts.yml` document from raw bytes.
     ///
-    /// Invalid UTF-8 is replaced lossily rather than rejected outright, since
-    /// `refhosts.yml` is a YAML document expected to be UTF-8 in practice.
+    /// Invalid UTF-8 is replaced lossily rather than rejected: `refhosts.yml` is
+    /// UTF-8 in practice.
     ///
     /// # Errors
     /// Returns [`RefhostError::Parse`] if the (lossily-decoded) contents are
@@ -154,17 +142,15 @@ impl Refhosts {
 
     /// Return refhosts matching the filters, de-duplicated by host name.
     ///
-    /// `attributes` (parsed from a
-    /// `testplatform`) and the ad-hoc field filters (`name` glob, `arch` list,
-    /// `product` substring, `version` loose, `addon` substring list) are
-    /// alternatives — when `attributes` is `Some` the field filters are ignored.
-    /// With neither, every host is returned. A host matches an `attributes`
-    /// query when it satisfies **any** of the alternatives.
+    /// `attributes` (parsed from a `testplatform`, matching a host that
+    /// satisfies **any** alternative) and the ad-hoc field filters are
+    /// exclusive: `Some(attributes)` ignores the field filters, and neither
+    /// returns every host.
     ///
-    /// The dedup is first-occurrence-wins. It is redundant for a store built by
-    /// [`Refhosts::from_path`] (`mtui-types::load_refhosts` already de-dups at load
-    /// time) but **load-bearing** for [`Refhosts::from_hosts`], which accepts a
-    /// raw row list — matching the first-occurrence semantics of `host_by_name`.
+    /// The first-occurrence-wins dedup is redundant after
+    /// [`Refhosts::from_path`] but **load-bearing** for
+    /// [`Refhosts::from_hosts`], which accepts a raw row list — and it matches
+    /// `host_by_name`'s semantics.
     #[must_use]
     pub fn query(
         &self,
@@ -195,10 +181,10 @@ impl Refhosts {
     /// Return `true` iff `host` satisfies every supplied ad-hoc field filter.
     ///
     /// An unset filter (empty/`None`) imposes no constraint: `name` is a shell
-    /// glob, `arch` is membership in a list,
-    /// `product` is a case-insensitive substring of the base product name,
-    /// `version` is the loose form matched by [`version_str_match`](Self::version_str_match), and each
-    /// `addon` term is a case-insensitive substring of some installed addon.
+    /// glob, `arch` list membership, `product` a case-insensitive substring of
+    /// the base product name, `version` the loose form matched by
+    /// [`version_str_match`](Self::version_str_match), and each `addon` term a
+    /// case-insensitive substring of some installed addon.
     #[must_use]
     fn field_match(
         host: &Host,
@@ -244,9 +230,8 @@ impl Refhosts {
 
     /// Loosely match a host version against `15-SP6` / `15.6` / `15`.
     ///
-    /// `SP` is optional and
-    /// case-insensitive; a bare major matches any minor. A host with no version
-    /// never matches a versioned query.
+    /// `SP` is optional and case-insensitive, and a bare major matches any
+    /// minor. A host with no version never matches a versioned query.
     #[must_use]
     fn version_str_match(hostver: Option<&Version>, want: &str) -> bool {
         let Some(hostver) = hostver else {
@@ -273,9 +258,9 @@ impl Refhosts {
 
     /// Return the test-target [`Slot`] key for `host`.
     ///
-    /// The full `(product, version, arch, addons)` an
-    /// update distinguishes, so only genuine duplicates collapse to one slot.
-    /// Addon names are sorted for a stable key.
+    /// The full `(product, version, arch, addons)` an update distinguishes, so
+    /// only genuine duplicates collapse to one slot. Addons are sorted for a
+    /// stable key.
     #[must_use]
     pub fn slot_of(host: &Host) -> Slot {
         let ver_str = version_display(host.product.version.as_ref());
@@ -292,13 +277,12 @@ impl Refhosts {
     /// Return the test-target [`Slot`] key derived from the **queried**
     /// attributes.
     ///
-    /// Where [`slot_of`](Self::slot_of) keys on every module a host
-    /// happens to have installed, this keys on what the testplatform actually
-    /// distinguishes: the base product + version it requests, the host's arch
-    /// (testplatforms fan out one query per arch), and only the addons the
-    /// testplatform explicitly asked for. Hosts that satisfy the same query are
-    /// interchangeable for that update and collapse to one slot, so the arbiter
-    /// draws a single host per `(product, version, arch, requested addons)`.
+    /// Where [`slot_of`](Self::slot_of) keys on every module a host happens to
+    /// have installed, this keys on what the testplatform distinguishes: the
+    /// base product + version requested, the host's arch (testplatforms fan out
+    /// one query per arch), and only the addons explicitly asked for. Hosts
+    /// satisfying the same query are interchangeable, so they collapse to one
+    /// slot and the arbiter draws a single host from it.
     #[must_use]
     fn slot_for_query(attribute: &Attributes, host: &Host) -> Slot {
         let (name, ver_str) = match &attribute.product {
@@ -315,10 +299,9 @@ impl Refhosts {
 
     /// Return pool candidates `(host, slot)` keyed on the query slot.
     ///
-    /// Each host matching any of `attributes` is returned once, tagged with the
-    /// `slot_for_query` of the **first** attribute it
-    /// matches — the testplatform's requested identity rather than the host's
-    /// full installed-module identity — so host-arbitration draws one host per
+    /// Each matching host is returned once, tagged with the `slot_for_query` of
+    /// the **first** attribute it matches — the requested identity, not the
+    /// host's full installed-module one — so host-arbitration draws one host per
     /// *requested* test-target slot.
     #[must_use]
     pub fn search_pool_by_query(&self, attributes: &[Attributes]) -> Vec<(Host, Slot)> {
@@ -342,9 +325,9 @@ impl Refhosts {
     /// **or** when the host carries that product as an addon.
     ///
     /// Extension products (`SLES-LTSS`, `sle-ha`, `SLES_SAP`, `SLE_RT`, …) ship
-    /// on a `SLES`/`SLED` base and are recorded as addons; a host can only have
-    /// one base, so `base=SLES-LTSS` must still resolve to a `SLES` host that
-    /// has the `SLES-LTSS` extension installed.
+    /// on a `SLES`/`SLED` base and are recorded as addons, and a host has only
+    /// one base — so `base=SLES-LTSS` must resolve to a `SLES` host carrying the
+    /// `SLES-LTSS` extension.
     fn product_satisfied(candidate: &Host, query: &Product) -> bool {
         if Self::product_matches(&candidate.product, query) {
             return true;
@@ -381,11 +364,8 @@ impl Refhosts {
             return false;
         }
         match &query.minor {
-            // Sentinel: candidate must have no minor.
             Some(VersionField::Text(s)) if s.is_empty() => candidate.minor.is_none(),
-            // Ignore minor.
             None => true,
-            // Exact minor match.
             Some(qv) => candidate.minor.as_ref() == Some(qv),
         }
     }
@@ -425,10 +405,9 @@ fn version_display(ver: Option<&Version>) -> String {
 /// Match `text` against a shell glob supporting `*` and `?` for the `--name`
 /// filter.
 ///
-/// `*` matches any run (including empty), `?` matches exactly one character;
-/// every other character is literal. Matching is case-sensitive, which suits
-/// the hostnames mtui deals with. Implemented inline to avoid a glob dependency
-/// (no-runtime-deps goal).
+/// `*` matches any run (including empty), `?` exactly one character; everything
+/// else is literal. Case-sensitive, which suits hostnames. Inline to avoid a
+/// glob dependency (no-runtime-deps goal).
 fn name_glob(text: &str, pattern: &str) -> bool {
     let t: Vec<char> = text.chars().collect();
     let p: Vec<char> = pattern.chars().collect();
@@ -551,8 +530,6 @@ default:
 
     #[test]
     fn from_bytes_lossily_decodes_invalid_utf8() {
-        // An invalid byte spliced into the host name is lossily replaced
-        // rather than rejected, keeping the surrounding YAML parseable.
         let split = FIXTURE_YAML.find("host.example.com").unwrap() + "host".len();
         let mut bytes = FIXTURE_YAML.as_bytes()[..split].to_vec();
         bytes.push(0xFF);
@@ -607,9 +584,8 @@ default:
         assert!(p.host_by_name("no-such-host").is_none());
     }
 
-    /// The name index keeps **first-occurrence** semantics of the linear scan it
-    /// replaced: on a duplicate name (which `load_refhosts` normally de-dups,
-    /// but `from_hosts` accepts raw), the first row wins (0mop.12 lever 2).
+    /// On a duplicate name — which `load_refhosts` de-dups but `from_hosts`
+    /// accepts raw — the name index must keep the first row.
     #[test]
     fn host_by_name_returns_first_on_duplicate() {
         let rh = Refhosts::from_hosts(vec![
@@ -841,32 +817,26 @@ default:
 
     #[test]
     fn query_name_glob_and_arch_filter() {
-        // name glob
         let got = names(&pool().query(None, Some("host-nbg-*"), &[], None, None, &[]));
         assert_eq!(got, ["host-nbg-x86", "host-nbg-only-here"]);
-        // arch list membership
         let got = names(&pool().query(None, None, &["ppc64le".to_owned()], None, None, &[]));
         assert_eq!(got, ["host-nbg-only-here"]);
     }
 
     #[test]
     fn query_product_substring_and_version_loose() {
-        // product substring is case-insensitive
         let got = names(&pool().query(None, None, &[], Some("SLE"), None, &[]));
         assert_eq!(got.len(), 4);
-        // loose version: "15" matches any 15.x minor
         let got = names(&pool().query(None, None, &[], None, Some("15"), &[]));
         assert_eq!(
             got,
             ["host-default-x86", "host-nbg-x86", "host-nbg-only-here"]
         );
-        // loose version with SP-optional minor
         let got = names(&pool().query(None, None, &[], None, Some("15-SP5"), &[]));
         assert_eq!(
             got,
             ["host-default-x86", "host-nbg-x86", "host-nbg-only-here"]
         );
-        // dotted form
         let got = names(&pool().query(None, None, &[], None, Some("12.sp4"), &[]));
         assert_eq!(got, ["host-default-noaddon"]);
     }
@@ -875,7 +845,6 @@ default:
     fn query_addon_substring_requires_all() {
         let got = names(&pool().query(None, None, &[], None, None, &["sdk".to_owned()]));
         assert_eq!(got, ["host-default-x86"]);
-        // a term that matches nothing excludes every host
         let got = names(&pool().query(None, None, &[], None, None, &["nope".to_owned()]));
         assert!(got.is_empty());
     }
@@ -939,8 +908,7 @@ default:
 
     #[test]
     fn slot_for_query_keys_on_requested_not_installed_addons() {
-        // A host with an extra installed addon (sdk) queried by a testplatform
-        // that requests no addons: the query slot must ignore the sdk.
+        // The host's extra installed `sdk` must not reach the query slot.
         let h = host(
             "h",
             "x86_64",
@@ -976,8 +944,7 @@ default:
     #[test]
     fn search_pool_by_query_collapses_interchangeable_hosts_to_one_slot() {
         // Both x86_64 SLES15-SP5 hosts (one with an sdk addon, one without)
-        // satisfy the same addon-less query and must share a single query slot,
-        // so the arbiter draws just one of them.
+        // satisfy the same addon-less query, so the arbiter draws one of them.
         let attrs = Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
         let pairs = pool().search_pool_by_query(&attrs);
         let hosts: std::collections::BTreeSet<_> =
@@ -995,21 +962,17 @@ default:
 
     #[test]
     fn search_pool_by_query_distinct_arches_are_distinct_slots() {
-        // x86_64 and ppc64le SLES15-SP5 hosts land in different slots.
         let attrs =
             Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64,ppc64le]");
         let pairs = pool().search_pool_by_query(&attrs);
         let slots: std::collections::BTreeSet<_> = pairs.iter().map(|(_, s)| s.clone()).collect();
-        // x86_64 slot (2 interchangeable hosts) + ppc64le slot = 2 slots.
+        // x86_64 (2 interchangeable hosts) + ppc64le.
         assert_eq!(slots.len(), 2);
     }
 
     #[test]
     fn search_pool_by_query_dedups_host_across_attributes() {
-        // A host matching two overlapping attributes appears once, tagged with
-        // the first attribute it matches.
         let mut attrs = Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
-        // A second, equivalent query the same hosts also satisfy.
         attrs.extend(Attributes::from_testplatform(
             "base=sles(major=15,minor=5);arch=[x86_64]",
         ));

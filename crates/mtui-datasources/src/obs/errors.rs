@@ -1,18 +1,10 @@
 //! The error family for the native OBS/IBS backend.
 //!
 //! One [`ObsError`] enum covers every failure in the backend — transport,
-//! timeout, config/credential, XML parse, and workflow-precondition — so the
+//! timeout, config/credential, XML parse and workflow-precondition — so the
 //! `OSC` facade can match it exhaustively with a single `Err(_)` arm and fold
-//! it into a logged `false`, mirroring the crate's other typed error families
-//! ([`crate::error::GiteaError`], `crate::error::OscError`).
-//!
-//! The transport foundation (G1a) landed [`Api`](ObsError::Api),
-//! [`Timeout`](ObsError::Timeout) and the [`Http`](ObsError::Http) transport
-//! passthrough; the oscrc reader (G1b) added [`Config`](ObsError::Config); the
-//! XML models (G1d) added [`Parse`](ObsError::Parse) (malformed OBS XML and
-//! the DTD/XXE refusal); the QAM operations (G1f) added [`Op`](ObsError::Op)
-//! (workflow-precondition refusals). `#[non_exhaustive]` keeps further
-//! additions additive.
+//! it into a logged `false`, as it does for [`crate::error::GiteaError`].
+//! `#[non_exhaustive]` keeps further additions additive.
 
 use thiserror::Error;
 
@@ -20,19 +12,17 @@ use crate::error::HttpError;
 
 /// The OBS backend error family.
 ///
-/// The `OSC(config, rrid)` facade (landing in G1g) converts *every* member of
-/// this family into a logged `false`, so its bare callers never see a panic.
-/// Keeping it one enum means that facade catch is a single `match`/`Err(_)`.
+/// The `OSC(config, rrid)` facade converts *every* member of this family into a
+/// logged `false`, so its bare callers never see a panic — one enum keeps that
+/// catch a single `Err(_)` arm.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ObsError {
     /// An OBS API call returned a non-2xx HTTP response.
     ///
-    /// The message is
-    /// `OBS API returned {status} for {url}` with a `": {summary}"` suffix only
-    /// when the `<status><summary>` error envelope carried a non-empty summary.
-    /// The `status`/`url`/`summary` are kept as inspectable fields so callers
-    /// (and later ops) can branch on them.
+    /// `OBS API returned {status} for {url}`, with a `": {summary}"` suffix only
+    /// when the `<status><summary>` error envelope carried one. The fields stay
+    /// inspectable so callers can branch on them.
     #[error("OBS API returned {status} for {url}{}", summary_suffix(summary))]
     Api {
         /// The HTTP status code of the failing response.
@@ -45,41 +35,38 @@ pub enum ObsError {
 
     /// A native OBS operation exceeded its coarse between-calls time budget.
     ///
-    /// A whole operation makes a few
-    /// calls; the deadline is checked *before* each one (there is no safe
-    /// in-process mid-call hard kill), so the payload names the URL the budget
-    /// was exhausted before.
+    /// An operation makes a few calls and the deadline is checked *before* each
+    /// (there is no safe in-process mid-call hard kill), so the payload names
+    /// the URL the budget was exhausted before.
     #[error("{0}")]
     Timeout(String),
 
-    /// A configuration/credential fault while reading the oscrc (or, later, the
-    /// SSH-signature signer, G1c).
+    /// A configuration/credential fault from the oscrc or the SSH-signature
+    /// signer.
     ///
-    /// A fail-closed, secret-safe message
-    /// that names the real failing oscrc file/section. The native oscrc reader
-    /// ([`crate::obs::oscrc`]) never interpolates a parser error's own text into
-    /// this message, so a malformed oscrc's offending source line (possibly a
-    /// password) is never leaked.
+    /// A fail-closed, secret-safe message naming the failing oscrc
+    /// file/section. [`crate::obs::oscrc`] never interpolates a parser error's
+    /// own text here, so a malformed oscrc's offending source line — possibly a
+    /// password — is never leaked.
     #[error("{0}")]
     Config(String),
 
     /// A malformed OBS XML payload, or a payload refused by the DTD/XXE guard.
     ///
-    /// Both a reader failure and the pre-parse `<!DOCTYPE`/`<!ENTITY` refusal
-    /// map onto this same variant, so the `OSC` facade folds either into a
-    /// logged `false` with one `Err(_)` arm. The DTD-refusal message contains
-    /// `"DTD"`.
+    /// A reader failure and the pre-parse `<!DOCTYPE`/`<!ENTITY` refusal share
+    /// this variant, so one `Err(_)` arm folds either into a logged `false`. The
+    /// DTD-refusal message contains `"DTD"`.
     #[error("{0}")]
     Parse(String),
 
-    /// A QAM operation refused a workflow precondition (G1f).
+    /// A QAM operation refused a workflow precondition: an empty comment, an
+    /// ambiguous auto-inferred group, a request not open for review, a
+    /// missing/wrong-`SUMMARY` testreport, the previous-decline guard, or the
+    /// group-approve refusal.
     ///
-    /// Covers the operation-level refusals — an empty comment, an ambiguous auto-inferred
-    /// group, a request not open for review, a missing/wrong-`SUMMARY`
-    /// testreport, a previous-decline guard, and the group-approve refusal.
-    /// Kept distinct from [`Parse`](ObsError::Parse) (which means malformed XML)
-    /// so the `OSC` facade (G1g) can tell a workflow refusal apart from a
-    /// transport/parse fault while still folding both into a logged `false`.
+    /// Distinct from [`Parse`](ObsError::Parse) (malformed XML) so the `OSC`
+    /// facade can tell a workflow refusal apart from a transport/parse fault
+    /// while still folding both into a logged `false`.
     #[error("{0}")]
     Op(String),
 
@@ -105,7 +92,6 @@ mod tests {
 
     #[test]
     fn api_error_display_includes_summary_suffix() {
-        // A non-empty summary.
         let e = ObsError::Api {
             status: 404,
             url: "https://api.suse.de/request/9".to_owned(),
@@ -119,7 +105,6 @@ mod tests {
 
     #[test]
     fn api_error_display_omits_suffix_when_summary_empty() {
-        // No trailing ": " when the error envelope had no summary.
         let e = ObsError::Api {
             status: 500,
             url: "https://api.suse.de/x".to_owned(),
@@ -147,14 +132,12 @@ mod tests {
 
     #[test]
     fn config_error_display_is_verbatim_message() {
-        // A plain, fail-closed message.
         let e = ObsError::Config("oscrc [https://api.suse.de] has no 'user'".to_owned());
         assert_eq!(e.to_string(), "oscrc [https://api.suse.de] has no 'user'");
     }
 
     #[test]
     fn parse_error_display_is_verbatim_message() {
-        // Plain, verbatim message.
         let e = ObsError::Parse("refusing to parse an OBS document that carries a DTD".to_owned());
         assert_eq!(
             e.to_string(),
@@ -164,7 +147,6 @@ mod tests {
 
     #[test]
     fn op_error_display_is_verbatim_message() {
-        // Plain, verbatim message.
         let e =
             ObsError::Op("group approval is not supported by the native OBS backend".to_owned());
         assert_eq!(

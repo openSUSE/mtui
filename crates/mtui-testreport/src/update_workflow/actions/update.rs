@@ -1,194 +1,82 @@
 //! Update command templates (role `updater`).
 //!
-//! These command templates interpolate `$repa` (the patch repo/RRID selector)
-//! and `$packages` **via safe substitution**, because they also embed shell/awk
-//! `$`-tokens
-//! (`awk … print $2`, `while read r … $$r`) that must reach the remote shell
-//! unaltered. The `slmicro` entry is transactional with a reboot.
+//! `$repa` (the patch repo/RRID selector) and `$packages` are interpolated with
+//! [`SubstMode::Safe`], because the templates also embed shell/awk `$`-tokens
+//! that must reach the remote shell unaltered. Constraints on the text:
 //!
-//! Each template's leading newline keeps the first command off the prompt line
-//! in the transcript `show_log` prints.
+//! * every `$` meant for the remote shell is written `$$`; awk field refs
+//!   (`print $2`) stay bare. Shell variables are `mtui_`-prefixed so no future
+//!   `$name` template variable can expand one away.
+//! * the literal token `zypper` must stay in `ZYPPER_UPDATE` —
+//!   `checks::update::zypper` gates its exit-code rules on the command text
+//!   containing it, so losing it silently disables them.
+//! * each template's leading newline keeps the first command off the prompt
+//!   line in the transcript `show_log` prints.
 //!
-//! # The exit status the zypper / slmicro scripts report
+//! # Exit status
 //!
-//! Both are multi-line scripts run as **one** remote `exec`, so the shell's
-//! last-command-wins rule decides what the update check gets to inspect. Left
-//! alone that is the trailing repo-cleanup loop's status — `0` whenever the
-//! loop body never runs — and a genuinely failed patch reported success.
+//! Each script is one remote `exec`, so the shell's last-command-wins rule
+//! would hand the verdict to the trailing repo-cleanup loop. The patch's own
+//! status is captured into `$mtui_status` and re-`exit`ed instead: an `update`
+//! check failure fires the **group-wide** rollback downgrade, so a cosmetic
+//! `zypper -n rr` hiccup must not revert every healthy host in the group.
 //!
-//! So the patch's own status is captured into `$mtui_status` on the line after
-//! the patch, before the post-state `zypper -n patches | grep` can clobber
-//! `$?`, and the script ends with `exit $mtui_status`. The two commands after
-//! the patch stay: the `grep` is transcript signal, and the cleanup loop is
-//! real work. Neither may decide the verdict — an `update` check failure fires
-//! the **group-wide** rollback downgrade, so a cosmetic `zypper -n rr` hiccup
-//! would revert every healthy host in the group.
+//! Emptiness is tested with `set -- $mtui_patches` + `[ "$#" -gt 0 ]`, not
+//! `[ -n … ]`: a whitespace-only list is "non-empty" to `-n` but splits into
+//! zero words, so the patch would run with no operands after all.
 //!
-//! The patch list is captured into `$mtui_patches` first so the empty case is
-//! distinguishable: a host carrying none of the update's products is a no-op,
-//! not a failure, and running the patch command with no operands would make the
-//! package manager complain about its own arguments — a status that is now
-//! real. That verdict is unchanged; only the way it is reached is.
+//! # The probe guard (#447)
 //!
-//! # The probe guard
+//! If a command that *produces* `$mtui_patches` fails, the list comes back
+//! empty, the patch is skipped and the script exits `0` — an update reported
+//! but never installed. `pipefail` and `${PIPESTATUS[0]}` are unavailable (the
+//! tests below run this text under dash), so each probe is captured on its own
+//! assignment and its `$?` read on the next line (POSIX XCU 2.9.1). The rows
+//! reach awk through the **builtin** `printf`, so no `ARG_MAX` limit sits
+//! between them.
 //!
-//! `$mtui_patches` decides whether the patch runs at all, so the commands that
-//! *produce* it are the script's premise. If one of them fails the list comes
-//! back empty, the guard skips the patch, and the script exits `0` — mtui
-//! reporting an update it never installed. That is issue #447, and it is not
-//! merely a discarded status: `mtui_patches=$(zypper -n patches | awk …)` took
-//! the **pipeline's** status, which POSIX defines as the *last* stage's, so it
-//! was awk's — and awk exits `0` on empty input. zypper's status was not
-//! discarded there, it was unobservable.
+//! `mtui_probe_ok` prints the marker line `mtui: could not determine what to
+//! patch: …` and exits with the probe's own status. The check gates on the
+//! *marker*, ahead of its exit-code rules
+//! ([`crate::update_workflow::checks::update`]), because a POSIX `exit N`
+//! truncates to `0..=255` and any value chosen here would collide with the
+//! package manager's own space. The marker is split across the `printf` format
+//! string and its argument so the script's text does not itself contain the
+//! string the check greps for — otherwise a `set -x` on the host would report a
+//! probe failure on every healthy update
+//! (`the_rendered_update_templates_do_not_trip_the_gate` pins this).
 //!
-//! `set -o pipefail` (not POSIX) and `${PIPESTATUS[0]}` (bash-only) are both
-//! out: the acceptance tests below run this text under `/bin/sh`, which is
-//! dash on Debian-family builders. The portable lever is POSIX XCU 2.9.1 — an
-//! assignment-only command takes the status of its last command substitution —
-//! so each probe is captured on its own (`mtui_patch_rows=$(zypper -n
-//! patches)`) and its `$?` read on the next line. The rows then reach awk
-//! through the **builtin** `printf '%s\n'`, not `echo` or `xargs`, so on any
-//! shell where `printf` is a builtin — dash, bash and busybox, i.e. every
-//! shell these run under — no `ARG_MAX` limit sits between them. Were it ever
-//! to resolve to `/usr/bin/printf`, a large enough patch table would fail the
-//! probe rather than truncate it: the fail-safe direction.
+//! Accepted probe statuses are `0`, plus `106`
+//! (`ZYPPER_EXIT_INF_REPO_SKIPPED`) only when `mtui_issue_repo_present` still
+//! finds `$repa` in `zypper -n lr`. **Do not unify this with `classify_exit`'s
+//! success set**, which is argued from "the transaction committed": as a
+//! verdict on a metadata probe, `106` may mean the issue repo itself was
+//! skipped. It cannot simply be rejected either — `init_repos()` raises it for
+//! *any* skipped repo, and refhosts routinely carry an unrelated stale one.
 //!
-//! `mtui_probe_ok <label> <status>` is the guard. On `0` it returns; on
-//! anything else it prints the marker line
-//! `mtui: could not determine what to patch: <label> exited <status>` and
-//! exits with **the probe's own status**. The marker is the signal — the check
-//! gates on it ahead of the exit-code rules
-//! ([`crate::update_workflow::checks::update`]) — because no exit code could
-//! carry it: a POSIX `exit N` truncates to `0..=255`, so any value a template
-//! chose would sit inside the package manager's own space. Nothing in this
-//! workspace exits with a status of its own choosing; every `exit` in shell
-//! text passes a tool's status through, and this one does too.
+//! Guarded: `zypper -n patches` and the awk that filters it (an awk exiting `2`
+//! or missing from `PATH` reproduces #447 verbatim). Deliberately unguarded:
 //!
-//! The marker is assembled from the `printf` format string **and** its
-//! argument (`printf 'mtui: could not %s\n' "determine what to patch: …"`) so
-//! that the script's own text does not contain the string the check greps for.
-//! Otherwise a transcript that echoed the command — a `set -x` in the host's
-//! profile, a verbose transport — would report a probe failure on every
-//! healthy update. `the_rendered_update_templates_do_not_trip_the_gate` pins
-//! it.
+//! * `zypper -n refresh` — its status cannot support the verdict. Per
+//!   `openSUSE/zypper` `src/commands/repos/refresh.cc:337-345` it returns `4`
+//!   both when every repository failed and when only some did, and never `106`.
+//!   The dominant case survives anyway: for a repo with no local cache, a
+//!   failed refresh makes `patches` (which does go through `init_repos`) answer
+//!   `106`, and the alias question then finds the repo missing.
+//! * the post-state `grep` (a successful patch makes it exit `1`), the cleanup
+//!   loop, and the pre-state `grep` (exit `1` is the legitimate "this host
+//!   carries none of these products" case).
 //!
-//! ## Why the accepted set is `0`, plus `106` only when the repo is there
+//! Residual, narrowed rather than closed: repos are added without `-f`
+//! (`mtui-hosts` `target/repo_manager.rs`), so a *stale but present* cache lets
+//! `patches` answer `0` with the new patch absent. Closing it needs a freshness
+//! assertion, not a status test.
 //!
-//! **Deliberately narrower than `classify_exit`'s success set, and the two
-//! must not be unified.** That set is argued from "the transaction committed",
-//! which is a statement about the *patch*. Read as a verdict on a metadata
-//! *probe* its members invert: `106` (`ZYPPER_EXIT_INF_REPO_SKIPPED`) says a
-//! repository was skipped, and if the skipped one is the issue repo then the
-//! list legitimately lacks the patch — precisely the silent no-op this guard
-//! exists to stop.
-//!
-//! But `106` cannot simply be *rejected* either, and the reason is the same
-//! one that leaves `refresh` unguarded below: `init_repos()` raises it for
-//! **any** skipped repository and cannot say which. A refhost routinely
-//! carries one stale or unreachable repo alongside working ones, and those
-//! hosts patch correctly today. Rejecting `106` would abort exactly the hosts
-//! that leaving `refresh` unguarded was meant to protect — the two rules would
-//! cancel out, and the fleet, not one code path, would pay for it.
-//!
-//! So the status is not asked to carry the verdict at all. On `106` the script
-//! asks the question the guard actually cares about — *is the update's own
-//! repo still there?* — with `mtui_issue_repo_present`, which greps `$repa` out
-//! of `zypper -n lr`, the same selector and the same listing the cleanup loop
-//! already matches on. Repo present: the skipped one was somebody else's, so
-//! note it in the transcript and carry on. Repo absent: the list cannot be
-//! trusted, and the probe fails.
-//!
-//! `mtui_issue_repo_present` is a pipeline, and here the last-stage rule is
-//! wanted rather than worked around: awk's `END { exit !found }` *is* the
-//! verdict. An `lr` that fails outright therefore reads as "absent" and fails
-//! the probe, which is the conservative direction.
-//!
-//! A host carrying none of the update's products is untouched by this: no repo
-//! was added for it, so `patches` answers `0`, no `106` arises, and the empty
-//! list stays the legitimate no-op it always was. The alias question is only
-//! ever asked on the `106` path, which is why it cannot turn that no-op into a
-//! failure.
-//!
-//! ## What is and is not guarded
-//!
-//! Guarded: `zypper -n patches` (both templates) and **the awk that filters
-//! its output**. awk is the last stage of the filter pipeline, so `$?` on the
-//! next line is already awk's and the capture is free — and without it #447 is
-//! still reachable: an awk that exits `2`, or is missing from `PATH`, yields an
-//! empty list, a skipped patch and `exit 0`, which is the original verdict
-//! verbatim.
-//!
-//! **`zypper -n refresh` is deliberately NOT guarded**, although it is the
-//! other command whose failure leaves the patch absent from the metadata. Its
-//! status cannot support the verdict: verified against `openSUSE/zypper`
-//! `src/commands/repos/refresh.cc:337-345`, the explicit `refresh` command
-//! returns `ZYPPER_EXIT_ERR_ZYPP` (`4`) both when *every* repository failed and
-//! when only *some* did — and it never returns `106`, which is set by
-//! `init_repos()` during an operation command, not here. So a refhost with one
-//! stale, unreachable or unsigned-key repository alongside working ones is
-//! indistinguishable from a host whose issue repo failed, and guarding it would
-//! abort updates that are fine. The dominant case it would have caught is not
-//! lost: for a freshly added repo with no local cache, a refresh failure means
-//! `zypper -n patches` — which *does* go through `init_repos` — answers `106`,
-//! and the alias question above then finds the repo missing or disabled.
-//!
-//! **One residual remains, narrowed rather than closed.** Repos are added with
-//! `zypper ar` and no `-f` (`mtui-hosts` `target/repo_manager.rs`), so
-//! `patches` will not autorefresh them. A repo whose cache is *stale but
-//! present* — an `update` re-run after an earlier successful `prepare`, with
-//! the repo now unreachable — lets `patches` answer `0` from that cache with
-//! the new patch absent, and the script exits `0`: the original silent no-op,
-//! on that one path. Closing it needs a freshness assertion, not a status
-//! test.
-//!
-//! Also not guarded: the post-state `grep` (a successful patch makes it exit
-//! `1` — the reason `$mtui_status` exists), the repo-cleanup loop (a cosmetic
-//! `zypper -n rr` hiccup must not revert the fleet), and the pre-state `grep`
-//! (exit `1` there is the legitimate "this host carries none of these
-//! products" case).
-//!
-//! The emptiness test is `set -- $mtui_patches` followed by `[ "$#" -gt 0 ]`,
-//! **not** `[ -n "$mtui_patches" ]`. The two differ on a list of whitespace:
-//! `-n` calls it non-empty, but the unquoted expansion that follows splits it
-//! into *zero* words, so the patch would run with no operands after all — the
-//! precise case the guard exists to prevent, and one the awk can produce from a
-//! matching row whose second `|` field is blank. Going through the positional
-//! parameters makes the guard test what the patch command will actually
-//! receive, and lets the patch itself use a quoted `"$@"` instead of a bare
-//! unquoted expansion.
-//!
-//! Two constraints on the text:
-//!
-//! * every `$` meant for the remote shell is written `$$`
-//!   (`$$mtui_status`, `$$?`, `$$(`, `$$#`, `$$@`, `$$r`, and the guard
-//!   function's own `$$1` / `$$2`). A bare `$?` happens
-//!   to survive [`SubstMode::Safe`] today, but `$$` is the documented escape
-//!   and the only form that stays correct if the mode is ever tightened. The
-//!   awk field refs (`print $2`) stay bare — that is the tested convention.
-//!   Shell variables are `mtui_`-prefixed *and* `$$`-escaped, so no future
-//!   `$name` template variable can silently expand one away.
-//! * the literal token `zypper` stays in `ZYPPER_UPDATE`: the *zypper* update
-//!   check gates its exit-code rules on the command text containing it
-//!   (`checks::update::zypper`), so losing it there would silently disable
-//!   them. `SLM_UPDATE` carries the token too, via its `zypper -n lr` /
-//!   `patches` lines, but nothing depends on that —
-//!   `checks::update::transactional_update` deliberately has no such gate.
-//!
-//! One portability note, pre-existing and unchanged: **these templates require
-//! GNU awk on the refhost.** `/$repa\>/` uses `\>`, a GNU-awk word-boundary
-//! operator; mawk, busybox awk and `gawk --traditional` degrade an unknown
-//! escape to the literal character, and against a realistic
-//! `zypper -n patches` row that extracts nothing — an empty patch list, a
-//! skipped patch and a silent no-op. The SUSE hosts these run on ship gawk, so
-//! the dependency is met in production, and it is stated here rather than
-//! guarded because the guard cannot see it (awk succeeds; it simply matches
-//! nothing).
-//!
-//! Do not mistake the tests below for awk coverage. They execute this text
-//! under the *build host's* awk, and the stub row is deliberately chosen to
-//! match under **either** dialect — that keeps the macOS CI leg (BWK awk)
-//! working, and it is exactly why those tests cannot notice a dialect that
-//! extracts nothing.
+//! **These templates require GNU awk on the refhost**: `/$repa\>/` uses the
+//! GNU word-boundary operator, and mawk/busybox awk degrade it to a literal,
+//! extracting nothing. SUSE refhosts ship gawk. The tests below run under the
+//! *build host's* awk with a stub row that matches under either dialect (to
+//! keep the macOS CI leg working), so they cannot catch this.
 
 use crate::update_workflow::actions::{ActionCommands, SubstMode};
 

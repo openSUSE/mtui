@@ -7,11 +7,8 @@ use crate::command::{Command, Scope};
 use crate::error::CommandResult;
 use crate::session::Session;
 
-/// Shows the update repositories that are valid for the current update.
-///
-/// Reads the active report's
-/// [`update_repos`](mtui_testreport::TestReportBase::update_repos) and lists them
-/// through the display.
+/// Shows the update repositories valid for the current update, from the active
+/// report's [`update_repos`](mtui_testreport::TestReportBase::update_repos).
 pub struct ShowUpdateRepos;
 
 #[async_trait]
@@ -29,8 +26,8 @@ impl Command for ShowUpdateRepos {
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
-        // Snapshot the (product, repo) pairs first so the display's mutable
-        // borrow does not overlap the report's immutable borrow.
+        // Snapshotted so the display's mutable borrow does not overlap the
+        // report's immutable one.
         let mut repos: Vec<(mtui_types::SystemProduct, String)> = session
             .metadata()
             .base()
@@ -74,7 +71,6 @@ mod tests {
     #[tokio::test]
     async fn lists_update_repos_sorted() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        // Seed the active report's update_repos.
         let base = session.metadata_mut().base_mut();
         base.update_repos.insert(
             mtui_types::SystemProduct::new("SLES", "15.5", "x86_64"),

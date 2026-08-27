@@ -10,10 +10,8 @@ use crate::session::Session;
 
 /// Prints the current command timeout per host, in seconds.
 ///
-/// Each host's
-/// `(hostname, system, timeout_secs)` is snapshotted first (the
-/// [`Reporter::timeout`](mtui_hosts) fields), then rendered through the
-/// display's `list_timeout` sink.
+/// Each host's `(hostname, system, timeout_secs)` (the
+/// [`Reporter::timeout`](mtui_hosts) fields) is snapshotted, then rendered.
 pub struct ListTimeout;
 
 #[async_trait]

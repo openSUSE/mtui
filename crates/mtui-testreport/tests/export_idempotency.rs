@@ -41,9 +41,7 @@ fn index_of(template: &[String], line: &str) -> usize {
         .unwrap_or_else(|| panic!("line not found: {line:?}"))
 }
 
-// ---------------------------------------------------------------------------
-// 31: auto install_results must bound its replacement at the export footer
-// ---------------------------------------------------------------------------
+// auto install_results must bound its replacement at the export footer
 
 #[test]
 fn auto_install_results_bounds_at_footer() {
@@ -82,9 +80,7 @@ fn auto_install_results_bounds_at_footer() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 32: installlogs_lines must reuse an existing 'Links for update logs:' header
-// ---------------------------------------------------------------------------
+// installlogs_lines must reuse an existing 'Links for update logs:' header
 
 #[test]
 fn installlogs_lines_reuses_existing_header() {
@@ -132,9 +128,7 @@ fn installlogs_lines_twice_is_idempotent() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 33: base install_results notice must not multiply on kernel re-export
-// ---------------------------------------------------------------------------
+// base install_results notice must not multiply on kernel re-export
 
 #[test]
 fn kernel_install_notice_not_duplicated_on_reexport() {
@@ -161,9 +155,7 @@ fn kernel_install_notice_not_duplicated_on_reexport() {
     assert_eq!(count(&ex.ctx.template, notice), 1);
 }
 
-// ---------------------------------------------------------------------------
-// 34: manual install_results stale-result cleanup must actually work
-// ---------------------------------------------------------------------------
+// manual install_results stale-result cleanup must actually work
 
 /// A decoupled host view with no packages.
 fn session_host(hostname: &str, system: &str) -> ManualHost {

@@ -6,22 +6,15 @@
 //!
 //! They live next to the report impls (rather than in
 //! [`metadata_parsers`](crate::metadata_parsers)) because they *are* the report
-//! side of update-repo derivation: `SLTestReport::update_repos_parser` dispatches
-//! among [`reporepoparse`], [`slrepoparse`], and [`gitrepoparse`] below.
+//! side of update-repo derivation: `SLTestReport::update_repos_parser`
+//! dispatches among [`reporepoparse`], [`slrepoparse`] and [`gitrepoparse`];
+//! [`obsrepoparse`] parses a checkout's `project.xml` for the OBS report. All
+//! operate on the flat [`SystemProduct`] `(name, version, arch)`.
 //!
-//! ## Scope
-//!
-//! The OBS variant ([`obsrepoparse`] + its private `read_project`/`xmlparse`
-//! helpers) parses a checkout's `project.xml`; it is used by the OBS report.
-//!
-//! All helpers operate on the flat [`SystemProduct`] `(name, version, arch)`.
-//!
-//! ## Security
-//!
-//! Each derived URL is validated through [`RepoUrl`] before it enters the
-//! `update_repos` map (it later becomes a root `zypper ar`/`rr` argument). A URL
-//! with an unsupported scheme or a shell-unsafe character is dropped and logged,
-//! never trusted; the exec boundary additionally shell-quotes every argument.
+//! **Security:** every derived URL is validated through [`RepoUrl`] before it
+//! enters the `update_repos` map, because it later becomes a root
+//! `zypper ar`/`rr` argument; an unsupported scheme or shell-unsafe character
+//! is dropped and logged. The exec boundary additionally shell-quotes it.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -36,9 +29,9 @@ use crate::products::{normalize, normalize_16};
 /// A product string sourced from external metadata (`metadata.json`) was not
 /// shaped `"<name> <version> (<archs>)"`.
 ///
-/// [`parse_product`] returns this instead of panicking so a malformed template
-/// degrades to "no repos for that entry" rather than aborting the process under
-/// release `panic=abort`.
+/// [`parse_product`] returns this rather than panicking, so a malformed
+/// template degrades to "no repos for that entry" instead of aborting the
+/// process under release `panic=abort`.
 #[derive(Debug, thiserror::Error)]
 #[error("malformed product string {product:?}: {reason}")]
 pub struct ProductParseError {
@@ -51,9 +44,8 @@ pub struct ProductParseError {
 /// Validates a derived repository URL before it becomes part of an
 /// `update_repos` map (and thus a root `zypper ar`/`rr` argument).
 ///
-/// Returns the URL unchanged when valid, or `None` (logged at ERROR) when it
-/// fails [`RepoUrl`] validation — a malformed or injection-shaped URL is dropped
-/// rather than trusted, keeping loading lenient (never hard-failing).
+/// A URL failing [`RepoUrl`] validation is dropped and logged at ERROR rather
+/// than trusted, keeping loading lenient.
 fn validated_url(url: String) -> Option<String> {
     match RepoUrl::parse(&url) {
         Ok(_) => Some(url),
@@ -64,12 +56,10 @@ fn validated_url(url: String) -> Option<String> {
     }
 }
 
-/// Joins a base URL and a path segment with a single `/` separator, without
-/// collapsing an existing trailing slash on `base` into a doubled one.
+/// Joins a base URL and a path segment with exactly one `/` separator.
 ///
-/// The tails used (`"standard"`, `"images/repo/..."`) never start with `/`,
-/// so a plain separator-aware join reproduces the exact strings the tests
-/// assert.
+/// The tails used (`"standard"`, `"images/repo/..."`) never start with `/`, so
+/// this reproduces the exact strings the tests assert.
 fn urljoin(base: &str, tail: &str) -> String {
     if base.ends_with('/') {
         format!("{base}{tail}")
@@ -81,17 +71,14 @@ fn urljoin(base: &str, tail: &str) -> String {
 /// Parses a product string such as `"SLES 15 (x86_64, aarch64)"` into one
 /// [`SystemProduct`] per architecture.
 ///
-/// Splits on `" ("`, strips the trailing `")"`, splits the arch list on
-/// `", "`, and the base on `" "` — taking the first two whitespace tokens as
-/// `(name, version)`.
+/// Splits on `" ("`, strips the trailing `")"`, splits the arch list on `", "`,
+/// and takes the base's first two whitespace tokens as `(name, version)`.
 ///
 /// # Errors
 ///
 /// Returns [`ProductParseError`] when `product` is not shaped
-/// `"<name> <version> (<archs>)"`: missing the `" ("` arch-list delimiter, or a
-/// base lacking a name or version token. Externally-sourced metadata is
-/// untrusted, so a malformed string is a typed error rather than a panic (which
-/// under release `panic=abort` would terminate the process).
+/// `"<name> <version> (<archs>)"`. Externally-sourced metadata is untrusted, so
+/// this is a typed error rather than a panic (fatal under `panic=abort`).
 pub fn parse_product(product: &str) -> Result<Vec<SystemProduct>, ProductParseError> {
     let err = |reason| ProductParseError {
         product: product.to_owned(),
@@ -125,11 +112,9 @@ pub fn slrepoparse(repository: &str, products: &[String]) -> HashMap<SystemProdu
         .collect()
 }
 
-/// Parses a product string, dropping (and logging at ERROR) a malformed one so a
-/// single bad entry never poisons the whole `*repoparse` batch.
-///
-/// This is the lenient wrapper the `*repoparse` helpers use, mirroring
-/// [`validated_url`]'s drop-and-log stance for invalid URLs.
+/// Parses a product string, dropping (and logging at ERROR) a malformed one so
+/// a single bad entry never poisons the whole `*repoparse` batch — the same
+/// lenient stance as [`validated_url`].
 fn parse_products(product: &str) -> Vec<SystemProduct> {
     match parse_product(product) {
         Ok(ps) => ps,
@@ -178,26 +163,20 @@ pub fn reporepoparse(
     out
 }
 
-/// Reads the `project.xml` file from an OBS/IBS checkout directory.
-///
-/// Reads `<dir>/project.xml` to a string.
+/// Reads `<dir>/project.xml` from an OBS/IBS checkout directory.
 fn read_project(dir: &Path) -> std::io::Result<String> {
     std::fs::read_to_string(dir.join("project.xml"))
 }
 
 /// Parses an OBS `project.xml` into `(product, repo-name)` pairs.
 ///
-/// Selects each `<repository>` that has an `update` `<path>` child (the
-/// equivalent of the XPath `repository/path[@repository='update']/..`),
-/// excluding any whose `name` contains `DEBUG`.
-/// For each such repository it yields the [`SystemProduct`] built from the
-/// `<releasetarget>` child's `project` attribute (split on `:`, last three
-/// segments → `name`/`version`/`arch`) paired with the repository's `name`.
+/// Selects each `<repository>` with an `update` `<path>` child (XPath
+/// `repository/path[@repository='update']/..`) whose `name` does not contain
+/// `DEBUG`, pairing its `name` with the [`SystemProduct`] from the
+/// `<releasetarget>` child's `project` attribute.
 ///
-/// quick-xml has no XPath, so this buffers each open `<repository>` element's
-/// relevant children (`path`, `releasetarget`) and emits the pair on the
-/// closing tag once the `update` path has been seen — mirroring the
-/// event-driven style used by `parse_patchinfo`.
+/// quick-xml has no XPath, so this buffers each open `<repository>`'s relevant
+/// children and emits on the closing tag once the `update` path has been seen.
 fn xmlparse(xml: &str) -> Vec<(SystemProduct, String)> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
@@ -217,8 +196,7 @@ fn xmlparse(xml: &str) -> Vec<(SystemProduct, String)> {
                 has_update_path = false;
                 release_project = None;
             }
-            // `<path repository="update"/>` and `<releasetarget project="..."/>`
-            // are empty elements; handle both empty and (defensively) start form.
+            // Both are empty elements; the start form is handled defensively.
             Ok(Event::Empty(e)) | Ok(Event::Start(e)) if repo_name.is_some() => {
                 match e.local_name().as_ref() {
                     "path" if attr(&e, "repository").as_deref() == Some("update") => {
@@ -253,10 +231,8 @@ fn xmlparse(xml: &str) -> Vec<(SystemProduct, String)> {
 }
 
 /// Builds a [`SystemProduct`] from a releasetarget `project` attribute by
-/// taking the last three `:`-separated segments as `name`/`version`/`arch`.
-///
-/// Returns `None` when fewer than three segments are present rather than
-/// panicking.
+/// taking the last three `:`-separated segments as `name`/`version`/`arch`;
+/// fewer than three is `None`, not a panic.
 fn product_from_project(project: &str) -> Option<SystemProduct> {
     let parts: Vec<&str> = project.split(':').collect();
     let [name, version, arch] = parts[parts.len().checked_sub(3)?..] else {
@@ -277,11 +253,9 @@ fn attr(e: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> {
 
 /// Derives the update-repo map for an OBS/IBS incident from its checkout.
 ///
-/// Parses `<dir>/project.xml`, [`normalize`]s each parsed product, and keys
-/// it to `<repository>/<repo-name>`.
-///
-/// A missing or unreadable `project.xml` yields an empty map — loading is
-/// best-effort, and the caller has no repos to act on.
+/// Parses `<dir>/project.xml`, [`normalize`]s each parsed product, and keys it
+/// to `<repository>/<repo-name>`. A missing or unreadable `project.xml` yields
+/// an empty map — loading is best-effort.
 #[must_use]
 pub fn obsrepoparse(repository: &str, dir: &Path) -> HashMap<SystemProduct, String> {
     let Ok(xml) = read_project(dir) else {

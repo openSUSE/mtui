@@ -9,13 +9,12 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Commits the testing template working copy to SVN.
+/// Commits the testing template working copy to SVN, persisting the final
+/// template after testing.
 ///
-/// Run after testing to persist
-/// the final template. With `-m/--msg` the given message is used; without it a
-/// message is generated from the local system info (reusing the export
-/// footer via `system_info(..., prefix="committed from")`) so the commit is
-/// non-interactive rather than opening `svn`'s editor. Requires a loaded report.
+/// Without `-m/--msg` a message is generated from the local system info (the
+/// export footer, via `system_info(..., prefix="committed from")`), so the
+/// commit never opens `svn`'s editor. Requires a loaded report.
 pub struct Commit;
 
 #[async_trait]
@@ -56,8 +55,6 @@ impl Command for Commit {
             .map_err(|e| CommandError::Other(format!("no report loaded: {e}")))?;
         let install_logs = session.config.install_logs.clone();
 
-        // -m tokens join into one message; without it, a generated system-info
-        // message keeps the commit non-interactive.
         let msg: Vec<String> = match args
             .try_get_many::<String>("msg")
             .ok()
@@ -125,8 +122,8 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
-    /// A successful commit prints the committed report URL to the display so the
-    /// MCP result is never empty.
+    /// A successful commit must print the report URL, so the MCP result is never
+    /// empty.
     #[tokio::test]
     async fn success_prints_committed_url_to_display() {
         if std::process::Command::new("svn")
@@ -155,8 +152,7 @@ mod tests {
                 .success()
         );
 
-        // The commit adds the install-logs dir; create it in the working copy so
-        // `svn add --force install_logs` succeeds.
+        // The commit runs `svn add --force install_logs`.
         std::fs::create_dir_all(wc.join("install_logs")).unwrap();
 
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");

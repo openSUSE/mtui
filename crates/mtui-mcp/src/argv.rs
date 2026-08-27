@@ -1,32 +1,27 @@
 //! Reconstruct a `clap` argv token list from a tool-call kwargs dict.
 //!
-//! The **inverse of [`crate::schema`]**. An MCP tool call arrives as a
-//! `{param_name: value}` object (kwargs). To dispatch it through the *same*
-//! engine the REPL uses ([`mtui_core::dispatch_argv`]), we must turn that object
-//! back into the `argv` token list `clap` re-parses. This module does that
-//! reconstruction purely, introspecting the command's built [`clap::Command`] —
-//! the identical `get_arguments()` surface [`crate::schema`] reads.
+//! The **inverse of [`crate::schema`]**: a tool call arrives as a
+//! `{param_name: value}` object, and dispatching it through the *same* engine
+//! the REPL uses ([`mtui_core::dispatch_argv`]) means turning that object back
+//! into the argv `clap` re-parses. Done purely, introspecting the command's
+//! built [`clap::Command`] — the identical `get_arguments()` surface
+//! [`crate::schema`] reads.
 //!
-//! # Design notes
-//!
-//! * **No synthetic-dest / const-mutex routing.** `clap` gives each group
-//!   member of a mutually-exclusive group a *distinct* arg id (`auto`/`kernel`,
-//!   `add`/`remove` for `load_template -a/-k`, `set_repo -A/-R`), so its kwarg
-//!   maps straight to its own long flag through the normal loop — no
-//!   special-casing.
-//! * **No "exactly one required" pre-check.** `clap::ArgGroup` enforces that when
-//!   the reconstructed argv is re-parsed by the engine, which already surfaces a
-//!   clean [`mtui_core::EngineError::Parse`].
+//! Deliberately absent: synthetic-dest routing for mutually-exclusive groups
+//! (clap already gives each member a distinct arg id, so its kwarg maps to its
+//! own long flag through the normal loop), and an "exactly one required"
+//! pre-check (`clap::ArgGroup` enforces that on re-parse, as a clean
+//! [`mtui_core::EngineError::Parse`]).
 //!
 //! # Ordering
 //!
-//! Plain optional flags are emitted first (in `get_arguments()` order), then the
-//! positional tail. Append / multi-value flags are routed into the tail as well:
-//! a greedy (`num_args(1..)`) one consumes every token after it, so a later flag
+//! Plain optional flags first (in `get_arguments()` order), then the positional
+//! tail. Append / multi-value flags route into the tail too: a greedy
+//! (`num_args(1..)`) one consumes every token after it, so a later flag
 //! (notably the base parser's `-T/--template`, declared after per-command args)
 //! must not sit behind it. An `Append` flag is emitted once per element (the only
 //! form clap parses when each occurrence takes one value); a non-`Append`
-//! multi-value option is emitted once with all its values (see the loop below).
+//! multi-value option once with all its values (see the loop below).
 
 use clap::{Arg, ArgAction};
 use serde_json::{Map, Value};
@@ -35,9 +30,8 @@ use serde_json::{Map, Value};
 ///
 /// `argv_prefix` is prepended verbatim — used by the MCP tool synthesiser's
 /// subparser fan-out to inject a subcommand name (`["show"]` for the
-/// `config_show` tool). Args absent
-/// from `kwargs` or whose value is JSON `null` are skipped. Flags come first,
-/// then the positional tail (see the module docs for why).
+/// `config_show` tool). Args absent from `kwargs` or whose value is JSON `null`
+/// are skipped. Flags come first, then the positional tail (module docs for why).
 #[must_use]
 pub(crate) fn kwargs_to_argv(
     cmd: &clap::Command,
@@ -59,8 +53,7 @@ pub(crate) fn kwargs_to_argv(
             continue;
         }
 
-        // ---- boolean-shaped flags ----------------------------------------
-        // Emit the long flag only when the value is the flag's "on" side.
+        // Boolean-shaped: emit the long flag only on the flag's "on" side.
         match arg.get_action() {
             ArgAction::SetTrue => {
                 if value.as_bool() == Some(true) {
@@ -82,25 +75,17 @@ pub(crate) fn kwargs_to_argv(
             continue;
         }
 
-        // ---- positional ---------------------------------------------------
         if is_positional(arg) {
             tail.extend(items);
             continue;
         }
 
-        // ---- append / multi-value flag -----------------------------------
-        // Both shapes route into the tail so a later flag cannot be swallowed
-        // as one of their values, but they emit differently:
-        //
-        // * `ArgAction::Append` → repeat the flag before *every* element. This
-        //   is the only form every Append arg parses: with the default
-        //   `num_args = 1` (e.g. `approve --group`), clap rejects `--group a b`
-        //   as an unexpected argument, while `num_args(1..)` Append args (e.g.
-        //   `commit -m`) parse `--msg a --msg b` identically to `--msg a b`.
-        // * non-`Append` multi-value option (`ArgAction::Set` + `num_args(1..)`)
-        //   → emit the flag *once* followed by all items. One occurrence
-        //   consumes many values there, and repeating the flag would make the
-        //   last occurrence win, silently dropping the earlier values.
+        // Both shapes route into the tail so a later flag cannot be swallowed as
+        // one of their values, but emit differently: `Append` repeats the flag
+        // before *every* element (the only form a default `num_args = 1` Append
+        // arg parses), while a non-`Append` multi-value option consumes many
+        // values from one occurrence — repeating it would make the last
+        // occurrence win and silently drop the earlier values.
         if is_multi(arg) {
             if matches!(arg.get_action(), ArgAction::Append) {
                 for item in items {
@@ -114,7 +99,6 @@ pub(crate) fn kwargs_to_argv(
             continue;
         }
 
-        // ---- optional scalar flag ----------------------------------------
         flags.push(long_flag(arg));
         flags.extend(items);
     }
@@ -126,10 +110,8 @@ pub(crate) fn kwargs_to_argv(
     out
 }
 
-/// The long `--flag` form, falling back to the first option string.
-///
-/// Every mtui optional with a short form also has a long form; the fallback is
-/// defensive.
+/// The long `--flag` form. Every mtui optional with a short form also has a
+/// long form, so the short/id fallbacks are purely defensive.
 fn long_flag(arg: &Arg) -> String {
     arg.get_long()
         .map(|l| format!("--{l}"))
@@ -137,15 +119,14 @@ fn long_flag(arg: &Arg) -> String {
         .unwrap_or_else(|| arg.get_id().to_string())
 }
 
-/// Whether an arg is a positional (takes no `--flag`).
+/// Whether an arg is a positional.
 fn is_positional(arg: &Arg) -> bool {
     arg.get_long().is_none() && arg.get_short().is_none()
 }
 
-/// Whether a value-taking arg accepts multiple tokens after one flag.
-///
-/// `ArgAction::Append` or a `num_args` upper bound above one. Kept in sync with
-/// [`crate::schema`]'s `is_list_arg`.
+/// Whether a value-taking arg accepts multiple tokens after one flag
+/// (`ArgAction::Append`, or a `num_args` upper bound above one). Kept in sync
+/// with [`crate::schema`]'s `is_list_arg`.
 fn is_multi(arg: &Arg) -> bool {
     if matches!(arg.get_action(), ArgAction::Append) {
         return true;
@@ -153,10 +134,9 @@ fn is_multi(arg: &Arg) -> bool {
     arg.get_num_args().is_some_and(|r| r.max_values() > 1)
 }
 
-/// Flatten a JSON value into the argv tokens it contributes.
-///
-/// Arrays fan out per element; scalars render to a single token. `null` is
-/// filtered by the caller, but nested `null`s inside an array are dropped here.
+/// Flatten a JSON value into the argv tokens it contributes: arrays fan out per
+/// element, scalars render to one token. A top-level `null` is filtered by the
+/// caller; one nested inside an array is dropped here.
 fn as_items(value: &Value) -> Vec<String> {
     match value {
         Value::Array(items) => items.iter().filter_map(render_scalar).collect(),
@@ -171,8 +151,8 @@ fn render_scalar(value: &Value) -> Option<String> {
         Value::String(s) => Some(s.clone()),
         Value::Bool(b) => Some(b.to_string()),
         Value::Number(n) => Some(n.to_string()),
-        // Objects/arrays are not valid CLI scalars; stringify defensively so the
-        // downstream parse error names the offending value rather than panicking.
+        // Not a valid CLI scalar; stringify so the downstream parse error names
+        // the offending value rather than panicking.
         other => Some(other.to_string()),
     }
 }
@@ -184,8 +164,8 @@ mod tests {
     use serde_json::json;
 
     /// Build a command's full parser (base template flags + its own `configure`)
-    /// through the same `mtui-core` builder `dispatch_argv` re-parses, so this
-    /// test exercises exactly the parser real dispatch sees.
+    /// through the same `mtui-core` builder `dispatch_argv` re-parses, so these
+    /// tests exercise exactly the parser real dispatch sees.
     fn parser_for(command: &str) -> clap::Command {
         let registry: Registry = register_all();
         let cmd = registry
@@ -199,7 +179,7 @@ mod tests {
         kwargs_to_argv(&parser, kwargs.as_object().unwrap(), &[])
     }
 
-    /// The reconstructed argv must re-parse cleanly through the same parser.
+    /// The reconstructed argv must re-parse through the same parser.
     fn assert_reparses(command: &str, tokens: &[String]) {
         let parser = parser_for(command);
         parser
@@ -261,10 +241,9 @@ mod tests {
 
     #[test]
     fn regenerate_rrid_maps_to_positional_not_template_selector() {
-        // The load/regenerate catch-22 fix: `{rrid: <RRID>}` must land on the
-        // `regenerate` positional (a bare token), NOT the base `-T/--template`
-        // loaded-template selector — otherwise the engine rejects the unloaded
-        // RRID with `Template not loaded`.
+        // `{rrid: <RRID>}` must land on the `regenerate` positional, NOT the base
+        // `-T/--template` loaded-template selector — otherwise the engine rejects
+        // the unloaded RRID with `Template not loaded`.
         let out = argv("regenerate", json!({ "rrid": "SUSE:SLFO:1.2:6311" }));
         assert_eq!(out, vec!["SUSE:SLFO:1.2:6311"]);
         assert!(
@@ -289,11 +268,9 @@ mod tests {
 
     #[test]
     fn append_single_value_flag_repeats_per_element() {
-        // `approve -g/--group` (Append, default num_args = 1): the flag must
-        // repeat before every element — the flag-once form `--group a b` is
-        // rejected by clap ("unexpected argument 'b'") because each occurrence
-        // takes exactly one value. This is the shape `updates --review-group`
-        // and `-F` use too.
+        // `approve -g/--group` (Append, default num_args = 1): clap rejects the
+        // flag-once form `--group a b`, so the flag must repeat per element.
+        // Same shape as `updates --review-group` / `-F`.
         let out = argv("approve", json!({ "group": ["qam-sle", "qam-teradata"] }));
         assert_eq!(out, vec!["--group", "qam-sle", "--group", "qam-teradata"]);
         assert_reparses("approve", &out);
@@ -301,13 +278,11 @@ mod tests {
 
     #[test]
     fn run_hosts_and_command_round_trip_without_leaking_across_boundary() {
-        // The silent-corruption case the repeat-per-element fix closes. `run`'s
-        // `-t/--target` (Append) and its trailing `COMMAND` positional share the
-        // tail. The pre-fix flag-once emission produced
-        // `--target h1 h2 uname -a`, which clap parsed as hosts=["h1"] and
-        // command=["h2","uname","-a"] — i.e. it would run `h2 uname -a` on h1.
-        // Repeating `--target` per host keeps the multi-flag/positional boundary
-        // intact; no other test covers this interaction.
+        // The silent-corruption case: `run`'s `-t/--target` (Append) and its
+        // trailing `COMMAND` positional share the tail, so a flag-once
+        // `--target h1 h2 uname -a` parses as hosts=["h1"], command=["h2",
+        // "uname","-a"] — running `h2 uname -a` on h1. Repeating `--target` per
+        // host keeps the boundary intact; no other test covers this interaction.
         let out = argv(
             "run",
             json!({ "hosts": ["h1", "h2"], "command": ["uname", "-a"] }),
@@ -323,9 +298,8 @@ mod tests {
 
     #[test]
     fn updates_multi_group_and_fields_round_trip() {
-        // The #415 surface: two review groups and two osc-qam field names
-        // (one with an embedded space) reconstruct and re-parse to the same
-        // value lists an MCP client sent.
+        // The #415 surface: two review groups and two field names (one with an
+        // embedded space) round-trip to the value lists the client sent.
         let out = argv(
             "updates",
             json!({
@@ -343,10 +317,9 @@ mod tests {
 
     #[test]
     fn append_multi_flag_repeats_per_element_and_reparses_identically() {
-        // `commit -m/--msg` (Append, num_args 1..): the flag repeats before
-        // every token (tail-routed so a trailing base flag stays safe). For a
-        // `num_args(1..)` arg the repeated form parses to the same value list
-        // as the flag-once form — pinned by re-parsing.
+        // `commit -m/--msg` (Append, num_args 1..): tail-routed so a trailing
+        // base flag stays safe, and for `num_args(1..)` the repeated form parses
+        // to the same value list as the flag-once one — pinned by re-parsing.
         let out = argv(
             "commit",
             json!({ "msg": ["hello", "world"], "template": "a:b:1:1" }),
@@ -365,8 +338,8 @@ mod tests {
     #[test]
     fn append_list_flag_with_choices_repeats_per_element() {
         // `openqa_overview --aggregated-groups` (Append + PossibleValues,
-        // default num_args = 1): every element gets its own flag. With the
-        // old flag-once emission a two-element call could not re-parse.
+        // default num_args = 1): every element gets its own flag, else a
+        // two-element call cannot re-parse.
         let parser = parser_for("openqa_overview");
         // Discover valid enum members from the parser so the re-parse succeeds.
         let arg = parser
@@ -397,11 +370,8 @@ mod tests {
     fn set_multi_value_option_emits_flag_once() {
         // No mtui registry arg is a non-Append multi-value option, so pin the
         // branch on a bespoke parser (as `store_false_off_side_emits_flag`
-        // does). An `ArgAction::Set` option with `num_args(2..)` consumes many
-        // values from ONE occurrence; repeating the flag would make the last
-        // occurrence win and silently drop earlier values, so it must emit the
-        // flag once followed by all items — and that form re-parses to the full
-        // value list.
+        // does): `num_args(2..)` consumes many values from ONE occurrence, so
+        // the flag must be emitted once followed by all items.
         let parser = clap::Command::new("probe").no_binary_name(true).arg(
             clap::Arg::new("point")
                 .long("point")
@@ -474,9 +444,7 @@ mod tests {
     #[test]
     fn argv_prefix_is_prepended() {
         // The MCP tool synthesiser fans `config` out per-subcommand and passes
-        // the *subparser* here (its args live on `set`, not the parent). Mirror
-        // that: introspect the
-        // `set` subcommand and prepend its name as the prefix.
+        // the *subparser* here (its args live on `set`, not the parent).
         let parent = parser_for("config");
         let set = parent
             .get_subcommands()

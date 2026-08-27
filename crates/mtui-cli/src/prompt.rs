@@ -1,20 +1,16 @@
 //! The interactive prompt string.
 //!
-//! [`MtuiPrompt`] renders two segments from the live [`Session`]:
-//!
-//! * **Left prompt** — the workflow-aware `mtui[-mode]> `: plain `mtui> ` for
-//!   [`Workflow::Manual`], and `mtui-<mode]> ` (e.g. `mtui-kernel> `,
-//!   `mtui-auto> `) otherwise.
-//! * **Right prompt** — the `mode / hosts / templates / active:RRID` status
-//!   line. reedline 0.50 has no bottom-toolbar segment, so the status lives in
-//!   the right prompt — the closest persistent analogue.
+//! [`MtuiPrompt`] renders two segments from the live [`Session`]: a
+//! workflow-aware left prompt (plain `mtui> ` for [`Workflow::Manual`],
+//! `mtui-<mode>> ` otherwise), and a `mode / hosts / templates / active:RRID`
+//! status line on the right — reedline 0.50 has no bottom toolbar, and the right
+//! prompt is the closest persistent analogue.
 //!
 //! Both read the shared `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl)
-//! loop and the [`MtuiCompleter`](crate::completer::MtuiCompleter) already share.
-//! reedline calls `render_*` synchronously *during* `read_line`, the same window
-//! the completer locks in; per-line dispatch locks the session only *after*
-//! `read_line` returns, so these short read-locks never overlap the dispatch
-//! lock (same soundness argument as the completer — see its module docs).
+//! loop and the [`MtuiCompleter`](crate::completer::MtuiCompleter) share.
+//! reedline calls `render_*` synchronously *during* `read_line`, so these short
+//! read-locks never overlap the post-`read_line` dispatch lock (the completer's
+//! soundness argument, unchanged).
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
@@ -47,7 +43,6 @@ impl Prompt for MtuiPrompt {
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Bare `mtui` for MANUAL, `mtui-<mode>` otherwise.
         let workflow = session.metadata().workflow();
         let prompt = match workflow {
             Workflow::Manual => "mtui> ".to_owned(),
@@ -61,7 +56,6 @@ impl Prompt for MtuiPrompt {
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // mode / hosts / templates / active(RRID).
         let mode = session.metadata().workflow();
         let n_hosts = session.targets().len();
         let n_templates = session.templates.len();
@@ -101,8 +95,8 @@ mod tests {
         Arc::new(Mutex::new(Session::new(Config::default(), true)))
     }
 
-    /// Seeds a loaded `ObsReport` (RRID + optional workflow) as the active
-    /// template, mirroring `mtui-core`'s own `seed_active_report` test helper.
+    /// Seeds a loaded `ObsReport` as the active template, mirroring
+    /// `mtui-core`'s own `seed_active_report` helper.
     fn seed(session: &Arc<Mutex<Session>>, rrid: &str, workflow: Workflow) {
         let mut s = session.lock().unwrap();
         let mut report = ObsReport::new(s.config.clone());
@@ -114,7 +108,7 @@ mod tests {
 
     #[test]
     fn left_prompt_is_bare_mtui_for_manual() {
-        // A fresh session's active is the null report (workflow MANUAL default).
+        // A fresh session's active is the null report, which defaults to MANUAL.
         let p = MtuiPrompt::new(session());
         assert_eq!(p.render_prompt_left(), "mtui> ");
     }

@@ -10,11 +10,9 @@ use crate::session::Session;
 
 /// Lists related bugs and their Bugzilla/Jira URLs.
 ///
-/// Reads the loaded
-/// report's Bugzilla and Jira id→title maps and renders them through the
-/// display's `list_bugs` sink together with `config.bugzilla_url`. With nothing
-/// loaded the maps are empty, so the sink prints the "No bugs…"/"No Jira…"
-/// sentinels.
+/// Renders the loaded report's Bugzilla and Jira id→title maps through
+/// `list_bugs` alongside `config.bugzilla_url`. With nothing loaded the maps are
+/// empty and the sink prints its "No bugs…"/"No Jira…" sentinels.
 pub struct ListBugs;
 
 #[async_trait]
@@ -67,9 +65,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_report_renders_bug_query_and_no_jira() {
-        // The null report has genuinely empty bug/jira maps (not the `[""]`
-        // sentinel), so the display prints the (empty) Buglist query URL
-        // and the "No Jira issues" sentinel. Exercises the command wiring.
+        // The null report's maps are genuinely empty, not the `[""]` sentinel.
         let (mut session, buf) = empty_session();
         let args = matches(&ListBugs, &[]);
         ListBugs.call(&mut session, &args).await.unwrap();

@@ -13,22 +13,18 @@ use crate::session::Session;
 
 /// Unlocks hosts previously locked with `lock`.
 ///
-/// By default removes the
-/// zypper/operation lock; `-f`/`--force` also removes locks set by other users
-/// or sessions, fanning
-/// [`HostsGroup::unlock_force`](mtui_hosts::HostsGroup::unlock_force) out under the
-/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) teardown budget, so
-/// a dead peer cannot hold the session.
+/// By default removes the zypper/operation lock; `-f`/`--force` also removes
+/// locks set by other users or sessions, fanning
+/// [`HostsGroup::unlock_force`](mtui_hosts::HostsGroup::unlock_force) out under
+/// the [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) teardown
+/// budget so a dead peer cannot hold the session.
 ///
-/// `-p`/`--pool` removes the host *pool* claim (RRID-based ownership) instead of
-/// the zypper/operation lock, fanning
+/// `-p`/`--pool` removes the host *pool* claim (RRID-based ownership) instead,
+/// fanning
 /// [`HostsGroup::pool_unlock_collecting`](mtui_hosts::HostsGroup::pool_unlock_collecting)
-/// out across the active group under the same
-/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget as
-/// `--force`. With `--force` a claim owned by another template is removed too.
-///
-/// Like `lock`, host sub-selection via `-t` is not yet honoured for the fan-out
-/// (whole active group).
+/// out under the same budget; with `--force` a claim owned by another template
+/// goes too. Like `lock`, `-t` sub-selection is not yet honoured for the
+/// fan-out (whole active group).
 pub struct HostsUnlock;
 
 #[async_trait]
@@ -75,10 +71,8 @@ impl Command for HostsUnlock {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let force = args.get_flag("force");
         if args.get_flag("pool") {
-            // `pool_unlock_collecting` reaches the same possibly-dead links as
-            // `unlock_force`, so it gets the same budget and per-host
-            // attribution rather than reporting "removed on: {hosts}"
-            // unconditionally.
+            // Reaches the same possibly-dead links as `unlock_force`, so it gets
+            // the same budget and per-host attribution.
             let names = session.targets().names();
             let budget = host_op_budget();
             let collected = std::sync::Mutex::new(BTreeMap::new());
@@ -102,13 +96,13 @@ impl Command for HostsUnlock {
         }
 
         if force {
-            // `unlock_force` reaches foreign locks, which the plain group
-            // fan-out (force=false) reports as contended instead. Bounded: this
-            // is remote work over a link that may be open locally but dead.
+            // `unlock_force` reaches foreign locks, which the plain fan-out
+            // reports as contended instead. Bounded: remote work over a link that
+            // may be open locally but dead.
             let names = session.targets().names();
             let budget = host_op_budget();
-            // Caller-owned, so the hosts that finished before the budget expired
-            // are still attributed once the fan-out future is dropped.
+            // Caller-owned, so hosts that finished before the budget expired are
+            // still attributed once the fan-out future is dropped.
             let collected = std::sync::Mutex::new(BTreeMap::new());
             let timed_out =
                 tokio::time::timeout(budget, session.targets_mut().unlock_force(&collected))
@@ -134,9 +128,8 @@ impl Command for HostsUnlock {
 }
 
 /// Distinguishes `--force`'s and `--pool`'s bounded fan-outs in the messages
-/// [`bounded_unlock`] prints; the fan-out call itself still happens at each
-/// call site since `unlock_force` and `pool_unlock_collecting` are different
-/// methods.
+/// [`bounded_unlock`] prints; the fan-out call itself stays at each call site,
+/// `unlock_force` and `pool_unlock_collecting` being different methods.
 enum UnlockKind {
     Force,
     Pool,
@@ -185,15 +178,11 @@ impl UnlockKind {
     }
 }
 
-/// Reports `outcomes` and returns the budget's verdict, naming only the hosts
-/// the budget actually cut short.
-///
-/// Shared tail of the `--force` and `--pool` branches: both fan out under
-/// [`host_op_budget`] into a caller-owned outcome map, so a host abandoned
-/// mid-flight is simply absent from `outcomes` rather than losing its slot to
-/// the dropped future. `stuck` is exactly that absence: every requested host
-/// not accounted for. Reported before `failed` (a host that really answered
-/// but whose release errored) so the two lists are never conflated.
+/// Reports `outcomes` and returns the budget's verdict, naming only the hosts it
+/// cut short. Shared tail of the `--force` and `--pool` branches: both fan out
+/// under [`host_op_budget`] into a caller-owned map, so a host abandoned
+/// mid-flight is simply absent from `outcomes` and `stuck` is exactly that
+/// absence — kept distinct from `failed` (answered, but the release errored).
 fn bounded_unlock(
     session: &mut Session,
     budget: std::time::Duration,
@@ -225,15 +214,11 @@ fn bounded_unlock(
     verdict(&kind, failed)
 }
 
-/// Prints each host's [`LockOutcome`] and returns the hosts whose release really
-/// failed.
-///
-/// A `Contended` host is a benign foreign lock (skipped without `--force`), not
-/// a failure; only a real transport error (`Failed`) counts. `kind` picks the
-/// wording for `Released`/`Contended` (the plain and `--force` branches read
-/// "unlocked"/"locked by another"; `--pool` reads "pool claim removed"/"pool
-/// claim held by another") so a host really unlocked and one whose pool claim
-/// was removed are never reported in each other's words.
+/// Prints each host's [`LockOutcome`] and returns those whose release really
+/// failed. A `Contended` host is a benign foreign lock (skipped without
+/// `--force`), not a failure; only a real transport error (`Failed`) counts.
+/// `kind` picks the `Released`/`Contended` wording so an unlocked host and one
+/// whose pool claim was removed are never reported in each other's words.
 fn report_outcomes(
     session: &mut Session,
     kind: &UnlockKind,
@@ -328,8 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_reports_a_foreign_lock_as_contended_without_force() {
-        // Without --force a foreign lock is benign contention: left in place,
-        // and not counted as a failure.
+        // Benign contention: left in place, and not counted as a failure.
         let foreign = foreign_lock("h1");
         let (mut session, buf) =
             session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", foreign.clone())]);
@@ -355,9 +339,8 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_reports_a_real_failure_without_timing_out() {
-        // A lock this session owns whose removal errors for real (not
-        // "already gone") propagates as `Failed`, not `Contended` —
-        // `verdict`'s real-failure branch, no wedge involved.
+        // A removal that errors for real (not "already gone") must propagate as
+        // `Failed`, not `Contended`. No wedge involved.
         let broken = MockConnection::new("broken")
             .with_file(TARGET_LOCK_PATH, own_op_lock())
             .failing_sftp_remove();
@@ -380,8 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn force_unlock_clears_foreign_locks_on_all_hosts() {
-        // The capability the hand-written serial loop existed for: every host's
-        // foreign lock file is really removed, across the fan-out.
+        // Every host's foreign lock file is really removed, across the fan-out.
         let (c1, c2) = (foreign_lock("h1"), foreign_lock("h2"));
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
@@ -402,11 +384,10 @@ mod tests {
 
     #[tokio::test]
     async fn force_unlock_is_bounded_when_a_host_wedges() {
-        // `dead` answers no SFTP at all (a peer gone without a FIN — the link
-        // still reports active locally); `healthy` carries a foreign lock. The
-        // budget must abandon the first while the second's lock is really
-        // force-removed — and `healthy` must be reported as unlocked, not swept
-        // into the timeout's host list.
+        // `dead` answers no SFTP (a peer gone without a FIN, so the link still
+        // reports active locally). The budget must abandon it while `healthy`'s
+        // foreign lock is really force-removed and reported as unlocked, not
+        // swept into the timeout's host list.
         let healthy = foreign_lock("healthy");
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
@@ -451,9 +432,8 @@ mod tests {
 
     #[tokio::test]
     async fn force_unlock_timeout_still_names_a_failed_host() {
-        // `dead` wedges (times out); `broken` has a foreign lock whose remove
-        // genuinely fails; `healthy` releases cleanly. The timeout error must
-        // name both `dead` and `broken`, and neither must name `healthy`.
+        // `dead` wedges, `broken`'s remove genuinely fails, `healthy` releases:
+        // the error must name the first two and never the third.
         let broken = MockConnection::new("broken")
             .with_file(TARGET_LOCK_PATH, b"1700000000:otheruser:99999".to_vec())
             .failing_sftp_remove();
@@ -495,10 +475,8 @@ mod tests {
 
     #[tokio::test]
     async fn pool_unlock_routes_to_pool_branch() {
-        // `--pool` fans HostsGroup::pool_unlock_collecting out over the group.
-        // On an unclaimed host this is a clean no-op; the command must succeed
-        // and attribute the release to the host by name, not a whole-group
-        // "removed on: {hosts}" line.
+        // On an unclaimed host this is a clean no-op, but the release must
+        // still be attributed per host, not as one whole-group line.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &["-p"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
@@ -516,22 +494,21 @@ mod tests {
         HostsUnlock.call(&mut session, &args).await.unwrap();
     }
 
-    /// Wire path of the pool-claim lock file. `mtui_hosts::target::POOL_LOCK_PATH`
-    /// is `pub(crate)`, not reachable from this crate; `/var/lock/mtui.lock`'s
-    /// sibling constant is hardcoded the same way in `commands::run`'s tests.
+    /// Wire path of the pool-claim lock file; `mtui_hosts`'s own constant is
+    /// `pub(crate)` and unreachable here, as with `/var/lock/mtui.lock` in
+    /// `commands::run`'s tests.
     const POOL_LOCK_PATH: &str = "/var/lock/mtui-pool.lock";
 
-    /// A pool claim this session's identity owns: the wire format
-    /// `timestamp:user:pid:mtui pool <rrid> [<owner>]`. `Target::set_rrid` must
-    /// still be called on the built target so `PoolLock::is_mine` recognises it.
+    /// A pool claim this session's identity owns, in the wire format
+    /// `timestamp:user:pid:mtui pool <rrid> [<owner>]`. The built target still
+    /// needs `Target::set_rrid` for `PoolLock::is_mine` to recognise it.
     fn own_pool_claim(rrid: &str) -> Vec<u8> {
         let me = mtui_config::Config::default().session_user;
         format!("1700000000:{me}:1:mtui pool {rrid} [{rrid}]").into_bytes()
     }
 
-    /// A pool claim owned by a different template's RRID than the target's own
-    /// — `PoolLock::is_mine` is RRID-based, so this is foreign regardless of
-    /// which user or pid stamped it.
+    /// A claim under a different template's RRID: `PoolLock::is_mine` is
+    /// RRID-based, so this is foreign whoever stamped it.
     fn foreign_pool_claim() -> Vec<u8> {
         b"1700000000:alice:4242:mtui pool SUSE:Maintenance:9:9 [alice]".to_vec()
     }
@@ -558,8 +535,7 @@ mod tests {
 
     #[tokio::test]
     async fn pool_unlock_reports_a_real_failure_without_timing_out() {
-        // A pool claim this session owns whose removal errors for real
-        // exercises `verdict`'s `--pool` wording, no wedge involved.
+        // Exercises `verdict`'s `--pool` wording; no wedge involved.
         let rrid = "SUSE:Maintenance:1:1";
         let conn = MockConnection::new("broken")
             .with_file(POOL_LOCK_PATH, own_pool_claim(rrid))
@@ -584,10 +560,8 @@ mod tests {
 
     #[tokio::test]
     async fn pool_unlock_is_bounded_when_a_host_wedges() {
-        // A wedged pool host must not report success: mutation to catch is
-        // `bounded_unlock`'s `tokio::time::timeout` wrapper being dropped,
-        // which must make this test hang past its own 5s guard instead of
-        // silently passing.
+        // Mutation to catch: dropping `bounded_unlock`'s `timeout` wrapper must
+        // hang this past its own 5s guard, not pass silently.
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
             vec![target(
@@ -622,12 +596,9 @@ mod tests {
 
     #[tokio::test]
     async fn pool_unlock_timeout_names_only_the_wedged_host() {
-        // `dead` wedges; `healthy` really carries our pool claim. The timeout
-        // error must name only `dead`, and `healthy`'s claim must really be
-        // removed — this requires `POOL_LOCK_PATH` seeded on `healthy` and its
-        // target stamped with the matching RRID, or `is_locked()` short-circuits
-        // to `Ok(false)` before any wedge and the "really removed" half of this
-        // test proves nothing (the same disarm-the-fixture trap as elsewhere).
+        // `healthy` needs both the seeded `POOL_LOCK_PATH` and a matching RRID,
+        // or `is_locked()` short-circuits to `Ok(false)` before any wedge and the
+        // "really removed" half asserts nothing.
         let rrid = "SUSE:Maintenance:1:1";
         let healthy_conn =
             MockConnection::new("healthy").with_file(POOL_LOCK_PATH, own_pool_claim(rrid));

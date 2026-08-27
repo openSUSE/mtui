@@ -1,22 +1,16 @@
 //! The SUSE Linux [`TestReport`] implementation ([`SlReport`]).
 //!
-//! Keys its identity on the parsed [`RequestReviewID`], derives its
-//! update-repo map by dispatching among the [`repoparse`](super::repoparse)
-//! helpers, and verifies its git commit hash against Gitea — bypassed for an
-//! OBS-served update (no Gitea PR to compare against), keyed on the report's
-//! own [`UpdateSource`], not the RRID's maintenance id (see
-//! `AGENTS.md`/issue #433: the SL-Micro 6.0/6.1 cutover shares the `SLFO:1.1`
-//! id space between both workflows).
+//! Keys its identity on the parsed [`RequestReviewID`], derives its update-repo
+//! map by dispatching among the [`repoparse`](super::repoparse) helpers, and
+//! verifies its git commit hash against Gitea. The verification is bypassed for
+//! an OBS-served update (no Gitea PR to compare against), keyed on the report's
+//! own [`UpdateSource`] and **not** the RRID's maintenance id — issue #433: the
+//! SL-Micro 6.0/6.1 cutover shares the `SLFO:1.1` id space between both
+//! workflows.
 //!
-//! ## Scope
-//!
-//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`](mtui_hosts::RepoManager::run_zypper)) is
-//!   implemented here (task nbv.fly): add uses `-n ar -cfGkn`, remove
-//!   uses `-n rr`, both fanned out over [`TestReportBase::update_repos`].
-//! * `list_update_commands` would render per-host commands via the doer seam
-//!   ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)), which is wired
-//!   for install/uninstall but has no listing consumer yet — this is a
-//!   documented no-op stub.
+//! `list_update_commands` is a documented no-op stub: the doer seam
+//! ([`PlanProvider::doer`](mtui_hosts::PlanProvider::doer)) is wired for
+//! install/uninstall but has no listing consumer.
 
 use std::collections::HashMap;
 
@@ -39,10 +33,6 @@ pub struct SlReport {
 
 impl SlReport {
     /// Builds an [`SlReport`] from `config`.
-    ///
-    /// The git/rating envelope fields default to empty and `repositories` to an
-    /// empty set; [`TestReportBase::new`] already applies
-    /// those defaults, so this simply wraps a fresh base.
     #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
@@ -71,9 +61,8 @@ impl TestReport for SlReport {
     }
 
     fn parser(&self) -> HashMap<String, String> {
-        // The skeleton trait models the table's *keys* as strings; the concrete
-        // parser dispatch lives in the loader (a later task). Values are the
-        // parser names so callers can branch on them.
+        // The trait models the table's *keys* as strings; the values are the
+        // parser names, so callers can branch on them.
         HashMap::from([
             ("hosts".to_string(), "ReducedMetadataParser".to_string()),
             ("json".to_string(), "JSONParser".to_string()),
@@ -81,15 +70,10 @@ impl TestReport for SlReport {
     }
 
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
-        // Dispatch order:
-        //   repositories set        -> reporepoparse(repositories, products)
-        //   update_source == Obs    -> slrepoparse(repository, products)
-        //   otherwise (Git)         -> gitrepoparse(repository, products)
-        //
         // The `repositories` short-circuit must stay first: it is populated
         // upstream of TeReGen and can start appearing for a git-served update
-        // at any time, with no release-gated notice to mtui (issue #433,
-        // F7) — this precedence is load-bearing, not a nicety.
+        // at any time, with no release-gated notice to mtui (#433). This
+        // precedence is load-bearing, not a nicety.
         if !self.base.repositories.is_empty() {
             let repos: Vec<String> = self.base.repositories.iter().cloned().collect();
             return reporepoparse(&repos, &self.base.products);
@@ -101,21 +85,14 @@ impl TestReport for SlReport {
     }
 
     fn list_update_commands(&self, _targets: &HostsGroup) {
-        // Upstream renders per-host `updater` commands for display via
-        // `target.doer('updater')['command'].safe_substitute(...)`. The bespoke
-        // `perform_update` flow that actually runs them is implemented below;
-        // the read-only *listing* is a documented no-op stub across every
-        // report — the `list_update_commands` command calls this but only
-        // ever prints a placeholder.
+        // `perform_update` below runs the per-host `updater` commands; the
+        // read-only listing command only ever prints a placeholder.
         debug!("list_update_commands: no-op stub, not yet implemented");
     }
 
-    // Upstream defines these five `perform_*` flows once on the base
-    // `TestReport`; every report (SL/PI/OBS) inherits identical behaviour and
-    // differs only in `set_repo` / `list_update_commands`. Rust's object-safe
-    // `dyn TestReport` cannot express a `where Self: SetRepo` default, so each
-    // `SetRepo` report delegates to the shared `update_flow` free functions
-    // below (thin, identical across the three reports).
+    // SL/PI/OBS behave identically here, but an object-safe `dyn TestReport`
+    // cannot express a `where Self: SetRepo` default, so each report delegates
+    // to the shared `update_flow` free functions.
     async fn perform_install(
         &self,
         targets: &mut HostsGroup,
@@ -177,9 +154,8 @@ impl TestReport for SlReport {
         let giteaprapi = self.base.giteaprapi.clone().unwrap_or_default();
         let gitea = match Gitea::new(&self.base.config, &giteaprapi, None) {
             Ok(g) => g,
-            // A missing token is a distinct, actionable failure
-            // (`HashCheck::MissingToken`); anything else building the client
-            // is a failed call.
+            // A missing token is a distinct, actionable failure; anything else
+            // failing to build the client is a failed call.
             Err(GiteaError::MissingToken) => return HashCheck::MissingToken,
             Err(e) => {
                 debug!(error = %e, "check_hash: could not build Gitea client");

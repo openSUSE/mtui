@@ -1,9 +1,9 @@
 //! Integration test for the testreport tools.
 //!
-//! Library-level (not stdio) checks that the hand-written testreport tools drive
-//! a fixture checkout end-to-end through the public `dispatch_testreport_tool`
-//! seam, plus a full-schema insta snapshot of the five tool descriptors so a
-//! token-budget or field-name regression surfaces in review.
+//! Library-level (not stdio) checks that the tools drive a fixture checkout
+//! end-to-end through the public `dispatch_testreport_tool` seam, plus a
+//! full-schema snapshot of the five descriptors so a token-budget or field-name
+//! regression surfaces in review.
 
 #![cfg(feature = "mcp")]
 
@@ -58,11 +58,9 @@ async fn dispatch_end_to_end_flow() {
     )
     .await;
 
-    // read the whole file
     let r = call(&session, "testreport_read", json!({})).await;
     assert_eq!(r["line_count"], 4);
 
-    // patch the body line
     let p = call(
         &session,
         "testreport_patch",
@@ -76,7 +74,6 @@ async fn dispatch_end_to_end_flow() {
             .contains("edited body\n")
     );
 
-    // windowed read of just the patched line
     let w = call(
         &session,
         "testreport_read",
@@ -86,7 +83,6 @@ async fn dispatch_end_to_end_flow() {
     assert_eq!(w["returned_lines"], 1);
     assert_eq!(w["content"], "edited body\n");
 
-    // bulk-fill the placeholders
     let f = call(
         &session,
         "testreport_fill",
@@ -110,7 +106,6 @@ async fn dispatch_end_to_end_flow() {
         "{after_fill}"
     );
 
-    // full overwrite fallback
     let ow = call(
         &session,
         "testreport_write",

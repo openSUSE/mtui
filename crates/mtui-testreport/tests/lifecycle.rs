@@ -1,13 +1,10 @@
-//! `TestReport::read` + `make_testreport`.
-//!
-//! Tests the parse-and-populate slice of `TestReport::read` and the
-//! `make_testreport` factory (report-class selection + checkout +
-//! workflow/autoconnect selection).
+//! `TestReport::read` + `make_testreport`: the parse-and-populate slice, and
+//! the factory's report-class selection, checkout and workflow/autoconnect
+//! choice.
 //!
 //! All tests run offline: `make_testreport` reads a template pre-placed on disk
-//! (so the read-succeeds-first path is taken and no `svn` is spawned), and the
-//! load-failure path points at an empty `template_dir` so the internal `svn`
-//! checkout fails fast and the factory falls back to a [`NullReport`].
+//! so no `svn` is spawned, and the load-failure path points at an empty
+//! `template_dir` so the checkout fails fast into a [`NullReport`].
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -92,19 +89,18 @@ fn cfg(template_dir: PathBuf) -> Config {
     c
 }
 
-/// Points a config's QEM-dashboard + openQA URLs at a mock `server` so a
-/// `make_testreport(-a)` load resolves openQA offline instead of hitting the
-/// production instances baked into `Config::default()`.
+/// Points a config's QEM-dashboard + openQA URLs at a mock `server`, so a
+/// `-a` load resolves openQA offline instead of hitting the production
+/// instances baked into `Config::default()`.
 fn point_dashboard(config: &mut Config, server: &MockServer) {
     config.qem_dashboard_api = format!("{}/api", server.uri());
     config.openqa_instance = server.uri();
     config.openqa_instance_baremetal = server.uri();
 }
 
-/// Mounts the three QEM-dashboard endpoints the auto path touches for
-/// `incident_number`, each returning an empty-but-valid body. With no incident
-/// settings there are no install jobs, so `DashboardAutoOpenQA` yields
-/// `results = None` — the auto→manual downgrade trigger.
+/// Mounts the three QEM-dashboard endpoints the auto path touches, each with an
+/// empty-but-valid body. No incident settings means no install jobs, so
+/// `DashboardAutoOpenQA` yields `results = None` — the auto→manual trigger.
 async fn mount_dashboard_no_results(server: &MockServer, incident_number: &str) {
     for (endpoint, body) in [
         ("incidents", serde_json::json!({})),
@@ -161,25 +157,21 @@ fn read_populates_metadata_and_hosts() {
     report.read(&log).expect("read should succeed");
 
     let base = report.base();
-    // JSON envelope fields.
     assert_eq!(base.rrid.as_ref().unwrap().to_string(), RRID);
     assert_eq!(base.packager, "slemke@suse.com");
     assert_eq!(base.category, "recommended");
     assert_eq!(base.testplatforms.len(), 1);
-    // Hosts parser picked up both reference hosts from the log.
     assert!(base.hostnames.contains("refhost-a.example.com"));
     assert!(base.hostnames.contains("refhost-b.example.com"));
-    // Bug 12345 is listed in the JSON envelope, so after `_parse_json` the JSON
-    // placeholder wins over the log's `Bug N ("title"):` line (the hosts
-    // parser runs first, then the JSON parser, which re-seeds the ids).
-    // Without a patchinfo entry for 12345, the placeholder survives.
+    // The hosts parser runs first, then the JSON parser re-seeds the ids, so the
+    // envelope's placeholder wins over the log's `Bug N ("title"):` line, and
+    // with no patchinfo entry for 12345 it survives.
     assert_eq!(
         base.bugs.get("12345").map(String::as_str),
         Some("Description not available")
     );
     // `path` is recorded so `report_wd()` / update-repo parsing can resolve.
     assert_eq!(base.path.as_deref(), Some(log.as_path()));
-    // OBS update-repo map was derived from project.xml during read.
     assert!(
         !base.update_repos.is_empty(),
         "update_repos should be parsed"
@@ -252,10 +244,9 @@ fn read_invalid_metadata_errors() {
     assert!(matches!(err, ReadError::MetadataInvalid));
 }
 
-/// `make_testreport` with an on-disk template loads it, selects the OBS report
-/// (Maintenance kind), and — when the dashboard reports **no install jobs** —
-/// downgrades the AUTO workflow to MANUAL and (autoconnect=true) marks the
-/// report autoconnect-pending.
+/// An on-disk template loads, selects the OBS report (Maintenance kind), and —
+/// with **no install jobs** on the dashboard — downgrades AUTO to MANUAL and
+/// (autoconnect=true) marks the report autoconnect-pending.
 #[tokio::test]
 async fn make_testreport_auto_no_install_jobs_downgrades_to_manual() {
     let tmp = tempfile::tempdir().unwrap();
@@ -351,22 +342,18 @@ async fn make_testreport_auto_respects_explicit_no_autoconnect() {
 
     let report = make_testreport(&update, config, UpdateKind::Auto, false, false, None).await;
 
-    // No install jobs → downgraded to manual, but autoconnect=false suppresses
-    // the deferred connect.
     assert_eq!(report.workflow(), Workflow::Manual);
     assert!(!report.base().autoconnect_pending);
 }
 
-/// Regression (spinner invisible during `update`): `make_testreport` reconciles
-/// the loaded report's targets group to the session mode at **load time**, so a
-/// REPL load (`is_repl = true`) yields an interactive group — the fan-out
-/// spinner seam — while a headless load stays quiet. The report group is
-/// default-built headless; this is the single set-once site.
+/// Regression (spinner invisible during `update`): the group is default-built
+/// headless and `make_testreport` is the single set-once site that reconciles it
+/// to the session mode, so a REPL load must yield an interactive group — the
+/// fan-out spinner seam — while a headless load stays quiet.
 #[tokio::test]
 async fn make_testreport_sets_targets_is_repl_from_session_mode() {
     let update = UpdateID::parse(RRID).unwrap();
 
-    // REPL load → interactive targets group.
     let tmp_repl = tempfile::tempdir().unwrap();
     make_checkout(tmp_repl.path(), false);
     let server = MockServer::start().await;
@@ -379,7 +366,6 @@ async fn make_testreport_sets_targets_is_repl_from_session_mode() {
         "REPL load must yield an is_repl targets group"
     );
 
-    // Headless load (MCP) → non-interactive targets group.
     let tmp_head = tempfile::tempdir().unwrap();
     make_checkout(tmp_head.path(), false);
     let server2 = MockServer::start().await;
@@ -394,14 +380,11 @@ async fn make_testreport_sets_targets_is_repl_from_session_mode() {
 }
 
 /// When neither the template is on disk nor a checkout can succeed, the factory
-/// falls back to a `NullReport` — never an error. `svn_path` is pointed at a
-/// bare local `file://` path so `svn co` fails immediately and offline (no
-/// network / SSH).
+/// falls back to a `NullReport` — never an error. `svn_path` points at a bare
+/// local `file://` path so `svn co` fails immediately and offline.
 #[tokio::test]
 async fn make_testreport_falls_back_to_null_on_load_failure() {
     let tmp = tempfile::tempdir().unwrap();
-    // No checkout placed; force the internal `svn co` to fail fast offline by
-    // aiming it at a nonexistent local file:// repository.
     let mut config = cfg(tmp.path().to_path_buf());
     config.svn_path = format!("file://{}/no-such-svn-repo", tmp.path().display());
     let update = UpdateID::parse(RRID).unwrap();
@@ -413,8 +396,7 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
         "unloaded report should be the null object"
     );
     assert_eq!(report.id(), "");
-    // The null report carries *why* the load failed (svn checkout), so the
-    // caller can surface it instead of a bare "could not load".
+    // The null report carries *why*, so the caller need not say "could not load".
     let reason = report
         .base()
         .load_error
@@ -428,18 +410,14 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
 
 // --- Gitea token + hash verification on load (SLFO / `SlReport`) ------------
 //
-// mtui runs hash verification in `make_testreport` (async seam). These
-// exercise the three non-`Ok` branches (the interactive TeReGen regenerate path
-// is covered in Phase C) plus the happy path.
+// Hash verification runs in `make_testreport` (async seam). These exercise the
+// three non-`Ok` branches plus the happy path.
 
 /// Places an SLFO checkout on disk for `rrid` whose `metadata.json` carries a
-/// Gitea PR API URL (pointed at `gitea_pr_api`), a `repository` +
-/// `products` pair (so `update_repos_parser` resolves a URL — issue #433,
-/// step 3), and, when `commit_hash` is `Some`, a recorded commit hash
-/// (`giteacohash`) — the discriminator `update_source` resolves from.
+/// Gitea PR API URL, a `repository` + `products` pair (so
+/// `update_repos_parser` resolves a URL — #433), and, when `commit_hash` is
+/// `Some`, the recorded commit hash `update_source` is resolved from;
 /// `commit_hash = None` omits the key entirely, resolving `Obs`.
-/// Returns nothing; the caller drives `make_testreport` against the
-/// template dir.
 fn make_slfo_checkout(root: &Path, rrid: &str, gitea_pr_api: &str, commit_hash: Option<&str>) {
     let hash_field = commit_hash
         .map(|h| format!(r#", "gitea_commit_hash": "{h}""#))
@@ -461,19 +439,17 @@ fn make_slfo_checkout(root: &Path, rrid: &str, gitea_pr_api: &str, commit_hash: 
 }
 
 /// The real `SUSE:SLFO:1.1:418286` metadata record, captured from TeReGen on
-/// 2026-08-11 with a single substitution (`packager`) and re-indented to match
-/// its golden sibling. Full provenance note sits on the same const in
+/// 2026-08-11. Full provenance note sits on the same const in
 /// `tests/metadata_parsers.rs`.
 const SLFO_METADATA_JSON: &str = include_str!("fixtures/metadata/slfo_metadata.json");
 
 /// Places an SLFO checkout on disk for `rrid` — the `log` template plus a
 /// caller-supplied `metadata.json` body written verbatim.
 ///
-/// [`make_slfo_checkout`] is this function plus a computed synthetic envelope,
-/// and delegates here, so the `log` literal lives in exactly one place. Callers
-/// that need a *captured* envelope (rather than the synthetic one the
-/// hash/update-source tests share — those must keep their `"packages": {}`,
-/// which is what makes them indifferent to package parsing) call this directly.
+/// [`make_slfo_checkout`] delegates here with a synthetic envelope, so the `log`
+/// literal lives in one place. Callers needing a *captured* envelope call this
+/// directly; the synthetic one must keep its `"packages": {}`, which is what
+/// makes the hash/update-source tests indifferent to package parsing.
 fn make_slfo_checkout_with_metadata(root: &Path, rrid: &str, metadata: &str) {
     let dir = root.join(rrid);
     std::fs::create_dir_all(&dir).unwrap();
@@ -539,7 +515,7 @@ async fn make_testreport_slfo_hash_match_loads() {
 /// never from the `1.1`/`1.2` literal.
 const SLFO_11_RRID: &str = "SUSE:SLFO:1.1:418286";
 
-/// A git-served `SLFO:1.1` update — the dual-served case (F8) — resolves
+/// A git-served `SLFO:1.1` update — the dual-served case — resolves
 /// [`UpdateSource::Git`], runs the real Gitea hash comparison (restoring
 /// #398's gate for `1.1`), and derives its update-repo URL via `gitrepoparse`
 /// (`<repository>/standard`), not `slrepoparse`.
@@ -625,28 +601,23 @@ async fn make_testreport_slfo_1_1_obs_served_resolves_obs_source_and_slrepoparse
     );
 }
 
-/// #397 T3 — the on-disk loader populates `base().packages` from a **real**
-/// SLFO `metadata.json`.
+/// #397 — the on-disk loader populates `base().packages` from a **real** SLFO
+/// `metadata.json`.
 ///
-/// This is the **only** assertion in the crate on `base().packages` after
+/// The **only** assertion in the crate on `base().packages` after
 /// `TestReport::read`: no unit test in `src` drives `read()` at all, and every
-/// other SLFO lifecycle test writes `"packages": {}` and asserts nothing about
-/// packages. So the specific thing added here is that the metadata a report
-/// loads from disk actually reaches `base().packages` with its values intact —
-/// not merely that `JSONParser` works when handed a string.
+/// other SLFO lifecycle test writes `"packages": {}`. So what it adds is that
+/// metadata loaded from disk reaches `base().packages` with its values intact,
+/// not merely that `JSONParser` works when handed a string. Like the OBS-served
+/// 1.1 test above, the captured record carries no `gitea_commit_hash`, so the
+/// load needs neither a Gitea token nor a network call.
 ///
-/// Modelled on the OBS-served 1.1 test above: the captured 1.1 record carries
-/// no `gitea_commit_hash`, so it resolves [`UpdateSource::Obs`] and the load
-/// needs neither a Gitea token nor a network call.
-///
-/// **Scope, stated honestly.** This proves the on-disk read path runs
-/// `JSONParser` over an SL report's metadata and keeps the real values. It does
-/// **not** prove host seeding: the production seeding call site
-/// (`Session::connect_one`) is private, and `Target::connect` hard-codes
+/// It does **not** prove host seeding: the production call site
+/// (`Session::connect_one`) is private and `Target::connect` hard-codes
 /// `SshConnection::connect` with no injectable seam, so no test can reach it.
 /// `slfo_real_fixture_seeds_packages_for_any_base_version` (in
 /// `tests/metadata_parsers.rs`) re-implements the `packages_for_map` half
-/// explicitly rather than pretending this test covers it.
+/// rather than pretending this test covers it.
 #[tokio::test]
 async fn make_testreport_slfo_real_metadata_populates_packages() {
     let dashboard = MockServer::start().await;
@@ -666,9 +637,8 @@ async fn make_testreport_slfo_real_metadata_populates_packages() {
     assert_eq!(report.update_source(), UpdateSource::Obs);
 
     let packages = &report.base().packages;
-    // A set, not a Vec: `packages` is a HashMap, so a Vec comparison would be
-    // order-dependent the moment a second key appeared — a flake where a clean
-    // failure belongs.
+    // A set, not a Vec: `packages` is a HashMap, so a Vec comparison would go
+    // order-dependent the moment a second key appeared.
     let products: HashSet<&str> = packages.keys().map(String::as_str).collect();
     assert_eq!(
         products,
@@ -685,10 +655,9 @@ async fn make_testreport_slfo_real_metadata_populates_packages() {
         "{standard:?}"
     );
 
-    // Secondary, and deliberately labelled as weak: `get_package_list` flattens
-    // *every* product and never consults `base_version`, so it would stay green
-    // under a total failure of the `"standard"` assumption. It shows only that
-    // the loader ran the parser at all — the assertions above are the claim.
+    // Deliberately weak: `get_package_list` flattens *every* product and never
+    // consults `base_version`, so it stays green under a total failure of the
+    // `"standard"` assumption. The assertions above are the claim.
     assert_eq!(
         report.get_package_list(),
         vec!["afterburn", "afterburn-dracut"]
@@ -731,8 +700,7 @@ async fn make_testreport_slfo_missing_token_yields_null() {
 }
 
 /// A stale template hash (differs from the Gitea PR head) abandons the load
-/// (null report) in the non-interactive path — the degradation happens
-/// before the TeReGen prompt (Phase C).
+/// (null report) in the non-interactive path, before any TeReGen prompt.
 #[tokio::test]
 async fn make_testreport_slfo_hash_mismatch_yields_null() {
     let server = MockServer::start().await;
@@ -798,9 +766,8 @@ async fn make_testreport_slfo_mismatch_force_continue_keeps_stale() {
     let server = MockServer::start().await;
     mount_pr_head_sha(&server, "freshsha").await;
 
-    // The forced-continue report loads, so it reaches the auto enrichment; keep
-    // that offline by pointing the dashboard at a mock (no install jobs → the
-    // workflow downgrades to manual, which this test does not assert).
+    // The forced-continue report loads, so it reaches the auto enrichment; a
+    // mock dashboard keeps that offline.
     let dashboard = MockServer::start().await;
     mount_dashboard_no_results(&dashboard, "4413").await;
 

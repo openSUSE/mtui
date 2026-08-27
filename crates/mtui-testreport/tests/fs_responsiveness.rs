@@ -76,7 +76,7 @@ fn inline_blocking_fs_starves_the_worker() {
 }
 
 /// The fix: moving the same blocking work off the worker via `spawn_blocking`
-/// keeps the heartbeat ticking — the invariant the 0mop.9 conversions provide.
+/// keeps the heartbeat ticking — the invariant the conversions provide.
 #[test]
 fn spawn_blocking_fs_keeps_the_worker_responsive() {
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -96,11 +96,9 @@ fn spawn_blocking_fs_keeps_the_worker_responsive() {
         let after = beats.load(Ordering::Relaxed);
         hb.abort();
 
-        // The worker stayed free to run the timer, so the heartbeat kept ticking
-        // across the 100ms window. A responsive worker accrues many ticks
-        // (~40-100 depending on 1ms-timer granularity + scheduler overhead);
-        // the threshold sits well above the starvation ceiling (<20) it must
-        // beat, so the two cases never overlap while staying CI-robust.
+        // A responsive worker accrues ~40-100 ticks over the 100ms window
+        // (1ms-timer granularity + scheduler overhead); the threshold sits well
+        // above the starvation ceiling (<20), so the two cases never overlap.
         assert!(
             after - before > 30,
             "heartbeat should keep ticking under spawn_blocking, got {} ticks",

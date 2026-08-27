@@ -1,26 +1,17 @@
 //! Persistent REPL command history.
 //!
-//! Three behaviours come together here:
+//! A [`FileBackedHistory`] keeps the up-arrow stack across sessions; Ctrl-R
+//! reverse-search comes free from reedline's default emacs edit mode, and the
+//! greyed inline hint ([`DefaultHinter`](reedline::DefaultHinter)) is wired
+//! alongside [`file_backed_history`] in [`crate::repl::Repl::new`].
 //!
-//! * **Persistence** — a [`FileBackedHistory`] keeps the up-arrow stack across
-//!   sessions.
-//! * **Reverse-search** — Ctrl-R, provided by reedline's default emacs edit
-//!   mode; it needs no wiring here, only a populated history to search.
-//! * **Inline suggestion** — the greyed hint shown by [`DefaultHinter`](reedline::DefaultHinter) is
-//!   wired in [`crate::repl::Repl::new`] alongside [`file_backed_history`].
+//! mtui is XDG-first: the history file lives at `$XDG_DATA_HOME/mtui/history`
+//! ([`mtui_config::data_dir`]), keeping durable per-user state out of the config
+//! and cache trees.
 //!
-//! ## Location
-//!
-//! mtui is XDG-first, so the history file lives at
-//! `$XDG_DATA_HOME/mtui/history` ([`mtui_config::data_dir`]). This keeps
-//! durable per-user state out of the config and cache trees.
-//!
-//! ## Degradation contract
-//!
-//! History is best-effort, matching mtui's lenient config philosophy: if the
-//! data directory cannot be resolved, or the file cannot be created/opened, the
-//! REPL falls back to an **in-memory** history (a WARN is logged via `tracing`)
-//! rather than failing to start. The line editor is always usable.
+//! History is best-effort, matching mtui's lenient config philosophy — an
+//! unresolvable data directory or an unopenable file degrades to an **in-memory**
+//! history with a WARN rather than failing to start.
 
 use std::path::PathBuf;
 
@@ -40,14 +31,10 @@ pub(crate) fn file_backed_history() -> Box<dyn History> {
     history_from_path(mtui_config::data_dir().map(|d| d.join(HISTORY_FILE)))
 }
 
-/// Pure core of [`file_backed_history`], with the target path injected so the
-/// happy path and the degradation path are both unit-testable without touching
-/// the process environment (mirrors the `resolve_search_paths` pattern in
-/// `mtui-config`).
-///
-/// `None` (no data dir) or a `with_file` failure (unwritable path, mkdir error)
-/// both yield the in-memory [`FileBackedHistory::default`], with a WARN logged
-/// on the error path.
+/// Pure core of [`file_backed_history`], with the path injected so both the
+/// happy and the degradation path are unit-testable without touching the
+/// process environment. `None` or a `with_file` failure both yield the
+/// in-memory [`FileBackedHistory::default`], the latter with a WARN.
 #[must_use]
 fn history_from_path(path: Option<PathBuf>) -> Box<dyn History> {
     let Some(path) = path else {
@@ -73,12 +60,11 @@ mod tests {
     use super::*;
     use reedline::{HistoryItem, SearchDirection, SearchQuery};
 
-    /// The production entry point returns a usable backend without panicking,
-    /// whether or not a data dir resolves in the test environment.
+    /// The production entry point returns a usable, searchable backend whether
+    /// or not a data dir resolves in the test environment.
     #[test]
     fn file_backed_history_is_constructible() {
         let history = file_backed_history();
-        // A fresh/opened history must be searchable (no panic, empty or not).
         let all = history
             .search(SearchQuery::everything(SearchDirection::Forward, None))
             .expect("history search must succeed");
@@ -95,17 +81,17 @@ mod tests {
         assert_eq!(item.command_line, "list");
     }
 
-    /// An unwritable path → error path → in-memory fallback (never a panic).
+    /// An unwritable path takes the error path to the in-memory fallback, never
+    /// a panic.
     #[test]
     fn unwritable_path_degrades_to_in_memory() {
-        // A path whose parent cannot be created: a file used as a directory.
+        // A parent that cannot be created: a regular file used as a directory.
         let mut file = std::env::temp_dir();
         file.push(format!("mtui-history-blocker-{}", std::process::id()));
         std::fs::write(&file, b"x").expect("seed a regular file");
         let bad = file.join("nested").join("history");
 
         let mut history = history_from_path(Some(bad));
-        // Fallback is in-memory but fully functional.
         let saved = history
             .save(HistoryItem::from_command_line("add host"))
             .expect("fallback save must succeed");
@@ -114,8 +100,8 @@ mod tests {
         let _ = std::fs::remove_file(&file);
     }
 
-    /// Round-trip across two backends over the same file: what one session
-    /// writes, the next session recalls — the persistence contract.
+    /// The persistence contract: what one session writes over a file, the next
+    /// backend over that file recalls.
     #[test]
     fn history_persists_across_sessions() {
         let mut path = std::env::temp_dir();
@@ -126,7 +112,6 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
 
-        // Session 1: write an entry and drop the backend (sync on drop).
         {
             let mut h1 = history_from_path(Some(path.clone()));
             h1.save(HistoryItem::from_command_line("testreport export"))
@@ -134,7 +119,6 @@ mod tests {
             h1.sync().expect("sync session 1");
         }
 
-        // Session 2: a new backend over the same file recalls it.
         let h2 = history_from_path(Some(path.clone()));
         let found = h2
             .search(SearchQuery::everything(SearchDirection::Forward, None))

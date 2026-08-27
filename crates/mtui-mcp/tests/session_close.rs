@@ -1,18 +1,12 @@
-//! Tests for the `close()` host-teardown behaviours.
+//! Tests for the `close()` host-teardown behaviours: pool claims released and
+//! hosts disconnected across *every* loaded template, not just the active one.
+//! The wedged-close bounded-wait case needs the `pub(crate)` timeout seam and so
+//! lives beside it, in `src/session.rs`'s
+//! `close_with_timeout_survives_a_wedged_close`.
 //!
-//! Three behaviours:
-//!
-//! * `close_releases_pool_claims` — `close()` releases every loaded template's
-//!   host-arbitration pool claims.
-//! * `close_disconnects_every_loaded_templates_hosts` — `close()` disconnects
-//!   hosts on *all* loaded templates, not just the active one.
-//! * the wedged-close bounded-wait case is a colocated `#[cfg(test)]` unit test
-//!   in `src/session.rs` (it needs the `pub(crate)` timeout seam) — see
-//!   `close_with_timeout_survives_a_wedged_close` there.
-//!
-//! `HostsGroup::close` (like the REPL `quit`) closes each `Target` but
-//! leaves it in the group with its now-dead connection, so these tests assert
-//! the connection observes `is_closed()` rather than an emptied group.
+//! `HostsGroup::close` (like the REPL `quit`) closes each `Target` but leaves it
+//! in the group with its now-dead connection, so these tests assert the
+//! connection observes `is_closed()` rather than an emptied group.
 
 #![cfg(feature = "mcp")]
 
@@ -33,15 +27,14 @@ fn session() -> Arc<McpSession> {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = Config::default();
     config.template_dir = tmp.path().to_path_buf();
-    // Leak the tempdir guard: the session outlives this fn and only reads the
-    // path; the OS reclaims it at process exit.
+    // Leaked: the session outlives this fn and only reads the path.
     std::mem::forget(tmp);
     McpSession::new(config)
 }
 
-/// Build a target wrapping a fresh [`MockConnection`], returning the target and
-/// a shared handle to the mock (its state is `Arc`-shared) so the test can
-/// observe `is_closed()` after the target is moved into a host group.
+/// A target wrapping a fresh [`MockConnection`], plus an `Arc`-shared handle to
+/// that mock, so a test can observe `is_closed()` after the target is moved into
+/// a host group.
 fn host_with_mock(name: &str) -> (Target, MockConnection) {
     let mock = MockConnection::new(name);
     let target = Target::with_connection(name, TargetState::Enabled, Box::new(mock.clone()));
@@ -103,9 +96,8 @@ async fn close_disconnects_every_loaded_templates_hosts() {
 
     sess.close().await;
 
-    // Both the active and the non-active template's hosts are disconnected.
-    // (Rust deviation: the groups themselves are not emptied; the connections
-    // observe the close.)
+    // Both the active and the non-active template's hosts are disconnected; the
+    // groups themselves stay populated (see the module docs).
     assert!(active_mock.is_closed(), "active template's host was closed");
     assert!(
         other_mock.is_closed(),

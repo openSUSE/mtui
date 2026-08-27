@@ -5,15 +5,12 @@
 /// cutover makes undecidable (both workflows share the SLFO:1.1 id space).
 ///
 /// **This is a selection, not an observation.** During the OBS-1.1 → git-1.1
-/// transition an update may be served *both* ways at once, and exactly one
-/// workflow must be active. The rule is a precedence: Gitea metadata present
-/// (`gitea_commit_hash`) ⇒ `Git`, otherwise `Obs`. Do not "correct" this into
-/// an exclusive inference, and do not add a branch for an update that is both
-/// — being both is expected, and `Git` is the deliberate answer.
-///
-/// `Obs` therefore means "drive the OBS workflow", not "this update is only
-/// OBS-served". A dual-served update resolves to `Git`, and mtui leaves its
-/// OBS review request alone by design.
+/// transition an update may be served *both* ways at once, so the rule is a
+/// precedence, not an exclusive inference: Gitea metadata present
+/// (`gitea_commit_hash`) ⇒ `Git`, otherwise `Obs`. Being both is expected and
+/// `Git` is the deliberate answer — do not add a branch for it. So `Obs` means
+/// "drive the OBS workflow", not "only OBS-served": a dual-served update
+/// resolves to `Git` and mtui leaves its OBS review request alone by design.
 ///
 /// The variants mirror qem-dashboard's `incidents.type` column, whose value
 /// qem-bot writes into the openQA BUILD string as `:{type}:{number}:{package}`

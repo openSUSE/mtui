@@ -1,19 +1,14 @@
 //! Cap + idle-TTL enforcement for the http `SessionRegistry`.
 //!
-//! Covers the offline-portable subset of the registry's cap/idle-TTL behaviour.
-//! Session-key/log-label-style cases do not apply here: rmcp owns session
-//! keying by `Mcp-Session-Id`; the Rust registry tracks a `Weak` live-set
-//! around rmcp's factory instead.
+//! rmcp owns session keying by `Mcp-Session-Id`; the registry tracks a `Weak`
+//! live-set around rmcp's factory. Covered here:
 //!
-//! What is covered (behaviour-equivalent):
-//!
-//! * cap refuses a new session past `session_cap`;
-//! * dropping a server frees a cap slot (rmcp drops the server on session
-//!   close, our `SessionGuard::drop` frees the slot);
+//! * the cap refuses a new session past `session_cap`;
+//! * dropping a server frees a cap slot (rmcp drops the server on session close,
+//!   `SessionGuard::drop` frees the slot);
 //! * a re-mint after a drop is a fresh session;
-//! * the idle sweeper evicts + `close()`-es a stale session;
-//! * fresh activity keeps a session alive;
-//! * `idle_timeout == 0` starts no sweeper.
+//! * the idle sweeper evicts + `close()`-es a stale session, while fresh activity
+//!   keeps one alive, and `idle_timeout == 0` starts no sweeper.
 
 #![cfg(feature = "mcp")]
 
@@ -38,7 +33,7 @@ fn registry(cap: usize, idle_secs: u64) -> SessionRegistry {
     config.template_dir = tmp.path().to_path_buf();
     config.mcp_session_cap = cap;
     config.mcp_session_idle_timeout = idle_secs;
-    // Leak the tempdir guard: sessions outlive this fn and only read the path.
+    // Leaked: sessions outlive this fn and only read the path.
     std::mem::forget(tmp);
     SessionRegistry::new(Arc::new(register_all()), config)
 }
@@ -103,11 +98,10 @@ async fn drop_frees_a_slot() {
 /// re-mint after a drop is a brand-new session.
 #[tokio::test]
 async fn remint_after_drop_is_a_new_session() {
-    // Cap of 2 so the first session can be held alive in the live-set *across*
-    // the re-mint. Freshness is asserted via the session's stable, monotonic
-    // `id()` — not `Arc` address identity, which the allocator can reuse after a
-    // drop (a flake that surfaced once these tests share one process, the
-    // consolidated `it` binary, instead of one binary each).
+    // Cap of 2 so the first session stays in the live-set *across* the re-mint.
+    // Freshness is asserted on the stable, monotonic `id()`, never on `Arc`
+    // address identity, which the allocator can reuse after a drop — a real flake
+    // now that every test in the crate shares the one `it` binary.
     let reg = registry(2, 0);
 
     let first = reg.live_sessions();
@@ -117,8 +111,8 @@ async fn remint_after_drop_is_a_new_session() {
     let sess_a = reg.live_sessions();
     assert_eq!(sess_a.len(), 1);
     let id_a = sess_a[0].id();
-    // Drop the server (frees its cap slot) but retain the session `Arc` so it
-    // stays in the live-set alongside the re-mint.
+    // Dropping the server frees its slot; the retained session `Arc` keeps it in
+    // the live-set alongside the re-mint.
     drop(a);
 
     let _b = reg.try_make_server().unwrap();

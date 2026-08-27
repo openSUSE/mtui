@@ -8,9 +8,8 @@
 //!
 //! This runner is deliberately local to this crate rather than shared with the
 //! incident-review backends in `mtui-datasources`: those drive the OBS review
-//! API and have no `cwd` notion, and reusing one runner would couple testreport
-//! checkout to the review crate. A small, local trait keeps the crate boundary
-//! honest and lets tests inject a stub that records the `cwd`.
+//! API and have no `cwd` notion, so one shared runner would couple testreport
+//! checkout to the review crate. A local trait also lets tests record the `cwd`.
 
 use std::io;
 use std::path::Path;
@@ -54,9 +53,8 @@ pub struct TokioSvnRunner;
 #[async_trait]
 impl SvnRunner for TokioSvnRunner {
     async fn run(&self, args: &[String], cwd: &Path) -> io::Result<SvnOutcome> {
-        // Detach stdin, capture stderr. `svn`'s absolute URI means we run with
-        // an explicit `cwd` rather than mutating the process-global working
-        // directory.
+        // `svn`'s absolute URI means an explicit `cwd` rather than mutating the
+        // process-global working directory.
         let output = Command::new("svn")
             .args(args)
             .current_dir(cwd)

@@ -14,20 +14,12 @@
 //!   provider that loads the incident + aggregate openQA jobs and renders the
 //!   review-facing `Results from openQA jobs` block.
 //!
-//! ## Notable design points
-//!
-//! * **Native async fan-out.** Jobs are fanned out
-//!   concurrently with `tokio`, each fetch guarded by
-//!   [`tokio::time::timeout`] with a 60s per-future wall-clock cap
-//!   (`FUTURE_TIMEOUT`), preserving a
-//!   fixed ordering (incident settings first, then update settings; jobs in
-//!   submission order) and a warn-and-skip-on-timeout behaviour, without a
-//!   thread pool.
-//! * **No `config` dependency.** [`DashboardAutoOpenQA`]'s
-//!   `openqa_install_distri` / `openqa_install_logs` are pinned Rust
-//!   constants (`OPENQA_INSTALL_DISTRI`,
-//!   `install_logfile_for`), so the
-//!   constructor takes no config.
+//! Jobs are fanned out concurrently with `tokio`, each fetch guarded by
+//! [`tokio::time::timeout`] with a 60s per-future cap (`FUTURE_TIMEOUT`), while
+//! preserving a fixed ordering (incident settings first, then update settings;
+//! jobs in submission order) and warn-and-skip on timeout. [`DashboardAutoOpenQA`]
+//! takes no config: `openqa_install_distri` / `openqa_install_logs` are pinned
+//! constants (`OPENQA_INSTALL_DISTRI`, `install_logfile_for`).
 //!
 //! [`RequestReviewID`]: mtui_types::RequestReviewID
 

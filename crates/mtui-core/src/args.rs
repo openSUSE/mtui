@@ -1,34 +1,24 @@
 //! Process-level command-line arguments (`Args`).
 //!
-//! The *top-level* argument parser
-//! for the `mtui` process, distinct from the per-command `clap::Command`s the
-//! [`engine`](crate::engine) builds from the registry. It declares the global
-//! flags that configure the whole session (config/template overrides, SUT host
-//! overrides, colour mode, Gitea token) and the mutually-exclusive update
-//! selector that seeds a workflow.
-//!
-//! ## Deliberate design choices
-//!
-//! A few surfaces are shaped for this tool rather than inherited:
+//! The *top-level* parser for the `mtui` process, distinct from the per-command
+//! `clap::Command`s the [`engine`](crate::engine) builds from the registry. It
+//! declares the global session flags (config/template overrides, SUT hosts,
+//! colour mode, Gitea token) and the mutually-exclusive update selector.
 //!
 //! * **`-V/--version`** prints `mtui <version> (<sha>[-dirty], <profile>,
-//!   <target>)`. A statically-compiled binary has no runtime dependency drift
-//!   (deps are compiled in at lockfile-pinned versions), so the build
-//!   provenance — commit, profile, target — is what varies for an out-of-tree
-//!   build. [`build.rs`](../../build.rs) captures it into the
-//!   `MTUI_LONG_VERSION` env var fed to clap's `long_version` below. Outside a
-//!   git checkout the sha field is omitted; profile and target are always shown.
-//! * **`-a/--auto-review-id` vs `-k/--kernel-review-id`** both parse into the
-//!   same [`UpdateID`] value type (all this crate has today)
-//!   paired with the [`Workflow`] the flag selects, surfaced as [`Args::update`].
+//!   <target>)`: a static binary has no runtime dependency drift, so build
+//!   provenance is what varies between out-of-tree builds.
+//!   [`build.rs`](../../build.rs) captures it into `MTUI_LONG_VERSION`. Outside
+//!   a git checkout the sha is omitted; profile and target always show.
+//! * **`-a/--auto-review-id` vs `-k/--kernel-review-id`** both parse into
+//!   [`UpdateID`], paired with the [`Workflow`] the flag selects and surfaced as
+//!   [`Args::update`].
 //!
-//! Config merging lives here as `Args::apply_to` / [`Args::resolve_config`]:
-//! the CLI overrides are the highest-precedence config layer, overlaid on top of
-//! the loaded file chain. (It lives in `mtui-core`, not `mtui-config`, because it
-//! needs [`Args`]; `mtui-config` must not depend on `mtui-core`.) The `auto` →
-//! TTY/`NO_COLOR` resolution of [`ColorArg`] into
-//! [`ColorMode`](crate::display::ColorMode) remains the consumer's job, not this
-//! parser's.
+//! Config merging lives here as `Args::apply_to` / [`Args::resolve_config`] —
+//! the highest-precedence config layer, overlaid on the loaded file chain. It is
+//! in `mtui-core` rather than `mtui-config` because it needs [`Args`], and
+//! `mtui-config` must not depend on `mtui-core`. Resolving [`ColorArg`]'s `auto`
+//! against the TTY/`NO_COLOR` is the consumer's job, not this parser's.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -65,9 +55,8 @@ pub struct Args {
     pub sut: Vec<Sut>,
 
     /// Override config `mtui.connection_timeout` (seconds).
-    // Rejected at parse time if 0 via the value_parser range: the config-file
-    // loader guards this key with `validated_positive!`, so the CLI must not be
-    // able to express a 0 the file would refuse (keeps `apply_to`'s invariant).
+    // Range-rejected at 0: the file loader guards this key with
+    // `validated_positive!`, so the CLI must not express a 0 the file refuses.
     #[arg(
         short = 'w',
         long = "connection-timeout",
@@ -78,8 +67,7 @@ pub struct Args {
 
     /// Override config `connection.reboot_timeout`: the backoff base
     /// (seconds) for post-reboot reconnect retries.
-    // Rejected at parse time if 0, matching `validated_positive!` in the
-    // config-file loader.
+    // Range-rejected at 0, matching the file loader's `validated_positive!`.
     #[arg(
         long = "reboot-timeout",
         value_name = "SECONDS",
@@ -89,8 +77,7 @@ pub struct Args {
 
     /// Override config `connection.reboot_retries`: the number of post-reboot
     /// reconnect attempts beyond the first probe.
-    // Rejected at parse time if 0, matching `validated_positive!` in the
-    // config-file loader.
+    // Range-rejected at 0, matching the file loader's `validated_positive!`.
     #[arg(
         long = "reboot-retries",
         value_name = "COUNT",
@@ -145,8 +132,7 @@ impl Args {
     /// Resolves the mutually-exclusive `-a`/`-k` pair into the selected update
     /// and its [`Workflow`], or `None` when neither was given.
     ///
-    /// The two flags share a clap [`ArgGroup`](clap::ArgGroup), so at most one is
-    /// ever set.
+    /// The flags share a clap [`ArgGroup`](clap::ArgGroup), so at most one is set.
     #[must_use]
     pub fn update(&self) -> Option<Update> {
         match (&self.auto_review_id, &self.kernel_review_id) {
@@ -164,20 +150,17 @@ impl Args {
 
     /// Overlay the process-level CLI overrides onto an already-loaded [`Config`].
     ///
-    /// This is the highest-precedence config layer:
-    /// it runs *after* [`Config::load`] has merged the file chain (`/etc` →
-    /// `~/.mtui.toml` → XDG, or the single `--config`/`$MTUI_CONF` file), so a
-    /// flag given on the command line wins over every config file.
+    /// The highest-precedence config layer: it runs *after* [`Config::load`] has
+    /// merged the file chain (`/etc` → `~/.mtui.toml` → XDG, or the single
+    /// `--config`/`$MTUI_CONF` file), so a command-line flag wins over every
+    /// file. Only flags mapping to a config key are applied, and only when
+    /// actually passed; `--ssl-verify` goes through [`SslVerify::parse`], the
+    /// same coercion the file uses, so the CLI cannot express a value the file
+    /// could not.
     ///
-    /// Only the flags that map to a config key are applied, and only when the
-    /// user actually passed them (`Option::Some` / a non-empty `--sut`): an
-    /// omitted flag leaves the loaded value untouched. `--ssl-verify` goes
-    /// through [`SslVerify::parse`], the same coercion the config file uses, so
-    /// the CLI cannot express a value the file could not.
-    ///
-    /// `--config`, `--debug`, `--color`, `--sut`, and `-a`/`-k` are *not* config
-    /// keys — they steer path resolution, logging, host seeding, and workflow
-    /// selection respectively — so they are intentionally not merged here.
+    /// `--config`, `--debug`, `--color`, `--sut` and `-a`/`-k` are *not* config
+    /// keys — they steer path resolution, logging, host seeding and workflow
+    /// selection — so they are deliberately not merged here.
     fn apply_to(&self, config: &mut Config) {
         if let Some(dir) = &self.template_dir {
             config.template_dir = dir.clone();
@@ -200,10 +183,8 @@ impl Args {
     }
 
     /// Load the config from the file chain (keyed on `--config`) and overlay the
-    /// CLI overrides, returning the fully-resolved [`Config`].
-    ///
-    /// The one-call composition both binaries use: [`Config::load`] for the file
-    /// layers followed by `apply_to` for the CLI layer.
+    /// CLI overrides, returning the fully-resolved [`Config`]. The one-call
+    /// composition both binaries use.
     #[must_use]
     pub fn resolve_config(&self) -> Config {
         let mut config = Config::load(self.config.clone());
@@ -224,7 +205,7 @@ pub struct Update {
 
 /// The `--color` choice, before it is resolved against the terminal.
 ///
-/// [`Auto`](Self::Auto) is the default; turning it into a concrete
+/// Turning [`Auto`](Self::Auto) into a concrete
 /// [`ColorMode`](crate::display::ColorMode) (TTY + `NO_COLOR` detection) is the
 /// consumer's job, not the parser's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
@@ -243,10 +224,10 @@ impl From<ColorArg> for crate::display::ColorMode {
     /// Resolves the parsed `--color` choice into the display/logging
     /// [`ColorMode`](crate::display::ColorMode).
     ///
-    /// A straight arm-for-arm mapping: the `auto` → TTY/`NO_COLOR` decision is
-    /// deferred to [`ColorMode::resolve`](crate::display::ColorMode::resolve) at
-    /// render time, so both the command display and the tracing subscriber share
-    /// one source of truth for whether escapes are emitted.
+    /// Arm-for-arm: the `auto` → TTY/`NO_COLOR` decision is deferred to
+    /// [`ColorMode::resolve`](crate::display::ColorMode::resolve) at render time,
+    /// so the command display and the tracing subscriber share one source of
+    /// truth for whether escapes are emitted.
     fn from(arg: ColorArg) -> Self {
         match arg {
             ColorArg::Auto => Self::Auto,
@@ -258,10 +239,9 @@ impl From<ColorArg> for crate::display::ColorMode {
 
 /// A comma-separated SUT (System Under Test) host override.
 ///
-/// `"a,b,c"` becomes the argv
-/// fragment `-t a -t b -t c` that the `add host` command consumes. The split
-/// happens on construction; [`print_args`](Self::print_args) renders the stored
-/// fragment.
+/// `"a,b,c"` becomes the argv fragment `-t a -t b -t c` that the `add host`
+/// command consumes. Split on construction; [`print_args`](Self::print_args)
+/// renders it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sut {
     hosts: Vec<String>,
@@ -312,8 +292,8 @@ mod tests {
 
     #[test]
     fn connection_timeout_zero_is_rejected_at_parse() {
-        // The file loader's `validated_positive!` rejects 0, so the CLI flag must
-        // too — a usage error, not a silently stored 0 that bypasses the guard.
+        // A usage error, not a silently stored 0 that bypasses the file loader's
+        // `validated_positive!` guard.
         assert!(parse(&["--connection-timeout", "0"]).is_err());
         assert_eq!(
             parse(&["--connection-timeout", "1"])
@@ -423,8 +403,8 @@ mod tests {
 
     #[test]
     fn malformed_rrid_surfaces_types_parse_error() {
-        // clap wraps the value-parser error; the source chain carries the
-        // mtui-types RridParseError, keeping the interop contract's message.
+        // clap wraps the value-parser error, but the source chain must still
+        // carry `RridParseError` so the interop contract's message survives.
         let err = parse(&["-a", "not-an-rrid"]).expect_err("malformed RRID must fail");
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
         let has_rrid_err = std::error::Error::source(&err)
@@ -453,7 +433,6 @@ mod tests {
 
     #[test]
     fn sut_trailing_comma_keeps_empty_token() {
-        // Upstream `"a,".split(",")` -> `["a", ""]`; we preserve that verbatim.
         let s: Sut = "a,".parse().unwrap();
         assert_eq!(s.hosts(), ["a", ""]);
         assert_eq!(s.print_args(), "-t a -t ");
@@ -544,9 +523,8 @@ mod tests {
     #[test]
     fn resolve_config_applies_cli_over_file_defaults() {
         use mtui_config::SslVerify;
-        // With no --config the file chain yields defaults; the CLI layer then
-        // overrides ssl_verify. (No file is written, so this exercises the
-        // load→apply composition against the default baseline.)
+        // No file is written, so the file chain yields defaults and this
+        // exercises the load→apply composition against the default baseline.
         let cfg = parse(&["--ssl-verify", "false"]).unwrap().resolve_config();
         assert_eq!(cfg.ssl_verify, SslVerify::Disabled);
     }

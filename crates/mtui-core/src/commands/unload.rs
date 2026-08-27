@@ -9,12 +9,10 @@ use crate::session::Session;
 
 /// Unloads one loaded template, closing only its host connections.
 ///
-/// Other loaded templates are left
-/// untouched; if the unloaded template was active, the registry promotes the
-/// next remaining one. It names its own target RRID and removes exactly that
-/// template, so it runs once ([`Scope::Single`]) regardless of how many
-/// templates are loaded — without this it would fan out under MCP and fail on
-/// the second pass with a not-loaded error.
+/// Other templates are untouched; unloading the active one promotes the next
+/// remaining. It names its own target RRID, so it runs once ([`Scope::Single`])
+/// — otherwise it would fan out under MCP and fail the second pass with a
+/// not-loaded error.
 pub struct Unload;
 
 #[async_trait]
@@ -61,16 +59,13 @@ impl Command for Unload {
         if !session.templates.contains(&rrid) {
             return Err(CommandError::TemplateNotLoaded(rrid));
         }
-        // Release the per-call active handle before removing: `remove` locks the
-        // target entry to tear it down, which would self-deadlock if that entry
-        // is the one this session's guard currently holds (unload of the active
-        // template). Leaves the registry pointer alone so the survivor is still
-        // promoted by `remove`.
+        // `remove` locks the target entry to tear it down, self-deadlocking when
+        // that is the entry this session's guard holds. The registry pointer is
+        // left alone, so `remove` still promotes the survivor.
         session.release_active_guard();
-        // Async removal releases the report's arbiter claim + remote
-        // pool/operation locks and closes its hosts (bounded) before the entry is
-        // dropped. Teardown failures are best-effort logged; unload still
-        // succeeds (mirroring `quit`).
+        // Removal releases the arbiter claim + remote pool/operation locks and
+        // closes the hosts (bounded) before the entry drops. As in `quit`,
+        // teardown failures are logged and unload still succeeds.
         let removed = session.templates.remove(&rrid).await;
         for (host, err) in &removed.failed {
             tracing::warn!("failed to disconnect from {host}: {err}");
@@ -122,8 +117,7 @@ mod tests {
 
     #[tokio::test]
     async fn unload_releases_pool_claims_and_closes_hosts() {
-        // The active report of two claims a host through the process-global
-        // arbiter; unload must release that ownership (not just drop the entry).
+        // Unload must release the arbiter ownership, not just drop the entry.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session
             .templates
@@ -135,8 +129,8 @@ mod tests {
         );
         let arbiter = mtui_hosts::get_arbiter();
         assert!(arbiter.try_acquire("unload-claim-h1", &owner));
-        // `SUSE:Maintenance:1:1` is the active template, so mutate it through the
-        // session's active handle rather than a (locked) registry entry.
+        // The active template, so mutate it through the session's handle rather
+        // than a locked registry entry.
         session
             .metadata_mut()
             .base_mut()

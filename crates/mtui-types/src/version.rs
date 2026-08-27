@@ -11,11 +11,9 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A single version field, preserving the numeric-vs-textual distinction.
-///
-/// YAML `5` deserializes to [`VersionField::Num`]; YAML `sp4` deserializes to
-/// [`VersionField::Text`]. The `Num` variant is listed first so `#[serde(untagged)]`
-/// prefers the integer interpretation for bare numeric scalars.
+/// A single version field, preserving the numeric-vs-textual distinction. The
+/// `Num` variant is listed first so `#[serde(untagged)]` prefers the integer
+/// interpretation for bare numeric scalars.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum VersionField {
@@ -85,7 +83,6 @@ mod tests {
         let v: Version = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(v.major, VersionField::Num(15));
         assert_eq!(v.minor, Some(VersionField::Num(5)));
-        // Re-serializing preserves the numeric shape.
         let round = serde_saphyr::to_string(&v).unwrap();
         let back: Version = serde_saphyr::from_str(&round).unwrap();
         assert_eq!(back, v);
@@ -108,7 +105,6 @@ mod tests {
         let v: Version = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(v.major, VersionField::Num(15));
         assert_eq!(v.minor, None);
-        // With minor None, it is skipped on serialize.
         let round = serde_saphyr::to_string(&v).unwrap();
         assert!(!round.contains("minor"));
     }

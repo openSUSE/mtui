@@ -4,11 +4,6 @@
 //! [`Registry`](crate::Registry) by [`register_all`](crate::register_all). Each
 //! is a thin async adapter over the lower crates' services, reached through the
 //! [`Session`](crate::Session).
-//!
-//! Ported in port-order "waves" (`PLAN-phase5.md §5.5`). Wave 1 — the core
-//! workflow that gates the phase — lands here: `run`, `update`,
-//! `install`/`uninstall`, `prepare`, `downgrade`, `reboot`, `set_repo`,
-//! `show_update_repos`.
 
 pub mod support;
 
@@ -23,7 +18,7 @@ mod showrepos;
 mod update;
 mod zypper;
 
-// Wave 2 — host & session management.
+// Host & session management.
 mod addhost;
 mod config;
 mod hostslock;
@@ -39,7 +34,7 @@ mod templates;
 mod unload;
 mod whoami;
 
-// Wave 4 — backend APIs, openQA/QEM queue & workflow.
+// Backend APIs, openQA/QEM queue & workflow.
 mod apicall;
 mod approve;
 mod checkers;
@@ -51,7 +46,7 @@ mod request_review;
 mod simpleset;
 mod updates;
 
-// Wave 3 — testreport lifecycle, metadata & host-info commands.
+// Testreport lifecycle, metadata & host-info commands.
 mod checkout;
 mod commit;
 mod listbugs;
@@ -70,7 +65,6 @@ mod sftpput;
 mod showdiff;
 mod showlog;
 
-// Deferred commands whose machinery has since landed.
 mod export;
 mod list_refhosts;
 mod load_template;
@@ -139,11 +133,9 @@ pub use showdiff::{AnalyzeDiff, ShowDiff};
 pub use showlog::ShowLog;
 pub use terms::Terms;
 
-/// Shared test scaffolding for the Wave-1 command bodies.
-///
-/// Builds a [`Session`](crate::Session) whose active report carries scripted
-/// [`MockConnection`](mtui_hosts::MockConnection) hosts and a captured display,
-/// so a command's `run` can be driven end-to-end offline and its output asserted.
+/// Shared test scaffolding: a [`Session`](crate::Session) whose active report
+/// carries scripted [`MockConnection`](mtui_hosts::MockConnection) hosts and a
+/// captured display, so a command's `run` runs end-to-end offline.
 #[cfg(test)]
 pub(crate) mod testkit {
     use std::collections::HashMap;
@@ -161,75 +153,45 @@ pub(crate) mod testkit {
     use crate::session::{HOST_CLOSE_TIMEOUT, Session};
 
     tokio::task_local! {
-        /// Test-only override for
-        /// [`host_op_budget`](super::support::host_op_budget), in
-        /// milliseconds. Unset means "use the production
-        /// [`HOST_CLOSE_TIMEOUT`]" — the fallback `try_with` takes when no
-        /// test has scoped a shrunk value onto the current task.
+        /// Test-only override for [`host_op_budget`](super::support::host_op_budget),
+        /// in ms. Unset means the production [`HOST_CLOSE_TIMEOUT`].
         static HOST_OP_BUDGET_MS: u64;
     }
 
-    /// Task-local, not a process-global: the crate's tests share one process,
-    /// but a value scoped onto one test's task by
-    /// [`with_shrunk_budget`] can never leak into a sibling test running
-    /// concurrently on another task, so no cross-test lock is needed.
+    /// Task-local, not a process-global: a value scoped by [`with_shrunk_budget`]
+    /// cannot leak into a sibling test sharing the process, so no lock is needed.
     pub(crate) fn host_op_budget_override() -> std::time::Duration {
         HOST_OP_BUDGET_MS
             .try_with(|ms| std::time::Duration::from_millis(*ms))
             .unwrap_or(HOST_CLOSE_TIMEOUT)
     }
 
-    /// Runs `fut` with [`host_op_budget_override`] shrunk to `ms` for its
-    /// duration, so a dispatch it abandons costs milliseconds instead of the
-    /// full production budget.
+    /// Runs `fut` with [`host_op_budget_override`] shrunk to `ms`, so a dispatch
+    /// it abandons costs milliseconds instead of the full production budget.
     ///
-    /// The scope does not cross a `tokio::spawn` boundary, so `fut` must stay
-    /// on this task end to end — verified safe: `mtui-core`'s only
-    /// `tokio::spawn` is `regenerate.rs:506`, outside the budget path.
-    /// Re-run `rg -n 'tokio::spawn' crates/mtui-core/src` before relying on
-    /// this if a command on the budget path ever grows one; a spawn inside
-    /// `fut` would silently fall back to the production 45 s budget instead
-    /// of erroring, and a test asserting a bounded abandon would then hang
-    /// for tens of seconds rather than going red.
+    /// The scope does not cross a `tokio::spawn`, so `fut` must stay on this
+    /// task end to end (`mtui-core`'s only spawn, in `regenerate.rs`, is off the
+    /// budget path); a spawn inside it silently falls back to the production
+    /// budget, hanging a bounded-abandon test instead of going red.
     pub(crate) async fn with_shrunk_budget<F: std::future::Future>(ms: u64, fut: F) -> F::Output {
         HOST_OP_BUDGET_MS.scope(ms, fut).await
     }
 
-    /// Captures `tracing` events on the calling thread, so a command's
-    /// log-only output (a `succeeded` summary field, a `warn!` line with no
-    /// named field) can be asserted instead of assumed from its `Result` or
-    /// display output alone. The one shared capture for this test binary —
-    /// see the module doc for why a second one silently disarms itself.
+    /// Captures `tracing` events on the calling thread, so a command's log-only
+    /// output (a `succeeded` summary field, a bare `warn!` line) can be
+    /// asserted. The one shared capture for this binary.
     ///
-    /// The subscriber is installed **globally and permanently**, not as a
-    /// thread-local default: `tracing` caches callsite interest process-wide,
-    /// so a callsite reached by many other tests in this binary, none of which
-    /// has a subscriber, would otherwise be cached as `Interest::never` and
-    /// stay silent here for good. `set_global_default` rebuilds that cache and
-    /// then keeps interest pinned. Scoping moves to a thread-local sink
-    /// instead, so tests running in parallel on other threads cannot see (or
-    /// pollute) this capture.
-    ///
-    /// Two consequences of that choice, both deliberate:
-    ///
-    /// - **The level ceiling goes to `TRACE` binary-wide.** An unfiltered
-    ///   `Registry` reports no `max_level_hint`, so from the first [`start`]
-    ///   call `LevelFilter::current()` is `TRACE` for the whole `mtui-core` lib
-    ///   test binary: every `debug!`/`trace!` callsite that was dead before now
-    ///   evaluates its formatting arguments (in every parallel test, not just
-    ///   this one). That costs a little time, and a `Display`/`Debug` impl that
-    ///   takes a lock the emitting thread already holds would deadlock rather
-    ///   than stay unevaluated. Nothing in this binary does that today; if a
-    ///   callsite ever pays for it, bound the layer with a `LevelFilter` — that
-    ///   keeps the interest rebuild without the blast radius — rather than
-    ///   going back to a thread-local default.
-    /// - **The capture assumes the logging happens on the arming thread.**
-    ///   `#[tokio::test]` defaults to the current-thread flavour, so the
-    ///   command and its logging run on the thread that called [`start`] and
-    ///   reach its sink. Adding `flavor = "multi_thread"` to a test using this
-    ///   capture would move the event to a worker thread with no sink, silently
-    ///   emptying the buffer — and an assertion built on it would then read as
-    ///   a product bug rather than as the harness change it is.
+    /// Installed **globally and permanently** rather than as a thread-local
+    /// default: `tracing` caches callsite interest process-wide, so a callsite
+    /// first reached with no subscriber is cached `Interest::never` for good;
+    /// scoping moves to a thread-local sink instead. Two consequences:
+    /// `LevelFilter::current()` goes to `TRACE` binary-wide (an unfiltered
+    /// `Registry` reports no `max_level_hint`), so bound the layer with a
+    /// `LevelFilter` if that ever costs rather than going back to a
+    /// thread-local default; and **the logging must happen on the arming
+    /// thread** — `#[tokio::test]` defaults to current-thread, but adding
+    /// `flavor = "multi_thread"` would silently empty the buffer and make an
+    /// assertion read as a product bug rather than a harness change.
     pub(crate) mod log_capture {
         use std::cell::RefCell;
         use std::sync::Once;
@@ -240,11 +202,9 @@ pub(crate) mod testkit {
 
         /// The fields of one captured event that commands' tests care about.
         pub(crate) struct Captured {
-            /// The rendered `succeeded` field, if the event carries one (the
-            /// fan-out driver's summary log).
+            /// The fan-out driver's `succeeded` summary field, if present.
             pub succeeded: Option<String>,
-            /// The rendered default message, if the event was logged with a
-            /// format string (e.g. `tracing::warn!("disconnect failed: {e}")`).
+            /// The rendered message, if the event carried a format string.
             pub message: Option<String>,
         }
 
@@ -263,9 +223,8 @@ pub(crate) mod testkit {
 
         impl Visit for CaptureVisitor {
             fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                // Both `succeeded = %…` and a bare format-string message arrive
-                // as `Display` values, which tracing hands to `record_debug`
-                // already rendered.
+                // `succeeded = %…` and bare format-string messages both arrive
+                // as `Display` values, already rendered for `record_debug`.
                 match field.name() {
                     "succeeded" => self.succeeded = Some(format!("{value:?}")),
                     "message" => self.message = Some(format!("{value:?}")),
@@ -296,8 +255,7 @@ pub(crate) mod testkit {
             static INSTALL: Once = Once::new();
             INSTALL.call_once(|| {
                 // A pre-existing global default would leave the capture empty,
-                // which a caller's assertion reports loudly rather than
-                // passing over.
+                // which a caller's assertion reports loudly.
                 let _ =
                     tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
             });
@@ -314,24 +272,21 @@ pub(crate) mod testkit {
     pub struct FakeReport {
         base: TestReportBase,
         rrid: String,
-        /// When `true`, `perform_update` returns an `Err` so the command's
-        /// failure path (error toast, non-`Ok` result) can be exercised.
+        /// `perform_update` returns an `Err`, exercising the failure path
+        /// (error toast, non-`Ok` result).
         fail_update: bool,
-        /// When `true`, the `perform_install`/`uninstall`/`prepare`/`downgrade`
-        /// flows return an `Err` naming host `h1`, so the shared `perform::drive`
-        /// failure path (per-host summary + non-`Ok` result) can be exercised.
+        /// The `perform_install`/`uninstall`/`prepare`/`downgrade` flows return
+        /// an `Err` naming host `h1`, exercising `perform::drive`'s failure path.
         fail_perform: bool,
-        /// When `true`, [`as_set_repo`](TestReport::as_set_repo) returns `Some`
-        /// so `set_repo` drives the (empty-repo) `run_zypper` refresh — the only
-        /// public path that records [`Target::last_repo`] — letting the command's
-        /// per-host repo summary + failure aggregation be exercised via the
-        /// mock's scripted `zypper -n ref` exit code.
+        /// [`as_set_repo`](TestReport::as_set_repo) returns `Some`, so `set_repo`
+        /// drives the empty-repo `run_zypper` refresh — the only public path
+        /// recording [`Target::last_repo`], hence the only way to exercise the
+        /// per-host repo summary.
         set_repo_enabled: bool,
     }
 
     impl FakeReport {
-        /// The shared verdict for the `perform_install`-family overrides: an
-        /// `Err` naming host `h1` when `fail_perform`, else `Ok(())`.
+        /// The shared verdict for the `perform_install`-family overrides.
         fn perform_verdict(&self) -> Result<(), mtui_testreport::UpdateError> {
             if self.fail_perform {
                 Err(mtui_testreport::UpdateError::new("RPM Error", "h1"))
@@ -344,10 +299,8 @@ pub(crate) mod testkit {
     #[async_trait]
     impl SetRepo for FakeReport {
         async fn set_repo(&self, target: &mut Target, _operation: RepoOp) {
-            // Drive the empty-repo `run_zypper` refresh — the only public path
-            // that records `Target::last_repo`. With no matched repos only the
-            // trailing `zypper -n ref` runs, so the recorded verdict follows the
-            // mock's scripted exit code for that command.
+            // With no matched repos only the trailing `zypper -n ref` runs, so
+            // `last_repo` follows the mock's scripted exit for that command.
             let rrid = self.base.rrid.clone().expect("test rrid set");
             target
                 .repo_manager()
@@ -374,8 +327,7 @@ pub(crate) mod testkit {
             _newpackage: bool,
             diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
-            // Emit both diagnostic shapes so the perform-layer render path is
-            // exercised end-to-end (a highlighted section + a plain section).
+            // Both diagnostic shapes, so the render path is exercised fully.
             diagnostics.push(mtui_testreport::Diagnostic::highlighted(
                 "\nwarning: extra rpm output\n",
             ));
@@ -477,8 +429,7 @@ pub(crate) mod testkit {
     }
 
     /// A session (interactive `false`) whose active report has the named hosts,
-    /// each mock echoing `stdout`, plus a captured display. Returns the session
-    /// and the buffer handle.
+    /// each mock echoing `stdout`, plus a captured display.
     #[must_use]
     pub(crate) fn session_with_hosts(
         rrid: &str,
@@ -489,10 +440,9 @@ pub(crate) mod testkit {
         session_with_targets(rrid, targets)
     }
 
-    /// A session (interactive `false`) whose active report holds one host per
-    /// `(name, ok)` pair: `ok == false` wires a [`MockConnection`] whose
-    /// `sftp_put` fails, so the `put` command's per-host upload aggregation can
-    /// be exercised. The failure reason echoes the host name for assertion.
+    /// One host per `(name, ok)` pair: `ok == false` wires a [`MockConnection`]
+    /// whose `sftp_put` fails (host name in the reason), exercising `put`'s
+    /// per-host upload aggregation.
     #[must_use]
     pub(crate) fn session_with_upload_outcomes(
         rrid: &str,
@@ -512,12 +462,9 @@ pub(crate) mod testkit {
         session_with_targets(rrid, targets)
     }
 
-    /// A session (interactive `false`) whose active report holds one host per
-    /// `(name, ok)` pair for the `reboot` command: `ok == true` wires a
-    /// [`MockConnection::with_changing_boot_id`] (the boot id differs across the
-    /// pre/post-reboot reads, so the group records a successful reboot); `ok ==
-    /// false` scripts a *fixed* boot id, modelling a host that never rebooted (an
-    /// unchanged id ⇒ recorded failure).
+    /// One host per `(name, ok)` pair for `reboot`: `ok == true` wires a
+    /// [`MockConnection::with_changing_boot_id`] (differing pre/post reads ⇒
+    /// recorded success), `ok == false` a *fixed* boot id (⇒ recorded failure).
     #[must_use]
     pub(crate) fn session_with_reboot_outcomes(
         rrid: &str,
@@ -531,10 +478,8 @@ pub(crate) mod testkit {
                 if ok {
                     conn = conn.with_changing_boot_id();
                 } else {
-                    // A *fixed non-empty* boot id models a host that did not
-                    // reboot: the pre/post reads match, so the group records a
-                    // failure (an empty id would read as "could not confirm" ⇒
-                    // Ok, which is not what we want here).
+                    // Fixed *non-empty*: an empty id reads as "could not
+                    // confirm" ⇒ Ok, which would disarm the assertion.
                     conn = conn.with_response(
                         "cat /proc/sys/kernel/random/boot_id",
                         CommandLog::new(
@@ -552,10 +497,9 @@ pub(crate) mod testkit {
         session_with_targets(rrid, targets)
     }
 
-    /// A session (interactive `false`) whose active report holds one host per
-    /// `(name, ok)` pair for the `get` command: `ok == false` wires a
-    /// [`MockConnection::failing_sftp_get`] so the download aggregation's
-    /// failure path can be exercised. The report carries a real checkout path so
+    /// One host per `(name, ok)` pair for `get`: `ok == false` wires a
+    /// [`MockConnection::failing_sftp_get`], exercising the download
+    /// aggregation's failure path. The report carries a real checkout path so
     /// `report_wd` resolves.
     #[must_use]
     pub(crate) fn session_with_download_outcomes(
@@ -594,12 +538,9 @@ pub(crate) mod testkit {
         (session, buf)
     }
 
-    /// A session (interactive `false`) whose active report has the given
-    /// already-built `targets`, plus a captured display. The building block
-    /// behind [`session_with_hosts`] for callers that need to pre-wire a
-    /// target beyond the uniform stdout-echo mock — e.g. calling `.connect()`
-    /// on a [`Target::with_connection`] host scripted with a system-parse
-    /// fixture before adding it to the group.
+    /// A session whose active report has the given already-built `targets` —
+    /// the building block behind [`session_with_hosts`], for callers pre-wiring
+    /// a target beyond the uniform stdout-echo mock.
     #[must_use]
     pub(crate) fn session_with_targets(rrid: &str, targets: Vec<Target>) -> (Session, Buffer) {
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
@@ -622,9 +563,8 @@ pub(crate) mod testkit {
         (session, buf)
     }
 
-    /// A session whose active report's `perform_update` returns `Err`, so the
-    /// `update` command's failure path (error toast, non-`Ok` result) can be
-    /// exercised end-to-end.
+    /// A session whose active report's `perform_update` returns `Err`,
+    /// exercising the `update` command's failure path end-to-end.
     #[must_use]
     pub(crate) fn session_with_failing_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
@@ -646,12 +586,10 @@ pub(crate) mod testkit {
         (session, buf)
     }
 
-    /// A session (interactive `false`) whose active report holds one host per
-    /// `(name, ok)` pair for the `lock`/`unlock` commands: `ok == false` scripts
-    /// the exclusive write of the operation-lock file (`/var/lock/mtui.lock`) to
-    /// a hard [`HostError::Sftp`] (not a benign collision), so the group's
-    /// [`LockOutcome::Failed`] path can be exercised. `ok == true` locks/unlocks
-    /// cleanly.
+    /// One host per `(name, ok)` pair for `lock`/`unlock`: `ok == false` scripts
+    /// the exclusive write of `/var/lock/mtui.lock` to a hard
+    /// [`HostError::Sftp`] — not a benign collision — reaching the group's
+    /// [`LockOutcome::Failed`] path.
     #[must_use]
     pub(crate) fn session_with_lock_outcomes(
         rrid: &str,
@@ -671,11 +609,9 @@ pub(crate) mod testkit {
         session_with_targets(rrid, targets)
     }
 
-    /// A session (interactive `false`) whose active report is `SetRepo`-capable
-    /// and holds one host per `(name, ok)` pair for the `set_repo` command:
-    /// `ok == false` scripts the trailing `zypper -n ref` refresh to a non-zero
-    /// exit so `last_repo` records a failure; `ok == true` leaves the default
-    /// exit-0 mock so the run records success.
+    /// A `SetRepo`-capable report with one host per `(name, ok)` pair for
+    /// `set_repo`: `ok == false` scripts the trailing `zypper -n ref` refresh to
+    /// a non-zero exit so `last_repo` records a failure.
     #[must_use]
     pub(crate) fn session_with_setrepo_outcomes(
         rrid: &str,
@@ -710,9 +646,8 @@ pub(crate) mod testkit {
         (session, buf)
     }
 
-    /// A session whose active report's `perform_install`/`uninstall`/`prepare`/
-    /// `downgrade` flows return `Err` (naming host `h1`), so `perform::drive`'s
-    /// failure path (per-host summary + non-`Ok` result) can be exercised.
+    /// A session whose active report's `perform_install`-family flows return
+    /// `Err` (naming host `h1`), exercising `perform::drive`'s failure path.
     #[must_use]
     pub(crate) fn session_with_failing_perform(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
@@ -734,11 +669,9 @@ pub(crate) mod testkit {
         (session, buf)
     }
 
-    /// Builds a standalone loaded report with the named hosts (each mock echoing
-    /// `stdout`), boxed for [`TemplateRegistry::add`](crate::TemplateRegistry).
-    ///
-    /// The building block behind [`session_with_hosts`]; command tests that need
-    /// more than one loaded template call this to `add` extra reports.
+    /// A standalone loaded report with the named hosts (each mock echoing
+    /// `stdout`), boxed for [`TemplateRegistry::add`](crate::TemplateRegistry);
+    /// tests needing more than one loaded template `add` extra reports.
     #[must_use]
     pub(crate) fn fake_report(
         rrid: &str,
@@ -758,13 +691,9 @@ pub(crate) mod testkit {
         })
     }
 
-    /// Boxes a caller-built [`TestReportBase`] under `rrid` into the shared
-    /// [`FakeReport`] double.
-    ///
-    /// The escape hatch behind [`fake_report`] for tests that must pre-wire the
-    /// host group beyond the uniform stdout-echo mock — e.g. a group holding a
-    /// target whose mock `close` fails or wedges, to exercise the removal
-    /// teardown paths.
+    /// Boxes a caller-built [`TestReportBase`] into the shared [`FakeReport`]
+    /// double — the escape hatch behind [`fake_report`] for pre-wiring the host
+    /// group, e.g. a target whose mock `close` fails or wedges.
     #[must_use]
     pub(crate) fn fake_report_from_base(base: TestReportBase) -> Box<dyn TestReport + Send + Sync> {
         let rrid = base
@@ -837,12 +766,9 @@ pub(crate) mod testkit {
         )
     }
 
-    /// A session with hosts wired onto the active report but **no template
-    /// loaded** (the active report stays the `NullReport`, so
-    /// `session.metadata().is_loaded()` is `false`). Mirrors
-    /// [`session_with_hosts`] but skips `templates.add`, so commands can be
-    /// exercised in the no-metadata state a real REPL reaches before any
-    /// template is checked out.
+    /// A session with hosts on the active report but **no template loaded** (it
+    /// stays the `NullReport`, so `metadata().is_loaded()` is `false`) — the
+    /// state a real REPL reaches before any checkout.
     #[must_use]
     pub(crate) fn session_host_no_template(hosts: &[&str], stdout: &str) -> (Session, Buffer) {
         let (mut session, buf) = empty_session();
@@ -863,30 +789,18 @@ pub(crate) mod testkit {
     }
 }
 
-/// Standing MCP-contract guard: every non-denied command that reaches a
-/// successful (`Ok(())`) dispatch must write **something** to the session
-/// display.
+/// Standing MCP-contract guard: every non-denied command reaching a successful
+/// (`Ok(())`) dispatch must write **something** to the session display, since
+/// the MCP tool result text is exactly that — an empty success block makes the
+/// tool return an empty confirmation and the client hallucinate a result.
 ///
-/// ## Why this lives here (approach "b")
-///
-/// The MCP tool result text is exactly what a command writes to `session.display`
-/// on `Ok(())`; an empty success block makes the MCP tool return an empty
-/// confirmation and the client hallucinate a result. A whole epic fixed commands
-/// that silently returned `Ok(())` with no output; this test stops the
-/// regression coming back.
-///
-/// It would ideally live in `mtui-mcp` (where the deny-filter + tool synthesis
-/// run), but the only machinery that drives the state-mutating fan-out commands
-/// to a *real* success with per-host output is the [`testkit`] above — its
-/// `FakeReport` double plus mock-host session builders — which is `#[cfg(test)]`
-/// and `pub(crate)`, unreachable from another crate. Re-implementing that fixture
-/// surface in `mtui-mcp` would be a large duplication for no extra signal, so the
-/// guard runs here against the **same display sink** the MCP capture buffer wraps
-/// and iterates the **same** [`register_all`](crate::register_all) registry minus
-/// the **same** [`MCP_DENYLIST`](crate::MCP_DENYLIST) the MCP tool layer filters
-/// on. Each command is driven through the real engine
-/// ([`dispatch_command`](crate::dispatch_command)), not `Command::call`, so the
-/// fan-out path an MCP call takes is exercised.
+/// It belongs in `mtui-mcp`, but the only machinery driving the state-mutating
+/// fan-out commands to a *real* success with per-host output is the
+/// `#[cfg(test)] pub(crate)` [`testkit`] above, unreachable from another crate.
+/// So it runs here over the same [`register_all`](crate::register_all) registry
+/// minus the same [`MCP_DENYLIST`](crate::MCP_DENYLIST), dispatching through the
+/// real engine ([`dispatch_command`](crate::dispatch_command)) rather than
+/// `Command::call` so the fan-out path an MCP call takes is exercised.
 #[cfg(test)]
 mod mcp_nonempty_success_guard {
     use super::testkit::{
@@ -898,54 +812,44 @@ mod mcp_nonempty_success_guard {
 
     const RRID: &str = "SUSE:Maintenance:1:1";
 
-    /// Commands legitimately excluded from the non-empty-success guard, each with
-    /// a `// why:` justification. Keep this list as small as honestly possible:
-    /// every entry here is a command whose *success* path cannot be reached in an
-    /// offline, headless test without standing up an external system (SVN, the
-    /// OBS/IBS or Gitea API, openQA/QEM, a live SSH host) or without fixture
-    /// plumbing far beyond what the shared testkit offers. Their own per-command
-    /// unit tests assert they print a success line before returning `Ok(())`; this
-    /// guard covers everything that can be driven offline.
+    /// Commands excluded from the non-empty-success guard, each with a `// why:`
+    /// justification. Keep it as small as honestly possible: an entry is a
+    /// command whose *success* path needs an external system or fixture
+    /// plumbing beyond the testkit, and asserts its own success line in its
+    /// per-command unit tests.
     const ALLOW_EMPTY_SUCCESS: &[&str] = &[
-        // why: checkout/commit shell out to `svn` against a working copy; success
-        // needs a real SVN repo+checkout (their tests skip when svn is absent).
+        // why: shell out to `svn`; success needs a real repo + checkout (their
+        // tests skip when svn is absent).
         "checkout",
         "commit",
-        // why: the QAM review workflow talks to the OBS/IBS or Gitea API; the
-        // success line ("assigned {rrid}" etc.) is only printed after a live
-        // network call succeeds, unreachable offline without a mock server.
+        // why: the QAM review workflow needs a live OBS/IBS or Gitea call.
         "approve",
         "assign",
         "unassign",
         "reject",
         "comment",
-        // why: query openQA/QEM (and the QEM Dashboard); success requires a mock
-        // HTTP backend (wiremock) their own tests stand up per case.
+        // why: query openQA/QEM; success needs a wiremock HTTP backend their own
+        // tests stand up per case.
         "checkers",
         "updates",
         "openqa_overview",
         "openqa_jobs",
         "reload_openqa",
         "regenerate",
-        // why: builds the QEM incident + openQA "auto" result on every mode
-        // change (build_incident/refresh_auto), so success needs the QEM
-        // Dashboard + openQA backends its own tests mock per case.
+        // why: rebuilds the QEM incident + openQA "auto" result on every mode
+        // change, so success needs both backends.
         "set_workflow",
-        // why: posts to the Slack Web API; the success line is printed only
-        // after a live `auth.test` + `chat.postMessage` succeed, so driving it
-        // needs the wiremock backend its own tests stand up per case.
+        // why: posts to the Slack Web API (`auth.test` + `chat.postMessage`).
         "request_review",
-        // why: connects a brand-new host over SSH; success needs a reachable
-        // reference host (its tests only exercise the connect-failure path).
+        // why: connects a brand-new host over SSH to a reachable refhost (its
+        // tests only exercise the connect-failure path).
         "add_host",
-        // why: folds per-host update logs sourced from openQA into a template
-        // file; a real success needs a source template + openQA/QEM backend.
+        // why: folds openQA-sourced per-host logs into a template file, so
+        // success needs a source template + openQA/QEM backend.
         "export",
-        // why: resolves the refhosts store (network or a configured local file);
-        // driving success needs a refhosts YAML fixture beyond the shared testkit.
+        // why: resolves the refhosts store; needs a refhosts YAML fixture.
         "list_refhosts",
-        // why: renders a source.diff / spec diff; success needs a checkout with a
-        // diff fixture (its tests build one via a local-only helper).
+        // why: renders a source.diff / spec diff from a checkout fixture.
         "show_diff",
         "analyze_diff",
     ];
@@ -954,19 +858,17 @@ mod mcp_nonempty_success_guard {
     /// dispatch with output, for every command the guard *enforces*. Returns
     /// `None` for a name not enforced here (it must then be on the allow-list).
     fn fixture(name: &str) -> Option<(Session, Buffer, Vec<String>)> {
-        // Most commands only need a single mock host echoing "ok".
         let hosts = || session_with_hosts(RRID, &["h1"], "ok");
         let argv = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
 
         let (session, buf, args): (Session, Buffer, Vec<String>) = match name {
-            // Wave 1 — core workflow fan-outs.
+            // Core workflow fan-outs.
             "run" => {
                 let (s, b) = hosts();
                 (s, b, argv(&["true"]))
             }
             "update" => {
-                // Seed one package: the #396 pre-flight refuses a report whose
-                // metadata names no package versions.
+                // #396 pre-flight: a report naming no package versions is refused.
                 let (mut s, b) = hosts();
                 s.metadata_mut().base_mut().packages.insert(
                     "standard".to_owned(),
@@ -1012,7 +914,7 @@ mod mcp_nonempty_success_guard {
                 let (s, b) = hosts();
                 (s, b, argv(&[]))
             }
-            // Wave 2 — host & session management.
+            // Host & session management.
             "remove_host" => {
                 let (s, b) = session_with_hosts(RRID, &["h1", "h2"], "ok");
                 (s, b, argv(&["-t", "h1"]))
@@ -1054,7 +956,6 @@ mod mcp_nonempty_success_guard {
                 (s, b, argv(&["show", "session_user"]))
             }
             "unload" => {
-                // Unloading the loaded template prints "unloaded <rrid>".
                 let (s, b) = hosts();
                 (s, b, argv(&[RRID]))
             }
@@ -1062,7 +963,7 @@ mod mcp_nonempty_success_guard {
                 let (s, b) = hosts();
                 (s, b, argv(&[]))
             }
-            // Wave 3 — testreport metadata & host-info.
+            // Testreport metadata & host-info.
             "list_metadata" => {
                 let (s, b) = hosts();
                 (s, b, argv(&[]))
@@ -1104,12 +1005,10 @@ mod mcp_nonempty_success_guard {
                 (s, b, argv(&["warning"]))
             }
             "put" => {
-                // `put` uploads a real local file; write one into a temp dir.
                 let dir = tempfile::tempdir().expect("tempdir");
                 let file = dir.path().join("payload.txt");
                 std::fs::write(&file, b"payload").expect("write payload");
-                // Leak the dir guard: the command reads the file synchronously
-                // during dispatch; the OS reclaims it at process exit.
+                // Leak the guard: the read is synchronous within dispatch.
                 std::mem::forget(dir);
                 let (s, b) = session_with_upload_outcomes(RRID, &[("h1", true)]);
                 (s, b, argv(&[file.to_str().expect("utf8 path")]))
@@ -1121,8 +1020,7 @@ mod mcp_nonempty_success_guard {
                 (s, b, argv(&["/remote/file.log"]))
             }
             "load_template" => {
-                // A kernel (`-k`) load of an on-disk template registers +
-                // activates it without connecting, printing "loaded <rrid>".
+                // A kernel (`-k`) load registers + activates without connecting.
                 let (mut s, b) = empty_session();
                 let dir = tempfile::tempdir().expect("tempdir");
                 let krrid = "SUSE:Maintenance:24993:275518";
@@ -1135,8 +1033,7 @@ mod mcp_nonempty_success_guard {
                 )
                 .expect("write metadata");
                 s.config.template_dir = dir.path().to_path_buf();
-                // Leak the dir guard: the load reads it synchronously during
-                // dispatch; the OS reclaims it at process exit.
+                // Leak the guard: the load is synchronous within dispatch.
                 std::mem::forget(dir);
                 (s, b, argv(&["-k", krrid]))
             }
@@ -1145,9 +1042,9 @@ mod mcp_nonempty_success_guard {
         Some((session, buf, args))
     }
 
-    /// Every non-denied command either has an enforced success fixture or is on
-    /// the allow-list — never both, and never neither. This keeps the split
-    /// exhaustive so a newly registered command cannot slip through unguarded.
+    /// Every non-denied command has either an enforced success fixture or an
+    /// allow-list entry — never both, never neither, so a newly registered
+    /// command cannot slip through unguarded.
     #[test]
     fn every_non_denied_command_is_enforced_or_allow_listed() {
         let registry = register_all();
@@ -1175,9 +1072,8 @@ mod mcp_nonempty_success_guard {
         }
     }
 
-    /// The core invariant: every enforced command reaches `Ok(())` **and** leaves
-    /// a non-empty display buffer, so its MCP tool result is never an empty
-    /// success block.
+    /// The core invariant: every enforced command reaches `Ok(())` **and**
+    /// leaves a non-empty display buffer.
     #[tokio::test]
     async fn enforced_commands_write_something_on_success() {
         let registry = register_all();
@@ -1205,10 +1101,8 @@ mod mcp_nonempty_success_guard {
         }
     }
 
-    /// Sanity check that the assertion is real, not a tautology: a fixture whose
-    /// command prints nothing on success **would** fail the guard. We use a tiny
-    /// stub command that returns `Ok(())` silently and confirm its buffer is
-    /// empty (i.e. the enforced assertion above would fire on it).
+    /// The assertion above is not a tautology: a stub returning `Ok(())`
+    /// silently does leave the buffer empty, so the guard would fire on it.
     #[tokio::test]
     async fn guard_would_catch_a_silent_success() {
         use crate::command::Scope;
@@ -1242,10 +1136,9 @@ mod mcp_nonempty_success_guard {
 }
 
 /// Driver-level tests for the cancellation seam (`Session::cancel` +
-/// [`Command::run`](crate::Command::run) checkpoints). They live here — not in
-/// `command.rs` — for the same reason as the guard above: the [`testkit`]
-/// multi-template session builders are `#[cfg(test)]` `pub(crate)` in this
-/// module.
+/// [`Command::run`](crate::Command::run) checkpoints), here rather than in
+/// `command.rs` because the [`testkit`] multi-template builders are
+/// `#[cfg(test)] pub(crate)` in this module.
 #[cfg(test)]
 mod cancellation_seam {
     use std::sync::{Arc, Mutex};
@@ -1282,28 +1175,26 @@ mod cancellation_seam {
                 .lock()
                 .expect("probe log poisoned")
                 .push(session.templates.active_rrid().unwrap_or("").to_owned());
-            // A job_cancel landing mid-call: the driver must stop at the next
-            // template boundary.
+            // A job_cancel mid-call: the driver stops at the next boundary.
             session.cancel_token().cancel();
             Ok(())
         }
     }
 
-    /// A fan-out probe whose body returns a scripted per-template verdict, so
-    /// the driver's classification of a body-level cancel can be pinned
-    /// independently of the session token.
+    /// A fan-out probe returning a scripted per-template verdict, pinning the
+    /// driver's classification of a body-level cancel independently of the
+    /// session token.
     struct ScriptedBody {
         ran: Arc<Mutex<Vec<String>>>,
         /// Template whose body fails with a *real* error.
         fail_on: Option<&'static str>,
-        /// Template whose body stops at one of its own cancellation
-        /// checkpoints (what `perform.rs::map_flow_error` produces).
+        /// Template whose body stops at its own cancellation checkpoint (what
+        /// `perform.rs::map_flow_error` produces).
         cancel_on: &'static str,
-        /// Template whose body also fires the session token, before returning
-        /// its scripted verdict (the `job_cancel` coincidence). `None` on a
-        /// `cancel_on` run pins that the verdict needs no token at all; set on
-        /// a `fail_on` run it produces the *other* stop shape — the loop-top
-        /// checkpoint breaking the fan-out with a failure already banked.
+        /// Template whose body also fires the session token (the `job_cancel`
+        /// coincidence): `None` pins that a `cancel_on` verdict needs no token;
+        /// set on a `fail_on` run it produces the *other* stop shape, the
+        /// loop-top checkpoint breaking the fan-out with a failure banked.
         fire_token_on: Option<&'static str>,
     }
 
@@ -1321,8 +1212,8 @@ mod cancellation_seam {
                 .lock()
                 .expect("probe log poisoned")
                 .push(rrid.clone());
-            // Fired first, so it also composes with the failing body: a token
-            // cancel banked alongside a real failure is the loop-top stop.
+            // Fired first so it composes with the failing body: a token cancel
+            // banked alongside a real failure is the loop-top stop.
             if self.fire_token_on == Some(rrid.as_str()) {
                 session.cancel_token().cancel();
             }
@@ -1336,11 +1227,10 @@ mod cancellation_seam {
         }
     }
 
-    /// Three loaded templates, the second one's *body* stopping at its own
-    /// cancellation checkpoint while the session token is never fired: the
-    /// verdict is [`CommandError::Cancelled`] carrying the flow's own detail
-    /// and an honest completion count — not a `FanOut` aggregate with the
-    /// cancel impersonating a broken template (#404).
+    /// Three templates, the second's *body* stopping at its own checkpoint with
+    /// the session token never fired: the verdict is [`CommandError::Cancelled`]
+    /// carrying the flow's own detail and an honest count, not a `FanOut`
+    /// aggregate with the cancel impersonating a broken template (#404).
     #[tokio::test]
     async fn fanout_body_cancel_reports_cancelled_not_fanout() {
         let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
@@ -1377,15 +1267,12 @@ mod cancellation_seam {
         );
     }
 
-    /// A real per-template failure collected *before* a body-level cancel still
-    /// outranks it: the verdict stays the `FanOut` aggregate, the cancel does
-    /// not pad the failure list, and the fan-out still stops at the boundary.
-    /// The token *is* fired here, so a verdict derived from the token instead
-    /// of the error variant would bury the broken template.
-    ///
-    /// The outranked cancel is still *reported*, as the aggregate's `stop`
-    /// note: without it the caller is told only that A broke, and reads the
-    /// interrupted B and the never-attempted C as clean.
+    /// A real per-template failure collected *before* a body-level cancel
+    /// outranks it: the verdict stays the `FanOut` aggregate and the cancel does
+    /// not pad the failure list. The token *is* fired, so a verdict derived from
+    /// it rather than the error variant would bury the broken template; the
+    /// outranked cancel survives as the aggregate's `stop` note, without which
+    /// the interrupted B and never-attempted C read as clean.
     #[tokio::test]
     async fn real_failure_before_body_cancel_still_outranks_it() {
         let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
@@ -1405,9 +1292,8 @@ mod cancellation_seam {
             .run(&mut session, &args)
             .await
             .expect_err("a failed template must not report success");
-        // Rendered first: this is the string the REPL prints and the MCP error
-        // envelope carries, and the whole point of the note is that it reaches
-        // a caller who never sees the `tracing` breadcrumb.
+        // Asserted on the rendered string: the note's point is reaching a caller
+        // (REPL output / MCP error envelope), not the `tracing` log.
         assert_eq!(
             err.to_string(),
             format!(
@@ -1446,14 +1332,10 @@ mod cancellation_seam {
     }
 
     /// The sibling stop shape: a *token* cancel fired while the first template
-    /// was failing, so the loop-top checkpoint — not a body verdict — breaks
-    /// the fan-out with a failure already banked.
-    ///
-    /// The aggregate is still the verdict, and still carries the stop note, so
-    /// the caller does not read the two templates that never ran as clean.
-    /// There is no interrupted body here, so the note is the bare count: a
-    /// `; rrid: detail` suffix appearing would mean the driver invented a
-    /// detail no flow reported.
+    /// was failing, so the loop-top checkpoint — not a body verdict — breaks the
+    /// fan-out with a failure already banked. With no interrupted body the stop
+    /// note is the bare count; a `; rrid: detail` suffix would mean the driver
+    /// invented a detail no flow reported.
     #[tokio::test]
     async fn real_failure_before_token_cancel_keeps_the_stop_note() {
         let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
@@ -1486,13 +1368,11 @@ mod cancellation_seam {
         );
     }
 
-    /// The `succeeded` summary log names templates that actually completed.
-    ///
-    /// This is the outranked-cancel fall-through — a real failure *and* a
-    /// body-level cancel — which is the only shape where the old derived list
-    /// (`resolved` minus `failures` minus `skipped`) could lie: the
-    /// body-cancelled template no longer lands in `failures`, and the template
-    /// after the break never ran at all, so both were reported as succeeded.
+    /// The `succeeded` summary log names only templates that completed. A real
+    /// failure *and* a body-level cancel is the one shape where a list derived
+    /// as `resolved` minus `failures` minus `skipped` lies: the body-cancelled
+    /// template is in no failure list and the one after the break never ran, yet
+    /// both would be reported as succeeded.
     #[tokio::test]
     async fn succeeded_log_names_only_completed_templates() {
         let (mut session, _buf) = session_with_hosts(RRID_A, &["h1"], "ok");
@@ -1519,9 +1399,8 @@ mod cancellation_seam {
             .filter_map(|c| c.succeeded)
             .collect();
 
-        // Only A ran to completion: B failed, C stopped mid-body, D was never
-        // reached. Exact equality, not `contains` — the whole defect is *extra*
-        // names in this list, which a substring check would sail past.
+        // Exact equality, not `contains`: the defect is *extra* names, which a
+        // substring check would sail past.
         assert_eq!(
             logged,
             vec![RRID_A.to_owned()],

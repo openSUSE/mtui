@@ -1,10 +1,8 @@
 //! Integration tests for the native QAM operations (`mtui_datasources::obs::qam`).
 //!
-//! HTTP is mocked with
-//! `wiremock` — the OBS API base backs the
-//! `ObsClient` calls and a second `wiremock` server backs the `qam.suse.de`
-//! reports host that `preconditions` fetches (with no OBS auth). Pinned query
-//! params and bodies are asserted from `received_requests()`.
+//! Two `wiremock` servers: the OBS API base behind the `ObsClient` calls, and
+//! the `qam.suse.de` reports host `preconditions` fetches with no OBS auth.
+//! Pinned query params and bodies are asserted from `received_requests()`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,9 +22,9 @@ fn rrid() -> RequestReviewID {
 }
 
 /// A genuine PI-kind RRID. `qam`'s precondition guard is
-/// `matches!(kind, Pi | Slfo)`, so PI is a distinct arm from SLFO and needs its
-/// own fixture — this used to return an SLFO RRID, which left every `_pi_` test
-/// below exercising the SLFO arm twice and the PI arm not at all.
+/// `matches!(kind, Pi | Slfo)`, so PI is a distinct arm needing its own fixture:
+/// an SLFO RRID here would leave every `_pi_` test below exercising the SLFO arm
+/// twice and the PI arm not at all.
 fn pi_rrid() -> RequestReviewID {
     RequestReviewID::parse("SUSE:PI:1.1:70000").unwrap()
 }
@@ -486,8 +484,7 @@ async fn assign_skips_preconditions_for_pi() {
 
 #[tokio::test]
 async fn assign_skips_preconditions_for_slfo() {
-    // The arm the `_for_pi` test above covered before its fixture was corrected;
-    // kept so both halves of `matches!(kind, Pi | Slfo)` stay pinned.
+    // Pins the SLFO half of `matches!(kind, Pi | Slfo)`.
     assert_assign_skips_preconditions(&slfo_rrid()).await;
 }
 

@@ -2,22 +2,14 @@
 //!
 //! A [`System`] captures the products installed on a reference host: a
 //! [`base`](System::get_base) product plus a set of add-on modules/extensions.
-//! It is used for pretty-printing and for driving correct update handling.
+//! It drives pretty-printing and correct update handling.
 //!
-//! ## The two `Product` types
-//!
-//! There are two distinct `Product` types:
-//!
-//! * a rich refhost product whose `version` is structured:
-//!   [`crate::product::Product`]; and
-//! * a flat `(name, version: str, arch)` tuple used by `System`:
-//!   [`SystemProduct`], named to avoid a clash with the refhost variant.
-//!
-//! Addons are stored in a [`BTreeSet`] (rather than an unordered set) so that
-//! [`pretty`](System::pretty), [`flatten`](System::flatten), hashing, and
-//! equality are all deterministic. `get_release` guards its `version[:2]`-style
-//! slice against versions shorter than two characters instead of risking an
-//! out-of-bounds panic.
+//! Two `Product` types coexist: the rich refhost one whose `version` is
+//! structured ([`crate::product::Product`]), and the flat
+//! `(name, version: str, arch)` tuple `System` uses ([`SystemProduct`], named to
+//! avoid the clash). Addons live in a [`BTreeSet`] so that
+//! [`pretty`](System::pretty), [`flatten`](System::flatten), hashing and
+//! equality are all deterministic.
 
 use std::collections::BTreeSet;
 
@@ -95,7 +87,7 @@ impl System {
             "rhel" => "YUM".to_owned(),
             "SLES" | "SLED" | "SUSE_SLES" | "SLES_SAP" | "SUSE_SLES_SAP" | "SLE_HPC"
             | "SLES_TERADATA" | "SLE_RT" => {
-                // Take the first two characters; guard short versions against a panic.
+                // `take` rather than a slice: a short version must not panic.
                 self.base.version.chars().take(2).collect()
             }
             "openSUSE" => "15".to_owned(),
@@ -268,7 +260,6 @@ mod tests {
         let pretty = s.pretty();
         assert_eq!(pretty[0], "  Base product: SLES-15.5-x86_64");
         assert_eq!(pretty[1], "  Installed Extensions and Modules:");
-        // Addon name is left-padded to 53 columns.
         assert_eq!(
             pretty[2],
             format!(

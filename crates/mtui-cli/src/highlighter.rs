@@ -1,21 +1,14 @@
 //! reedline [`Highlighter`] over the REPL input line.
 //!
-//! Gives a quick visual signal about what the user has typed *before* pressing
-//! Enter:
+//! A visual signal about what the user has typed *before* pressing Enter: the
+//! first token is green when [`Registry::contains`] knows it (names *and*
+//! aliases) and red otherwise, later `-`/`--` tokens are cyan, everything else
+//! takes the terminal default.
 //!
-//! * The **first token** (the command name) is green when it names a registered
-//!   command ([`Registry::contains`], which matches command names *and* aliases)
-//!   and red otherwise — making typos / out-of-context commands visible.
-//! * Later tokens starting with `-` / `--` (flags) are cyan.
-//! * Everything else (positional args, values) uses the terminal default.
-//!
-//! Whitespace runs are preserved verbatim so the styled text round-trips the
-//! input exactly (reedline re-renders the line from the `(Style, String)`
-//! chunks; dropping a character would shift the cursor).
-//!
-//! Coloring is gated on the live [`ColorMode`](mtui_core::ColorMode): when it
-//! resolves to *off* (`--color never`, or `auto` piped to a non-TTY), every
-//! chunk is emitted unstyled so scraped / piped output stays plain.
+//! Whitespace runs are preserved verbatim: reedline re-renders the line from the
+//! `(Style, String)` chunks, so dropping a character would shift the cursor.
+//! Coloring is gated on the live [`ColorMode`](mtui_core::ColorMode), so piped
+//! output stays plain.
 //!
 //! Like [`MtuiPrompt`](crate::prompt::MtuiPrompt) and
 //! [`MtuiCompleter`](crate::completer::MtuiCompleter), this holds the shared
@@ -70,7 +63,8 @@ impl MtuiHighlighter {
         Self { registry, session }
     }
 
-    /// Whether colored output is currently enabled (live [`ColorMode`](mtui_core::ColorMode) resolve).
+    /// Whether colored output is currently enabled, by live
+    /// [`ColorMode`](mtui_core::ColorMode) resolution.
     fn color_enabled(&self) -> bool {
         self.session
             .lock()

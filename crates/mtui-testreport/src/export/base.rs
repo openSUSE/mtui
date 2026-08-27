@@ -1,17 +1,14 @@
 //! Shared export state and template-mutation helpers.
 //!
-//! Rust has no class inheritance, so the shared state and common methods
-//! live in [`ExportContext`], which each concrete exporter (`auto`,
-//! `manual`, `kernel`) embeds.
+//! Rust has no class inheritance, so the shared state and common methods live
+//! in [`ExportContext`], which each concrete exporter (`auto`, `manual`,
+//! `kernel`) embeds.
 //!
-//! ## Interactive overwrite prompt
-//!
-//! Writing a divergent existing file asks whether to overwrite it. Per the
-//! established crate-boundary pattern (see `mtui-hosts::target::actions`),
-//! the interactive prompt is a display concern owned by `mtui-cli`;
-//! here it is injected as the [`OverwritePrompt`] trait so the exporter stays
-//! testable and free of a CLI dependency. The default [`DenyOverwrite`] never
-//! overwrites (safe for non-interactive runs and the MCP surface).
+//! Writing a divergent existing file asks whether to overwrite it. As in
+//! `mtui-hosts::target::actions`, that prompt is a display concern owned by
+//! `mtui-cli` and is injected here as the [`OverwritePrompt`] trait, so the
+//! exporter stays testable and free of a CLI dependency; the default
+//! [`DenyOverwrite`] never overwrites (safe for non-interactive runs and MCP).
 
 use std::path::{Path, PathBuf};
 
@@ -24,22 +21,18 @@ use crate::support::sysinfo::{EXPORT_PREFIX, detect_system, system_info};
 /// The decision an exporter makes when an existing file differs from what it is
 /// about to write.
 ///
-/// `mtui` supplies an interactive implementation; library and test
-/// callers use [`DenyOverwrite`].
-///
-/// The bound is `Send + Sync` because [`AutoExport::run`](crate::AutoExport) is
-/// `async` and holds the injected prompt across an `.await`, so a boxed prompt
-/// must be shareable across the executor's threads.
+/// `mtui` supplies an interactive implementation; library and test callers use
+/// [`DenyOverwrite`]. `Send + Sync` because
+/// [`AutoExport::run`](crate::AutoExport) holds the boxed prompt across an
+/// `.await`.
 pub trait OverwritePrompt: Send + Sync {
     /// Returns `true` to overwrite `path` in place, `false` to write to a
     /// timestamp-suffixed sibling instead.
     fn should_overwrite(&self, path: &Path) -> bool;
 }
 
-/// The non-interactive default: never overwrite a divergent file.
-///
-/// Returns the default
-/// negative answer, so the exporter falls back to a timestamped filename.
+/// The non-interactive default: never overwrite a divergent file, so the
+/// exporter falls back to a timestamped filename.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DenyOverwrite;
 
@@ -51,9 +44,8 @@ impl OverwritePrompt for DenyOverwrite {
 
 /// Shared state and helpers for every exporter.
 ///
-/// Holds the config, the working template, the force flag, and the RRID. The
-/// per-connector openQA results are held by the concrete exporters (their types
-/// differ), so they are not a field here.
+/// The per-connector openQA results are *not* a field here: their types differ
+/// per exporter, so each concrete one holds its own.
 pub struct ExportContext {
     /// The application configuration.
     pub(crate) config: Config,
@@ -112,12 +104,10 @@ impl ExportContext {
     /// Adds install-log links to the template.
     ///
     /// Links are deduplicated against the template from just past a
-    /// `HAS_UNTRACKED` marker (or from the whole template if the marker is
-    /// absent). An existing `Links for update logs:` header is reused rather
-    /// than a fresh one being inserted on every call, so manual/kernel
-    /// re-exports do not stack empty duplicate sections.
+    /// `HAS_UNTRACKED` marker (or the whole template if absent). An existing
+    /// `Links for update logs:` header is reused rather than freshly inserted,
+    /// so manual/kernel re-exports do not stack empty duplicate sections.
     pub fn installlogs_lines(&mut self, filenames: &[String]) {
-        // Index just past the HAS_UNTRACKED marker; links are deduped from there.
         let mut o = 0usize;
         for (i, line) in self.template.iter().enumerate() {
             if line.contains("HAS_UNTRACKED") {
@@ -130,20 +120,14 @@ impl ExportContext {
         let reports_url = self.config.reports_url.clone();
 
         let mut index = if let Some(header) = self.template.iter().position(|l| l == marker) {
-            // Reuse an existing section: manual/kernel exports run this on
-            // every export, and unconditionally inserting a fresh header
-            // stacked empty 'Links for update logs:' sections that grew with
-            // each re-export. New links are appended after the section's
-            // existing links.
+            // Reuse the section; new links append after its existing ones.
             let mut index = header + 1;
             self.drop_empty_link_sections(marker, index);
             if index >= self.template.len()
                 || (self.template[index] != "\n" && !self.template[index].contains(&reports_url))
             {
-                // Hand-trimmed template: the header is followed directly by
-                // foreign content (e.g. the export footer). Restore the
-                // canonical blank so the links land inside the section, not
-                // after the footer.
+                // Hand-trimmed template: restore the canonical blank so links
+                // land inside the section rather than after the export footer.
                 self.template.insert(index, "\n".to_string());
             }
             while index + 1 < self.template.len() && self.template[index + 1].contains(&reports_url)
@@ -185,12 +169,10 @@ impl ExportContext {
 
     /// Removes empty duplicate `Links for update logs:` headers.
     ///
-    /// Pre-fix exports stacked one fresh header per run while the links stayed
-    /// under the original section, so damaged templates carry trailing header
-    /// blocks with nothing but blanks under them. `dedup_lines` never collapses
-    /// blank-separated duplicates, so they would otherwise survive forever. A
-    /// duplicate section that does hold links is left alone — never delete
-    /// content.
+    /// `dedup_lines` never collapses blank-separated duplicates, so a damaged
+    /// template's header blocks with nothing but blanks under them would
+    /// survive forever. A duplicate section that *does* hold links is left
+    /// alone — never delete content.
     fn drop_empty_link_sections(&mut self, marker: &str, search_from: usize) {
         let reports_url = self.config.reports_url.clone();
         let mut i = search_from;
@@ -212,8 +194,7 @@ impl ExportContext {
                 i = k; // a section with real links: keep it
                 continue;
             }
-            // Empty duplicate: drop the header, its trailing blanks, and the
-            // framing blank the old code inserted before it.
+            // Empty duplicate: drop the header, its blanks, and the one before it.
             let start = if j > 0 && self.template[j - 1] == "\n" {
                 j - 1
             } else {
@@ -287,14 +268,10 @@ impl ExportContext {
     /// previous results block first.
     ///
     /// `pp` is the connector's pretty-print lines (`self.openqa.auto.pp`). A
-    /// no-op when `pp` is empty. Requires the template to contain the
-    /// `source code change review:` anchor; if absent this is a no-op, since
-    /// a missing anchor means the file is not mtui-shaped, matching how the
-    /// injector guards on its header.
-    ///
-    /// The block is inserted just before the anchor. When the anchor is the
-    /// very first line, the position is clamped to 0 rather than
-    /// underflowing the `usize` index.
+    /// no-op when `pp` is empty, or when the `source code change review:`
+    /// anchor is absent — a missing anchor means the file is not mtui-shaped,
+    /// matching how the injector guards on its header. The block goes just
+    /// before the anchor, clamped to index 0 when the anchor is the first line.
     pub(crate) fn inject_openqa(&mut self, pp: &[String]) {
         if pp.is_empty() {
             return;
@@ -317,9 +294,6 @@ impl ExportContext {
                 end + 1
             } else {
                 match self.anchor_index() {
-                    // `anchor - 1` is the removal-block position; clamp to 0
-                    // when the anchor is the first line so the `usize`
-                    // subtraction cannot underflow/panic.
                     Some(anchor) => anchor.saturating_sub(1),
                     None => return,
                 }
@@ -331,9 +305,6 @@ impl ExportContext {
         let Some(anchor) = self.anchor_index() else {
             return;
         };
-        // `anchor - 1` is the insertion position; clamp to 0 so the
-        // degenerate "anchor is the first line" case inserts before it
-        // instead of panicking on `usize` underflow.
         let mut index = anchor.saturating_sub(1);
         for line in pp.iter().rev() {
             self.template.insert(index, line.clone());
@@ -363,11 +334,8 @@ impl ExportContext {
             return;
         };
         let line = "All installation tests done in openQA please see installlogs section\n";
-        // Idempotent: on a kernel re-export the previous run's notice is still
-        // there, separated from a fresh insert by the blank line, so
-        // dedup_lines() never collapsed them and the notice multiplied with
-        // every export. Copies stacked by pre-fix exports are dropped so a
-        // damaged template converges back to a single notice.
+        // A blank line separates the copies, so `dedup_lines` cannot collapse
+        // them; drop stacked ones here and converge on a single notice.
         while self.template.iter().filter(|l| l.as_str() == line).count() > 1 {
             let extra = self.template.len()
                 - 1
@@ -515,10 +483,8 @@ mod tests {
 
     #[test]
     fn inject_openqa_anchor_at_index_zero_does_not_panic() {
-        // Degenerate template: the `source code change review:` anchor is the
-        // very first line, so the `anchor - 1` insertion position would be
-        // -1. In Rust `0 - 1` on usize would panic; this must clamp to 0
-        // (insert before the anchor) instead of overflowing.
+        // Anchor at index 0: the `anchor - 1` insertion position would
+        // underflow `usize` and panic.
         let mut c = ctx_with(&["source code change review:\n"]);
         c.inject_openqa(&["job1 => PASSED\n".to_string()]);
         let body = c.template.concat();
@@ -527,7 +493,6 @@ mod tests {
             "block not injected:\n{body}"
         );
         assert!(body.contains("End of openQA Incidents results\n"));
-        // The block is inserted before the anchor line.
         let job = body.find("job1 => PASSED").unwrap();
         let anchor = body.find("source code change review:").unwrap();
         assert!(job < anchor, "block should precede the anchor:\n{body}");

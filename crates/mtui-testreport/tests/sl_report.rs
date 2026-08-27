@@ -1,17 +1,15 @@
-//! Covers the `SlReport` surface that lands in task nbv.4: `id`, `parser`,
-//! `update_repos_parser` (all three dispatch branches), and `check_hash` (the
-//! OBS fast path plus the Gitea match/mismatch compare via wiremock).
+//! Covers the `SlReport` surface: `id`, `parser`, `update_repos_parser` (all
+//! three dispatch branches), `check_hash` (the OBS fast path plus the Gitea
+//! match/mismatch compare via wiremock), and `set_repo`.
 //!
 //! `update_repos_parser`/`check_hash` dispatch on the report's own
 //! [`UpdateSource`](mtui_types::UpdateSource), not the RRID's maintenance id
-//! (issue #433) — the tests below deliberately exercise both `1.1` and `1.2`
+//! (#433) — the tests below deliberately exercise both `1.1` and `1.2`
 //! maintenance ids under each source so no case can pass by accident on the
 //! retired `maintenance_id == "1.1"` literal.
 //!
-//! Not covered here (deferred by design):
-//! * `set_repo` — lands with the `SetRepo` impl in task nbv.fly.
-//! * `list_update_commands` doer-rendering — awaits the `OperationGroup` seam;
-//!   only the no-op stub is smoke-checked.
+//! `list_update_commands` doer-rendering awaits the `OperationGroup` seam; only
+//! the no-op stub is smoke-checked.
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
@@ -76,11 +74,11 @@ fn update_repos_parser_uses_reporepoparse_when_repositories_set() {
     );
 }
 
-/// F7 precedence: a git-served `1.1` carrying `repositories` still takes
-/// `reporepoparse`, not `gitrepoparse` — the short-circuit outranks the
-/// source. This is the case that pins the short-circuit staying *first*: it
-/// must fail (fall to `gitrepoparse`) against a version that moved the
-/// `update_source` branch above the `repositories` check.
+/// Precedence: a git-served `1.1` carrying `repositories` still takes
+/// `reporepoparse`, not `gitrepoparse` — the short-circuit outranks the source.
+/// Pins the short-circuit staying *first*: it must fail (fall to
+/// `gitrepoparse`) against a version that moved the `update_source` branch
+/// above the `repositories` check.
 #[test]
 fn update_repos_parser_repositories_outrank_git_source() {
     let mut r = SlReport::new(config());
@@ -131,9 +129,8 @@ fn update_repos_parser_uses_slrepoparse_when_obs_at_1_2() {
 }
 
 /// Git-served at the classic `1.1` maintenance id: `gitrepoparse` — the
-/// dual-served case (F8). Must be observed red against the unfixed code,
-/// which routed every `1.1` maintenance id to `slrepoparse` regardless of
-/// source.
+/// dual-served case. Must be observed red against the unfixed code, which
+/// routed every `1.1` maintenance id to `slrepoparse` regardless of source.
 #[test]
 fn update_repos_parser_uses_gitrepoparse_when_git_at_1_1() {
     let mut r = SlReport::new(config());
@@ -281,10 +278,10 @@ use mtui_types::system::{System, SystemProduct};
 /// An enabled SLES 15.5 host in a group built exactly the way production builds
 /// it — `HostsGroup::new` and nothing else.
 ///
-/// There is deliberately no test-only `PlanProvider` here. An earlier stub
-/// provider returned the same doer for every role, which both hid that
-/// production injected no provider at all (so `install` ran nothing) and made
-/// `perform_uninstall` look correct while asserting an *install* command.
+/// Deliberately no test-only `PlanProvider`: an earlier stub returned the same
+/// doer for every role, which hid that production injected no provider at all
+/// (so `install` ran nothing) and made `perform_uninstall` look correct while
+/// asserting an *install* command.
 fn production_sles_group() -> (HostsGroup, MockConnection) {
     let conn = MockConnection::new("h1").with_default(CommandLog::new("", "done", "", 0, 1));
     let handle = conn.clone();

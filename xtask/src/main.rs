@@ -1,17 +1,14 @@
 //! `cargo xtask` — repo automation (the standard `xtask` pattern).
 //!
-//! Today it has one job: **regenerate the checked-in packaging artifacts** under
-//! `dist/` — shell completions (bash/zsh/fish) and man pages for both binaries
-//! (`mtui`, `mtui-mcp`). Upstream mtui shipped completions via `argcomplete` at
-//! runtime; mtui pre-generates them from the two top-level `clap` parsers so
-//! the rpm spec (`%files`) and any packaging can consume them without a build.
-//!
-//! Run with `cargo xtask gen` (see the `.cargo/config.toml` alias). A second
-//! task, `cargo xtask gen-docs`, regenerates the mdBook's generated pages — the
-//! CLI reference (`docs/src/cli.md`) from the command registry and the invocation
-//! reference (`docs/src/invocation.md`) from the two binary parsers. The actual
-//! generation lives in [`xtask::generate_into`] / [`xtask::generate_docs_into`]
-//! so it is unit-testable offline.
+//! `cargo xtask gen` (see the `.cargo/config.toml` alias) regenerates the
+//! checked-in packaging artifacts under `dist/` — shell completions
+//! (bash/zsh/fish) and man pages for both binaries — pre-generated from the two
+//! top-level `clap` parsers so the rpm spec (`%files`) and any packaging can
+//! consume them without a build. `cargo xtask gen-docs` regenerates the mdBook's
+//! generated pages: the CLI reference (`docs/src/cli.md`) from the command
+//! registry and the invocation reference (`docs/src/invocation.md`) from the
+//! binary parsers. The generation itself lives in [`xtask::generate_into`] /
+//! [`xtask::generate_docs_into`], so it is unit-testable offline.
 
 use std::path::{Path, PathBuf};
 
@@ -78,9 +75,8 @@ fn run_gen_docs() -> Result<()> {
 /// Build a release tarball for one target: `cargo xtask package --version <VER>
 /// --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]`.
 ///
-/// Resolves the workspace-relative default locations (`target/<triple>/release`
-/// for binaries, `dist/` for data files, `dist/release/` for output) and hands
-/// them to [`xtask::package_target`], whose staging step is offline-tested.
+/// Resolves the workspace-relative defaults (`target/<triple>/release`, `dist/`,
+/// `dist/release/`) and hands them to [`xtask::package_target`].
 fn run_package() -> Result<()> {
     let root = repo_root()?;
     let args = xtask::PackageArgs::parse(std::env::args().skip(2))?;

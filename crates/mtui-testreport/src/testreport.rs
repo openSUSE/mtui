@@ -1,21 +1,14 @@
 //! The [`TestReport`] trait and its shared-state carrier [`TestReportBase`].
 //!
-//! Each concrete report (SL/PI/OBS/Null)
-//! shares a large block of state, plus a handful of behaviors that only the
-//! concrete report can supply.
+//! Rust has no class inheritance, so the state every concrete report
+//! (SL/PI/OBS/Null) shares lives in a plain [`TestReportBase`] they embed,
+//! reached through the [`TestReport::base`]/[`TestReport::base_mut`] accessors
+//! so trait-default and caller code need no downcast.
 //!
-//! Rust has no class inheritance, so the shared state lives in a plain
-//! [`TestReportBase`] struct that concrete reports embed, and the abstract
-//! surface becomes the [`TestReport`] trait. The trait requires
-//! [`TestReport::base`]/[`TestReport::base_mut`] accessors so trait-default and
-//! caller code can reach the shared state without downcasting — the idiomatic
-//! "composition over inheritance" pattern (see `AGENTS.md`: keep the trait thin,
-//! inject collaborators).
-//!
-//! Only the shared state and the abstract-method surface land here. The
-//! concrete lifecycle (load/checkout/commit/export) lives in [`crate::lifecycle`],
-//! metadata parsing in [`crate::metadata_parsers`], and each report's
-//! host-connect logic in [`crate::reports`].
+//! Only the shared state and the abstract surface land here: the concrete
+//! lifecycle (load/checkout/commit/export) is [`crate::lifecycle`], metadata
+//! parsing [`crate::metadata_parsers`], per-report host-connect logic
+//! [`crate::reports`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -30,10 +23,9 @@ use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, UpdateSource, Wo
 
 /// The concrete openQA state holder carried on a report.
 ///
-/// Monomorphizes [`OpenQAResults`] to the concrete connectors: the
-/// QEM-dashboard "auto" result, the per-instance "kernel" results, and the
-/// `openqa_overview` payload. `mtui-testreport` already depends on
-/// `mtui-datasources`, so pinning these types here adds no new crate edge.
+/// Monomorphizes [`OpenQAResults`] to the QEM-dashboard "auto" result, the
+/// per-instance "kernel" results and the `openqa_overview` payload; pinning
+/// them here adds no new crate edge (`mtui-datasources` is already a dep).
 pub type ReportOpenQA = OpenQAResults<DashboardAutoOpenQA, KernelOpenQA, OpenQAOverviewResult>;
 
 use crate::checkout::TemplateIoError;
@@ -41,14 +33,8 @@ use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_title
 
 /// Shared state common to every [`TestReport`] implementation.
 ///
-/// The [`openqa`](Self::openqa) holder carries the report's openQA state
-/// ([`ReportOpenQA`]) — the QEM-dashboard "auto" result, the per-instance
-/// "kernel" results, and the `openqa_overview` payload — populated by the
-/// `reload_openqa` / `set_workflow` commands and consumed by the exporters.
-///
-/// Note: no `#[derive(Debug)]` — several embedded `mtui-hosts` collaborators
-/// (`HostsGroup`, `HostArbiter`) do not implement `Debug`. A hand-written
-/// summary impl can be added when a concrete need arises.
+/// No `#[derive(Debug)]`: the embedded `mtui-hosts` collaborators
+/// (`HostsGroup`, `HostArbiter`) do not implement it.
 pub struct TestReportBase {
     /// The application configuration.
     pub(crate) config: Config,
@@ -60,11 +46,10 @@ pub struct TestReportBase {
     pub targets: HostsGroup,
     /// `SystemProduct -> repository` map for the update repositories.
     ///
-    /// Keyed on the flat [`SystemProduct`] `(name, version, arch)` tuple. This
-    /// is what the `*repoparse` helpers build and what
-    /// [`RepoManager::run_zypper`](mtui_hosts) consumes; keying on the
-    /// refhost `Product` (no `arch`) would be lossy and mismatch that
-    /// consumer.
+    /// Keyed on the flat [`SystemProduct`] `(name, version, arch)` tuple, as
+    /// the `*repoparse` helpers build and
+    /// [`RepoManager::run_zypper`](mtui_hosts) consumes; the refhost `Product`
+    /// has no `arch`, so keying on it would be lossy.
     pub update_repos: HashMap<SystemProduct, String>,
     /// Known hostnames for this report.
     pub hostnames: HashSet<String>,
@@ -108,9 +93,9 @@ pub struct TestReportBase {
     pub reviewer: String,
     /// The Slack message this update's review was requested on, if any.
     ///
-    /// Written by `request_review` and read back on load, so a later `approve`
-    /// can verify the ack against the exact message rather than trusting that
-    /// a review happened. `None` when no request was posted.
+    /// Written by `request_review` and read back on load so a later `approve`
+    /// verifies the ack against the exact message rather than trusting that a
+    /// review happened.
     pub slack_review: Option<SlackReviewMarker>,
     /// Update repository string.
     pub repository: String,
@@ -118,9 +103,8 @@ pub struct TestReportBase {
     pub repositories: HashSet<String>,
     /// Nested package map: `product -> { package name -> version }`.
     ///
-    /// A test report routinely spans multiple products, each shipping its own
-    /// set of packages and versions. Consumed by the future `get_package_list`
-    /// which iterates products and flattens their package sets.
+    /// A report routinely spans multiple products, each shipping its own set
+    /// of packages and versions; [`TestReport::get_package_list`] flattens them.
     pub packages: HashMap<String, HashMap<String, String>>,
     /// Parsed Request Review ID, or `None` when unset/invalid.
     pub rrid: Option<RequestReviewID>,
@@ -143,20 +127,19 @@ pub struct TestReportBase {
     pub product_warnings: HashMap<String, Vec<String>>,
     /// The report's openQA results.
     ///
-    /// Empty until `reload_openqa` / `set_workflow` populate it; consumed by the
-    /// exporters for openQA-enriched templates.
+    /// Empty until `reload_openqa` / `set_workflow` populate it; consumed by
+    /// the exporters for openQA-enriched templates.
     pub openqa: ReportOpenQA,
 }
 
 impl TestReportBase {
     /// Builds the shared state with its default values.
     ///
-    /// The
-    /// targets [`HostsGroup`] starts headless (`is_repl = false`); the load site
-    /// ([`make_testreport`](crate::make_testreport)) reconciles it to the
-    /// session mode once, via [`set_is_repl`](HostsGroup::set_is_repl), before the
-    /// report is handed to the session — the session is the single source of
-    /// truth and the flag is never mutated afterwards.
+    /// `targets` starts headless (`is_repl = false`);
+    /// [`make_testreport`](crate::make_testreport) reconciles it to the session
+    /// mode once via [`set_is_repl`](HostsGroup::set_is_repl) before handing the
+    /// report over — the session is the single source of truth, and the flag is
+    /// never mutated afterwards.
     #[must_use]
     pub fn new(config: Config) -> Self {
         Self {
@@ -198,18 +181,14 @@ impl TestReportBase {
 
     /// The working directory of the loaded report checkout.
     ///
-    /// Returns the parent directory of the loaded report [`path`](Self::path),
-    /// created if absent. The OBS report feeds this to
+    /// The parent directory of [`path`](Self::path), created if absent. The OBS
+    /// report feeds this to
     /// [`obsrepoparse`](crate::reports::repoparse::obsrepoparse), which reads
     /// `project.xml` from it.
     ///
     /// Returns [`std::io::ErrorKind::NotFound`] when no report is loaded, and
     /// propagates any directory-creation error, so callers can degrade
     /// explicitly rather than panic.
-    ///
-    /// A variadic path-join is intentionally omitted: no current caller needs
-    /// it. Extend when the load/checkout lifecycle task introduces one,
-    /// rather than speculating on the shape now.
     pub fn report_wd(&self) -> std::io::Result<PathBuf> {
         let path = self
             .path
@@ -222,25 +201,18 @@ impl TestReportBase {
 }
 
 /// Resolves seed packages from a `product -> { name -> version }` map for a
-/// host's `base_version`, operating on a borrowed map.
+/// host's `base_version`.
 ///
-/// Selection rule:
+/// Uses the sole `"standard"` sub-map when that is the only key (a report
+/// shipping one product-agnostic set, e.g. SLFO metadata), else the one keyed
+/// by `base_version`; a `base_version` starting `"12"` additionally merges the
+/// `"12"` sub-map. Each `name -> version` becomes a [`Package`] with its
+/// [`required`](Package::required) set; an unparseable version is skipped
+/// (best-effort) rather than aborting the whole host.
 ///
-/// * if the map holds exactly the single key `"standard"`, use it (a report
-///   that ships one product-agnostic set — e.g. SLFO metadata);
-/// * otherwise use the sub-map keyed by the host's `base_version`;
-/// * additionally, when `base_version` starts with `"12"`, merge in the
-///   `"12"` sub-map (the SLE-12 special case).
-///
-/// Each resolved `name -> version` becomes a [`Package`] with its
-/// [`required`](Package::required) set. An unparseable version is skipped
-/// (best-effort), leaving that package unseeded rather than aborting the
-/// whole host. Returns an empty vec when no sub-map matches.
-///
-/// Factored out so the composition root (`mtui-core::session`) can resolve seed
-/// packages from a *snapshot* of the metadata map (cloned before a
-/// `targets_mut()` borrow, to keep the connect future `Send`) without needing a
-/// live `&TestReportBase` across the connect `.await`.
+/// Takes a *borrowed* map so the composition root (`mtui-core::session`) can
+/// resolve from a snapshot cloned before a `targets_mut()` borrow, keeping the
+/// connect future `Send`.
 #[must_use]
 pub fn packages_for_map(
     map: &HashMap<String, HashMap<String, String>>,
@@ -283,13 +255,12 @@ pub fn packages_for_map(
 /// The abstract test-report surface.
 ///
 /// Concrete reports embed a [`TestReportBase`] and expose it through
-/// [`base`](Self::base) / [`base_mut`](Self::base_mut); the remaining
-/// required methods are the abstract surface every report must supply.
-/// Non-abstract lifecycle methods (`read`, `release_pool_claims`,
-/// `perform_install`, …) are provided as trait defaults below.
+/// [`base`](Self::base) / [`base_mut`](Self::base_mut); the other required
+/// methods are the abstract surface. Non-abstract lifecycle methods (`read`,
+/// `release_pool_claims`, `perform_install`, …) are trait defaults below.
 ///
-/// The trait is `#[async_trait]` because [`check_hash`](Self::check_hash) drives
-/// async I/O for git-backed reports (`SLTestReport` awaits `Gitea::get_hash`).
+/// `#[async_trait]` because [`check_hash`](Self::check_hash) drives async I/O
+/// for git-backed reports (`SLTestReport` awaits `Gitea::get_hash`).
 #[async_trait::async_trait]
 pub trait TestReport {
     /// Borrows the shared state.
@@ -316,20 +287,16 @@ pub trait TestReport {
     /// Reads and parses a checkout's test-report template into this report.
     ///
     /// `path` names the checkout's `log` file; `metadata.json` is read from the
-    /// same directory. The two-parser pipeline: the `hosts` parser
-    /// ([`ReducedMetadataParser`]) is fed the `log` lines (reference hosts +
-    /// bug/jira titles), then the `json` parser ([`JSONParser`]) applies the
-    /// metadata envelope, and finally `patchinfo.xml` overlays real bug/jira
-    /// titles onto the ids the envelope carried. On success
-    /// [`path`](TestReportBase::path) is set and the update-repo map is
-    /// derived via [`update_repos_parser`](Self::update_repos_parser).
+    /// same directory. Two-parser pipeline: [`ReducedMetadataParser`] over the
+    /// `log` lines (reference hosts + bug/jira titles), then [`JSONParser`] over
+    /// the metadata envelope, then `patchinfo.xml` overlays real bug/jira titles
+    /// onto the ids the envelope carried. On success
+    /// [`path`](TestReportBase::path) is set and the update-repo map derived via
+    /// [`update_repos_parser`](Self::update_repos_parser).
     ///
-    /// The Gitea-hash verification is deferred to
+    /// Gitea-hash verification is deferred to
     /// [`make_testreport`](crate::make_testreport): `read` is sync while
-    /// [`check_hash`](Self::check_hash) is async (it fetches the PR head from
-    /// Gitea), so the check fires in the async load orchestrator right after a
-    /// successful read, before the report is handed back. This method is the
-    /// parse-and-populate slice only.
+    /// [`check_hash`](Self::check_hash) is async.
     ///
     /// # Errors
     ///
@@ -338,10 +305,8 @@ pub trait TestReport {
     /// * [`ReadError::MetadataMissing`] when `metadata.json` is absent.
     /// * [`ReadError::MetadataInvalid`] when `metadata.json` is not valid JSON.
     fn read(&mut self, path: &Path) -> Result<(), ReadError> {
-        // `_open_and_parse`: read the template `log` and the sibling metadata.
         let tpl = std::fs::read_to_string(path).map_err(|e| {
-            // A missing/unreadable template must carry its errno so the checkout
-            // seam can branch on ENOENT.
+            // Carry the errno so the checkout seam can branch on ENOENT.
             ReadError::Template(TemplateIoError::from_io(&e))
         })?;
 
@@ -353,16 +318,13 @@ pub trait TestReport {
         let metadata = std::fs::read_to_string(&metadata_path)
             .map_err(|e| ReadError::Template(TemplateIoError::from_io(&e)))?;
 
-        // `_parse_json`: hosts parser over the log lines, then the JSON envelope.
         let base = self.base_mut();
         for line in tpl.lines() {
             ReducedMetadataParser::parse(base, line);
         }
         JSONParser::parse_str(base, &metadata).map_err(|_| ReadError::MetadataInvalid)?;
 
-        // `_enrich_issue_titles`: overlay real bug/jira titles from patchinfo.xml
-        // onto the ids the envelope already carried, leaving the id set
-        // authoritative (no new ids introduced).
+        // The envelope's id set stays authoritative: titles overlay, never add.
         let titles = patchinfo_titles(dir);
         for (iid, title) in titles {
             if let Some(slot) = base.bugs.get_mut(&iid) {
@@ -372,7 +334,6 @@ pub trait TestReport {
             }
         }
 
-        // Resolves the path and then derives update repos.
         self.base_mut().path = Some(path.to_path_buf());
         let repos = self.update_repos_parser();
         self.base_mut().update_repos = repos;
@@ -381,22 +342,20 @@ pub trait TestReport {
 
     /// Drops this report's arbiter ownership and removes its remote pool locks.
     ///
-    /// For every host this report claimed through the arbiter, best-effort
-    /// [`Target::pool_unlock`](mtui_hosts::Target::pool_unlock) the remote
-    /// pool-claim lock (`force = false`, so a claim owned by another template is
-    /// left alone), then clear the in-process claim set and drop the arbiter
-    /// ownership via [`HostArbiter::release_owner`](mtui_hosts::HostArbiter::release_owner).
+    /// Best-effort
+    /// [`Target::pool_unlock`](mtui_hosts::Target::pool_unlock) with
+    /// `force = false` (so a claim owned by another template is left alone) for
+    /// every claimed host, then clears the in-process claim set and drops
+    /// ownership via
+    /// [`HostArbiter::release_owner`](mtui_hosts::HostArbiter::release_owner).
     ///
-    /// Idempotent and safe when pool selection was never used
+    /// Idempotent, and a no-op when pool selection was never used
     /// ([`arbiter`](TestReportBase::arbiter)/[`owner`](TestReportBase::owner) are
-    /// then `None`). Called from the exit path (`quit` and
-    /// `TemplateRegistry.release_claims`); the remote lock-wire format is
-    /// untouched — release goes through the same `pool_unlock` primitive that
-    /// created the claim.
+    /// then `None`). Called from the exit path (`quit`,
+    /// `TemplateRegistry.release_claims`).
     async fn release_pool_claims(&mut self) {
         let base = self.base_mut();
-        // Snapshot claims so the borrow of `pool_claims` is released before the
-        // mutable per-target `pool_unlock` calls.
+        // Snapshot so the `pool_claims` borrow ends before the `&mut` target calls.
         let claims: Vec<String> = base.pool_claims.iter().cloned().collect();
         for host in claims {
             if let Some(target) = base.targets.get_mut(&host) {
@@ -415,27 +374,20 @@ pub trait TestReport {
     ///
     /// The per-host analogue of
     /// [`release_pool_claims`](Self::release_pool_claims), called from
-    /// `remove_host` so a disconnected refhost does not stay claimed in the
-    /// process-global [`HostArbiter`] for the rest of
-    /// the server's lifetime (there is no `unload` over MCP, so the template
-    /// stays loaded). [`Target::close`](mtui_hosts::Target::close) already drops
-    /// the remote operation/pool-lock files; this clears the in-process
-    /// ownership those locks and the `--free` probe never see.
+    /// `remove_host`: there is no `unload` over MCP, so without it a
+    /// disconnected refhost stays claimed in the process-global
+    /// [`HostArbiter`] for the server's lifetime.
+    /// [`Target::close`](mtui_hosts::Target::close) drops the remote
+    /// operation/pool-lock files; this clears the in-process ownership those
+    /// locks and the `--free` probe never see.
     ///
-    /// Only `host` is dropped from each slot's candidate list — siblings stay
-    /// available as backup-refhost fallbacks (RFC §5.7); a slot is pruned only
-    /// once it has no candidates left. (Contrast
-    /// [`release_pool_claims`](Self::release_pool_claims), which clears the whole
-    /// map because it tears the entire report down.)
-    ///
-    /// Idempotent and safe when pool selection was never used
-    /// ([`arbiter`](TestReportBase::arbiter)/[`owner`](TestReportBase::owner) are
-    /// then `None`).
+    /// Only `host` leaves each slot's candidate list — siblings stay available
+    /// as backup-refhost fallbacks (RFC §5.7) — and a slot is pruned only once
+    /// empty; the whole-report variant clears the map instead. Idempotent, and
+    /// a no-op when pool selection was never used.
     fn release_pool_claim(&mut self, host: &str) {
         let base = self.base_mut();
         base.pool_claims.remove(host);
-        // Drop only this host from each slot; keep siblings as backups, and
-        // prune a slot only once it is empty.
         base.slot_candidates.retain(|_slot, candidates| {
             candidates.retain(|c| c != host);
             !candidates.is_empty()
@@ -451,12 +403,9 @@ pub trait TestReport {
 
     /// The deduplicated list of every package named in the report metadata.
     ///
-    /// Iterates the nested [`packages`](TestReportBase::packages) map
-    /// (`product -> { name -> version }`) and flattens the package **names**
-    /// across all products, deduplicated. Sorted for determinism (the callers
-    /// — `perform_update` / `perform_prepare` — only join the list into a
-    /// command string, so order is not behaviourally significant, but a
-    /// stable order keeps snapshots and tests reproducible).
+    /// Flattens the package **names** across all products of the nested
+    /// [`packages`](TestReportBase::packages) map. Sorted for reproducible
+    /// snapshots; no caller depends on the order.
     fn get_package_list(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .base()
@@ -481,10 +430,9 @@ pub trait TestReport {
 
     /// The Bugzilla `id -> title` and Jira `id -> title` maps.
     ///
-    /// Returned as sorted [`BTreeMap`](std::collections::BTreeMap)s so the
-    /// display renders ids in a stable order. The `list_bugs` command feeds
-    /// these to [`CommandPromptDisplay::list_bugs`](../../mtui_core/display);
-    /// an empty map renders the "No bugs…"/"No Jira…" sentinels.
+    /// Sorted [`BTreeMap`](std::collections::BTreeMap)s so the display renders
+    /// ids in a stable order; the `list_bugs` command renders the
+    /// "No bugs…"/"No Jira…" sentinels for an empty map.
     fn bug_maps(
         &self,
     ) -> (
@@ -585,16 +533,13 @@ pub trait TestReport {
     ///
     /// Drives the [`InstallOperation`](mtui_hosts::InstallOperation) template
     /// through the group's [`OperationGroup`](mtui_hosts::OperationGroup) impl,
-    /// which resolves each host's installer doer/check via the injected
-    /// `PlanProvider` (injected by `update_flow::perform_install`, which is the
-    /// shared body behind this method). The default is a no-op —
-    /// the null report has nothing to install — so only reports backed by real
-    /// doer tables override it.
+    /// which resolves each host's installer doer/check via the `PlanProvider`
+    /// injected by `update_flow::perform_install` (the shared body behind this
+    /// method).
     ///
     /// Returns `Err` when the install command failed on one or more hosts
-    /// (non-zero exit or non-empty stderr after the fan-out), aggregated the
-    /// same way [`perform_update`](Self::perform_update) reports failures. The
-    /// null object's default is a no-op `Ok(())`.
+    /// (non-zero exit or non-empty stderr after the fan-out). The null object's
+    /// default is a no-op `Ok(())`.
     async fn perform_install(
         &self,
         _targets: &mut HostsGroup,
@@ -618,19 +563,17 @@ pub trait TestReport {
 
     /// Prepares `packages` on every host.
     ///
-    /// The bespoke (non-template) preparer flow: fan the issue repo add/remove
-    /// out, install every package in a single transaction (or per-package for
-    /// the `installed_only` variant), run the preparer check, and reboot
-    /// transactional hosts — all under the operation lock. `testing` selects the
-    /// repo-`add` (testing) vs repo-`remove` path and the testing preparer
-    /// variant; `force` toggles `--force-resolution`; `installed_only` only
-    /// touches already-installed packages. Default no-op (the null report has
-    /// nothing to prepare); real reports override.
+    /// The bespoke (non-template) preparer flow, all under the operation lock:
+    /// fan the issue repo add/remove out, install every package in a single
+    /// transaction (per-package for `installed_only`), run the preparer check,
+    /// reboot transactional hosts. `testing` selects the repo-`add` (testing) vs
+    /// repo-`remove` path and the testing preparer variant; `force` toggles
+    /// `--force-resolution`; `installed_only` only touches already-installed
+    /// packages.
     ///
     /// Returns `Err` on a missing preparer, lock contention, a failed issue-repo
-    /// fan-out, a per-host prepare-command failure, or a prepare check failure —
-    /// aggregated like [`perform_update`](Self::perform_update). The null
-    /// object's default is a no-op `Ok(())`.
+    /// fan-out, a per-host prepare-command failure, or a prepare check failure.
+    /// The null object's default is a no-op `Ok(())`.
     async fn perform_prepare(
         &self,
         _targets: &mut HostsGroup,
@@ -644,16 +587,13 @@ pub trait TestReport {
 
     /// Downgrades `packages` on every host.
     ///
-    /// Removes the issue repos, resolves each package's available downgrade
-    /// version via the downgrader `list_command`, then downgrades — per-package
-    /// for non-transactional hosts, combined into a single transaction for
-    /// transactional hosts — runs the check, and reboots transactional hosts,
-    /// under the operation lock. Default no-op; real reports override.
+    /// Under the operation lock: remove the issue repos, resolve each package's
+    /// available downgrade version via the downgrader `list_command`, downgrade
+    /// (per-package for non-transactional hosts, one transaction for
+    /// transactional ones), run the check, reboot transactional hosts.
     ///
     /// Returns `Err` on a missing downgrader, lock contention, or a per-host
-    /// downgrade check failure — aggregated like
-    /// [`perform_update`](Self::perform_update). The null object's default is a
-    /// no-op `Ok(())`.
+    /// downgrade check failure. The null object's default is a no-op `Ok(())`.
     async fn perform_downgrade(
         &self,
         _targets: &mut HostsGroup,
@@ -667,18 +607,14 @@ pub trait TestReport {
     /// The full bespoke update flow: optional prepare, pre/post package checks,
     /// repo add, `updater` command render (with the `$repa` RRID selector), the
     /// per-host update check with failure aggregation, transactional reboot, and
-    /// the two-phase repo cleanup (remove on success, **keep** on failure for
-    /// retry/diagnosis). `noprepare` skips the initial prepare; `newpackage`
-    /// runs a testing prepare after the update. Default no-op; real reports
-    /// override.
+    /// the two-phase repo cleanup — remove on success, **keep** on failure for
+    /// retry/diagnosis. `noprepare` skips the initial prepare; `newpackage`
+    /// runs a testing prepare afterwards.
     ///
-    /// Returns `Err` when the update did not apply: a per-host `updater` check
-    /// failure (after a best-effort downgrade rollback) or a hard
-    /// missing-updater failure. The null object's default is a no-op `Ok(())`.
-    ///
-    /// Recognised-but-non-fatal diagnostic sections from the update check are
-    /// appended to `diagnostics` for the command layer to render through the
-    /// display.
+    /// Returns `Err` on a per-host `updater` check failure (after a best-effort
+    /// downgrade rollback) or a hard missing-updater failure; non-fatal
+    /// diagnostics from the check are appended to `diagnostics`. The null
+    /// object's default is a no-op `Ok(())`.
     async fn perform_update(
         &self,
         _targets: &mut HostsGroup,
@@ -691,14 +627,11 @@ pub trait TestReport {
 
     /// Verifies the loaded template hash.
     ///
-    /// Returns a [`HashCheck`] describing the outcome. The null object and the
-    /// non-git reports (OBS/PI) report [`HashCheck::Ok`] since they have nothing
-    /// to verify. Async because git-backed reports compare against a hash
-    /// fetched from Gitea.
-    ///
-    /// Returns the outcome (rather than raising) so the async load
-    /// orchestrator ([`make_testreport`](crate::make_testreport)) can branch
-    /// on it (`read` is sync; `check_hash` is async).
+    /// Returns a [`HashCheck`] rather than raising, so the async load
+    /// orchestrator ([`make_testreport`](crate::make_testreport)) can branch on
+    /// it. The null object and the non-git reports (OBS/PI) report
+    /// [`HashCheck::Ok`], having nothing to verify; async because git-backed
+    /// reports compare against a hash fetched from Gitea.
     async fn check_hash(&self) -> HashCheck;
 
     /// The working directory for target artifacts.
@@ -721,11 +654,10 @@ pub trait TestReport {
 
     /// Exposes this report as a [`SetRepo`] when it can add/remove issue repos.
     ///
-    /// The `set_repo` command needs a `&dyn SetRepo` to fan the repo add/remove
-    /// out over the group ([`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup)),
-    /// but `SetRepo` is a distinct object-safe trait a `dyn TestReport` cannot be
-    /// downcast to. Reports that implement `SetRepo` (SL/PI/OBS) override this to
-    /// return `Some(self)`; the null report (nothing to set) keeps the `None`
+    /// `SetRepo` is a distinct object-safe trait a `dyn TestReport` cannot be
+    /// downcast to, but `set_repo` needs a `&dyn SetRepo` for
+    /// [`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup). SL/PI/OBS
+    /// override this to return `Some(self)`; the null report keeps the `None`
     /// default, which the command surfaces as "no update loaded".
     fn as_set_repo(&self) -> Option<&dyn SetRepo> {
         None
@@ -787,10 +719,10 @@ pub trait TestReport {
 
     /// Records the reviewer in the loaded testreport template on disk.
     ///
-    /// Replaces the `Test Plan Reviewer:` metadata line with `name`, rewrites
-    /// the template file atomically, and updates the in-memory
-    /// [`reviewer`](TestReportBase::reviewer) only after the write succeeds
-    /// (older `Suggested …` phrasings are normalised away). `name` is trimmed.
+    /// Replaces the `Test Plan Reviewer:` line with the trimmed `name`
+    /// (normalising away older `Suggested …` phrasings), rewrites the file
+    /// atomically, and updates [`reviewer`](TestReportBase::reviewer) only
+    /// after the write succeeds.
     ///
     /// # Errors
     ///
@@ -823,19 +755,14 @@ pub trait TestReport {
     /// Records the Slack message a review was requested on, in the loaded
     /// template on disk.
     ///
-    /// Unlike [`set_reviewer`](TestReport::set_reviewer), the line being
-    /// written does **not** pre-exist in a server-generated template, so this
-    /// replaces an existing marker when there is one and otherwise *inserts*
-    /// immediately after the `Test Plan Reviewer:` line. Replacing-only would
-    /// fail on every first use.
-    ///
-    /// A pre-existing marker is overwritten rather than duplicated, so
-    /// re-running `request_review` re-points the gate at the newest message
-    /// instead of leaving two markers to disagree.
-    ///
-    /// The in-memory field is updated only after the write succeeds, matching
-    /// `set_reviewer`: a caller that treats the error as fatal then cannot
-    /// proceed believing a marker was persisted when it was not.
+    /// Unlike [`set_reviewer`](TestReport::set_reviewer) the line does **not**
+    /// pre-exist in a server-generated template, so this replaces an existing
+    /// marker and otherwise *inserts* after the `Test Plan Reviewer:` line;
+    /// replacing-only would fail on every first use, and overwriting rather
+    /// than duplicating keeps a re-run of `request_review` pointed at the
+    /// newest message. As in `set_reviewer`, the in-memory field is updated
+    /// only after the write succeeds, so a caller treating the error as fatal
+    /// is not left believing a marker was persisted.
     ///
     /// # Errors
     ///
@@ -855,8 +782,7 @@ pub trait TestReport {
         let existing = slack_review_line_re();
 
         let new_text = if existing.is_match(&text) {
-            // `replace` (not `replace_all`) rewrites the first marker; the
-            // duplicate-collapsing below removes any others.
+            // `replace` hits the first marker; the collapse below removes any others.
             let replaced = existing.replace(&text, line.as_str()).into_owned();
             collapse_extra_marker_lines(&replaced)
         } else {
@@ -907,8 +833,8 @@ fn collapse_extra_marker_lines(text: &str) -> String {
 /// Matches the `Test Plan Reviewer:` (or legacy `Suggested Test Plan
 /// Reviewer:`) metadata line.
 ///
-/// Compiled on demand; [`TestReport::set_reviewer`] replaces it, and
-/// [`TestReport::set_slack_review`] uses it as the anchor to insert after.
+/// [`TestReport::set_reviewer`] replaces it;
+/// [`TestReport::set_slack_review`] anchors its insert after it.
 fn reviewer_line_re() -> regex::Regex {
     regex::Regex::new(r"(?m)^(?:Suggested )?Test Plan Reviewer:.*$")
         .expect("static reviewer-line regex is valid")
@@ -941,9 +867,8 @@ impl SlackReviewMarker {
 
     /// Parse a `Slack Review: <channel> <ts>` line.
     ///
-    /// Returns `None` for anything that is not exactly that shape, so a
-    /// hand-edited or truncated marker is treated as absent rather than
-    /// producing a marker that points at no real message.
+    /// Anything not exactly that shape is `None`: a hand-edited or truncated
+    /// marker is treated as absent rather than pointing at no real message.
     #[must_use]
     pub(crate) fn parse_line(line: &str) -> Option<Self> {
         let rest = line.strip_prefix("Slack Review:")?;
@@ -968,10 +893,8 @@ pub enum SlackReviewError {
     NoTemplate,
     /// The template has no `Test Plan Reviewer:` line to anchor the marker to.
     ///
-    /// Unlike the reviewer line the marker never pre-exists, so it has to be
-    /// inserted somewhere deterministic rather than replaced; without the
-    /// anchor there is no such place, and guessing risks corrupting the
-    /// template.
+    /// The marker never pre-exists, so it must be inserted somewhere
+    /// deterministic; guessing risks corrupting the template.
     #[error("no 'Test Plan Reviewer:' line found in template to anchor the Slack marker to")]
     NoAnchor,
     /// Reading or atomically rewriting the template file failed.
@@ -979,11 +902,8 @@ pub enum SlackReviewError {
     Io(#[source] std::io::Error),
 }
 
-/// The outcome of [`TestReport::check_hash`].
-///
-/// These four states let the load path branch explicitly on the result (see
-/// [`make_testreport`](crate::make_testreport)) rather than relying on
-/// exceptions.
+/// The outcome of [`TestReport::check_hash`], so the load path
+/// ([`make_testreport`](crate::make_testreport)) can branch explicitly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HashCheck {
     /// The template hash matches the Gitea PR head, or there is nothing to
@@ -1010,8 +930,8 @@ pub enum ReadError {
     /// The template `log` file could not be read.
     ///
     /// Carries the [`TemplateIoError`] so the checkout seam can branch on
-    /// [`is_not_found`](TemplateIoError::is_not_found) to decide whether a
-    /// missing template triggers a fresh checkout.
+    /// [`is_not_found`](TemplateIoError::is_not_found) to decide whether to
+    /// trigger a fresh checkout.
     #[error(transparent)]
     Template(#[from] TemplateIoError),
     /// The sibling `metadata.json` is absent.
@@ -1102,8 +1022,6 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
-    /// Builds a `TestReportBase` whose `packages` map has one product `key`
-    /// carrying `entries` (`name -> version`).
     fn base_with_packages(entries: &[(&str, &str, &str)]) -> TestReportBase {
         let mut base = TestReportBase::new(config());
         for (product, name, ver) in entries {
@@ -1117,8 +1035,7 @@ mod tests {
 
     #[test]
     fn packages_for_selects_by_base_version_and_sets_required() {
-        // The user's exact case: metadata keyed by "15-SP6" (== parse_product
-        // version string), five hplip packages, host base version "15-SP6".
+        // Metadata keyed by "15-SP6", i.e. the parse_product version string.
         let base = base_with_packages(&[
             ("15-SP6", "hplip", "3.26.4-150600.4.12.1"),
             ("15-SP6", "hplip-devel", "3.26.4-150600.4.12.1"),
@@ -1143,8 +1060,6 @@ mod tests {
 
     #[test]
     fn packages_for_standard_only_map_used_regardless_of_base_version() {
-        // SLFO metadata ships a single "standard" product set; it applies to any
-        // host base version.
         let base = base_with_packages(&[("standard", "patch", "2.7.6-999999_stage.1.1")]);
         let pkgs = packages_for_map(&base.packages, "16.0");
         assert_eq!(pkgs.len(), 1);
@@ -1157,8 +1072,6 @@ mod tests {
 
     #[test]
     fn packages_for_merges_sle12_special_case() {
-        // Upstream merges the "12" sub-map for any 12.x host on top of the
-        // base-version sub-map.
         let base = base_with_packages(&[("12-SP5", "bash", "5.0-1"), ("12", "glibc", "2.31-1")]);
         let pkgs = packages_for_map(&base.packages, "12-SP5");
         let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
@@ -1173,18 +1086,15 @@ mod tests {
 
     #[test]
     fn packages_for_skips_unparseable_version() {
-        // A garbage version leaves the package unseeded rather than aborting.
         let base = base_with_packages(&[("15-SP6", "goodpkg", "1.0-1"), ("15-SP6", "badpkg", "")]);
         let pkgs = packages_for_map(&base.packages, "15-SP6");
-        // Empty string clears required (parse_opt treats "" as None), so badpkg
-        // is present but with no required version; goodpkg has one.
+        // `parse_opt` reads "" as None, so badpkg survives — just unseeded.
         let good = pkgs.iter().find(|p| p.name == "goodpkg").unwrap();
         assert!(good.required().is_some());
     }
 
-    /// A minimal report over a [`TestReportBase`] with a fixed id, so the
-    /// trait-default metadata helpers (`bug_maps`, `show_yourself_data`,
-    /// `testreport_url`, `fancy_report_url`) can be exercised directly.
+    /// A minimal report with a fixed id, so the trait-default metadata helpers
+    /// can be exercised directly.
     struct MetaReport {
         base: TestReportBase,
     }
@@ -1244,9 +1154,7 @@ mod tests {
     fn show_yourself_data_drops_empty_and_sorts() {
         let r = meta_report();
         let rows = r.show_yourself_data();
-        // Every emitted row has a non-empty value.
         assert!(rows.iter().all(|(_, v)| !v.is_empty()));
-        // Sorted by label.
         let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
         let mut sorted = labels.clone();
         sorted.sort_unstable();
@@ -1261,7 +1169,6 @@ mod tests {
         assert!(has("Rating"));
         assert!(has("Gitea PR"));
         assert!(!has("Packager"));
-        // Build checks strips the trailing "log".
         let build = rows.iter().find(|(l, _)| l == "Build checks").unwrap();
         assert!(build.1.ends_with("build_checks"), "{}", build.1);
     }
@@ -1307,8 +1214,7 @@ mod tests {
 
     #[test]
     fn set_slack_review_inserts_when_the_marker_is_absent() {
-        // The load-bearing case: the marker line never pre-exists in a
-        // server-generated template, so a replace-only implementation (like
+        // The marker never pre-exists, so a replace-only implementation (like
         // set_reviewer's) would fail on every first use.
         let dir = tempfile::tempdir().unwrap();
         let (mut r, path) = report_with_template(
@@ -1332,8 +1238,7 @@ mod tests {
 
     #[test]
     fn set_slack_review_replaces_an_existing_marker() {
-        // Re-running request_review must re-point the gate at the new message,
-        // not leave two markers for the reader to choose between.
+        // Re-running request_review must re-point the gate, not leave two markers.
         let dir = tempfile::tempdir().unwrap();
         let (mut r, path) = report_with_template(
             &dir,
@@ -1350,8 +1255,8 @@ mod tests {
 
     #[test]
     fn set_slack_review_collapses_duplicate_markers() {
-        // A hand-edited or merged template can carry several markers; the
-        // writer must leave exactly the one the reader would have picked.
+        // A hand-edited or merged template can carry several markers; the writer
+        // must leave exactly the one the reader would have picked.
         let dir = tempfile::tempdir().unwrap();
         let (mut r, path) = report_with_template(
             &dir,
@@ -1394,8 +1299,7 @@ mod tests {
 
     #[test]
     fn set_slack_review_leaves_memory_untouched_when_the_write_fails() {
-        // Mirrors set_reviewer's contract: a caller that aborts on the error
-        // must not be left believing a marker was persisted.
+        // Mirrors set_reviewer: a caller that aborts must not believe it persisted.
         let dir = tempfile::tempdir().unwrap();
         let mut base = TestReportBase::new(config());
         base.path = Some(dir.path().join("does/not/exist/log"));
@@ -1413,8 +1317,7 @@ mod tests {
 
     #[test]
     fn slack_marker_rejects_malformed_lines() {
-        // A truncated or over-long marker points at no real message; treating
-        // it as absent is safer than acting on half of one.
+        // A truncated or over-long marker points at no real message.
         assert_eq!(SlackReviewMarker::parse_line("Slack Review: C1"), None);
         assert_eq!(SlackReviewMarker::parse_line("Slack Review:"), None);
         assert_eq!(
@@ -1490,10 +1393,9 @@ mod tests {
     #[tokio::test]
     async fn release_pool_claims_drops_arbiter_ownership_and_clears_claims() {
         let owner: Owner = ("reg-1".to_owned(), "SUSE:Maintenance:1:1".to_owned());
-        // Leak a test-local arbiter to obtain the `&'static` the field expects
-        // without touching the shared process-global singleton.
+        // Leaked to get the `&'static` the field expects without touching the
+        // shared process-global singleton.
         let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
-        // Claim two hosts through the arbiter for this owner.
         assert!(arbiter.try_acquire("h1", &owner));
         assert!(arbiter.try_acquire("h2", &owner));
 
@@ -1508,10 +1410,8 @@ mod tests {
 
         r.release_pool_claims().await;
 
-        // In-process claim set and slot candidates are cleared.
         assert!(r.base().pool_claims.is_empty());
         assert!(r.base().slot_candidates.is_empty());
-        // Arbiter ownership is dropped for every previously-held host.
         let arbiter = r.base().arbiter.as_ref().unwrap();
         assert!(arbiter.owner_of("h1").is_none());
         assert!(arbiter.owner_of("h2").is_none());
@@ -1541,23 +1441,20 @@ mod tests {
         base.owner = Some(owner.clone());
         base.pool_claims.insert("h1".to_owned());
         base.pool_claims.insert("h2".to_owned());
-        // One slot holds both as candidates (h1 primary, h2 backup sibling).
+        // h1 primary, h2 backup sibling, in one slot.
         base.slot_candidates
             .insert("slot0".to_owned(), vec!["h1".to_owned(), "h2".to_owned()]);
         let mut r = MetaReport { base };
 
         r.release_pool_claim("h1");
 
-        // h1's in-process claim is dropped; h2 stays claimed.
         assert!(!r.base().pool_claims.contains("h1"));
         assert!(r.base().pool_claims.contains("h2"));
-        // The freed host is re-acquirable by another owner.
+        // The freed host is re-acquirable by another owner; the sibling is not.
         let arbiter = r.base().arbiter.as_ref().unwrap();
         let other: Owner = ("reg-2".to_owned(), "SUSE:Maintenance:2:2".to_owned());
         assert!(arbiter.try_acquire("h1", &other));
-        // h2 is still owned by us (its sibling stays as backup).
         assert_eq!(arbiter.owner_of("h2"), Some(owner.clone()));
-        // The slot survives (h2 still a candidate), with h1 pruned out.
         assert_eq!(
             r.base().slot_candidates.get("slot0"),
             Some(&vec!["h2".to_owned()])
@@ -1580,7 +1477,6 @@ mod tests {
 
         r.release_pool_claim("only");
 
-        // The slot had no siblings left, so it is pruned entirely.
         assert!(r.base().slot_candidates.is_empty());
         assert!(r.base().pool_claims.is_empty());
         assert!(

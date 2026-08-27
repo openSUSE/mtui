@@ -2,20 +2,16 @@
 //!
 //! Reads the refhost inventory — the same source `add_host` resolves through
 //! [`RefhostsFactory`] — and prints matching hosts **without connecting**: no
-//! SSH, no lock, no loaded template required, so fleet-maintenance and manual
-//! users can find refhosts through mtui instead of parsing `refhosts.yml` by
-//! hand. Results are de-duplicated by host name.
-//!
-//! The optional `--free` flag additionally connects to the matched hosts to
-//! report their live mtui-lock state — the only part that goes on the wire.
+//! SSH, no lock, no loaded template, so refhosts can be found through mtui
+//! instead of by parsing `refhosts.yml`. Results are de-duplicated by name.
+//! `--free` additionally connects to report live mtui-lock state — the only part
+//! that goes on the wire.
 //!
 //! # Testability seam
-//! The offline half is factored into pure, unit-tested helpers ([`gather`],
-//! [`render_table`], [`render_json`]) that operate on an in-memory
-//! [`Refhosts`] store. Only [`call`](ListRefhosts::call) touches the network
-//! (resolver fetch + the best-effort `--free` probe); the probe builds real
-//! [`Target`]s, so it is exercised by the gated sshd integration path rather
-//! than an offline unit test.
+//! [`gather`], [`render_table`] and [`render_json`] are pure over an in-memory
+//! [`Refhosts`] store; only [`call`](ListRefhosts::call) touches the network,
+//! and its `--free` probe builds real [`Target`]s, so that half is exercised by
+//! the gated sshd integration path.
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
@@ -53,8 +49,7 @@ pub struct Record {
 }
 
 impl Record {
-    /// Serialize this record into a JSON object, omitting `lock` when unset
-    /// (only set under `--free`).
+    /// Omits `lock` when unset (it is only set under `--free`).
     fn to_json(&self) -> Value {
         let mut obj = json!({
             "name": self.name,
@@ -103,10 +98,8 @@ fn record(host: &Host, with_slot: bool) -> Record {
     }
 }
 
-/// Resolve refhosts against the parsed filters and return the matched records.
-///
-/// Pure and offline: `testplatform` (parsed to [`Attributes`]) takes precedence
-/// over the ad-hoc field filters.
+/// Resolve refhosts against the parsed filters, offline. `testplatform` (parsed
+/// to [`Attributes`]) takes precedence over the ad-hoc field filters.
 #[must_use]
 pub fn gather(store: &Refhosts, args: &Filters<'_>) -> Vec<Record> {
     let hits = if let Some(tp) = args.testplatform {
@@ -125,8 +118,8 @@ pub fn gather(store: &Refhosts, args: &Filters<'_>) -> Vec<Record> {
     hits.iter().map(|h| record(h, args.pool)).collect()
 }
 
-/// The parsed offline filters `gather` consumes (decoupled from `clap` for
-/// direct unit testing).
+/// The offline filters `gather` consumes, decoupled from `clap` so it can be
+/// unit-tested directly.
 #[derive(Debug, Default)]
 pub struct Filters<'a> {
     /// A full SMELT `testplatform` query (mutually exclusive with the fields).
@@ -145,9 +138,8 @@ pub struct Filters<'a> {
     pub pool: bool,
 }
 
-/// Render `records` as an aligned human table (grouped by slot when `pool`).
-///
-/// Returns the full multi-line text.
+/// Render `records` as one aligned multi-line table, grouped by slot when
+/// `pool`.
 #[must_use]
 pub fn render_table(records: &[Record], pool: bool, free: bool, verbose: bool) -> String {
     let fmt = |r: &Record| -> String {
@@ -312,7 +304,6 @@ impl Command for ListRefhosts {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let config = session.config.clone();
 
-        // Resolve the inventory through the configured resolver chain.
         let factory = RefhostsFactory::production(
             config.refhosts_path.clone(),
             VerifyPolicy::from_config(&config.ssl_verify),
@@ -373,18 +364,15 @@ impl Command for ListRefhosts {
     }
 }
 
-/// Connect to each matched host (best-effort, in parallel) and record its live
-/// mtui-lock state under [`Record::lock`].
+/// Connect to each matched host in parallel and record its live mtui-lock state
+/// under [`Record::lock`]: `locked`/`free` when it answers, `unreachable` when
+/// the connect or probe fails.
 ///
-/// `locked` / `free` when the host answers,
-/// `unreachable` when the connect or probe fails. This is the only on-wire part
-/// of the command; failures are swallowed per host so one dead host never aborts
-/// the listing.
+/// The only on-wire part of the command; failures are swallowed per host so one
+/// dead host never aborts the listing.
 async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
-    // Bound the probe fan-out to `[connection] max_parallel`: one SSH task per
-    // inventory record, but no more than `max_parallel` connecting at once. Each
-    // task holds an owned permit for its whole lifetime, so the semaphore caps
-    // peak concurrent connections/sockets on large inventories.
+    // Caps peak concurrent connections on large inventories: one task per
+    // record, but at most `[connection] max_parallel` connecting at once.
     let bound = (config.max_parallel as usize).max(1);
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(bound));
     let mut set: JoinSet<(String, String)> = JoinSet::new();
@@ -393,8 +381,7 @@ async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
         let name = r.name.clone();
         let sem = std::sync::Arc::clone(&sem);
         set.spawn(async move {
-            // Held for the task's lifetime; the semaphore has as many permits as
-            // the bound, so at most `bound` probes run concurrently.
+            // Held for the task's lifetime, so at most `bound` probes run.
             let _permit = sem.acquire_owned().await.expect("semaphore is not closed");
             let mut target = Target::new(&config, name.clone(), TargetState::Enabled);
             let state = match target.connect().await {
@@ -405,7 +392,6 @@ async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
                 },
                 Err(_) => "unreachable",
             };
-            // The connection is torn down when `target` drops at scope end.
             (name, state.to_owned())
         });
     }
@@ -679,8 +665,8 @@ mod tests {
         assert!(args.get_flag("verbose"));
     }
 
-    /// A session whose config resolves refhosts from a local `path` file (no
-    /// network), plus the temp dir keeping the file alive for the test.
+    /// A session resolving refhosts from a local `path` file, plus the temp dir
+    /// keeping that file alive.
     fn session_with_refhosts_file(
         yaml: &str,
     ) -> (Session, crate::commands::testkit::Buffer, tempfile::TempDir) {

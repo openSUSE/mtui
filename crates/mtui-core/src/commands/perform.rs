@@ -1,18 +1,16 @@
 //! Shared driver for the `perform_*` workflow commands.
 //!
-//! `install`, `uninstall`, `prepare`, `downgrade`, and `update` all follow the
-//! same shape: resolve the `-t` host selection, then drive one of the active
-//! report's `perform_*` flows over the selected [`HostsGroup`].
+//! `install`, `uninstall`, `prepare`, `downgrade` and `update` share one shape:
+//! resolve the `-t` host selection, then drive one of the active report's
+//! `perform_*` flows over the selected [`HostsGroup`].
 //!
-//! Those flows take `&self` (the report) **and** `&mut HostsGroup` at once, and
-//! the group lives inside the report — so the body splits the group out
-//! ([`Session::split_targets`](crate::Session::split_targets)), re-borrows the
-//! report immutably, drives the op over the selected subset, and recombines the
-//! selected subset with the untouched remainder
-//! ([`Session::restore_split_targets`](crate::Session::restore_split_targets)) so
-//! a `-t` subset never drops the unselected hosts. Modelling the op as an enum
-//! (rather than a borrowing async closure) keeps the future `Send` without
-//! wrestling higher-ranked lifetimes.
+//! Those flows take `&self` (the report) **and** `&mut HostsGroup` at once while
+//! the group lives inside the report, so the body splits the group out
+//! ([`Session::split_targets`](crate::Session::split_targets)), drives the op
+//! over the subset, and recombines it with the untouched remainder
+//! ([`Session::restore_split_targets`](crate::Session::restore_split_targets))
+//! so a `-t` subset never drops the unselected hosts. The op is an enum rather
+//! than a borrowing async closure to keep the future `Send`.
 
 use clap::ArgMatches;
 use mtui_hosts::HostsGroup;
@@ -23,15 +21,12 @@ use mtui_testreport::UpdateError;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Renders update-check [`Diagnostic`] sections through the session display:
-/// the "Additional rpm output" section is printed with the word `warning`
-/// recolored yellow, while the "not supported by its vendor" section is
-/// printed plain.
+/// Renders update-check [`Diagnostic`] sections: "Additional rpm output" with
+/// the word `warning` recolored yellow, "not supported by its vendor" plain.
 fn render_diagnostics(session: &mut Session, diagnostics: &[Diagnostic]) {
     for diag in diagnostics {
         let line = if diag.highlight_warning {
-            // Recolor every "warning" occurrence yellow. `yellow` is a no-op
-            // under `ColorMode::Never`.
+            // `yellow` is a no-op under `ColorMode::Never`.
             let yellow_warning = session.display.yellow("warning");
             diag.text.replace("warning", &yellow_warning)
         } else {
@@ -60,16 +55,10 @@ pub(super) enum PerformOp {
     Update { noprepare: bool, newpackage: bool },
 }
 
-/// Maps a flow error onto a [`CommandError`].
-///
-/// A flow that stopped at one of its own cancellation checkpoints marks its
-/// error `cancelled`; that — **not** the session token — is the authority.
-/// Sniffing the token here instead would misreport a genuine host failure that
-/// merely coincided with a cancel, hiding (say) a broken connection behind a
-/// bare "cancelled".
-///
-/// The cancellation message carries the detail (which packages were applied,
-/// which were not), so it is preserved rather than flattened.
+/// Maps a flow error onto a [`CommandError`]. The flow's own `cancelled` marker
+/// — **not** the session token — is the authority: sniffing the token would hide
+/// a genuine host failure that merely coincided with a cancel. The message names
+/// which packages were applied, so it is preserved rather than flattened.
 fn map_flow_error(e: &UpdateError) -> CommandError {
     if e.is_cancelled() {
         return CommandError::Cancelled(e.to_string());
@@ -79,13 +68,10 @@ fn map_flow_error(e: &UpdateError) -> CommandError {
 
 /// Resolves the `-t` selection and drives `op` over it, restoring the group.
 ///
-/// A `-t` subset operation runs over only the selected hosts, but the unselected
-/// hosts are preserved: the group is split via
-/// [`Session::split_targets`](crate::Session::split_targets) and the untouched
-/// remainder is merged back by
-/// [`Session::restore_split_targets`](crate::Session::restore_split_targets)
-/// afterwards. With no `-t` — the common path, and what the tests and the e2e
-/// gate exercise — the remainder is empty and selection is lossless.
+/// A `-t` subset runs over only the selected hosts, the remainder split out by
+/// [`Session::split_targets`](crate::Session::split_targets) and merged back by
+/// [`Session::restore_split_targets`](crate::Session::restore_split_targets).
+/// With no `-t` the remainder is empty and selection is lossless.
 ///
 /// # Errors
 ///
@@ -98,10 +84,8 @@ pub(super) async fn drive(
     args: &ArgMatches,
     op: PerformOp,
 ) -> CommandResult {
-    // Upstream decorates each of these commands with `@requires_update`, which
-    // raises `TestReportNotLoadedError` before touching hosts. Enforce the same
-    // guard first so `install`/`uninstall`/`prepare`/`downgrade`/`update` refuse
-    // when no report is loaded instead of driving the null report's no-op flow.
+    // Guard before touching hosts, so these commands refuse when no report is
+    // loaded instead of driving the null report's no-op flow.
     super::support::require_update(session)?;
 
     let hosts = super::support::hosts_arg(args);
@@ -124,9 +108,8 @@ pub(super) async fn drive(
     // The host names the op ran over, for the success confirmation line.
     let hosts_label = selected.names().join(", ");
     let report = session.metadata();
-    // These flows return a `Result` (P3a-2): map an `Err` onto `CommandError`
-    // (its message already names the failed host(s)/reason) and confirm success
-    // to the display so an MCP call is never a silent "success".
+    // The flow's `Err` message already names the failed host(s)/reason. Success
+    // is confirmed to the display so an MCP call is never a silent "success".
     let (verb, outcome): (&str, Result<(), CommandError>) = match &op {
         PerformOp::Install(pkgs) => (
             "install",
@@ -165,25 +148,18 @@ pub(super) async fn drive(
             noprepare,
             newpackage,
         } => {
-            // Unlike the other flows, `update` surfaces a failure verdict: a
-            // per-host `updater` check failure (post-rollback) or a hard
-            // missing-updater failure. Restore the split group *before*
-            // returning so a failed update still merges the unselected hosts
-            // back, then map the update error onto CommandError.
-            //
-            // The update check also surfaces recognised-but-non-fatal
-            // diagnostic sections. Collect them into a sink here — the one
-            // place the session's display is in scope — and render them after
-            // the fan-out, on both the success and failure paths.
+            // `update` alone surfaces a failure verdict, so restore the split
+            // *before* returning or a failed update strands the unselected
+            // hosts. Its non-fatal diagnostics are collected here — the one
+            // place the display is in scope — and rendered on both paths.
             let mut diagnostics = Vec::new();
             let update_result = report
                 .perform_update(&mut selected, *noprepare, *newpackage, &mut diagnostics)
                 .await;
             session.restore_split_targets(selected, remainder);
             render_diagnostics(session, &diagnostics);
-            // A flow that stopped at a cancellation checkpoint surfaces as an
-            // ordinary `UpdateError`; re-check the token so the caller (and the
-            // MCP job record) sees `Cancelled` rather than a generic failure.
+            // A cancellation checkpoint surfaces as an ordinary `UpdateError`;
+            // map it so the caller sees `Cancelled`, not a generic failure.
             return update_result.map_err(|e| map_flow_error(&e));
         }
     };
@@ -221,8 +197,7 @@ mod tests {
             &[Diagnostic::highlighted("\nwarning: extra rpm output\n")],
         );
         let out = buf.contents();
-        // The section text is present and the word `warning` carries an ANSI
-        // escape (yellow).
+        // The word `warning` carries an ANSI escape (yellow).
         assert!(out.contains("extra rpm output"), "got: {out:?}");
         assert!(
             out.contains("\u{1b}["),
@@ -256,8 +231,7 @@ mod tests {
             )],
         );
         let out = buf.contents();
-        // Upstream prints the vendor section plain (no recoloring), even though
-        // it may contain the word "warning".
+        // The vendor section stays plain even though it contains "warning".
         assert!(out.contains("not supported by its vendor"), "got: {out:?}");
         assert!(!out.contains("\u{1b}["), "expected no ANSI, got: {out:?}");
     }

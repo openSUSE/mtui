@@ -5,16 +5,10 @@
 //! [`aggregated_updates`], and [`build_checks`]. Each returns a list of typed
 //! result rows (defined in [`super::results`]) that the command layer renders.
 //!
-//! ## Notable design points
-//!
-//! * The openQA job-group list is fetched per call rather than memoised, since
-//!   that is a per-process performance detail, not a behavioural
-//!   contract. A memo can be reintroduced if a consumer needs it.
-//! * The plain-text renderer (`render_overview` + the `OVERVIEW_*`
-//!   markers) lives in the sibling [`super::render`] module, shared by the
-//!   command layer and the export injector.
-//! * The build-check directory-index scan uses the `scraper` HTML parser; the
-//!   golden test pins the extracted `.log` set so any parser drift is caught.
+//! The openQA job-group list is fetched per call rather than memoised: that is
+//! a per-process performance detail, not a behavioural contract. The build-check
+//! directory-index scan uses the `scraper` HTML parser, with a golden test
+//! pinning the extracted `.log` set so parser drift is caught.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -54,9 +48,9 @@ async fn fetch_url_content(http: &HttpClient, url: &str) -> Result<String, OqaSe
 
 /// GET `path` (relative to `oqa`'s base URL) and return the parsed JSON body.
 ///
-/// `ruoqa::Client::request` already parses the response and enforces the
-/// client's `max_response_bytes` cap, so — unlike [`get_json`] — there is no
-/// separate byte-fetch step.
+/// `ruoqa::Client::request` parses the response and enforces the client's
+/// `max_response_bytes` cap, so unlike [`get_json`] there is no separate
+/// byte-fetch step.
 async fn oqa_request(oqa: &ruoqa::Client, path: &str) -> Result<serde_json::Value, OqaSearchError> {
     Ok(oqa.request(Method::GET, path, None).await?)
 }
@@ -386,12 +380,11 @@ async fn openqa_job_issues(
 
 /// The current UTC date, as a `chrono::NaiveDate`.
 ///
-/// The aggregated day-walk build strings are keyed on "today". The workspace
-/// pins `chrono` without the `clock` feature to keep the single-static-binary
-/// contract lean, so this computes "today" from
-/// [`std::time::SystemTime`] in UTC rather than local time. The two differ
-/// only within the local UTC-offset window around midnight; the day-walk
-/// simply starts one day over, which the N-day window absorbs.
+/// The workspace pins `chrono` without the `clock` feature to keep the
+/// single-static-binary contract lean, so "today" comes from
+/// [`std::time::SystemTime`] in UTC rather than local time. The two differ only
+/// in the UTC-offset window around midnight, where the day-walk starts one day
+/// over — which the N-day window absorbs.
 fn current_utc_date() -> chrono::NaiveDate {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -421,8 +414,8 @@ async fn query_version_status(
         version
     };
 
-    // `ruoqa`'s resolved `base_url` always carries a trailing `/` (`Url`'s own
-    // normalisation); trim it so the browser URL doesn't double up the slash.
+    // `ruoqa`'s resolved `base_url` always carries a trailing `/`; trim it so
+    // the browser URL does not double the slash.
     let base_url = oqa.base_url().as_str().trim_end_matches('/');
     let print_url = openqa_print_url(base_url, version_oqa, build, group_id);
     // These states are always valid; the .expect documents that invariant.
@@ -431,9 +424,8 @@ async fn query_version_status(
     let failed_path =
         openqa_build_path("failed", version_oqa, build, group_id).expect("failed is a valid state");
 
-    // The running and failed overview queries are independent; fetch them
-    // concurrently. Both are always needed, and the failed>0 / running>0
-    // precedence below is applied to the results, so ordering is unchanged.
+    // Independent, and both always needed; the precedence below applies to the
+    // results, so concurrency does not change the outcome.
     let (running_results, failed_results) = tokio::join!(
         oqa_request(oqa, &running_path),
         oqa_request(oqa, &failed_path)
@@ -564,7 +556,6 @@ pub fn summarize_test_results(lines: &[String]) -> String {
 
     let mut total_passed: u64 = 0;
     let mut total_failed: u64 = 0;
-    // Skip the first and last line.
     let middle = if lines.len() > 2 {
         &lines[1..lines.len() - 1]
     } else {
@@ -630,10 +621,9 @@ pub async fn single_incidents(
     };
 
     // Resolve each version's group id up front (a pure lookup), then fan the
-    // per-version openQA queries out concurrently under a bound; carry the input
-    // index so the output order is identical to the sequential version. Inputs
-    // are cloned into each future to keep the futures `'static`-friendly when the
-    // whole call is nested in another async context.
+    // queries out concurrently under a bound, carrying the input index so the
+    // output order is unchanged. Inputs are cloned into each future to keep them
+    // `'static`-friendly when nested in another async context.
     let jobs: Vec<(usize, String, Option<i64>)> = versions
         .iter()
         .enumerate()
@@ -643,8 +633,7 @@ pub async fn single_incidents(
     let mut indexed: Vec<(usize, VersionResult)> = stream::iter(jobs)
         .map(|(idx, version, group_id)| {
             let build = build.clone();
-            // `ruoqa::Client` is cheaply `Clone` (`Arc`-backed), matching
-            // `reqwest::Client`'s own clone-to-share-pool convention.
+            // `ruoqa::Client` is `Arc`-backed: cloning shares the pool.
             let oqa = oqa.clone();
             async move {
                 let Some(group_id) = group_id else {
@@ -711,9 +700,8 @@ pub async fn aggregated_updates(
         }
     };
 
-    // Resolve the valid groups first, preserving `groups_wanted` order (invalid
-    // groups are skipped with a warning). Each surviving group gets
-    // a stable output position.
+    // Valid groups first, in `groups_wanted` order (invalid ones warn and are
+    // skipped), so each survivor has a stable output position.
     let mut valid_groups: Vec<(String, i64)> = Vec::new();
     for group in groups_wanted {
         let Some(group_id) = get_group_id(&groups, group) else {
@@ -725,10 +713,9 @@ pub async fn aggregated_updates(
         valid_groups.push((group.clone(), group_id));
     }
 
-    // Fan the independent (group, version) day-scans out concurrently under a
-    // bound; each scan is still early-exit sequential internally. The (group,
-    // version) index pair restores the exact grouped/ordered output. Inputs are
-    // cloned into each future to keep the futures nesting-friendly.
+    // The (group, version) day-scans are independent, so fan them out under a
+    // bound — each is still early-exit sequential internally — and restore the
+    // grouped output order from the index pair.
     let jobs: Vec<(usize, usize, String, i64)> = valid_groups
         .iter()
         .enumerate()
@@ -828,9 +815,8 @@ async fn scan_aggregated_for_version(
 ///
 /// A missing index (or an unreadable log) is not an error — it yields no (or a
 /// bare) entry, so a flaky QAM host cannot abort the command.
-// The parameters plus the max-parallel concurrency bound are passed
-// positionally by the single internal caller (`openqa_overview`), so a params
-// struct would add ceremony without a readability win.
+// One internal caller (`openqa_overview`) passes these positionally, so a
+// params struct would be ceremony without a readability win.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_checks(
     http: &HttpClient,
@@ -864,10 +850,8 @@ pub async fn build_checks(
         return vec![];
     }
 
-    // Fetch + parse each matching log concurrently under a bound; carry the
-    // input index so the output order matches the sequential (link) order.
-    // Inputs are cloned/owned into each future to keep the futures
-    // nesting-friendly when the whole call is composed into another async task.
+    // Fetch + parse each matching log under a concurrency bound, carrying the
+    // input index so the output keeps link order.
     let test_pattern = test_pattern.map(str::to_owned);
     let mut indexed: Vec<(usize, BuildCheckResult)> =
         stream::iter(logfiles.into_iter().enumerate())
@@ -879,10 +863,9 @@ pub async fn build_checks(
                     let log_text = match fetch_url_content(http, &log_url).await {
                         Ok(t) => t,
                         Err(e) => {
-                            // `log_url` is built from the `[url] testreports`
-                            // config, which is taken verbatim and may embed
-                            // credentials — and this is WARN, i.e. visible by
-                            // default (#431).
+                            // `log_url` comes verbatim from `[url] testreports`
+                            // and may embed credentials; this line is WARN, so
+                            // visible by default (#431).
                             tracing::warn!(
                                 "build_check log {} unavailable: {e}",
                                 sanitize_url(&log_url)

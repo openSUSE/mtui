@@ -21,18 +21,16 @@ use crate::session::Session;
 
 /// Exports the gathered update data to the testing template.
 ///
-/// Picks the exporter by the
-/// report's [`Workflow`] and writes the pre/post package versions and update log
-/// into the template (or `filename` when given). Requires a loaded report.
+/// Picks the exporter by the report's [`Workflow`] and writes the pre/post
+/// package versions and update log into the template (or `filename`). Requires a
+/// loaded report.
 ///
 /// ## openQA enrichment (Manual)
 ///
-/// The `Manual` exporter folds openQA results into the template via the report's
-/// openQA holder (`metadata.openqa`). When the holder's "auto" result is
-/// absent, it is lazily built and run from the QEM Dashboard, then the
-/// connected-host results (`report_results`) and any `openqa_overview`
-/// payload are folded into [`ManualExport`]. `Auto`/`Kernel` render their
-/// full local template.
+/// `Manual` folds openQA results in via the report's holder (`metadata.openqa`):
+/// an absent "auto" result is lazily built and run from the QEM Dashboard, then
+/// the connected-host results and any `openqa_overview` payload go into
+/// [`ManualExport`]. `Auto`/`Kernel` render their full local template.
 pub struct Export;
 
 #[async_trait]
@@ -49,11 +47,10 @@ impl Command for Export {
         Scope::Fanout
     }
 
-    /// `export` opts out of the driver's host-less skip: for the `Auto`/`Kernel`
-    /// workflows it sources its data from openQA and needs no connected hosts, so
-    /// `export --all-templates` must still write those templates at zero hosts.
-    /// The per-template `Manual`-workflow rule (which *does* need hosts) is
-    /// applied inside [`call`](Self::call).
+    /// Opts out of the driver's host-less skip: `Auto`/`Kernel` source from
+    /// openQA, so `export --all-templates` must still write them at zero hosts.
+    /// The `Manual` rule (which *does* need hosts) lives in
+    /// [`call`](Self::call).
     fn skip_hostless_templates(&self) -> bool {
         false
     }
@@ -82,11 +79,8 @@ impl Command for Export {
         let workflow = session.metadata().workflow();
         let force = args.get_flag("force");
 
-        // The Manual workflow folds per-host update logs into the template, so a
-        // host-less template has nothing to fold. When no `-t` was named, report
-        // and skip it rather than writing an empty export; a typo'd `-t` still
-        // fails loudly below via `select_names`. Auto/Kernel source from openQA
-        // and proceed regardless of connected-host count.
+        // Nothing to fold, so report and skip rather than write an empty export.
+        // A typo'd `-t` still fails loudly below via `select_names`.
         if workflow == Workflow::Manual && !named_hosts(args) && session.targets().is_empty() {
             session
                 .display
@@ -94,7 +88,6 @@ impl Command for Export {
             return Ok(());
         }
 
-        // Output path: explicit `filename`, else the loaded report's own path.
         let filename: PathBuf = match args.get_one::<String>("filename") {
             Some(f) => PathBuf::from(f),
             None => session
@@ -105,9 +98,6 @@ impl Command for Export {
                 .ok_or_else(|| CommandError::Other("no report path to export to".to_owned()))?,
         };
 
-        // For Manual exports, ensure the report's openQA "auto" result exists
-        // (lazily built + run from the QEM Dashboard) and select the
-        // connected-host results to fold in (report_results).
         let (manual_results, manual_overview) = if workflow == Workflow::Manual {
             if session.metadata().openqa().auto.is_none() {
                 let http = build_http(session)?;
@@ -126,9 +116,8 @@ impl Command for Export {
                     rrid.clone(),
                     session.config.max_parallel as usize,
                 );
-                // Best-effort: a failed dashboard fetch
-                // is folded to "no results" so the export still renders the rest
-                // of the report rather than aborting.
+                // A failed fetch folds to "no results" so the export still
+                // renders the rest of the report rather than aborting.
                 if let Err(e) = auto.run().await {
                     tracing::warn!(error = %e, "QEM Dashboard fetch failed during export; continuing without auto results");
                 }
@@ -137,11 +126,10 @@ impl Command for Export {
             let hosts = select_names(session.targets(), args, false)
                 .map_err(|e| CommandError::Other(e.to_string()))?;
             let results = manual_hosts(session, &hosts);
-            // #396/#437: a host block exported with no recorded package data —
-            // or seeded packages the version query never answered for at all —
-            // keeps the scaffold's own (unverified) lines. Say so on the
-            // surface the operator/MCP client actually sees, not only in the
-            // tracing log.
+            // #396/#437: a host with no recorded package data — or seeded
+            // packages the version query never answered for — keeps the
+            // scaffold's unverified lines. Say so where the operator/MCP client
+            // sees it, not only in the log.
             for host in &results {
                 let unverified = host.packages.is_empty()
                     || host.packages.iter().all(|p| {
@@ -204,17 +192,15 @@ impl Command for Export {
     }
 }
 
-/// Borrows the session-scoped HTTP client for log downloads (reuse one
-/// client/pool across commands).
+/// Borrows the session-scoped HTTP client, so one pool serves every command.
 fn build_http(session: &Session) -> Result<HttpClient, CommandError> {
     session
         .http_client()
         .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))
 }
 
-/// Builds the decoupled [`ManualHost`] views the manual exporter reads, from
-/// the named connected targets — decoupled so the exporter never reads the
-/// live `Target`s directly.
+/// Builds the [`ManualHost`] views of the named connected targets, so the
+/// exporter never reads the live `Target`s directly.
 fn manual_hosts(session: &Session, hosts: &[String]) -> Vec<ManualHost> {
     hosts
         .iter()
@@ -259,7 +245,6 @@ mod tests {
         Export.call(&mut session, &args).await.unwrap();
 
         let written = std::fs::read_to_string(&path).unwrap();
-        // The auto exporter appends the system-info footer to any template.
         assert!(written.contains("## export MTUI:"));
         // A success line reaches the display so the MCP result is never empty.
         assert!(
@@ -269,10 +254,9 @@ mod tests {
         );
     }
 
-    /// Builds a `DashboardAutoOpenQA` with seeded `results`/`pp` (no network in
-    /// `new`; the output fields are set directly as `run()` would). The install
-    /// log `url` points at `log_url` so the exporter's real HTTP client can
-    /// download it from a mock server.
+    /// A `DashboardAutoOpenQA` with `results`/`pp` set directly as `run()`
+    /// would, so no network is touched, and an install-log `url` of `log_url` for
+    /// the exporter's real HTTP client to download.
     fn seeded_auto(log_url: &str) -> mtui_datasources::DashboardAutoOpenQA {
         use mtui_datasources::{
             DashboardAutoOpenQA, QemDashboardClient, QemIncident, VerifyPolicy,
@@ -296,15 +280,14 @@ mod tests {
         auto
     }
 
-    /// The Auto branch must read the report's openQA holder end-to-end: the
-    /// install status, the `pp` block, and the per-job install log must all land
-    /// in the template / on disk. Regression guard for the `None, None` stub.
+    /// The Auto branch must read the holder end-to-end: install status, `pp`
+    /// block and per-job install log all land in the template / on disk. Guards
+    /// against a regression to the `None, None` stub.
     #[tokio::test]
     async fn auto_reads_holder_status_pp_and_downloads_log() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // Serve the install log the seeded result points at.
         let oqa = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/install.log"))
@@ -317,8 +300,8 @@ mod tests {
         session.metadata_mut().base_mut().workflow = Workflow::Auto;
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
-        // Realistic template: a header above the `source code change review:`
-        // anchor so `inject_openqa`'s insertion point is in range.
+        // A header above the `source code change review:` anchor keeps
+        // `inject_openqa`'s insertion point in range.
         let path_out = dir.path().join("template.txt");
         std::fs::write(
             &path_out,
@@ -326,7 +309,7 @@ mod tests {
         )
         .unwrap();
 
-        // Pre-seed the holder (as `reload_openqa` would).
+        // As `reload_openqa` would.
         session.metadata_mut().openqa_mut().auto = Some(seeded_auto(&log_url));
 
         let args = matches(&Export, &["-f", path_out.to_str().unwrap()]);
@@ -341,7 +324,6 @@ mod tests {
             written.contains("Results from openQA jobs"),
             "pp block missing:\n{written}"
         );
-        // The per-job install log was downloaded from the mock and written.
         let logfile = dir
             .path()
             .join("SUSE:Maintenance:1:1")
@@ -366,17 +348,15 @@ mod tests {
     }
 
     /// The Kernel branch must read the report's `openqa.kernel` list and render
-    /// its result matrix — not export against an empty `Vec::new()`. Seeds one
-    /// real `KernelOpenQA` (populated from a mock openQA `/api/v1/jobs`) into the
-    /// holder and asserts its `pp` matrix lands under `regression tests:`.
-    /// Regression guard for the `Vec::new(), None` stub.
+    /// its matrix, not export against an empty `Vec::new()`. Guards against a
+    /// regression to the `Vec::new(), None` stub.
     #[tokio::test]
     async fn kernel_reads_holder_and_renders_matrix() {
         use mtui_datasources::{HttpClient, VerifyPolicy};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // A mock openQA returning one passing kernel LTP job → a matrix line.
+        // One passing kernel LTP job → one matrix line.
         let oqa = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/jobs"))
@@ -399,7 +379,6 @@ mod tests {
         let path_out = dir.path().join("template.txt");
         std::fs::write(&path_out, "regression tests:\n\nbuild log review:\n").unwrap();
 
-        // Build a real, populated kernel connector against the mock and seed it.
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = HttpClient::new(VerifyPolicy::Default(false)).unwrap();
         let openqa_transport = HttpClient::openqa_transport(VerifyPolicy::Default(false)).unwrap();
@@ -426,7 +405,7 @@ mod tests {
         Export.call(&mut session, &args).await.unwrap();
 
         let written = std::fs::read_to_string(&path_out).unwrap();
-        // The connector's matrix header + row prove the holder was read.
+        // The matrix header + row prove the holder was read.
         assert!(
             written.contains("Results from openQA:"),
             "kernel results header missing:\n{written}"
@@ -464,9 +443,8 @@ mod tests {
         session.config.qem_dashboard_api = format!("{}/api", server.uri());
         session.config.openqa_instance = server.uri();
         let dir = tempfile::tempdir().unwrap();
-        // The manual exporter writes per-host install logs under
-        // `template_dir/<rrid>/install_logs`; keep that inside the tempdir so the
-        // test never pollutes the working tree.
+        // Keeps the per-host install logs the manual exporter writes out of the
+        // working tree.
         session.config.template_dir = dir.path().to_path_buf();
         let path = dir.path().join("template.txt");
         std::fs::write(&path, "source code change review:\n").unwrap();
@@ -475,15 +453,13 @@ mod tests {
         let args = matches(&Export, &["-f", path.to_str().unwrap()]);
         Export.call(&mut session, &args).await.unwrap();
 
-        // The auto result was lazily built and stored on the report holder.
         assert!(session.metadata().openqa().auto.is_some());
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("## export MTUI:"));
     }
 
-    /// #396: a host exported with no recorded package version data must be
-    /// flagged on the operator-visible surface (display/MCP), not only in the
-    /// tracing log — its block is left unverified in the report.
+    /// #396: a host with no recorded package version data must be flagged on the
+    /// operator-visible surface, not only in the tracing log.
     #[tokio::test]
     async fn manual_warns_about_unverified_hosts_on_display() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -507,8 +483,8 @@ mod tests {
     }
 
     /// #437: a host seeded with packages the version query never answered for
-    /// at all must still be flagged — the `packages.is_empty()` check alone
-    /// missed this, reachable when a host dies between seed and check.
+    /// must still be flagged; `packages.is_empty()` alone missed it, reachable
+    /// when a host dies between seed and check.
     #[tokio::test]
     async fn manual_warns_about_seeded_but_unchecked_hosts_on_display() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -534,8 +510,7 @@ mod tests {
         );
     }
 
-    /// Negative control for the #396 WARNING: a host WITH recorded package
-    /// data must not be flagged — kills the warn-unconditionally mutant.
+    /// Negative control killing the warn-unconditionally mutant.
     #[tokio::test]
     async fn manual_does_not_warn_when_package_data_recorded() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -565,8 +540,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_reuses_existing_openqa_auto() {
-        // When the holder already has an "auto" result, export must not rebuild
-        // it (no dashboard call needed).
+        // An existing "auto" result must not be rebuilt.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
         let dir = tempfile::tempdir().unwrap();
@@ -574,7 +548,6 @@ mod tests {
         let path = dir.path().join("template.txt");
         std::fs::write(&path, "source code change review:\n").unwrap();
 
-        // Pre-seed an auto result via a throwaway dashboard.
         let server = dashboard_server("1").await;
         let rrid = session.metadata().rrid().unwrap().clone();
         let http = session.http_client().unwrap();
@@ -593,9 +566,8 @@ mod tests {
             max_parallel,
         ));
 
-        // Now point config at an unreachable dashboard: if export tried to
-        // rebuild, it would still succeed (errors are surfaced), so instead we
-        // assert the pre-seeded result is preserved.
+        // A rebuild would still succeed (errors are folded away), so the
+        // assertion is that the pre-seeded result survives.
         let args = matches(&Export, &["-f", path.to_str().unwrap()]);
         Export.call(&mut session, &args).await.unwrap();
         assert!(session.metadata().openqa().auto.is_some());
@@ -612,15 +584,14 @@ mod tests {
 
     #[test]
     fn opts_out_of_hostless_skip() {
-        // Unlike host-action commands, export must reach `call()` on a host-less
-        // template so its per-workflow rule can run (Auto/Kernel at zero hosts).
+        // It must reach `call()` on a host-less template so its per-workflow
+        // rule can run.
         assert!(!Export.skip_hostless_templates());
     }
 
     #[tokio::test]
     async fn auto_exports_with_zero_hosts() {
-        // The reported bug: `export` on an Auto template with no connected hosts
-        // must still write the template (data comes from openQA), not error.
+        // The data comes from openQA, so zero hosts must still write, not error.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
         session.metadata_mut().base_mut().workflow = Workflow::Auto;
         assert!(session.targets().is_empty());
@@ -637,10 +608,9 @@ mod tests {
 
     #[tokio::test]
     async fn manual_with_zero_hosts_is_skipped_not_errored() {
-        // A Manual template folds per-host logs; with no hosts (and no `-t`) there
-        // is nothing to fold, so export reports and skips it — without touching
-        // the dashboard/openQA (config points nowhere; a real export attempt
-        // would surface an error, proving the early return fired).
+        // Nothing to fold, so it reports and skips without touching the
+        // dashboard — whose config points nowhere, so a real attempt would error
+        // and prove the early return did not fire.
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
         assert!(session.targets().is_empty());
@@ -651,15 +621,14 @@ mod tests {
         let args = matches(&Export, &["-f", path.to_str().unwrap()]);
         Export.call(&mut session, &args).await.unwrap();
 
-        // The template file is left untouched (no export written).
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(
             !written.contains("## export MTUI:"),
             "should not export:\n{written}"
         );
-        // No openQA "auto" was lazily built — the body returned before that.
+        // Nothing was lazily built: the body returned before that.
         assert!(session.metadata().openqa().auto.is_none());
-        // The skip reason reaches the display (not just a swallowed tracing warn).
+        // The skip reason reaches the display, not just a tracing warn.
         assert!(
             buf.contents()
                 .contains("skipped: manual export needs a connected host"),
@@ -670,8 +639,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_with_named_missing_host_still_fails_loudly() {
-        // The host-less skip only applies when no `-t` is named. A typo'd `-t`
-        // on a Manual template must still fail, not be silently skipped.
+        // The host-less skip only applies when no `-t` is named.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
         let dir = tempfile::tempdir().unwrap();

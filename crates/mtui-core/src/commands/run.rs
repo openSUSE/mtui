@@ -13,15 +13,12 @@ use crate::session::Session;
 
 /// Runs a command on a specified host or on all enabled targets.
 ///
-/// The command is dispatched in
-/// parallel across every selected target; after it returns, each host's input
-/// line, exit code, stdout, and any stderr are collected and paged to the
-/// display.
+/// Dispatched in parallel across every selected target; each host's input line,
+/// exit code, stdout and any stderr are then paged to the display.
 ///
-/// The positional command tokens are quoted back together with `shlex::join`
-/// before being sent, so a single token containing shell metacharacters (e.g.
-/// `sh -c "a; b"` or `$(...)`) survives the trip to the remote shell intact
-/// instead of being re-split by it.
+/// The positional tokens are re-quoted with `shlex::join`, so a token carrying
+/// shell metacharacters (`sh -c "a; b"`, `$(...)`) reaches the remote shell
+/// intact instead of being re-split by it.
 pub struct Run;
 
 #[async_trait]
@@ -68,19 +65,15 @@ impl Command for Run {
             return Err(CommandError::NoRefhostsDefined);
         }
 
-        // The operation lock guards the serialized remote transaction. Lock
-        // exactly the selected hosts (not the whole group) and require every one to be
-        // `Acquired` before running: unlike `hostslock`, a `Contended` host is a
-        // blocker here, because the operation lock exists to serialize this
-        // remote transaction — running while another owner holds it would break
-        // that guarantee. A `Failed` (transport error) host is likewise a
-        // blocker. On any non-`Acquired` host we roll back the locks we did
-        // acquire and abort without running.
+        // Every selected host must be `Acquired`. Unlike `hostslock`,
+        // `Contended` and `Failed` block: running while another owner holds the
+        // operation lock breaks the serialization it exists for. Anything else
+        // rolls back and aborts without running.
         let selected: BTreeSet<String> = hosts.iter().cloned().collect();
         let outcomes = targets.lock_selected("", &selected).await;
 
-        // Classify while `targets` is borrowed; defer display writes (which would
-        // be a second `session` borrow) until after the borrow is released.
+        // Classify under the `targets` borrow; display writes would be a second
+        // `session` borrow, so they wait until it is released.
         let mut acquired: BTreeSet<String> = BTreeSet::new();
         let mut blocked: Vec<String> = Vec::new();
         let mut report: Vec<String> = Vec::new();
@@ -102,8 +95,6 @@ impl Command for Run {
         }
 
         if !blocked.is_empty() {
-            // Roll back the locks we acquired this call, then abort without
-            // running the command on any host.
             if !acquired.is_empty() {
                 targets.unlock_selected(&acquired).await;
             }
@@ -121,11 +112,9 @@ impl Command for Run {
         targets.unlock_selected(&selected).await;
 
         let mut output: Vec<String> = Vec::new();
-        // A non-zero remote exit is often expected (this stays `Ok`),
-        // but is collected here — while `targets` is still borrowed —
-        // to append one explicit summary line naming each failed host so the
-        // LLM/user gets an unambiguous signal. Hosts with no command run
-        // (`lastexit() == None`) are skipped.
+        // A non-zero remote exit is often expected, so this stays `Ok` and the
+        // summary line below is the signal. Collected under the `targets`
+        // borrow; hosts that ran nothing are skipped.
         let mut failed: Vec<(String, i16)> = Vec::new();
         for name in &hosts {
             let Some(t) = targets.get(name) else {
@@ -148,12 +137,9 @@ impl Command for Run {
             }
         }
 
-        // Page the aggregated per-host output. Interactive → screen-at-a-time;
-        // headless → every line forwarded unpaged.
         page_output(session, &output).await;
 
         if !failed.is_empty() {
-            // Sorted for determinism.
             failed.sort();
             let summary = failed
                 .iter()
@@ -205,10 +191,9 @@ mod tests {
             "{all:?}"
         );
 
-        // Prefix filter on a host name.
         assert_eq!(Run.complete(&session, "h1", "run h1"), vec!["h1"]);
 
-        // Once -t is on the line it is no longer offered (synonym removal).
+        // Once -t is on the line, neither synonym is offered again.
         let after = Run.complete(&session, "", "run -t h1 ");
         assert!(!after.contains(&"-t".to_owned()) && !after.contains(&"--target".to_owned()));
     }
@@ -227,9 +212,8 @@ mod tests {
         Run.call(&mut session, &args).await.unwrap();
 
         let out = buf.contents();
-        // The exit code and stdout are aggregated per host. `lastin` reflects the
-        // mock's canned (empty-command) log; the issued-command shaping is
-        // asserted separately via a command-echoing mock.
+        // `lastin` here is the mock's canned empty-command log; the issued
+        // command's shaping is asserted by the echoing mock below.
         assert!(out.contains("h1:->"), "missing h1 banner: {out}");
         assert!(out.contains("h2:->"), "missing h2 banner: {out}");
         assert_eq!(out.matches("[0]").count(), 2, "both hosts exit 0: {out}");
@@ -238,7 +222,6 @@ mod tests {
 
     #[tokio::test]
     async fn quotes_metacharacters_as_a_single_token() {
-        // `sh -c "a; b"` must reach the host as one quoted script, not re-split.
         // The mock echoes the exact command it received into `lastin`.
         let (mut session, buf) =
             session_scripting("SUSE:Maintenance:1:1", "h1", "sh -c 'a; b'", "done");
@@ -258,8 +241,8 @@ mod tests {
         use mtui_types::enums::TargetState;
         use mtui_types::hostlog::CommandLog;
 
-        // h1 exits 0, h2 exits 1, h3 exits 127 — the summary lists only the
-        // failures, sorted by hostname, and the command still succeeds.
+        // The summary lists only the failures, sorted, and the command still
+        // succeeds.
         let targets: Vec<Target> = [("h1", 0i16), ("h3", 127), ("h2", 1)]
             .into_iter()
             .map(|(name, code)| {
@@ -300,10 +283,9 @@ mod tests {
         use mtui_types::enums::TargetState;
         use mtui_types::hostlog::CommandLog;
 
-        // Tiny screen so the aggregated output actually needs paging, and a
-        // prompter that answers `q` to quit after the first screen. The FAILED
-        // summary is printed *after* the paged body, so it must survive an early
-        // quit. `ACCTEST_*` is process-global → `#[serial(env)]`.
+        // A tiny screen forces paging and the prompter quits after the first
+        // screen; the FAILED summary prints after the body, so it must survive
+        // that. `ACCTEST_*` is process-global, hence `#[serial(env)]`.
         unsafe {
             std::env::set_var("ACCTEST_COLS", "80");
             std::env::set_var("ACCTEST_ROWS", "3");
@@ -332,7 +314,6 @@ mod tests {
         }
 
         let out = buf.contents();
-        // The summary is unpaged and appended after the (possibly truncated) body.
         assert!(
             out.contains("FAILED on h2 (exit 1)"),
             "summary must survive an early quit: {out}"
@@ -355,8 +336,8 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
-    /// The operation-lock file path a foreign lock is planted at to script a
-    /// `Contended` outcome (mirrors `TARGET_LOCK_PATH` in `mtui-hosts`).
+    /// Where a foreign lock is planted to script a `Contended` outcome; mirrors
+    /// `TARGET_LOCK_PATH` in `mtui-hosts`.
     const LOCK_PATH: &str = "/var/lock/mtui.lock";
 
     use crate::commands::testkit::session_with_targets;
@@ -388,9 +369,8 @@ mod tests {
 
     #[tokio::test]
     async fn contended_host_aborts_without_running_and_rolls_back() {
-        // h1 free (Acquired), h2 foreign-locked (Contended). The whole run must
-        // abort: the command runs on neither host, and h1's acquired lock is
-        // rolled back.
+        // One `Contended` host must abort the whole run: neither host executes,
+        // and h1's acquired lock is rolled back.
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
             vec![free_host("h1"), foreign_locked_host("h2")],
@@ -405,10 +385,8 @@ mod tests {
         assert!(buf.contents().contains("h2: locked by another owner"));
 
         let targets = session.targets_mut();
-        // Neither host ran the command.
         assert!(targets.get("h1").unwrap().lastexit().is_none(), "h1 ran");
         assert!(targets.get("h2").unwrap().lastexit().is_none(), "h2 ran");
-        // h1's acquired lock was rolled back.
         assert!(
             !targets.get_mut("h1").unwrap().is_locked().await.unwrap(),
             "h1 lock not rolled back"
@@ -417,8 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn lock_failure_aborts_without_running_and_rolls_back() {
-        // h1 free (Acquired), h2 transport-failure on lock (Failed). Abort,
-        // don't run, roll back h1.
+        // A `Failed` host aborts on the same terms as a `Contended` one.
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
             vec![free_host("h1"), lock_failing_host("h2")],
@@ -443,8 +420,7 @@ mod tests {
 
     #[tokio::test]
     async fn unselected_bad_host_does_not_block_scoped_run() {
-        // h2 is foreign-locked but NOT selected: `-t h1` must run on h1 only and
-        // never touch h2's lock.
+        // h2 is foreign-locked but unselected, so its lock must stay untouched.
         let (mut session, _buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
             vec![free_host("h1"), foreign_locked_host("h2")],
@@ -462,7 +438,6 @@ mod tests {
             targets.get("h2").unwrap().lastexit().is_none(),
             "unselected h2 must not run"
         );
-        // h2's foreign lock is untouched (still present).
         assert!(
             targets.get_mut("h2").unwrap().is_locked().await.unwrap(),
             "unselected h2 lock must be untouched"
@@ -471,7 +446,6 @@ mod tests {
 
     #[tokio::test]
     async fn all_acquired_runs_and_unlocks_selected() {
-        // Happy path: both hosts lock cleanly, run, then unlock.
         let (mut session, _buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
             vec![free_host("h1"), free_host("h2")],

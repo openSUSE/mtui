@@ -12,25 +12,20 @@ use crate::session::Session;
 /// Downgrades all related packages to the last released version.
 ///
 /// Drives
-/// [`TestReport::perform_downgrade`](mtui_testreport::TestReport::perform_downgrade),
-/// which removes the issue repos, probes each package's available downgrade
-/// version in a single `zypper se -s` invocation, downgrades (per-package for
-/// non-transactional hosts, combined for transactional), runs the check, and
-/// reboots transactional hosts.
+/// [`TestReport::perform_downgrade`](mtui_testreport::TestReport::perform_downgrade):
+/// remove the issue repos, probe each package's available downgrade version in
+/// one `zypper se -s`, downgrade (per-package for non-transactional hosts,
+/// combined for transactional), check, and reboot transactional hosts.
 ///
-/// The post-downgrade verdict is done by the workflow itself:
-/// `perform_downgrade` re-queries versions,
-/// rotates `before = after; after = current` per package, and — crucially —
-/// **aborts loudly** rather than half-rolling back silently. A dead version
-/// probe (an SSH no-output timeout records exit `-1`) or a dead downgrade command
-/// fails the host; any package still at or above the update's `required` version
-/// after the run is named per host at ERROR. Because `drive` maps that
-/// [`UpdateError`](mtui_testreport::UpdateError) onto a `CommandError`, a
-/// half-rollback fails the command for both the REPL and headless (MCP) callers
-/// instead of returning a success-looking log.
+/// It reaches its own verdict and **aborts loudly** rather than half-rolling
+/// back silently: a dead version probe (an SSH no-output timeout records exit
+/// `-1`) or downgrade command fails the host, and any package still at or above
+/// `required` is named per host at ERROR. `drive` maps that
+/// [`UpdateError`](mtui_testreport::UpdateError) onto a `CommandError`, so a
+/// half-rollback fails the command on both surfaces.
 ///
-/// Warning: this command cannot work for new packages (they have no released
-/// version to go back to, so they always appear in the not-downgraded list).
+/// Warning: it cannot work for new packages — with no released version to go
+/// back to they always appear in the not-downgraded list.
 pub struct Downgrade;
 
 #[async_trait]
@@ -109,8 +104,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_hosts_is_no_refhosts_defined() {
-        // Loaded report but no hosts: passes the requires_update guard, then the
-        // empty selection yields NoRefhostsDefined.
+        // Past the requires_update guard, the empty selection is the error.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
         let args = matches(&Downgrade, &[]);
         let err = Downgrade.call(&mut session, &args).await.unwrap_err();
@@ -119,7 +113,6 @@ mod tests {
 
     #[tokio::test]
     async fn no_template_loaded_errors() {
-        // No report loaded → requires_update guard fires first.
         let (mut session, _buf) = empty_session();
         let args = matches(&Downgrade, &[]);
         let err = Downgrade.call(&mut session, &args).await.unwrap_err();

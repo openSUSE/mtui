@@ -1,28 +1,20 @@
 //! The update-workflow engine: action command tables, post-run check tables,
 //! and the `${}` command-template helper.
 //!
-//! ## Model
+//! Two families of tables keyed by a `(release, transactional)` tuple:
+//! **actions** ([`actions`]) map a key to `${}` command-template strings and
+//! raise a role-specific `MissingDoerError` on an unknown one; **checks**
+//! ([`checks`]) map the same key to a function over
+//! `(hostname, stdout, stdin, stderr, exitcode)` that raises [`UpdateError`] on
+//! a recognised failure.
 //!
-//! The workflow is modelled as two families of tables keyed by a
-//! `(release, transactional)` tuple:
-//!
-//! * **actions** ([`actions`]) map a key to a set of `${}` command-template
-//!   strings (`command`, and — depending on the action — `reboot`,
-//!   `installed_only`, `list_command`). They are stored in a table
-//!   that raises a role-specific `MissingDoerError` on an unknown key.
-//! * **checks** ([`checks`]) map the same key to a function
-//!   `(hostname, stdout, stdin, stderr, exitcode) -> None` that raises
-//!   [`UpdateError`] when it recognises a failure.
-//!
-//! ## How the tables reach the hosts
-//!
-//! [`WorkflowRegistry`] implements three seams over these tables: the crate-local
-//! [`DoerProvider`] / [`CheckProvider`] (used directly by the bespoke
+//! [`WorkflowRegistry`] implements three seams over them: the crate-local
+//! [`DoerProvider`] / [`CheckProvider`] (used by the bespoke
 //! prepare/update/downgrade flows) and `mtui_hosts::PlanProvider` (used by the
-//! shared install/uninstall template). The `PlanProvider` impl lives in this
-//! crate because the trait is foreign and the type is local — and because the
-//! check tables' `CheckArgs` fields are `pub(crate)`. `impl OperationGroup for
-//! HostsGroup` stays in `mtui-hosts`, so that crate never depends on this one.
+//! shared install/uninstall template). The `PlanProvider` impl is legal here
+//! and nowhere else — foreign trait, local type, and the check tables'
+//! `CheckArgs` fields are `pub(crate)`. `impl OperationGroup for HostsGroup`
+//! stays in `mtui-hosts`, so that crate never depends on this one.
 
 pub mod actions;
 pub mod checks;
@@ -33,30 +25,26 @@ use thiserror::Error;
 
 pub use checks::Diagnostic;
 
-/// The lookup key shared by every action and check table.
-///
-/// The key is a `(str, bool)` pair: a *release* token — a product
-/// major version (`"11"`, `"12"`, `"15"`, `"16"`), the package-manager family
-/// `"YUM"`, or `"slmicro"` — paired with a *transactional* flag (read-only-root
-/// hosts, e.g. SL Micro). The `Vec`-free `(String, bool)` here keeps ownership
-/// simple; lookups accept `(&str, bool)`.
+/// The lookup key shared by every action and check table: a *release* token —
+/// a product major version (`"11"`, `"12"`, `"15"`, `"16"`), the
+/// package-manager family `"YUM"`, or `"slmicro"` — paired with a
+/// *transactional* flag (read-only-root hosts, e.g. SL Micro). Lookups accept
+/// `(&str, bool)`.
 pub(crate) type WorkflowKey = (String, bool);
 
 /// A failure recognised by a post-run [`checks`] function.
 ///
-/// Its
-/// `Display` renders `"{host}: {reason}"` when a host is
-/// present, otherwise just `"{reason}"`. The `reason` strings are diagnoses
-/// shown to an operator and asserted on by tests ("package not found", "update
-/// stack locked", "RPM Error", "Dependency Error", "could not determine what to
-/// patch", "Unknown Error", "Unspecified Error", and the per-role never-ran
-/// verdicts "update/downgrade/prepare command timed out or failed to run" plus
-/// install/uninstall's role-neutral "command timed out or failed to run"); no
-/// code branches on them, so
-/// a check is free to pick the most accurate one for a given transcript. What
-/// *is* a contract is the `UpdateFailure` variant a failure routes to, which
-/// decides whether the group is rolled back — which is why the probe failure
-/// travels as the typed `probe_failed` flag and not as its string.
+/// `Display` renders `"{host}: {reason}"`, or just `"{reason}"` with no host.
+/// The `reason` strings are operator-facing diagnoses asserted on by tests
+/// ("package not found", "update stack locked", "RPM Error", "Dependency
+/// Error", "could not determine what to patch", "Unknown Error", "Unspecified
+/// Error", the per-role never-ran verdicts "update/downgrade/prepare command
+/// timed out or failed to run" and install/uninstall's role-neutral "command
+/// timed out or failed to run"); no code branches on them, so a check may pick
+/// the most accurate one for a transcript. The contract is the `UpdateFailure`
+/// variant a failure routes to, which decides whether the group is rolled back
+/// — hence the probe failure travelling as the typed `probe_failed` flag rather
+/// than as its string.
 #[derive(Debug, Error, PartialEq, Eq, Clone)]
 pub struct UpdateError {
     /// The failure reason: a short diagnosis for the operator, not a value
@@ -65,21 +53,17 @@ pub struct UpdateError {
     /// The host the command ran on, if known.
     pub(crate) host: Option<String>,
     /// `true` when the flow stopped at a cancellation checkpoint rather than
-    /// failing.
-    ///
-    /// Lets the command layer report a cancelled flow as cancelled *without*
-    /// inferring it from the session token — inferring would misreport a
-    /// genuine host failure that merely coincided with a cancel.
+    /// failing. Lets the command layer report a cancel *without* inferring it
+    /// from the session token, which would misreport a genuine host failure
+    /// that merely coincided with a cancel.
     pub(crate) cancelled: bool,
-    /// `true` when the update command ran but never dispatched a patch,
-    /// because it could not work out what to patch (`checks::update`'s
-    /// `probe_failure`).
+    /// `true` when the update command ran but could not work out what to patch,
+    /// so dispatched none (`checks::update`'s `probe_failure`).
     ///
-    /// Carried as a flag for the same reason `cancelled` is: the flow has to
-    /// route this away from the group-wide rollback downgrade, and the only
-    /// alternative — matching on the `reason` string in
-    /// `reports::update_flow` — would be the first place in the tree where
-    /// control flow depended on the text of a reason.
+    /// A flag for the same reason `cancelled` is: the flow must route this away
+    /// from the group-wide rollback downgrade, and the alternative — matching
+    /// on the `reason` string — would be the first place in the tree where
+    /// control flow depended on a reason's text.
     pub(crate) probe_failed: bool,
 }
 
@@ -112,11 +96,9 @@ impl UpdateError {
         self.cancelled
     }
 
-    /// Builds an [`UpdateError`] for an update that could not determine what
-    /// to patch, so never dispatched one.
-    ///
-    /// The flag is what `reports::update_flow` routes on; see
-    /// [`probe_failed`](Self::probe_failed).
+    /// Builds an [`UpdateError`] for an update that could not determine what to
+    /// patch, so never dispatched one. The flag is what `reports::update_flow`
+    /// routes on; see [`probe_failed`](Self::probe_failed).
     #[must_use]
     pub(crate) fn probe_failure(reason: impl Into<String>, host: impl Into<String>) -> Self {
         Self {
@@ -195,10 +177,8 @@ impl Role {
         }
     }
 
-    /// Builds the role's "missing doer" [`HostError`] for `release`.
-    ///
-    /// The per-role `Missing*Error` for an unknown `(release, transactional)`
-    /// key.
+    /// Builds the role's "missing doer" [`HostError`] for an unknown
+    /// `(release, transactional)` key.
     #[must_use]
     fn missing_error(self, release: &str) -> HostError {
         let release = release.to_owned();
@@ -215,10 +195,9 @@ impl Role {
 /// The injectable seam that resolves an action's command templates for a
 /// `(release, transactional)` key.
 ///
-/// Implemented by [`WorkflowRegistry`] over the [`actions`] tables. The
+/// Implemented by [`WorkflowRegistry`] over the [`actions`] tables; the
 /// install/uninstall path reaches it through that type's
-/// `mtui_hosts::PlanProvider` impl, so `OperationGroup::plans` can build a
-/// `mtui_hosts::Doer` without `mtui-hosts` depending on this crate.
+/// `mtui_hosts::PlanProvider` impl.
 pub trait DoerProvider: Send + Sync {
     /// Resolves the action command set for `role` at `(release, transactional)`.
     ///
@@ -237,22 +216,20 @@ pub trait DoerProvider: Send + Sync {
 /// The injectable seam that resolves a post-run check for a
 /// `(release, transactional)` key.
 ///
-/// Implemented by [`WorkflowRegistry`] over the [`checks`] tables. A check is
-/// returned as a boxed function; an unknown key yields `None`, which the caller
-/// treats as "no check to run".
+/// Implemented by [`WorkflowRegistry`] over the [`checks`] tables. An unknown
+/// key yields `None`, which the caller treats as "no check to run".
 pub trait CheckProvider: Send + Sync {
     /// Resolves the post-run check for `role` at `(release, transactional)`, or
     /// `None` when no check is registered for the key.
     fn check(&self, role: Role, release: &str, transactional: bool) -> Option<checks::CheckFn>;
 }
 
-/// The default [`DoerProvider`] / [`CheckProvider`], backed by the
-/// [`actions`] and [`checks`] tables.
+/// The default [`DoerProvider`] / [`CheckProvider`], backed by the [`actions`]
+/// and [`checks`] tables.
 ///
 /// The concrete registry every flow builds and, for install/uninstall, injects
-/// into the `HostsGroup` as a `mtui_hosts::PlanProvider`. It carries the
-/// prepare-only `force` / `testing` flags (the other actions ignore them),
-/// threading them into the `prepare` doers.
+/// into the `HostsGroup` as a `mtui_hosts::PlanProvider`. Carries the
+/// prepare-only `force` / `testing` flags, which the other actions ignore.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WorkflowRegistry {
     /// The `--force-resolution` flag threaded into `prepare` doers.
@@ -292,8 +269,7 @@ impl DoerProvider for WorkflowRegistry {
 impl CheckProvider for WorkflowRegistry {
     fn check(&self, role: Role, release: &str, transactional: bool) -> Option<checks::CheckFn> {
         match role {
-            // Upstream's uninstaller consults the *install* checks; install and
-            // uninstall share the same check table.
+            // Install and uninstall share one check table.
             Role::Install | Role::Uninstall => {
                 checks::install::install_check(release, transactional)
             }
@@ -307,14 +283,10 @@ impl CheckProvider for WorkflowRegistry {
 /// Adapts the registry to the `mtui-hosts` install/uninstall template seam.
 ///
 /// [`mtui_hosts::Operation`] resolves each host's command through
-/// [`mtui_hosts::PlanProvider`], a trait declared in `mtui-hosts` purely in
-/// terms of `mtui-hosts` types so that crate never has to depend on this one.
-/// This impl is the other half: it is legal here (foreign trait, local type)
-/// and nowhere else, because the check tables' `CheckArgs` fields are
-/// `pub(crate)`.
-///
-/// Injected by `update_flow::perform_install` / `perform_uninstall` immediately
-/// before the template runs.
+/// [`mtui_hosts::PlanProvider`], declared in `mtui-hosts` purely in terms of
+/// `mtui-hosts` types so that crate never depends on this one. Injected by
+/// `update_flow::perform_install` / `perform_uninstall` immediately before the
+/// template runs.
 impl mtui_hosts::PlanProvider for WorkflowRegistry {
     fn doer(
         &self,
@@ -322,22 +294,20 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
         release: &str,
         transactional: bool,
     ) -> Result<mtui_hosts::Doer, HostError> {
-        // An unrecognised role string cannot resolve to a table; report it as a
-        // missing installer rather than panicking. Only "installer" and
-        // "uninstaller" ever reach here (`Operation::role`).
+        // Only "installer" and "uninstaller" ever reach here
+        // (`Operation::role`); anything else is reported rather than panicked on.
         let Some(role) = Role::from_operation_role(role) else {
             return Err(HostError::MissingInstaller {
                 release: release.to_owned(),
             });
         };
         let commands = DoerProvider::doer(self, role, release, transactional)?;
-        // The raw templates go across the seam, not rendered strings: the
-        // package list is only known inside `mtui-hosts`, at
-        // `Operation::collect` time. `Doer` substitutes `$packages` with a plain
-        // `replace`, which agrees with this crate's [`substitute`]
-        // semantics for every install/uninstall template (each holds exactly one
-        // `$packages` and no `$$` or `${}`); `doer_templates_render_like_the_action_tables`
-        // pins that agreement.
+        // Raw templates, not rendered strings: the package list is only known
+        // inside `mtui-hosts`, at `Operation::collect` time. `Doer` substitutes
+        // `$packages` with a plain `replace`, which agrees with this crate's
+        // substitution for every install/uninstall template (each holds exactly
+        // one `$packages` and no `$$` or `${}`), as
+        // `doer_templates_render_like_the_action_tables` pins.
         Ok(mtui_hosts::Doer::new(
             commands.command_template(),
             // Only read back for a transactional host, which is exactly when the
@@ -379,18 +349,14 @@ impl mtui_hosts::PlanProvider for WorkflowRegistry {
                     }),
                 }
             }
-            // Defensive only: every key with an installer or uninstaller now
-            // has an install-table check (#406 registered the last two,
-            // `slmicro` and `YUM`), so no real key reaches here. It stays for
-            // the window in which a doer is added before its check — falling
-            // back to the exit code alone, which is what this arm has always
-            // done. Never "any stderr is a failure": `transactional-update`
-            // and `yum` both write progress and warnings to stderr on a
-            // successful run.
-            //
-            // Unreachable in production means untested by the flows, so
-            // `plan_provider_check_falls_back_to_the_exit_code_for_an_unknown_key`
-            // drives it directly.
+            // Defensive only: since #406 every key with an installer or
+            // uninstaller has an install-table check, so no real key reaches
+            // here. It stays for the window in which a doer is added before its
+            // check, falling back to the exit code alone — never "any stderr is
+            // a failure", which `transactional-update` and `yum` both produce on
+            // a successful run. Driven directly by
+            // `plan_provider_check_falls_back_to_the_exit_code_for_an_unknown_key`,
+            // since nothing in production reaches it.
             None if a.exitcode != 0 => Err(mtui_hosts::CheckFailure::new(format!(
                 "{op} command failed"
             ))),
@@ -526,20 +492,18 @@ mod tests {
     #[test]
     fn registry_check_unknown_key_is_none() {
         let reg = WorkflowRegistry::default();
-        // Was `("slmicro", true)` — which is now a *registered* update key, so
-        // it no longer demonstrates anything. Use keys with no doer either.
+        // Keys with no doer either: `("slmicro", true)` is now a *registered*
+        // update key and would demonstrate nothing.
         assert!(reg.check(Role::Update, "nonesuch", false).is_none());
         assert!(reg.check(Role::Update, "15", true).is_none());
     }
 
     #[test]
     fn registry_resolves_the_update_checks_that_used_to_be_missing() {
-        // `("slmicro", true)` and `("YUM", false)` have had an *updater* since
-        // the port but no check, so `run_checks` skipped them via its
-        // `else { continue }` and `update` reported success on those hosts
-        // whatever the command did. Pins the table wiring, not just the
-        // function: resolving through the registry is the path `run_checks`
-        // actually takes.
+        // `("slmicro", true)` and `("YUM", false)` had an *updater* but no
+        // check, so `run_checks` skipped them and `update` reported success on
+        // those hosts whatever the command did. Resolved through the registry,
+        // the path `run_checks` takes, so the table wiring is pinned too.
         let reg = WorkflowRegistry::default();
         assert!(reg.check(Role::Update, "slmicro", true).is_some());
         assert!(reg.check(Role::Update, "YUM", false).is_some());
@@ -547,16 +511,12 @@ mod tests {
 
     #[test]
     fn registry_resolves_the_prepare_and_install_checks_that_used_to_be_missing() {
-        // The sibling holes to the `update` ones above (#406). Both keys have
-        // had a preparer, an installer and an uninstaller since the port but no
-        // check for any of the three: `prepare` skipped the host in
-        // `run_checks`, while `install`/`uninstall` fell through to the
-        // `PlanProvider` adapter's exit-code-only fallback.
-        //
-        // Resolved through the registry, not the tables, because that is the
-        // path `run_checks` and the adapter actually take — and `Uninstall`
-        // is listed explicitly because it reaches the *install* table through
-        // this match, which a role-blind rewrite would silently break.
+        // The sibling holes to the `update` ones above (#406): both keys had a
+        // preparer, installer and uninstaller but no check, so `prepare` skipped
+        // the host and `install`/`uninstall` fell through to the `PlanProvider`
+        // adapter's exit-code-only fallback. `Uninstall` is listed explicitly
+        // because it reaches the *install* table through the registry's match,
+        // which a role-blind rewrite would silently break.
         let reg = WorkflowRegistry::default();
         for (release, transactional) in [("slmicro", true), ("YUM", false)] {
             for role in [Role::Prepare, Role::Install, Role::Uninstall] {
@@ -592,12 +552,10 @@ mod tests {
         use mtui_hosts::{Doer, PlanProvider};
 
         let reg = WorkflowRegistry::default();
-        // The role string must actually select the *matching* table: an
-        // adapter comparing the two doers for mere inequality would also pass
-        // on a role swap (installer <-> uninstaller). Compare each resolved
-        // doer against one built straight from that role's own table entry, so
-        // only the correct mapping passes. `Doer::command` / `Doer::reboot`
-        // are crate-private, so `Debug` is the only way to compare from here.
+        // Each resolved doer is compared against one built straight from that
+        // role's own table entry: merely asserting the two differ would also
+        // pass on a role swap. `Doer::command` / `Doer::reboot` are
+        // crate-private, so `Debug` is the only way to compare from here.
         let install = PlanProvider::doer(&reg, "installer", "15", false).expect("installer");
         let uninstall = PlanProvider::doer(&reg, "uninstaller", "15", false).expect("uninstaller");
 
@@ -622,11 +580,9 @@ mod tests {
     fn plan_provider_check_falls_back_to_the_exit_code_for_an_unknown_key() {
         use mtui_hosts::PlanProvider;
 
-        // Since #406 every key with an install/uninstall doer also has a
-        // check, so no production key reaches the adapter's `None` arms. They
-        // stay as the safety net for a doer added before its check — and a
-        // safety net nothing exercises is one nobody notices breaking, hence
-        // this direct drive.
+        // Since #406 no production key reaches the adapter's `None` arms; they
+        // are the safety net for a doer added before its check, and a net
+        // nothing exercises is one nobody notices breaking.
         let reg = WorkflowRegistry::default();
         let mut check = PlanProvider::check(&reg, "installer", "nonesuch", false);
         let args = |exitcode| mtui_hosts::CheckArgs {
@@ -643,7 +599,7 @@ mod tests {
         );
         assert!(check(args(0)).is_ok(), "a clean exit passes");
         // Not "any stderr is a failure": that rule would fail every SL Micro
-        // install, which is why it is spelled out here as well as in the flow.
+        // install.
         let chatty = mtui_hosts::CheckArgs {
             hostname: "h1",
             stdout: "",
@@ -674,10 +630,9 @@ mod tests {
     }
 
     /// `mtui_hosts::Doer` substitutes `$packages` with a plain `str::replace`,
-    /// while this crate renders the same templates through [`substitute`]
-    /// semantics. They agree for every install/uninstall entry today; this
-    /// fails if a future template gains `$$` or `${}`, which `replace` would
-    /// mangle.
+    /// while this crate renders the same templates through `substitute`. They
+    /// agree for every install/uninstall entry today; this fails if a future
+    /// template gains `$$` or `${}`, which `replace` would mangle.
     #[test]
     fn doer_templates_render_like_the_action_tables() {
         use std::collections::HashMap;

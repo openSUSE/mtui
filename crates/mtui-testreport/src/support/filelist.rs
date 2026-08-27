@@ -1,18 +1,13 @@
 //! A line-buffer that can be loaded from and saved back to a file.
 //!
-//! Its elements are the file's lines **with their trailing newline
-//! preserved**, matching Python's `readlines()` line-splitting. The
-//! exporters mutate this buffer in place — inserting result blocks, links,
+//! Its elements are the file's lines **with their trailing newline preserved**.
+//! The exporters mutate this buffer in place — inserting result blocks, links
 //! and system info — then persist it.
 //!
-//! A hash of the content captured at load time is tracked so a write can be
-//! skipped when nothing changed:
-//!
-//! * `FileList::is_dirty` reports whether the buffer differs from what was
-//!   loaded, and
-//! * `FileList::write_if_dirty` performs the conditional atomic write.
-//!
-//! [`FileList::write`] always writes unconditionally.
+//! A hash of the content captured at load time lets a write be skipped when
+//! nothing changed: `FileList::is_dirty` reports whether the buffer differs
+//! from what was loaded and `FileList::write_if_dirty` does the conditional
+//! atomic write; [`FileList::write`] always writes.
 
 use std::io;
 use std::ops::{Deref, DerefMut};
@@ -33,9 +28,8 @@ pub struct FileList {
 impl FileList {
     /// Builds a [`FileList`] from in-memory lines bound to `path`.
     ///
-    /// Used by tests and callers that synthesize a template rather than reading
-    /// one from disk. The load snapshot is taken from `lines` as given, so a
-    /// freshly built list is not considered dirty until mutated.
+    /// The load snapshot is taken from `lines` as given, so a freshly built
+    /// list is not dirty until mutated.
     #[must_use]
     pub fn from_lines(path: impl Into<PathBuf>, lines: Vec<String>) -> Self {
         let loaded = lines.concat();
@@ -46,11 +40,8 @@ impl FileList {
         }
     }
 
-    /// Loads a [`FileList`] from `path`, splitting into lines that each retain a
-    /// trailing `\n` (matching Python `readlines()`).
-    ///
-    /// Invalid UTF-8 is replaced with the Unicode replacement character
-    /// (lossy decoding).
+    /// Loads a [`FileList`] from `path`, splitting into lines that each retain
+    /// a trailing `\n`. Invalid UTF-8 is decoded lossily.
     ///
     /// # Errors
     ///
@@ -80,10 +71,8 @@ impl FileList {
         self.lines.concat()
     }
 
-    /// Atomically writes the current content to the bound path (always).
-    ///
-    /// Always writes, regardless of whether the content changed. After a
-    /// successful write the load snapshot is refreshed.
+    /// Atomically writes the current content to the bound path, regardless of
+    /// whether it changed, refreshing the load snapshot on success.
     ///
     /// # Errors
     ///
@@ -110,10 +99,9 @@ impl DerefMut for FileList {
     }
 }
 
-/// Splits `text` into lines that each keep their trailing `\n`, matching
-/// Python's `str.splitlines(keepends=True)` for the `\n` case (mtui templates
-/// are Unix-newline text). A trailing chunk without a newline is kept as its
-/// own final element; an empty string yields no lines.
+/// Splits `text` into lines that each keep their trailing `\n` (mtui templates
+/// are Unix-newline text). A trailing chunk without a newline becomes the final
+/// element; an empty string yields no lines.
 fn split_keepends(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut start = 0;

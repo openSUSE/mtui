@@ -15,12 +15,11 @@ const AGGREGATED_GROUP_CHOICES: &[&str] = &["core", "containers", "yast", "secur
 
 /// Prints an openQA / QAM Dashboard / build-checks overview for the loaded MU.
 ///
-/// Fetches three sections — single incidents, aggregated updates, build
-/// checks — and prints them to the REPL; `--export` also injects the plain-text
-/// block into the loaded testreport's `log` under `regression tests:`.
+/// Fetches and prints three sections — single incidents, aggregated updates,
+/// build checks; `--export` also injects the plain-text block into the loaded
+/// testreport's `log` under `regression tests:`.
 ///
-/// The `--no-fetch` cache reuse is not yet implemented; passing `--no-fetch`
-/// here logs and fetches anyway.
+/// `--no-fetch` cache reuse is not implemented: it logs and fetches anyway.
 pub struct OpenQAOverview;
 
 #[async_trait]
@@ -161,8 +160,8 @@ impl Command for OpenQAOverview {
         )
         .map_err(|e| CommandError::Other(format!("could not build openQA client: {e}")))?;
 
-        // incident_id is maintenance_id ("1.2" for SLFO); effective id falls back
-        // to the review id (the Gitea PR number) when maintenance_id is non-int.
+        // SLFO's maintenance id is not an integer ("1.2"), so fall back to the
+        // review id (the Gitea PR number) there.
         let incident_id = rrid.maintenance_id.clone();
         let request_id = rrid.review_id;
         let product = rrid.kind.as_str().to_owned();
@@ -188,7 +187,6 @@ impl Command for OpenQAOverview {
         let max_oqa_parallel = session.config.max_oqa_parallel as usize;
         let test_pattern = args.get_one::<String>("test_pattern").map(String::as_str);
 
-        // build_checks packages depend only on metadata + the QEM build string.
         let mut packages = session.metadata().get_package_list();
         if packages.is_empty()
             && !build.is_empty()
@@ -197,9 +195,8 @@ impl Command for OpenQAOverview {
             packages = vec![last.to_owned()];
         }
 
-        // The openQA (single/aggregated) and QAM (build_checks) fetches are
-        // independent; run them concurrently, then render in the fixed order
-        // below so on-screen output is byte-identical to the sequential flow.
+        // Independent fetches, so concurrent — but rendered in a fixed order
+        // below, keeping the output byte-identical to a sequential flow.
         let openqa_versions = versions.as_ref().filter(|v| !v.is_empty());
         let single_fut = async {
             match openqa_versions {
@@ -323,7 +320,6 @@ fn export_to_testreport(
         build_checks,
         no_aggregated,
     );
-    // `FileList` derefs to `Vec<String>`, which `inject_overview` mutates in place.
     if modified {
         file.write().map_err(|e| {
             CommandError::Other(format!(
@@ -334,8 +330,8 @@ fn export_to_testreport(
         let msg = format!("openqa_overview block written to {}", path.display());
         session.display.println(&msg);
     } else {
-        // Not a hard failure: the report simply has no place to inject; surface
-        // it to the user rather than silently succeeding.
+        // Not a hard failure — there is simply nowhere to inject — but say so
+        // rather than succeed silently.
         let msg = session.display.yellow(&format!(
             "Could not locate 'regression tests:' section in {}; overview NOT exported",
             path.display()
@@ -363,8 +359,8 @@ fn derive_qam_url(reports_url: &str) -> String {
         .to_owned()
 }
 
-/// Title-cases each whitespace-separated word, scoped to
-/// the simple group names used here.
+/// Title-cases each whitespace-separated word, scoped to the simple group names
+/// used here.
 fn title_case(s: &str) -> String {
     s.split(' ')
         .map(|w| {
@@ -378,10 +374,8 @@ fn title_case(s: &str) -> String {
         .join(" ")
 }
 
-/// Prints one PASSED/FAILED/RUNNING/MISSING row: the `version -> url` (or bare
-/// `version`) line, then the status label colored by state — `FAILED (n jobs)`
-/// red, `RUNNING/SCHEDULED (n jobs)` yellow, `PASSED` green — then the
-/// optional note in yellow.
+/// Prints one PASSED/FAILED/RUNNING/MISSING row: `version -> url` (or a bare
+/// `version`), the status label colored by state, then any note in yellow.
 fn print_version_row(session: &mut Session, row: &oqa::VersionResult) {
     if row.status == "missing" {
         let msg = session
@@ -454,7 +448,6 @@ mod tests {
             derive_qam_url("https://qam.suse.de/testreports"),
             "https://qam.suse.de"
         );
-        // No suffix → unchanged (minus trailing slash).
         assert_eq!(derive_dashboard_url("http://x/"), "http://x");
     }
 
@@ -500,7 +493,7 @@ mod tests {
         let (mut session, buf) = empty_session();
         print_version_row(&mut session, &version_row("failed", "", 0, 0, ""));
         let out = buf.contents();
-        // No url -> bare version line, not "version -> note".
+        // No url → a bare version line, not "version -> note".
         assert!(out.contains("15-SP5\n"));
         assert!(out.contains("FAILED\n"));
         assert!(!out.contains("FAILED ("));
@@ -532,7 +525,6 @@ mod tests {
         print_version_row(&mut session, &version_row("missing", "", 0, 0, "no build"));
         let out = buf.contents();
         assert!(out.contains("15-SP5 -> no build"));
-        // Missing rows never emit a status label.
         assert!(!out.contains("PASSED"));
         assert!(!out.contains("FAILED"));
     }
@@ -549,7 +541,6 @@ mod tests {
 
         print_version_row(&mut session, &version_row("failed", "", 1, 0, ""));
         let out = buf.contents();
-        // Red ANSI escape wraps the FAILED label.
         assert!(out.contains('\u{1b}'), "expected ANSI escape, got: {out:?}");
         assert!(out.contains("FAILED (1 jobs)"));
     }
@@ -600,7 +591,6 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        // Dashboard incident_settings → a build + one version.
         Mock::given(method("GET"))
             .and(path_regex(r"^/api/incident_settings/.*$"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
@@ -608,8 +598,8 @@ mod tests {
             ])))
             .mount(&server)
             .await;
-        // openQA job groups + jobs: return empty groups/jobs so single_incidents
-        // yields rows without failing, and build_checks index 404s (no checks).
+        // Empty groups/jobs so `single_incidents` yields rows without failing,
+        // and the build_checks index 404s.
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "JobGroups": [], "jobs": []
@@ -617,7 +607,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        // A loaded report whose `log` has a regression-tests section for export.
+        // A `log` with a regression-tests section for the export to find.
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("log");
         std::fs::write(
@@ -645,14 +635,13 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("Single incidents - Core"), "{out}");
         assert!(out.contains("Build checks:"), "{out}");
-        // The export path wrote the overview block into the log.
         let written = std::fs::read_to_string(&log).unwrap();
         assert!(written.contains("OpenQA Overview"), "{written}");
     }
 
     #[tokio::test]
     async fn export_without_report_path_is_an_error() {
-        // No path on the report → export surfaces an Err (not a silent no-op).
+        // No path on the report: an Err, not a silent no-op.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let err = export_to_testreport(&mut session, &[], &[], &[], false).unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
@@ -664,8 +653,7 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        // Any dashboard call 500s → get_incident_info errors → command surfaces
-        // the failure as Err (not an empty Ok the LLM would hallucinate over).
+        // An Err, not an empty Ok the LLM would hallucinate over.
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
@@ -689,8 +677,8 @@ mod tests {
 
     #[tokio::test]
     async fn export_without_regression_section_reports_to_display() {
-        // A report whose `log` lacks the regression-tests section: inject_overview
-        // returns false, so nothing is written but the user is told, not silence.
+        // With no regression-tests section `inject_overview` returns false, so
+        // nothing is written — but the user is told rather than left in silence.
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("log");
         std::fs::write(&log, "comment: hi\n").unwrap();

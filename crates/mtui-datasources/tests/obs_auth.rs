@@ -1,12 +1,11 @@
 //! Integration tests for OBS SSH-signature auth
 //! (`mtui_datasources::obs::auth`).
 //!
-//! Covers the
-//! retry-once 401 Signature flow through the real transport (`wiremock`), the
-//! "no Signature scheme → no retry" / "non-401 passes through" branches, and
-//! the ssh-agent selection paths (by SHA256 fingerprint, by `.pub`-matched
-//! counterpart, `.pub`-only on disk) plus their fail-closed cases — all offline
-//! via a mock [`AgentKeys`] (no live ssh-agent). Also asserts the Authorization
+//! Covers the retry-once 401 Signature flow through the real transport
+//! (`wiremock`), the "no Signature scheme → no retry" / "non-401 passes through"
+//! branches, and the ssh-agent selection paths (SHA256 fingerprint,
+//! `.pub`-matched counterpart, `.pub`-only on disk) plus their fail-closed
+//! cases — all offline via a mock [`AgentKeys`]. Also asserts the Authorization
 //! header/signature is never logged.
 
 use std::path::{Path, PathBuf};
@@ -29,10 +28,10 @@ fn fixture(name: &str) -> PathBuf {
 
 /// A mock ssh-agent holding a set of decrypted private keys, signing in-process.
 ///
-/// Reproduces a real agent's behavior (raw signature bytes, RSA→rsa-sha2-512 via
-/// the `hash_alg` flag) without a socket, so every agent-selection branch runs
-/// offline. A regression that mishandled the agent signature packing would fail
-/// the `_assert_authz_verifies` round-trip here.
+/// Reproduces a real agent's behaviour (raw signature bytes, RSA→rsa-sha2-512
+/// via the `hash_alg` flag) without a socket, so every agent-selection branch
+/// runs offline. Mishandled signature packing fails the
+/// `_assert_authz_verifies` round-trip.
 struct MockAgent {
     keys: Vec<PrivateKey>,
     fail: bool,
@@ -449,8 +448,8 @@ async fn unusable_key_file_fails_closed() {
         .authorization(REALM)
         .await
         .expect_err("binary key fails");
-    // A non-OpenSSH file surfaces as "not a usable private key" or, if it looks
-    // absent to the loader, the passphrase-protected/agent path — both Config.
+    // A non-OpenSSH file is "not a usable private key", or — if it looks absent
+    // to the loader — takes the agent path; both are Config.
     assert!(matches!(err, ObsError::Config(_)), "got {err:?}");
 }
 

@@ -1,12 +1,10 @@
 //! The native OBS/IBS review backend (direct OBS API, no `osc` subprocess).
 //!
-//! This backend replaces the `osc qam` subprocess wrapper
-//! (`oscqam`) with a native Rust OBS API client. The transport
-//! foundation ([`client`], [`errors`]), the native oscrc
-//! credential reader ([`oscrc`]), the XML models ([`models`]), the
-//! assignment-inference state machine ([`inference`]) and the SSH-signature
-//! auth ([`auth`], [`sshsig`]) have landed; later subtasks add the five QAM
-//! operations.
+//! A native Rust OBS API client in place of the `osc qam` subprocess wrapper:
+//! the transport foundation ([`client`], [`errors`]), the oscrc credential
+//! reader ([`oscrc`]), the XML models ([`models`]), the assignment-inference
+//! state machine ([`inference`]), the SSH-signature auth ([`auth`],
+//! [`sshsig`]) and the QAM operations ([`qam`]).
 
 pub mod auth;
 pub mod client;

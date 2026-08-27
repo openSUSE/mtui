@@ -1,18 +1,11 @@
 //! Action command tables: the per-`(release, transactional)` command templates
 //! for install / uninstall / update / prepare / downgrade.
 //!
-//! ## Reference
-//!
-//! Each action's templates are keyed by `(release, transactional)` and
-//! resolved through `substitute`, preserving `$$`
-//! escaping and `${}` bracing (see [`template`] docs).
-//!
-//! The value type is [`ActionCommands`]: an owning bundle of the command
-//! templates an action can carry. Not every action uses every field —
-//! `installed_only` is prepare-only, `list_command` is downgrade-only, `reboot`
-//! is transactional-only — so absent templates are `None`. Rendering a template
-//! substitutes the variables an action interpolates (`$packages`, `$package`,
-//! `$version`, `$repa`) and returns the ready-to-run command string.
+//! Each action's templates are keyed by `(release, transactional)` and resolved
+//! through `substitute`, preserving `$$` escaping and `${}` bracing (see
+//! [`template`] docs). The value type is [`ActionCommands`]; not every action
+//! uses every field — `installed_only` is prepare-only, `list_command`
+//! downgrade-only, `reboot` transactional-only — so absent templates are `None`.
 //!
 //! [`template`]: crate::update_workflow::template
 
@@ -52,10 +45,8 @@ impl SubstMode {
 
 /// The command templates for one resolved action.
 ///
-/// `command` is always present; the remaining fields are optional and used
-/// only by specific actions. `mode` records whether the
-/// action's call site uses [`Strict`](SubstMode::Strict) or
-/// [`Safe`](SubstMode::Safe) substitution.
+/// `command` is always present; the remaining fields are used only by specific
+/// actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionCommands {
     /// The primary command template, always present.
@@ -119,14 +110,12 @@ impl ActionCommands {
         self.mode.render(&self.command, vars)
     }
 
-    /// Renders [`reboot`](Self::reboot) if present. The reboot template takes no
-    /// variables, so an empty map is passed (always strict — it has no
-    /// placeholders).
+    /// Renders [`reboot`](Self::reboot) if present. The template has no
+    /// placeholders, so it is rendered strictly against an empty map.
     ///
     /// # Errors
     ///
-    /// Propagates [`TemplateError`] (never expected — the reboot template has no
-    /// placeholders).
+    /// Propagates [`TemplateError`]; never expected, for the reason above.
     pub(crate) fn render_reboot(&self) -> Result<Option<String>, TemplateError> {
         match &self.reboot {
             Some(t) => Ok(Some(substitute(t, &HashMap::new())?)),
@@ -136,11 +125,10 @@ impl ActionCommands {
 
     /// The raw, unrendered [`command`](Self::command) template.
     ///
-    /// Needed by the [`PlanProvider`](mtui_hosts::PlanProvider) adapter, which
-    /// hands the template to a [`Doer`](mtui_hosts::Doer) that performs the
-    /// `$packages` substitution itself (the package list is only known inside
-    /// `mtui-hosts`, at
-    /// [`Operation::collect`](mtui_hosts::Operation::collect) time). Prefer
+    /// Needed by the [`PlanProvider`](mtui_hosts::PlanProvider) adapter, whose
+    /// [`Doer`](mtui_hosts::Doer) substitutes `$packages` itself — the package
+    /// list is only known inside `mtui-hosts`, at
+    /// [`Operation::collect`](mtui_hosts::Operation::collect) time. Prefer
     /// [`render_command`](Self::render_command) everywhere else.
     pub(crate) fn command_template(&self) -> &str {
         &self.command
@@ -200,12 +188,11 @@ pub(crate) mod sh_harness {
     use std::process::{Command, Output};
     use std::time::Duration;
 
-    /// Writes `body` to `dir/name` as an executable stub.
-    ///
-    /// Via a temp file `fchmod`ed before the rename, so `dir/name` never names
-    /// a partial or not-yet-executable file. It does not address #483:
-    /// `ETXTBSY` is refused against the *inode*, which the rename carries
-    /// along. [`sh_output`] covers that.
+    /// Writes `body` to `dir/name` as an executable stub, via a temp file
+    /// `fchmod`ed before the rename so `dir/name` never names a partial or
+    /// not-yet-executable file. This does not address #483 — `ETXTBSY` is
+    /// refused against the *inode*, which the rename carries along; see
+    /// [`sh_output`].
     pub(crate) fn write_exe(dir: &Path, name: &str, body: &str) {
         let mut tmp = tempfile::NamedTempFile::new_in(dir).expect("create temp stub");
         tmp.write_all(body.as_bytes()).expect("write stub");
@@ -217,33 +204,29 @@ pub(crate) mod sh_harness {
             .expect("persist stub");
     }
 
-    /// Runs `cmd`, retrying it once if the shell reports `126` — which is how
-    /// an `ETXTBSY` exec surfaces (#483).
+    /// Runs `cmd`, retrying once if the shell reports `126` — how an `ETXTBSY`
+    /// exec surfaces (#483).
     ///
-    /// A sibling test thread's `Command::spawn` forks a child that duplicates
-    /// a write descriptor on a stub written here, and the exec is refused
-    /// until that duplicate dies, so no ordering on the write side can prevent
-    /// it. `126` is safe to retry on because no case drives it: every exit
-    /// knob is a fixed list or a fixed constant, the widest being `update`'s
-    /// probe vocabulary (`1..=8`, `99..=108`, `255`). No case may add a `126`.
+    /// A sibling test thread's `Command::spawn` forks a child holding a
+    /// duplicated write descriptor on a stub written here, and the exec is
+    /// refused until it dies, so no ordering on the write side can prevent it.
+    /// Retrying on `126` is safe because no case drives it: every exit knob is a
+    /// fixed list, the widest being `update`'s probe vocabulary (`1..=8`,
+    /// `99..=108`, `255`). **No case may add a `126`.**
     ///
-    /// The retry clears `MTUI_STUB_DIR`'s `.ran` sentinels first, since the
-    /// cases count invocations, and returns the second run even when it is
-    /// another `126`: that `Output` is the one that agrees with the files the
-    /// case then reads, and the status is `126` either way, so a genuine
-    /// "found but not executable" still surfaces.
+    /// The retry clears `MTUI_STUB_DIR`'s `.ran` sentinels first, since cases
+    /// count invocations, and returns the second run even on another `126`:
+    /// that `Output` agrees with the files the case then reads, and a genuine
+    /// "found but not executable" still surfaces as `126`.
     ///
-    /// **Mitigation, not a fix.** Any exec whose status the template discards
+    /// **Mitigation, not a fix.** An exec whose status the template discards
     /// leaves the script's status untouched, so no retry fires and a case
-    /// asserting on that stub's invocation fails unrescued — in
-    /// `ZYPPER_UPDATE`: `zypper -n lr`, `zypper -n refresh`, both
-    /// `zypper -n patches | grep` transcript lines, and the `zypper -n rr`
-    /// cleanup loop.
-    ///
-    /// Rejected: a module `RwLock` (write across `write_exe`, read across the
-    /// run) would close the race outright, residual included — the only
-    /// forkers here are the harness runs themselves. It would serialise every
-    /// run in the crate's lib suite; the retry costs nothing until a `126`.
+    /// asserting on that stub's invocation fails unrescued — in `ZYPPER_UPDATE`:
+    /// `zypper -n lr`, `zypper -n refresh`, both `zypper -n patches | grep`
+    /// transcript lines, and the `zypper -n rr` cleanup loop. Rejected: a module
+    /// `RwLock` would close the race outright (the only forkers are the harness
+    /// runs themselves) but serialise every run in the crate's lib suite, while
+    /// the retry costs nothing until a `126`.
     pub(crate) fn sh_output(cmd: &mut Command) -> Output {
         let first = cmd.output().expect("run under /bin/sh");
         if first.status.code() != Some(126) {
@@ -256,10 +239,8 @@ pub(crate) mod sh_harness {
         cmd.output().expect("run under /bin/sh")
     }
 
-    /// The stub directory `cmd` is configured with.
-    ///
-    /// Read back off the command so it cannot disagree with the one the stubs
-    /// were written into.
+    /// The stub directory `cmd` is configured with, read back off the command
+    /// so it cannot disagree with the one the stubs were written into.
     fn stub_dir(cmd: &Command) -> PathBuf {
         cmd.get_envs()
             .find_map(|(k, v)| (k == OsStr::new("MTUI_STUB_DIR")).then_some(v))
@@ -292,11 +273,10 @@ pub(crate) mod sh_harness {
 
         #[test]
         fn a_126_is_retried_once_on_a_cleared_sentinel() {
-            // The #483 shape, injected deterministically: the first run fails
-            // the way an ETXTBSY exec does, the second succeeds. Both runs
-            // append to a `.ran` sentinel, so the surviving line count also
-            // pins the clear — without it the retry doubles every invocation
-            // count the harness cases assert on.
+            // The #483 shape, injected deterministically. Both runs append to a
+            // `.ran` sentinel, so the surviving line count also pins the clear —
+            // without it the retry doubles every invocation count the harness
+            // cases assert on.
             let dir = tempfile::tempdir().expect("tempdir");
             let out = run(
                 dir.path(),
@@ -322,11 +302,11 @@ exit 126
         #[test]
         fn a_second_126_surfaces_the_retry_and_stops_there() {
             // 126 is ambiguous — a real "not executable" reports it too — so a
-            // run that fails twice must still report 126, and must not be
-            // retried a third time. `attempts` is not a `.ran` sentinel, so it
-            // survives the clear and counts the runs; the echoed count pins
-            // which run's stdout comes back, and it must be the retry's: the
-            // sentinels the case reads afterwards are the retry's too.
+            // run failing twice must still report 126 and must not be retried a
+            // third time. `attempts` is not a `.ran` sentinel, so it survives
+            // the clear and counts the runs; the echoed count pins that the
+            // retry's stdout is what comes back, matching the sentinels the case
+            // reads afterwards.
             let dir = tempfile::tempdir().expect("tempdir");
             let out = run(
                 dir.path(),
@@ -355,9 +335,8 @@ exit 126
 
         #[test]
         fn a_non_126_failure_is_not_retried() {
-            // The retry is scoped to the one status an ETXTBSY exec produces.
-            // Every other failing status is a case's own subject, and
-            // rerunning one would double its sentinels for nothing.
+            // Every other failing status is a case's own subject, and rerunning
+            // one would double its sentinels for nothing.
             let dir = tempfile::tempdir().expect("tempdir");
             let out = run(
                 dir.path(),
@@ -370,10 +349,10 @@ exit 126
 
         #[test]
         fn write_exe_publishes_the_body_at_0o755_without_writing_the_live_name() {
-            // The three hazards the temp file removes, in one shot: wrong mode,
-            // partial content, and a write seen through the name a concurrent
-            // exec resolves. `witness` is a second link to the first stub's
-            // inode — `fs::write` onto the final name would show through it.
+            // The three hazards the temp file removes: wrong mode, partial
+            // content, and a write seen through the name a concurrent exec
+            // resolves. `witness` is a second link to the first stub's inode —
+            // `fs::write` onto the final name would show through it.
             let dir = tempfile::tempdir().expect("tempdir");
             let stub = dir.path().join("probe");
             let first = "#!/bin/sh\nexit 1\n";

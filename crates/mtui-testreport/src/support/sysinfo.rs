@@ -5,9 +5,8 @@
 //! * [`system_info`] formats a one-line footer appended to a testreport on
 //!   export (`## export`) and reused by `commit` (`committed from`).
 //!
-//! The footer omits any SSH-library token — it carries no useful information
-//! about the run — and instead reports real mtui + system facts: the mtui
-//! version, the detected distro/version, kernel, and the session user.
+//! The footer deliberately carries no SSH-library token (it says nothing about
+//! the run), only the mtui version, distro/version, kernel and session user.
 
 /// The mtui version string, taken from the crate version at build time.
 const MTUI_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -45,10 +44,9 @@ pub fn detect_system() -> (String, String, String) {
 /// Finds the first line beginning with `key` and returns its value with a
 /// single surrounding pair of `"` or `'` stripped.
 ///
-/// An os-release value may be double-quoted, single-quoted, or bare
-/// (`NAME=Fedora` and `VERSION_ID=15.6` are spec-legal). A matching
-/// leading/trailing `"` or `'` pair is stripped; any other value (bare, or
-/// with mismatched delimiters) is returned verbatim.
+/// An os-release value may be double-quoted, single-quoted or bare
+/// (`NAME=Fedora`, `VERSION_ID=15.6` are spec-legal); a value with mismatched
+/// delimiters is returned verbatim.
 fn extract_quoted(content: &str, key: &str) -> Option<String> {
     let line = content.lines().find(|l| l.starts_with(key))?;
     let raw = &line[key.len()..];
@@ -104,8 +102,7 @@ mod tests {
 
     #[test]
     fn extract_leaves_mismatched_delimiters_verbatim() {
-        // A stray leading quote with no matching trailing quote is not stripped;
-        // a literal '|' is not a quote character (the old bug treated it as one).
+        // An unmatched leading quote is not stripped, and `|` is not a quote.
         assert_eq!(
             extract_quoted("NAME=\"oops\n", "NAME=").as_deref(),
             Some("\"oops")

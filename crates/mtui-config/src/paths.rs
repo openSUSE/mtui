@@ -1,28 +1,18 @@
-//! Filesystem path resolution for `mtui-config`.
+//! Filesystem path resolution for `mtui-config`: the ordered config search
+//! paths (`config_search_paths`) and the XDG data directory ([`data_dir`]).
 //!
-//! Two flavours of paths live here:
-//!
-//! * **Config search paths** (`config_search_paths`) — the ordered list of
-//!   candidate config files, later entries overriding earlier ones when merged.
-//! * **User data path** ([`data_dir`]) — the XDG data directory where mtui
-//!   persists per-user state.
-//!
-//! ## Search order
-//!
-//! mtui reads **TOML**; the config filename is always `mtui.toml`. Precedence,
-//! lowest → highest:
+//! The config filename is always `mtui.toml`. Precedence, lowest → highest:
 //!
 //! ```text
 //! /etc/mtui.toml  →  ~/.mtui.toml  →  $XDG_CONFIG_HOME/mtui/mtui.toml
 //! ```
 //!
 //! with `--config <file>` and `$MTUI_CONF` each short-circuiting the chain to a
-//! single file. The home dotfile `~/.mtui.toml` is for operators who prefer a
-//! dotfile over the XDG directory; when both exist the XDG file wins on shared
-//! keys (it is merged last).
+//! single file. The home dotfile is for operators who prefer it to the XDG
+//! directory; when both exist the XDG file wins on shared keys (merged last).
 //!
-//! This module is pure and I/O-free: it only computes paths, it never reads
-//! files (that is [`crate::Config::load`]'s job).
+//! Pure and I/O-free: it computes paths, it never reads files (that is
+//! [`crate::Config::load`]'s job).
 
 use std::path::{Path, PathBuf};
 
@@ -42,11 +32,8 @@ const ENV_TERMS: &str = "MTUI_TERMS_DIR";
 /// (`$XDG_CONFIG_HOME/mtui/mtui.toml`).
 const CONFIG_FILE: &str = "mtui.toml";
 
-/// Expand a leading `~` (and `~/`) to the user's home directory.
-///
-/// Mirrors Python's `Path(...).expanduser()` for the single common case used by
-/// mtui config (`~` / `~/...`). A bare `~user` form is left untouched — mtui has
-/// never relied on it.
+/// Expand a leading `~` (and `~/`) to the user's home directory. The `~user`
+/// form is left untouched — mtui has never relied on it.
 #[must_use]
 pub(crate) fn expanduser(path: &Path) -> PathBuf {
     let Some(s) = path.to_str() else {
@@ -71,21 +58,15 @@ fn home_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf())
 }
 
-/// The per-user XDG config file path, if a home/config dir can be resolved.
-///
-/// Uses `ProjectDirs::from("", "", "mtui")` so the directory is
-/// `$XDG_CONFIG_HOME/mtui` (falling back to `~/.config/mtui` per the XDG spec),
-/// and the file is `mtui.toml` within it.
+/// The per-user XDG config file path (`$XDG_CONFIG_HOME/mtui/mtui.toml`,
+/// falling back to `~/.config/mtui` per the XDG spec), if resolvable.
 #[must_use]
 fn xdg_config_file() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.config_dir().join(CONFIG_FILE))
 }
 
 /// The home-directory dotfile config path `~/.mtui.toml`, if a home dir can be
-/// resolved.
-///
-/// A single dotfile in `$HOME` for operators who prefer it to the XDG config
-/// directory. Sits between `/etc` and the XDG file in precedence (see
+/// resolved. Sits between `/etc` and the XDG file in precedence (see
 /// [`config_search_paths`]).
 #[must_use]
 fn home_config_file() -> Option<PathBuf> {
@@ -94,32 +75,24 @@ fn home_config_file() -> Option<PathBuf> {
 
 /// The user data directory for mtui (`$XDG_DATA_HOME/mtui`), if resolvable.
 ///
-/// Where mtui persists durable per-user state such as the REPL history file.
-/// Distinct from the disposable cache dir and the config dir (user-authored):
-/// history is data the user grows and expects to survive a cache wipe.
-///
-/// mtui is XDG-first for config/cache/data alike.
+/// mtui is XDG-first for config/cache/data alike. Durable per-user state such
+/// as the REPL history lives here, distinct from the disposable cache dir and
+/// the user-authored config dir: it must survive a cache wipe.
 #[must_use]
 pub fn data_dir() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.data_dir().to_path_buf())
 }
 
 /// The directory holding the `term.*.sh` terminal-launcher scripts, if it can be
-/// resolved.
+/// resolved. The `terms` command derives the available term names by globbing it.
 ///
-/// Resolution order:
-///
-/// * If `$MTUI_TERMS_DIR` is set (and non-empty), that directory (with `~`
-///   expanded) is used verbatim. This is how a system/package install points at
-///   its shared datadir (e.g. `/usr/share/mtui/terms`) without copying scripts
-///   into the per-user XDG tree.
-/// * Otherwise the default is `$XDG_DATA_HOME/mtui/terms` (consistent with
-///   [`data_dir`]), where packaging may also install `term.*.sh`.
+/// * A set, non-empty `$MTUI_TERMS_DIR` is used verbatim (with `~` expanded):
+///   how a package install points at its shared datadir (e.g.
+///   `/usr/share/mtui/terms`) without copying scripts into the per-user XDG tree.
+/// * Otherwise `$XDG_DATA_HOME/mtui/terms`, consistent with [`data_dir`].
 ///
 /// Rust has no package-data concept, so mtui ships the scripts under
-/// `dist/terms/` and lets packaging install them to the datadir (or `MTUI_TERMS_DIR`
-/// point elsewhere). The `terms` command derives the available term names by
-/// globbing this directory.
+/// `dist/terms/` and lets packaging install them.
 #[must_use]
 pub fn terms_path() -> Option<PathBuf> {
     resolve_terms_path(std::env::var_os(ENV_TERMS).map(PathBuf::from), data_dir())
@@ -187,14 +160,12 @@ fn resolve_search_paths(
 mod tests {
     use super::*;
 
-    // Note: precedence is tested through the pure `resolve_search_paths` core so
-    // no test mutates the process environment (which is `unsafe` under edition
-    // 2024 and racy across threads). `config_search_paths` is the thin wrapper
-    // that only reads `$MTUI_CONF` and calls this core.
+    // Precedence is tested through the pure `resolve_search_paths` core so no
+    // test mutates the process environment (`unsafe` under edition 2024, and
+    // racy across threads).
 
     #[test]
     fn explicit_path_short_circuits_everything() {
-        // Even with MTUI_CONF set, an explicit --config wins and is the sole entry.
         let paths = resolve_search_paths(
             Some(PathBuf::from("/explicit.toml")),
             Some(PathBuf::from("/from/env.toml")),
@@ -226,7 +197,6 @@ mod tests {
         let home = PathBuf::from("/home/u/.mtui.toml");
         let xdg = PathBuf::from("/home/u/.config/mtui/mtui.toml");
         let paths = resolve_search_paths(None, None, Some(home.clone()), Some(xdg.clone()));
-        // Lowest → highest precedence: /etc, then the home dotfile, then XDG.
         assert_eq!(
             paths,
             vec![PathBuf::from(ETC_CONFIG), home, xdg],
@@ -250,7 +220,7 @@ mod tests {
     #[test]
     fn env_var_path_expands_tilde() {
         let paths = resolve_search_paths(None, Some(PathBuf::from("~/my.toml")), None, None);
-        // The `~` must have been expanded away (or, if no home dir, left as-is).
+        // Expanded away, or left as-is when no home dir resolves.
         if home_dir().is_some() {
             assert!(!paths[0].starts_with("~"));
             assert!(paths[0].ends_with("my.toml"));
@@ -259,8 +229,7 @@ mod tests {
 
     #[test]
     fn public_wrapper_returns_etc_and_optional_xdg() {
-        // Smoke-test the public entry: with an explicit path it must return
-        // exactly that, regardless of ambient env.
+        // The public entry returns an explicit path regardless of ambient env.
         let paths = config_search_paths(Some(PathBuf::from("/x.toml")));
         assert_eq!(paths, vec![PathBuf::from("/x.toml")]);
     }
@@ -275,8 +244,7 @@ mod tests {
 
     #[test]
     fn xdg_and_home_files_share_the_mtui_toml_basename() {
-        // The config filename is always `mtui.toml` (XDG) / `.mtui.toml` (home);
-        // never `config.toml`.
+        // The filename is always `mtui.toml` / `.mtui.toml`, never `config.toml`.
         if let Some(xdg) = xdg_config_file() {
             assert!(xdg.ends_with("mtui.toml"), "XDG file should be mtui.toml");
             assert!(!xdg.ends_with("config.toml"));
@@ -288,8 +256,7 @@ mod tests {
 
     #[test]
     fn data_dir_lives_under_an_mtui_directory() {
-        // On any environment where a data dir resolves, it must be the mtui
-        // subdir (parallel to `cache_dir`), so the history file lands under it.
+        // The data dir must be the `mtui` subdir, so history lands under it.
         if let Some(dir) = data_dir() {
             assert!(
                 dir.ends_with("mtui"),
@@ -300,10 +267,8 @@ mod tests {
 
     #[test]
     fn terms_path_lives_under_the_mtui_data_dir() {
-        // When a data dir resolves, the terms dir is `<data>/terms` and the data
-        // component still ends in `mtui` (parallel to `data_dir`). Exercise the
-        // pure core with the override forced off so an ambient `MTUI_TERMS_DIR`
-        // in the test environment can't perturb the default-path invariant.
+        // The override is forced off so an ambient `MTUI_TERMS_DIR` in the test
+        // environment cannot perturb the default-path invariant.
         if let Some(dir) = resolve_terms_path(None, data_dir()) {
             assert!(
                 dir.ends_with("terms"),
@@ -318,7 +283,7 @@ mod tests {
 
     #[test]
     fn terms_path_env_override_wins_and_expands_tilde() {
-        // A set, non-empty override is used verbatim (data dir irrelevant).
+        // A set, non-empty override wins over the data dir.
         assert_eq!(
             resolve_terms_path(
                 Some(PathBuf::from("/usr/share/mtui/terms")),
@@ -326,7 +291,6 @@ mod tests {
             ),
             Some(PathBuf::from("/usr/share/mtui/terms"))
         );
-        // A leading `~` in the override is expanded like other mtui paths.
         if let Some(home) = home_dir() {
             assert_eq!(
                 resolve_terms_path(Some(PathBuf::from("~/terms")), None),
@@ -337,17 +301,15 @@ mod tests {
 
     #[test]
     fn terms_path_falls_back_to_data_dir_when_override_absent_or_empty() {
-        // Unset override → `<data>/terms`.
         assert_eq!(
             resolve_terms_path(None, Some(PathBuf::from("/data/mtui"))),
             Some(PathBuf::from("/data/mtui/terms"))
         );
-        // Empty override is treated as unset (same as `MTUI_CONF`'s handling).
+        // An empty override is unset, as for `$MTUI_CONF`.
         assert_eq!(
             resolve_terms_path(Some(PathBuf::new()), Some(PathBuf::from("/data/mtui"))),
             Some(PathBuf::from("/data/mtui/terms"))
         );
-        // No data dir and no override → nothing resolves.
         assert_eq!(resolve_terms_path(None, None), None);
     }
 
@@ -357,7 +319,6 @@ mod tests {
             assert_eq!(expanduser(Path::new("~")), home);
             assert_eq!(expanduser(Path::new("~/a/b")), home.join("a/b"));
         }
-        // A non-tilde path is passed through unchanged.
         assert_eq!(
             expanduser(Path::new("/abs/path")),
             PathBuf::from("/abs/path")

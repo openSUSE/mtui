@@ -2,10 +2,10 @@
 //! completion + man-page emission is unit-testable offline (into a `tempdir`)
 //! without touching the checked-in `dist/` tree.
 //!
-//! Both binary parsers derive `clap::Parser`, hence `CommandFactory`, so
+//! Both binary parsers derive `clap::Parser`, so
 //! [`mtui_core::Args::command`] / [`mtui_mcp::McpArgs::command`] hand back the
 //! `clap::Command` fed to `clap_complete` and `clap_mangen`. `mtui-mcp` is linked
-//! **without** its `mcp` feature: only the (ungated) `args` module is used,
+//! **without** its `mcp` feature — only the ungated `args` module is used —
 //! keeping the rmcp/axum server graph out of this dev tool's build.
 
 use std::fmt::Write as _;
@@ -36,8 +36,7 @@ pub fn generate_into(dist: &Path) -> Result<()> {
     }
     std::fs::create_dir_all(&man).context("creating man dir")?;
 
-    // `command()` uses the `#[command(name = ...)]` set on each parser, so the
-    // generated file names / man titles are already `mtui` and `mtui-mcp`.
+    // Each parser's `#[command(name = ...)]` already names the generated files.
     gen_binary(&mut mtui_core::Args::command(), "mtui", &completions, &man)?;
     gen_binary(
         &mut mtui_mcp::McpArgs::command(),
@@ -54,12 +53,10 @@ fn gen_binary(cmd: &mut clap::Command, bin: &str, completions: &Path, man: &Path
         clap_complete::generate_to(shell, cmd, bin, completions.join(shell.to_string()))
             .with_context(|| format!("generating {shell} completion for {bin}"))?;
     }
-    // Both parsers set `version` AND `long_version` to `MTUI_LONG_VERSION`, a
-    // build-provenance string (`<ver> (<sha>-dirty, <profile>, <target>)`). That
-    // is right for a live `--version` but poisons a *checked-in* man page (title
-    // + VERSION section) with the commit sha / dirty flag / host target, making it
-    // churn on every build. mangen renders `long_version` in the VERSION section,
-    // so pin *both* to the plain crate version for a stable, committable artifact.
+    // Both parsers set `version` and `long_version` to the build-provenance
+    // `MTUI_LONG_VERSION` (`<ver> (<sha>-dirty, <profile>, <target>)`), right for
+    // a live `--version` but churning a checked-in man page on every build.
+    // mangen renders both, so pin both to the plain crate version.
     let stable = cmd
         .clone()
         .version(env!("CARGO_PKG_VERSION"))
@@ -78,13 +75,10 @@ pub const CLI_REFERENCE_FILE: &str = "cli.md";
 
 /// Render the generated CLI-reference Markdown from the command registry.
 ///
-/// Iterates [`mtui_core::register_all`] in registration order and, for each
-/// command, renders a section from its `name`/`aliases`/`about` plus the full
-/// long help of the *exact* per-command clap parser [`mtui_core::command_parser`]
-/// builds (the same parser real REPL/MCP dispatch uses), so the reference never
-/// drifts from the actual arg surface. Deterministic: help is rendered at a
-/// fixed `CLI_TERM_WIDTH` and the parser version is pinned to the crate
-/// version, so the output is stable and committable.
+/// Iterates [`mtui_core::register_all`] in registration order, rendering each
+/// command's `name`/`aliases`/`about` plus the long help of the parser real
+/// dispatch uses, so the reference cannot drift from the actual arg surface.
+/// A fixed `CLI_TERM_WIDTH` and a pinned version keep the output committable.
 #[must_use]
 pub fn render_cli_reference() -> String {
     let registry = mtui_core::register_all();
@@ -124,19 +118,12 @@ pub fn render_cli_reference() -> String {
             writeln!(out, "{about}\n").expect("writing to String cannot fail");
         }
 
-        // Render the command's *own* argument surface, not the full dispatch
-        // parser: `command_parser` also injects the shared base flags
-        // (`-T/--template`, `--all-templates`), which some commands legitimately
-        // shadow with their own short (`list_refhosts` reuses `-T` for
-        // `--testplatform`). clap's `render_long_help` panics on that duplicate
-        // short, and the shared flags are already documented once in the preamble
-        // above — so build the parser from the command's `configure` alone. Pin
-        // version + width so the rendered help is byte-stable across builds and
-        // terminals (mirrors the man-page version pin above).
-        // No `.version()`: per-command parsers carry no auto `--version` (the
-        // engine's dispatch parser doesn't either), and some commands declare
-        // their own `--version` arg (`list_refhosts`' SLE-version filter), which
-        // would collide with clap's auto flag.
+        // The command's *own* surface, not `command_parser`'s: that injects the
+        // shared base flags, which a command may legitimately shadow with its own
+        // short (`list_refhosts` reuses `-T`), and `render_long_help` panics on
+        // the duplicate. The preamble documents the shared flags once instead.
+        // No `.version()` either: per-command parsers carry no auto `--version`,
+        // and `list_refhosts` declares its own, which would collide.
         let base = clap::Command::new(command.name())
             .no_binary_name(true)
             .term_width(CLI_TERM_WIDTH);
@@ -147,7 +134,6 @@ pub fn render_cli_reference() -> String {
         out.push_str("\n```\n\n");
     }
 
-    // Single trailing newline.
     let trimmed = out.trim_end();
     format!("{trimmed}\n")
 }
@@ -158,13 +144,10 @@ pub const INVOCATION_REFERENCE_FILE: &str = "invocation.md";
 /// Render the generated invocation reference (`mtui` + `mtui-mcp` binary flags)
 /// from the two top-level clap parsers.
 ///
-/// Unlike [`render_cli_reference`] (which documents the REPL *command* surface),
-/// this documents how the *binaries* are launched: their flags, and the fact that
-/// `mtui` is REPL-only (there is no positional single-command mode — headless
-/// single-command dispatch is `mtui-mcp`'s job). Deterministic: help is rendered
-/// at a fixed `CLI_TERM_WIDTH` and the version is pinned to the crate version
-/// (the live parsers carry the build-provenance `MTUI_LONG_VERSION`, which would
-/// churn the committed file), mirroring the man-page pin in `gen_binary`.
+/// Where [`render_cli_reference`] documents the REPL *command* surface, this
+/// documents how the *binaries* are launched, including that `mtui` is REPL-only
+/// (headless single-command dispatch is `mtui-mcp`'s job). Width and version are
+/// pinned as in `gen_binary`, so the committed file does not churn.
 #[must_use]
 pub fn render_invocation_reference() -> String {
     let mut out = String::new();
@@ -242,10 +225,9 @@ const ROOT_FILES: [&str; 2] = ["LICENSE", "README.md"];
 
 /// Inputs for assembling one release-tarball staging tree.
 ///
-/// All paths are taken as-is (no discovery), so the staging assembly is a pure,
-/// offline-testable file-copy step: the caller (`run_package`) resolves the real
-/// `dist/`, compiled-binary, and repo-root locations from the workspace, while
-/// tests point every field at a fixture tempdir.
+/// All paths are taken as-is, so staging is a pure, offline-testable file copy:
+/// `run_package` resolves the real workspace locations, tests point every field
+/// at a fixture tempdir.
 pub struct PackageInputs<'a> {
     /// Release version string, e.g. `v1.2.0` — names the staging dir + tarball.
     pub version: &'a str,
@@ -269,10 +251,10 @@ pub fn package_stem(version: &str, target: &str) -> String {
     format!("mtui-{version}-{target}")
 }
 
-/// Parsed `package` flags. A tiny hand-rolled parser (no clap in this dev tool),
-/// kept in the lib so the flag handling is unit-testable without spawning the
-/// `xtask` binary. `--version`/`--target` are required; `--bin-dir`/`--out-dir`
-/// override the workspace-relative defaults the caller supplies.
+/// Parsed `package` flags — hand-rolled (no clap in this dev tool) and kept in
+/// the lib so flag handling is testable without spawning the binary.
+/// `--version`/`--target` are required; `--bin-dir`/`--out-dir` override the
+/// workspace-relative defaults the caller supplies.
 pub struct PackageArgs {
     /// Release version string (`--version`), e.g. `v1.2.0`.
     pub version: String,
@@ -330,12 +312,12 @@ impl PackageArgs {
 ///   LICENSE  README.md
 /// ```
 ///
-/// Pure file I/O, no subprocess — this is the drift-prone part (must track
-/// `dist/`), so it is unit-tested offline against a fixture tree.
+/// Pure file I/O, no subprocess — the drift-prone part (it must track `dist/`),
+/// so it is unit-tested offline against a fixture tree.
 pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
     let stem = package_stem(inputs.version, inputs.target);
     let staging = inputs.out_dir.join(&stem);
-    // Start clean so a re-run is deterministic (mirrors gen idempotency).
+    // Start clean so a re-run is deterministic.
     if staging.exists() {
         std::fs::remove_dir_all(&staging)
             .with_context(|| format!("clearing stale staging dir {}", staging.display()))?;
@@ -350,8 +332,7 @@ pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
         set_executable(&to)?;
     }
 
-    // completions/, man/, terms/, vim-plugin/ are copied wholesale from dist/ so
-    // the tarball never drifts from what `xtask gen` produced.
+    // Copied wholesale from dist/ so the tarball cannot drift from `xtask gen`.
     copy_dir_all(
         &inputs.dist_dir.join("completions"),
         &staging.join("completions"),
@@ -378,17 +359,14 @@ pub fn stage_package(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
 /// Assemble + archive one target: stage the tree, `tar czf` it, and write a
 /// `<tarball>.sha256`. Returns the tarball path.
 ///
-/// `tar` and a SHA-256 CLI (`sha256sum`, or `shasum -a 256` on macOS) are
-/// shelled out; only the archive/checksum step touches a subprocess — the
-/// staging layout it archives is the offline-tested [`stage_package`].
+/// `tar` and a SHA-256 CLI are the only subprocesses; the layout they archive is
+/// the offline-tested [`stage_package`].
 pub fn package_target(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
-    // Materialise the staging tree on disk; `tar` archives it by name below.
     let staging = stage_package(inputs)?;
     let stem = package_stem(inputs.version, inputs.target);
     let tarball = inputs.out_dir.join(format!("{stem}.tar.gz"));
 
-    // `tar -C <out> <stem>` so the archive holds the versioned top-level dir, not
-    // absolute paths.
+    // `-C <out> <stem>` so the archive holds the versioned top-level dir.
     run(Command::new("tar")
         .arg("czf")
         .arg(&tarball)
@@ -399,9 +377,8 @@ pub fn package_target(inputs: &PackageInputs<'_>) -> Result<PathBuf> {
 
     write_sha256(&tarball)?;
 
-    // Remove the now-archived staging dir so `out_dir` holds only the tarball +
-    // checksum — release.yml uploads `dist/release/*` verbatim, and `gh release
-    // create` errors on a bare directory in that glob.
+    // `out_dir` must hold only the tarball + checksum: release.yml uploads
+    // `dist/release/*` verbatim and `gh release create` errors on a directory.
     std::fs::remove_dir_all(&staging)
         .with_context(|| format!("removing staging dir {}", staging.display()))?;
 
@@ -426,10 +403,9 @@ fn write_sha256(file: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Checksum `name` (relative to `dir`) with a portable SHA-256 CLI, returning
-/// the `<hash>  <name>` stdout. Prefers `sha256sum` (Linux/openSUSE runners);
-/// falls back to `shasum -a 256`, which is what macOS ships instead. Both emit
-/// the same format, so the written file stays `sha256sum -c`-compatible.
+/// Checksum `name` (relative to `dir`), returning the `<hash>  <name>` stdout.
+/// Prefers `sha256sum` (Linux runners) and falls back to macOS's `shasum -a
+/// 256`; both emit the same `sha256sum -c`-compatible format.
 fn sha256_stdout(dir: &Path, name: &str) -> Result<Vec<u8>> {
     let candidates: [(&str, &[&str]); 2] =
         [("sha256sum", &[name]), ("shasum", &["-a", "256", name])];
@@ -476,9 +452,9 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Mark a copied binary executable (0o755) on Unix; a no-op elsewhere. `std::fs::copy`
-/// preserves the source mode on Unix, but building via `cross`/CI can leave that
-/// mode inconsistent, so set it explicitly.
+/// Mark a copied binary executable (0o755) on Unix; a no-op elsewhere.
+/// `std::fs::copy` preserves the source mode, but a `cross`/CI build can leave
+/// that mode inconsistent, so set it explicitly.
 #[cfg(unix)]
 fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
@@ -512,8 +488,8 @@ fn run(cmd: &mut Command) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Happy path: whichever tool is on PATH emits `<64-hex>  <name>`. Skips
-    /// cleanly if neither `sha256sum` nor `shasum` is installed.
+    /// Whichever tool is on PATH emits `<64-hex>  <name>`; skips cleanly if
+    /// neither is installed.
     #[test]
     fn sha256_stdout_emits_hash_and_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -539,8 +515,7 @@ mod tests {
         assert!(got.is_none());
     }
 
-    /// A tool that runs but fails on its input surfaces an error rather than
-    /// being masked. Skips if neither tool is installed.
+    /// A tool that runs but fails on its input surfaces an error, never masked.
     #[test]
     fn try_sha256_tool_errors_on_bad_input() {
         let dir = tempfile::tempdir().unwrap();
@@ -549,7 +524,6 @@ mod tests {
             ("shasum", &["-a", "256", "nope.txt"]),
         ];
         for (prog, args) in candidates {
-            // Only assert against a tool that is actually present.
             if Command::new(prog).arg("--version").output().is_ok() {
                 assert!(
                     try_sha256_tool(prog, args, dir.path()).is_err(),

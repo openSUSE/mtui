@@ -10,17 +10,13 @@ use crate::session::Session;
 
 /// Reloads and re-parses the products on the target reference hosts.
 ///
-/// Re-runs the system/product parse over each selected host's live connection
-/// via [`Target::reload_system`](mtui_hosts::Target::reload_system).
-/// Best-effort: a host whose parse fails logs a warning and keeps its
-/// previously recorded system. Each host's parse runs under its own
-/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget; a host
-/// that exhausts it keeps its previous system, the pass continues, and the
-/// command fails naming the hosts it could not reach.
-///
-/// A host-phase command that takes only `-t/--target`, so it is
-/// [`Scope::Active`]: it acts on the active template's host set, not once per
-/// loaded template.
+/// Re-runs the parse over each selected host's live connection via
+/// [`Target::reload_system`](mtui_hosts::Target::reload_system). Best-effort: a
+/// host whose parse fails, or which exhausts its own
+/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget, keeps its
+/// previous system and the pass continues — but the command then fails naming
+/// the hosts it could not reach. `-t/--target`-only, hence [`Scope::Active`]:
+/// the active template's host set, not once per loaded template.
 pub struct ReloadProducts;
 
 #[async_trait]
@@ -54,18 +50,15 @@ impl Command for ReloadProducts {
         let targets = session.targets_mut();
         let hosts =
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
-        // `reload_system` re-parses the host's product set in place and does not
-        // return an outcome (a parse failure only logs and keeps the previous
-        // system — P3a-1 did not add a reload accessor, out of scope here). Read
-        // the (possibly refreshed) base product back and confirm per host so the
-        // command is never silent for an MCP caller.
+        // `reload_system` returns no outcome (a parse failure only logs and keeps
+        // the previous system), so the base product is read back per host to
+        // confirm — never silent for an MCP caller.
         let mut lines: Vec<String> = Vec::new();
         let mut unreached: Vec<&str> = Vec::new();
         let budget = host_op_budget();
         let secs = budget.as_secs();
-        // Per host, not one budget for the whole (serial) pass — see
-        // `host_op_budget`. A host that exhausts its own is abandoned and the
-        // pass moves on.
+        // Per host, not one budget for the whole serial pass: a host that
+        // exhausts its own is abandoned and the pass moves on.
         for name in &hosts {
             if let Some(t) = targets.get_mut(name) {
                 if tokio::time::timeout(budget, t.reload_system())
@@ -105,14 +98,12 @@ mod tests {
     #[test]
     fn name_and_active_scope() {
         assert_eq!(ReloadProducts.name(), "reload_products");
-        // Upstream `ReloadProducts` is `-t`-only (no `_add_template_arg`), so it
-        // stays active rather than fanning out per loaded template.
+        // `-t`-only, so it stays active rather than fanning out per template.
         assert_eq!(ReloadProducts.scope(), Scope::Active);
     }
 
     #[tokio::test]
     async fn reloads_system_over_live_connection() {
-        // A SUSE host whose product XML parses to SLES 15-SP5.
         let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
         let conn = MockConnection::new("h1")
             .with_listing("/etc/products.d", ["SLES.prod"])
@@ -145,7 +136,6 @@ mod tests {
                 .name,
             "SLES"
         );
-        // The confirmation names the host and the freshly re-parsed product.
         assert!(
             buf.contents().contains("h1: reloaded products (SLES)"),
             "{}",
@@ -167,12 +157,10 @@ mod tests {
 
         use crate::commands::testkit::{self, session_with_targets};
 
-        // Hosts are visited in sorted order, so "a-dead" wedges before "z-good"
-        // is reached: with a per-host budget the pass must survive it and still
-        // reload the later host. `a-dead` answers no SFTP at all —
-        // `parse_system`'s first act is opening an SFTP session, so no product
-        // scripting is needed (or wanted: an unscripted listing would fail fast
-        // instead).
+        // Sorted visit order puts the wedge first, so a per-host budget must
+        // still reach `z-good`. `a-dead` answers no SFTP at all, which
+        // `parse_system` opens first — scripting a product would only let it fail
+        // fast instead of wedging.
         let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
         let good = MockConnection::new("z-good")
             .with_listing("/etc/products.d", ["SLES.prod"])
@@ -204,8 +192,6 @@ mod tests {
             "{err}"
         );
         let out = buf.contents();
-        // The host after the wedge was still reached; the wedged one is named as
-        // unfinished, never as reloaded.
         assert!(out.contains("z-good: reloaded products (SLES)"), "{out}");
         assert!(!out.contains("a-dead: reloaded products"), "{out}");
         assert!(out.contains("a-dead: reload not completed"), "{out}");

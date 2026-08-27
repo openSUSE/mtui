@@ -1,24 +1,23 @@
 //! Hand-written in-band `get`/`put` MCP tools (#434).
 //!
-//! The synthesized forms of these two commands exchange **server-local
-//! paths**: `get` downloaded to `{report_wd}/downloads/` and returned the
-//! path, `put` uploaded a file that had to already exist on the server. Under
+//! The synthesised forms of these two commands exchange **server-local paths**:
+//! `get` downloaded to `{report_wd}/downloads/` and returned the path, `put`
+//! uploaded a file that had to already exist on the server. Under
 //! `--transport http` the client is on another machine, so those paths are
-//! unreachable (and `put` is unusable outright). Both commands are therefore
-//! on [`MCP_DENYLIST`](mtui_core::MCP_DENYLIST) and re-served here under the
-//! same names — the `edit` → `testreport_*` precedent — carrying the file
-//! content **in-band** in both directions, on both transports (in-band is
-//! strictly better on stdio too).
+//! unreachable and `put` is unusable outright. Both commands are therefore on
+//! [`MCP_DENYLIST`](mtui_core::MCP_DENYLIST) and re-served here under the same
+//! names — the `edit` → `testreport_*` precedent — carrying the content
+//! **in-band** in both directions, on both transports.
 //!
 //! The REPL/CLI `get`/`put` commands are untouched: literal paths (#399), the
 //! `{report_wd}/downloads/{name}.{host}` layout, and their messages all stay.
 //!
-//! Content encoding: UTF-8 payloads travel as `content`; anything else as
-//! `content_b64` (standard base64). Downloads are capped twice — per host at
-//! `[mcp] max_input_bytes` (applied after the transfer: the whole remote file
-//! is buffered per host, so point `get` at logs and configs, not images),
-//! then at an equal share of `[mcp] max_output_bytes` on the wire — with an
-//! explicit `truncated` flag and the full remote `size`, never a silent clip.
+//! Content encoding: UTF-8 payloads travel as `content`, anything else as
+//! `content_b64`. Downloads are capped twice — per host at
+//! `[mcp] max_input_bytes` (applied *after* the transfer, which buffers the whole
+//! remote file per host, so point `get` at logs and configs, not images), then at
+//! an equal share of `[mcp] max_output_bytes` on the wire — with an explicit
+//! `truncated` flag and the full remote `size`, never a silent clip.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -159,8 +158,7 @@ async fn dispatch_transfer_tool_inner(
     name: &str,
     kwargs: &Map<String, Value>,
 ) -> Result<Value, McpCommandError> {
-    // Reject misspelled fields up front, mirroring the strict schema — the
-    // allowed keys are exactly the descriptor's advertised properties.
+    // The allowed keys are the descriptor's advertised properties.
     if let Some(desc) = transfer_tool_descriptors()
         .into_iter()
         .find(|d| d.name == name)
@@ -232,8 +230,7 @@ fn opt_str<'a>(
 /// Resolves the target template rrid: the single loaded one, or the named one.
 ///
 /// Refuses when nothing is loaded, when `template` names an unloaded rrid, and
-/// when more than one is loaded with no `template` — the testreport tools'
-/// convention.
+/// when more than one is loaded with no `template`, as the testreport tools do.
 fn resolve_rrid(
     session: &mtui_core::Session,
     template: Option<&str>,
@@ -269,9 +266,9 @@ fn resolve_rrid(
 /// fan-out, then releases the entry guard.
 ///
 /// The release is load-bearing (the `run_command` exclusive-arm contract): the
-/// MCP session must hold no active guard between calls — a lingering owned
-/// guard would make a later forked (scoped) call's `try_lock_owned` fail in
-/// `activate`, silently dispatching that command against the null report.
+/// session must hold no active guard between calls, or a later forked (scoped)
+/// call's `try_lock_owned` fails in `activate` and silently dispatches that
+/// command against the null report.
 fn restore_active(session: &mut mtui_core::Session, prev: Option<String>) {
     match prev {
         Some(rrid) => {
@@ -299,8 +296,7 @@ async fn transfer_get(
         ));
     }
 
-    // Exclusive gate (fan-out parity with the synthesized commands), then the
-    // canonical session for the whole transfer.
+    // Exclusive gate for fan-out parity with the synthesised commands.
     let _lock = session.exclusive_lock().await;
     let mut guard = session.session().lock().await;
     let rrid = resolve_rrid(&guard, template)?;
@@ -314,8 +310,8 @@ async fn transfer_get(
         let targets = guard.targets_mut();
         let known: BTreeSet<String> = targets.names().into_iter().collect();
         if let Some(ref names) = hosts {
-            // Strict up-front: unknown names refuse before any transfer, and a
-            // named-but-absent-from-the-map host (disabled) is refused after.
+            // Unknown names refuse before any transfer; a named host absent from
+            // the map (disabled) is refused after.
             let unknown: Vec<&str> = names
                 .iter()
                 .map(String::as_str)
@@ -337,9 +333,9 @@ async fn transfer_get(
         restore_active(&mut guard, prev);
         drop(guard);
 
-        // An explicitly requested host that produced no outcome was disabled —
-        // diagnose that BEFORE the generic empty-map refusal, so an
-        // all-named-disabled call is not misdescribed as "no enabled hosts".
+        // A requested host with no outcome was disabled: diagnose that before the
+        // generic empty-map refusal, or an all-named-disabled call is
+        // misdescribed as "no enabled hosts".
         if let Some(ref names) = hosts {
             let missing: Vec<&str> = names
                 .iter()
@@ -362,9 +358,8 @@ async fn transfer_get(
         map
     };
 
-    // Any per-host failure fails the whole call, with attribution — partial
-    // content is never returned as success (#396's lesson); the `hosts` param
-    // is the retry path.
+    // Partial content is never returned as success (#396's lesson): any per-host
+    // failure fails the call, with attribution, and `hosts` is the retry path.
     let failures: Vec<String> = outcome
         .iter()
         .filter_map(|(host, res)| res.as_ref().err().map(|e| format!("{host} ({e})")))
@@ -376,9 +371,8 @@ async fn transfer_get(
         )));
     }
 
-    // Caps: per-host source cap first ([mcp] max_input_bytes), then an equal
-    // share of the wire budget ([mcp] max_output_bytes) per host. Cap the
-    // content string BEFORE embedding in JSON, never the serialized JSON.
+    // Source cap first, then an equal per-host share of the wire budget. Cap the
+    // content string BEFORE embedding it in JSON, never the serialised JSON.
     let max_input = session.max_input_bytes();
     let wire_budget = session.max_output_bytes();
     let share = if wire_budget == 0 {
@@ -397,11 +391,10 @@ async fn transfer_get(
             source_capped = &source_capped[..max_input];
             truncated = true;
         }
-        // A source-cap cut that lands mid-codepoint must not reclassify a
-        // text file as binary: `error_len() == None` means the only problem is
-        // an incomplete final sequence, so trim to the last whole codepoint
-        // and stay textual. A genuinely binary payload errors mid-stream
-        // (`error_len() == Some(_)`) and takes the b64 arm.
+        // A mid-codepoint source-cap cut must not reclassify a text file as
+        // binary: `error_len() == None` is only an incomplete final sequence, so
+        // trim to the last whole codepoint and stay textual. A genuinely binary
+        // payload errors mid-stream and takes the b64 arm.
         let text = match std::str::from_utf8(source_capped) {
             Ok(text) => Some(text),
             Err(e) if truncated && e.error_len().is_none() => {
@@ -411,11 +404,9 @@ async fn transfer_get(
         };
         let entry = match text {
             Some(text) => {
-                // Clean char-boundary truncation with NO embedded notice —
-                // `cap_output` would splice its testreport-flavoured notice
-                // (naming the per-host share as `max_output_bytes`) into the
-                // file content; here `truncated` + `size` are the signal,
-                // symmetric with the binary arm.
+                // No embedded notice: `cap_output` would splice its
+                // testreport-flavoured text into the file content. `truncated` +
+                // `size` are the signal, symmetric with the binary arm.
                 let mut text = text;
                 if share > 0 && text.len() > share {
                     let mut cut = share;
@@ -428,10 +419,9 @@ async fn transfer_get(
                 json!({ "size": size, "truncated": truncated, "content": text })
             }
             None => {
-                // Binary: byte-truncate to 3/4 of the share before encoding
-                // (base64 expands 4/3), never below one byte so a tiny wire
-                // budget cannot silently disable the cap; the flag + size
-                // carry the signal.
+                // Byte-truncate to 3/4 of the share before encoding (base64
+                // expands 4/3), never below one byte, so a tiny wire budget
+                // cannot silently disable the cap.
                 let mut raw = source_capped;
                 if share > 0 {
                     let byte_cap = std::cmp::max(1, share.saturating_mul(3) / 4);
@@ -573,9 +563,8 @@ mod tests {
         report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
         report.base_mut().path = Some(path);
         guard.templates.add(Box::new(report));
-        // `activate` (not bare `set_active`): it installs the active guard, so
-        // `targets_mut()` below reaches THIS report's group rather than the
-        // null-object fallback.
+        // `activate`, not bare `set_active`: it installs the active guard, so
+        // `targets_mut()` reaches THIS report's group, not the null object.
         assert!(guard.activate(rrid), "activate {rrid}");
         for t in targets {
             guard.targets_mut().add(t);
@@ -599,9 +588,9 @@ mod tests {
 
     // ---- get -------------------------------------------------------------
 
-    /// The issue's defect pin: content arrives in-band, per host, DISTINCT per
-    /// host (identical fixtures could pass with one host's bytes for all), and
-    /// nothing lands under the report checkout's downloads/ dir.
+    /// The defect pin: content arrives in-band and DISTINCT per host (identical
+    /// fixtures could pass with one host's bytes for all), and nothing lands
+    /// under the report checkout's downloads/ dir.
     #[tokio::test]
     async fn get_returns_per_host_distinct_content_in_band() {
         let (session, tmp) = session_with(|_| {});
@@ -1089,8 +1078,8 @@ mod tests {
         assert_eq!(raw, payload[..30], "byte cap = share*3/4");
     }
 
-    /// A source-cap cut landing mid-codepoint must not reclassify a text file
-    /// as binary: trim to the last whole codepoint and stay textual.
+    /// A mid-codepoint source-cap cut stays textual, trimmed to the last whole
+    /// codepoint, rather than being reclassified as binary.
     #[tokio::test]
     async fn get_source_cap_mid_codepoint_stays_text() {
         // "aaaé" = 61 61 61 c3 a9; cap 4 cuts inside the two-byte 'é'.
@@ -1138,8 +1127,7 @@ mod tests {
         assert_eq!(h1.sftp_ops().len(), 1);
     }
 
-    /// A disabled host is absent from the result and receives nothing —
-    /// it must never be reported "ok".
+    /// A disabled host is absent from the result and receives nothing.
     #[tokio::test]
     async fn put_disabled_host_absent_and_untouched() {
         let m1 = MockConnection::new("h1");
@@ -1173,9 +1161,8 @@ mod tests {
     }
 
     /// After a transfer call the canonical session must hold NO active entry
-    /// guard — a lingering guard makes the next scoped (forked) command's
-    /// `try_lock_owned` fail and silently dispatch against the null report
-    /// (the `run_command` exclusive-arm contract).
+    /// guard, or the next scoped (forked) command's `try_lock_owned` fails and
+    /// silently dispatches against the null report.
     #[tokio::test]
     async fn transfer_leaves_no_active_guard() {
         let (session, tmp) = session_with(|_| {});
@@ -1189,8 +1176,7 @@ mod tests {
             )],
         )
         .await;
-        // The loader itself installs a guard; the tool must clean up after
-        // itself regardless of the pre-call state.
+        // The loader installs a guard, so the tool must clean up regardless.
         session.session().lock().await.release_active_guard();
 
         call(&session, "get", json!({ "remote": "/f" }))

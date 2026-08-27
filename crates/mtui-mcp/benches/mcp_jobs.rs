@@ -1,15 +1,15 @@
 //! Perf baseline for MCP session lock behaviour.
 //!
-//! Measurement-only, offline; requires the `mcp` feature (the session model is
-//! gated behind it). Measures [`McpSession::scoped_lock`] acquire+release, the
-//! per-dispatch gate the MCP command path takes on every tool call:
+//! Measurement-only, offline; requires the `mcp` feature. Measures
+//! [`McpSession::scoped_lock`] acquire+release, the per-dispatch gate every MCP
+//! tool call takes:
 //! - `mcp/scoped_lock/uncontended`: distinct RRID keys — the fast path.
-//! - `mcp/scoped_lock/contended`: one shared RRID key acquired/released in a
-//!   tight loop — the baseline for reducing session lock contention (0mop.11).
+//! - `mcp/scoped_lock/contended`: one shared RRID key in a tight loop — the
+//!   session-lock-contention baseline.
 //!
-//! Full tool-dispatch and background-job throughput are measured as request /
-//! job counts in the integration tests rather than timed here (they are
-//! dominated by the mocked command work); see plans/perf-baseline-0mop1.md.
+//! Full tool-dispatch and background-job throughput are dominated by the mocked
+//! command work, so the integration tests count requests/jobs instead of timing
+//! them here.
 
 use std::hint::black_box;
 use std::sync::Arc;

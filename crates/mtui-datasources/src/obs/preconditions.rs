@@ -1,13 +1,12 @@
 //! `qam.suse.de` testreport preconditions for the native QAM ops.
 //!
-//! A plain HTTPS
-//! GET of the machine-readable testreport log (**no OBS auth** — this is the
-//! public reports host, not the OBS API), applying the same guards the `osc qam`
-//! plugin does: [`assign`](crate::obs::qam::assign) only needs the log to EXIST
-//! (a 200); [`approve`](crate::obs::qam::approve) / [`reject`](crate::obs::qam::reject)
-//! additionally require `SUMMARY: PASSED` / `SUMMARY: FAILED` plus a non-empty
-//! `comment:` for reject. Skipped by the caller for PI/SLFO requests, which
-//! carry no maintenance testreport.
+//! A plain HTTPS GET of the machine-readable testreport log — **no OBS auth**,
+//! this is the public reports host, not the OBS API — applying the same guards
+//! the `osc qam` plugin does: [`assign`](crate::obs::qam::assign) needs only a
+//! 200, while [`approve`](crate::obs::qam::approve) /
+//! [`reject`](crate::obs::qam::reject) also require `SUMMARY: PASSED` /
+//! `SUMMARY: FAILED` plus, for reject, a non-empty `comment:`. The caller skips
+//! it for PI/SLFO requests, which carry no maintenance testreport.
 
 use std::sync::LazyLock;
 
@@ -19,10 +18,9 @@ use mtui_types::RequestReviewID;
 use crate::error::HttpError;
 use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, sanitize_url};
 
-/// Capture the whole trimmed `SUMMARY:` value, not just the first token, so a
-/// trailing qualifier ("PASSED with notes") reads as UNKNOWN — matching the
-/// plugin's whole-value compare rather than approving/rejecting on the first
-/// word.
+/// Captures the whole trimmed `SUMMARY:` value, not just the first token, so a
+/// trailing qualifier ("PASSED with notes") reads as UNKNOWN rather than
+/// approving on the first word.
 static SUMMARY_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^SUMMARY:\s*(.+?)\s*$").expect("static SUMMARY regex"));
 
@@ -39,12 +37,12 @@ fn log_url(reports_url: &str, rrid: &RequestReviewID) -> String {
 /// GET the testreport log; `None` when absent (404), unreachable, or any other
 /// non-2xx status.
 ///
-/// Best-effort by design: a transport
-/// failure or a non-404 error status is logged at ERROR and folded to `None`, so
-/// a flaky reports host degrades to "no testreport" rather than aborting the
-/// operation. Uses a status-preserving GET (`HttpClient::inner`) rather than
-/// [`HttpClient::get_bytes`](crate::http::HttpClient::get_bytes), which raises on
-/// non-2xx and so cannot tell a 404 apart from a 200.
+/// Best-effort by design: a transport failure or a non-404 error status is
+/// logged at ERROR and folded to `None`, so a flaky reports host degrades to "no
+/// testreport" rather than aborting the operation. Uses a status-preserving GET
+/// (`HttpClient::inner`) rather than
+/// [`HttpClient::get_bytes`](crate::http::HttpClient::get_bytes), which raises
+/// on non-2xx and so cannot tell a 404 from a 200.
 pub(crate) async fn fetch_testreport_log(
     reports_url: &str,
     ssl_verify: &SslVerify,
@@ -63,7 +61,7 @@ pub(crate) async fn fetch_testreport_log(
     let response = match client.inner().get(&url).send().await {
         Ok(response) => response,
         Err(e) => {
-            // Convert first: a raw `reqwest::Error` would append the *un*safe
+            // Convert first: a raw `reqwest::Error` would append the unsafe
             // URL right next to the sanitized one (#431).
             tracing::error!(
                 "could not fetch testreport {safe_url}: {}",
@@ -91,9 +89,8 @@ pub(crate) async fn fetch_testreport_log(
 
 /// The upper-cased `SUMMARY:` value of a testreport log (else `UNKNOWN`).
 ///
-/// The WHOLE trimmed captured value is upper-cased,
-/// so "PASSED with notes" becomes `PASSED WITH NOTES` (i.e. not exactly
-/// `PASSED`).
+/// The WHOLE trimmed value is upper-cased, so "PASSED with notes" becomes
+/// `PASSED WITH NOTES` — not exactly `PASSED`.
 #[must_use]
 pub(crate) fn summary(log: &str) -> String {
     SUMMARY_RE
@@ -138,7 +135,7 @@ mod tests {
 
     // The 404 -> None path is covered end-to-end by the qam integration test
     // `assign_refused_when_no_testreport`; these cover the other best-effort
-    // arms (non-404 status and an unreachable host) directly.
+    // arms directly.
     #[tokio::test]
     async fn fetch_testreport_log_none_on_server_error() {
         use wiremock::matchers::method;
@@ -159,8 +156,8 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_testreport_log_none_on_connection_error() {
-        // A reserved-but-unroutable base URL: the GET fails at the transport
-        // layer and is folded to None rather than propagating.
+        // A reserved-but-unroutable base URL: the transport-layer failure must
+        // fold to None rather than propagate.
         let rrid = RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap();
         assert!(
             fetch_testreport_log("http://127.0.0.1:1/nope", &SslVerify::Enabled, &rrid)

@@ -22,7 +22,6 @@ fn config_toml_fixture_parses_all_sections() {
 
     let cfg = Config::load(Some(path));
 
-    // String values across multiple sections.
     assert_eq!(cfg.session_user, "qauser");
     assert_eq!(cfg.ssh_strict_host_key_checking, "warn");
     assert_eq!(cfg.bugzilla_url, "https://bugzilla.example.com");
@@ -30,7 +29,6 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.refhosts_resolvers, "https,path");
     assert_eq!(cfg.svn_path, "svn+ssh://svn@svn.example/testreports");
 
-    // Integer-typed options.
     assert_eq!(cfg.connection_timeout, 450);
     assert_eq!(cfg.reboot_timeout, 25);
     assert_eq!(cfg.reboot_retries, 10); // omitted -> default
@@ -38,7 +36,6 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.max_oqa_parallel, 4);
     assert_eq!(cfg.refhosts_https_expiration, 3600);
 
-    // Boolean-typed option.
     assert!(cfg.chdir_to_template_dir);
 
     // ssl_verify: a non-boolean string is treated as a CA bundle path.
@@ -47,7 +44,6 @@ fn config_toml_fixture_parses_all_sections() {
         SslVerify::CaBundle(PathBuf::from("warn.example/ca.pem"))
     );
 
-    // Tilde in a path option expands to $HOME.
     if let Some(base) = directories::BaseDirs::new() {
         assert_eq!(
             cfg.refhosts_path,
@@ -56,7 +52,7 @@ fn config_toml_fixture_parses_all_sections() {
         );
     }
 
-    // [lock] section: explicit overrides land, an omitted key keeps its default.
+    // [lock]
     assert!(!cfg.lock_reap_stale);
     assert_eq!(cfg.lock_stale_age, 3600);
     assert_eq!(cfg.pool_stale_age, 7200);
@@ -64,23 +60,22 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.lock_wait, 30);
     assert_eq!(cfg.lock_wait_poll, 15); // omitted -> default
 
-    // [mcp] section: explicit override lands.
+    // [mcp]
     assert_eq!(cfg.mcp_max_output_bytes, 65536);
     assert_eq!(cfg.mcp_profile, "core");
     assert_eq!(cfg.mcp_tools_allow, vec!["whoami".to_owned()]);
     assert_eq!(cfg.mcp_tools_deny, vec!["run".to_owned()]);
 
-    // [slack] section: explicit overrides land, an omitted key keeps its default.
+    // [slack]
     assert!(cfg.slack_enabled);
     assert_eq!(cfg.slack_token, "xoxb-fixture");
     assert_eq!(cfg.slack_channel, "#qam-review");
     assert_eq!(cfg.slack_poll_interval, 90);
     assert_eq!(cfg.slack_watch_timeout, 3600);
 
-    // [obs] section: explicit overrides land, an omitted key keeps its default.
+    // [obs]
     assert_eq!(cfg.obs_api_url, "https://api.example.de");
     assert_eq!(cfg.obs_request_timeout, 90);
 
-    // An option absent from the fixture keeps its default.
     assert_eq!(cfg.fancy_reports_url, "https://qam.suse.de/reports");
 }

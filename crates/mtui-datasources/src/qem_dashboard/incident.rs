@@ -18,8 +18,7 @@ use crate::openqa::base::IncidentName;
 use super::client::QemDashboardClient;
 
 /// Package-name suffixes qem-bot demotes when choosing an incident's short
-/// name (issue #433, B2; `qem-bot/openqabot/types/submission.py:29-72`,
-/// `sort_packages`).
+/// name (#433; `qem-bot/openqabot/types/submission.py:29-72`, `sort_packages`).
 const DEMOTED_ARCH_SUFFIXES: &[&str] = &[
     "-aarch64", "-armv7l", "-armv6l", "-x86_64", "-i586", "-i686",
 ];
@@ -33,22 +32,20 @@ fn is_demoted_package_name(name: &str) -> bool {
 
 /// Incident metadata from the QEM Dashboard.
 ///
-/// On construction it resolves the incident
-/// number (SLFO 1.2 requests key on the review id; everything else keys on the
-/// maintenance id) and fetches the incident record. A missing/failed fetch
-/// leaves [`data`](Self::data) as `None` — the [`is_present`](Self::is_present)
-/// predicate reflects that.
+/// Construction resolves the incident number (SLFO keys on the review id,
+/// everything else on the maintenance id) and fetches the incident record; a
+/// missing/failed fetch leaves [`data`](Self::data) as `None`, which
+/// [`is_present`](Self::is_present) reports.
 #[derive(Debug, Clone)]
 pub struct QemIncident {
     /// The request/review id of the incident.
     pub rrid: RequestReviewID,
     /// The resolved dashboard incident number (a maintenance or review id).
     pub incident_number: String,
-    /// The report's own [`UpdateSource`], as resolved by the caller at load
-    /// time from the template's `gitea_commit_hash` — the fallback the
-    /// [`update_source`](Self::update_source) accessor uses when no dashboard
-    /// record is available (see
-    /// [`source_from_record`](Self::source_from_record)).
+    /// The report's own [`UpdateSource`], resolved by the caller at load time
+    /// from the template's `gitea_commit_hash`;
+    /// [`update_source`](Self::update_source) falls back to it when no dashboard
+    /// record is available.
     pub source: UpdateSource,
     /// The shared dashboard client (reused by the auto-workflow provider).
     pub client: QemDashboardClient,
@@ -59,10 +56,9 @@ pub struct QemIncident {
 impl QemIncident {
     /// Build the incident metadata: resolve the number, then fetch the record.
     ///
-    /// `source` is the report's own [`UpdateSource`] (resolved at load from
-    /// the template's `gitea_commit_hash`), used as the fallback when no
-    /// dashboard record is available — see
-    /// [`update_source`](Self::update_source).
+    /// `source` is the report's own [`UpdateSource`], the fallback for
+    /// [`update_source`](Self::update_source) when no dashboard record is
+    /// available.
     ///
     /// # Errors
     ///
@@ -82,12 +78,10 @@ impl QemIncident {
     /// seam), fetching the incident record eagerly on construction.
     ///
     /// Skips the fetch entirely for a Product Increment: PI is connected to
-    /// neither qem-dashboard nor openQA (issue #433, F5 — its RRID's
-    /// `maintenance_id` slot holds a product-family string, not an id, so
-    /// every id-shaped use of it here would be meaningless rather than merely
-    /// wrong). `data` is left `None`, identical to today's failed fetch
-    /// (`is_present()` false, `get_incident_name()` empty) — the only
-    /// observable difference is the removed request and its log line.
+    /// neither qem-dashboard nor openQA, and its RRID's `maintenance_id` slot
+    /// holds a product-family string rather than an id, so every id-shaped use
+    /// of it would be meaningless (#433). `data` is left `None`, indistinguishable
+    /// from a failed fetch apart from the absent request.
     #[must_use = "the fetched incident metadata should be used"]
     pub async fn with_client(
         rrid: RequestReviewID,
@@ -111,19 +105,16 @@ impl QemIncident {
 
     /// Resolve the dashboard incident number from an [`RequestReviewID`].
     ///
-    /// Mirrors qem-bot's own dashboard writes (issue #433, F3): a git
-    /// submission's dashboard `number` is the Gitea PR number
-    /// (`gitea.py::698`), a classic one is the maintenance incident id
-    /// (`smeltsync.py::111`) — but for **every** SLFO update, both git- and
-    /// OBS-served, that number is the RRID's `review_id` (a Gitea PR number
-    /// for git, an OBS review-request number for OBS; the dashboard does not
-    /// distinguish them). Every other kind keys on the maintenance id.
+    /// Mirrors qem-bot's own dashboard writes (#433): a git submission's
+    /// dashboard `number` is the Gitea PR number (`gitea.py::698`), a classic
+    /// one is the maintenance incident id (`smeltsync.py::111`) — but for
+    /// **every** SLFO update, git- and OBS-served alike, it is the RRID's
+    /// `review_id`, which the dashboard does not distinguish by source. Every
+    /// other kind keys on the maintenance id.
     ///
-    /// This is a `kind`-only predicate, not an [`UpdateSource`] one: both
-    /// SLFO sources key on `review_id`, so the fact the RRID's shape cannot
-    /// resolve (issue #433) never enters here. Do not add an `UpdateSource`
-    /// parameter — it would be unused and imply a distinction that does not
-    /// exist (see the plan's F4).
+    /// Deliberately a `kind`-only predicate: both SLFO sources key on
+    /// `review_id`, so an [`UpdateSource`] parameter would be unused and would
+    /// imply a distinction that does not exist.
     ///
     /// [`RequestReviewID`]: mtui_types::RequestReviewID
     /// [`UpdateSource`]: mtui_types::UpdateSource
@@ -139,12 +130,11 @@ impl QemIncident {
     /// Return the incident's short name, for build-query compatibility.
     ///
     /// `None` when there is no incident record or no packages, else the name
-    /// chosen by qem-bot's own `sort_packages` ordering (issue #433, B2):
-    /// arch-suffixed and `-livepatch-` names are demoted *first*, then the
-    /// remaining candidates are sorted by length, then alphabetically; the
-    /// first survivor wins. Plain shortest-by-length disagrees with this on a
-    /// livepatch or arch-split submission, and the two diverging is exactly
-    /// how B2 went unnoticed: the `build` query then matches no openQA job.
+    /// chosen by qem-bot's own `sort_packages` ordering (#433): arch-suffixed
+    /// and `-livepatch-` names are demoted *first*, then the rest sort by
+    /// length, then alphabetically, and the first survivor wins. Plain
+    /// shortest-by-length disagrees on a livepatch or arch-split submission,
+    /// and the `build` query then matches no openQA job.
     #[must_use]
     pub fn get_incident_name(&self) -> Option<String> {
         let packages = self.data.as_ref()?.get("packages")?.as_array()?;
@@ -161,12 +151,12 @@ impl QemIncident {
     /// The dashboard record's own `type` field, resolved to an
     /// [`UpdateSource`], when a record is available.
     ///
-    /// `None` only when no incident record was fetched at all (dashboard
-    /// down, or PI, which never fetches one — see [`with_client`](Self::with_client));
+    /// `None` only when no record was fetched at all (dashboard down, or PI,
+    /// which never fetches one), in which case
     /// [`update_source`](IncidentName::update_source) falls back to
-    /// [`source`](Self::source) in that case. When a record *is* present, a
-    /// missing or blank `type` field resolves to `Obs` (not a fallback),
-    /// matching qem-bot's own `default_submission_type = "smelt"`.
+    /// [`source`](Self::source). With a record present, a missing or blank
+    /// `type` resolves to `Obs` — not a fallback — matching qem-bot's own
+    /// `default_submission_type = "smelt"`.
     #[must_use]
     pub fn source_from_record(&self) -> Option<UpdateSource> {
         let record = self.data.as_ref()?;
@@ -185,16 +175,15 @@ impl IncidentName for QemIncident {
     /// The incident's short name for openQA build queries.
     ///
     /// Delegates to the inherent [`get_incident_name`](Self::get_incident_name),
-    /// falling back to an empty string when no incident record / package is
-    /// available; an empty name yields the same `:prefix:mid:` shape
+    /// falling back to an empty string, which yields the `:prefix:mid:` shape
     /// the connectors already tolerate.
     fn get_incident_name(&self) -> String {
         Self::get_incident_name(self).unwrap_or_default()
     }
 
-    /// The resolved dashboard incident number (the openQA `build` middle
-    /// component — B3: qem-bot writes the dashboard `number`, not the RRID's
-    /// maintenance id).
+    /// The resolved dashboard incident number — the openQA `build` middle
+    /// component, which qem-bot writes as the dashboard `number`, not the
+    /// RRID's maintenance id.
     fn incident_number(&self) -> String {
         self.incident_number.clone()
     }
@@ -232,34 +221,29 @@ mod tests {
         assert_eq!(QemIncident::incident_number(&rrid), "199773");
     }
 
-    /// B1: an OBS-served `SLFO:1.1` request also keys on the review id, not
-    /// the maintenance id — the predicate is `kind == Slfo` alone (issue
-    /// #433, F4: both git and OBS SLFO key on `review_id`). Before this fix
-    /// `incident_number("SUSE:SLFO:1.1:418286")` returned `"1.1"`, which made
-    /// mtui GET `/api/incidents/1.1` (not an incident number) for every
-    /// OBS-served `1.1` update. Must be observed red against the unfixed
-    /// `maintenance_id == "1.2"` guard.
+    /// An OBS-served `SLFO:1.1` request keys on the review id too: the
+    /// predicate is `kind == Slfo` alone (#433). The unfixed
+    /// `maintenance_id == "1.2"` guard returned `"1.1"` here, making mtui GET
+    /// `/api/incidents/1.1` for every OBS-served `1.1` update — this must be
+    /// observed red against it.
     #[test]
     fn incident_number_uses_review_id_for_slfo_1_1() {
         let rrid: RequestReviewID = "SUSE:SLFO:1.1:199773".parse().unwrap();
         assert_eq!(QemIncident::incident_number(&rrid), "199773");
     }
 
-    /// A hypothetical future SLFO maintenance id — there is no SLFO 2.0
-    /// product, and none is expected soon — still keys on the review id: the
-    /// predicate is open on `kind`, not closed on a maintenance-id literal.
+    /// A hypothetical future SLFO maintenance id still keys on the review id:
+    /// the predicate is open on `kind`, not a maintenance-id literal.
     #[test]
     fn incident_number_uses_review_id_for_any_slfo_maintenance_id() {
         let rrid: RequestReviewID = "SUSE:SLFO:2.0:199773".parse().unwrap();
         assert_eq!(QemIncident::incident_number(&rrid), "199773");
     }
 
-    /// A PI or Maintenance request that happens to carry a SLFO-shaped
-    /// maintenance id (`1.2`) still keys on the maintenance id: the guard is
-    /// `kind == Slfo`, not a maintenance-id literal match. Pins the `kind`
-    /// half of the predicate, which a "simplification" down to
-    /// `maintenance_id == "1.2"` would drop while every other test stayed
-    /// green.
+    /// A PI or Maintenance request carrying a SLFO-shaped maintenance id
+    /// (`1.2`) still keys on the maintenance id. Pins the `kind` half of the
+    /// predicate, which a "simplification" to `maintenance_id == "1.2"` would
+    /// drop while every other test stayed green.
     #[test]
     fn incident_number_ignores_maintenance_id_1_2_on_non_slfo_kinds() {
         let pi: RequestReviewID = "SUSE:PI:1.2:199773".parse().unwrap();
@@ -318,12 +302,10 @@ mod tests {
         assert_eq!(incident.get_incident_name(), None);
     }
 
-    /// B2: a `-livepatch-` name is demoted below a plain name **even when it
-    /// is shorter** — plain shortest-by-length would pick the (wrong)
-    /// livepatch name here (`a-livepatch-b` is 13 chars, `kernel-default` is
-    /// 14), so this case is the one that actually discriminates the two
-    /// orderings, unlike a case where the correct answer also happens to be
-    /// globally shortest.
+    /// A `-livepatch-` name is demoted below a plain one **even when shorter**
+    /// (`a-livepatch-b` 13 chars vs `kernel-default` 14), so this case
+    /// discriminates the two orderings — one where the right answer is also the
+    /// globally shortest would not.
     #[tokio::test]
     async fn get_incident_name_demotes_livepatch_packages() {
         let server = MockServer::start().await;
@@ -344,9 +326,9 @@ mod tests {
         );
     }
 
-    /// B2: an arch-suffixed name is demoted below a plain name, again picking
-    /// a case where the demoted candidate (`ab-x86_64`, 9 chars) is shorter
-    /// than the correct answer (`kernel-default`, 14 chars).
+    /// An arch-suffixed name is demoted below a plain one, again with the
+    /// demoted candidate (`ab-x86_64`, 9) shorter than the answer
+    /// (`kernel-default`, 14).
     #[tokio::test]
     async fn get_incident_name_demotes_arch_suffixed_packages() {
         let server = MockServer::start().await;
@@ -367,8 +349,8 @@ mod tests {
         );
     }
 
-    /// B2: among non-demoted candidates of equal length, the alphabetically
-    /// first wins.
+    /// Among non-demoted candidates of equal length, the alphabetically first
+    /// wins.
     #[tokio::test]
     async fn get_incident_name_breaks_length_ties_alphabetically() {
         let server = MockServer::start().await;
@@ -386,8 +368,7 @@ mod tests {
         assert_eq!(incident.get_incident_name().as_deref(), Some("bat"));
     }
 
-    /// Site 5: the dashboard record's own `type` wins when a record is
-    /// present.
+    /// The dashboard record's own `type` wins when a record is present.
     #[tokio::test]
     async fn update_source_prefers_the_dashboard_records_type() {
         let server = MockServer::start().await;
@@ -439,11 +420,10 @@ mod tests {
         assert_eq!(incident.update_source(), UpdateSource::Git);
     }
 
-    /// F5: a PI request is on neither service, so `with_client` skips the
-    /// dashboard fetch entirely — zero requests, even though a mock is
-    /// mounted and would happily answer. A `SUSE:Maintenance` RRID against
-    /// the *same* mock still fetches, so this test can tell "PI skipped"
-    /// apart from "mock never mounted".
+    /// A PI request is on neither service, so `with_client` skips the fetch
+    /// entirely — zero requests, though a mounted mock would answer. The same
+    /// mock is then hit with a `SUSE:Maintenance` RRID, so "PI skipped" cannot
+    /// be confused with "mock never mounted".
     #[tokio::test]
     async fn pi_skips_the_dashboard_fetch_entirely() {
         let server = MockServer::start().await;

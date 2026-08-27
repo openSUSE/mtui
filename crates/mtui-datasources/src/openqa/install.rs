@@ -6,10 +6,9 @@
 //! jobs (`qam-incidentinstall-SLFO`) instead publish
 //! `SLFO_update_install-zypper.log`.
 //!
-//! A single value cannot express this per-job-name divergence, so the URL
-//! builders in the auto connector consult [`install_logfile_for`], which maps a
-//! job name to its log filename by marker substring and falls back to a default
-//! for the classic case.
+//! The auto connector's URL builders therefore consult [`install_logfile_for`],
+//! which maps a job name to its log filename by marker substring and falls back
+//! to the classic default.
 
 /// Marker → install-log-filename overrides.
 ///
@@ -19,16 +18,14 @@ const INSTALL_LOGFILES: &[(&str, &str)] = &[("-SLFO", "SLFO_update_install-zyppe
 
 /// The classic install-log filename.
 ///
-/// This value has not meaningfully changed in practice, so it is pinned here
-/// as a constant rather than adding an `[openqa]` config surface.
+/// Unchanged in practice, so pinned here rather than given an `[openqa]` config
+/// surface.
 const DEFAULT_INSTALL_LOGFILE: &str = "update_install-zypper.log";
 
 /// Return the install-log filename for an openQA install-test job.
 ///
 /// Matching is by marker substring so name variants resolve to the same log;
 /// unknown or empty names return [`DEFAULT_INSTALL_LOGFILE`].
-///
-/// The default is pinned to [`DEFAULT_INSTALL_LOGFILE`] (see the constant docs).
 #[must_use]
 pub(crate) fn install_logfile_for(test_name: &str) -> &'static str {
     for (marker, logfile) in INSTALL_LOGFILES {

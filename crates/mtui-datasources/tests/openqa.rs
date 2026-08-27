@@ -1,9 +1,9 @@
 //! Integration tests for the openQA connectors against a real HTTP transport
 //! (`wiremock`).
 //!
-//! Covers the request/auth contract: `get_jobs` folds
-//! every failure into `None`, a well-formed response deserialises into jobs, and
-//! the signed request carries the `X-API-Key`/`X-API-Hash` auth headers.
+//! Covers the request/auth contract: `get_jobs` folds every failure into
+//! `None`, a well-formed response deserialises into jobs, and the signed request
+//! carries the `X-API-Key`/`X-API-Hash` headers.
 
 use mtui_datasources::VerifyPolicy;
 use mtui_datasources::openqa::base::{IncidentName, OpenQABase};
@@ -49,13 +49,11 @@ fn base_for_no_creds(server_uri: &str) -> OpenQABase {
     base_for(server_uri, dir.path())
 }
 
-/// Clears `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` for the guard's lifetime,
-/// restoring their prior value on drop. `ruoqa` 0.2 resolves this pair
-/// *ahead of* `client.conf`, so a test asserting a specific `client.conf`
-/// credential (or none at all) via [`base_for`]/[`base_for_no_creds`] must
-/// not see an ambient pair from the developer's or CI's shell. Must only be
-/// used inside `#[serial(openqa_config_env)]` tests: `std::env` mutation is
-/// process-global.
+/// Clears `$OPENQA_API_KEY`/`$OPENQA_API_SECRET` for the guard's lifetime.
+/// `ruoqa` 0.2 resolves that pair *ahead of* `client.conf`, so a test asserting
+/// a specific `client.conf` credential must not see an ambient pair from the
+/// developer's or CI's shell. Only usable inside `#[serial(openqa_config_env)]`
+/// tests: `std::env` mutation is process-global.
 struct ApiEnvGuard {
     prev_key: Option<std::ffi::OsString>,
     prev_secret: Option<std::ffi::OsString>,
@@ -132,7 +130,7 @@ async fn get_jobs_returns_parsed_jobs_on_success() {
 
 #[tokio::test]
 async fn get_jobs_returns_none_on_error_status() {
-    // Upstream: an openqa_client RequestError (HTTP error code) yields None.
+    // An HTTP error status yields None.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/jobs"))
@@ -179,15 +177,12 @@ async fn try_get_jobs_errs_on_error_status() {
     assert!(base.try_get_jobs().await.is_err());
 }
 
-/// The `http://user:pass@host` form was already stripped of userinfo by
-/// `ruoqa::config::resolve`'s `netloc()` branch before 0.1.4 existed, so a
-/// credential there could never have regressed — it never reaches a request.
-/// The *bare-authority* form (no scheme, e.g. `alice:s3cret@host`) skips that
-/// branch and reached `Url::parse` untouched in 0.1.3, only gaining a strip
-/// in 0.1.4 (`config::resolve`'s post-parse `username()`/`password()`
-/// check). `describe` no longer sanitizes the URL itself — that's `ruoqa`'s
-/// job now — so this is the one assertion in this file that turns red on a
-/// `ruoqa 0.1.3` downgrade.
+/// The `http://user:pass@host` form was already stripped by
+/// `ruoqa::config::resolve`'s `netloc()` branch, so it never reaches a request.
+/// The *bare-authority* form (no scheme, `alice:s3cret@host`) skips that branch
+/// and only gained a strip in `ruoqa` 0.1.4's post-parse
+/// `username()`/`password()` check. Since `describe` no longer sanitizes the URL
+/// itself, this is the one assertion here that turns red on a 0.1.3 downgrade.
 #[tokio::test]
 async fn try_get_jobs_error_never_leaks_a_bare_authority_credential() {
     let dir = tempfile::tempdir().unwrap();
@@ -213,14 +208,12 @@ async fn try_get_jobs_ok_empty_on_valid_empty_body() {
 /// Drives `ruoqa`'s own redaction with a *real* `Error::CrossOriginRedirect`
 /// carrying a credentialed URL, rather than a hand-written string.
 ///
-/// `ruoqa::config::resolve` drops userinfo from the *client's own* base URL
-/// before any request, but a `Location` header is server-controlled: a
-/// malicious or misconfigured openQA instance could redirect off-origin to a
-/// URL embedding `user:pass@`. ruoqa refuses to follow it (same-origin only),
-/// and (>= 0.1.4) redacts both URLs in `Error::CrossOriginRedirect`'s
-/// `Display` itself. Pins the exact `***` marker, not just credential
-/// absence: a `ruoqa 0.1.3` downgrade renders both URLs verbatim, turning
-/// this red.
+/// `ruoqa::config::resolve` drops userinfo from the *client's own* base URL,
+/// but a `Location` header is server-controlled and could redirect off-origin to
+/// a URL embedding `user:pass@`. ruoqa refuses to follow it and (>= 0.1.4)
+/// redacts both URLs in `Error::CrossOriginRedirect`'s `Display`. Pins the exact
+/// `***` marker, not just credential absence: a 0.1.3 downgrade renders both
+/// verbatim and turns this red.
 #[tokio::test]
 async fn try_get_jobs_error_never_leaks_a_credential_from_a_redirect_location() {
     let server = MockServer::start().await;
@@ -241,12 +234,10 @@ async fn try_get_jobs_error_never_leaks_a_credential_from_a_redirect_location() 
     );
 }
 
-/// Risk 2 backstop: a connection-failure message must never contain
-/// reqwest's own `Display` suffix (`" for url (...)"`,
-/// reqwest-0.13.4/src/error.rs:280) — that would leak the request URL
-/// unredacted, bypassing `ruoqa`'s own `Connection` redaction entirely.
-/// Swapping `root_cause(source)` for `source.to_string()` in `describe`
-/// turns this red.
+/// A connection-failure message must never carry reqwest's own `" for url
+/// (...)"` suffix, which would leak the request URL unredacted and bypass
+/// `ruoqa`'s `Connection` redaction. Swapping `root_cause(source)` for
+/// `source.to_string()` in `describe` turns this red.
 #[tokio::test]
 async fn try_get_jobs_connection_failure_never_leaks_reqwests_own_url_suffix() {
     let base = base_for_no_creds("http://127.0.0.1:1");
@@ -257,10 +248,9 @@ async fn try_get_jobs_connection_failure_never_leaks_reqwests_own_url_suffix() {
     );
 }
 
-/// Risk 1: the message still carries a real transport cause, not just the
-/// redacted URL — dropping `root_cause`'s recovered cause in `describe`
-/// turns this red. Deliberately doesn't pin the OS-specific errno text (61
-/// on macOS, 111 on Linux).
+/// The message must still carry a real transport cause, not just the redacted
+/// URL: dropping `root_cause`'s recovered cause in `describe` turns this red.
+/// Deliberately does not pin the OS-specific errno text.
 #[tokio::test]
 async fn try_get_jobs_connection_failure_message_carries_a_transport_cause() {
     let base = base_for_no_creds("http://127.0.0.1:1");
@@ -380,16 +370,13 @@ async fn request_carries_auth_headers_from_openqa_config_env() {
     assert_eq!(base.get_jobs().await.map(|j| j.len()), Some(0));
 }
 
-/// Pins the *upstream* contract this crate's `build_openqa_client_with_transport`
-/// depends on never having called `.tls()`/`.timeouts()`: combining either with
-/// an injected `http_client` is a runtime `Error::IncompatibleHttpClient`, not
-/// a compile error, so a `ruoqa` upgrade that loosened this would only surface
-/// as a mysterious runtime failure. This test exercises `ruoqa::ClientBuilder`
-/// directly (not mtui's wrapper, which never calls either) to record that
-/// contract explicitly. The regression guard for mtui's *own* code never
-/// re-adding either call is
-/// `openqa::client::tests::build_openqa_client_succeeds_with_default_verify`
-/// (in `src/openqa/client.rs`), which builds through the real wrapper.
+/// Pins the `ruoqa` contract that `build_openqa_client_with_transport` relies
+/// on: combining `.tls()`/`.timeouts()` with an injected `http_client` is a
+/// runtime `Error::IncompatibleHttpClient`, not a compile error, so an upgrade
+/// loosening it would only surface as a mysterious runtime failure. Exercises
+/// `ruoqa::ClientBuilder` directly; the guard against mtui's own code re-adding
+/// either call is
+/// `openqa::client::tests::build_openqa_client_succeeds_with_default_verify`.
 #[test]
 fn injected_transport_rejects_tls_override() {
     let err = ruoqa::ClientBuilder::new()

@@ -1,10 +1,9 @@
 //! Hand-written MCP tools for editing the loaded testreport checkout file(s).
 //!
 //! The auto-generated command tools ([`crate::tools`]) cover every `Command`,
-//! but the REPL `edit` command
-//! spawns `$EDITOR` on `metadata.path` — meaningless under MCP (and hence
-//! deny-listed). This module replaces it with five explicit tools that operate
-//! directly on the file path tracked by the loaded [`mtui_testreport::TestReport`]:
+//! but the REPL `edit` spawns `$EDITOR` on `metadata.path` — meaningless under
+//! MCP, hence deny-listed. These five tools replace it, operating directly on
+//! the file path tracked by the loaded [`mtui_testreport::TestReport`]:
 //!
 //! * `testreport_read` — return a checkout file's content plus a line count
 //!   (defaults to the `log` file; `relpath` reads any other checkout file,
@@ -18,27 +17,25 @@
 //! ## Locking
 //!
 //! Each tool takes the per-RRID [`McpSession::scoped_lock`] for its `template`:
-//! entering the registry gate in *shared* mode keeps the loaded set stable for
-//! the call (no concurrent `load_template`/`unload`) while tools on *other*
-//! templates run in parallel, and the per-RRID lock serialises the file op
-//! against same-template foreground dispatch (e.g. a concurrent `commit`). The
-//! inner `Mutex<Session>` is still taken briefly for the actual state
-//! read/write.
+//! the registry gate in *shared* mode keeps the loaded set stable for the call
+//! (no concurrent `load_template`/`unload`) while tools on *other* templates run
+//! in parallel, and the per-RRID lock serialises the file op against
+//! same-template foreground dispatch (a concurrent `commit`). The inner
+//! `Mutex<Session>` is still taken briefly for the state read/write.
 //!
 //! ## Multi-template resolution
 //!
-//! Resolution mirrors the auto-generated tools' `-T/--template` contract even
-//! though locking is coarse: `template=<rrid>` selects a loaded report; omitted
-//! with >1 loaded refuses (no client-addressable "active" pointer under MCP);
-//! omitted with 0/1 loaded falls back to the active report.
+//! Mirrors the auto-generated tools' `-T/--template` contract: `template=<rrid>`
+//! selects a loaded report; omitted with >1 loaded refuses (there is no
+//! client-addressable "active" pointer under MCP); omitted with 0/1 loaded falls
+//! back to the active report.
 //!
 //! ## Progress heartbeats
 //!
-//! [`dispatch_testreport_tool`] races the tool body against the same heartbeat as
-//! the auto-generated command tools (via `run_with_heartbeat`) when the client
-//! supplied a `progressToken`, so a slow file op (a large `testreport_read`/
-//! `testreport_write`) does not time the client out. The frames carry the tool
-//! name; a `None` sink takes the zero-overhead path.
+//! [`dispatch_testreport_tool`] races the tool body against the same
+//! `run_with_heartbeat` the command tools use when the client supplied a
+//! `progressToken`, so a slow file op does not time the client out. The frames
+//! carry the tool name; a `None` sink takes the zero-overhead path.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -94,12 +91,11 @@ fn refuse(msg: impl Into<String>) -> McpCommandError {
 /// * `template` omitted with >1 loaded → refuse `"multiple templates loaded (…)"`.
 /// * `template` omitted with 0/1 loaded → the active report.
 ///
-/// Then validates the report is loaded and has a path, else
+/// The report must then be loaded and have a path, else
 /// `"no testreport loaded; run `load_template` first"`.
 fn resolve_path(session: &Session, template: Option<&str>) -> Result<PathBuf, McpCommandError> {
-    // Reads `(is_loaded, path)` from a report, then applies the shared "loaded +
-    // has path" validation. Kept as a closure so both the named-template and
-    // active-report branches funnel through one place.
+    // A closure so the named-template and active-report branches funnel the
+    // "loaded + has path" validation through one place.
     let validate = |is_loaded: bool, path: Option<PathBuf>| -> Result<PathBuf, McpCommandError> {
         if !is_loaded {
             return Err(refuse("no testreport loaded; run `load_template` first"));
@@ -107,7 +103,6 @@ fn resolve_path(session: &Session, template: Option<&str>) -> Result<PathBuf, Mc
         path.ok_or_else(|| refuse("no testreport loaded; run `load_template` first"))
     };
 
-    // Resolve the target RRID (named, or the single/active one).
     let rrid = if let Some(rrid) = template {
         rrid.to_owned()
     } else {
@@ -119,8 +114,7 @@ fn resolve_path(session: &Session, template: Option<&str>) -> Result<PathBuf, Mc
         }
         match session.templates.active_rrid() {
             Some(r) => r.to_owned(),
-            // Nothing loaded: read the null active report through `metadata()` so
-            // the "no testreport loaded" message is produced consistently.
+            // Read the null active report so the refusal message is consistent.
             None => {
                 let report = session.metadata();
                 return validate(report.is_loaded(), report.base().path.clone());
@@ -128,11 +122,10 @@ fn resolve_path(session: &Session, template: Option<&str>) -> Result<PathBuf, Mc
         }
     };
 
-    // Read the target report. These hand-written tools do not run through the
-    // fan-out driver, so no per-call active guard is installed — read the entry
-    // directly. If it *is* the active template and a guard happens to hold it
-    // (e.g. after a prior foreground command), read through `metadata()` instead
-    // of a would-fail `try_lock`.
+    // These tools never run through the fan-out driver, so no per-call active
+    // guard is installed and the entry is read directly — unless a guard from a
+    // prior foreground command still holds it, where `try_lock` would fail and
+    // `metadata()` is the way in.
     if session.active_report_is_guarded(&rrid) {
         let report = session.metadata();
         validate(report.is_loaded(), report.base().path.clone())
@@ -159,15 +152,12 @@ fn resolve_dir(session: &Session, template: Option<&str>) -> Result<PathBuf, Mcp
 
 /// Resolve `relpath` under `base`, refusing anything that escapes it.
 ///
-/// Guards against `..` traversal and absolute paths: the target must be
-/// `base` itself or a descendant of it.
-///
-/// Two-stage containment: a cheap lexical `.`/`..` collapse first (so a
-/// not-yet-existing file still resolves — `canonicalize` would fail on a missing
-/// path), then a symlink-aware re-check that canonicalizes the target's longest
-/// *existing* ancestor. The second stage catches a symlink placed *inside* the
-/// checkout that points outside the tree, which the lexical pass alone would
-/// follow.
+/// The target must be `base` itself or a descendant, guarding `..` traversal and
+/// absolute paths. Containment is checked twice: a cheap lexical `.`/`..`
+/// collapse first, so a not-yet-existing file still resolves where
+/// `canonicalize` would fail, then a symlink-aware re-check over the target's
+/// longest *existing* ancestor — which catches an in-tree symlink pointing
+/// outside the tree, as the lexical pass alone would follow it.
 fn safe_template_file(base: &Path, relpath: &str) -> Result<PathBuf, McpCommandError> {
     let base_resolved = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     let joined = base_resolved.join(relpath);
@@ -177,12 +167,9 @@ fn safe_template_file(base: &Path, relpath: &str) -> Result<PathBuf, McpCommandE
     if target != base_resolved && !target.starts_with(&base_resolved) {
         return Err(escape());
     }
-    // Symlink-aware re-check: canonicalize the longest existing ancestor of the
-    // (possibly not-yet-existing) target and re-verify containment. This defeats
-    // an in-tree symlink whose canonical destination lies outside `base`.
-    // Compare against the *canonicalized* base ancestor so a base that does not
-    // itself exist on disk (its symlink-free lexical form) is not spuriously
-    // rejected against a canonicalized target prefix (e.g. `/tmp`→`/private/tmp`).
+    // Compare against the *canonicalized* base ancestor, so a base that does not
+    // itself exist on disk is not spuriously rejected against a canonicalized
+    // target prefix (e.g. `/tmp`→`/private/tmp`).
     let resolved = resolve_existing_ancestor(&target);
     let base_canon = resolve_existing_ancestor(&base_resolved);
     if resolved != base_canon && !resolved.starts_with(&base_canon) {
@@ -296,9 +283,8 @@ struct StreamRead {
 /// Blocking; call inside [`spawn_blocking`](tokio::task::spawn_blocking). Reads
 /// at most `max_bytes` source bytes (`0` = unbounded), counting every line for
 /// `line_count` while buffering only the requested content, so a huge file costs
-/// O(1) memory beyond the window. `window` is `None` for a whole-file read (the
-/// byte-capped content is returned) or `Some((offset_1based, limit))` for a
-/// windowed read (only those lines are buffered). Decoding is UTF-8-lossy per
+/// O(1) memory beyond the window. `window` is `None` for a whole-file read or
+/// `Some((offset_1based, limit))` for a windowed one. Decoding is UTF-8-lossy per
 /// line; splitting on the `\n` byte cannot split a codepoint.
 fn stream_read(
     path: &Path,
@@ -391,14 +377,11 @@ async fn testreport_read(
         return Err(refuse(format!("offset must be >= 1 (got {offset})")));
     }
 
-    // Resolve the target path under the session lock, then release it before any
-    // filesystem I/O: only the `PathBuf` needs the guard, the bytes do not, so a
-    // slow read cannot stall concurrent same-lock work.
+    // Only the `PathBuf` needs the session lock, so it is released before the
+    // file I/O: a slow read must not stall concurrent same-lock work.
     let path = {
-        // Serialise against same-template dispatch and keep the loaded set stable
-        // for this call (gate-shared) while tools on other templates run in
-        // parallel; the gate scope is held for the whole call, the inner mutex
-        // only for the path resolution.
+        // The gate scope is held for the whole call, the inner mutex only for the
+        // path resolution.
         let _scope = session.scoped_lock(template).await;
         let guard = session.session().lock().await;
         if let Some(rel) = relpath {
@@ -419,18 +402,16 @@ async fn testreport_read(
     let window = windowed.then_some((offset, limit));
     let max_input = session.max_input_bytes();
 
-    // Read off the runtime worker: a large or network-mounted file must not block
-    // a Tokio thread, and `stream_read` never buffers more than the window.
+    // Off the runtime worker: a large or network-mounted file must not block a
+    // Tokio thread.
     let read_path = path.clone();
     let result = tokio::task::spawn_blocking(move || stream_read(&read_path, max_input, window))
         .await
         .map_err(|e| refuse(format!("read task failed: {e}")))??;
 
-    // Always apply the wire-result cap: the source cap (`max_input_bytes`) is
-    // typically far larger than the output budget (`max_output_bytes`), so even a
-    // source-truncated payload can still exceed the wire budget and must be
-    // trimmed. `stream_read` has already appended its own source-truncation
-    // notice at the tail; `cap_output` may trim into it, which is acceptable.
+    // The source cap is typically far larger than the output budget, so even a
+    // source-truncated payload can exceed the wire budget. `cap_output` may trim
+    // into `stream_read`'s own truncation notice, which is acceptable.
     let cap = session.max_output_bytes();
     let content = cap_output(result.content, cap);
 
@@ -679,9 +660,9 @@ async fn testreport_fill(
 }
 
 /// If `body` is exactly `<ws>LABEL<ws>VALUE` for one of `values`, return the
-/// leading `label + padding` so the replacement keeps
-/// the template's column alignment. Only the exact placeholder value matches, so
-/// an already-filled line is never touched (idempotent).
+/// leading `label + padding` so the replacement keeps the template's column
+/// alignment. Only the exact placeholder value matches, keeping the fill
+/// idempotent over an already-filled line.
 fn match_placeholder<'a>(body: &'a str, label: &str, values: &[&str]) -> Option<&'a str> {
     let idx = body.find(label)?;
     // Leading portion must be whitespace only.
@@ -921,9 +902,8 @@ async fn dispatch_testreport_tool_inner(
     name: &str,
     kwargs: &Map<String, Value>,
 ) -> Result<Value, McpCommandError> {
-    // Reject misspelled fields up front, mirroring the tool's strict schema. The
-    // allowed keys are exactly the descriptor's advertised properties, so the
-    // check can never drift from the schema.
+    // The allowed keys are the descriptor's advertised properties, so this
+    // cannot drift from the tool's strict schema.
     if let Some(desc) = testreport_tool_descriptors()
         .into_iter()
         .find(|d| d.name == name)
@@ -1173,8 +1153,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_source_cap_truncates_with_notice() {
-        // Cap the *source* read well below the file size: the read stops early,
-        // the notice is appended, and line_count reflects lines read to the cap.
+        // A source cap below the file size stops the read early, appends the
+        // notice, and leaves line_count at the lines read up to the cap.
         let (session, tmp) = session_with_input_cap(10);
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await; // 15 bytes
@@ -1197,9 +1177,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_source_cap_windowed_buffers_only_window() {
-        // A windowed read past a large file: only the window is buffered, but the
-        // source cap still bounds how far we scan. With a generous cap the window
-        // is returned intact and line_count is the true total.
+        // Only the window is buffered, but the source cap still bounds the scan;
+        // with a generous cap the window is intact and line_count is the total.
         let (session, tmp) = session_with_input_cap(0); // uncapped source
         let path = log_path(&tmp);
         let big: String = (0..1000).map(|i| format!("line{i}\n")).collect();
@@ -1543,8 +1522,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_refuses_unknown_property() {
-        // A misspelled field (`relpat` for `relpath`) must be refused, not
-        // silently dropped into a whole-`log` read.
+        // `relpat` must be refused, not dropped into a whole-`log` read.
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "a\nb\n").await;
@@ -1574,8 +1552,7 @@ mod tests {
     fn safe_template_file_blocks_in_tree_symlink_escape() {
         use std::os::unix::fs::symlink;
 
-        // A checkout containing a symlink that points *outside* the tree must be
-        // refused even though the relpath is lexically inside `base`.
+        // Refused even though the relpath is lexically inside `base`.
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path().join("checkout");
         std::fs::create_dir_all(&base).unwrap();

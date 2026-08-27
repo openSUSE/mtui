@@ -1,16 +1,11 @@
 //! The `edit` REPL command and its `$EDITOR` spawn.
 //!
-//! Spawning `$EDITOR` (default `vim`) on the file inherits the process stdio,
-//! so the child needs the controlling terminal — which only the `mtui` binary
-//! owns. `mtui-core`'s `edit` command is therefore a headless-error stub
-//! (mirroring `shell`); the REPL **intercepts** the `edit` line before
-//! dispatch (see [`is_edit_line`]) and spawns the editor here, where the local
-//! TTY is available. A host library / the headless MCP engine never runs this
-//! path.
-//!
-//! [`run_edit`] returns a typed [`anyhow::Result`] and the REPL renders any
-//! failure in red (the same path `run_shell` uses), matching the project's
-//! "typed `Result` over log-and-swallow" preference.
+//! Spawning `$EDITOR` (default `vim`) inherits the process stdio, so the child
+//! needs the controlling terminal only the `mtui` binary owns. `mtui-core`'s
+//! `edit` is therefore a headless-error stub, mirroring `shell`, and the REPL
+//! intercepts the `edit` line before dispatch ([`is_edit_line`]) to spawn the
+//! editor here. [`run_edit`] returns a typed [`anyhow::Result`] rather than
+//! logging and swallowing; the REPL renders any failure in red.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -21,9 +16,9 @@ use mtui_core::Session;
 /// Peeks a REPL input line: if its first token is the `edit` command, returns
 /// its argv (everything after the command word); otherwise `None`.
 ///
-/// The pure seam the REPL uses to route `edit` to the local `$EDITOR` spawn
-/// instead of the headless engine (kept off the reedline boundary so it is
-/// unit-testable, mirroring [`crate::shell::is_shell_line`]).
+/// The pure seam the REPL routes `edit` through to reach the local `$EDITOR`
+/// spawn instead of the headless engine, kept off the reedline boundary so it is
+/// unit-testable (mirroring [`crate::shell::is_shell_line`]).
 #[must_use]
 pub(crate) fn is_edit_line(line: &str) -> Option<Vec<String>> {
     let tokens = shlex::split(line)?;
@@ -34,8 +29,8 @@ pub(crate) fn is_edit_line(line: &str) -> Option<Vec<String>> {
 /// Resolves the edit target: the explicit `filename` argument, or — when none is
 /// given — the active report's template path.
 ///
-/// Errors when nothing is loaded, with the same "not loaded" message the
-/// engine's `require_update` would give.
+/// Errors when nothing is loaded, with the engine's own `require_update`
+/// message.
 fn resolve_path(session: &Session, filename: Option<&String>) -> anyhow::Result<PathBuf> {
     if let Some(name) = filename {
         return Ok(PathBuf::from(name));
@@ -53,15 +48,13 @@ fn resolve_path(session: &Session, filename: Option<&String>) -> anyhow::Result<
 /// Runs the `edit` command: parse the optional `filename`, resolve the path,
 /// then spawn `$EDITOR` (default `vim`) on it with inherited stdio.
 ///
-/// `$EDITOR` is passed straight to `Command::new(editor).arg(path)` with no
-/// shell-word splitting, so `$EDITOR="code -w"` is treated as a single program
-/// name (a deliberate choice, not word-split).
+/// `$EDITOR` reaches `Command::new` unsplit, so `$EDITOR="code -w"` is one
+/// program name — deliberate, not an oversight.
 ///
 /// # Errors
 ///
-/// Returns an error on an argument-parse failure (clap usage), an unresolved
-/// default path (no template loaded), a spawn failure (`$EDITOR` not found), or
-/// a non-zero editor exit. The REPL renders it; nothing is swallowed.
+/// Returns an error on an argument-parse failure, an unresolved default path
+/// (no template loaded), a spawn failure, or a non-zero editor exit.
 pub(crate) fn run_edit(session: &mut Session, argv: &[String]) -> anyhow::Result<()> {
     let parser = clap::Command::new("edit").no_binary_name(true).arg(
         Arg::new("filename")
@@ -101,8 +94,8 @@ mod tests {
         Session::with_display(Config::default(), true, display)
     }
 
-    /// Writes an executable stub script that records its argv (one per line) to
-    /// `record` and exits with `code`. Returns its path (used as `$EDITOR`).
+    /// An executable stub that records its argv (one per line) to `record` and
+    /// exits with `code`; its path is used as `$EDITOR`.
     #[cfg(unix)]
     fn editor_stub(dir: &std::path::Path, record: &std::path::Path, code: i32) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -128,7 +121,6 @@ mod tests {
         );
         assert_eq!(is_edit_line("run uname -a"), None);
         assert_eq!(is_edit_line(""), None);
-        // Unbalanced quote → no split.
         assert_eq!(is_edit_line("edit \"unbalanced"), None);
     }
 
@@ -156,8 +148,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the crate's
-    // single `env` serial domain makes the mutation exclusive.
+    // Edition-2024 env mutation is `unsafe`; the crate's single `env` serial
+    // domain makes it exclusive.
     #[serial_test::serial(env)]
     #[allow(unsafe_code)]
     fn run_edit_uses_editor_env_and_path() {
@@ -168,7 +160,7 @@ mod tests {
         let mut session = empty_session();
         // SAFETY: `#[serial(env)]` is the crate's one exclusion domain for the
         // process-global environment, so no other test reads, writes or
-        // *inherits* it (this one spawns `$EDITOR`) while this runs.
+        // *inherits* it — this one spawns `$EDITOR` — while this runs.
         unsafe {
             std::env::set_var("EDITOR", &stub);
         }
@@ -184,8 +176,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    // See `run_edit_uses_editor_env_and_path`: edition-2024 env mutation is
-    // `unsafe`, serialized on the crate's one `env` domain.
+    // See `run_edit_uses_editor_env_and_path`.
     #[serial_test::serial(env)]
     #[allow(unsafe_code)]
     fn run_edit_nonzero_exit_errors() {
@@ -194,9 +185,8 @@ mod tests {
         let stub = editor_stub(dir.path(), &record, 3);
 
         let mut session = empty_session();
-        // SAFETY: `#[serial(env)]`, the crate's one exclusion domain for the
-        // process-global environment; this test spawns `$EDITOR`, which inherits
-        // it.
+        // SAFETY: as above — `#[serial(env)]`, and this test spawns `$EDITOR`,
+        // which inherits the environment.
         unsafe {
             std::env::set_var("EDITOR", &stub);
         }

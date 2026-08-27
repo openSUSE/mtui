@@ -3,12 +3,9 @@
 //! Under `--transport http` one process serves many clients, and each must see
 //! **only its own** loaded template + SSH `targets`; sharing one session would
 //! let one client's `load_template` clobber another's. rmcp's streamable-HTTP
-//! transport enforces this by calling [`SessionRegistry::make_server`] once per
-//! new MCP session — so the correctness+security property to prove offline is:
-//! **the factory mints independent sessions whose state does not bleed.**
-//!
-//! These are offline unit tests of the factory boundary (no live HTTP round-trip
-//! in this bead — that is deferred).
+//! transport enforces that by calling [`SessionRegistry::make_server`] once per
+//! new MCP session, so the offline property to prove at that factory boundary is:
+//! **it mints independent sessions whose state does not bleed.**
 
 #![cfg(feature = "mcp")]
 

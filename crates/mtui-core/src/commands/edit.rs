@@ -10,14 +10,12 @@ use crate::session::Session;
 
 /// Edits the active testing template or a local file in `$EDITOR`.
 ///
-/// Spawning `$EDITOR` (default `vim`)
-/// on the controlling terminal needs the local TTY, which only the
-/// `mtui` binary owns; the command surface (name, optional `filename`, file-path
-/// completion) is defined here so the registry and MCP synthesiser see it, but
-/// the runtime editor spawn is intercepted in `crates/mtui-cli/src/edit.rs`
-/// (like `shell`) — the shared engine, which the headless MCP also drives, has
-/// no controlling terminal. Invoked headlessly it errors cleanly rather than
-/// hanging. REPL-only — on the MCP deny-list.
+/// Spawning `$EDITOR` (default `vim`) needs the local TTY, which only the `mtui`
+/// binary owns. Only the surface (name, optional `filename`, file-path
+/// completion) is defined here, so the registry and MCP synthesiser see it; the
+/// spawn is intercepted in `crates/mtui-cli/src/edit.rs`, like `shell`'s, and
+/// headless it errors cleanly rather than hanging. REPL-only, on the MCP
+/// deny-list.
 pub struct Edit;
 
 #[async_trait]
@@ -44,9 +42,8 @@ impl Command for Edit {
     }
 
     async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
-        // The editor attaches to the controlling terminal, which only the REPL
-        // owns; the CLI intercepts the `edit` line before dispatch and spawns
-        // `$EDITOR` there. Headless callers get a clean error instead of a hang.
+        // The CLI intercepts the line before dispatch; a headless caller gets a
+        // clean error instead of a hang.
         Err(CommandError::Other(
             "interactive editor is not available in this mode (REPL only)".to_owned(),
         ))
@@ -70,8 +67,8 @@ mod tests {
 
     #[test]
     fn configure_accepts_bare_and_filename() {
-        // `matches` builds the parser the same way the engine does, so this
-        // exercises the real arg grammar for both the bare and one-arg forms.
+        // `matches` builds the parser as the engine does, so this exercises the
+        // real grammar for both forms.
         let bare = matches(&Edit, &[]);
         assert_eq!(bare.get_one::<String>("filename"), None);
         let with = matches(&Edit, &["foo.txt"]);
@@ -105,7 +102,7 @@ mod tests {
         // Directories carry a trailing slash.
         assert!(all.iter().any(|c| c.ends_with("apex/")));
 
-        // Prefix filters and preserves the directory anchor.
+        // Prefix filters, and preserves the directory anchor.
         let a = Edit.complete(&session, &format!("{base}a"), "");
         assert!(a.iter().all(|c| c.contains("/a")));
         assert!(a.iter().any(|c| c.ends_with("alpha.txt")));

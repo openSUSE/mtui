@@ -1,17 +1,12 @@
 //! A single openQA test result.
 //!
-//! Produced by the kernel openQA connector to describe one job: its name,
-//! overall result, job id, architecture, and the per-module results.
-//!
-//! `modules` is a [`BTreeMap`] (rather than an unordered map) so iteration
-//! order, equality, and hashing are deterministic — matching the crate-wide
-//! convention (see [`crate::system::System`]).
+//! Produced by the kernel openQA connector to describe one job. `modules` is a
+//! [`BTreeMap`] so iteration order, equality and hashing stay deterministic, the
+//! crate-wide convention (see [`crate::system::System`]).
 
 use std::collections::BTreeMap;
 
 /// One openQA test/job result with its per-module breakdown.
-///
-/// The tuple is `(name, result, test_id, arch, modules)`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Test {
     /// The name of the test (e.g. `qam-kernel`).

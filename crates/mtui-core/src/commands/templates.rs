@@ -9,14 +9,11 @@ use crate::session::Session;
 
 /// Lists all loaded templates, marking the active one.
 ///
-/// For each loaded
-/// template the RRID, connected host count and workflow mode are shown. In the
-/// REPL the active template (the one plain action commands act on) is marked
-/// with a leading `*`; under MCP there is no client-addressable active pointer
-/// (`switch` is REPL-only), so the marker is omitted.
-///
-/// Self-describing (reads the whole registry, not one template), so it runs once
-/// ([`Scope::Single`]) rather than fanning out.
+/// Shows each template's RRID, connected host count and workflow mode. In the
+/// REPL the active one — what plain action commands act on — is marked with a
+/// leading `*`; under MCP there is no client-addressable active pointer
+/// (`switch` being REPL-only), so the marker is omitted. Reads the whole
+/// registry rather than one template, so it runs once ([`Scope::Single`]).
 pub struct ListTemplates;
 
 #[async_trait]
@@ -40,13 +37,13 @@ impl Command for ListTemplates {
             return Ok(());
         }
 
-        // The active pointer is meaningful only in the interactive REPL; under
-        // MCP it is hidden state the client cannot address, so no marker.
+        // Under MCP the active pointer is hidden state the client cannot
+        // address, so it gets no marker.
         let active = session.templates.active_rrid().map(str::to_owned);
         let is_repl = session.is_repl;
 
-        // Snapshot the rows first so the report borrow does not overlap the
-        // display's mutable borrow.
+        // Snapshotted so the report borrow does not overlap the display's
+        // mutable borrow.
         let rows: Vec<(String, usize, &'static str)> = rrids
             .iter()
             .filter_map(|rrid| {
@@ -100,7 +97,6 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("  SUSE:Maintenance:1:1  hosts: 1"), "{out}");
         assert!(out.contains("  SUSE:Maintenance:2:2  hosts: 2"), "{out}");
-        // interactive == false -> no `*` marker anywhere.
         assert!(!out.contains('*'), "{out}");
     }
 
@@ -111,7 +107,6 @@ mod tests {
         session
             .templates
             .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
-        // The most-recently added is active.
         session.activate("SUSE:Maintenance:1:1");
         let args = matches(&ListTemplates, &[]);
         ListTemplates.call(&mut session, &args).await.unwrap();

@@ -31,8 +31,7 @@ fn session() -> Arc<McpSession> {
     let mut config = Config::default();
     config.template_dir = tmp.path().to_path_buf();
     config.session_user = "testuser".to_owned();
-    // Leak the tempdir guard: the session outlives this fn and only reads the
-    // path; the OS reclaims it at process exit.
+    // Leaked: the session outlives this fn and only reads the path.
     std::mem::forget(tmp);
     McpSession::new(config)
 }
@@ -289,8 +288,8 @@ async fn cancel_one_template_job_leaves_others() {
     let sess = session();
     load_two(&sess).await;
 
-    // The first template's body blocks on a per-RRID notify; the second returns
-    // at once. We cancel the first and assert the second still completes.
+    // The first template's body blocks on a per-RRID notify, the second returns
+    // at once: cancel the first, the second must still complete.
     let probe = PerRridBlocker {
         blocking_rrid: RRID_A.to_owned(),
         release: Arc::new(Notify::new()),
@@ -359,9 +358,8 @@ fn session_with_caps(max_active: usize, max_completed: usize) -> Arc<McpSession>
 #[tokio::test]
 async fn active_job_cap_rejects_before_spawn_and_frees_on_finish() {
     let sess = session_with_caps(2, 0);
-    // Two blocking probes occupy both active slots. Both records are inserted as
-    // Running synchronously by `start_job` (before either body runs), so the cap
-    // sees two active jobs regardless of the registry-gate serialisation.
+    // `start_job` inserts both records as Running synchronously, before either
+    // body runs, so the cap sees two active jobs regardless of gate serialisation.
     let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let registry = registry_with_probe(Arc::new(FlagBlocker {
         release: Arc::clone(&flag),
@@ -492,11 +490,10 @@ impl Command for Blocker {
 
 /// A self-scoped probe that blocks by *polling* an `AtomicBool` until it is set.
 ///
-/// Unlike [`Blocker`] (a `Notify`, which only wakes tasks already parked at
-/// `.notified()`), this survives wake races and workers that arrive at the block
-/// late — the right primitive for the resource-limit tests, where several
-/// same-scope jobs serialise on the registry gate and reach the block at
-/// different times.
+/// Unlike [`Blocker`]'s `Notify`, which only wakes tasks already parked at
+/// `.notified()`, this survives wake races and late arrivals — needed by the
+/// resource-limit tests, where same-scope jobs serialise on the registry gate and
+/// reach the block at different times.
 struct FlagBlocker {
     release: Arc<std::sync::atomic::AtomicBool>,
 }

@@ -16,20 +16,15 @@ use mtui_types::{RequestReviewID, UpdateSource};
 use crate::error::CommandError;
 use crate::session::Session;
 
-/// The wall-clock budget a command body applies to remote host work that runs
-/// over an already-established link: `remove_host`'s close fan-out,
-/// `unlock --force`, and `reload_products`.
+/// The wall-clock budget for remote work over an already-established link
+/// (`remove_host`'s close fan-out, `unlock --force`, `reload_products`), whose
+/// peer may have vanished without closing the link and so never answer. The
+/// value is [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT).
 ///
-/// A peer that vanished without closing its SSH link still reports as active
-/// locally, so those dispatches go into a link that never answers. The value is
-/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT), the budget
-/// `quit`, template removal and the MCP idle sweep already use.
-///
-/// The two concurrent fan-outs spend one budget for the whole call. Serial work
-/// spends one *per host* instead (`reload_products`): sharing a single budget
-/// across a serial pass would tie success to fleet size and start failing
-/// healthy but slow fleets. `testkit` overrides the value in tests, so the
-/// abandon path costs milliseconds rather than the full budget.
+/// Concurrent fan-outs spend one budget for the whole call; serial work
+/// (`reload_products`) spends one *per host*, since sharing one across a serial
+/// pass would tie success to fleet size and fail healthy-but-slow fleets.
+/// `testkit` shrinks it so the abandon path costs milliseconds.
 #[cfg(not(test))]
 pub(crate) fn host_op_budget() -> std::time::Duration {
     crate::session::HOST_CLOSE_TIMEOUT
@@ -39,19 +34,14 @@ pub(crate) fn host_op_budget() -> std::time::Duration {
     crate::commands::testkit::host_op_budget_override()
 }
 
-/// Builds the report's [`QemIncident`] (the shared handle both openQA connectors
-/// build on).
+/// Builds the report's [`QemIncident`], threaded into both
+/// `DashboardAutoOpenQA` and `KernelOpenQA` so they share one incident state.
 ///
-/// Built once and threaded into both `DashboardAutoOpenQA` and
-/// `KernelOpenQA`, so both connectors share the same incident state. Takes an
-/// already-built [`HttpClient`] (obtain it once from
-/// [`Session::http_client`](crate::session::Session::http_client)) so the QEM
-/// dashboard fetch reuses the session connection pool instead of building a
-/// fresh client, and plain values rather than
-/// `&Session` so callers never hold a (non-`Sync`) `Session` borrow across the
-/// `.await`. `source` is the report's own [`UpdateSource`]
-/// (`session.metadata().update_source()`), the fallback the incident's
-/// `update_source()` uses when no dashboard record is available.
+/// Takes an already-built [`HttpClient`] (from
+/// [`Session::http_client`](crate::session::Session::http_client)) to reuse the
+/// session connection pool, and plain values rather than `&Session` so callers
+/// never hold a non-`Sync` borrow across the `.await`. `source` is the
+/// incident's fallback when the dashboard has no record.
 pub(crate) async fn build_incident(
     rrid: RequestReviewID,
     dashboard_api: String,
@@ -62,10 +52,9 @@ pub(crate) async fn build_incident(
     QemIncident::with_client(rrid, client, source).await
 }
 
-/// Builds a fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow on
-/// the given openQA instance `host`. `max_parallel` bounds the
-/// connector's concurrent per-setting job fetches. Call
-/// [`DashboardAutoOpenQA::run`] to populate it.
+/// A fresh, unpopulated [`DashboardAutoOpenQA`] for the auto workflow on openQA
+/// instance `host`, its concurrent per-setting job fetches bounded by
+/// `max_parallel`. Call [`DashboardAutoOpenQA::run`] to populate it.
 #[must_use]
 pub(crate) fn build_auto_openqa(
     host: String,
@@ -76,18 +65,13 @@ pub(crate) fn build_auto_openqa(
     DashboardAutoOpenQA::new(host, incident, rrid, max_parallel)
 }
 
-/// Builds a fresh, unpopulated [`KernelOpenQA`] connector for a given openQA
-/// instance `host`.
+/// A fresh, unpopulated [`KernelOpenQA`] connector for openQA instance `host`.
 ///
-/// Resolves openQA API credentials from the standard `client.conf`/
-/// `$OPENQA_CONFIG` search path, keyed on the instance host. Call
-/// [`KernelOpenQA::run`] to populate it.
-///
-/// Takes an already-built openQA transport (obtain it once from
-/// [`Session::openqa_transport`](crate::session::Session::openqa_transport))
-/// so a per-host loop (the kernel workflow's primary + baremetal instances)
-/// reuses one connection pool instead of building a fresh transport per
-/// instance.
+/// Resolves API credentials from the standard `client.conf`/`$OPENQA_CONFIG`
+/// search path, keyed on the instance host; call [`KernelOpenQA::run`] to
+/// populate it. Takes an already-built transport (from
+/// [`Session::openqa_transport`](crate::session::Session::openqa_transport)) so
+/// a per-host loop (primary + baremetal instances) reuses one connection pool.
 ///
 /// # Errors
 ///
@@ -103,12 +87,8 @@ pub(crate) fn build_kernel_openqa(
     Ok(KernelOpenQA::new(base))
 }
 
-/// Guards a command body that requires a loaded update.
-///
-/// Returns [`CommandError::Other`] with a stable message when no report is
-/// loaded, so a data-source command errors cleanly instead of building a client
-/// for an empty RRID. On success returns the active report's
-/// [`RequestReviewID`].
+/// Guards a command body that requires a loaded update, so a data-source
+/// command fails cleanly instead of building a client for an empty RRID.
 ///
 /// # Errors
 ///
@@ -127,11 +107,8 @@ pub(crate) fn require_update(
     })
 }
 
-/// Tab-completion candidates that offer every loaded template RRID.
-///
-/// Returned RRIDs that start with `text` are offered; the caller merges these
-/// with any flag candidates, so `-T/--template` can be completed with the
-/// loaded RRIDs.
+/// Loaded template RRIDs starting with `text`, for the caller to merge with its
+/// flag candidates so `-T/--template` completes.
 #[must_use]
 pub(crate) fn template_completion(session: &Session, text: &str) -> Vec<String> {
     session
@@ -144,23 +121,17 @@ pub(crate) fn template_completion(session: &Session, text: &str) -> Vec<String> 
 
 /// Filters flag/value choices for tab completion.
 ///
-/// `synonyms` groups interchangeable flags — e.g. `[["-t", "--target"]]`; `extra`
-/// carries the free-form candidates (host names, package names, template RRIDs).
-/// `line` is the command line typed so far and `text` the partial word under the
-/// cursor.
+/// `synonyms` groups interchangeable flags — e.g. `[["-t", "--target"]]`;
+/// `extra` carries free-form candidates (hosts, packages, RRIDs); `line` is the
+/// line typed so far and `text` the partial word under the cursor.
 ///
-/// Behaviour:
-/// * A synonym group already present on the line is dropped from the offered set
-///   (once you type `-t`, neither `-t` nor `--target` is suggested again).
-/// * A bundled short-flag token (`-abc`, i.e. a single `-` followed by two or
-///   more non-`-` chars) is expanded to `-a`, `-b`, `-c` for that matching.
-/// * If `text` exactly equals a candidate, only that candidate is returned (the
-///   completion is already satisfied).
-/// * Otherwise every candidate starting with `text` is returned.
+/// * A synonym group already on the line is dropped, bundled short flags
+///   (`-abc` ⇒ `-a`, `-b`, `-c`) expanded first.
+/// * `text` exactly equalling a candidate short-circuits to just that one;
+///   otherwise every candidate starting with `text` is returned.
 ///
-/// Preserves the input order (flags first in the order given, then `extra`),
-/// which keeps the menu deterministic and testable, rather than deriving the
-/// result from an unordered set.
+/// Input order is preserved (flags as given, then `extra`) rather than derived
+/// from a set, so the menu is deterministic and testable.
 #[must_use]
 pub(crate) fn complete_choices(
     synonyms: &[&[&str]],
@@ -168,8 +139,7 @@ pub(crate) fn complete_choices(
     line: &str,
     text: &str,
 ) -> Vec<String> {
-    // Ordered candidate list (flags in given order, then extras), de-duplicated
-    // while preserving first-seen order.
+    // De-duplicated, first-seen order preserved.
     let mut choices: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let push =
@@ -187,9 +157,8 @@ pub(crate) fn complete_choices(
         push(e, &mut choices, &mut seen);
     }
 
-    // Walk the already-typed tokens (skip the command name) and remove any
-    // synonym group the user has already committed to. Expand bundled short
-    // flags (`-abc` → `-a -b -c`) first.
+    // Drop any synonym group the already-typed tokens (minus the command name)
+    // committed to.
     let mut tokens: Vec<String> = line.split(' ').map(str::to_owned).collect();
     if !tokens.is_empty() {
         tokens.remove(0);
@@ -225,12 +194,10 @@ pub(crate) fn complete_choices(
         .collect()
 }
 
-/// Completion for a command that offers its own flags plus the template synonym
+/// Completion for a command offering its own flags plus the template synonym
 /// groups (`-T/--template`, `--all-templates`) and the loaded RRIDs, but **no**
-/// host names (commands like `add_host`, `commit`, `checkout`,
-/// `show_diff`, `put` that pass only `template_completion` to `complete_choices`).
-///
-/// `extra` carries any command-specific free-form candidates.
+/// host names (`commit`, `checkout`, `show_diff`, `put`, …). `extra` carries
+/// command-specific free-form candidates.
 #[must_use]
 pub(crate) fn complete_with_templates(
     session: &Session,
@@ -248,12 +215,10 @@ pub(crate) fn complete_with_templates(
 }
 
 /// Completion for a host-phase (fan-out) command: `-t/--target`, the loaded
-/// template RRIDs, and the connected host names.
-///
-/// `extra_flags` are prepended as additional synonym groups (e.g. a command's own
-/// `--force`/`--installed` options). This is the shared shape behind `run`,
-/// `reboot`, `prepare`, `update`, `downgrade`, `install`, `uninstall`, `set_repo`,
-/// and `add_host`.
+/// template RRIDs, and the connected host names, with `extra_flags` prepended
+/// as additional synonym groups (a command's own `--force`/`--installed`). The
+/// shared shape behind `run`, `reboot`, `prepare`, `update`, `downgrade`,
+/// `install`, `uninstall`, `set_repo` and `add_host`.
 #[must_use]
 pub(crate) fn complete_fanout(
     session: &Session,
@@ -262,13 +227,10 @@ pub(crate) fn complete_fanout(
     line: &str,
     text: &str,
 ) -> Vec<String> {
-    // `-t/--target`, the command's own flags, then the template synonym groups
-    // (`-T/--template`, `--all-templates`).
     let mut groups: Vec<&[&str]> = vec![&["-t", "--target"]];
     groups.extend_from_slice(extra_flags);
     groups.push(&["-T", "--template"]);
     groups.push(&["--all-templates"]);
-    // Loaded RRIDs, then any command-specific extras (packages), then host names.
     let mut candidates: Vec<String> = extra;
     candidates.extend(session.templates.rrids());
     candidates.extend(session.targets().names());
@@ -277,11 +239,10 @@ pub(crate) fn complete_fanout(
 
 /// File-path variant of [`complete_choices`].
 ///
-/// Offers directory entries under the directory part of `text` (basename-prefix
-/// filtered, directories carrying a trailing `/`) merged with the flag/value
-/// choices from [`complete_choices`]. A `~` prefix expands to the home directory;
-/// an unreadable directory yields no file candidates (a transient typo must not
-/// tear down completion).
+/// Directory entries under the directory part of `text` (basename-prefix
+/// filtered, directories carrying a trailing `/`) merged with
+/// [`complete_choices`]. A `~` prefix expands; an unreadable directory yields
+/// no candidates, so a transient typo does not tear down completion.
 #[must_use]
 pub(crate) fn complete_choices_filelist(
     synonyms: &[&[&str]],
@@ -294,22 +255,16 @@ pub(crate) fn complete_choices_filelist(
     complete_choices(synonyms, merged, line, text)
 }
 
-/// Expands a leading tilde in a completion path, mirroring Python's
-/// `os.path.expanduser` for the forms mtui's file completer sees.
-///
-/// - `~` / `~/…` → `$HOME` (+ the remainder), as before.
-/// - `~user` / `~user/…` → that user's home directory (getpwnam), so completing
-///   another user's tree resolves to real absolute candidates.
-///
-/// Best-effort, matching the completer's "transient input must not tear down
-/// completion" convention: an unknown user, a degraded environment (no `$HOME`),
-/// or a non-Unix target leaves `text` unexpanded.
+/// Expands a leading tilde in a completion path: `~`/`~/…` → `$HOME`,
+/// `~user`/`~user/…` → that user's home (getpwnam). Best-effort, per the
+/// completer's "transient input must not tear down completion" convention: an
+/// unknown user, no `$HOME`, or a non-Unix target leaves `text` unexpanded.
 fn expand_tilde(text: &str) -> String {
     let Some(rest) = text.strip_prefix('~') else {
         return text.to_owned();
     };
 
-    // Bare `~` or `~/…`: split off the user segment (empty here) from `/rest`.
+    // Bare `~` or `~/…`: the user segment is empty.
     if rest.is_empty() || rest.starts_with('/') {
         return match std::env::var_os("HOME") {
             Some(home) => format!("{}{rest}", home.to_string_lossy()),
@@ -325,10 +280,9 @@ fn expand_tilde(text: &str) -> String {
     resolve_user_home(user).map_or_else(|| text.to_owned(), |home| format!("{home}{tail}"))
 }
 
-/// The home directory of a named user, or `None` when it can't be resolved.
-///
-/// Uses getpwnam on Unix; non-Unix targets can't resolve arbitrary users, so the
-/// caller falls back to leaving the tilde unexpanded.
+/// The home directory of a named user via getpwnam, or `None` when it can't be
+/// resolved — including every non-Unix target, where the caller leaves the
+/// tilde unexpanded.
 #[cfg(unix)]
 fn resolve_user_home(user: &str) -> Option<String> {
     nix::unistd::User::from_name(user)
@@ -342,19 +296,14 @@ fn resolve_user_home(_user: &str) -> Option<String> {
     None
 }
 
-/// Lists directory entries matching the basename prefix in `text` (shared by the
-/// `edit`/`put` file completers).
-///
-/// Splits `text` into a directory part and a basename prefix, lists that
-/// directory, and offers entries whose name starts with the prefix (directories
-/// carry a trailing `/`). A `~`/`~user` prefix expands to the corresponding home
-/// directory. A bare prefix completes against the current directory.
+/// Directory entries matching the basename prefix in `text`, shared by the
+/// `edit`/`put` file completers. Directories carry a trailing `/`; a `~`/`~user`
+/// prefix expands; a bare prefix completes against the current directory.
 /// Best-effort: an unreadable directory yields no candidates.
 #[must_use]
 pub(crate) fn complete_path(text: &str) -> Vec<String> {
     use std::path::Path;
 
-    // `~` / `~/…` / `~user` / `~user/…` → expand.
     let expanded = expand_tilde(text);
 
     let (dir, prefix) = match expanded.rfind('/') {
@@ -388,11 +337,8 @@ pub(crate) fn complete_path(text: &str) -> Vec<String> {
     out
 }
 
-/// Adds the repeatable `-t/--target` host argument.
-///
-/// [`ArgAction::Append`]: the flag may be
-/// given more than once, each occurrence naming one host. When omitted, the
-/// command acts on every enabled host.
+/// Adds the repeatable `-t/--target` host argument: [`ArgAction::Append`], so
+/// each occurrence names one host. Omitted, every enabled host is acted on.
 pub fn add_hosts_arg(cmd: clap::Command) -> clap::Command {
     cmd.arg(
         Arg::new("hosts")
@@ -408,9 +354,8 @@ pub fn add_hosts_arg(cmd: clap::Command) -> clap::Command {
 }
 
 /// The parsed `-t/--target` hostnames, or `None` when the flag was omitted.
-///
-/// `None` (no `-t`) is distinct from `Some([])` (which clap never produces for
-/// an `Append` arg) — callers use the `None` case to mean "all enabled hosts".
+/// `None` is distinct from `Some([])` (which clap never produces for an
+/// `Append` arg): callers read it as "all enabled hosts".
 #[must_use]
 pub(crate) fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
     args.try_get_many::<String>("hosts")
@@ -419,11 +364,9 @@ pub(crate) fn hosts_arg(args: &ArgMatches) -> Option<Vec<String>> {
         .map(|it| it.cloned().collect())
 }
 
-/// Whether the invocation named explicit `-t` hosts.
-///
-/// The fan-out skip rule keys on this: a host-phase command with
-/// no explicit `-t` may be skipped on a template with no connected host, but a
-/// typo'd `-t` must fail loudly.
+/// Whether the invocation named explicit `-t` hosts. The fan-out skip rule keys
+/// on this: with no explicit `-t` a host-phase command may be skipped on a
+/// template with no connected host, but a typo'd `-t` must fail loudly.
 #[must_use]
 pub(crate) fn named_hosts(args: &ArgMatches) -> bool {
     hosts_arg(args).is_some_and(|v| !v.is_empty())
@@ -432,17 +375,15 @@ pub(crate) fn named_hosts(args: &ArgMatches) -> bool {
 /// Resolves the hostnames a host-phase command acts on, **without** consuming
 /// the group.
 ///
-/// * `-t host …` → exactly those hosts (validated against membership; only the
-///   enabled among them when `enabled`).
+/// * `-t host …` → exactly those hosts (membership-validated; only the enabled
+///   among them when `enabled`).
 /// * no `-t` → every enabled host.
-/// * the deprecated `-t all` → every enabled host, with a warning (the `all`
-///   escape hatch is kept for backwards compatibility).
+/// * the deprecated `-t all` → every enabled host, with a warning.
 ///
-/// Returns hostnames (sorted, as [`HostsGroup::names`] yields) rather than a new
-/// group: `HostsGroup::select` consumes the group and drops the unselected
-/// hosts, which a state-preserving command (`run`, `reboot`) must not do. The
-/// caller drives the subset in place via a
-/// [`Command::PerHost`](mtui_hosts::Command) map keyed on the returned names.
+/// Names rather than a new group, because `HostsGroup::select` consumes the
+/// group and drops the unselected hosts — which a state-preserving command
+/// (`run`, `reboot`) must not do. The caller drives the subset in place via a
+/// [`Command::PerHost`](mtui_hosts::Command) map keyed on them.
 ///
 /// # Errors
 ///
@@ -498,15 +439,13 @@ pub(crate) fn per_host(command: &str, hosts: &[String]) -> mtui_hosts::Command {
     )
 }
 
-/// Pages `output` through the session's display.
-///
-/// In the interactive REPL (`session.is_repl`) it drives the async
-/// [`page_interactive`](crate::display::page_interactive) pager, reading the
-/// Enter/`q` continuation through the session's serialised
-/// [`Prompter`](mtui_hosts::Prompter). Headless callers (MCP) take the
-/// non-interactive [`page`](crate::display::page) path, which forwards every
-/// line unpaged — keeping that output byte-identical. The prompter is cloned
-/// before the mutable `display` borrow to sidestep the split borrow.
+/// Pages `output` through the session's display: the REPL drives
+/// [`page_interactive`](crate::display::page_interactive), reading the Enter/`q`
+/// continuation through the session's serialised
+/// [`Prompter`](mtui_hosts::Prompter); headless callers take
+/// [`page`](crate::display::page), which forwards every line unpaged so output
+/// stays byte-identical. The prompter is cloned before the mutable `display`
+/// borrow to sidestep the split borrow.
 pub(crate) async fn page_output(session: &mut Session, output: &[String]) {
     if session.is_repl {
         let prompter = session.prompter().cloned();
@@ -639,8 +578,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn expand_tilde_resolves_named_user_home() {
-        // Resolve the *current* user — always present in the password DB — so the
-        // test is hermetic and makes no assumption about root/nobody.
+        // The *current* user is always in the password DB, so the test is
+        // hermetic and assumes nothing about root/nobody.
         let Some(me) = nix::unistd::User::from_uid(nix::unistd::getuid())
             .ok()
             .flatten()

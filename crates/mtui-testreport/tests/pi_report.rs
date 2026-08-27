@@ -1,11 +1,8 @@
-//! Covers the `PiReport` surface that lands in task nbv.12: `id`, `parser`,
-//! `update_repos_parser` (delegating to `reporepoparse`), and `check_hash` (the
-//! constant `(true, "", "")`).
+//! Covers the `PiReport` surface: `id`, `parser`, `update_repos_parser`
+//! (delegating to `reporepoparse`), `check_hash` (constant) and `set_repo`.
 //!
-//! Not covered here (deferred by design, mirroring the `SlReport` boundary):
-//! * `list_update_commands` doer-rendering — awaits the `OperationGroup` seam;
-//!   only the no-op stub is smoke-checked.
-//! * `_show_yourself_data` — not on the trait skeleton yet.
+//! `list_update_commands` doer-rendering awaits the `OperationGroup` seam; only
+//! the no-op stub is smoke-checked.
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;

@@ -1,27 +1,21 @@
 //! Translate a command's `clap` arg spec into a JSON-Schema `object`.
 //!
-//! This module introspects a **built [`clap::Command`]** directly and emits
-//! the JSON Schema `rmcp` wants — a `serde_json::Map<String, Value>` shaped
-//! like `{"type":"object","properties":{…},"required":[…]}`.
+//! This module introspects a **built [`clap::Command`]** directly and emits the
+//! JSON Schema `rmcp` wants — a `serde_json::Map<String, Value>` shaped like
+//! `{"type":"object","properties":{…},"required":[…]}`.
 //!
-//! It is intentionally pure: the single entry point [`command_input_schema`]
-//! takes a `&clap::Command` and returns plain data. Tool registration
-//! ([`crate::tools`]), argv reconstruction ([`crate::argv`]), and schema
-//! slimming ([`crate::slim`]) live in the sibling modules.
+//! Intentionally pure: [`command_input_schema`] takes a `&clap::Command` and
+//! returns plain data. Tool registration ([`crate::tools`]), argv reconstruction
+//! ([`crate::argv`]) and slimming ([`crate::slim`]) are sibling modules.
 //!
-//! # Design notes
+//! Two consequences of the `clap` arg spec being the source of truth:
 //!
-//! * **No shared-`dest` collapse needed.** In `clap` every member of a
-//!   mutually exclusive group carries a *distinct* arg id (`auto`/`kernel`,
-//!   `add`/`remove`), so each maps to its own schema property naturally and
-//!   the "exactly one required" constraint is enforced by `clap::ArgGroup` at
-//!   parse time — nothing for the schema to reconstruct.
-//! * **Ranged integers stay `{"type":"integer"}` without bounds.** The Rust
-//!   `--days` uses a `value_parser!(u32).range(1..=30)` parser; `clap`
-//!   erases the parser behind [`clap::builder::ValueParser`] and does not expose
-//!   the numeric bounds, so we emit a plain `integer` (the parser still enforces
-//!   the range at call time). The `clap` arg spec is the source of truth for the
-//!   synthesised schema.
+//! * every member of a mutually exclusive group carries a *distinct* arg id
+//!   (`auto`/`kernel`, `add`/`remove`), so each maps to its own property and the
+//!   "exactly one" constraint stays with `clap::ArgGroup` at parse time;
+//! * a ranged integer stays a bare `{"type":"integer"}`, because `clap` erases
+//!   the parser behind [`clap::builder::ValueParser`] and does not expose the
+//!   bounds — the parser still enforces the range at call time.
 
 use std::any::TypeId;
 
@@ -41,10 +35,7 @@ pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
     let mut required: Vec<Value> = Vec::new();
 
     for arg in cmd.get_arguments() {
-        // clap injects `help`/`version` args (unless disabled). They carry no
-        // callable value — the tool envelope advertises descriptions instead —
-        // so `--help`/`--version` are parser plumbing, not tool inputs, and are
-        // dropped from the schema.
+        // clap-injected parser plumbing, not callable tool inputs.
         let id = arg.get_id().as_str();
         if id == "help" || id == "version" {
             continue;
@@ -63,9 +54,8 @@ pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
     if !required.is_empty() {
         out.insert("required".to_owned(), Value::Array(required));
     }
-    // Reject unknown/misspelled fields: a strict schema lets schema-aware clients
-    // fail fast on a typo instead of silently dropping it (the runtime dispatch
-    // enforces the same, for clients that do not validate client-side).
+    // A strict schema lets a schema-aware client fail fast on a typo instead of
+    // silently dropping it; runtime dispatch enforces the same for the rest.
     out.insert("additionalProperties".to_owned(), Value::Bool(false));
     out
 }
@@ -73,8 +63,7 @@ pub(crate) fn command_input_schema(cmd: &clap::Command) -> Map<String, Value> {
 /// Translate one [`Arg`] into `(property schema, is_required)`.
 fn arg_to_property(arg: &Arg) -> (Value, bool) {
     // ------------------------------------------------------------- boolean
-    // store_true → default false; store_false → default true. A flag never
-    // takes a value and is never "required".
+    // A flag never takes a value and is never "required".
     match arg.get_action() {
         ArgAction::SetTrue => return (bool_schema(arg, false), false),
         ArgAction::SetFalse => return (bool_schema(arg, true), false),
@@ -84,12 +73,10 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
     let is_list = is_list_arg(arg);
     let base = base_type(arg);
 
-    // A property object; `enum`/`minItems`/`default`/`description` layer on.
     let mut inner = Map::new();
     match &base {
         BaseType::Enum(values) => {
-            // Choices → JSON `enum`. clap normalises the value type to String,
-            // so the enum members are strings.
+            // clap normalises choices to String, so the members are strings.
             inner.insert("type".to_owned(), Value::String("string".to_owned()));
             inner.insert(
                 "enum".to_owned(),
@@ -114,9 +101,8 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
         array.insert("type".to_owned(), Value::String("array".to_owned()));
         array.insert("items".to_owned(), Value::Object(inner));
         apply_list_bounds(&mut array, arg.get_num_args());
-        // A list arg is required only when clap marks it required *and* it has no
-        // default; otherwise it is optional, defaulting to `[]` or its real
-        // default so the schema stays a plain array.
+        // Required only when clap says so *and* there is no default; otherwise
+        // optional, defaulting to `[]` or the real default.
         let has_default = !arg.get_default_values().is_empty();
         let required = arg.is_required_set() && !has_default;
         if let Some(def) = default_array(arg) {
@@ -127,11 +113,9 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
 
     // ------------------------------------------------------------- scalar
     let has_default = !arg.get_default_values().is_empty();
-    // clap is authoritative on requiredness for both positionals and options:
-    // a positional is optional unless `.required(true)` (unlike argparse, where
-    // a bare positional is required). A default always makes it optional. When a
-    // required positional also carries a `num_args` lower bound of zero (`?`/`*`)
-    // it is effectively optional, so honour that too.
+    // clap is authoritative on requiredness: a positional is optional unless
+    // `.required(true)`, a default always makes it optional, and a `num_args`
+    // lower bound of zero (`?`/`*`) makes even a required one effectively so.
     let required = if has_default {
         false
     } else if arg.is_required_set() {
@@ -150,8 +134,7 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
         return (Value::Object(inner), true);
     }
 
-    // Optional scalar with no default: widen to `X | null` so the schema
-    // reflects nullability rather than failing client-side validation. enum
+    // Widen to `X | null` rather than failing client-side validation; enum
     // members stay inside the string alternative.
     let nullable = wrap_nullable(inner);
     (nullable, false)
@@ -183,22 +166,21 @@ impl ScalarKind {
 
 /// Decide an arg's base type from its possible values and value parser.
 ///
-/// Possible values (`PossibleValuesParser`) win → `enum`. Otherwise the value
-/// parser's output [`TypeId`] selects integer vs string; an unrecognised parser
-/// degrades to string with a WARNING rather than failing schema synthesis.
+/// Possible values (`PossibleValuesParser`) win → `enum`; otherwise the parser's
+/// output [`TypeId`] selects integer vs string, an unrecognised one degrading to
+/// string with a WARNING rather than failing schema synthesis.
 fn base_type(arg: &Arg) -> BaseType {
     let choices = arg.get_possible_values();
     if !choices.is_empty() {
         return BaseType::Enum(choices.iter().map(|pv| pv.get_name().to_owned()).collect());
     }
 
-    // `AnyValueId: PartialEq<TypeId>`, so compare the parser's output type
-    // against the standard integer types clap can produce.
+    // `AnyValueId: PartialEq<TypeId>`, so compare against the integer types.
     if is_integer_type(arg) {
         return BaseType::Scalar(ScalarKind::Integer);
     }
-    // String / PathBuf / no explicit parser all render as JSON string. Only an
-    // *unexpected* type warns; the common string/path case is silent.
+    // String / PathBuf / no parser all render as JSON string; only an
+    // *unexpected* type warns.
     if !is_known_string_type(arg) {
         tracing::warn!(
             arg = arg.get_id().as_str(),
@@ -322,8 +304,7 @@ fn default_array(arg: &Arg) -> Option<Value> {
 
 /// Wrap a scalar property object as a nullable `{"anyOf":[<inner>,{"type":"null"}]}`.
 fn wrap_nullable(inner: Map<String, Value>) -> Value {
-    // Description belongs on the outer schema so clients see it regardless of
-    // which alternative validates; pull it out of the inner object.
+    // On the outer schema, so clients see it whichever alternative validates.
     let mut inner = inner;
     let description = inner.remove("description");
     let mut out = Map::new();
@@ -342,11 +323,9 @@ mod tests {
     use super::*;
     use mtui_core::{Registry, register_all};
 
-    /// Build the per-command clap parser the way each command's own unit tests
-    /// do: a bare `no_binary_name` base with the command's `configure` applied.
-    /// The base template flags (`-T`/`--all-templates`) are the tool
-    /// synthesiser's concern and out of scope for the per-arg schema this
-    /// module produces.
+    /// The per-command clap parser as each command's own unit tests build it: a
+    /// bare `no_binary_name` base plus `configure`. The base template flags are
+    /// the tool synthesiser's concern, not this module's.
     fn schema_for(command: &str) -> Map<String, Value> {
         let registry: Registry = register_all();
         let cmd = registry
@@ -372,21 +351,18 @@ mod tests {
 
     #[test]
     fn int_typed_option_maps_to_integer_schema_and_keeps_default() {
-        // `openqa_overview --days` (value_parser!(u32).range(1..=30), default 5)
-        // stays an integer with its real default — never a string.
+        // `openqa_overview --days` stays an integer with its real default.
         let schema = schema_for("openqa_overview");
         let days = &props(&schema)["days"];
         assert_eq!(days["type"], "integer");
         assert_eq!(days["default"], json!(5));
-        // Not required (has a default) and not nullable.
         assert!(!required(&schema).contains(&"days"));
         assert!(days.get("anyOf").is_none());
     }
 
     #[test]
     fn ranged_integer_emits_no_bounds_documented_deviation() {
-        // A ranged integer parser: clap erases the
-        // range parser, so we emit a plain integer with no minimum/maximum/enum.
+        // clap erases the range, so no minimum/maximum/enum is emitted.
         let days = props(&schema_for("openqa_overview"))["days"].clone();
         assert!(days.get("minimum").is_none());
         assert!(days.get("maximum").is_none());
@@ -421,8 +397,7 @@ mod tests {
 
     #[test]
     fn store_true_generic_branch_defaults_false() {
-        // Pin the generic SetTrue/SetFalse mapping directly against a bespoke arg
-        // (no mtui command uses SetFalse today).
+        // Pinned against a bespoke arg: no mtui command uses SetFalse today.
         let parser = clap::Command::new("probe").no_binary_name(true).arg(
             clap::Arg::new("color")
                 .long("no-color")
@@ -538,9 +513,8 @@ mod tests {
 
     #[test]
     fn clap_group_members_become_independent_nullable_props() {
-        // `load_template` -a/-k share a required ArgGroup but carry distinct ids,
-        // so each is its own optional nullable property (the group's "exactly
-        // one" is enforced by clap at parse time, not by the schema).
+        // -a/-k share a required ArgGroup but carry distinct ids, so each is its
+        // own optional nullable property; clap enforces the "exactly one".
         let schema = schema_for("load_template");
         let p = props(&schema);
         assert!(p.contains_key("auto"));
@@ -561,8 +535,7 @@ mod tests {
 
     #[test]
     fn output_is_strict_rejecting_unknown_properties() {
-        // A strict schema advertises additionalProperties:false so a schema-aware
-        // client rejects a misspelled field rather than silently dropping it.
+        // additionalProperties:false so a client rejects a misspelled field.
         let schema = schema_for("updates");
         assert_eq!(schema["additionalProperties"], Value::Bool(false));
         // Also holds for an empty command.
@@ -576,7 +549,7 @@ mod tests {
 
     #[test]
     fn help_and_version_args_are_skipped() {
-        // clap injects a `help` arg; it must never surface as a tool property.
+        // The clap-injected `help` arg must never surface as a property.
         let parser = clap::Command::new("probe").arg(clap::Arg::new("real").long("real"));
         let schema = command_input_schema(&parser);
         assert!(!props(&schema).contains_key("help"));
@@ -595,8 +568,8 @@ mod tests {
 
     #[test]
     fn unknown_value_parser_falls_back_to_string() {
-        // A bespoke parser whose output is neither integer nor a known string
-        // type degrades to string (warns; assertion covers the fallback path).
+        // A parser output that is neither integer nor a known string type
+        // degrades to string.
         #[derive(Clone)]
         struct Weird(#[allow(dead_code)] String);
         let parser = clap::Command::new("probe").no_binary_name(true).arg(

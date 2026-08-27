@@ -1,16 +1,15 @@
 //! Refhost **search query** model.
 //!
-//! The `refhosts.yml` *row* schema ([`Host`](mtui_types::Host), [`Product`], [`Addon`],
-//! [`Version`]) lives in `mtui-types` (it is pure, I/O-free wire data). This
-//! module adds the **query side**: [`Attributes`], the mutable search filter,
-//! and [`Attributes::from_testplatform`], which parses a SMELT `testplatform`
-//! string into one [`Attributes`] per architecture.
+//! The `refhosts.yml` *row* schema ([`Host`](mtui_types::Host), [`Product`],
+//! [`Addon`], [`Version`]) is pure I/O-free wire data and lives in `mtui-types`.
+//! This module adds the **query side**: [`Attributes`], the mutable search
+//! filter, and [`Attributes::from_testplatform`], which parses a SMELT
+//! `testplatform` string into one [`Attributes`] per architecture.
 //!
-//! # Design note
-//! The `mtui-types` crate is deliberately the pure wire-schema and carries no
-//! query/parsing concerns (and no `regex` dependency), so the query model and
-//! its grammar parser live here in `mtui-datasources` next to the search engine
-//! that consumes them (`store.rs`).
+//! They live here rather than in `mtui-types` because that crate is deliberately
+//! the pure wire schema, with no query/parsing concerns and no `regex`
+//! dependency — and because `store.rs`, the search engine consuming them, is
+//! next door.
 
 use std::sync::LazyLock;
 
@@ -27,11 +26,10 @@ static NAMED_VERSION_RE: LazyLock<Regex> =
 
 /// A search query against a [`Refhosts`](super::store::Refhosts) database.
 ///
-/// Each field is optional; the matcher skips constraints on unset fields (an
-/// empty `arch`, `product == None`, and empty `addons` are the "unset"
-/// sentinels). Mutable because
-/// [`from_testplatform`](Self::from_testplatform) builds it up segment
-/// by segment before fanning out per arch.
+/// Each field is optional and the matcher skips unset ones (empty `arch`,
+/// `product == None`, empty `addons`). Mutable because
+/// [`from_testplatform`](Self::from_testplatform) builds it segment by segment
+/// before fanning out per arch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Attributes {
     /// The target architecture (empty string means "any").
@@ -48,12 +46,10 @@ impl Attributes {
     /// Grammar (segments separated by `;`):
     /// `base=<name>(major=X,minor=Y);arch=[a,b,c];addon=<name>(...)`.
     ///
-    /// One [`Attributes`] is produced per architecture in the `arch=[…]`
-    /// segment (the shared `base`/`addon` constraints are cloned into each).
-    /// A segment with no `=` is logged at `error` and skipped; an unknown
-    /// segment name (not `base`/`arch`/`addon`) is logged at `error` and
-    /// skipped. With no `arch=[…]` segment, the result is empty (fanning out
-    /// over an empty arch list).
+    /// One [`Attributes`] per architecture in the `arch=[…]` segment, with the
+    /// shared `base`/`addon` constraints cloned into each. A segment with no `=`
+    /// or an unrecognised name is logged at `error` and skipped; with no
+    /// `arch=[…]` segment at all the result is empty.
     ///
     #[must_use]
     pub fn from_testplatform(testplatform: &str) -> Vec<Self> {
@@ -106,8 +102,7 @@ impl Attributes {
 impl std::fmt::Display for Attributes {
     /// Human-readable query, e.g. `sles 15.5 x86_64 ha 15 sdk 15.5`.
     ///
-    /// Product first, then arch, then addons sorted
-    /// alphabetically by name. Empty parts are omitted.
+    /// Product, then arch, then addons sorted by name; empty parts omitted.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts: Vec<String> = Vec::new();
 
@@ -141,9 +136,8 @@ impl std::fmt::Display for Attributes {
 
 /// Render `name` + optional `version` like `"sles 15.5"` / `"sles 12sp4"`.
 ///
-/// A numeric minor uses a `.` separator, a
-/// textual minor is concatenated, and the empty-string minor sentinel (or an
-/// absent minor) renders as major only.
+/// A numeric minor uses a `.` separator, a textual one is concatenated, and an
+/// absent or empty-sentinel minor renders as major only.
 fn format_named_version(name: &str, version: Option<&Version>) -> String {
     let Some(version) = version else {
         return name.to_owned();
@@ -152,7 +146,6 @@ fn format_named_version(name: &str, version: Option<&Version>) -> String {
     match &version.minor {
         Some(VersionField::Num(n)) => out.push_str(&format!(".{n}")),
         Some(VersionField::Text(s)) if !s.is_empty() => out.push_str(s),
-        // `Text("")` (empty sentinel) and `None` render as major only.
         _ => {}
     }
     out
@@ -160,10 +153,9 @@ fn format_named_version(name: &str, version: Option<&Version>) -> String {
 
 /// Parse `name(major=X,minor=Y)` → `(name, Some(Version))`.
 ///
-/// Returns `None` when `content` does not
-/// match the `name(...)` grammar at all. When it matches but has no `major`
-/// field, returns `(name, None)`. Each field value is parsed as numeric when it
-/// parses as an integer, else kept as text — so `minor=` yields the empty-string
+/// `None` when `content` does not match the `name(...)` grammar; `(name, None)`
+/// when it matches without a `major`. A field value is numeric when it parses as
+/// an integer, else text — so `minor=` yields the empty-string
 /// [`VersionField::Text`] sentinel ("candidate must have no minor").
 fn parse_named_version(content: &str) -> Option<(String, Option<Version>)> {
     let cap = NAMED_VERSION_RE.captures(content)?;
@@ -191,8 +183,7 @@ fn parse_named_version(content: &str) -> Option<(String, Option<Version>)> {
 
 /// Parse a single field value: numeric if it parses as `u64`, else textual.
 ///
-/// `""` therefore becomes `VersionField::Text("")` — the "no minor" query
-/// sentinel: parse as an integer, falling back to text on failure.
+/// `""` therefore becomes the `VersionField::Text("")` "no minor" sentinel.
 fn parse_field(value: &str) -> VersionField {
     match value.parse::<u64>() {
         Ok(n) => VersionField::Num(n),
@@ -389,9 +380,9 @@ mod tests {
 
     #[test]
     fn arch_injection_is_literal() {
-        // No eval — a shell-injection payload inside the brackets is parsed as a
-        // plain literal arch string, never executed. (`;` is the segment
-        // separator, so a payload with no embedded `;` stays in one segment.)
+        // A shell-injection payload inside the brackets parses as a literal
+        // arch string. (`;` is the segment separator, so a payload without one
+        // stays in a single segment.)
         let tp = "arch=[x' && rm -rf ~ && echo y]";
         let attrs = Attributes::from_testplatform(tp);
         assert_eq!(attrs.len(), 1);

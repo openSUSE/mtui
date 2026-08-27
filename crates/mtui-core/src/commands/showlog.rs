@@ -11,10 +11,10 @@ use crate::session::Session;
 
 /// Prints the command protocol (issued commands + output) from the hosts.
 ///
-/// Fans each host's log through `display.show_log` into an accumulator and
-/// pages the result. Useful for dumping the command history into a
-/// template's reproducer section. The per-host command log is snapshotted
-/// first so the report borrow does not overlap the display borrow.
+/// Fans each host's log through `display.show_log` into an accumulator and pages
+/// the result — useful for dumping the command history into a template's
+/// reproducer section. The per-host log is snapshotted first so the report borrow
+/// does not overlap the display borrow.
 pub struct ShowLog;
 
 #[async_trait]
@@ -31,12 +31,9 @@ impl Command for ShowLog {
         Scope::Fanout
     }
 
-    /// `show_log` opts out of the driver's host-less skip: it reports each host's
-    /// *in-memory* command protocol (`Target::out`), doing no SSH, so it has
-    /// meaningful (or harmlessly empty) work even at zero connected hosts. Like
-    /// `export`, dumping the protocol across `--all-templates` must not be
-    /// silently skipped when a template is host-less. A host-action command keeps
-    /// the default `true`; only these local-read commands override it.
+    /// Opts out of the driver's host-less skip: it reads the *in-memory*
+    /// protocol (`Target::out`) with no SSH, so `--all-templates` must not skip a
+    /// host-less template. Only such local-read commands override the default.
     fn skip_hostless_templates(&self) -> bool {
         false
     }
@@ -74,14 +71,14 @@ impl Command for ShowLog {
         let hosts = select_names(session.targets(), args, true)
             .map_err(|e| CommandError::Other(e.to_string()))?;
 
-        // Select before rendering: the MCP byte budget is spent at write time, so
-        // a trailing host is only reachable if the window narrows what is written.
+        // Selected before rendering: the MCP byte budget is spent at write time,
+        // so a trailing host is only reachable if the window narrows the writes.
         let offset = args.get_one::<usize>("offset").copied().unwrap_or(1);
         let limit = args.get_one::<usize>("limit").copied();
         let windowed = offset != 1 || limit.is_some();
 
-        // Window against the live log, so only the selected entries are cloned;
-        // `--limit 0` clones none. `total` is the pre-window count the header reports.
+        // Windowed against the live log, so only selected entries are cloned and
+        // `--limit 0` clones none. `total` is the pre-window count for the header.
         let per_host: Vec<(String, usize, Vec<(String, String, String, i32)>)> = hosts
             .iter()
             .filter_map(|name| {
@@ -140,8 +137,8 @@ mod tests {
         (session, buf)
     }
 
-    /// Three hosts driven to different log lengths: h1 three entries, h2 one,
-    /// h3 none. A `PerHost` map skips the hosts it does not name.
+    /// Three hosts at different log lengths — h1 three entries, h2 one, h3 none
+    /// — since a `PerHost` map skips the hosts it does not name.
     async fn uneven_hosts_session() -> (Session, Buffer) {
         let (mut session, buf) = session_scripting_hosts(
             "SUSE:Maintenance:1:1",
@@ -299,8 +296,8 @@ mod tests {
 
     #[test]
     fn complete_offers_own_flags_template_flags_and_hosts() {
-        // Completion is part of the command surface: the paging flags must be
-        // offered alongside the shared fan-out/template flags and host names.
+        // The paging flags belong on the surface alongside the shared fan-out /
+        // template flags and host names.
         let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
         let out = ShowLog.complete(&session, "", "show_log ");
         for f in [
@@ -325,23 +322,19 @@ mod tests {
 
     #[test]
     fn opts_out_of_hostless_skip() {
-        // show_log reads the in-memory protocol; it must dispatch at zero hosts.
         assert!(!ShowLog.skip_hostless_templates());
     }
 
     #[test]
     fn ssh_dependent_fanout_command_keeps_default_skip() {
-        // Negative control: the audit deliberately left SSH-driven Fanout
-        // commands skippable. If this flips, re-run the host-less audit.
+        // Negative control: SSH-driven Fanout commands stay skippable.
         assert!(ListVersions.skip_hostless_templates());
     }
 
     #[tokio::test]
     async fn runs_across_all_hostless_templates_without_error() {
-        // Every loaded template is host-less and no `-t` is named: the driver
-        // would skip a default host-action command (→ NoRefhostsDefined), but
-        // show_log opts out and must run on each, returning Ok. A headless
-        // session with >1 loaded template fans out without an explicit flag.
+        // The driver would skip a default host-action command here
+        // (NoRefhostsDefined), but show_log opts out and must run on each.
         let (mut session, _buf) = empty_session();
         session
             .templates
@@ -355,7 +348,6 @@ mod tests {
 
     #[tokio::test]
     async fn shows_ran_command_log() {
-        // session_scripting echoes the command into the host log.
         let (mut session, buf) =
             session_scripting("SUSE:Maintenance:1:1", "h1", "uname -a", "Linux\n");
         session.targets_mut().run("uname -a").await;
@@ -372,9 +364,9 @@ mod tests {
     async fn interactive_paging_reads_prompter() {
         use mtui_hosts::Prompter;
 
-        // A tall-enough screen means the whole log fits in one screen and no
-        // prompt read is needed; the interactive path must still print it all.
-        // `ACCTEST_*` → `#[serial(env)]`.
+        // A tall screen fits the whole log, so no prompt read is needed and the
+        // interactive path must still print it all. `ACCTEST_*` is
+        // process-global, hence `#[serial(env)]`.
         unsafe {
             std::env::set_var("ACCTEST_COLS", "80");
             std::env::set_var("ACCTEST_ROWS", "40");

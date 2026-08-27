@@ -65,8 +65,7 @@ impl KernelOpenQA {
 
     /// The openQA instance host this connector targets.
     ///
-    /// Exposes the shared-base host so the export downloader can build the
-    /// per-instance log URLs.
+    /// Exposed so the export downloader can build per-instance log URLs.
     #[must_use]
     pub fn host(&self) -> &str {
         self.base.host()
@@ -76,9 +75,8 @@ impl KernelOpenQA {
     ///
     /// # Errors
     ///
-    /// Returns [`OpenQAError::Fetch`] when the jobs fetch fails (openQA
-    /// unreachable / non-2xx / malformed body), so the caller can tell an
-    /// unreachable instance apart from a genuinely-empty result. A
+    /// Returns [`OpenQAError::Fetch`] when the jobs fetch fails, so the caller
+    /// can tell an unreachable instance apart from a genuinely-empty result; a
     /// valid-but-empty response is `Ok` with no results.
     pub async fn run(mut self) -> Result<Self, OpenQAError> {
         let jobs = self.base.try_get_jobs().await?;
@@ -90,8 +88,7 @@ impl KernelOpenQA {
 
     /// Keep only kernel-flavor jobs.
     ///
-    /// `None` → `None`; else jobs whose
-    /// `FLAVOR` (lowercased, split on `-`) contains the segment `kernel`.
+    /// Jobs whose `FLAVOR` (lowercased, split on `-`) has a `kernel` segment.
     #[must_use]
     fn filter_jobs(jobs: Option<&[Job]>) -> Option<Vec<Job>> {
         let jobs = jobs?;
@@ -110,9 +107,8 @@ impl KernelOpenQA {
 
     /// Parse kernel jobs into [`Test`] objects.
     ///
-    /// `None` → `None`; else one [`Test`] per
-    /// non-cloned job (dropping [`EXCLUDED_MODULES`] from each module map),
-    /// excluding any whose result is in [`EXCLUDED_RESULTS`].
+    /// One [`Test`] per non-cloned job, dropping [`EXCLUDED_MODULES`] from each
+    /// module map and skipping any result in [`EXCLUDED_RESULTS`].
     #[must_use]
     fn parse_jobs(jobs: Option<&[Job]>) -> Option<Vec<Test>> {
         let jobs = jobs?;
@@ -153,10 +149,9 @@ impl KernelOpenQA {
 
     /// Format the LTP test results into a sorted matrix.
     ///
-    /// Only `ltp_`-prefixed tests produce a
-    /// line; a failed LTP test appends a `<module>: ...` line per failed
-    /// module. Column widths match fixed field specs
-    /// (`{0:36}`, `{1:<3}`, `{2:8}`). The result is sorted.
+    /// Only `ltp_`-prefixed tests produce a line, and a failed one appends a
+    /// `<module>: ...` line per failed module. Column widths are the fixed
+    /// `{0:36}` / `{1:<3}` / `{2:8}` specs, and the result is sorted.
     #[must_use]
     fn result_matrix(testresults: &[Test]) -> Vec<String> {
         let mut matrix: Vec<String> = Vec::new();
@@ -189,9 +184,8 @@ impl OpenQAResult for KernelOpenQA {
         Self::KIND
     }
 
-    /// Truthy when `pp` or
-    /// `results` is non-empty. Called during `pretty_print`, where `pp` is not
-    /// yet populated, so it effectively keys on `results`.
+    /// Truthy when `pp` or `results` is non-empty. `pretty_print` calls it
+    /// before `pp` is populated, so there it effectively keys on `results`.
     fn has_results(&self) -> bool {
         !self.pp.is_empty() || self.results.as_ref().is_some_and(|r| !r.is_empty())
     }
@@ -209,8 +203,7 @@ mod tests {
     }
 
     /// Parses a wire-form result string (`"passed"`, `"skipped"`, ...) into
-    /// [`OqaJobResult`], for building test fixtures from the same literals the
-    /// old `String`-typed field took.
+    /// [`OqaJobResult`], for building test fixtures from literals.
     fn job_result(s: &str) -> OqaJobResult {
         serde_json::from_value(serde_json::Value::String(s.to_owned()))
             .expect("valid job-result fixture literal")
@@ -302,15 +295,12 @@ mod tests {
                     ("shutdown_ltp", "passed"),
                 ],
             ),
-            // cloned -> dropped
             job(2, "ltp_b", "passed", "Kernel", "x86_64", Some(99), &[]),
-            // excluded result -> dropped
             job(3, "ltp_c", "skipped", "Kernel", "x86_64", None, &[]),
         ];
         let out = KernelOpenQA::parse_jobs(Some(&jobs)).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].test_id, 1);
-        // boot_ltp / shutdown_ltp stripped, real_mod kept
         assert!(out[0].modules.contains_key("real_mod"));
         assert!(!out[0].modules.contains_key("boot_ltp"));
         assert!(!out[0].modules.contains_key("shutdown_ltp"));

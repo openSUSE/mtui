@@ -1,12 +1,11 @@
 //! Validated package name / `name=version` specifier.
 //!
 //! Package specifiers parsed from testreport metadata are joined into remote
-//! commands executed **as root** on reference hosts. Raw interpolation (naive
-//! whitespace-joining) would be a command-injection vector, so [`PackageSpec`]
-//! validates a specifier at ingestion and rejects anything that is not a
-//! plausible RPM package form with a typed [`PackageSpecParseError`], so
-//! malformed input never reaches host execution. The exec-boundary sinks
-//! additionally shell-quote every argument (defense-in-depth).
+//! commands executed **as root**, so raw whitespace-joining is a
+//! command-injection vector: [`PackageSpec`] rejects anything that is not a
+//! plausible RPM package form at ingestion, with a typed
+//! [`PackageSpecParseError`], before it can reach host execution. The
+//! exec-boundary sinks shell-quote every argument too (defense-in-depth).
 //!
 //! ## Grammar
 //!

@@ -43,10 +43,8 @@ fn valid_rrids_parse() {
 }
 
 /// An absent component is a MissingComponent. Four components are *required*,
-/// not merely a maximum, so any input with one, two, or three components
-/// fails on the first absent one. The 3-token `SUSE:Maintenance:1` case (only
-/// the review_id missing) locks the exact-count lower bound alongside the
-/// 1- and 2-token fixtures.
+/// not merely a maximum, so any shorter input fails on the first absent one —
+/// the 3-token case locks that lower bound.
 #[test]
 fn missing_components_error() {
     for input in ["SUSE:Maintenance:1", "SUSE:Maintenance", "SUSE:M", "SUSE"] {
@@ -118,7 +116,6 @@ fn equal_rrids_hash_equally() {
 
     let mut set = HashSet::new();
     set.insert(RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap());
-    // Inserting the short form of the same RRID must not grow the set.
     assert!(!set.insert(RequestReviewID::parse("S:M:1:1").unwrap()));
     assert_eq!(set.len(), 1);
 }

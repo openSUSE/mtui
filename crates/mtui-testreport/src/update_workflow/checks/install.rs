@@ -10,9 +10,8 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, EXIT_NOT_RU
 /// The zypper install check.
 ///
 /// Below its own role-neutral `-1` gate, this is [`super::update::classified`]:
-/// the install and update keys share one exit-code/marker classifier, so the
-/// two cannot drift into two different verdicts for the same transcript the
-/// way they once did.
+/// install and update share one exit-code/marker classifier, so the two cannot
+/// drift into different verdicts for the same transcript.
 ///
 /// # Errors
 ///
@@ -36,23 +35,19 @@ fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
 /// The transactional-update (`slmicro`) install/uninstall check.
 ///
 /// Reuses the `update` check's [`classified`](super::update::classified)
-/// verdict — `classify_exit` interleaved with the shared stdout/stderr markers
-/// — rather than restating it, so the two `transactional-update` keys cannot
-/// drift apart. The reasoning for what that classifier means on this key is
-/// recorded once, on `checks::update`'s `transactional_update`: the command
-/// returns **only** `0` or `1` (verified against upstream
-/// `openSUSE/transactional-update` v6.1.3, unchanged from v2.28.3), because it
-/// absorbs zypper's status instead of propagating it. So the informational band
-/// and the package-not-found set are inert here by construction, and the
-/// classifier reduces to "`0` passes, anything else is an Unknown Error" —
-/// while the markers still catch the shape an exit code cannot: a run that
-/// reported a locked update stack, a dependency prompt or an RPM error and
-/// still exited `0`.
+/// verdict so the two `transactional-update` keys cannot drift apart. What that
+/// classifier means on this key is argued once, on `checks::update`'s
+/// `transactional_update`: the command returns **only** `0` or `1` (verified
+/// against `openSUSE/transactional-update` v6.1.3, unchanged from v2.28.3),
+/// because it absorbs zypper's status. So the informational band and the
+/// package-not-found set are inert here, while the markers still catch what an
+/// exit code cannot — a run that reported a locked update stack, a dependency
+/// prompt or an RPM error and still exited `0`.
 ///
-/// The `-1` sentinel is gated here rather than deferred to the classifier's own
-/// [`NotRun`](super::ExitClass::NotRun) arm because that arm speaks the
-/// `update` vocabulary ("update command timed out…"), and this table serves
-/// `install` *and* `uninstall` — hence the role-neutral wording.
+/// The `-1` sentinel is gated here rather than left to the classifier's own
+/// [`NotRun`](super::ExitClass::NotRun) arm, which speaks the `update`
+/// vocabulary; this table serves `install` *and* `uninstall`, hence the
+/// role-neutral wording.
 ///
 /// # Errors
 ///
@@ -72,29 +67,24 @@ fn transactional_update(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateEr
 
 /// The yum install/uninstall check.
 ///
-/// Deliberately narrow: the exit code is the whole verdict, with no marker
-/// reading and no zypper exit-code semantics.
+/// Deliberately narrow: the exit code is the whole verdict, with no markers and
+/// no zypper exit-code semantics.
 ///
-/// * **The accepted statuses.** `yum(8)` and `dnf(8)` document `0` as success
-///   and any other status as an error for `install`/`remove`; unlike zypper
-///   there is no informational band to carve out. zypper's `100`-`107` must
-///   **not** transfer — `dnf`'s only documented `100` belongs to
-///   `check-update`, which no install or uninstall doer runs, so accepting it
-///   here would pass a genuinely failed transaction. `-1` is mtui's own "never
-///   produced a status" sentinel and gets its own reason, so a host mtui never
-///   reached is not reported as a package failure.
-/// * **No markers.** Three of [`markers`](super::update::markers)' four
-///   strings are zypper-only vocabulary, and the fourth (`Error:` on stderr)
-///   was written against zypper transcripts; the yum *update* check's doc
-///   records the same reasoning at length. Adding it here would be a new rule
-///   judging a transcript it was never written for.
+/// * **The accepted statuses.** `yum(8)`/`dnf(8)` document `0` as success and
+///   anything else as an error for `install`/`remove`; there is no
+///   informational band. zypper's `100`-`107` must **not** transfer — `dnf`'s
+///   only documented `100` belongs to `check-update`, which no doer here runs,
+///   so accepting it would pass a failed transaction. `-1` keeps its own
+///   reason, so a host mtui never reached is not reported as a package failure.
+/// * **No markers**, for the reason the yum *update* check argues: three of
+///   [`markers`](super::update::markers)' four strings are zypper-only and the
+///   fourth was written against zypper transcripts.
 ///
-/// "Unknown Error" is therefore an admission rather than a diagnosis: naming
-/// the failure would take observed `yum`/`dnf` output from a real RHEL refhost
-/// rather than inference. Unlike the *update* check — where a false failure
-/// fires the group-wide rollback downgrade — a failed install/uninstall verdict
-/// only fails the operation that was asked for, which is why judging the exit
-/// code at all is safe here.
+/// "Unknown Error" is therefore an admission, not a diagnosis: naming the
+/// failure needs observed `yum`/`dnf` output from a real RHEL refhost. Reading
+/// the exit code at all is safe here only because a failed install/uninstall
+/// verdict fails just the operation asked for, where the *update* check's would
+/// fire the group-wide rollback downgrade.
 ///
 /// # Errors
 ///
@@ -152,12 +142,10 @@ mod tests {
 
     #[test]
     fn success_exit_codes_pass() {
-        // `107` (`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`) is in the list because
-        // `man zypper` puts it in the informational band: "Installation
-        // basically succeeded, but some of the packages %post install scripts
-        // returned an error. These packages were successfully unpacked to disk
-        // and are registered in the rpm database". It was missing, so a
-        // routine `%posttrans` hiccup failed the install.
+        // `107` (`ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED`) is in the informational
+        // band per `man zypper` — the packages are unpacked and registered,
+        // only a `%post` script failed — and was once missing, so a routine
+        // `%posttrans` hiccup failed the install.
         for code in [
             0,
             ZYPPER_EXIT_INF_UPDATE_NEEDED,
@@ -176,9 +164,8 @@ mod tests {
 
     #[test]
     fn successful_install_now_returns_the_additional_rpm_output_diagnostic() {
-        // Before the fold this check always returned `Ok(Vec::new())` on
-        // success. Sharing `classified` means a successful install now
-        // surfaces the same "Additional rpm output" section `update` does.
+        // Sharing `classified` means a successful install surfaces the same
+        // "Additional rpm output" section `update` does.
         let stdout = "before Additional rpm output:\nwarning: stuff\nRetrieving repo\nafter";
         let diags = zypper(args(stdout, "", 0)).unwrap();
         assert_eq!(diags.len(), 1);
@@ -202,14 +189,11 @@ mod tests {
 
     #[test]
     fn only_104_outranks_the_markers_here() {
-        // The install check now shares `update`'s ordering, having folded onto
-        // its `classified` verdict: only `104` (`ZYPPER_EXIT_INF_CAP_NOT_FOUND`)
-        // literally means "capability not found" and short-circuits ahead of
-        // the stderr markers; `4`/`5`/`8` (`ERR_ZYPP`, `ERR_PRIVILEGES`,
-        // `ERR_COMMIT`) let the transcript name the failure instead. The two
-        // checks can no longer disagree on the same transcript — this test and
-        // `update`'s `only_104_outranks_the_markers` assert the identical
-        // verdicts, so neither side can drift apart again.
+        // Shares `update`'s ordering: only `104`
+        // (`ZYPPER_EXIT_INF_CAP_NOT_FOUND`) short-circuits ahead of the stderr
+        // markers, while `4`/`5`/`8` let the transcript name the failure. This
+        // and `update`'s `only_104_outranks_the_markers` assert identical
+        // verdicts, so neither side can drift.
         let err = zypper(args(
             "",
             "System management is locked",
@@ -260,11 +244,9 @@ mod tests {
 
     #[test]
     fn both_markers_present_favors_the_dependency_prompt() {
-        // Unpinned before the fold, and would have flipped silently: the old
-        // inline order checked stderr's `Error:` before stdout's `(c): c`, so
-        // a transcript carrying both read as "RPM Error". `classified`'s
-        // shared `markers` checks the dependency prompt first, so the same
-        // transcript now reads "Dependency Error" — matching `update`.
+        // `markers` checks the dependency prompt before stderr's `Error:`, so a
+        // transcript carrying both reads "Dependency Error" — matching
+        // `update`. The order is otherwise free to flip silently.
         let err = zypper(args("choose (c): c", "Error: boom", 1)).unwrap_err();
         assert_eq!(err.reason, "Dependency Error");
     }
@@ -294,10 +276,8 @@ mod tests {
 
     #[test]
     fn slmicro_failed_exit_is_unknown_error() {
-        // Before this key had a check the adapter's fallback answered
-        // "install command failed" for every failure. The verdict must survive
-        // the move — a check that could not fail would be worse than the
-        // fallback it replaced.
+        // This key's check replaced the adapter's exit-code-only fallback, so
+        // it must still fail — a check that cannot fail is worse than none.
         let err = transactional_update(args_for(
             "transactional-update -n pkg install pkg-a",
             "",
@@ -311,11 +291,10 @@ mod tests {
 
     #[test]
     fn slmicro_clean_exit_with_chatty_stderr_passes() {
-        // The unit-level twin of `perform_install_ignores_stderr_on_a_clean_
-        // exit`, which now routes through this check: `transactional-update`
-        // and `yum` write progress and warnings to stderr on a successful run,
-        // so no `!stderr.is_empty()` rule may exist here. This exact string is
-        // the one that flow test feeds.
+        // `transactional-update` and `yum` write progress and warnings to
+        // stderr on a successful run, so no `!stderr.is_empty()` rule may exist
+        // here. Twin of `perform_install_ignores_stderr_on_a_clean_exit`, whose
+        // string this is.
         assert!(
             transactional_update(args_for(
                 "transactional-update -n pkg install pkg-a",
@@ -329,11 +308,9 @@ mod tests {
 
     #[test]
     fn slmicro_lock_message_on_a_clean_exit_is_stack_locked() {
-        // The markers must run on the *success* class too: a
-        // `transactional-update` that reported a locked stack and still exited
-        // `0` is the failure an exit-code rule cannot see. A short-circuit
-        // `if exitcode == 0 { return Ok(...) }` ahead of the classifier would
-        // silently pass it.
+        // The markers must run on the *success* class too, or a short-circuit
+        // `if exitcode == 0 { return Ok(…) }` silently passes the failure an
+        // exit-code rule cannot see.
         let err = transactional_update(args_for(
             "transactional-update -n pkg install pkg-a",
             "",
@@ -346,10 +323,9 @@ mod tests {
 
     #[test]
     fn slmicro_timed_out_reason_is_its_own_not_updates() {
-        // Exact string, because this is what the local `-1` gate buys: without
-        // it the shared classifier's `NotRun` arm answers, in the *update*
-        // check's vocabulary ("update command timed out or failed to run"),
-        // on a table that also serves `uninstall`.
+        // Exact string: without the local `-1` gate the shared classifier's
+        // `NotRun` arm answers in the *update* check's vocabulary, on a table
+        // that also serves `uninstall`.
         let err = transactional_update(args_for(
             "transactional-update -n pkg install pkg-a",
             "",
@@ -363,9 +339,8 @@ mod tests {
 
     #[test]
     fn install_timed_out_reason_is_role_neutral_not_updates() {
-        // Mirrors `slmicro_timed_out_reason_is_its_own_not_updates`: this
-        // table also serves `uninstall`, so its own `-1` gate must answer in
-        // role-neutral wording, not the *update* check's vocabulary.
+        // As above: this table also serves `uninstall`, so its `-1` gate must
+        // answer role-neutrally, not in the *update* check's vocabulary.
         let err = zypper(args("", "", EXIT_NOT_RUN))
             .expect_err("a command that never ran must fail the check");
         assert_eq!(err.reason, "command timed out or failed to run");
@@ -389,11 +364,10 @@ mod tests {
         let err = yum(args_for("yum -y install pkg-a", "", "", 1)).unwrap_err();
         assert_eq!(err.reason, "Unknown Error");
         assert_eq!(err.host.as_deref(), Some("h1"));
-        // (c) zypper's informational band does NOT transfer. `100` is
-        // "updates available" to zypper and an error to yum/dnf (whose only
-        // documented `100` belongs to `check-update`, which no install or
-        // uninstall doer runs), so routing this key through the shared
-        // classifier would pass a failed transaction.
+        // (c) zypper's informational band does NOT transfer: `100` is "updates
+        // available" to zypper and an error to yum/dnf (whose only documented
+        // `100` belongs to `check-update`, which no doer here runs), so the
+        // shared classifier would pass a failed transaction.
         for code in [
             ZYPPER_EXIT_INF_UPDATE_NEEDED,
             ZYPPER_EXIT_INF_SEC_UPDATE_NEEDED,
@@ -415,10 +389,9 @@ mod tests {
     #[test]
     fn table_lookup() {
         assert!(install_check("15", false).is_some());
-        // Both keys that have an *installer* and an *uninstaller* but used to
-        // have no check: they fell back to the `PlanProvider` adapter's
-        // exit-code-only verdict, with no lock/dependency/RPM attribution and
-        // no distinct verdict for a command that never ran.
+        // Both keys have an installer and an uninstaller; with no check they
+        // fell back to the `PlanProvider` adapter's exit-code-only verdict, so
+        // no lock/dependency/RPM attribution and no never-ran verdict.
         assert!(install_check("slmicro", true).is_some());
         assert!(install_check("YUM", false).is_some());
         // The key shape still matters — `slmicro` is only ever transactional,
@@ -430,15 +403,14 @@ mod tests {
 
     #[test]
     fn the_new_arms_resolve_to_their_own_check_not_a_sibling() {
-        // `is_some()` above pins that the arm exists, not *what* it binds to.
-        // Every behaviour test in this module calls the functions directly, and
-        // on exit `1` all three answer "Unknown Error" — so merging the arms
-        // onto one function would leave the suite green. Two transcripts
-        // separate all three here.
+        // `is_some()` above pins that the arm exists, not *what* it binds to:
+        // every behaviour test here calls the functions directly and all three
+        // answer "Unknown Error" on exit `1`, so merging the arms onto one
+        // function would leave the suite green. Two transcripts separate them.
         let yum_fn = install_check("YUM", false).expect("the YUM key has an install check");
-        // (a) A clean exit carrying a zypper lock marker: `yum` reads no
-        // markers and passes it; `transactional_update` fails it. This is the
-        // shape a successful `yum install` on a RHEL host can really produce.
+        // (a) A clean exit carrying a zypper lock marker — the shape a
+        // successful `yum install` on a RHEL host can really produce: `yum`
+        // reads no markers and passes it, `transactional_update` fails it.
         assert!(
             yum_fn(args_for(
                 "yum -y install pkg-a",
@@ -449,9 +421,8 @@ mod tests {
             .is_ok(),
             "the YUM arm must bind the marker-blind yum check"
         );
-        // (b) Exit `100`: zypper's informational band is success to `zypper`
-        // and a failed transaction to yum/dnf, so this separates the YUM arm
-        // from the zypper one, which (a) cannot.
+        // (b) Exit `100` is a success to `zypper` and a failed transaction to
+        // yum/dnf, so it separates those two arms, which (a) cannot.
         assert_eq!(
             yum_fn(args_for(
                 "yum -y install pkg-a",
@@ -464,10 +435,9 @@ mod tests {
             "Unknown Error"
         );
 
-        // The same transcript on the slmicro arm must FAIL: `transactional_
-        // update` runs the markers on the success class too, while both `yum`
-        // (no markers) and `zypper` (exit `0` short-circuits ahead of them)
-        // pass it. One assertion separates that arm from both siblings.
+        // The same transcript must FAIL on the slmicro arm, which runs the
+        // markers on the success class too — so it cannot have been bound to
+        // the marker-blind `yum` check.
         let slmicro_fn =
             install_check("slmicro", true).expect("the slmicro key has an install check");
         let err = slmicro_fn(args_for(

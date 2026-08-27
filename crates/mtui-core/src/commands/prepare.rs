@@ -75,13 +75,11 @@ impl Command for Prepare {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         // Not-loaded first, so the refusal below can honestly say "the loaded
-        // report" (#396 review).
+        // report".
         let _rrid = crate::commands::support::require_update(session)?;
         let packages = session.metadata().get_package_list();
-        // #396: a report whose metadata names no package versions would sail
-        // through the flow (repo add/refresh, zero installs) and print
-        // `prepare completed on <hosts>` — an unqualified success an MCP
-        // client cannot distinguish from a prepared host. Refuse up front.
+        // #396: an empty package list would sail through the flow with zero
+        // installs and print a success an MCP client cannot tell from a real one.
         if packages.is_empty() {
             return Err(CommandError::Other(
                 "the loaded report names no package versions, so prepare has nothing to \
@@ -112,9 +110,8 @@ mod tests {
     };
     use crate::error::CommandError;
 
-    /// Seeds one package version on the loaded fixture report: the #396
-    /// pre-flight refuses a report whose metadata names none, and these tests
-    /// drive the paths past that guard.
+    /// Gets past the #396 pre-flight, which refuses a report naming no package
+    /// versions.
     fn seed_package(session: &mut crate::session::Session) {
         session.metadata_mut().base_mut().packages.insert(
             "standard".to_owned(),
@@ -170,8 +167,8 @@ mod tests {
         assert!(!buf.contents().contains("completed"), "{}", buf.contents());
     }
 
-    /// #396 headline: a loaded report whose metadata names no package
-    /// versions must REFUSE, not print `prepare completed on h1`.
+    /// #396: a metadata-empty report must refuse, not print `prepare completed
+    /// on h1`.
     #[tokio::test]
     async fn empty_package_list_errors_instead_of_success() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -190,8 +187,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_hosts_is_no_refhosts_defined() {
-        // Loaded report but no hosts: passes the requires_update guard, then the
-        // empty selection yields NoRefhostsDefined.
+        // Past the requires_update guard, the empty selection is the error.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
         seed_package(&mut session);
         let args = matches(&Prepare, &[]);
@@ -201,8 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_template_loaded_errors() {
-        // No report loaded (even with the empty session) → requires_update guard
-        // fires first.
+        // The requires_update guard fires first.
         let (mut session, _buf) = empty_session();
         let args = matches(&Prepare, &[]);
         let err = Prepare.call(&mut session, &args).await.unwrap_err();

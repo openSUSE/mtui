@@ -1,23 +1,17 @@
 //! reedline [`Completer`] adapter over the command surface.
 //!
-//! Bridges [`reedline::Completer`] onto the
-//! [`Command::complete`](mtui_core::Command::complete) surface every command
-//! already implements (P5), plus [`Registry::keys`] (names **and** aliases) for
-//! first-token completion.
-//!
-//! This is an **adapter**, not new completion logic: it translates reedline's
+//! An **adapter**, not new completion logic: it translates reedline's
 //! `(line, pos)` into the `(text, line)` the registry commands expect,
-//! dispatches, and re-emits [`Suggestion`]s.
-//!
-//! ## Session access
+//! dispatches to [`Command::complete`](mtui_core::Command::complete) (or
+//! [`Registry::keys`] — names **and** aliases — for the first token), and
+//! re-emits [`Suggestion`]s.
 //!
 //! [`reedline::Completer::complete`] receives no session, but a command's
-//! `complete(session, …)` needs one (loaded RRIDs, host names, templates drive
-//! the candidates). The completer therefore holds a clone of the same
-//! `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl) loop drives and takes a
-//! short-lived lock inside [`complete`](MtuiCompleter::complete) to read live
-//! state. Completion happens *during* `read_line`; dispatch happens *after* it
-//! returns, so the lock never overlaps the per-line dispatch lock.
+//! `complete(session, …)` needs one (loaded RRIDs, host names and templates
+//! drive the candidates), so the completer holds a clone of the same
+//! `Arc<Mutex<Session>>` the [`Repl`](crate::repl::Repl) loop drives. Completion
+//! runs *during* `read_line` and dispatch *after* it returns, so its short-lived
+//! lock never overlaps the per-line dispatch lock.
 
 use std::sync::{Arc, Mutex};
 
@@ -42,16 +36,14 @@ impl MtuiCompleter {
 /// Splits `line` into `(word_before_cursor, begidx)`.
 ///
 /// `text` is the contiguous non-whitespace tail of `line`, `begidx` the byte
-/// offset where that tail starts. When `line` ends in whitespace (e.g.
-/// `"run -t "`), `text` is empty and `begidx == line.len()` — the command
+/// offset where it starts (matching reedline's [`Span`] contract). A `line`
+/// ending in whitespace gives an empty `text` at `line.len()`, and the command
 /// completer is still invoked.
-///
-/// Offsets are byte offsets into `line`, matching reedline's [`Span`] contract.
 fn split_text_word(line: &str) -> (&str, usize) {
     if line.is_empty() {
         return ("", 0);
     }
-    // Last space or tab; `+ len_utf8` maps just past it. Both are 1 byte.
+    // `+ 1` maps just past the separator; space and tab are both 1 byte.
     let last_ws = line.rfind([' ', '\t']).map_or(0, |i| i + 1);
     (&line[last_ws..], last_ws)
 }
@@ -60,47 +52,35 @@ impl Completer for MtuiCompleter {
     /// Returns completion candidates for the buffer `line` up to byte offset
     /// `pos`.
     ///
-    /// Dispatch rules:
-    ///
-    /// * The buffer before the cursor is `&line[..pos]`, then left-trimmed so
-    ///   column offsets match the trimmed buffer.
-    /// * `begidx == 0` → **first-token** completion: registry command names
-    ///   **and aliases** by case-sensitive prefix match.
-    /// * otherwise → **per-command**: look up the first token in the registry
-    ///   and delegate to its `complete(session, text, line)`; an unknown token
-    ///   or a command with no completer yields nothing.
+    /// A first token (`begidx == 0`) completes over registry names **and
+    /// aliases** by case-sensitive prefix; otherwise the first token names the
+    /// command whose `complete(session, text, line)` is delegated to, and an
+    /// unknown token or a command with no completer yields nothing.
     ///
     /// A poisoned session lock is recovered ([`into_inner`](std::sync::PoisonError::into_inner))
     /// rather than panicking — a bad completion must never tear down the REPL.
-    ///
-    /// This adapter computes candidates synchronously, so it always answers
-    /// [`CompletionResult::Fresh`] and never `Pending`/`Stale`.
+    /// Candidates are computed synchronously, so the answer is always
+    /// [`CompletionResult::Fresh`].
     fn complete(&mut self, line: &str, pos: usize) -> CompletionResult {
-        // The buffer up to the cursor (reedline hands us the whole line + pos).
         let before = &line[..pos.min(line.len())];
-        // Left-trim before computing offsets; track the shift so the
+        // Left-trimmed before computing offsets; the shift is tracked so the
         // reported span still indexes the *original* buffer in bytes.
         let leading = before.len() - before.trim_start().len();
         let stripped = &before[leading..];
 
         let (text, begidx_in_stripped) = split_text_word(stripped);
-        // Span into the original buffer: start past the trimmed leading ws.
         let span = Span::new(leading + begidx_in_stripped, pos.min(line.len()));
 
         let candidates = if begidx_in_stripped == 0 {
-            // First-token completion: registry names *and aliases* by prefix.
             self.registry
                 .keys()
                 .filter(|key| key.starts_with(text))
                 .map(str::to_owned)
                 .collect::<Vec<_>>()
         } else {
-            // Per-command completion: first token names the command.
             let first_token = stripped.split(' ').next().unwrap_or("");
-            // `help <cmd>` completes over command names. The trait's
-            // `complete(session, …)` has no registry handle, so the adapter —
-            // which does — supplies the candidates here (canonical names +
-            // aliases).
+            // The trait's `complete(session, …)` has no registry handle, so the
+            // adapter supplies `help <cmd>`'s candidates itself.
             if first_token == "help" {
                 self.registry
                     .keys()
@@ -170,10 +150,9 @@ mod tests {
         }
     }
 
-    /// A command whose `complete()` reads live session state (`interactive`) —
-    /// proves the `Arc<Mutex<Session>>` bridge exposes the *live* session to the
-    /// completer rather than a snapshot. Reads a trivially-public field so the
-    /// test needs no `mtui-hosts`/`TestReport` fixtures.
+    /// A command whose `complete()` reads live session state, proving the
+    /// `Arc<Mutex<Session>>` bridge exposes the live session rather than a
+    /// snapshot. It reads a trivially-public field so no host fixtures are needed.
     struct SessionProbeCmd;
 
     #[async_trait]
@@ -248,7 +227,6 @@ mod tests {
 
     #[test]
     fn split_trailing_space_yields_empty_tail_at_end() {
-        // "run " → completing a fresh (empty) second token.
         assert_eq!(split_text_word("run "), ("", 4));
     }
 
@@ -268,15 +246,13 @@ mod tests {
     fn first_token_empty_offers_all_names_and_aliases() {
         let mut c = completer();
         let s = c.complete("", 0);
-        // Insertion order, each command's name before its own aliases
-        // (`run` carries alias `r`).
+        // Insertion order, each command's name before its own aliases.
         assert_eq!(values(&s), vec!["run", "r", "shell", "reboot"]);
     }
 
     #[test]
     fn first_token_completion_is_never_provisional() {
-        // The adapter is synchronous, so it must always answer `Fresh` — a
-        // `Pending`/`Stale` result here would silently empty the Tab menu.
+        // A `Pending`/`Stale` answer would silently empty the Tab menu.
         let mut c = completer();
         let s = c.complete("r", 1);
         assert!(!s.is_provisional());
@@ -288,14 +264,11 @@ mod tests {
         let s = c.complete("r", 1);
         let mut got = values(&s);
         got.sort_unstable();
-        // `r` matches the alias `r`, plus `reboot` and `run`.
         assert_eq!(got, vec!["r", "reboot", "run"]);
     }
 
     #[test]
     fn first_token_completes_aliases() {
-        // An alias-only prefix must surface the alias: `run` carries alias `r`,
-        // so completing `r` (before any space) offers the alias itself.
         let mut c = completer();
         let s = c.complete("r", 1);
         assert!(
@@ -333,7 +306,7 @@ mod tests {
         let mut c = completer();
         let s = c.complete("run --h", 7);
         assert_eq!(values(&s), vec!["--host"]);
-        // The span replaces just the "--h" partial arg, not the command.
+        // The span replaces just the partial arg, not the command.
         assert_eq!(s.suggestions()[0].span, Span::new(4, 7));
     }
 
@@ -346,12 +319,11 @@ mod tests {
     #[test]
     fn command_without_completer_yields_nothing() {
         let mut c = completer();
-        // `reboot` (BareCmd) has the default empty `complete()`.
         assert!(c.complete("reboot ", 7).suggestions().is_empty());
     }
 
-    /// A bare command named `help` so the adapter's `help`-argument special case
-    /// (registry-backed, since the trait `complete` has no registry) is reachable.
+    /// A bare command named `help`, so the adapter's registry-backed
+    /// `help`-argument special case is reachable.
     struct HelpCmd;
 
     #[async_trait]
@@ -375,12 +347,11 @@ mod tests {
         let session = Session::new(Config::default(), true);
         let mut c = MtuiCompleter::new(Arc::new(registry), Arc::new(Mutex::new(session)));
 
-        // `help r` → the registry names/aliases starting with "r" (run, r).
         let s = c.complete("help r", 6);
         let mut got = values(&s);
         got.sort_unstable();
+        // An empty tail offers every command key.
         assert_eq!(got, vec!["r", "run"]);
-        // `help ` (empty tail) offers every command key.
         let s = c.complete("help ", 5);
         let all = values(&s);
         assert!(all.contains(&"run") && all.contains(&"help"));
@@ -390,8 +361,6 @@ mod tests {
 
     #[test]
     fn command_reads_live_session_state() {
-        // An interactive session → the probe command sees `interactive == true`
-        // through the shared lock and completes accordingly.
         let mut registry = Registry::new();
         registry.register(Arc::new(SessionProbeCmd));
         let session = Session::new(Config::default(), true);
@@ -402,7 +371,7 @@ mod tests {
     #[test]
     fn completer_reflects_headless_session() {
         // The mirror case: a headless session flips the probe's answer, proving
-        // the completer reads the *live* session, not a baked-in snapshot.
+        // the completer reads the live session, not a baked-in snapshot.
         let mut registry = Registry::new();
         registry.register(Arc::new(SessionProbeCmd));
         let session = Session::new(Config::default(), false);
@@ -415,12 +384,11 @@ mod tests {
     #[test]
     fn leading_whitespace_span_indexes_original_buffer() {
         let mut c = completer();
-        // Two leading spaces; "run r" starts at byte 2, "r" partial at byte 6.
+        // Two leading spaces, so the "r" partial sits at bytes 6..7 of the
+        // *original* buffer, which is what the span must index.
         let line = "  run r";
         let s = c.complete(line, line.len());
-        // FixedCmd.complete("r", …) → "reboot".
         assert_eq!(values(&s), vec!["reboot"]);
-        // Span must index the ORIGINAL buffer: the "r" partial is bytes 6..7.
         assert_eq!(s.suggestions()[0].span, Span::new(6, 7));
         assert_eq!(
             &line[s.suggestions()[0].span.start..s.suggestions()[0].span.end],

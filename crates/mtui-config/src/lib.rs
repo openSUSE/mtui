@@ -1,24 +1,14 @@
 //! `mtui-config` — TOML config parsing and XDG path resolution for mtui.
 //!
-//! ## What this crate does
+//! Loads the `mtui.toml` file, resolved highest-precedence first from the
+//! `--config` flag, `$MTUI_CONF`, the XDG per-user file
+//! (`$XDG_CONFIG_HOME/mtui/mtui.toml`), the home dotfile (`~/.mtui.toml`), then
+//! `/etc/mtui.toml`. The behavioural contract is: sectioned options, documented
+//! defaults for missing keys, and **lenient loading** — a bad or missing file is
+//! logged and skipped, never fatal.
 //!
-//! Loads mtui's configuration from a **TOML** file named `mtui.toml`, resolved
-//! from (highest precedence first): the `--config` flag, then `$MTUI_CONF`, then
-//! the XDG per-user file (`$XDG_CONFIG_HOME/mtui/mtui.toml`), then the home
-//! dotfile (`~/.mtui.toml`), then `/etc/mtui.toml`. Missing keys fall back to
-//! their documented defaults.
-//!
-//! ## Design choices
-//!
-//! Config is **TOML** with XDG paths — a typed, modern format. The
-//! *behavioural* contract is: sectioned options, well-defined default
-//! values, and **lenient loading** (a bad or missing file is logged and skipped,
-//! never fatal).
-//!
-//! ## Scope
-//!
-//! Every option section mtui understands is modelled here (see [`options`]).
-//! CLI-argument merging lives with the `clap` args structs that own it —
+//! Every option section mtui understands is modelled here (see [`options`]);
+//! CLI-argument merging lives with the `clap` args structs that own it,
 //! `mtui_core::args` for the REPL and `mtui_mcp::args` for the MCP server.
 
 pub mod atomic;
@@ -41,10 +31,9 @@ impl Config {
     /// `explicit` is the optional `--config` path. Files are merged
     /// **lowest-precedence first** (see `config_search_paths`): `/etc` →
     /// `~/.mtui.toml` → the XDG file, so a per-user file overrides `/etc` on
-    /// shared keys and the XDG file wins over the home dotfile. A file that does not exist is
-    /// silently skipped; a file that fails to read or parse is logged at ERROR
-    /// and skipped — loading never hard-fails. Absent options take their
-    /// documented defaults.
+    /// shared keys. An absent file is skipped silently, an unreadable or
+    /// unparseable one is logged at ERROR and skipped — loading never
+    /// hard-fails, and absent options take their documented defaults.
     #[must_use]
     pub fn load(explicit: Option<PathBuf>) -> Self {
         let mut merged = RawConfig::default();
@@ -67,7 +56,6 @@ impl Config {
 
 /// Read and parse a single config file.
 ///
-/// Returns:
 /// * `Ok(Some(raw))` — the file existed and parsed cleanly.
 /// * `Ok(None)` — the file does not exist (a normal, non-error condition).
 /// * `Err(_)` — the file existed but could not be read or was invalid TOML.
@@ -120,7 +108,6 @@ mod tests {
         let cfg = Config::load(Some(path));
         assert_eq!(cfg.connection_timeout, 600);
         assert_eq!(cfg.bugzilla_url, "https://bz.example");
-        // Unset option keeps its default.
         assert_eq!(cfg.reports_url, "https://qam.suse.de/testreports");
     }
 
@@ -253,7 +240,6 @@ mod tests {
 
     #[test]
     fn load_malformed_file_logs_and_falls_back_to_defaults() {
-        // Invalid TOML must not panic; defaults apply.
         let path = write_tmp("broken.toml", "connection_timeout = = 42\n");
         let cfg = Config::load(Some(path));
         assert_eq!(cfg.connection_timeout, 300);
@@ -261,8 +247,7 @@ mod tests {
 
     #[test]
     fn load_wrong_type_logs_and_falls_back() {
-        // connection_timeout declared as a string -> serde type error ->
-        // logged + skipped -> default applied (no crash).
+        // A serde type error is logged and skipped, not a crash.
         let path = write_tmp("typed.toml", "[connection]\nconnection_timeout = \"abc\"\n");
         let cfg = Config::load(Some(path));
         assert_eq!(cfg.connection_timeout, 300);
@@ -286,9 +271,7 @@ mod tests {
 
     #[test]
     fn load_ssl_verify_native_bool_false_disables() {
-        // Regression: `ssl_verify = false` as a native TOML boolean must
-        // actually disable verification (previously it silently defaulted to
-        // Enabled because the field only accepted strings).
+        // A native TOML boolean, not just the string spellings, must disable it.
         let path = write_tmp("ssl_bool.toml", "[mtui]\nssl_verify = false\n");
         assert_eq!(Config::load(Some(path)).ssl_verify, SslVerify::Disabled);
     }

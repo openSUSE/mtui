@@ -9,9 +9,8 @@ use crate::session::Session;
 
 /// Displays the current user name and session PID.
 ///
-/// The username comes from
-/// [`Config::session_user`](mtui_config::Config) and the PID from the running
-/// process; both form the session identity used for host locking and logging.
+/// [`Config::session_user`](mtui_config::Config) plus the running process's PID
+/// — together the session identity used for host locking and logging.
 pub struct Whoami;
 
 #[async_trait]

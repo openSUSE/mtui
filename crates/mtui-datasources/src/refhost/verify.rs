@@ -1,13 +1,12 @@
 //! Compare a connected host's installed products against `refhosts.yml`.
 //!
-//! When mtui connects a reference host it can know two things about that host's
-//! products: what is *actually installed* (parsed from `/etc/products.d` into a
-//! [`System`]) and what the `refhosts.yml` metadata *says* should be there (a
-//! [`Host`] row). [`compare`] checks the two for drift — a wrong or
-//! wrong-version base product, a wrong architecture, missing or extra addons, or
-//! a dangling `baseproduct` symlink — so that validating an update on a host
-//! that is not the system we think it is gets surfaced. The check is advisory:
-//! callers warn and keep the host.
+//! mtui can know two things about a connected reference host's products: what
+//! is *actually installed* (parsed from `/etc/products.d` into a [`System`]) and
+//! what `refhosts.yml` says should be there (a [`Host`] row). [`compare`] checks
+//! the two for drift — a wrong or wrong-version base product, a wrong
+//! architecture, missing or extra addons, a dangling `baseproduct` symlink — so
+//! that validating an update on the wrong system is surfaced. The check is
+//! advisory: callers warn and keep the host.
 //!
 //! # Normalization (grounded on real refhosts across SLE 15/16 and SL-Micro)
 //!
@@ -21,17 +20,12 @@
 //!   detected-side parser intentionally skips `qa.prod` — keeping it would
 //!   report a phantom "missing qa" on every host whose metadata lists it.
 //!
-//! # Version representation
-//!
-//! The mtui
 //! [`Version`] preserves the numeric-vs-textual distinction via
-//! [`VersionField`], rather than collapsing it into one untyped field.
-//! `normalize_version` therefore yields
-//! [`VersionField::Text`] for a service-pack minor (`"SP4"`) and
-//! [`VersionField::Num`] for a dotted numeric minor (`"0"`), matching how
-//! `refhosts.yml` metadata deserializes so exact-match hosts compare equal.
-//! Name case-folding uses ASCII-only [`str::eq_ignore_ascii_case`] (product
-//! names are ASCII in practice) rather than Python's full-Unicode `casefold`.
+//! [`VersionField`], so `normalize_version` yields [`VersionField::Text`] for a
+//! service-pack minor (`"SP4"`) and [`VersionField::Num`] for a dotted numeric
+//! one (`"0"`), matching how `refhosts.yml` deserializes so exact-match hosts
+//! compare equal. Name case-folding is ASCII-only
+//! ([`str::eq_ignore_ascii_case`]); product names are ASCII in practice.
 
 use std::collections::BTreeMap;
 
@@ -66,8 +60,8 @@ fn int_or_str(value: &str) -> VersionField {
 /// * `"15"` → `Version { major: Num(15), minor: None }`
 /// * `""` / whitespace-only → `None`
 ///
-/// A leading numeric segment parses as [`VersionField::Num`]; anything else
-/// (e.g. an odd non-numeric major) is kept as [`VersionField::Text`].
+/// A leading numeric segment parses as [`VersionField::Num`]; anything else is
+/// kept as [`VersionField::Text`].
 #[must_use]
 fn normalize_version(version: &str) -> Option<Version> {
     let version = version.trim();
@@ -91,7 +85,6 @@ fn normalize_version(version: &str) -> Option<Version> {
         });
     }
 
-    // Major only.
     Some(Version {
         major: int_or_str(version),
         minor: None,
@@ -104,7 +97,6 @@ fn normalize_version(version: &str) -> Option<Version> {
 fn parse_service_pack(version: &str) -> Option<(u64, u64)> {
     let (major, rest) = version.split_once("-SP")?;
     let major: u64 = major.parse().ok()?;
-    // The whole remainder must be digits.
     if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -114,9 +106,8 @@ fn parse_service_pack(version: &str) -> Option<(u64, u64)> {
 
 /// Render a [`Version`] for warning messages (`""` when `None`).
 ///
-/// A numeric minor uses a `.` separator, a
-/// textual minor uses `-`, and an absent/empty-sentinel minor renders as major
-/// only.
+/// A numeric minor uses a `.` separator, a textual one `-`, and an
+/// absent/empty-sentinel minor renders as major only.
 fn fmt_version(version: Option<&Version>) -> String {
     let Some(version) = version else {
         return String::new();
@@ -210,10 +201,10 @@ fn sorted_join(items: &[String]) -> String {
 ///
 /// Returns a [`ProductDiff`] describing any base/addon/symlink drift.
 ///
-/// The base name/version check is skipped when the base is a dangling
-/// placeholder (the dangling warning already covers it), but the architecture
-/// is still checked. Addons are matched case-folded by name, with the
-/// always-ignored addons (`qa`) dropped from both sides.
+/// A dangling placeholder base skips the name/version check — the dangling
+/// warning covers it — but the architecture is still checked. Addons match
+/// case-folded by name, with the always-ignored ones (`qa`) dropped from both
+/// sides.
 #[must_use]
 pub fn compare(system: &System, host: &Host) -> ProductDiff {
     let mut diff = ProductDiff {
@@ -253,8 +244,7 @@ pub fn compare(system: &System, host: &Host) -> ProductDiff {
         diff.base_mismatch = Some(problems.join("; "));
     }
 
-    // Addons: case-folded name -> (display name, normalized version), with the
-    // always-ignored addons (qa) dropped from both sides.
+    // Case-folded name -> (display name, normalized version).
     let detected: BTreeMap<String, (String, Option<Version>)> = system
         .get_addons()
         .iter()
@@ -369,18 +359,16 @@ mod tests {
         Some(VersionField::Num(n))
     }
 
-    // --- normalize_version (TestNormalizeVersion) ---------------------------
+    // --- normalize_version ---------------------------
 
     #[test]
     fn normalize_dotted_int_minor() {
-        // SLE 16 / SL-Micro: "16.0" -> Version(16, 0), "6.1" -> Version(6, 1).
         assert_eq!(normalize_version("16.0"), Some(version(16, num(0))));
         assert_eq!(normalize_version("6.1"), Some(version(6, num(1))));
     }
 
     #[test]
     fn normalize_service_pack() {
-        // SLE 12/15: "15-SP4" -> Version(15, "SP4").
         assert_eq!(normalize_version("15-SP4"), Some(version(15, sp(4))));
     }
 
@@ -397,8 +385,8 @@ mod tests {
 
     #[test]
     fn normalize_service_pack_equals_metadata_text_minor() {
-        // The Num/Text distinction must line up: a detected "15-SP4" must
-        // compare equal to metadata whose minor deserializes as Text("SP4").
+        // A detected "15-SP4" must compare equal to metadata whose minor
+        // deserializes as Text("SP4").
         let detected = normalize_version("15-SP4").unwrap();
         let metadata = version(15, sp(4));
         assert_eq!(detected, metadata);
@@ -411,7 +399,7 @@ mod tests {
         assert_eq!(detected, metadata);
     }
 
-    // --- compare: base (TestCompareBase) ------------------------------------
+    // --- compare: base ------------------------------------
 
     #[test]
     fn sle16_exact_match_no_warnings() {
@@ -449,7 +437,6 @@ mod tests {
 
     #[test]
     fn base_name_casefold_matches() {
-        // Names differing only in case are treated as equal.
         let sys = system(("sles", "16.0", "x86_64"), &[], false);
         let h = host("x86_64", ("SLES", 16, num(0)), &[]);
         assert!(compare(&sys, &h).ok());
@@ -478,11 +465,11 @@ mod tests {
         assert!(diff.base_mismatch.as_deref().unwrap_or("").contains("arch"));
     }
 
-    // --- compare: addons (TestCompareAddons) --------------------------------
+    // --- compare: addons --------------------------------
 
     #[test]
     fn extra_addon_detected() {
-        // bojack-style drift: host has modules absent from metadata.
+        // The host has modules absent from metadata.
         let sys = system(
             ("SLE_RT", "15-SP4", "x86_64"),
             &[
@@ -552,8 +539,8 @@ mod tests {
 
     #[test]
     fn qa_excluded_from_both_sides() {
-        // The detected side never reports qa, so metadata's qa must not be
-        // reported as missing, and a detected qa not as extra.
+        // The detected side never reports qa, so metadata's qa is not missing
+        // and a detected qa is not extra.
         let sys = system(
             ("SLES", "15-SP4", "x86_64"),
             &[("sle-module-basesystem", "15-SP4", "x86_64")],
@@ -569,7 +556,7 @@ mod tests {
 
     #[test]
     fn full_sle15_match_no_warnings() {
-        // antares-style host whose module set matches metadata exactly.
+        // A host whose module set matches metadata exactly.
         let modules = [
             "sle-module-basesystem",
             "sle-module-server-applications",
@@ -590,12 +577,12 @@ mod tests {
         assert!(compare(&sys, &h).ok());
     }
 
-    // --- compare: dangling base (TestCompareDangling) -----------------------
+    // --- compare: dangling base -----------------------
 
     #[test]
     fn dangling_base_warns_and_skips_base_check() {
-        // A dangling baseproduct symlink is reported; the (placeholder) base
-        // name/version are not additionally flagged as a mismatch.
+        // The placeholder base name/version must not be flagged on top of the
+        // dangling report.
         let sys = system(("SLES", "", "x86_64"), &[], true);
         let h = host("x86_64", ("SLES", 16, num(0)), &[]);
         let diff = compare(&sys, &h);
@@ -607,7 +594,6 @@ mod tests {
 
     #[test]
     fn dangling_still_checks_arch() {
-        // Arch is still compared even with a dangling base.
         let sys = system(("SLES", "", "x86_64"), &[], true);
         let h = host("aarch64", ("SLES", 16, num(0)), &[]);
         let diff = compare(&sys, &h);
@@ -623,7 +609,6 @@ mod tests {
         assert_eq!(fmt_version(Some(&version(15, None))), "15");
         assert_eq!(fmt_version(Some(&version(16, num(0)))), "16.0");
         assert_eq!(fmt_version(Some(&version(15, sp(4)))), "15-SP4");
-        // Empty-string Text sentinel renders as major only.
         assert_eq!(
             fmt_version(Some(&version(11, Some(VersionField::Text(String::new()))))),
             "11"
@@ -656,7 +641,6 @@ mod tests {
         assert_eq!(warnings.len(), 5);
         assert!(warnings[0].contains("dangling"));
         assert!(warnings[1].contains("base product mismatch"));
-        // missing_addons are sorted: "a 1" before "b 1".
         assert!(warnings[2].contains("a 1, b 1"));
         assert!(warnings[3].contains("installed but not in metadata"));
         assert!(warnings[4].contains("version mismatch"));
@@ -664,8 +648,8 @@ mod tests {
 
     #[test]
     fn service_pack_parse_rejects_non_numeric_suffix() {
-        // "15-SPfoo" is not a valid service pack; falls through to major-only
-        // (no `.`), so the whole string becomes a textual major.
+        // "15-SPfoo" is not a valid service pack and has no `.`, so it falls
+        // through to major-only and the whole string becomes a textual major.
         assert_eq!(
             normalize_version("15-SPfoo"),
             Some(Version {

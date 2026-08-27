@@ -70,10 +70,8 @@ fn generate_into_emits_all_completions_and_man_pages() {
             "{} should carry the stable crate version",
             man_page.display()
         );
-        // The build-provenance version (`MTUI_LONG_VERSION`) wraps the sha/target
-        // in parens and marks a dirty tree with `-dirty`; neither must leak into
-        // the committed man page. (The `--debug` *flag* legitimately appears, so
-        // we key on the provenance-specific `-dirty` / `, <profile>,` shapes.)
+        // `MTUI_LONG_VERSION` must not leak in. The `--debug` *flag* legitimately
+        // appears, so key on the provenance-specific `-dirty` / `, <profile>,`.
         assert!(
             !body.contains("\\-dirty")
                 && !body.contains(", debug,")
@@ -110,14 +108,12 @@ fn checked_in_docs_page(file: &str) -> std::path::PathBuf {
 #[test]
 fn cli_reference_lists_known_commands_with_aliases() {
     let doc = render_cli_reference();
-    // A representative command from each wave appears as a section.
     for name in ["run", "update", "checkout", "openqa_overview", "config"] {
         assert!(
             doc.contains(&format!("## `{name}`")),
             "cli reference should document `{name}`"
         );
     }
-    // `quit`'s REPL aliases are surfaced.
     assert!(
         doc.contains("*Aliases:*") && doc.contains("`exit`") && doc.contains("`EOF`"),
         "cli reference should list command aliases"
@@ -155,7 +151,6 @@ fn invocation_reference_documents_both_binaries() {
         doc.contains("## `mtui-mcp`"),
         "documents the mtui-mcp binary"
     );
-    // Representative flags from each parser (hyphenated long forms).
     for flag in [
         "--auto-review-id",
         "--kernel-review-id",
@@ -168,7 +163,6 @@ fn invocation_reference_documents_both_binaries() {
     for flag in ["--transport", "--host", "--port"] {
         assert!(doc.contains(flag), "invocation ref should document {flag}");
     }
-    // The REPL-only caveat is stated.
     assert!(
         doc.contains("REPL-only"),
         "invocation ref should note mtui has no single-command mode"
@@ -198,10 +192,10 @@ fn checked_in_generated_docs_are_up_to_date() {
 
 // --- Release packaging --------------------------------------------------------
 
-/// Build a minimal fixture tree (fake binaries, `dist/`, root files) under `root`
-/// and return `(bin_dir, dist_dir)`. Mirrors the real layout `stage_package`
-/// reads: `target/<triple>/release/{mtui,mtui-mcp}`, `dist/{completions,man,terms}`,
-/// and `LICENSE`/`README.md` at the root.
+/// Build a minimal fixture tree under `root`, returning `(bin_dir, dist_dir)`.
+/// Mirrors the layout `stage_package` reads:
+/// `target/<triple>/release/{mtui,mtui-mcp}`, `dist/{completions,man,terms}` and
+/// `LICENSE`/`README.md` at the root.
 fn make_fixture(root: &Path, target: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let bin_dir = root.join("target").join(target).join("release");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -342,9 +336,8 @@ fn stage_package_is_idempotent_and_clears_stale() {
     );
 }
 
-/// `tar` + `sha256sum` are shelled out; both exist on CI runners, openSUSE, and
-/// macOS dev boxes, so exercise the full archive path. Skips gracefully if a tool
-/// is missing (e.g. a minimal container) rather than failing spuriously.
+/// Exercises the full archive path through the `tar` + `sha256sum` subprocesses,
+/// skipping gracefully when one is missing rather than failing spuriously.
 #[test]
 fn package_target_produces_tarball_and_checksum() {
     if !have("tar") || !have("sha256sum") {

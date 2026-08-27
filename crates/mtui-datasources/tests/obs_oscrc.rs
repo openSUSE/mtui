@@ -3,10 +3,9 @@
 //!
 //! The reader locates oscrc exactly like `osc` (`$OSC_CONFIG` →
 //! `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`), so each case writes a throwaway
-//! oscrc under a `TempDir` and points `$OSC_CONFIG` at it, then asserts the
-//! resolved [`ObsCredentials`] or the fail-closed [`ObsError::Config`] message
-//! substring. No network, no real `~/.oscrc`, no interactive
-//! prompt.
+//! oscrc under a `TempDir`, points `$OSC_CONFIG` at it, and asserts the resolved
+//! [`ObsCredentials`] or the fail-closed [`ObsError::Config`] substring. No
+//! network, no real `~/.oscrc`, no interactive prompt.
 //!
 //! `$OSC_CONFIG`/`$HOME`/`$XDG_CONFIG_HOME` are process-global, so every test
 //! that mutates them is `#[serial(osc_config_env)]` and installs an [`EnvGuard`]
@@ -23,12 +22,10 @@ const API: &str = "https://api.suse.de";
 
 /// Scoped isolation of the oscrc-discovery environment.
 ///
-/// On construction it clears `$OSC_CONFIG` and redirects `$HOME` and
-/// `$XDG_CONFIG_HOME` under a fresh temp dir, so the reader never touches the
-/// developer's real files. On drop it restores every variable to its prior
-/// value. Must only be
-/// used inside `#[serial(osc_config_env)]` tests: `std::env` mutation is
-/// process-global.
+/// Clears `$OSC_CONFIG` and redirects `$HOME` / `$XDG_CONFIG_HOME` under a fresh
+/// temp dir so the reader never touches the developer's real files, restoring
+/// all three on drop. Only usable inside `#[serial(osc_config_env)]` tests:
+/// `std::env` mutation is process-global.
 struct EnvGuard {
     _dir: TempDir,
     xdg: PathBuf,
@@ -223,10 +220,10 @@ fn missing_sshkey_raises() {
 #[test]
 #[serial(osc_config_env)]
 fn credentials_manager_ignored_when_sshkey_usable() {
-    // A usable 'sshkey' wins; `credentials_mgr_class` is not consulted. osc orders
-    // Signature auth ahead of Basic and disables the password path for the
+    // A usable `sshkey` wins and `credentials_mgr_class` is not consulted: osc
+    // orders Signature ahead of Basic and disables the password path for the
     // transient manager, so an oscrc carrying both authenticates by signature
-    // there too. Rejecting it turned a working configuration into a hard failure.
+    // there too. Rejecting it breaks a working configuration.
     let guard = EnvGuard::new();
     let dir = TempDir::new().unwrap();
     let key = dir.path().join("k");
@@ -248,10 +245,9 @@ fn credentials_manager_ignored_when_sshkey_usable() {
 #[test]
 #[serial(osc_config_env)]
 fn reported_transient_manager_with_sshkey_and_pass() {
-    // Regression for the reported failure: sshkey + transient mgr + pass. This
-    // exact oscrc shape made `approve` fail with "supports only SSH-signature
-    // auth" even though the sshkey was usable. The password must never be read,
-    // nor leak into the credentials' Debug.
+    // sshkey + transient mgr + pass: this exact shape made `approve` fail with
+    // "supports only SSH-signature auth" despite a usable sshkey. The password
+    // must never be read, nor leak into the credentials' Debug.
     let guard = EnvGuard::new();
     let dir = TempDir::new().unwrap();
     let key = dir.path().join("id_rsa");
@@ -420,10 +416,9 @@ fn general_credentials_manager_does_not_veto_host_sshkey() {
 #[test]
 #[serial(osc_config_env)]
 fn credentials_manager_not_inherited_from_general() {
-    // `credentials_mgr_class` is host-section only (osc gives it no parent).
-    // Discriminating case: with NO sshkey anywhere, a [general] manager must not
-    // be picked up — the failure must be the plain "no 'sshkey'" one, never the
-    // manager-specific message.
+    // `credentials_mgr_class` is host-section only (osc gives it no parent), so
+    // with no sshkey anywhere the failure must be the plain "no 'sshkey'" one,
+    // never the manager-specific message.
     let guard = EnvGuard::new();
     let dir = TempDir::new().unwrap();
     write_oscrc(
@@ -460,13 +455,11 @@ fn trailing_slash_section_header_matches() {
 /// Run `f` under a scoped tracing subscriber that captures each event's message
 /// **synchronously** into an in-memory buffer, returning the joined records.
 ///
-/// Unlike an `fmt` subscriber writing through a `MakeWriter`, this appends the
-/// rendered message the instant the event fires (no formatter/flush step), so the
-/// captured buffer never depends on writer flush ordering under scheduler
-/// pressure — the condition that made the previous `fmt`-based capture flake under
-/// `cargo test --workspace`. The subscriber is a thread-local default via
-/// `with_default`; every caller is `#[serial(osc_config_env)]`, so no concurrent
-/// test in this binary races it.
+/// Appending the rendered message the instant the event fires — rather than
+/// through an `fmt` subscriber's `MakeWriter` — keeps the buffer independent of
+/// writer flush ordering under scheduler pressure, which is what made the
+/// previous `fmt`-based capture flake. The subscriber is a thread-local default;
+/// every caller is `#[serial(osc_config_env)]`, so nothing races it.
 #[cfg(unix)]
 fn capture_logs(f: impl FnOnce()) -> String {
     use std::fmt::Write as _;

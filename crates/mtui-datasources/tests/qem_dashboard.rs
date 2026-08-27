@@ -1,8 +1,7 @@
 //! Integration tests for the QEM Dashboard connector, exercising the public
 //! `QemIncident` + `DashboardAutoOpenQA` API end-to-end against a mock server.
 //!
-//! The end-to-end cases against a mock server. The pure-helper and
-//! async-timeout assertions are colocated unit tests in
+//! The pure-helper and async-timeout assertions are colocated unit tests in
 //! `src/qem_dashboard/`.
 
 use mtui_datasources::http::{HttpClient, VerifyPolicy};
@@ -117,9 +116,8 @@ async fn loads_incident_and_aggregate_jobs() {
 
 #[tokio::test]
 async fn slfo_1_2_incident_uses_review_id() {
-    // The incident
-    // number for an SLFO 1.2 request is the review id, so every dashboard URL
-    // keys on it.
+    // An SLFO 1.2 request's incident number is the review id, so every
+    // dashboard URL keys on it.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/incidents/12358"))
@@ -175,9 +173,8 @@ async fn incident_metadata_shortest_package_name() {
 
 #[tokio::test]
 async fn oversized_incident_body_folds_to_absent() {
-    // th4o.9: a body exceeding MAX_API_BODY is rejected by the bounded read and
-    // the dashboard `get` folds that error to None, so an oversized/hostile
-    // response degrades to "incident not present" instead of OOMing.
+    // A body over MAX_API_BODY is rejected by the bounded read and folded to
+    // None, so a hostile response degrades to "incident not present".
     use mtui_datasources::MAX_API_BODY;
     let server = MockServer::start().await;
     let oversized = vec![b'x'; MAX_API_BODY + 1];

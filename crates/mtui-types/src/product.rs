@@ -1,16 +1,13 @@
 //! Refhost product schema.
 //!
-//! These are the value-types a `refhosts.yml` row deserializes into:
-//! [`Product`] (base product), [`Addon`] (module/extension), and [`Host`]
-//! (one refhost row). The location-flatten/dedup loader that turns a whole
-//! `refhosts.yml` document into a `Vec<Host>` lives in [`crate::refhost`]; this
-//! module only defines the serde-derived types and verifies they round-trip an
-//! inline row.
+//! The value-types a `refhosts.yml` row deserializes into: [`Product`] (base
+//! product), [`Addon`] (module/extension) and [`Host`] (one row). The
+//! location-flatten/dedup loader for a whole document lives in
+//! [`crate::refhost`].
 //!
-//! Note: there is a separate flat `Product`-like type used by `System`
-//! (name/version:str/arch), defined in `system.rs` as
-//! [`SystemProduct`](crate::system::SystemProduct); this `Product` is the
-//! refhost variant whose `version` is a structured [`Version`].
+//! This `Product` is the refhost variant, whose `version` is a structured
+//! [`Version`]; `System` uses the separate flat
+//! [`SystemProduct`](crate::system::SystemProduct).
 
 use serde::{Deserialize, Serialize};
 
@@ -85,7 +82,6 @@ addons:
         assert_eq!(host.addons.len(), 1);
         assert_eq!(host.addons[0].name, "sdk");
 
-        // Round-trip preserves the row.
         let round = serde_saphyr::to_string(&host).unwrap();
         let back: Host = serde_saphyr::from_str(&round).unwrap();
         assert_eq!(back, host);

@@ -3,11 +3,8 @@
 //! A [`CommandLog`] records one command executed on a target host and its
 //! outcome; a [`HostLog`] is an ordered list of them.
 //!
-//! The Rust type system makes runtime argument-count and type checks
-//! unnecessary here: [`push`](HostLog::push) takes a fully-typed
-//! [`CommandLog`], so arity and type errors simply cannot occur. Read access is
-//! provided via [`Deref`] to a `[CommandLog]` slice, giving iteration,
-//! indexing, `len`, etc. for free.
+//! Read access is via [`Deref`] to a `[CommandLog]` slice, giving iteration,
+//! indexing, `len` and friends for free.
 
 use std::ops::Deref;
 
@@ -32,10 +29,9 @@ pub struct CommandLog {
     /// Whether the captured `stdout`/`stderr` was truncated because the command
     /// exceeded the connection layer's output byte caps.
     ///
-    /// `false` for every non-SSH producer (mocks, synthesised logs);
-    /// only [`mtui-hosts`](../../mtui_hosts)' bounded capture sets it. When
-    /// `true`, `stdout`/`stderr` hold the capped prefix and the overflow was
-    /// discarded rather than buffered.
+    /// `false` for every non-SSH producer (mocks, synthesised logs); only
+    /// [`mtui-hosts`](../../mtui_hosts)' bounded capture sets it, and then the
+    /// fields hold the capped prefix — the overflow was discarded, not buffered.
     pub truncated: bool,
     /// Whether the command was aborted because it hit the connection layer's
     /// absolute execution deadline (as opposed to completing on its own).
@@ -45,12 +41,9 @@ pub struct CommandLog {
 }
 
 impl CommandLog {
-    /// Creates a new [`CommandLog`] with the truncation/timeout flags cleared.
-    ///
-    /// This is the primary constructor used by every producer that cannot
-    /// truncate or deadline output (mocks, synthesised logs). The SSH
-    /// connection layer, which *can*, uses [`with_flags`](Self::with_flags) to
-    /// record those conditions.
+    /// Creates a new [`CommandLog`] with the truncation/timeout flags cleared:
+    /// the constructor for every producer that cannot truncate or deadline
+    /// output. The SSH layer, which can, adds [`with_flags`](Self::with_flags).
     #[must_use]
     pub fn new(
         command: impl Into<String>,
@@ -71,11 +64,9 @@ impl CommandLog {
     }
 
     /// Sets the [`truncated`](Self::truncated) / [`timed_out`](Self::timed_out)
-    /// flags, returning the updated log.
-    ///
-    /// Used by the SSH `run` path to record that captured output was capped or
-    /// that the command was aborted at its absolute deadline, without changing
-    /// [`new`](Self::new)'s signature for the many callers that never do either.
+    /// flags, returning the updated log — the SSH `run` path records capping and
+    /// deadline aborts here rather than in [`new`](Self::new)'s signature, which
+    /// the many callers that can do neither would have to carry.
     #[must_use]
     pub fn with_flags(mut self, truncated: bool, timed_out: bool) -> Self {
         self.truncated = truncated;
@@ -84,10 +75,8 @@ impl CommandLog {
     }
 }
 
-/// An ordered list of [`CommandLog`] entries for a single host.
-///
-/// Dereferences to a `[CommandLog]` slice for read access (iteration,
-/// indexing, `len`, `iter`).
+/// An ordered list of [`CommandLog`] entries for a single host, dereferencing to
+/// a `[CommandLog]` slice for read access.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostLog {
     entries: Vec<CommandLog>,
@@ -170,7 +159,6 @@ mod tests {
         let c = CommandLog::new("ls", "x", "", 0, 1).with_flags(true, true);
         assert!(c.truncated);
         assert!(c.timed_out);
-        // Other fields are preserved.
         assert_eq!(c.stdout, "x");
         assert_eq!(c.exitcode, 0);
     }

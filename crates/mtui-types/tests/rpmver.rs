@@ -69,11 +69,8 @@ fn version_ne() {
     assert!(v("1-1.1") != v("1-1.2"));
 }
 
-/// An empty version string is rejected.
-///
-/// The Rust API takes `&str`, so the input representing "no version" is the
-/// empty string, which returns the typed [`RpmVersionParseError::Empty`]
-/// rather than panicking.
+/// An empty version string — the input representing "no version" — returns the
+/// typed [`RpmVersionParseError::Empty`] rather than panicking.
 #[test]
 fn version_empty_is_error() {
     assert_eq!(RPMVersion::parse(""), Err(RpmVersionParseError::Empty));

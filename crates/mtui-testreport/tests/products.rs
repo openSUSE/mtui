@@ -12,10 +12,8 @@ fn p(name: &str, version: &str, arch: &str) -> SystemProduct {
     SystemProduct::new(name, version, arch)
 }
 
-// ---------------------------------------------------------------------------
-// Per-family normalizers: assert the rewritten name (and version where a
-// suffix is stripped).
-// ---------------------------------------------------------------------------
+// Per-family normalizers: assert the rewritten name, and the version where a
+// suffix is stripped.
 
 #[test]
 fn sle11_branches() {
@@ -45,10 +43,9 @@ fn sle11_branches() {
     assert_eq!(out.name, "SUSE_SLES_LTSS-EXTREME-CORE");
     assert_eq!(out.version, "11-CORE");
 
-    // The only input that exercises the `-LTSS-EXTREME-CORE` strip: the branch
-    // rewrites the name, strips the suffix, then falls through to the final
-    // return. Every other CORE case leaves the version untouched, so without
-    // this the strip is a no-op in the whole suite.
+    // The only input that exercises the `-LTSS-EXTREME-CORE` strip: every other
+    // CORE case leaves the version untouched, so without this the strip is a
+    // no-op across the whole suite.
     let out = normalize_sle11(p("SLE-SERVER", "11-SP3-LTSS-EXTREME-CORE", "x86_64"));
     assert_eq!(out.name, "SUSE_SLES_LTSS-EXTREME-CORE");
     assert_eq!(out.version, "11-SP3");
@@ -195,9 +192,7 @@ fn osle_field_shift() {
     assert_eq!(out.arch, "x86_64");
 }
 
-// ---------------------------------------------------------------------------
 // normalize_16
-// ---------------------------------------------------------------------------
 
 #[test]
 fn normalize_16_sles_sap_rewrites_name() {
@@ -215,9 +210,7 @@ fn normalize_16_passthrough_unchanged() {
     assert_eq!(normalize_16(input.clone()), input);
 }
 
-// ---------------------------------------------------------------------------
-// Dispatcher: assert observable output per branch (no monkeypatching).
-// ---------------------------------------------------------------------------
+// Dispatcher: assert observable output per branch.
 
 #[test]
 fn dispatch_sle_rt() {

@@ -14,23 +14,20 @@ use crate::session::Session;
 
 /// Regenerates a test-report template via the TeReGen API.
 ///
-/// Enqueues a regeneration
-/// job (`POST /reports/{id}/regenerate`); by default waits for the Minion job to
-/// finish and reports the outcome. `--force` overwrites an existing but unedited
-/// template, `--ignore-inconsistent` regenerates despite inconsistent metadata,
-/// and `--no-wait` enqueues and returns immediately.
+/// Enqueues `POST /reports/{id}/regenerate` and, by default, waits for the Minion
+/// job. `--force` overwrites an existing but unedited template,
+/// `--ignore-inconsistent` regenerates despite inconsistent metadata, `--no-wait`
+/// enqueues and returns.
 ///
-/// The target template is named by an **optional `RRID` positional**. When given,
-/// that RRID is regenerated directly — *without* requiring it to be loaded first,
-/// which breaks the load/regenerate catch-22 for a never-generated report (a
-/// missing SLFO template cannot be loaded, and TeReGen is exactly what creates
-/// it). When omitted, the loaded/active template is used.
+/// The optional `RRID` positional is regenerated *without* being loaded first,
+/// breaking the load/regenerate catch-22 for a never-generated report (a missing
+/// SLFO template cannot be loaded, and TeReGen is what creates it); omitted,
+/// the active template is used.
 ///
-/// After a successful wait, the freshly built template is **loaded** in place:
-/// any stale local checkout is dropped and the update is
-/// loaded via [`Session::load_update`] without autoconnect. The workflow kind is
-/// inferred from the loaded report when one exists; for a standalone RRID it
-/// defaults to [`UpdateKind::Auto`], or [`UpdateKind::Kernel`] with `-k/--kernel`.
+/// After a successful wait the freshly built template is loaded in place via
+/// [`Session::load_update`] without autoconnect. The kind is inferred from the
+/// loaded report when one exists; for a standalone RRID it is
+/// [`UpdateKind::Auto`], or [`UpdateKind::Kernel`] with `-k/--kernel`.
 ///
 /// It names its own target and never fans out ([`Scope::Single`]).
 pub struct Regenerate;
@@ -105,10 +102,8 @@ impl Command for Regenerate {
         let no_wait = args.get_flag("no_wait");
         let kernel = args.get_flag("kernel");
 
-        // An explicit `RRID` positional regenerates that template without it
-        // being loaded first (breaks the load/regenerate catch-22); otherwise
-        // fall back to the loaded/active template. Only the
-        // fallback goes through the "load first" guard.
+        // Only the fallback goes through the "load first" guard; an explicit
+        // RRID breaks the load/regenerate catch-22.
         let rrid_str = match args.get_one::<String>("rrid") {
             Some(rrid) => rrid.clone(),
             None => require_update(session)?.to_string(),
@@ -130,18 +125,14 @@ impl Command for Regenerate {
             return Ok(());
         }
 
-        // Drive a TTY spinner for the (long-polling) wait. REPL-only (gated on
-        // `interactive`, like the fan-out spinner); a no-op off a TTY / over
-        // MCP.
+        // REPL-only, like the fan-out spinner; a no-op off a TTY / over MCP.
         let spin = session
             .is_repl
             .then(|| mtui_hosts::spinner(format!("Regenerating {rrid_str}")));
-        // `regenerate_and_wait`'s cooperative-cancel hook, fed from the
-        // session's cancellation seam: a REPL Ctrl-C (forwarded onto the
-        // per-line token) or an MCP `job_cancel` abandons the wait at its next
-        // step instead of blocking to the next poll. The spinner's own stop
-        // flag stays in the predicate — it is set by the display layer, never
-        // by a cancel, so neither source can cover for the other.
+        // Cooperative-cancel hook off the session seam, so a Ctrl-C or an MCP
+        // `job_cancel` abandons the wait at its next step, not the next poll.
+        // The spinner's own stop flag stays in the predicate: the display layer
+        // sets it and a cancel never does, so neither covers for the other.
         let cancel = session.cancel_token();
         let should_stop = || {
             cancel.is_cancelled()
@@ -177,8 +168,6 @@ impl Command for Regenerate {
             return Ok(());
         }
 
-        // Success. Drop any stale checkout and load the freshly built template
-        // in place.
         session
             .display
             .println(&format!("Template for {rrid_str} regenerated — reloading"));
@@ -187,19 +176,12 @@ impl Command for Regenerate {
     }
 }
 
-/// Drops any stale local checkout and loads the freshly built template.
-///
-/// Picks the update kind by:
-/// * a loaded report whose RRID matches `rrid` → its workflow
-///   ([`Workflow::Kernel`] → [`UpdateKind::Kernel`], else [`UpdateKind::Auto`]);
-/// * otherwise (a standalone RRID with nothing matching loaded) →
-///   [`UpdateKind::Kernel`] when `kernel_hint` is set, else [`UpdateKind::Auto`].
-///
-/// Removes `template_dir/<rrid>` best-effort, then loads the update **without**
-/// autoconnect (no live-host grab on a regen-reload).
+/// Drops any stale local checkout (`template_dir/<rrid>`, best-effort) and loads
+/// the freshly built template **without** autoconnect — no live-host grab on a
+/// regen-reload. The kind comes from a loaded report whose RRID matches `rrid`
+/// ([`Workflow::Kernel`] → [`UpdateKind::Kernel`], else [`UpdateKind::Auto`]),
+/// falling back to `kernel_hint` for a standalone RRID with no workflow to read.
 async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
-    // Infer the kind from a matching loaded report; fall back to the CLI hint for
-    // a standalone RRID that was never loaded (no workflow to read).
     let loaded_matches = session
         .metadata()
         .rrid()
@@ -215,9 +197,7 @@ async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
         UpdateKind::Auto
     };
 
-    // Drop the stale checkout so the reload re-checks-out the new build. Upstream
-    // uses `shutil.rmtree(..., ignore_errors=True)`: a missing/undeletable dir is
-    // not fatal.
+    // Drop the stale checkout so the reload re-checks-out the new build.
     let trdir = session.config.template_dir.join(rrid);
     if trdir.exists() {
         match tokio::fs::remove_dir_all(&trdir).await {
@@ -229,8 +209,7 @@ async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
         }
     }
 
-    // The RRID came from a loaded report, so it parses; if it somehow does not,
-    // skip the reload rather than abort the command.
+    // Skip the reload rather than abort the whole command on an unparseable RRID.
     let update = match UpdateID::parse(rrid) {
         Ok(u) => u,
         Err(e) => {
@@ -304,8 +283,7 @@ mod tests {
     #[test]
     fn name_and_single_scope() {
         assert_eq!(Regenerate.name(), "regenerate");
-        // Single, not Fanout: it names its own target (positional RRID or the
-        // active template) and must never fan out across sibling templates.
+        // It names its own target, so it must never fan out across siblings.
         assert_eq!(Regenerate.scope(), Scope::Single);
     }
 
@@ -407,8 +385,7 @@ mod tests {
 
         session.config = config_for(&server);
         session.config.template_dir = tmp.path().to_path_buf();
-        // Offline svn: the post-removal re-checkout yields a NullReport, so the
-        // reload degrades gracefully without touching the network.
+        // Offline svn: the re-checkout yields a NullReport, no network touched.
         session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
 
         let args = matches(&Regenerate, &[]);
@@ -416,7 +393,6 @@ mod tests {
 
         let out = buf.contents();
         assert!(out.contains("regenerated — reloading"), "{out}");
-        // The stale checkout (and its marker) were dropped by the reload leg.
         assert!(!marker.exists(), "stale checkout should have been removed");
         assert!(
             !trdir.exists(),
@@ -426,9 +402,6 @@ mod tests {
 
     #[tokio::test]
     async fn success_reload_does_not_autoconnect() {
-        // Kernel workflow selects UpdateKind::Kernel, which never autoconnects;
-        // more generally the reload passes autoconnect=false, so no hosts are
-        // connected as a side effect of reloading.
         let rrid = "SUSE:Maintenance:2:2";
         let server = MockServer::start().await;
         mount_success(&server, rrid).await;
@@ -444,8 +417,7 @@ mod tests {
         let args = matches(&Regenerate, &[]);
         Regenerate.call(&mut session, &args).await.unwrap();
 
-        // The reload passes autoconnect=false: it never grabs additional pool
-        // hosts, so the target count is unchanged by the regen-reload.
+        // autoconnect=false: the regen-reload grabs no additional pool hosts.
         assert_eq!(session.targets().len(), before);
     }
 
@@ -465,20 +437,14 @@ mod tests {
         }
     }
 
-    /// A cancel arriving **mid-wait** abandons the (long-polling) wait promptly
-    /// instead of blocking to the next poll — the `should_stop` hook's promise,
-    /// which until now only the spinner's stop flag could keep, and nothing
-    /// signal-related ever sets that.
+    /// A cancel arriving **mid-wait** abandons the long-polling wait promptly.
     ///
-    /// Cancelling *before* the call would not prove this: a predicate that read
-    /// the token once, when the closure was built, would pass that way and still
-    /// leave a live Ctrl-C waiting out the poll interval. So the cancel is fired
-    /// only after TeReGen has been polled once — the wait is by then inside its
-    /// inter-poll sleep, which must notice within one 100ms step.
-    ///
-    /// The bound is the assertion: TeReGen never reports the job finished here,
-    /// so a wait that does not keep observing the seam sleeps a full poll
-    /// interval (5s) before looking again, many times over.
+    /// Cancelling *before* the call would not prove it: a predicate reading the
+    /// token once at closure-build time would pass that way and still leave a
+    /// live Ctrl-C waiting out the poll interval. So the cancel fires only after
+    /// one TeReGen poll, with the wait inside its inter-poll sleep. The timeout
+    /// is the assertion: the job never finishes, so a wait that stops observing
+    /// the seam sleeps the full 5s poll interval, repeatedly.
     #[tokio::test]
     async fn a_cancel_mid_wait_abandons_it_promptly() {
         let rrid = "SUSE:Maintenance:1:1";
@@ -501,7 +467,6 @@ mod tests {
 
         let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
         session.config = config_for(&server);
-        // Fires once the wait is genuinely under way.
         let cancel = session.cancel_token();
         tokio::spawn(async move {
             hit_rx
@@ -540,13 +505,11 @@ mod tests {
         );
     }
 
-    /// The standalone `regenerate <RRID>` on an **empty** session (nothing
-    /// loaded) breaks the catch-22: it reaches the TeReGen POST (the finished
-    /// status only comes back if the POST landed) instead of erroring
-    /// `Metadata not loaded`, and proceeds to the reload leg. The auto workflow's
-    /// Gitea hash-check needs a token this offline test can't satisfy, so the
-    /// post-regenerate load degrades to a NullReport — registration on success is
-    /// proven by the kind-agnostic kernel test below.
+    /// `regenerate <RRID>` on an empty session reaches the TeReGen POST (the
+    /// finished status only comes back if it landed) instead of erroring
+    /// `Metadata not loaded`. The auto workflow's Gitea hash-check needs a token
+    /// this offline test can't satisfy, so the load degrades to a NullReport —
+    /// registration on success is proven by the kernel test below.
     #[tokio::test]
     async fn standalone_rrid_regenerates_without_load_first() {
         let rrid = "SUSE:SLFO:1.2:6311";
@@ -567,15 +530,14 @@ mod tests {
         assert!(out.contains("regenerated — reloading"), "{out}");
     }
 
-    /// A standalone `-k <RRID>` auto-loads with the kernel workflow (decision 3),
-    /// proving the success path registers the RRID (the registration is
-    /// kind-agnostic in `load_update`).
+    /// A standalone `-k <RRID>` loads with the kernel workflow, proving the
+    /// success path registers the RRID (`load_update`'s registration is
+    /// kind-agnostic).
     #[tokio::test]
     async fn standalone_rrid_kernel_hint_loads_kernel_workflow() {
-        // `reload` deletes `template_dir/<rrid>` before loading, so the report
-        // must be re-checked-out from SVN. Drive that against a real *local*
-        // `file://` repo (never the `qam.suse.de` default) so the test is
-        // hermetic: no network, and skipped cleanly where `svn` is absent.
+        // `reload` deletes `template_dir/<rrid>`, so the report must come back
+        // from SVN. A local `file://` repo (never the `qam.suse.de` default)
+        // keeps that hermetic, and skips cleanly where `svn` is absent.
         if std::process::Command::new("svn")
             .arg("--version")
             .output()
@@ -591,9 +553,6 @@ mod tests {
         let (mut session, _buf) = empty_session();
         let tmp = tempfile::tempdir().unwrap();
 
-        // Build a local SVN repo whose `<rrid>/` tree holds the template, so
-        // `svn co <repo>/<rrid>` repopulates the dir `reload` removed and the
-        // post-regenerate load reads a real report (not a NullReport).
         let repo = tmp.path().join("repo");
         assert!(
             std::process::Command::new("svnadmin")
@@ -639,8 +598,8 @@ mod tests {
         assert_eq!(session.metadata().workflow(), Workflow::Kernel);
     }
 
-    /// `--no-wait` with an explicit RRID on an empty session enqueues and returns
-    /// without loading anything (decision 2).
+    /// `--no-wait` with an explicit RRID on an empty session enqueues and
+    /// returns without loading anything.
     #[tokio::test]
     async fn standalone_rrid_no_wait_enqueues_without_load() {
         let rrid = "SUSE:SLFO:1.2:6311";
@@ -659,7 +618,6 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("Regeneration job 9 enqueued"), "{out}");
         assert!(out.contains("Not waiting"), "{out}");
-        // No reload / no registry change on --no-wait.
         assert!(
             !session.templates.contains(rrid),
             "--no-wait must not load the template"
@@ -669,15 +627,12 @@ mod tests {
     #[test]
     fn accepts_optional_rrid_and_kernel_hint() {
         let cmd = Regenerate.configure(clap::Command::new("regenerate").no_binary_name(true));
-        // Bare (no RRID) still parses (falls back to the loaded template).
         assert!(cmd.clone().try_get_matches_from([] as [&str; 0]).is_ok());
-        // Positional RRID parses.
         assert!(
             cmd.clone()
                 .try_get_matches_from(["SUSE:SLFO:1.2:6311"])
                 .is_ok()
         );
-        // -k with a positional RRID parses.
         assert!(
             cmd.try_get_matches_from(["-k", "SUSE:Maintenance:1:1"])
                 .is_ok()

@@ -1,21 +1,19 @@
 //! Contention measurement for different-RRID MCP dispatch.
 //!
-//! Measurement-only, offline; requires the `mcp` feature. `McpSession::run_command`
-//! dispatches a single-real-RRID call on a per-call [`Session::fork_for_call`]
-//! that shares the loaded reports' per-entry locks, so N commands scoped to N
-//! *distinct* RRIDs run concurrently rather than serialising on one session-wide
-//! mutex.
+//! Measurement-only, offline; requires the `mcp` feature.
+//! `McpSession::run_command` dispatches a single-real-RRID call on a per-call
+//! [`Session::fork_for_call`] sharing the loaded reports' per-entry locks, so N
+//! commands scoped to N *distinct* RRIDs run concurrently rather than serialising
+//! on one session-wide mutex.
 //!
-//! This bench dispatches N probe commands — each scoped to its own loaded RRID
-//! and each holding a fixed CPU-free `hold` window inside the session lock — via
-//! `join_all`, at N ∈ {1,2,4,8}. The verdict oracle is the *shape* of the curve:
-//! wall-clock ≈ ~1 × hold (the calls overlap) rather than ≈ N × hold (serialised).
+//! This dispatches N probe commands — each scoped to its own loaded RRID, each
+//! holding a fixed CPU-free `hold` window inside the session lock — via
+//! `join_all`, at N ∈ {1,2,4,8}. The verdict is the *shape* of the curve:
+//! wall-clock ≈ 1 × hold (overlapping) rather than ≈ N × hold (serialised).
 //!
-//! Wall-clock async timing is scheduler-noisy (the baseline calls it advisory);
-//! the deterministic oracle is the interval-overlap
-//! assertion in `tests/session_concurrency.rs`, not these numbers. This bench
-//! is a regression guard against contention creeping back into the dispatch
-//! path.
+//! Async wall-clock timing is scheduler-noisy and advisory; the deterministic
+//! oracle is the interval-overlap assertion in `tests/session_concurrency.rs`.
+//! This bench only guards against contention creeping back in.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,11 +26,9 @@ use mtui_mcp::McpSession;
 use mtui_testreport::{ObsReport, TestReport};
 use mtui_types::RequestReviewID;
 
-/// A test-only command that holds the dispatch lock for a fixed window.
-///
-/// Sleeps `hold` synchronously (the point is to occupy whatever lock the caller
-/// took for a measurable, deterministic window), so N concurrent invocations
-/// reveal whether they overlapped.
+/// A test-only command that holds the dispatch lock for a fixed window: it
+/// sleeps `hold` synchronously, occupying whatever lock the caller took, so N
+/// concurrent invocations reveal whether they overlapped.
 struct Hold {
     hold: Duration,
 }
@@ -104,7 +100,7 @@ async fn fan(session: &McpSession, registry: &Registry, rrids: &[String]) {
 
 fn bench_dispatch_concurrency(c: &mut Criterion) {
     let rt = rt();
-    // A hold long enough to dwarf the ~257ns lock + mock command overhead, so the
+    // Long enough to dwarf the ~257ns lock + mock command overhead, so the
     // serial-vs-parallel difference is the dispatch-mutex window, not noise.
     let hold = Duration::from_millis(5);
     let registry = registry(hold);

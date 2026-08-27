@@ -1,11 +1,9 @@
 //! HTTP transport for the native OBS/IBS API (native `reqwest`, no `osc`).
 //!
-//! Mirrors the crate's
-//! [`Gitea`](crate::gitea::Gitea) request wrapper: one shared
-//! [`HttpClient`] (built with a fixed timeout + TLS
-//! posture) carries the handful of calls one QAM operation makes. SSH-signature
-//! auth is injected through the [`ObsAuth`] seam so this transport foundation
-//! (G1a) is testable now with [`NoAuth`]; the real signer lands in G1c.
+//! Shaped like the crate's [`Gitea`](crate::gitea::Gitea) request wrapper: one
+//! shared [`HttpClient`], with a fixed timeout + TLS posture, carries the
+//! handful of calls one QAM operation makes. SSH-signature auth is injected
+//! through the [`ObsAuth`] seam, so the transport is testable with [`NoAuth`].
 //!
 //! Two behaviours are load-bearing and preserved:
 //!
@@ -32,16 +30,13 @@ use crate::obs::errors::ObsError;
 
 /// The SSH-signature auth seam for the OBS transport.
 ///
-/// Upstream sends the first request unauthenticated and only signs on a `401`
-/// `WWW-Authenticate: Signature` challenge, resending **exactly once** with the
-/// `Authorization: Signature` header. reqwest has no `requests`-style response
-/// hook, so the retry-once loop lives in `ObsClient::request`; this trait is
-/// the seam it drives: [`authorization`](ObsAuth::authorization) builds the
-/// header value for the challenge `realm`.
+/// The first request goes out unauthenticated and is only signed on a `401`
+/// `WWW-Authenticate: Signature` challenge, then resent **exactly once** with
+/// the `Authorization: Signature` header. reqwest has no response hook, so that
+/// retry-once loop lives in `ObsClient::request` and drives this trait.
 ///
-/// Implementations must **never** cause the auth material (header/signature) to
-/// be logged — they only ever *return* it to the transport, which logs method +
-/// URL only.
+/// An implementation must **never** cause the auth material to be logged: it
+/// only ever *returns* it to the transport, which logs method + URL alone.
 #[async_trait::async_trait]
 pub trait ObsAuth: Send + Sync {
     /// Build the `Authorization: Signature …` value for the challenge `realm`.
@@ -54,8 +49,8 @@ pub trait ObsAuth: Send + Sync {
 
 /// A no-op [`ObsAuth`] that never signs.
 ///
-/// Used by callers that hold a session cookie already, and by tests; a `401`
-/// challenge is returned as-is (no retry) because there is nothing to sign.
+/// For callers holding a session cookie already, and for tests: a `401`
+/// challenge is returned as-is, since there is nothing to sign.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoAuth;
 
@@ -71,11 +66,10 @@ impl ObsAuth for NoAuth {
 /// Best-effort: any parse failure or an absent summary yields an empty string.
 ///
 /// **Security (DTD/XXE guard):** OBS never sends a DTD, so a body carrying
-/// `<!DOCTYPE` or `<!ENTITY` is refused *before* parsing — this neutralises an
-/// entity-expansion DoS on a compromised/MITM'd error body. Defence in depth:
-/// `quick-xml` does not expand general entities anyway (it surfaces them as
-/// distinct events rather than inlining their replacement text), so even a
-/// DTD-free body with an entity reference never expands.
+/// `<!DOCTYPE` or `<!ENTITY` is refused *before* parsing, neutralising an
+/// entity-expansion DoS on a compromised/MITM'd error body. `quick-xml` does not
+/// expand general entities anyway — it surfaces them as distinct events — so
+/// even a DTD-free body with an entity reference never expands.
 #[must_use]
 fn error_summary(body: &str) -> String {
     if body.contains("<!DOCTYPE") || body.contains("<!ENTITY") {
@@ -114,8 +108,8 @@ fn error_summary(body: &str) -> String {
 
 /// A thin OBS API client over one shared, authenticated HTTP transport.
 ///
-/// Build once per operation: the constructor fixes the API base
-/// URL, the TLS posture, the auth signer, and the coarse time budget; each
+/// Built once per operation: the constructor fixes the API base URL, the TLS
+/// posture, the auth signer and the coarse time budget, and each
 /// [`get`](ObsClient::get) / [`post`](ObsClient::post) is one bounded hop.
 #[derive(Clone)]
 pub struct ObsClient {
@@ -129,11 +123,9 @@ impl ObsClient {
     /// Build a client for `api_url` with the given time budget, TLS posture and
     /// auth signer.
     ///
-    /// Explicit parameters rather than a `Config`/oscrc coupling keep this
-    /// transport foundation self-contained; wiring from `[obs]` config +
-    /// resolved credentials lands in later subtasks. The trailing `/` is
-    /// stripped from `api_url`, and the coarse deadline is set to
-    /// `now + request_timeout`.
+    /// Explicit parameters rather than a `Config`/oscrc coupling keep the
+    /// transport self-contained. A trailing `/` is stripped from `api_url` and
+    /// the coarse deadline is `now + request_timeout`.
     ///
     /// # Errors
     ///
@@ -181,9 +173,8 @@ impl ObsClient {
     }
 
     /// Build a fresh request builder for `url` with the standard OBS headers and
-    /// optional body. `auth` is deliberately *not* applied here — the first
-    /// request goes out unauthenticated, and the retry attaches the
-    /// signed header directly.
+    /// optional body. `auth` is deliberately *not* applied: the first request
+    /// goes out unauthenticated and the retry attaches the signed header itself.
     fn builder(&self, method: &Method, url: &str, body: Option<&str>) -> RequestBuilder {
         let mut builder = self
             .http
@@ -222,10 +213,10 @@ impl ObsClient {
 
     /// The shared request path for GET/POST.
     ///
-    /// Sends the first request unauthenticated; on a `401` that offers a
+    /// Sends the first request unauthenticated; on a `401` offering a
     /// `Signature` challenge, signs `(created)` over the challenge realm and
-    /// resends **exactly once** with the `Authorization: Signature` header. The
-    /// header is never logged — only method + URL are, at `debug`.
+    /// resends **exactly once**. The header is never logged — only method + URL,
+    /// at `debug`.
     async fn request(
         &self,
         method: Method,
@@ -253,9 +244,8 @@ impl ObsClient {
     /// On a `401`, build the signed retry and resend once.
     ///
     /// Returns the retried response when the challenge offers `Signature` and a
-    /// signer is configured; otherwise returns the original `401` unchanged (the
-    /// caller then surfaces it as an [`ObsError::Api`]). A signer error
-    /// (fail-closed) propagates.
+    /// signer is configured, else the original `401` unchanged for the caller to
+    /// surface as an [`ObsError::Api`]. A signer error propagates (fail-closed).
     async fn retry_signed(
         &self,
         method: &Method,
@@ -360,9 +350,9 @@ impl ObsClient {
 
 /// Build the percent-encoded `key=value&...` query string.
 ///
-/// Uses `application/x-www-form-urlencoded` encoding (space → `+`), matching
-/// reqwest's `.query()` wire form, which this workspace's minimal reqwest build
-/// does not expose (see [`crate::teregen`]).
+/// `application/x-www-form-urlencoded` (space → `+`), matching reqwest's
+/// `.query()` wire form, which this workspace's minimal reqwest build omits
+/// (see [`crate::teregen`]).
 fn build_query_string(params: &[(&str, String)]) -> String {
     params
         .iter()
@@ -382,9 +372,8 @@ fn build_query_string(params: &[(&str, String)]) -> String {
 /// `None` if the shape is unexpected.
 ///
 /// Any userinfo is dropped first: without that, a credentialed API base makes
-/// the hint name the *username* as the host it failed to verify (#431).
-///
-/// Mirrors the same helper in [`crate::gitea`].
+/// the hint name the *username* as the host it failed to verify (#431). Same
+/// helper as in [`crate::gitea`].
 fn host_of(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
     let authority = rest.split(['/', '?', '#']).next()?;
@@ -417,16 +406,15 @@ mod tests {
 
     #[test]
     fn error_summary_skips_dtd_bearing_body_without_expanding_entities() {
-        // A DTD-bearing error body is refused before parsing, so the entity is
-        // never expanded (no `boom`, empty string).
+        // Refused before parsing, so the entity is never expanded.
         let body = r#"<!DOCTYPE x [<!ENTITY e "boom">]><status><summary>&e;</summary></status>"#;
         assert_eq!(error_summary(body), "");
     }
 
     #[test]
     fn error_summary_does_not_expand_lone_entity_reference() {
-        // Defence in depth: even without a DTD, an entity reference is not
-        // inlined by the reader, so the summary stays empty rather than "boom".
+        // Defence in depth: the reader does not inline entity references
+        // either, so the summary stays empty rather than "boom".
         let body = "<status><summary>&e;</summary></status>";
         assert_eq!(error_summary(body), "");
     }

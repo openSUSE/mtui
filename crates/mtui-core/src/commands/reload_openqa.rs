@@ -11,13 +11,12 @@ use crate::commands::support::{
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Reloads information from the openQA instances.
+/// Reloads information from the openQA instances onto the report's holder
+/// ([`TestReport::openqa_mut`](mtui_testreport::TestReport)).
 ///
-/// For a kernel-workflow report the per-instance kernel results are (re)fetched
-/// from the primary and the baremetal openQA instances; the QEM-dashboard "auto"
-/// result is (re)fetched for every workflow. Results are stored on the report's
-/// openQA holder ([`TestReport::openqa_mut`](mtui_testreport::TestReport)).
-/// Requires a loaded update.
+/// A kernel-workflow report (re)fetches its per-instance kernel results from the
+/// primary and baremetal instances; the QEM-dashboard "auto" result is
+/// (re)fetched for every workflow. Requires a loaded update.
 pub struct ReloadOpenQA;
 
 #[async_trait]
@@ -44,8 +43,8 @@ impl Command for ReloadOpenQA {
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
-        // Snapshot the config primitives up front so no `&Session` borrow is
-        // held across an `.await` (`Session` is not `Sync`).
+        // Snapshotted so no `&Session` borrow crosses an `.await`; it is not
+        // `Sync`.
         let http = session
             .http_client()
             .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))?;
@@ -142,9 +141,9 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
-    /// Mounts the three QEM-dashboard endpoints the auto path touches, each
-    /// returning an empty-but-valid body, so `DashboardAutoOpenQA::run` resolves
-    /// to a populated-but-empty result (no install jobs).
+    /// The three QEM-dashboard endpoints the auto path touches, each returning
+    /// an empty-but-valid body, so `DashboardAutoOpenQA::run` resolves to a
+    /// populated-but-empty result.
     async fn dashboard_server(incident_number: &str) -> wiremock::MockServer {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -178,15 +177,14 @@ mod tests {
         assert!(session.metadata().openqa().auto.is_none());
         let args = matches(&ReloadOpenQA, &[]);
         ReloadOpenQA.call(&mut session, &args).await.unwrap();
-        // The auto holder is now present (install jobs were empty → no results).
         assert!(session.metadata().openqa().auto.is_some());
         assert!(session.metadata().openqa().kernel.is_empty());
     }
 
     #[tokio::test]
     async fn auto_fetch_failure_returns_err() {
-        // Dashboard unreachable (no mounts -> settings 404): reload must surface
-        // the failure as Err rather than folding to an empty auto holder.
+        // An unreachable dashboard must surface as Err, not fold to an empty
+        // auto holder.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.set_workflow(Workflow::Auto);
         let server = wiremock::MockServer::start().await;

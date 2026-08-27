@@ -1,20 +1,13 @@
 //! Best-effort desktop notifications for the interactive REPL.
 //!
-//! Desktop toasts are an opt-in courtesy compiled in behind the `notify`
-//! feature (which pulls in `notify-rust`). When the feature is absent, or the
-//! process is not attached to an interactive desktop session, `display`
-//! degrades to a quiet no-op so headless, piped, cron, and `mtui-mcp` runs never
-//! attempt to pop a toast.
+//! Toasts are an opt-in courtesy behind the `notify` feature (`notify-rust`).
+//! Without the feature, or off an interactive desktop session, `display` is a
+//! quiet no-op, so headless, piped, cron and `mtui-mcp` runs never pop one.
 //!
-//! ## Headless guard
-//!
-//! A toast only makes sense when a user is sitting at an interactive terminal
-//! with a graphical session, so `display` first checks
-//! `desktop_available`: `stdin` must be a TTY, and on Linux/BSD a graphical
-//! session (`DISPLAY` / `WAYLAND_DISPLAY`) must be present; macOS always
-//! qualifies once the TTY check passes. The predicate is factored out and
-//! parameterised (`desktop_available_with`) so it is unit-testable without a
-//! real terminal or display.
+//! The guard is `desktop_available`: `stdin` must be a TTY, and on Linux/BSD a
+//! graphical session (`DISPLAY` / `WAYLAND_DISPLAY`) must be present; macOS
+//! qualifies on the TTY check alone. It is parameterised
+//! (`desktop_available_with`) so it is unit-testable without a real terminal.
 
 use std::io::IsTerminal;
 
@@ -29,10 +22,8 @@ fn desktop_available() -> bool {
 
 /// The pure core of [`desktop_available`], with the environment injected.
 ///
-/// * `stdin_is_tty` — is stdin attached to a terminal?
-/// * `os` — the target OS string (`std::env::consts::OS`: `"macos"`, `"linux"`,
-///   …).
-/// * `has_env` — whether a named environment variable is set.
+/// `os` is the `std::env::consts::OS` string; `has_env` reports whether a named
+/// environment variable is set.
 fn desktop_available_with(stdin_is_tty: bool, os: &str, has_env: impl Fn(&str) -> bool) -> bool {
     if !stdin_is_tty {
         return false;
@@ -40,27 +31,24 @@ fn desktop_available_with(stdin_is_tty: bool, os: &str, has_env: impl Fn(&str) -
     if os == "macos" {
         return true;
     }
-    // Linux/BSD: a freedesktop notification needs a graphical session.
+    // A freedesktop notification needs a graphical session.
     has_env("DISPLAY") || has_env("WAYLAND_DISPLAY")
 }
 
 /// Displays a best-effort desktop notification.
 ///
-/// A no-op when `desktop_available` is false, and (without the `notify`
-/// feature) always a no-op beyond the guard + a debug log. Failures from the
-/// backend are swallowed and debug-logged — a notification must never break the
-/// REPL.
+/// A no-op when `desktop_available` is false, and without the `notify` feature
+/// a no-op beyond a debug log. Backend failures are swallowed and debug-logged:
+/// a notification must never break the REPL.
 ///
 /// `summary` is the title, `text` the body, `icon` an optional freedesktop icon
-/// name (e.g. `"dialog-error"`).
+/// name.
 fn display(summary: Option<&str>, text: Option<&str>, icon: Option<&str>) {
     if !desktop_available() {
         return;
     }
-    // Only reached with a real desktop TTY, so the offline test suite exercises
-    // the guard's `return` above but not this backend hop; `display_backend` is
-    // covered directly in tests, and the guard→backend edge needs a pty harness
-    // (out of scope — see module docs).
+    // Only reached with a real desktop TTY, so the offline suite covers
+    // `display_backend` directly; the guard→backend edge needs a pty harness.
     display_backend(summary, text, icon);
 }
 
@@ -89,10 +77,8 @@ fn display_backend(_summary: Option<&str>, _text: Option<&str>, _icon: Option<&s
 }
 
 /// Shows a `"MTUI"`-titled toast via `display`, using the freedesktop
-/// `dialog-error` icon for error-class messages.
-///
-/// A thin convenience for command code (e.g. the `update` start/finish toasts)
-/// so callers don't repeat the title/icon convention.
+/// `dialog-error` icon for error-class messages, so callers need not repeat the
+/// title/icon convention.
 pub fn notify_user(msg: &str, error: bool) {
     let icon = if error { Some("dialog-error") } else { None };
     display(Some("MTUI"), Some(msg), icon);
@@ -122,9 +108,8 @@ mod tests {
 
     #[test]
     fn display_is_a_noop_when_headless() {
-        // In the test harness stdin is not a TTY, so `desktop_available` is
-        // false and `display` must return without touching any backend. We can
-        // only assert it does not panic / hang.
+        // The harness stdin is not a TTY, so `display` returns before any
+        // backend hop; only "does not panic" is assertable.
         display(Some("MTUI"), Some("hello"), None);
         notify_user("done", false);
         notify_user("boom", true);
@@ -132,12 +117,10 @@ mod tests {
 
     #[test]
     fn backend_handles_all_field_combinations() {
-        // Drive `display_backend` directly — the harness stdin is not a TTY, so
-        // `display`'s guard would short-circuit before ever reaching it. Under
-        // the default build (`notify` off) this exercises the no-op body; under
-        // `--features notify` it builds the `Notification` and swallows the
-        // `show()` error on a headless bus. Either way it must not panic across
-        // the present/absent matrix of every optional field.
+        // Driven directly, since `display`'s guard short-circuits in the
+        // harness. Neither the `notify`-off no-op body nor the real
+        // `Notification` (whose `show()` fails on a headless bus) may panic
+        // across the present/absent matrix of every optional field.
         display_backend(None, None, None);
         display_backend(Some("MTUI"), None, None);
         display_backend(Some("MTUI"), Some("body"), None);
@@ -145,15 +128,13 @@ mod tests {
     }
 
     #[test]
-    // Reads the process-global environment (`var_os`), so it joins the crate's
-    // one `env` exclusion domain rather than racing a `set_var` in another test.
+    // Reads the process-global environment, so it joins the crate's one `env`
+    // exclusion domain rather than racing another test's `set_var`.
     #[serial_test::serial(env)]
     fn desktop_available_reads_the_real_environment() {
-        // Exercise the real (un-injected) entry point so the closure that reads
-        // `std::env::var_os` and the `std::io::stdin().is_terminal()` probe are
-        // covered. The result depends on the harness environment (typically not
-        // a TTY → false), so we only assert it returns a bool without panicking
-        // and agrees with the pure core on the same inputs.
+        // The un-injected entry point, covering the `var_os` closure and the
+        // `is_terminal` probe. Its value is harness-dependent, so all that can
+        // be asserted is agreement with the pure core on the same inputs.
         let real = desktop_available();
         let expected =
             desktop_available_with(std::io::stdin().is_terminal(), std::env::consts::OS, |k| {

@@ -12,18 +12,12 @@ use crate::session::Session;
 
 /// Adds one or more reference hosts to the target host list.
 ///
-/// Running `add_host` is a manual
-/// action, so if the session is still in the automatic workflow it is moved to
-/// manual (unless `-k`/`--keep-mode`). Then:
-///
-/// * **with `-t`/`--target`:** each named host is connected and added to the
-///   active report's group (`Session::add_named_hosts`).
-/// * **without `-t`:** the report's testplatforms are resolved through the
-///   refhosts factory and the resulting hosts are connected and added
-///   (`Session::add_testplatform_hosts`).
-///
-/// Refreshing the REPL prompt string after the workflow switch is a separate,
-/// REPL concern, so this command only mutates the report's workflow.
+/// A manual action, so an automatic workflow is moved to manual unless
+/// `-k`/`--keep-mode`. With `-t`/`--target` each named host is connected and
+/// added to the active report's group (`Session::add_named_hosts`); without it
+/// the report's testplatforms are resolved through the refhosts factory and the
+/// results connected (`Session::add_testplatform_hosts`). Only the workflow is
+/// mutated — refreshing the prompt string is the REPL's concern.
 pub struct AddHost;
 
 #[async_trait]
@@ -69,9 +63,8 @@ impl Command for AddHost {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // Running add_host is a manual action. If the session is still in the
-        // automatic workflow the user almost certainly meant to test manually
-        // (and just forgot to switch), so move to manual — unless --keep-mode.
+        // An automatic workflow here almost certainly means the switch to manual
+        // was forgotten.
         let keep_mode = args.get_flag("keep_mode");
         if session.metadata().workflow() == Workflow::Auto && !keep_mode {
             info!("add_host: switching from automatic to manual workflow");
@@ -83,13 +76,11 @@ impl Command for AddHost {
             .map(|it| it.cloned().collect())
             .unwrap_or_default();
 
-        // Snapshot the group before connecting so we can report which hosts were
-        // actually added vs. skipped/failed to connect.
+        // So added hosts can be told apart from skipped/failed ones afterwards.
         let before: std::collections::HashSet<String> =
             session.targets().names().into_iter().collect();
 
         if hosts.is_empty() {
-            // No -t: resolve the report's testplatforms and connect the hosts.
             session.add_testplatform_hosts().await;
             let mut added: Vec<String> = session
                 .targets()
@@ -109,7 +100,6 @@ impl Command for AddHost {
             }
             Ok(())
         } else {
-            // Explicit -t: connect and add each named host.
             session.add_named_hosts(hosts.clone()).await;
             let after: std::collections::HashSet<String> =
                 session.targets().names().into_iter().collect();
@@ -126,9 +116,8 @@ impl Command for AddHost {
             added.sort();
             skipped.sort();
 
-            // A requested `-t` host that never connected is a hard failure: with
-            // zero added, surface an error so the caller (and, via MCP, the LLM)
-            // is not told a phantom success.
+            // Zero added must be an error, or the caller (and via MCP the LLM)
+            // is told a phantom success.
             if added.is_empty() {
                 return Err(CommandError::Other(format!(
                     "could not connect any requested host: {}",
@@ -172,8 +161,8 @@ mod tests {
             tps.iter().map(|s| (*s).to_owned()).collect();
     }
 
-    /// Pre-adds an already-connected (mock) target named `host` to the active
-    /// group, so a subsequent `add_host -t host` sees `connect` short-circuit.
+    /// Pre-adds a connected mock target, so a later `add_host -t host` sees
+    /// `connect` short-circuit.
     fn add_mock_host(session: &mut Session, host: &str) {
         let conn = MockConnection::new(host).with_default(CommandLog::new("", "ok", "", 0, 0));
         let target = Target::with_connection(host, TargetState::Enabled, Box::new(conn));
@@ -194,21 +183,19 @@ mod tests {
         assert!(out.contains(&"-k".to_owned()), "{out:?}");
         assert!(out.contains(&"--keep-mode".to_owned()), "{out:?}");
         assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
-        // add_host connects *new* hosts, so it does not offer already-loaded ones.
+        // It connects *new* hosts, so already-loaded ones are not offered.
         assert!(!out.contains(&"h1".to_owned()), "{out:?}");
     }
 
-    /// Behavior change (bead w7w4.9): a requested `-t` host that cannot connect
-    /// is a hard failure, not a silent skip. When *zero* requested hosts are
-    /// added, `call` returns `Err` so the MCP result is an error rather than a
-    /// phantom success. (Previously this asserted an `Ok`-skip.)
+    /// A requested `-t` host that cannot connect is a hard failure, not a silent
+    /// skip: zero added means `Err`, so the MCP result is an error rather than a
+    /// phantom success.
     #[tokio::test]
     async fn named_hosts_that_cannot_connect_are_error() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&AddHost, &["-t", "unreachable.invalid"]);
         let err = AddHost.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("unreachable.invalid")));
-        // The unreachable host could not connect, so it is not added.
         assert_eq!(session.targets().len(), 1);
         assert!(
             !session
@@ -218,10 +205,8 @@ mod tests {
         );
     }
 
-    /// A pre-connected mock host already in the group survives an `add_host` of
-    /// a *different* unreachable host: the failed connect errors (zero added)
-    /// but the existing member is untouched (one bad host never disturbs the
-    /// group).
+    /// One bad host never disturbs the group: an `add_host` of a different,
+    /// unreachable host errors but leaves the existing member untouched.
     #[tokio::test]
     async fn existing_mock_host_survives_a_failed_add() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -234,8 +219,7 @@ mod tests {
         assert!(session.targets().names().contains(&"h2".to_owned()));
     }
 
-    /// Running `add_host` in the automatic workflow switches to manual — the
-    /// mode switch happens before the connect, so it stands even when the
+    /// The mode switch happens before the connect, so it stands even when the
     /// unreachable `-t` host makes the command error.
     #[tokio::test]
     async fn switches_auto_workflow_to_manual() {
@@ -256,7 +240,7 @@ mod tests {
         assert_eq!(session.metadata().workflow(), Workflow::Auto);
     }
 
-    /// A manual workflow is left untouched (no spurious downgrade path).
+    /// A manual workflow is left untouched.
     #[tokio::test]
     async fn manual_workflow_is_left_untouched() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -266,10 +250,9 @@ mod tests {
         assert_eq!(session.metadata().workflow(), Workflow::Manual);
     }
 
-    /// Without `-t`, add_host resolves the report's testplatforms via the
-    /// offline `path` refhosts resolver and connects the resulting hosts. The
-    /// resolved fixture hosts are not mock-backed, so they fail to connect and
-    /// are skipped — but the testplatform-resolution path is driven end to end.
+    /// Drives the testplatform-resolution path end to end against the offline
+    /// `path` resolver. The fixture hosts are not mock-backed, so they fail to
+    /// connect and are skipped.
     #[tokio::test]
     async fn no_target_resolves_testplatforms() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -277,11 +260,8 @@ mod tests {
         set_testplatforms(&mut session, &["base=sles(major=15,minor=5);arch=[x86_64]"]);
         let args = matches(&AddHost, &[]);
         AddHost.call(&mut session, &args).await.unwrap();
-        // Resolution ran (no panic); unreachable fixture hosts were skipped, so
-        // the group is unchanged.
         assert_eq!(session.targets().len(), 1);
-        // Zero new hosts connected: the display still gets a non-empty line so
-        // the MCP result is never empty.
+        // The display still gets a line, so the MCP result is never empty.
         assert!(
             buf.contents()
                 .contains("no reference hosts resolved/connected"),

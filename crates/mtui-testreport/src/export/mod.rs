@@ -4,16 +4,11 @@
 //! concrete exporters ([`auto`], [`manual`], [`kernel`]), a log
 //! [`downloader`], and the idempotent [`overview_inject`] block writer.
 //!
-//! ## Exporter selection
-//!
-//! The exporter is picked by [`Workflow`](mtui_types::Workflow)
-//! (`AUTO`/`MANUAL`/`KERNEL`). The three concrete types here have
-//! deliberately different constructors — [`ManualExport`] needs the connected
-//! hosts, [`KernelExport`] needs the kernel connectors — so a single boxed
-//! factory would flatten inputs that legitimately differ. The composition root
-//! (`mtui-core`) matches on `Workflow` and constructs the right exporter
-//! directly; this module exposes the concrete types rather than prescribing
-//! that match.
+//! The exporter is picked by [`Workflow`](mtui_types::Workflow) in the
+//! composition root (`mtui-core`), which constructs the concrete type directly.
+//! There is no boxed factory here: the constructors differ legitimately —
+//! [`ManualExport`] needs the connected hosts, [`KernelExport`] the kernel
+//! connectors — and one factory would flatten that.
 
 pub mod auto;
 pub mod base;

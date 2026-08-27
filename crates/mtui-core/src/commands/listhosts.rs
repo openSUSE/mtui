@@ -11,11 +11,9 @@ use crate::session::Session;
 
 /// Lists all connected hosts with their system and state.
 ///
-/// Each host's status tuple
-/// (`hostname, system, transactional, state` — the
-/// [`Reporter::self_`](mtui_hosts) fields) is snapshotted first so the report
-/// borrow does not overlap the display's mutable borrow, then rendered through
-/// the display's `list_host` sink.
+/// Each host's `hostname, system, transactional, state` tuple (the
+/// [`Reporter::self_`](mtui_hosts) fields) is snapshotted so the report borrow
+/// does not overlap the display's mutable one, then rendered via `list_host`.
 pub struct ListHosts;
 
 /// One host's full status tuple, snapshotted for rendering.
@@ -99,9 +97,8 @@ mod tests {
         assert!(out.contains("Enabled"), "{out}");
     }
 
-    /// Regression test: a host whose `Target::connect()` ran
-    /// over a connection carrying real system-parse data must render its
-    /// parsed system, not the pre-parse `unknown--` sentinel.
+    /// A host connected over a link carrying real system-parse data must render
+    /// its parsed system, not the pre-parse `unknown--` sentinel.
     #[tokio::test]
     async fn connected_host_shows_parsed_system_not_unknown_sentinel() {
         let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;

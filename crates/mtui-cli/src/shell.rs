@@ -4,22 +4,15 @@
 //! object-safe [`ShellChannel`] duplex — lives in `mtui-hosts` (feature
 //! `shell`); this module is the **CLI consumer** that owns the local terminal.
 //!
-//! ## Why this lives in the CLI, not the engine
-//!
-//! Attaching an interactive PTY needs a controlling terminal, which only the
-//! `mtui` binary owns. `mtui-core`'s `shell` command therefore stays a
-//! headless-error stub (correct for MCP / non-interactive), and the REPL
-//! **intercepts** the `shell` line before dispatch (see `is_shell_line`) and
-//! drives the bridge here. A host library has no business toggling the local TTY
-//! into raw mode, so the raw-mode bridge is a terminal concern by construction.
-//!
-//! ## Testability
+//! It lives here, not in the engine, because attaching an interactive PTY needs
+//! a controlling terminal only the `mtui` binary owns: `mtui-core`'s `shell`
+//! command stays a headless-error stub for MCP, and the REPL intercepts the
+//! `shell` line before dispatch (`is_shell_line`) to drive the bridge here.
 //!
 //! The pump loop `bridge` is generic over a `BridgeIo` trait abstracting the
 //! three terminal touch-points (async input, stdout write, flush), so it runs
-//! entirely offline against `MockConnection`'s scriptable [`ShellChannel`] — the
-//! same mocking doctrine as the rest of the host layer. The only untested sliver
-//! is the thin `TerminalIo` / `RawModeGuard` wiring around a real TTY.
+//! offline against `MockConnection`'s scriptable [`ShellChannel`]. The only
+//! untested sliver is the `TerminalIo` / `RawModeGuard` wiring around a real TTY.
 
 use std::io::Write as _;
 
@@ -40,11 +33,10 @@ pub enum InputEvent {
 }
 
 /// The three local-terminal touch-points the [`bridge`] pump needs, abstracted
-/// so tests drive it without a real TTY (mirrors the host layer's
-/// `MockConnection`).
+/// so tests drive it without a real TTY.
 ///
-/// `#[async_trait]` (not a native `async fn` in trait) keeps it dyn-compatible so
-/// the [`bridge`] pump can take `&mut dyn BridgeIo`.
+/// `#[async_trait]` rather than a native `async fn` in trait keeps it
+/// dyn-compatible, so [`bridge`] can take `&mut dyn BridgeIo`.
 #[async_trait::async_trait]
 trait BridgeIo: Send {
     /// Awaits the next local input event, or `None` on local EOF / stream end.
@@ -60,17 +52,11 @@ trait BridgeIo: Send {
 /// Pumps bytes between a spawned [`ShellChannel`] and the local terminal until
 /// either side ends the session.
 ///
-/// Each `select!` iteration:
-///
-/// * remote output → [`BridgeIo::write_out`]; `read → Ok(0)` (remote shell
-///   exited) or a channel error stops the loop;
-/// * local [`InputEvent::Bytes`] → [`ShellChannel::write`]; a local `None`
-///   (stdin EOF) stops the loop;
-/// * local [`InputEvent::Resize`] → best-effort [`ShellChannel::resize`]
-///   (SIGWINCH forwarding, so the remote PTY tracks a local terminal resize
-///   mid-session).
-///
-/// The channel is closed on the way out.
+/// Remote output goes to [`BridgeIo::write_out`], local [`InputEvent::Bytes`] to
+/// [`ShellChannel::write`], and [`InputEvent::Resize`] to a best-effort
+/// [`ShellChannel::resize`] so the remote PTY tracks a mid-session SIGWINCH. A
+/// remote `Ok(0)`/error or a local `None` stops the loop; the channel is closed
+/// on the way out.
 ///
 /// # Errors
 ///
@@ -91,7 +77,7 @@ async fn bridge(channel: &mut dyn ShellChannel, io: &mut dyn BridgeIo) -> anyhow
                 None => break,                    // local EOF
                 Some(InputEvent::Bytes(b)) => channel.write(&b).await?,
                 Some(InputEvent::Resize(cols, rows)) => {
-                    // Best-effort: a resize failure must not tear down the session.
+                    // A resize failure must not tear down the session.
                     let _ = channel.resize(cols, rows).await;
                 }
             },
@@ -101,10 +87,8 @@ async fn bridge(channel: &mut dyn ShellChannel, io: &mut dyn BridgeIo) -> anyhow
     Ok(())
 }
 
-/// Restores the terminal to cooked mode on drop.
-///
-/// Enabling raw mode in [`new`](Self::new) and disabling it in [`Drop`]
-/// guarantees restoration on normal return, `?`, or panic.
+/// Restores the terminal to cooked mode on drop — so on normal return, `?`, or
+/// panic alike.
 struct RawModeGuard;
 
 impl RawModeGuard {
@@ -121,7 +105,7 @@ impl RawModeGuard {
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        // Best-effort restore; nothing actionable if the terminal is already gone.
+        // Nothing actionable if the terminal is already gone.
         let _ = disable_raw_mode();
     }
 }
@@ -151,8 +135,6 @@ impl BridgeIo for TerminalIo {
                     if let Some(bytes) = encode_key(key) {
                         return Some(InputEvent::Bytes(bytes));
                     }
-                    // A key with no byte encoding (e.g. a bare modifier) is
-                    // ignored; keep waiting for the next event.
                 }
                 Some(Ok(Event::Paste(text))) => {
                     return Some(InputEvent::Bytes(text.into_bytes()));
@@ -160,7 +142,7 @@ impl BridgeIo for TerminalIo {
                 Some(Ok(Event::Resize(cols, rows))) => {
                     return Some(InputEvent::Resize(u32::from(cols), u32::from(rows)));
                 }
-                // Focus/mouse events carry nothing for the shell; keep waiting.
+                // Focus/mouse events carry nothing for the shell.
                 Some(Ok(_)) => {}
                 // A read error or end-of-stream ends the local side.
                 Some(Err(_)) | None => return None,
@@ -177,25 +159,21 @@ impl BridgeIo for TerminalIo {
     }
 }
 
-/// Encodes a crossterm [`KeyEvent`] into the terminal byte sequence a remote
-/// shell expects, covering the common cases (printable, Enter, Tab, Backspace,
-/// Esc, Ctrl-letter, and CSI arrow keys).
-///
-/// Returns `None` for keys with no meaningful byte encoding (bare modifiers).
-/// This is deliberately not exhaustive — uncommon keys are dropped rather than
-/// mis-encoded; extend as needed.
+/// Encodes a crossterm [`KeyEvent`] into the byte sequence a remote shell
+/// expects, covering printable, Enter, Tab, Backspace, Esc, Ctrl-letter and CSI
+/// arrow keys, and returning `None` for keys with no meaningful encoding.
+/// Deliberately not exhaustive: uncommon keys are dropped, not mis-encoded.
 fn encode_key(key: KeyEvent) -> Option<Vec<u8>> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         KeyCode::Char(c) => {
             if ctrl {
-                // Ctrl-letter → control byte (Ctrl-A = 0x01 … Ctrl-Z = 0x1a);
-                // matches a terminal driver's control-char generation.
+                // Ctrl-A = 0x01 … Ctrl-Z = 0x1a, as a terminal driver generates
+                // them; Ctrl with a non-letter falls through to the raw byte.
                 let upper = c.to_ascii_uppercase();
                 if upper.is_ascii_uppercase() {
                     return Some(vec![(upper as u8) - b'A' + 1]);
                 }
-                // Ctrl with a non-letter: fall through to the raw byte.
             }
             let mut b = [0u8; 4];
             Some(c.encode_utf8(&mut b).as_bytes().to_vec())
@@ -218,9 +196,8 @@ fn encode_key(key: KeyEvent) -> Option<Vec<u8>> {
 /// Spawns an interactive shell on `target` and runs the local↔remote [`bridge`]
 /// under raw mode.
 ///
-/// Reads the current terminal size, spawns via [`Target::shell`] (state-gated:
-/// a disabled/failed target returns `None`), then bridges until the
-/// session ends, restoring cooked mode via [`RawModeGuard`] on the way out.
+/// Reads the terminal size, spawns via [`Target::shell`] (state-gated: a
+/// disabled/failed target returns `None`), then bridges until the session ends.
 ///
 /// # Errors
 ///
@@ -233,8 +210,8 @@ async fn run_bridge_on(target: &mut Target) -> anyhow::Result<()> {
         mtui_core::display::DEFAULT_TERM_COLS,
         mtui_core::display::DEFAULT_TERM_ROWS,
     ));
-    // Enter raw mode *before* spawning so the guard restores it even if the
-    // bridge fails partway; the spawn itself does not touch the local TTY.
+    // Before the spawn, so the guard restores cooked mode even if the bridge
+    // fails partway.
     let _guard = RawModeGuard::new()?;
     let mut channel = target
         .shell(u32::from(cols), u32::from(rows))
@@ -242,15 +219,13 @@ async fn run_bridge_on(target: &mut Target) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("could not open a shell on {}", target.hostname()))?;
     let mut io = TerminalIo::new();
     bridge(channel.as_mut(), &mut io).await
-    // `_guard` drops here → cooked mode restored.
 }
 
 /// Peeks a REPL input line: if its first token is the `shell` command, returns
 /// its argv (everything after the command word); otherwise `None`.
 ///
-/// This is the pure seam the REPL uses to route `shell` to the CLI bridge
-/// instead of the headless engine (kept off the reedline boundary so it is
-/// unit-testable, mirroring the `step` extraction).
+/// The pure seam the REPL routes `shell` through to reach the CLI bridge instead
+/// of the headless engine, kept off the reedline boundary so it is unit-testable.
 #[must_use]
 pub(crate) fn is_shell_line(line: &str) -> Option<Vec<String>> {
     let tokens = shlex_split(line)?;
@@ -267,19 +242,17 @@ fn shlex_split(line: &str) -> Option<Vec<String>> {
 /// Runs the `shell` command: parse `-t/--target`, resolve the host selection,
 /// then attach a shell on each selected host **sequentially**.
 ///
-/// A host with no attachable PTY (disabled / spawn failure →
-/// [`Target::shell`] `None`) is reported and skipped; the loop continues to the
-/// next host. An empty selection is reported and nothing is spawned.
+/// A host with no attachable PTY (disabled / spawn failure → [`Target::shell`]
+/// `None`) is reported and skipped. An empty selection spawns nothing.
 ///
 /// # Errors
 ///
-/// Returns an error only for an argument-parse failure (clap usage) or an
-/// unbalanced-quote split — the same class of error the engine would render.
-/// Per-host attach failures are rendered to the session display and do not abort
-/// the command.
+/// Returns an error only for an argument-parse failure or an unbalanced-quote
+/// split — the same class the engine would render. Per-host attach failures are
+/// rendered to the session display and do not abort the command.
 pub(crate) async fn run_shell(session: &mut Session, argv: &[String]) -> anyhow::Result<()> {
-    // Reuse mtui-core's exact `-t/--target` grammar so REPL `shell` and the
-    // (headless-stub) engine `shell` stay in lock-step.
+    // mtui-core's exact `-t/--target` grammar, so REPL `shell` and the
+    // headless-stub engine `shell` stay in lock-step.
     let parser = add_hosts_arg(clap::Command::new("shell").no_binary_name(true));
     let matches = parser
         .try_get_matches_from(argv)
@@ -294,8 +267,8 @@ pub(crate) async fn run_shell(session: &mut Session, argv: &[String]) -> anyhow:
 
     for name in names {
         let Some(target) = session.targets_mut().get_mut(&name) else {
-            // The name resolved from the live group a moment ago; a miss here is
-            // a race we simply skip.
+            // The name resolved from the live group a moment ago; a miss is a
+            // race, not an error.
             continue;
         };
         if let Err(e) = run_bridge_on(target).await {
@@ -315,11 +288,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     /// A test [`ShellChannel`] that records writes/resizes and **blocks forever**
-    /// on `read` (never EOF), so a test can assert input handling deterministically
-    /// via a local-EOF (`next_input → None`) stop — without racing the mock's
-    /// instant `Ok(0)`. (The `MockConnection` shell double, which serves canned
-    /// output then EOF, covers the remote-EOF stop path in the `bridge_writes_*`
-    /// test.)
+    /// on `read`, so input handling can be asserted against a local-EOF stop
+    /// without racing the mock's instant `Ok(0)`. The remote-EOF stop path is
+    /// covered by `bridge_writes_*` through the `MockConnection` shell double.
     struct BlockingChannel {
         writes: Arc<Mutex<Vec<u8>>>,
         resizes: Arc<Mutex<Vec<(u32, u32)>>>,
@@ -346,13 +317,11 @@ mod tests {
     /// A scripted [`BridgeIo`] double: serves queued input events, records
     /// everything written to "stdout".
     ///
-    /// Once the queue is drained, [`next_input`](ScriptedIo::next_input) either
-    /// returns `None` (signalling local EOF, the loop's stop condition) or stays
-    /// pending forever (`eof_on_drain = false`), so the *remote* side (channel
-    /// EOF) is what stops the loop — mirroring a real terminal, where stdin
-    /// blocks rather than reporting EOF while the shell is alive. The pending
-    /// mode lets a test assert that all remote output is flushed before the
-    /// remote shell exits, without racing an instant local EOF.
+    /// Once drained, [`next_input`](ScriptedIo::next_input) either reports local
+    /// EOF or stays pending forever (`eof_on_drain = false`) so the *remote* EOF
+    /// stops the loop, mirroring a real terminal where stdin blocks while the
+    /// shell is alive. The pending mode is what lets a test assert all remote
+    /// output is flushed without racing an instant local EOF.
     struct ScriptedIo {
         inputs: VecDeque<InputEvent>,
         out: Vec<u8>,
@@ -389,7 +358,7 @@ mod tests {
             if self.eof_on_drain {
                 None
             } else {
-                // Stay pending: let the channel-read branch of the select win.
+                // Let the channel-read branch of the select win.
                 std::future::pending().await
             }
         }
@@ -415,8 +384,8 @@ mod tests {
     async fn bridge_writes_remote_output_then_stops_on_eof() {
         let (mut target, _h) = target_with_output("h1", &[b"welcome\n", b"$ "]);
         let mut channel = target.shell(80, 24).await.expect("spawn");
-        // Block on input so the remote channel EOF (all chunks drained) is what
-        // stops the loop — asserts every output chunk is flushed first.
+        // Blocking input, so the remote EOF is what stops the loop — proving
+        // every output chunk was flushed first.
         let mut io = ScriptedIo::blocking_after(vec![]);
         bridge(channel.as_mut(), &mut io).await.unwrap();
         assert_eq!(io.out, b"welcome\n$ ");
@@ -429,8 +398,8 @@ mod tests {
             writes: Arc::clone(&writes),
             resizes: Arc::new(Mutex::new(Vec::new())),
         };
-        // Input drains, then `next_input → None` stops the loop; the channel
-        // never EOFs, so the write is guaranteed processed first.
+        // The channel never EOFs, so the write is processed before the drained
+        // input's `None` stops the loop.
         let mut io = ScriptedIo::new(vec![InputEvent::Bytes(b"ls\n".to_vec())]);
         bridge(&mut channel, &mut io).await.unwrap();
         assert_eq!(*writes.lock().unwrap(), b"ls\n");
@@ -457,11 +426,9 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_stops_on_local_eof_with_no_input() {
-        // No scripted input and no output: `next_input` yields None → clean stop.
         let (mut target, _h) = target_with_output("h1", &[]);
         let mut channel = target.shell(80, 24).await.expect("spawn");
         let mut io = ScriptedIo::new(vec![]);
-        // Even with a pending output chunk absent, the loop must terminate.
         bridge(channel.as_mut(), &mut io).await.unwrap();
         assert!(io.out.is_empty());
     }
@@ -491,17 +458,14 @@ mod tests {
         assert_eq!(k(KeyCode::Backspace, KeyModifiers::NONE), Some(vec![0x7f]));
         assert_eq!(k(KeyCode::Esc, KeyModifiers::NONE), Some(vec![0x1b]));
         assert_eq!(k(KeyCode::Up, KeyModifiers::NONE), Some(b"\x1b[A".to_vec()));
-        // Ctrl-C → 0x03.
         assert_eq!(
             k(KeyCode::Char('c'), KeyModifiers::CONTROL),
             Some(vec![0x03])
         );
-        // Ctrl-D → 0x04.
         assert_eq!(
             k(KeyCode::Char('d'), KeyModifiers::CONTROL),
             Some(vec![0x04])
         );
-        // Remaining CSI navigation keys.
         assert_eq!(
             k(KeyCode::Down, KeyModifiers::NONE),
             Some(b"\x1b[B".to_vec())
@@ -526,8 +490,7 @@ mod tests {
             k(KeyCode::Delete, KeyModifiers::NONE),
             Some(b"\x1b[3~".to_vec())
         );
-        // Ctrl with a non-letter falls through to the raw UTF-8 byte (line 203+):
-        // Ctrl-'1' has no control-char mapping, so it encodes as plain "1".
+        // Ctrl-'1' has no control-char mapping, so it falls through to "1".
         assert_eq!(
             k(KeyCode::Char('1'), KeyModifiers::CONTROL),
             Some(b"1".to_vec())
@@ -536,8 +499,7 @@ mod tests {
         assert_eq!(k(KeyCode::F(5), KeyModifiers::NONE), None);
     }
 
-    /// Builds a session with a group of enabled hosts, each backed by a
-    /// `MockConnection`, returning the handles keyed by name for introspection.
+    /// A host group whose targets are each backed by a `MockConnection`.
     fn group(hosts: &[(&str, TargetState)]) -> HostsGroup {
         let targets = hosts
             .iter()
@@ -561,7 +523,6 @@ mod tests {
     #[tokio::test]
     async fn run_shell_no_hosts_does_not_error() {
         let mut session = session_with_group(group(&[]));
-        // No hosts → prints a notice, returns Ok, spawns nothing.
         run_shell(&mut session, &[]).await.unwrap();
     }
 
@@ -585,13 +546,10 @@ mod tests {
 
     #[tokio::test]
     async fn run_shell_renders_per_host_failure_and_continues() {
-        // Drives the per-host loop against enabled mock hosts. Offline (no
-        // controlling TTY) `run_bridge_on` fails at `RawModeGuard::new`, so each
-        // host takes the error-render branch; the loop must render the failure to
-        // the display and keep going, returning `Ok` overall (a per-host attach
-        // failure never aborts the command). This is the hermetic reach of the
-        // loop body — the raw-mode/PTY wiring past that point needs a real TTY
-        // and is left to the manual/gated path.
+        // Offline there is no controlling TTY, so `run_bridge_on` fails at
+        // `RawModeGuard::new` and each host takes the error-render branch. That
+        // is the hermetic reach of the loop body; the PTY wiring past it needs a
+        // real TTY.
         let out = Arc::new(Mutex::new(Vec::new()));
         struct Sink(Arc<Mutex<Vec<u8>>>);
         impl std::io::Write for Sink {
@@ -615,7 +573,6 @@ mod tests {
         run_shell(&mut session, &[]).await.unwrap();
 
         let rendered = String::from_utf8(out.lock().unwrap().clone()).unwrap();
-        // Both hosts were attempted and each failure was rendered ("shell on <h>:").
         assert!(
             rendered.contains("shell on h1:") && rendered.contains("shell on h2:"),
             "each host's attach failure must be rendered, got: {rendered:?}"

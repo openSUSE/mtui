@@ -1,25 +1,20 @@
 //! Custom compact `tracing` event format for the REPL.
 //!
-//! One line per record: a **lowercased**, colorized level token (green `info` /
-//! yellow `warning` / red `error`), then `": "`, then the message — no
-//! timestamp, no module path. mtui already renders *command errors* that way
-//! through the session display (see `repl::render_error`); this layer brings
-//! `tracing::info!`/`warn!` (and any other event at the default verbosity) to
-//! the same look, so the two channels are indistinguishable to an operator
-//! reading the terminal.
+//! One line per record: a **lowercased**, colorized level token, `": "`, then
+//! the message — no timestamp, no module path. That is how the session display
+//! already renders command errors (`repl::render_error`), so bringing
+//! `tracing::info!`/`warn!` to the same look makes the two channels
+//! indistinguishable to an operator reading the terminal.
 //!
-//! **ANSI decision is shared with the display.** Whether escapes are emitted is
-//! computed once from the resolved [`ColorMode`](mtui_core::ColorMode) handed to
-//! [`init_tracing`](crate::init_tracing) — the same `ColorMode::resolve()` the
-//! display uses — so `--color auto/always/never` governs the level token
-//! identically to the `error:` line. The subscriber's own ANSI is disabled
-//! (`with_ansi(false)`) so only this layer's explicit coloring emits escapes.
+//! **The ANSI decision is shared with the display**: it is computed once from
+//! the resolved [`ColorMode`](mtui_core::ColorMode) handed to
+//! [`init_tracing`](crate::init_tracing), so `--color` governs the level token
+//! and the `error:` line identically. The subscriber's own ANSI is disabled so
+//! only this layer's explicit coloring emits escapes.
 //!
-//! **Design choice:** the DEBUG-only `" [module:function]"` suffix is
-//! intentionally not reproduced (low value in Rust — under `-d/--debug` the
-//! verbose Rust format restores the module `target`, which covers the diagnostic
-//! need). This compact layer is only installed at the *default* verbosity;
-//! `-d/--debug` keeps the stock verbose format (timestamp + level + target).
+//! Installed at the *default* verbosity only; `-d/--debug` keeps the stock
+//! verbose format. mtui deliberately has no DEBUG-only `" [module:function]"`
+//! suffix — the verbose format's `target` covers the same need.
 
 use std::fmt;
 
@@ -52,10 +47,9 @@ impl CompactLevelFormat {
         Self { ansi }
     }
 
-    /// The lowercased level token, colorized when ANSI is
-    /// on: info→green, warn→yellow, error→red. `trace`/`debug` fall through
-    /// uncolored (they only appear under `-d`, which uses the verbose format
-    /// anyway, but stay defensive).
+    /// The lowercased level token, colorized when ANSI is on: info→green,
+    /// warn→yellow, error→red. `trace`/`debug` stay uncolored — they only appear
+    /// under `-d`, which uses the verbose format anyway.
     fn level_token(self, level: &Level) -> String {
         let name = match *level {
             Level::ERROR => "error",
@@ -91,9 +85,7 @@ where
         if meta.target() != CLAP_PREFIXED_TARGET {
             write!(writer, "{}: ", self.level_token(meta.level()))?;
         }
-        // The field formatter writes the `message` field (and any structured
-        // fields) exactly as the stock compact format does — but without the
-        // level/timestamp/target prefix we deliberately omit.
+        // The stock field rendering, minus the level/timestamp/target prefix.
         ctx.field_format().format_fields(writer.by_ref(), event)?;
         writeln!(writer)
     }
@@ -109,8 +101,8 @@ mod tests {
 
     use super::*;
 
-    /// A `MakeWriter` over a shared buffer so a scoped subscriber's output can be
-    /// inspected without touching the process-global default subscriber.
+    /// A `MakeWriter` over a shared buffer, so a scoped subscriber's output is
+    /// inspectable without touching the process-global default.
     #[derive(Clone)]
     struct BufMaker(Arc<Mutex<Vec<u8>>>);
 
@@ -156,16 +148,13 @@ mod tests {
         assert!(out.contains("info: hello info"), "got: {out:?}");
         assert!(out.contains("warn: hello warn"), "got: {out:?}");
         assert!(out.contains("error: hello error"), "got: {out:?}");
-        // No module target and no ISO-8601 timestamp leak into the compact line.
         assert!(!out.contains("mtui_cli"), "no target: {out:?}");
         assert!(!out.contains("logfmt"), "no target: {out:?}");
         assert!(
             !out.contains('T') || !out.contains('Z'),
             "no RFC3339: {out:?}"
         );
-        // Plain (ansi=false): no escapes at all.
         assert!(!out.contains('\u{1b}'), "no escapes when off: {out:?}");
-        // Each event is exactly one line.
         assert_eq!(out.lines().count(), 3, "one line per event: {out:?}");
     }
 
@@ -173,8 +162,7 @@ mod tests {
     fn full_format_colorizes_level_token_when_ansi_on() {
         let out = render_via_layer(true);
         assert!(out.contains('\u{1b}'), "escapes present: {out:?}");
-        // Lowercased tokens still present inside the colored spans; message text
-        // stays uncolored (only the level token is wrapped).
+        // Only the level token is wrapped; the message text stays uncolored.
         assert!(out.contains("hello info"), "message present: {out:?}");
         assert!(out.contains("hello error"), "message present: {out:?}");
     }
@@ -196,23 +184,19 @@ mod tests {
         let info = f.level_token(&Level::INFO);
         let warn = f.level_token(&Level::WARN);
         let error = f.level_token(&Level::ERROR);
-        // Escapes present and the lowercased name survives inside them.
         for (tok, name) in [(&info, "info"), (&warn, "warn"), (&error, "error")] {
             assert!(tok.contains('\u{1b}'), "escape present: {tok:?}");
             assert!(tok.contains(name), "name present: {tok:?}");
         }
-        // Distinct colors per level (green/yellow/red differ byte-wise).
         assert_ne!(info, warn);
         assert_ne!(warn, error);
         assert_ne!(info, error);
-        // Parity with the display's `error` token (both via owo-colors red).
+        // Parity with the display's `error` token (both owo-colors red).
         assert_eq!(error, "error".red().to_string());
     }
 
-    /// An event marked with [`CLAP_PREFIXED_TARGET`] renders its message
-    /// verbatim, with no `"{level}: "` prefix added on top — the mechanism
-    /// that lets a genuine clap usage error (which already carries its own
-    /// `"error: "` prefix) avoid being double-prefixed.
+    /// An event marked with [`CLAP_PREFIXED_TARGET`] renders verbatim, which is
+    /// what keeps a clap usage error from being double-prefixed.
     #[test]
     fn clap_prefixed_target_suppresses_level_prefix() {
         let buf = Arc::new(Mutex::new(Vec::new()));

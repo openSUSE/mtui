@@ -10,12 +10,10 @@ use crate::session::Session;
 
 /// Sets the command-execution timeout, in seconds, for the selected hosts.
 ///
-/// Calls `target.set_timeout(value)` per host. `0` disables the timeout.
-/// Selection acts on the named `-t` hosts, or all enabled hosts when omitted.
+/// `0` disables the timeout. Acts on the named `-t` hosts, or all enabled hosts.
 ///
-/// A host-phase command that takes only `-t/--target`, so it is
-/// [`Scope::Active`]: it acts on the active template's host set, not once per
-/// loaded template.
+/// `-t/--target`-only, hence [`Scope::Active`]: it acts on the active template's
+/// host set, not once per loaded template.
 pub struct SetTimeout;
 
 #[async_trait]
@@ -76,8 +74,7 @@ mod tests {
     #[test]
     fn name_and_active_scope() {
         assert_eq!(SetTimeout.name(), "set_timeout");
-        // Upstream `SetTimeout` is `-t`-only (no `_add_template_arg`), so it
-        // stays active rather than fanning out per loaded template.
+        // `-t`-only, so it stays active rather than fanning out per template.
         assert_eq!(SetTimeout.scope(), Scope::Active);
     }
 
@@ -105,7 +102,6 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_numeric_timeout() {
-        // clap rejects a non-u64 value at parse time.
         let base = clap::Command::new("set_timeout").no_binary_name(true);
         let parsed = SetTimeout
             .configure(base)

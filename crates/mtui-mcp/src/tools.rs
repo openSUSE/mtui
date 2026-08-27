@@ -10,19 +10,18 @@
 //! * **`read_only`** hint is set conservatively from a name allow-list.
 //!
 //! The subparser command (`config` today) is fanned out into one tool per
-//! subcommand (`config_show`, `config_set`); the bare `config` tool is not
-//! emitted (a "show or set" union schema would mislead the client about which
-//! fields are required). Slow host commands gain a `background` boolean.
+//! subcommand; the bare `config` tool is not emitted, because a "show or set"
+//! union schema would mislead the client about which fields are required. Slow
+//! host commands gain a `background` boolean.
 //!
 //! This layer is intentionally **transport-free**: it returns plain descriptors
 //! and routes, not `rmcp` types. [`crate::server`] converts a [`ToolDescriptor`]
 //! into an `rmcp::model::Tool` and wires `dispatch_tool` into the `ServerHandler`.
 //!
-//! The background-job path (`dispatch_tool` with `background = true`, and the
-//! four job tools from [`job_tool_descriptors`]) drives the session's `_jobs`
-//! table: a `background=true` slow call fans out one job
-//! per resolved template and returns their ids immediately, and the four job
-//! tools poll/control that table.
+//! The background-job path — `dispatch_tool` with `background = true`, plus the
+//! four tools from [`job_tool_descriptors`] — drives the session's `_jobs` table:
+//! the slow call fans out one job per resolved template and returns their ids
+//! immediately, and the job tools poll/control that table.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -37,9 +36,8 @@ use crate::session::{
     DEFAULT_PROGRESS_INTERVAL, JobView, McpCommandError, McpSession, ProgressSink, ToolOutcome,
 };
 
-/// Commands that touch reference hosts and can run for minutes. These gain a
-/// `background` boolean parameter (see [`dispatch_tool`]). Pinned here as an
-/// explicit list.
+/// Commands that touch reference hosts and can run for minutes, so they gain a
+/// `background` boolean parameter (see [`dispatch_tool`]). An explicit list.
 const SLOW_COMMANDS: &[&str] = &[
     "run",
     "update",
@@ -50,15 +48,12 @@ const SLOW_COMMANDS: &[&str] = &[
     "set_repo",
     "reboot",
     "regenerate",
-    // Both connect to a whole fleet of hosts (a pool-selected slot batch or an
-    // autoconnecting template load) and can run for minutes; a black-hole host
-    // among the candidates has no other cancellable escape hatch.
+    // Both connect to a whole fleet, where a black-hole candidate host has no
+    // other cancellable escape hatch.
     "add_host",
     "load_template",
-    // `--watch` polls Slack for up to `[slack] watch_timeout` (an hour by
-    // default), far past any MCP client timeout, so the caller needs the
-    // `background` escape hatch. Without `--watch` the command just posts and
-    // returns, which is fast enough to run in the foreground.
+    // `--watch` polls Slack for up to an hour, far past any MCP client timeout;
+    // without it the command just posts and returns.
     "request_review",
 ];
 
@@ -73,10 +68,8 @@ const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 /// (`reload_products` is intentionally absent — it re-reads from the hosts.)
 const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs"];
 
-/// A synthesised MCP tool as plain data (transport-free).
-///
-/// [`crate::server`] converts this into `rmcp::model::Tool` (name + description +
-/// `Arc<input_schema>` + `ToolAnnotations { read_only_hint }`).
+/// A synthesised MCP tool as plain data; [`crate::server`] converts it into an
+/// `rmcp::model::Tool` with its `ToolAnnotations { read_only_hint }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolDescriptor {
     /// The tool name (command name, or `config_<sub>` for the fan-out).
@@ -89,10 +82,8 @@ pub struct ToolDescriptor {
     pub read_only: bool,
 }
 
-/// How a tool name routes back to the engine when called.
-///
-/// Built in the same pass as the descriptors so a tool's schema and its dispatch
-/// can never diverge. `dispatch_tool` consumes it.
+/// How a tool name routes back to the engine when called, built in the same pass
+/// as the descriptors so a tool's schema and its dispatch cannot diverge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRoute {
     /// The registry command name to dispatch (`config` for `config_show`).
@@ -111,10 +102,9 @@ fn is_read_only(name: &str) -> bool {
 /// Reject any tool-call kwarg not in `allowed`, mirroring the strict
 /// `additionalProperties: false` the advertised schema carries.
 ///
-/// The schema half lets a schema-aware client fail fast on a typo; this is the
-/// runtime half for clients that do not validate — without it a misspelled field
-/// (`temlate=`, `mesage=`) is silently dropped and the command runs with it
-/// missing. Offending keys are reported sorted for a deterministic message.
+/// The runtime half for clients that do not validate: without it a misspelled
+/// field (`temlate=`, `mesage=`) is silently dropped and the command runs with
+/// it missing. Keys are reported sorted for a deterministic message.
 pub(crate) fn reject_unknown_kwargs<'a>(
     kwargs: &Map<String, Value>,
     allowed: impl IntoIterator<Item = &'a str>,
@@ -137,12 +127,9 @@ pub(crate) fn reject_unknown_kwargs<'a>(
     })
 }
 
-/// The `clap` subcommand a fanned-out subparser tool's args live on.
-///
-/// For a subparser tool the schema is built from a subcommand
-/// (`command_input_schema(sub)`) and the route carries that subcommand's name as
-/// its single-element `argv_prefix`; return that subcommand so the allowed-arg
-/// set matches the advertised schema. `None` for a plain (non-fanned-out) tool.
+/// The `clap` subcommand a fanned-out subparser tool's args live on, resolved
+/// through the route's single-element `argv_prefix` so the allowed-arg set
+/// matches the advertised schema. `None` for a plain tool.
 fn subparser_layer<'a>(
     parser: &'a clap::Command,
     argv_prefix: &[String],
@@ -220,9 +207,8 @@ fn synthesise(registry: &Registry) -> (Vec<ToolDescriptor>, BTreeMap<String, Too
     (descriptors, routes)
 }
 
-/// Register one tool per subcommand of a subparser command (`config`).
-///
-/// The bare parent tool is not emitted. `config` is not slow, so no `background`.
+/// Register one tool per subcommand of a subparser command (`config`); the bare
+/// parent is not emitted, and `config` is not slow, so no `background`.
 fn fan_out_subparser(
     command: &dyn mtui_core::Command,
     name: &'static str,
@@ -271,11 +257,9 @@ fn warn_on_deny_drift(registry: &Registry) {
     }
 }
 
-/// Build the synthesised command-tool descriptors, sorted by name.
-///
-/// Skips deny-listed commands, fans out the `config` subparser, and injects a
-/// `background` flag into slow host commands. Does not include the job tools —
-/// see [`job_tool_descriptors`].
+/// Build the synthesised command-tool descriptors, sorted by name: deny-listed
+/// commands skipped, the `config` subparser fanned out, a `background` flag on
+/// slow host commands. The job tools are [`job_tool_descriptors`]'s.
 #[must_use]
 pub fn build_tools(registry: &Registry) -> Vec<ToolDescriptor> {
     synthesise(registry).0
@@ -291,13 +275,12 @@ pub(crate) fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
 /// Dispatch a synthesised command tool call back through the engine.
 ///
 /// Pops the `background` flag for slow commands; when `true` the call fans out
-/// background jobs via [`McpSession::start_jobs`] (one per resolved template) and
-/// returns a "started job(s)" reply naming the ids to poll. Otherwise
-/// reconstructs argv from `kwargs` (honouring the route's `argv_prefix`) and
-/// runs it through [`McpSession::run_command_with_progress`] (`client_ct ==
-/// None`) or [`McpSession::run_command_client_cancellable`] (`client_ct ==
-/// Some`), emitting heartbeats via `sink` (when the client requested progress)
-/// so a slow foreground call does not time the client out.
+/// jobs via [`McpSession::start_jobs`], one per resolved template, and returns
+/// their ids to poll. Otherwise it reconstructs argv from `kwargs` (honouring
+/// the route's `argv_prefix`) and runs it through
+/// [`McpSession::run_command_with_progress`] or, with a `client_ct`,
+/// [`McpSession::run_command_client_cancellable`] — emitting heartbeats via
+/// `sink` so a slow foreground call does not time the client out.
 ///
 /// `client_ct` is the MCP request's own cancellation token: only this
 /// synthesised-command path can hold `/var/lock/mtui.lock`, so it is the one
@@ -329,11 +312,9 @@ pub(crate) async fn dispatch_tool(
     let parser = command_parser(command.as_ref());
 
     // Reject misspelled fields before argv reconstruction silently drops them.
-    // `background` was already popped above, so it needn't be in the allowed set;
-    // the allowed keys are exactly the callable clap args of the parser layer that
-    // produced this tool's schema. For a fanned-out subparser tool (`config_show`)
-    // that layer is the *subcommand* named by `argv_prefix`, not the parent — its
-    // args (`attributes`) live there, so match the schema by resolving it.
+    // The allowed keys are the callable args of the parser layer that produced
+    // this tool's schema — for a fanned-out tool (`config_show`) the *subcommand*,
+    // where its args live, not the parent. `background` was popped above.
     let arg_source = subparser_layer(&parser, &route.argv_prefix).unwrap_or(&parser);
     let allowed = arg_source
         .get_arguments()
@@ -379,10 +360,8 @@ pub(crate) async fn dispatch_tool(
     }
 }
 
-/// The client-facing reply after starting one or more background jobs.
-///
-/// A single job points at `job_status`/`job_result` for that id; a fan-out
-/// lists every id and tells the client to poll per job.
+/// The client-facing reply after starting one or more background jobs: a single
+/// job points at `job_status`/`job_result`, a fan-out lists every id.
 fn started_jobs_reply(command: &str, job_ids: &[String]) -> String {
     if let [job_id] = job_ids {
         return format!(
@@ -402,13 +381,12 @@ fn started_jobs_reply(command: &str, job_ids: &[String]) -> String {
     )
 }
 
-/// The four background-job control tools (`job_list`, `job_status`,
-/// `job_result`, `job_cancel`).
+/// The four background-job control tools, routed onto the session's job table by
+/// `dispatch_job_tool`.
 ///
-/// Their names and schemas are a downstream contract (see `AGENTS.md`) and are
-/// snapshot-tested; the schemas are strict (`additionalProperties: false`) so a
-/// misspelled field is a clean error rather than a silently ignored argument.
-/// `dispatch_job_tool` routes them onto the session's job table.
+/// Their names and schemas are a downstream contract and snapshot-tested; the
+/// schemas are strict (`additionalProperties: false`), so a misspelled field is a
+/// clean error rather than a silently ignored argument.
 #[must_use]
 pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
     let job_id_schema = || {
@@ -472,9 +450,8 @@ pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
 
 /// Dispatch a job-control tool call against the session's `_jobs` table.
 ///
-/// Routes `job_list` / `job_status` / `job_result` / `job_cancel` to the
-/// matching [`McpSession`] method and renders its result into the one-line text
-/// the client sees.
+/// Routes each of the four names to the matching [`McpSession`] method and
+/// renders its result into the one-line text the client sees.
 ///
 /// # Errors
 ///
@@ -486,8 +463,7 @@ pub(crate) async fn dispatch_job_tool(
     name: &str,
     kwargs: &Map<String, Value>,
 ) -> Result<String, McpCommandError> {
-    // Reject misspelled fields, mirroring each job tool's strict schema:
-    // `job_list` takes nothing; the others take only `job_id`.
+    // Mirrors each job tool's strict schema.
     let allowed: &[&str] = if name == "job_list" { &[] } else { &["job_id"] };
     reject_unknown_kwargs(kwargs, allowed.iter().copied())?;
 
@@ -523,9 +499,8 @@ pub(crate) async fn dispatch_job_tool(
     }
 }
 
-/// Render a [`JobView`] as the one-line status text (`job_status` form).
-///
-/// `job_list` prepends `"- "` to each of these.
+/// Render a [`JobView`] as the one-line `job_status` text; `job_list` prepends
+/// `"- "` to each.
 fn format_job_view(job: &JobView) -> String {
     format!(
         "{}: {} ({}s) [{}]",
@@ -710,9 +685,8 @@ mod tests {
         );
     }
 
-    /// `add_host` and `load_template` connect to whole fleets and can run for
-    /// minutes; both must carry the `background` escape hatch so a black-hole
-    /// candidate host does not wedge the caller with no way to cancel.
+    /// Both connect to whole fleets, so both must carry the `background` escape
+    /// hatch: a black-hole candidate host must not wedge the caller.
     #[test]
     fn add_host_and_load_template_carry_background() {
         let tools = build_tools(&register_all());
@@ -775,8 +749,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_refuses_unknown_property_instead_of_dropping_it() {
-        // A misspelled field must be refused, not silently discarded (which would
-        // run `config show` with no attribute filter).
+        // Silently discarding it would run `config show` with no filter.
         let session = McpSession::new(Config::default());
         let registry = Arc::new(register_all());
         let routes = tool_routes(&registry);
@@ -803,8 +776,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_still_accepts_background_on_slow_route() {
-        // `background` is popped before validation, so a legit background call on
-        // a slow command is not falsely rejected as an unknown property.
+        // Popped before validation, so a legit background call is not rejected.
         let session = McpSession::new(Config::default());
         let registry = Arc::new(register_all());
         let routes = tool_routes(&registry);
@@ -932,8 +904,8 @@ mod tests {
         assert!(err.stderr.contains("no such job: nope-1"), "got: {err:?}");
     }
 
-    /// A started job renders through `job_list` / `job_status` in the pinned
-    /// text shapes (`- id: state (…s) [cmd]` vs `id: state (…s) [cmd]`).
+    /// The pinned text shapes: `- id: state (…s) [cmd]` for `job_list`, without
+    /// the dash for `job_status`.
     #[tokio::test]
     async fn dispatch_job_list_and_status_render_started_job() {
         let mut config = Config::default();
@@ -965,7 +937,7 @@ mod tests {
         assert!(status.contains("[whoami]"), "names the command: {status:?}");
     }
 
-    /// An unrecognised job-tool name is a clean error (defensive; the server
+    /// An unrecognised job-tool name is a clean error (defensive: the server
     /// only routes the four known names here).
     #[tokio::test]
     async fn dispatch_job_tool_unknown_name() {

@@ -12,17 +12,15 @@ use crate::session::Session;
 
 /// Lists the lock state of all connected hosts.
 ///
-/// By default only the
-/// zypper/operation locks (set by `lock` and the install/update/prepare/downgrade
-/// flows) are shown; `-p`/`--pool` instead lists the host *pool* claims taken
-/// during pool selection.
+/// By default the zypper/operation locks (set by `lock` and the
+/// install/update/prepare/downgrade flows); `-p`/`--pool` lists the host *pool*
+/// claims taken during pool selection instead.
 ///
-/// The enabled hosts (honouring the `-t` sub-selection) are resolved via
-/// [`Target::lock_status`](mtui_hosts::Target::lock_status) and forwarded through
-/// the per-host [`Reporter::locks`](mtui_hosts) sink into
-/// `display.list_locks`. The lock accessors are async `&mut self`; the resolved
-/// (sync) [`LockStatus`] values are collected first so `display` — which borrows
-/// the session mutably — is driven afterwards.
+/// The enabled hosts (honouring `-t`) resolve through
+/// [`Target::lock_status`](mtui_hosts::Target::lock_status) into
+/// `display.list_locks`. Those accessors are async `&mut self`, so the sync
+/// [`LockStatus`] values are collected before driving `display`, which itself
+/// borrows the session mutably.
 pub struct ListLocks;
 
 #[async_trait]
@@ -67,7 +65,6 @@ impl Command for ListLocks {
             return Err(CommandError::NoRefhostsDefined);
         }
 
-        // Resolve each host's lock (async, &mut) into a sync row, then render.
         let mut rows: Vec<(String, System, LockStatus)> = Vec::with_capacity(hosts.len());
         for name in &hosts {
             let Some(target) = targets.get_mut(name) else {

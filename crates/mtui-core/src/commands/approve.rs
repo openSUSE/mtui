@@ -14,13 +14,11 @@ use crate::session::Session;
 /// Approves the loaded update, dispatching to OSC or Gitea like the other
 /// backend-API commands.
 ///
-/// With `-r/--reviewer` the
-/// reviewer is recorded in the testreport and the template is committed to SVN
-/// *before* the approval; if either step fails the approval is aborted. On the
-/// Gitea path a checkout-hash mismatch prompts for confirmation in the REPL
-/// (default no) and refuses non-interactively; a missing Gitea token or a
-/// failed Gitea call always refuses, on both surfaces. Unlocks PI reference
-/// hosts afterwards.
+/// With `-r/--reviewer` the reviewer is recorded and the template committed to
+/// SVN *before* the approval; either failing aborts it. On the Gitea path a
+/// checkout-hash mismatch prompts for confirmation in the REPL (default no) and
+/// refuses non-interactively; a missing token or a failed call always refuses.
+/// Unlocks PI reference hosts afterwards.
 pub struct Approve;
 
 #[async_trait]
@@ -78,12 +76,11 @@ impl Command for Approve {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let rrid = require_update(session)?;
 
-        // Slack gate: when the site has opted into Slack review, an approval
-        // requires an acknowledged review request. Runs before any state
-        // changes so a refused approval leaves nothing half-done.
+        // Before any state change, so a refused approval leaves nothing
+        // half-done.
         slack_review_gate(session, &rrid).await?;
 
-        // -r/--reviewer: record + commit before approving; abort on failure.
+        // Record + commit before approving; abort on failure.
         if let Some(reviewer) = args.get_one::<String>("reviewer") {
             record_reviewer(session, reviewer).await?;
         }
@@ -119,24 +116,16 @@ impl Command for Approve {
 
 /// Refuse the approval unless the update's Slack review request was acked.
 ///
-/// Only engages when the site has opted into the integration
-/// (`[slack] enabled = true`); with Slack off this is a no-op and `approve`
-/// behaves exactly as it always has. Once on, the gate is deliberately strict,
-/// because a gate with a per-invocation bypass flag is not a gate: turning it
-/// off is a config change (`config set slack_enabled false`), which is
-/// explicit and auditable rather than a habit that creeps into muscle memory.
+/// A no-op unless `[slack] enabled = true`. Once on there is deliberately no
+/// per-invocation bypass — a gate with one is not a gate; turning it off is an
+/// explicit, auditable `config set slack_enabled false`.
 ///
-/// Three things must hold, and each rules out a distinct way of approving
-/// something nobody reviewed:
-///
-/// 1. A marker exists — otherwise no review was ever requested.
-/// 2. The marked message still names this RRID — otherwise a marker copied
-///    from another template (or a re-used message) would launder an approval
-///    for an update nobody looked at.
-/// 3. Someone other than the bot left an approving reaction.
-///
-/// Only `approve` is gated. `reject` is the conservative direction: blocking
-/// it would strand an update that a reviewer wants stopped.
+/// Three things must hold, each ruling out a way of approving something nobody
+/// reviewed: a marker exists (else no review was requested); the marked message
+/// still names this RRID (else a marker copied from another template would
+/// launder an approval for an unexamined update); and someone other than the bot
+/// left an approving reaction. Only `approve` is gated — blocking `reject` would
+/// strand an update a reviewer wants stopped.
 async fn slack_review_gate(
     session: &mut Session,
     rrid: &mtui_types::RequestReviewID,
@@ -164,8 +153,8 @@ async fn slack_review_gate(
             ))
         })?;
 
-    // Bind the marker to this update: a message that does not name this RRID
-    // is not this update's review, whatever the template claims.
+    // A message that does not name this RRID is not this update's review,
+    // whatever the template claims.
     if !message.text.contains(&rrid.to_string()) {
         return Err(CommandError::Other(format!(
             "the recorded Slack message does not mention {rrid}, not approving; \
@@ -198,13 +187,10 @@ async fn slack_review_gate(
 }
 
 /// Verifies the checked-out template's hash against the Gitea PR head before
-/// approving.
-///
-/// A [`HashCheck::Mismatch`] is the only verdict an operator can act on: in
-/// the REPL, with a prompter installed, it asks for confirmation (default
-/// no); anywhere else it refuses. [`HashCheck::MissingToken`] and
-/// [`HashCheck::Failed`] mean the check never produced a verdict, so there is
-/// nothing to confirm — both refuse on every surface.
+/// approving. A [`HashCheck::Mismatch`] is the only verdict an operator can act
+/// on: in the REPL, with a prompter installed, it asks (default no); anywhere
+/// else it refuses. [`HashCheck::MissingToken`] and [`HashCheck::Failed`]
+/// produced no verdict at all, so both always refuse.
 async fn hash_gate(session: &mut Session) -> Result<(), CommandError> {
     match session.metadata().check_hash().await {
         HashCheck::Ok => Ok(()),
@@ -244,9 +230,8 @@ async fn hash_gate(session: &mut Session) -> Result<(), CommandError> {
     }
 }
 
-/// Records the reviewer and commits the testreport to SVN. Returns `Err` when
-/// the record/commit fails so the approval is aborted and the failure is
-/// surfaced (not swallowed).
+/// Records the reviewer and commits the testreport to SVN. `Err` aborts the
+/// approval rather than swallowing the record/commit failure.
 async fn record_reviewer(session: &mut Session, name: &str) -> Result<(), CommandError> {
     let name = name.trim();
     if name.is_empty() {
@@ -341,8 +326,7 @@ mod tests {
 
     #[tokio::test]
     async fn slack_gate_is_inert_when_the_integration_is_off() {
-        // The default posture. Approve must behave exactly as it always has,
-        // so every pre-existing approve test stays meaningful.
+        // The default posture, under which every other approve test runs.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         assert!(!session.config.slack_enabled);
         let rrid = require_update(&session).unwrap();
@@ -365,8 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn slack_gate_refuses_a_marker_pointing_at_another_update() {
-        // The defence against a marker copied between templates: the message
-        // must actually name this RRID, or it is not this update's review.
+        // A marker copied between templates: the message must name this RRID.
         let server = wiremock::MockServer::start().await;
         mount_message(
             &server,
@@ -431,7 +414,7 @@ mod tests {
         let rrid = require_update(&session).unwrap();
 
         slack_review_gate(&mut session, &rrid).await.unwrap();
-        // The human is named; the bot that shares the reaction is not.
+        // The human is named; the bot sharing the reaction is not.
         let out = buf.contents();
         assert!(out.contains("acknowledged by U1"), "{out}");
         assert!(!out.contains("UBOT"), "{out}");
@@ -465,14 +448,12 @@ mod tests {
 
     #[tokio::test]
     async fn reviewer_with_no_template_path_errors() {
-        // The report has no `path`, so set_reviewer fails → record_reviewer
-        // returns Err → approve aborts with a surfaced error and never
-        // dispatches (previously this was swallowed as Ok).
+        // No `path` on the report, so `set_reviewer` fails and the approval must
+        // abort with a surfaced error rather than dispatching.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Approve, &["-r", "alice"]);
         let err = Approve.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("record reviewer")));
-        // Reviewer was NOT recorded (the write failed with no path).
         assert_eq!(session.metadata().base().reviewer, "");
     }
 
@@ -487,26 +468,20 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial(osc_config_env)]
-    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
-    // `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+    // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes the
+    // mutation of the process-global `$OSC_CONFIG` exclusive.
     #[allow(unsafe_code)]
     async fn osc_dispatch_runs_for_maintenance_rrid() {
-        // A Maintenance RRID routes to the native OBS backend. Point $OSC_CONFIG
-        // at an oscrc that does not exist so credential resolution fails fast
-        // (offline, no network), exercising the non-gitea dispatch + error
-        // mapping without needing a real backend. (Group-approve is refused
-        // before any I/O, but the missing-oscrc guard makes the failure
-        // deterministic regardless.) `$OSC_CONFIG` is process-global → `#[serial]`.
+        // A missing oscrc makes credential resolution fail fast offline, so the
+        // non-gitea dispatch and its error mapping run without a real backend.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.config.session_user = "tester".to_owned();
-        // SAFETY: serialised via `#[serial(osc_config_env)]`.
+        // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
         unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
         let args = matches(&Approve, &["-g", "qam-sle"]);
         let res = Approve.call(&mut session, &args).await;
-        // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+        // SAFETY: still inside that critical section.
         unsafe { std::env::remove_var("OSC_CONFIG") };
-        // The native backend refuses group-approve / fails to resolve creds → Err;
-        // the branch executed and the error mapping produced our message.
         if let Err(e) = res {
             assert!(matches!(e, CommandError::Other(m) if m.contains("osc approve failed")));
         }
@@ -518,11 +493,8 @@ mod tests {
         use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // SLFO report → Gitea path; the fake report's check_hash reports a match,
-        // so the guard passes and gitea.approve runs. The comments GET reports
-        // the acting user assigned to the group (and no decision yet), so the
-        // approval posts its LGTM and succeeds, exercising the gitea success
-        // branch + the success confirmation.
+        // check_hash matches, and the comments GET has the acting user assigned
+        // with no decision yet, so the LGTM posts and the Gitea path succeeds.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"/comments$"))
@@ -566,8 +538,7 @@ mod tests {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // The comments GET returns 500 so gitea.approve fails; the failure must
-        // be surfaced as a CommandError, not swallowed into an empty success.
+        // A 500 must surface as a CommandError, not an empty success.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(500))
@@ -588,9 +559,7 @@ mod tests {
         assert!(matches!(err, CommandError::Other(m) if m.contains("gitea approve failed")));
     }
 
-    // A report whose `check_hash` returns a fixed, injected verdict, so the
-    // hash-gate branches can be driven without a real Gitea PR head. Shared by
-    // the tests below.
+    // Drives the hash-gate branches without a real Gitea PR head.
     use async_trait::async_trait;
     use mtui_testreport::{TestReport, TestReportBase};
     use std::collections::HashMap;
@@ -654,7 +623,6 @@ mod tests {
 
     #[tokio::test]
     async fn gitea_hash_mismatch_aborts_headless() {
-        // A SLFO report routes to Gitea; check_hash is forced to Mismatch, and
         // is_repl is false (the default), so the guard refuses without ever
         // consulting a prompter.
         let (mut session, _buf) = fixed_hash_session(
@@ -672,9 +640,8 @@ mod tests {
 
     #[tokio::test]
     async fn gitea_hash_mismatch_declined_in_repl_never_approves() {
-        // A declining prompter must refuse, and gitea.approve must never be
-        // reached: the mock server has no mounts, so any request would 404 —
-        // an empty request log is positive proof it was never called.
+        // The mock has no mounts, so an empty request log is positive proof
+        // gitea.approve was never reached.
         let server = wiremock::MockServer::start().await;
         let (mut session, _buf) = fixed_hash_session(
             HashCheck::Mismatch {
@@ -751,8 +718,8 @@ mod tests {
 
     #[tokio::test]
     async fn gitea_hash_mismatch_in_repl_without_prompter_refuses() {
-        // is_repl is true but no prompter is installed (the `mtui-mcp`
-        // posture): the guard must still refuse, without ever calling Gitea.
+        // is_repl with no prompter (the `mtui-mcp` posture) must still refuse,
+        // without ever calling Gitea.
         let server = wiremock::MockServer::start().await;
         let (mut session, _buf) = fixed_hash_session(
             HashCheck::Mismatch {
@@ -774,9 +741,8 @@ mod tests {
 
     #[tokio::test]
     async fn gitea_hash_check_failure_refuses_in_repl() {
-        // `Failed` never produced a verdict, so there is nothing to confirm:
-        // it must refuse without consulting the prompter at all, even though
-        // this one would answer yes.
+        // `Failed` produced no verdict, so there is nothing to confirm: it must
+        // refuse without consulting this prompter, which would answer yes.
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let calls_clone = calls.clone();
         let prompter = mtui_hosts::Prompter::new(std::sync::Arc::new(move |_t: String| {

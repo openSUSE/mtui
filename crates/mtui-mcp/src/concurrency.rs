@@ -1,32 +1,27 @@
 //! Async concurrency primitives for the MCP session's per-template locking.
 //!
 //! A minimal async readers-writer lock used as the **registry gate**. Many
-//! *shared* holders (per-RRID commands, each mutating only its own template)
-//! may run at once, but a *shared* holder
-//! excludes every *exclusive* holder and vice-versa. Exclusive holders (registry
-//! mutators — `load_template` / `unload` — and unscoped fan-out) run one at a
-//! time with no shared holder present.
+//! *shared* holders (per-RRID commands, each mutating only its own template) may
+//! run at once, but shared and exclusive holders exclude one another: registry
+//! mutators — `load_template` / `unload` — and unscoped fan-out run alone.
 //!
 //! **Writer-preference is intentional**: while an exclusive waiter is pending,
-//! new shared acquisitions block, so a steady
-//! stream of per-RRID commands cannot starve a `load_template`. There is no
-//! fairness queue beyond that; the single-session workload (a handful of
-//! concurrent subagents) does not need one.
+//! new shared acquisitions block, so a steady stream of per-RRID commands cannot
+//! starve a `load_template`. There is no fairness queue beyond that; a handful of
+//! concurrent subagents does not need one.
 //!
 //! ## Locking depth
 //!
-//! This gate + the per-RRID lock map in [`crate::session`] land the lock
+//! This gate plus the per-RRID lock map in [`crate::session`] are the lock
 //! *discipline*: same-RRID and unscoped calls serialise, and registry mutators
-//! drain in-flight per-RRID work. Genuine wall-clock concurrency between
-//! *different-RRID* calls **has landed**: `mtui-core` report
-//! entries are per-entry `Arc<Mutex<..>>`, and a single-real-RRID call dispatches
-//! on a [`Session::fork_for_call`](mtui_core::Session::fork_for_call) (sharing
-//! the entry locks, with its own display) via
+//! drain in-flight per-RRID work. The wall-clock concurrency between
+//! *different-RRID* calls comes from `mtui-core`'s per-entry `Arc<Mutex<..>>`
+//! report entries: a single-real-RRID call dispatches on a
+//! [`Session::fork_for_call`](mtui_core::Session::fork_for_call) — sharing the
+//! entry locks, with its own display — via
 //! [`dispatch_command`](mtui_core::dispatch_command), so
-//! [`run_command`](crate::McpSession::run_command) no longer holds a session-wide
-//! mutex across dispatch. Two different-RRID calls now acquire distinct per-RRID
-//! locks *and* run in parallel; registry-structure mutators still take this gate
-//! *exclusive* against the canonical session.
+//! [`run_command`](crate::McpSession::run_command) holds no session-wide mutex
+//! across dispatch.
 
 use std::sync::{Arc, Mutex};
 
@@ -46,9 +41,9 @@ struct Inner {
 
 /// A minimal async writer-preference readers-writer gate.
 ///
-/// Cloneable: all clones share one underlying state, so an [`RwGate`] handed to
-/// several tasks gates them against one another. Acquisition returns an RAII
-/// guard whose `Drop` releases the hold and wakes waiters.
+/// Cloneable: all clones share one state, so an [`RwGate`] handed to several
+/// tasks gates them against one another. Acquisition returns an RAII guard whose
+/// `Drop` releases the hold and wakes waiters.
 #[derive(Clone, Default)]
 pub struct RwGate {
     inner: Arc<Mutex<Inner>>,
@@ -64,17 +59,14 @@ impl RwGate {
     }
 
     /// Acquires the gate in shared (reader) mode, waiting out any active or
-    /// pending exclusive holder (writer preference).
-    ///
-    /// The returned [`SharedGuard`] releases the hold on drop.
+    /// pending exclusive holder (writer preference). The returned
+    /// [`SharedGuard`] releases the hold on drop.
     pub(crate) async fn shared(&self) -> SharedGuard {
         loop {
-            // Register for a wakeup *before* checking so we cannot miss a release
-            // that happens between the check and the await. `enable()` arms the
-            // `Notified` future as a registered waiter without awaiting it, so a
-            // `notify_waiters()` fired after the condition check but before the
-            // `.await` below is still delivered. The std mutex is held only for
-            // the counter check/bump — never across an await.
+            // Register for a wakeup *before* checking, or a release landing
+            // between check and await is missed: `enable()` arms the `Notified`
+            // as a registered waiter without awaiting it. The std mutex is held
+            // only for the counter check/bump, never across an await.
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
@@ -99,13 +91,11 @@ impl RwGate {
     /// is bumped for the whole wait so pending shared acquisitions block behind
     /// this writer.
     ///
-    /// **Cancellation-safe:** the `writers_waiting` bump is owned by a
-    /// [`PendingWriter`] RAII guard, so dropping this future while parked (e.g. a
-    /// cancelled MCP request) restores the counter and wakes waiters rather than
-    /// leaking the bump and deadlocking readers. On success the
-    /// pending guard is disarmed and the count is handed to the [`ExclusiveGuard`],
-    /// which decrements it on its own drop — so success-path accounting is
-    /// unchanged.
+    /// **Cancellation-safe:** a [`PendingWriter`] RAII guard owns that bump, so
+    /// dropping this future while parked (a cancelled MCP request) restores the
+    /// counter and wakes waiters instead of leaking it and deadlocking readers.
+    /// On success the guard is disarmed and the count handed to the
+    /// [`ExclusiveGuard`], which decrements it on its own drop.
     pub(crate) async fn exclusive(&self) -> ExclusiveGuard {
         let mut pending = PendingWriter::new(Arc::clone(&self.inner), Arc::clone(&self.notify));
         loop {
@@ -116,8 +106,7 @@ impl RwGate {
                 let mut inner = self.inner.lock().expect("rw gate poisoned");
                 if inner.readers == 0 && !inner.writer_active {
                     inner.writer_active = true;
-                    // Hand the `writers_waiting` bump to the ExclusiveGuard; it
-                    // will decrement on its own drop.
+                    // The ExclusiveGuard inherits the `writers_waiting` bump.
                     pending.armed = false;
                     return ExclusiveGuard {
                         inner: Arc::clone(&self.inner),
@@ -134,9 +123,9 @@ impl RwGate {
 /// writer.
 ///
 /// Constructed the moment [`RwGate::exclusive`] starts waiting; if that future is
-/// dropped before it acquires (cancellation), `drop` restores the counter and
-/// wakes waiters. On success it is disarmed and the bump is inherited by the
-/// [`ExclusiveGuard`], so the counter is decremented exactly once either way.
+/// dropped before acquiring, `drop` restores the counter and wakes waiters. On
+/// success it is disarmed and the [`ExclusiveGuard`] inherits the bump, so the
+/// counter is decremented exactly once either way.
 struct PendingWriter {
     inner: Arc<Mutex<Inner>>,
     notify: Arc<Notify>,
@@ -209,8 +198,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    /// Many shared holders coexist: two `shared()` acquisitions are both live at
-    /// once (readers reaches 2).
+    /// Two `shared()` acquisitions are live at once (readers reaches 2).
     #[tokio::test]
     async fn shared_holders_coexist() {
         let gate = RwGate::new();
@@ -224,8 +212,7 @@ mod tests {
         drop(b);
     }
 
-    /// An exclusive holder excludes shared holders: while exclusive is held, a
-    /// `shared()` call does not complete; it proceeds only after release.
+    /// While an exclusive hold is live a `shared()` call cannot complete.
     #[tokio::test]
     async fn exclusive_excludes_shared() {
         let gate = RwGate::new();
@@ -302,9 +289,8 @@ mod tests {
         assert_eq!(shared_done.load(Ordering::SeqCst), 1, "second reader ran");
     }
 
-    /// Cancelling a *waiting* writer (its `exclusive()` future is dropped before
-    /// it ever acquires) must not leak `writers_waiting`, or new shared
-    /// acquisitions would be blocked forever.
+    /// Cancelling a *waiting* writer must not leak `writers_waiting`, or new
+    /// shared acquisitions would block forever.
     #[tokio::test]
     async fn cancelled_writer_does_not_block_readers() {
         let gate = RwGate::new();
@@ -322,8 +308,7 @@ mod tests {
         let _ = writer.await;
         tokio::time::sleep(Duration::from_millis(20)).await;
 
-        // Release the reader and prove a fresh shared acquisition completes
-        // promptly rather than deadlocking behind the leaked writer count.
+        // A fresh shared acquisition must not deadlock behind a leaked count.
         drop(held);
         let g = gate.clone();
         tokio::time::timeout(Duration::from_millis(500), async move {
@@ -363,8 +348,8 @@ mod tests {
         .expect("a fresh writer must acquire after a cancelled writer");
     }
 
-    /// Cancelling a *waiting* reader must not leak `readers`. Documents the
-    /// already-correct reader path (the count is only bumped on success).
+    /// Cancelling a *waiting* reader must not leak `readers`; the count is only
+    /// bumped on success.
     #[tokio::test]
     async fn cancelled_shared_does_not_leak_readers() {
         let gate = RwGate::new();

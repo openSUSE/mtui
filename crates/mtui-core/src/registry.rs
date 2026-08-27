@@ -1,15 +1,14 @@
 //! The explicit command registry.
 //!
-//! Every command is wired through an **explicit** [`register_all`] composition
-//! point (per `AGENTS.md`). The REPL dispatch, tab-completion, and the MCP
-//! tool synthesiser all iterate this one [`Registry`] — it is the single
-//! source of the command surface.
+//! Every command is wired through the **explicit** [`register_all`] composition
+//! point. The REPL dispatch, tab-completion and the MCP tool synthesiser all
+//! iterate this one [`Registry`] — it is the single source of the command
+//! surface.
 //!
 //! A command answers to its [`name`](crate::Command::name) and any
-//! [`aliases`](crate::Command::aliases); every one of those strings maps to the
-//! same command instance. Two commands claiming the same name (or alias) is a
-//! programming error: [`Registry::register`] **panics** when it is wired, so
-//! the composition root ([`register_all`]) fails fast at boot.
+//! [`aliases`](crate::Command::aliases), each mapping to the same instance. Two
+//! commands claiming one name (or alias) is a programming error:
+//! [`Registry::register`] **panics**, so the composition root fails fast at boot.
 
 use std::sync::Arc;
 
@@ -17,21 +16,16 @@ use indexmap::IndexMap;
 
 use crate::command::Command;
 
-/// A name→command lookup that preserves registration order.
-///
-/// Both the canonical name and every alias key the same [`Arc<dyn Command>`], so
-/// lookup is uniform. Iteration order ([`names`](Registry::names)) follows
-/// registration order (canonical names only), giving the REPL and MCP a stable,
-/// deterministic command listing.
+/// A name→command lookup that preserves registration order, giving the REPL and
+/// MCP a deterministic command listing.
 #[derive(Default)]
 pub struct Registry {
-    /// name-or-alias → command. Insertion-ordered so the first-inserted keys
-    /// (canonical names, since a command registers its name before its aliases)
-    /// drive a deterministic listing.
+    /// name-or-alias → command; both key the same [`Arc<dyn Command>`], so
+    /// lookup is uniform. Insertion-ordered, and a command registers its name
+    /// before its aliases.
     by_key: IndexMap<&'static str, Arc<dyn Command>>,
-    /// Canonical names in registration order (the subset of `by_key` keys that
-    /// are a command's own `name()`), so [`names`](Registry::names) never lists
-    /// aliases.
+    /// Canonical names in registration order, so [`names`](Registry::names)
+    /// never lists aliases.
     canonical: Vec<&'static str>,
 }
 
@@ -46,10 +40,9 @@ impl Registry {
     ///
     /// # Panics
     ///
-    /// Panics if the command's name or any alias is already claimed by another
-    /// command: a duplicate command string is a static programming error, so
-    /// the composition root fails fast at boot rather than silently shadowing
-    /// a command.
+    /// Panics if the name or any alias is already claimed: a duplicate is a
+    /// static programming error, and failing fast at boot beats silently
+    /// shadowing a command.
     pub fn register(&mut self, command: Arc<dyn Command>) {
         let name = command.name();
         assert!(
@@ -84,14 +77,10 @@ impl Registry {
         self.canonical.iter().copied()
     }
 
-    /// Every command key — canonical names **and** aliases — in insertion
-    /// order (a command's own name precedes its aliases).
+    /// Every command key — canonical names **and** aliases — in insertion order.
     ///
-    /// Use this for alias-aware first-token completion; contrast with
-    /// [`names`], which is canonical-only and drives the REPL/MCP command
-    /// listing.
-    ///
-    /// [`names`]: Registry::names
+    /// For alias-aware first-token completion; [`names`](Registry::names) is the
+    /// canonical-only listing.
     pub fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.by_key.keys().copied()
     }
@@ -99,22 +88,17 @@ impl Registry {
 
 /// Commands that must not be synthesised into MCP tools.
 ///
-/// The MCP deny-list (`AGENTS.md`): these commands drive
-/// the interactive shell or require a controlling terminal, or are replaced by
-/// richer hand-written MCP tools (`edit` → the `testreport_*` tools; `get`/`put`
-/// → the in-band transfer tools, #434 — their synthesized forms exchange
-/// server-local paths a remote `--transport http` client cannot reach). (Local
-/// process execution used to be a further category; its `lrun` command was
-/// removed outright rather than merely denied.) The `mtui-mcp` tool
-/// synthesiser skips every registry command whose name or alias appears here,
-/// and warns at boot if a deny-list entry no longer resolves (so a
-/// renamed/removed command does not drift silently). Kept here, beside
-/// [`register_all`], so the deny-list and the command surface it filters live in
-/// one place.
+/// They either drive the interactive shell / need a controlling terminal, or are
+/// replaced by richer hand-written tools: `edit` → the `testreport_*` tools, and
+/// `get`/`put` → the in-band transfer tools (#434), because their synthesised
+/// forms exchange server-local paths a remote `--transport http` client cannot
+/// reach. Local process execution is not a category here: `lrun` was removed
+/// outright rather than denied.
 ///
-/// Every name here currently resolves to a registered command or alias. The
-/// `mcp_denylist_is_consistent` test pins the exact expected set, so renaming or
-/// removing one of them is caught rather than drifting silently.
+/// The synthesiser skips every registry command whose name or alias appears
+/// here and warns at boot if an entry no longer resolves; the
+/// `mcp_denylist_is_consistent` test pins the exact expected set. Kept beside
+/// [`register_all`] so the list and the surface it filters live in one place.
 pub const MCP_DENYLIST: &[&str] = &[
     "quit", "exit", "EOF",    // session exit (Wave 2)
     "switch", // active-template pointer, REPL-only (Wave 2)
@@ -137,7 +121,7 @@ pub fn register_all() -> Registry {
     use crate::commands;
 
     let mut registry = Registry::new();
-    // Wave 1 — core workflow (gates the phase).
+    // Wave 1 — core workflow.
     registry.register(Arc::new(commands::Run));
     registry.register(Arc::new(commands::Update));
     registry.register(Arc::new(commands::Install));
@@ -196,7 +180,6 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::Approve));
     registry.register(Arc::new(commands::Regenerate));
     registry.register(Arc::new(commands::RequestReview));
-    // Deferred commands whose machinery has since landed.
     registry.register(Arc::new(commands::Export));
     registry.register(Arc::new(commands::ListRefhosts));
     registry.register(Arc::new(commands::LoadTemplate));
@@ -251,7 +234,6 @@ mod tests {
     #[test]
     fn register_all_wires_wave1_commands() {
         let r = register_all();
-        // Wave 1 — core workflow.
         for name in [
             "run",
             "update",
@@ -270,7 +252,6 @@ mod tests {
     #[test]
     fn register_all_wires_wave2_commands() {
         let r = register_all();
-        // Wave 2 — host & session management.
         for name in [
             "add_host",
             "remove_host",
@@ -289,7 +270,6 @@ mod tests {
         ] {
             assert!(r.contains(name), "expected {name} to be registered");
         }
-        // `quit` also answers to its REPL aliases.
         assert!(r.contains("exit"));
         assert!(r.contains("EOF"));
     }
@@ -297,7 +277,6 @@ mod tests {
     #[test]
     fn register_all_wires_wave3_commands() {
         let r = register_all();
-        // Wave 3 — testreport lifecycle, metadata & host-info.
         for name in [
             "checkout",
             "commit",
@@ -325,7 +304,6 @@ mod tests {
     #[test]
     fn register_all_wires_wave4_commands() {
         let r = register_all();
-        // Wave 4 — backend APIs, openQA/QEM queue & workflow.
         for name in [
             "checkers",
             "updates",
@@ -346,12 +324,9 @@ mod tests {
 
     #[test]
     fn register_all_command_count() {
-        // 9 Wave 1 (10 originally; `lrun` was later removed outright) + 14
-        // Wave 2 + 17 Wave 3 + 12 Wave 4 (incl. request_review) + 4
-        // follow-up commands (export, list_refhosts, load_template,
-        // list_locks) + 2 openQA-holder follow-ups (reload_openqa,
-        // set_workflow) + 3 REPL-only additions (help, edit, terms) = 61
-        // canonical commands.
+        // 9 Wave 1 + 14 Wave 2 + 17 Wave 3 + 12 Wave 4 + 4 follow-ups
+        // (export, list_refhosts, load_template, list_locks) + reload_openqa +
+        // set_workflow + 3 REPL-only (help, edit, terms) = 61.
         assert_eq!(register_all().names().count(), 61);
     }
 
@@ -365,14 +340,12 @@ mod tests {
 
     #[test]
     fn load_template_is_not_mcp_denylisted() {
-        // load_template is a valid headless tool (it names its own RRID), so it
-        // must NOT be deny-listed — it should synthesise an MCP tool.
+        // A valid headless tool: it names its own RRID.
         assert!(!MCP_DENYLIST.contains(&"load_template"));
     }
 
     #[test]
     fn mcp_denylist_covers_wave2_repl_only_commands() {
-        // The REPL-only Wave 2 commands must be denied MCP tool synthesis.
         for name in ["quit", "exit", "EOF", "switch", "shell"] {
             assert!(
                 MCP_DENYLIST.contains(&name),
@@ -383,10 +356,9 @@ mod tests {
 
     #[test]
     fn lrun_is_fully_removed() {
-        // `lrun` (arbitrary local execution) was removed as a design choice —
-        // not merely MCP-denied. It must be absent from the registry (so
-        // neither the REPL nor MCP can reach it) and absent from the deny-list
-        // (which would otherwise imply it still exists somewhere).
+        // Arbitrary local execution is removed by design, not merely denied:
+        // absent from the registry, and absent from the deny-list too, which
+        // would otherwise imply it still exists somewhere.
         assert!(
             !register_all().contains("lrun"),
             "lrun must not be a registered command"
@@ -399,19 +371,16 @@ mod tests {
 
     #[test]
     fn mcp_denylist_is_consistent() {
-        // This loop checks only that nothing in the deny-list is duplicated;
-        // that every entry actually resolves to a registered command or alias
-        // is asserted below, against the full expected list.
+        // The loop only rules out duplicates; that every entry resolves is
+        // asserted below against the full expected list.
         let r = register_all();
         let mut seen = std::collections::HashSet::new();
         for name in MCP_DENYLIST {
             assert!(seen.insert(*name), "duplicate deny-list entry: {name}");
             let _reserved_or_registered = r.contains(name);
         }
-        // Sanity: the currently-registered deny-listed commands are the Wave 2
-        // REPL-only set (quit+aliases, switch, shell), the REPL-only
-        // additions `help`, `edit`, and `terms`, and the path-based transfer
-        // pair `get`/`put`, re-served as hand-written in-band MCP tools (#434).
+        // The REPL-only set (quit+aliases, switch, shell, help, edit, terms)
+        // plus the transfer pair re-served as in-band MCP tools (#434).
         let registered_denied: Vec<&str> = MCP_DENYLIST
             .iter()
             .copied()
@@ -432,7 +401,6 @@ mod tests {
         assert!(r.contains("run"));
         assert!(r.contains("r"));
         assert!(r.contains("exec"));
-        // aliases don't inflate the canonical count.
         assert_eq!(r.names().count(), 1);
         let by_name = r.get("run").unwrap();
         let by_alias = r.get("r").unwrap();
@@ -455,8 +423,6 @@ mod tests {
         r.register(stub("run", &["r"]));
         r.register(stub("list", &[]));
         r.register(stub("add", &["a"]));
-        // Each command's canonical name precedes its own aliases; commands
-        // stay in registration order.
         let keys: Vec<&str> = r.keys().collect();
         assert_eq!(keys, vec!["run", "r", "list", "add", "a"]);
     }

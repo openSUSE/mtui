@@ -162,9 +162,8 @@ impl AutoExport {
         template.splice(start..end, block);
     }
 
-    /// Downloads each passing job's install log and returns their filenames.
-    ///
-    /// Returns the written `<distri>_<version>_<arch>.log` filenames.
+    /// Downloads each passing job's install log, returning the written
+    /// `<distri>_<version>_<arch>.log` filenames.
     async fn get_logs(
         &self,
         fetcher: &dyn BytesFetcher,
@@ -183,9 +182,8 @@ impl AutoExport {
             return Vec::new();
         }
 
-        // Fan the downloads out concurrently (order-preserving), then write
-        // serially in input order — the write step touches the filesystem and
-        // may prompt on overwrite, so it must not run in parallel.
+        // Download concurrently (order-preserving), then write serially: the
+        // write may prompt on overwrite, so it must not run in parallel.
         let downloads = results.iter().map(|url| self.installog_lines(fetcher, url));
         let all_lines = futures::future::join_all(downloads).await;
 
@@ -221,9 +219,7 @@ impl AutoExport {
         }
     }
 
-    /// Runs the exporter.
-    ///
-    /// Returns the finished template lines.
+    /// Runs the exporter, returning the finished template lines.
     pub async fn run(
         &mut self,
         fetcher: &dyn BytesFetcher,
@@ -546,9 +542,8 @@ mod tests {
             Some(vec![urls("passed")]),
             vec!["Results from openQA jobs\n".to_string()],
         );
-        // A realistic template: the `source code change review:` anchor is not
-        // the first line (a real template always has a header above it), so
-        // the `inject_openqa` insertion point (anchor - 1) is in range.
+        // Realistic template: a real one always has a header above the
+        // `source code change review:` anchor, so `anchor - 1` is in range.
         let ctx = ctx_in(
             dir.path(),
             &[

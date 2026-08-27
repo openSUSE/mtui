@@ -1,13 +1,12 @@
 //! Backend-API commands (`assign`, `unassign`, `reject`, `comment`).
 //!
-//! Each command dispatches to the OSC or Gitea backend depending on the
-//! loaded report's own [`UpdateSource`] — resolved
-//! at load from the template's `gitea_commit_hash`, not inferred from the
-//! RRID's shape (issue #433: the SL-Micro 6.0/6.1 cutover shares the
-//! `SLFO:1.1` id space between both workflows). A Product Increment's
-//! reference-host lock is bracketed around the loaded report, not this
-//! module's review actions — see `Session::load_update_reported` (seeds
-//! `lock_comment`) and `Target::close` (releases on unload/quit). `approve`
+//! Each command dispatches to the OSC or Gitea backend by the loaded report's
+//! own [`UpdateSource`] — resolved at load from the template's
+//! `gitea_commit_hash`, never inferred from the RRID's shape (#433: the
+//! SL-Micro 6.0/6.1 cutover shares the `SLFO:1.1` id space between both
+//! workflows). A Product Increment's reference-host lock is bracketed around the
+//! loaded report, not these review actions: `Session::load_update_reported`
+//! seeds `lock_comment`, `Target::close` releases on unload/quit. `approve`
 //! lives in [`approve`](super::approve) and reuses the dispatch helpers here.
 
 use async_trait::async_trait;
@@ -22,8 +21,6 @@ use crate::session::Session;
 
 /// Whether the loaded report is handled by the Gitea backend.
 ///
-/// Reads the active report's [`UpdateSource`]
-/// (resolved once at load — see [`UpdateSource`] for the precedence rule);
 /// `Git` routes to Gitea, `Obs` to OSC. A Product Increment carries no Gitea
 /// metadata and so always resolves `Obs`, whatever its RRID looks like.
 pub(crate) fn is_gitea_workflow(session: &Session) -> bool {
@@ -45,11 +42,9 @@ fn user_override(args: &ArgMatches) -> Option<String> {
 }
 
 /// Builds a Gitea client for the loaded report, mapping the missing-PR-URL and
-/// build errors onto [`CommandError`].
-///
-/// Reuses the session-scoped [`HttpClient`](mtui_datasources::HttpClient)
-/// via [`Gitea::with_client`], while preserving
-/// [`Gitea::new`]'s empty-token guard.
+/// build errors onto [`CommandError`]. Reuses the session-scoped
+/// [`HttpClient`](mtui_datasources::HttpClient) via [`Gitea::with_client`],
+/// while preserving [`Gitea::new`]'s empty-token guard.
 pub(crate) fn gitea_client(session: &Session) -> Result<Gitea, CommandError> {
     let apiurl = session
         .metadata()
@@ -77,8 +72,7 @@ pub(crate) fn gitea_client(session: &Session) -> Result<Gitea, CommandError> {
 }
 
 /// Builds a TeReGen client for the loaded report, reusing the session-scoped
-/// [`HttpClient`](mtui_datasources::HttpClient)
-/// via [`TeReGen::with_client`].
+/// [`HttpClient`](mtui_datasources::HttpClient) via [`TeReGen::with_client`].
 ///
 /// # Errors
 ///
@@ -90,19 +84,13 @@ pub(crate) fn teregen_client(session: &Session) -> Result<TeReGen, CommandError>
     Ok(TeReGen::with_client(http, &session.config.teregen_api))
 }
 
-/// Prints best-effort TeReGen context for the loaded update.
-///
-/// Sourced from a single `GET /reports/{id}` fetch: the live priority/deadline
-/// and, when the report already carries assignment state, who currently holds
-/// or has decided each review group.
-///
-/// Context only, never a gate. It runs **after** the assign has already
-/// succeeded, so it is fully infallible: silent when TeReGen has nothing (or is
-/// unreachable), and malformed payloads are filtered rather than raised — a
-/// panic here would dress a successful action up as an error. An empty
-/// `assignees` map is not authoritative (it is also what an upstream lookup
-/// failure yields, and the server caches this endpoint for ~300s), so its
-/// absence prints nothing.
+/// Prints best-effort TeReGen context for the loaded update: live
+/// priority/deadline from one `GET /reports/{id}`, plus who holds or has decided
+/// each review group. Context only, never a gate, and infallible because it runs
+/// *after* the assign succeeded — an error here would dress a successful action
+/// up as a failure, so malformed payloads are filtered rather than raised. An
+/// empty `assignees` map is not authoritative (a lookup failure yields the same,
+/// and the endpoint is cached ~300s), so it prints nothing.
 async fn show_priority_deadline(session: &mut Session, rrid: &mtui_types::RequestReviewID) {
     let teregen = match teregen_client(session) {
         Ok(t) => t,
@@ -128,9 +116,8 @@ async fn show_priority_deadline(session: &mut Session, rrid: &mtui_types::Reques
             .println(&format!("TeReGen: priority {p}, deadline {d}"));
     }
 
-    // Best-effort assignment context: warn when someone already holds (or has
-    // decided) a review group. Non-list group values are skipped, non-object
-    // entries filtered, and a null/missing user or state renders as '?'.
+    // Non-list group values are skipped, non-object entries filtered, and a
+    // null/missing user or state renders as '?'.
     let Some(assignees) = info.get("assignees").and_then(serde_json::Value::as_object) else {
         return;
     };
@@ -372,8 +359,7 @@ impl Command for Reject {
 
 /// Adds a comment to a review request.
 ///
-/// The comment is supplied via `-m/--message` rather than an interactive
-/// prompt, so the command works headlessly (MCP) as well as in the REPL.
+/// `-m/--message` rather than an interactive prompt, so it works headlessly.
 pub struct Comment;
 
 #[async_trait]
@@ -459,9 +445,8 @@ mod tests {
     }
 
     /// The dispatch reads the report's own `UpdateSource`, not the RRID's
-    /// shape: a `Git`-resolved report routes to Gitea regardless of its
-    /// maintenance id (including the classic `1.1`, the dual-served case),
-    /// and an `Obs`-resolved report routes to OSC even at `1.2`.
+    /// shape: `Git` routes to Gitea even at the dual-served `1.1`, and `Obs`
+    /// routes to OSC even at `1.2`.
     #[test]
     fn is_gitea_workflow_reflects_the_reports_update_source() {
         let (mut session, _buf) = session_with_hosts("SUSE:SLFO:1.1:5", &["h1"], "ok");
@@ -477,9 +462,8 @@ mod tests {
     }
 
     /// A Product Increment carries no Gitea metadata, so it always resolves
-    /// `Obs` and routes to OSC — a live distinction from `qam`'s precondition
-    /// guard, which groups PI *with* SLFO. Merging the two would route PI
-    /// through the wrong backend.
+    /// `Obs`. Unlike `qam`'s precondition guard, which groups PI *with* SLFO —
+    /// merging the two would route PI through the wrong backend.
     #[test]
     fn is_gitea_workflow_excludes_pi() {
         for id in ["SUSE:PI:1.1:5", "SUSE:PI:1.2:5", "SUSE:PI:42:99"] {
@@ -531,29 +515,24 @@ mod tests {
         assert!(matches!(err, CommandError::Other(m) if m.contains("comment is required")));
     }
 
-    // The PI reference-host lock bracket moved off `assign`/`unassign`/`reject`/
-    // `approve` onto report load — see
-    // `session::tests::load_update_reported_seeds_pi_lock_comment_when_enabled`
-    // and its siblings, which pin the same three conditions (PI+enabled,
-    // non-PI, disabled) at the new seam.
+    // The PI reference-host lock bracket lives on report load, not on these
+    // commands: `session::tests::load_update_reported_seeds_pi_lock_comment_when_enabled`
+    // and its siblings pin it at that seam.
 
     #[tokio::test]
     #[serial_test::serial(osc_config_env)]
-    // `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
-    // `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+    // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes the
+    // mutation of the process-global `$OSC_CONFIG` exclusive.
     #[allow(unsafe_code)]
     async fn osc_dispatch_maintenance_assign_runs_backend() {
-        // A Maintenance RRID routes to the native OBS backend. Point $OSC_CONFIG
-        // at an oscrc that does not exist so credential resolution fails fast
-        // (offline, no network), surfacing the OSC-branch error and exercising
-        // that dispatch. `$OSC_CONFIG` is process-global, hence `#[serial]`.
+        // A missing oscrc makes credential resolution fail fast offline,
+        // surfacing the OSC-branch error and so proving the dispatch ran.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        // SAFETY: serialised via `#[serial(osc_config_env)]` so no other test
-        // reads/writes this env var concurrently.
+        // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
         unsafe { std::env::set_var("OSC_CONFIG", "/nonexistent/oscrc-for-tests") };
         let args = matches(&Assign, &["-g", "qam-sle"]);
         let res = Assign.call(&mut session, &args).await;
-        // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+        // SAFETY: still inside that critical section.
         unsafe { std::env::remove_var("OSC_CONFIG") };
         if let Err(e) = res {
             assert!(matches!(e, CommandError::Other(m) if m.contains("osc assign failed")));
@@ -565,9 +544,8 @@ mod tests {
         use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // A SLFO report routes to Gitea; the comments GET returns an empty
-        // history (unassigned, no decision) so `assign --force` posts the marker
-        // and succeeds. The PR GET is the catch-all fallback.
+        // An empty comment history (unassigned, no decision) lets the marker
+        // post succeed; the bare PR GET is the catch-all fallback.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"/comments$"))
@@ -593,8 +571,7 @@ mod tests {
         session.config.gitea_url = server.uri();
         session.config.gitea_token = "tok".to_owned();
 
-        // Force assign skips the open-group guard; the mock accepts the marker
-        // post, so the Gitea call succeeds and the command confirms.
+        // Force assign skips the open-group guard.
         let args = matches(&Assign, &["--force"]);
         Assign.call(&mut session, &args).await.unwrap();
         assert!(
@@ -609,9 +586,8 @@ mod tests {
         use wiremock::matchers::method;
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // A SLFO report routes to Gitea; the PR API returns 500 so the Gitea
-        // call fails. The failure must be surfaced as a CommandError, not
-        // swallowed into an Ok/empty success.
+        // A 500 from the PR API must surface as a CommandError, not be
+        // swallowed into an empty success.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(500))
@@ -638,9 +614,8 @@ mod tests {
         use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // One server backs both the Gitea PR API and the TeReGen report API.
-        // The TeReGen `GET /reports/{rrid}` mock is registered first and matched
-        // by path, so it wins over the catch-all Gitea GET.
+        // One server backs both APIs; the path-matched TeReGen mock is
+        // registered first so it wins over the catch-all Gitea GET.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"/reports/.+"))
@@ -691,8 +666,7 @@ mod tests {
         use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        // TeReGen returns a report object with neither priority nor deadline →
-        // the assign must print nothing TeReGen-related.
+        // Neither priority nor deadline: nothing TeReGen-related may print.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path_regex(r"/reports/.+"))
@@ -734,10 +708,9 @@ mod tests {
         );
     }
 
-    /// Runs `assign` against a mock server whose `GET /reports/{rrid}` returns
-    /// `report_body`, with the Gitea PR API stubbed to succeed, and returns the
-    /// display buffer contents. Mirrors the wiremock harness of the
-    /// priority/deadline tests above.
+    /// Runs `assign` against a mock whose `GET /reports/{rrid}` returns
+    /// `report_body` and whose Gitea PR API succeeds, returning the display
+    /// buffer contents.
     async fn assign_with_report(report_body: serde_json::Value) -> String {
         use wiremock::matchers::{method, path_regex};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -780,8 +753,8 @@ mod tests {
 
     #[tokio::test]
     async fn assign_shows_existing_assignment_holders() {
-        // Current holders (and past decisions) are surfaced; a group may carry
-        // both a decision entry and a live assignment (decider != tester).
+        // A group may carry both a decision and a live assignment
+        // (decider != tester).
         let out = assign_with_report(serde_json::json!({
             "priority": 700,
             "deadline": "2026-07-09",
@@ -819,8 +792,7 @@ mod tests {
     #[tokio::test]
     async fn assign_malformed_assignees_never_breaks_the_flow() {
         // Malformed payloads are filtered, never raised — this prints after the
-        // assign already succeeded. Non-list group values are skipped, non-dict
-        // entries filtered, and an explicit null user/state renders as '?'.
+        // assign already succeeded.
         let out = assign_with_report(serde_json::json!({
             "assignees": {
                 "a": null,

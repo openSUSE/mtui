@@ -11,12 +11,11 @@ use crate::session::Session;
 /// Prints the installed products on the reference hosts.
 ///
 /// Renders each selected host's parsed [`System`](mtui_types::system::System)
-/// through the display's `list_products` sink (base product + addons).
-/// Reflects whatever was last parsed; `reload_products` refreshes it.
+/// through the display's `list_products` sink. Reflects whatever was last
+/// parsed; `reload_products` refreshes it.
 ///
-/// A host-phase command that takes only `-t/--target`, so it is
-/// [`Scope::Active`]: it acts on the active template's host set, not once per
-/// loaded template.
+/// `-t/--target`-only, hence [`Scope::Active`]: it acts on the active template's
+/// host set, not once per loaded template.
 pub struct ListProducts;
 
 #[async_trait]
@@ -47,8 +46,8 @@ impl Command for ListProducts {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // Snapshot (hostname, system) first so the report borrow does not overlap
-        // the display's mutable borrow.
+        // Snapshotted so the report borrow does not overlap the display's
+        // mutable borrow.
         let hosts = select_names(session.targets(), args, true)
             .map_err(|e| CommandError::Other(e.to_string()))?;
         let rows: Vec<(String, mtui_types::system::System)> = hosts
@@ -79,8 +78,7 @@ mod tests {
     #[test]
     fn name_and_active_scope() {
         assert_eq!(ListProducts.name(), "list_products");
-        // Upstream `ListProducts` is `-t`-only (no `_add_template_arg`), so it
-        // stays active rather than fanning out per loaded template.
+        // `-t`-only, so it stays active rather than fanning out per template.
         assert_eq!(ListProducts.scope(), Scope::Active);
     }
 
@@ -90,7 +88,6 @@ mod tests {
         let args = matches(&ListProducts, &["-t", "h1"]);
         ListProducts.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        // The label + the host name are rendered.
         assert!(out.contains("Reference host"), "{out}");
         assert!(out.contains("h1"), "{out}");
     }

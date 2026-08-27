@@ -6,10 +6,9 @@
 //! behind the `mcp` feature so the default build (and the `mtui` REPL, which
 //! never depends on this crate's server) does not pull in the rmcp SDK.
 
-// `args` is ungated: it holds only the process-arg parser (`McpArgs`/`Transport`)
-// and depends on `clap`/`mtui-config`/`mtui-core::ColorArg` — no rmcp/server code.
-// Keeping it out of the `mcp` gate lets the `xtask` completion/man generator reach
-// `McpArgs::command()` without dragging the MCP server graph into that build.
+// `args` is ungated — it is only the process-arg parser, no rmcp/server code — so
+// the `xtask` completion/man generator can reach `McpArgs::command()` without
+// dragging the MCP server graph into that build.
 pub mod args;
 #[cfg(feature = "mcp")]
 pub(crate) mod argv;

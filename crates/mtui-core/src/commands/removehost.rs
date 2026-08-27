@@ -12,20 +12,16 @@ use crate::session::Session;
 
 /// Disconnects from a host and removes it from the list.
 ///
-/// The selected hosts are moved into their own group and
+/// The selected hosts move into their own group and are
 /// [`close`](mtui_hosts::HostsGroup::close)d there (dropping the remote
-/// operation and pool-claim lock files), concurrently and under the shared
-/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) teardown budget,
-/// so a dead peer costs one budget for the whole call rather than one per
-/// host. Each host's in-process arbiter claim is then released via
-/// [`TestReport::release_pool_claim`](mtui_testreport::TestReport::release_pool_claim)
-/// (without which a scarce-pool host stays marked busy in the process-global
-/// [`HostArbiter`](mtui_hosts::HostArbiter) for the rest of a long-lived MCP
-/// session) — outside the budget, so an abandoned teardown never skips it. A
-/// host whose close the budget cut short is named on the display (`still
-/// disconnecting from {host} after {secs} seconds; abandoning`) — only that
-/// host, not every host in the call. With no `-t` argument every host is
-/// removed.
+/// operation and pool-claim lock files) concurrently, under one shared
+/// [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) budget for the
+/// whole call. Each in-process arbiter claim is then released via
+/// [`TestReport::release_pool_claim`](mtui_testreport::TestReport::release_pool_claim),
+/// *outside* the budget so an abandoned teardown never skips it — otherwise a
+/// scarce pool host stays busy in the process-global
+/// [`HostArbiter`](mtui_hosts::HostArbiter) for the life of an MCP session. Only
+/// hosts the budget cut short are named. With no `-t` every host is removed.
 pub struct RemoveHost;
 
 #[async_trait]
@@ -59,21 +55,17 @@ impl Command for RemoveHost {
         // enabled=false: remove disabled hosts too.
         let hosts = select_names(session.targets_mut(), args, false)
             .map_err(|e| CommandError::Other(e.to_string()))?;
-        // Take the doomed hosts out into their own group and close them there:
-        // dropping a target alone never runs `close`, and the group fan-out
-        // tears them all down concurrently. `enabled=false` since disabled hosts
-        // must be removed too. Unreachable — `select_names` already validated
-        // membership. On `Err` the group stays empty, exactly as
-        // `Session::split_targets` documents.
+        // Dropping a target alone never runs `close`, so the doomed hosts need
+        // their own group to be torn down in — concurrently. The `Err` is
+        // unreachable, `select_names` having validated membership already.
         let (mut doomed, rest) = session
             .split_targets(Some(&hosts), false)
             .map_err(|e| CommandError::Other(e.to_string()))?;
 
-        // Best-effort teardown; a failed shutdown is irrelevant since the target
-        // is being dropped anyway, so the budget only bounds how long a dead peer
-        // can hold the session.
+        // Best-effort: the target is being dropped anyway, so the budget only
+        // bounds how long a dead peer can hold the session.
         let budget = host_op_budget();
-        // Caller-owned, so the hosts that finished before the budget expired are
+        // Caller-owned, so hosts that finished before the budget expired are
         // still attributed once the fan-out future is dropped.
         let collected = std::sync::Mutex::new(BTreeMap::new());
         let timed_out = tokio::time::timeout(budget, doomed.close_collecting(None, &collected))
@@ -85,8 +77,8 @@ impl Command for RemoveHost {
                 tracing::warn!("failed to disconnect from {host}: {e}");
             }
         }
-        // Only the hosts the budget actually cut short — not every host in the
-        // call, which would blame the ones whose close already completed.
+        // Only the cut-short hosts; blaming the whole call would name hosts
+        // whose close already completed.
         if timed_out {
             let secs = budget.as_secs();
             for host in hosts.iter().filter(|h| !outcomes.contains_key(*h)) {
@@ -98,9 +90,8 @@ impl Command for RemoveHost {
         drop(doomed);
         *session.targets_mut() = rest;
 
-        // Outside the budget: the arbiter claim is in-process, so it must be
-        // released even when the remote teardown was abandoned. Also prunes slot
-        // candidates; no-op when unpooled.
+        // Outside the budget: an in-process claim must be released even when the
+        // remote teardown was abandoned. Also prunes slot candidates.
         for name in &hosts {
             session.metadata_mut().release_pool_claim(name);
         }
@@ -170,13 +161,12 @@ mod tests {
     async fn removed_pool_host_is_reacquirable_in_process() {
         use mtui_hosts::{HostArbiter, Owner};
 
-        // A test-local arbiter leaked to the `&'static` the report field needs,
-        // without touching the process-global singleton.
+        // Leaked to the `&'static` the report field needs, without touching the
+        // process-global singleton.
         let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
 
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
-        // Wire pool state onto the active report: claim h1 for this owner.
         {
             let base = session.metadata_mut().base_mut();
             base.arbiter = Some(arbiter);
@@ -193,18 +183,15 @@ mod tests {
         let args = matches(&RemoveHost, &["-t", "h1"]);
         RemoveHost.call(&mut session, &args).await.unwrap();
 
-        // Host is gone from the group and its in-process claim is released, so a
-        // sibling session can re-acquire the freed pool host.
+        // A sibling session can re-acquire the freed pool host.
         assert!(!session.targets().contains("h1"));
         assert!(arbiter.try_acquire("h1", &other));
-        // The report's claim bookkeeping no longer tracks it.
         assert!(!session.metadata().base().pool_claims.contains("h1"));
     }
 
     #[tokio::test]
     async fn remove_host_is_bounded_when_a_close_wedges() {
-        // A wedged teardown must be abandoned on the (shrunk) budget — and the
-        // healthy sibling must still really be torn down, which a bound that
+        // The healthy sibling must still really be torn down, which a bound that
         // skipped the work would break.
         let gate = Arc::new(tokio::sync::Notify::new());
         let good = MockConnection::new("good");
@@ -229,10 +216,8 @@ mod tests {
         assert!(session.targets().is_empty());
         assert!(good.is_closed(), "the healthy host was really torn down");
         assert!(buf.contents().contains("Removed"), "{}", buf.contents());
-        // Only the cut-short host is named as abandoned — `good`'s close
-        // really landed in the outcomes map inside the 50ms budget, so a
-        // regression that warns for every host in the call (not just the ones
-        // the timeout actually cut short) must fail here.
+        // `good`'s close really lands in the outcomes map inside the 50ms
+        // budget, so warning for every host in the call fails here.
         assert!(
             buf.contents().contains("still disconnecting from dead"),
             "{}",
@@ -244,16 +229,14 @@ mod tests {
             buf.contents()
         );
 
-        // Let the abandoned close unwind.
         gate.notify_waiters();
     }
 
     #[tokio::test(start_paused = true)]
     async fn remove_host_closes_hosts_concurrently() {
-        // Three 10s teardowns under the production 45s budget: concurrent is
-        // ~10s, the old serial loop 30s. Virtual time (the mock's delay is a
-        // tokio timer), so the wall cost is nil. No other test's shrunk budget
-        // can reach this task: the override is task-local.
+        // Three 10s teardowns under the production 45s budget: ~10s concurrent
+        // against 30s serial. Virtual time, so the wall cost is nil, and the
+        // budget override is task-local so no sibling test's can reach here.
         let slow = |h: &str| MockConnection::new(h).with_close_delay(Duration::from_secs(10));
         let (c1, c2, c3) = (slow("h1"), slow("h2"), slow("h3"));
         let targets = vec![
@@ -280,9 +263,9 @@ mod tests {
     async fn abandoned_close_still_releases_pool_claim() {
         use mtui_hosts::{HostArbiter, Owner};
 
-        // The in-process arbiter release must sit outside the budget: it is the
-        // one part of teardown that always works, and losing it strands a
-        // scarce pool host for the life of the session.
+        // The arbiter release is the one part of teardown that always works;
+        // inside the budget, losing it strands a scarce pool host for the
+        // session's life.
         let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
         let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
         let gate = Arc::new(tokio::sync::Notify::new());
@@ -323,11 +306,9 @@ mod tests {
 
     #[tokio::test]
     async fn close_error_is_warned_not_timed_out() {
-        // A host that errors on close (rather than wedging) must land in the
-        // outcomes map with an `Err`, driving the `Ok(outcomes)` arm's per-host
-        // `tracing::warn!("failed to disconnect from {host}: {e}")` — distinct
-        // from the timeout-abandonment arm B1 covers, which never sees this
-        // host's outcome at all.
+        // An erroring close lands in the outcomes map with an `Err`, driving the
+        // `Ok(outcomes)` arm's warn — distinct from the abandonment arm, which
+        // never sees the host's outcome at all.
         testkit::log_capture::start();
         let (mut session, _buf) = session_with_targets(
             "SUSE:Maintenance:1:1",

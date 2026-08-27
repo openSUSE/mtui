@@ -10,12 +10,11 @@ use crate::session::Session;
 
 /// Opens an interactive shell on a reference host.
 ///
-/// Attaching an interactive PTY to a
-/// remote shell needs a controlling terminal, which only the `mtui` REPL
-/// binary owns; the command surface (name, args, host selection, completion) is
-/// defined here so the registry and MCP synthesiser see it, but the runtime PTY
-/// attach lives in the REPL binary, not here. Invoked headlessly it errors
-/// cleanly rather than hanging. REPL-only — on the MCP deny-list.
+/// Attaching a PTY needs a controlling terminal, which only the `mtui` REPL
+/// binary owns. Only the surface (name, args, host selection, completion) is
+/// defined here, so the registry and MCP synthesiser see it; the attach lives in
+/// the REPL binary and headless it errors cleanly rather than hanging.
+/// REPL-only, on the MCP deny-list.
 pub struct Shell;
 
 #[async_trait]
@@ -29,8 +28,8 @@ impl Command for Shell {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        // Upstream `shell` takes only `-t/--target` and opens an interactive
-        // root shell per host; no command positional (strict parity, gap #5).
+        // `-t/--target` only: it opens a root shell per host, with no command
+        // positional.
         add_hosts_arg(cmd)
     }
 
@@ -44,9 +43,8 @@ impl Command for Shell {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // Validate host selection so headless callers get the same argument
-        // errors the REPL would, but the interactive PTY attach lives in the
-        // REPL binary.
+        // Validated so headless callers get the same argument errors the REPL
+        // would; the PTY attach itself lives in the REPL binary.
         let targets = session.targets_mut();
         let hosts =
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;

@@ -9,17 +9,14 @@ use crate::session::Session;
 
 /// Lists available commands, or shows detailed help for one command.
 ///
-/// With no argument it lists every
-/// registered command (documented vs undocumented buckets, fixed-width
-/// columns); with a command name it prints that command's `--help`. Listing and
-/// per-command help both need the command [`Registry`](crate::Registry), which
-/// the [`Command`] trait does not hand to [`call`](Command::call); so `help` is
-/// intercepted in the engine (`dispatch_argv`), where the registry is in hand —
-/// mirroring how the REPL intercepts `shell`. This registered command exists so
-/// `help` appears in listings, completion, and the MCP deny-list check; its
-/// [`call`](Command::call) body is only reached if the intercept is bypassed and
-/// then defers, exactly like `shell`'s headless fallback. REPL-only — on the MCP
-/// deny-list.
+/// With no argument it lists every registered command (documented vs
+/// undocumented buckets, fixed-width columns); with a name it prints that
+/// command's `--help`. Both need the command [`Registry`](crate::Registry),
+/// which [`Command`] does not hand to [`call`](Command::call), so `help` is
+/// intercepted in the engine (`dispatch_argv`) as the REPL intercepts `shell`.
+/// It is registered anyway so it appears in listings, completion and the
+/// deny-list check; [`call`](Command::call) only runs if the intercept is
+/// bypassed, and then defers. REPL-only — on the MCP deny-list.
 pub struct Help;
 
 #[async_trait]
@@ -46,9 +43,8 @@ impl Command for Help {
     }
 
     async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
-        // Reached only if the engine intercept is bypassed: `help` needs the
-        // command registry, which this body has no handle to. Defer with a clear
-        // message rather than fabricate a registry (same shape as `shell`).
+        // Reached only if the intercept is bypassed: this body has no registry
+        // handle, so defer rather than fabricate one.
         Err(CommandError::Other(
             "help is available in the interactive REPL".to_owned(),
         ))
@@ -79,8 +75,8 @@ mod tests {
     async fn call_accepts_a_command_argument() {
         let (mut session, _buf) = empty_session();
         let args = matches(&Help, &["run"]);
-        // The body defers regardless; this asserts arg parsing accepts the
-        // positional so the intercept path receives it.
+        // The body defers regardless, so what matters is that parsing accepts
+        // the positional the intercept path will receive.
         assert_eq!(
             args.get_one::<String>("command").map(String::as_str),
             Some("run")

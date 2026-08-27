@@ -7,14 +7,12 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-/// Switches the active template to another loaded one.
+/// Switches the active template — the one plain action commands act on — to
+/// another loaded one.
 ///
-/// Plain action commands act on
-/// the active template; `switch` moves that pointer. It names its own target
-/// RRID, so it runs exactly once ([`Scope::Single`]) — never auto-fanned-out.
-///
-/// REPL-only: the active pointer is meaningful only in the interactive shell, so
-/// this command is on the MCP deny-list.
+/// It names its own target RRID, so it runs exactly once ([`Scope::Single`]),
+/// never auto-fanned-out. REPL-only, the active pointer being meaningful only in
+/// the interactive shell, so it is on the MCP deny-list.
 pub struct Switch;
 
 #[async_trait]
@@ -80,7 +78,7 @@ mod tests {
     #[tokio::test]
     async fn switch_to_loaded_template_succeeds() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        // Add a second template; the first stays active until we switch.
+        // The first stays active until the switch.
         session
             .templates
             .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));

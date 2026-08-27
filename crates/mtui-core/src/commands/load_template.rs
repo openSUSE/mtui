@@ -13,21 +13,16 @@ use crate::session::Session;
 /// reference hosts.
 ///
 /// Exactly one of `-a`/`--auto-review-id` (an automatic OBS update) or
-/// `-k`/`--kernel-review-id` (a kernel/live-patch update) names the update by
-/// RRID; the two are mutually exclusive and one is required. The template is
-/// **added** to the registry (keyed by RRID) and made active — re-loading an
-/// already-loaded RRID replaces its stored report and re-activates it, leaving
-/// sibling templates untouched.
+/// `-k`/`--kernel-review-id` (a kernel/live-patch update) is required. The
+/// template is **added** to the registry (keyed by RRID) and made active;
+/// re-loading an already-loaded RRID replaces its stored report and re-activates
+/// it, leaving siblings untouched.
 ///
-/// It names its own target RRID via `-a`/`-k` and connects only that template's
-/// reference hosts, so it runs once ([`Scope::Single`]) regardless of how many
-/// templates are loaded — without this it would fan out under MCP and re-run the
-/// autoconnect (grabbing pool hosts) on every loaded template.
-///
-/// The `-a` update autoconnects its reference hosts by default; `-k` starts
-/// the kernel workflow and does not autoconnect on load. The autoconnect
-/// intent is honoured by [`Session::load_update`], which the concrete
-/// workflow selection flows through.
+/// It names its own target RRID and connects only that template's reference
+/// hosts, so it runs once ([`Scope::Single`]) however many are loaded —
+/// otherwise it would fan out under MCP and re-run the autoconnect, grabbing
+/// pool hosts, on every one. `-a` autoconnects; `-k` starts the kernel workflow
+/// and does not ([`Session::load_update`] honours that intent).
 pub struct LoadTemplate;
 
 #[async_trait]
@@ -75,7 +70,6 @@ impl Command for LoadTemplate {
     }
 
     fn complete(&self, _session: &Session, text: &str, _line: &str) -> Vec<String> {
-        // Offer the two RRID prefixes plus the flags.
         [
             "SUSE:Maintenance:",
             "openSUSE:Maintenance:",
@@ -91,8 +85,6 @@ impl Command for LoadTemplate {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        // Exactly one of the two flags is present (enforced by the required
-        // mutually-exclusive group), naming the update kind and its RRID.
         let (rrid, kind) = match (
             args.get_one::<String>("auto"),
             args.get_one::<String>("kernel"),
@@ -110,10 +102,8 @@ impl Command for LoadTemplate {
         let update = UpdateID::parse(rrid)
             .map_err(|e| CommandError::Other(format!("invalid RRID {rrid:?}: {e}")))?;
 
-        // `load_update` builds the report (workflow seeded from `kind`), adds it
-        // to the registry, activates it, and — for an autoconnecting update —
-        // connects its reference hosts. autoconnect is always requested here;
-        // the update kind decides whether a connect actually happens.
+        // Autoconnect is always *requested*; the update kind decides whether a
+        // connect actually happens.
         let (loaded, reason) = session.load_update_reported(&update, true, kind).await;
         if loaded.is_empty() {
             return Err(CommandError::Other(match reason {
@@ -142,10 +132,8 @@ mod tests {
 
     #[test]
     fn requires_exactly_one_review_id() {
-        // Neither flag → clap rejects (required group).
         let cmd = LoadTemplate.configure(clap::Command::new("load_template"));
         assert!(cmd.clone().try_get_matches_from(["load_template"]).is_err());
-        // Both flags → mutually exclusive, rejected.
         assert!(
             cmd.clone()
                 .try_get_matches_from([
@@ -157,7 +145,6 @@ mod tests {
                 ])
                 .is_err()
         );
-        // Exactly one → accepted.
         assert!(
             cmd.try_get_matches_from(["load_template", "-a", "SUSE:Maintenance:1:1"])
                 .is_ok()
@@ -174,9 +161,7 @@ mod tests {
 
     #[tokio::test]
     async fn unloadable_template_reports_error() {
-        // An RRID that cannot be checked out (empty template_dir, offline svn)
-        // surfaces as a clear "could not load" error rather than a phantom
-        // registration.
+        // An un-checkout-able RRID must error, not register a phantom.
         let (mut session, _buf) = empty_session();
         let tmp = tempfile::tempdir().unwrap();
         session.config.template_dir = tmp.path().to_path_buf();
@@ -184,8 +169,7 @@ mod tests {
 
         let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:1:1"]);
         let err = LoadTemplate.call(&mut session, &args).await.unwrap_err();
-        // The generic prefix plus the threaded underlying cause (svn checkout),
-        // so the operator (and, via MCP, the LLM) sees *why* it failed.
+        // The threaded-through cause, so the operator sees *why* it failed.
         assert!(
             matches!(&err, CommandError::Other(m)
             if m.contains("could not load") && m.contains("svn checkout")),
@@ -196,8 +180,7 @@ mod tests {
 
     #[tokio::test]
     async fn kernel_load_registers_and_activates() {
-        // A kernel load of an on-disk template registers + activates it without
-        // connecting (kernel does not autoconnect).
+        // Kernel does not autoconnect, so this registers and activates only.
         let (mut session, buf) = empty_session();
         let tmp = tempfile::tempdir().unwrap();
         let rrid = "SUSE:Maintenance:24993:275518";
@@ -229,7 +212,6 @@ mod tests {
         let all = LoadTemplate.complete(&session, "", "load_template ");
         assert!(all.contains(&"SUSE:Maintenance:".to_owned()));
         assert!(all.contains(&"-a".to_owned()));
-        // Prefix filtering works.
         let filtered = LoadTemplate.complete(&session, "-k", "load_template -k");
         assert_eq!(filtered, vec!["-k".to_owned()]);
     }

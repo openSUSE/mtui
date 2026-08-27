@@ -1,7 +1,6 @@
 //! Result types — the public return shapes of the entry points.
 //!
-//! These are the typed
-//! rows the command layer renders; the search functions never print.
+//! The typed rows the command layer renders; the search functions never print.
 
 use mtui_types::OverviewResult;
 
@@ -73,8 +72,8 @@ pub struct JobResult {
 
 /// The structured payload produced by the `openqa_overview` command.
 ///
-/// Carries the three sections the oqa-search script prints so consumers such as
-/// the exporters can render them without re-fetching.
+/// Carries all three sections, so a consumer such as an exporter can render
+/// them without re-fetching.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OpenQAOverviewResult {
     /// Results for the single-incidents section.
@@ -85,8 +84,8 @@ pub struct OpenQAOverviewResult {
     pub build_checks: Vec<BuildCheckResult>,
     /// Whether the user requested to skip the aggregated-updates section.
     ///
-    /// When `true` the aggregated section is omitted from exported output
-    /// entirely because the absence is intentional.
+    /// When `true` the aggregated section is omitted from exported output —
+    /// the absence is intentional.
     pub skip_aggregated: bool,
 }
 
@@ -108,7 +107,6 @@ mod tests {
         let empty = OpenQAOverviewResult::default();
         assert!(!empty.has_overview());
 
-        // skip_aggregated alone does not make it truthy.
         let skipped = OpenQAOverviewResult {
             skip_aggregated: true,
             ..Default::default()

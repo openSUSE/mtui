@@ -27,11 +27,10 @@ pub(crate) fn timestamp() -> String {
 /// Atomically writes `data` to `path`.
 ///
 /// Delegates to [`mtui_config::atomic::write`], the single secure temp-file +
-/// rename implementation: it creates the destination directory first (cache
-/// locations such as `~/.cache/mtui` may be absent on a fresh checkout), writes
-/// to a unique same-directory temp opened `create_new` + `0o600`, fsyncs, then
-/// renames into place — so a reader never observes a half-written file and no
-/// attacker-precreated symlink is followed.
+/// rename implementation: it creates the destination directory first (a cache
+/// location may be absent on a fresh checkout), writes to a unique
+/// same-directory temp opened `create_new` + `0o600`, fsyncs, then renames — so
+/// no reader sees a half-written file and no precreated symlink is followed.
 ///
 /// # Errors
 ///

@@ -1,15 +1,13 @@
 //! Integration tests for the Gitea PR review-workflow connector against a real
 //! HTTP transport (`wiremock`).
 //!
-//! Covers the
-//! comment-driven assign/approve/reject state machine, the "re-requested review
-//! supersedes a stale decision" rule, the assignment guards, and the request
-//! failure / auth-header contract.
+//! Covers the comment-driven assign/approve/reject state machine, the
+//! "re-requested review supersedes a stale decision" rule, the assignment
+//! guards and the request-failure / auth-header contract.
 //!
 //! wiremock matches by request shape rather than call order, so an operation
-//! that issues several GETs to the same endpoint (each returning the same
-//! comment snapshot) is modelled by one mounted GET plus one mounted POST —
-//! exactly the states each case sets up.
+//! issuing several GETs to one endpoint is modelled by a single mounted GET
+//! plus a mounted POST.
 
 use super::log_capture::capture_logs;
 use mtui_datasources::gitea::{Gitea, assign_marker};
@@ -83,9 +81,9 @@ async fn mount_post_comment(server: &MockServer) {
 
 /// Mount the authenticated-user lookup so the token owner resolves to `login`.
 ///
-/// A write op with no explicit user resolves its acting identity via
-/// `GET /api/v1/user`; mounting this makes the default (`None`) path record the
-/// token owner's login rather than falling back to the session user.
+/// A write op with no explicit user resolves its identity via
+/// `GET /api/v1/user`, so mounting this makes the default path record the token
+/// owner's login rather than the session-user fallback.
 async fn mount_user(server: &MockServer, login: &str) {
     Mock::given(method("GET"))
         .and(path(USER_PATH))
@@ -201,12 +199,10 @@ async fn approve_uses_last_assignee() {
 
 /// Request-count oracle: deduplicate Gitea approval fetches.
 ///
-/// A single happy-path `approve` fetches the comment snapshot **once** and
-/// derives both the assignment state (`assign_state`) and the decision state
-/// (`is_done_from`) from it — one comments GET, plus one POST. `is_done_from`
-/// short-circuits before `has_review` here because no decision comment exists,
-/// so the PR endpoint is not hit. The count fails the test if it drifts either
-/// way (a regression back to the old double-fetch, or an unexpected extra call).
+/// A happy-path `approve` fetches the comment snapshot **once** and derives
+/// both `assign_state` and `is_done_from` from it — one comments GET plus one
+/// POST, and no PR GET because `is_done_from` short-circuits with no decision
+/// comment. The exact count fails on drift either way.
 #[tokio::test]
 async fn approve_request_count() {
     let server = MockServer::start().await;
@@ -336,8 +332,8 @@ async fn reject_posts_decline_with_reason() {
     assert!(body.contains("see logs"));
 }
 
-/// Request-count oracle (0mop.8): a happy-path `reject` fetches the comment
-/// snapshot once (no decision -> no PR GET) and posts once.
+/// Request-count oracle: a happy-path `reject` fetches the comment snapshot
+/// once (no decision, so no PR GET) and posts once.
 #[tokio::test]
 async fn reject_request_count() {
     let server = MockServer::start().await;
@@ -374,11 +370,11 @@ async fn reject_request_count() {
     assert_eq!(posts, 1);
 }
 
-/// Request-count oracle (0mop.8): a happy-path `assign` (no `force`) issues one
-/// PR GET (`has_review` review-requested guard), fetches the comment snapshot
-/// **once** (feeding both `is_done_from` and the unassigned guard — no refetch),
-/// and posts once. No decision comment means `has_review` runs only once (the
-/// guard), not again from the decision path.
+/// Request-count oracle: a happy-path `assign` (no `force`) issues one PR GET
+/// (the `has_review` guard), fetches the comment snapshot **once** for both
+/// `is_done_from` and the unassigned guard, and posts once. With no decision
+/// comment `has_review` runs only for the guard, not again from the decision
+/// path.
 #[tokio::test]
 async fn assign_request_count() {
     let server = MockServer::start().await;
@@ -644,11 +640,9 @@ async fn credentialed_pr_url_is_refused_before_send_and_redacted() {
         .mount(&server)
         .await;
 
-    // Embed `user:s3cret@` credentials in the target authority. A userinfo-
-    // bearing PR URL is refused by the origin guard *before* any request is
-    // sent (the token must never reach such a URL), so this drives both the
-    // refusal `warn!` and the `UntrustedOrigin` error through the sanitizing
-    // path.
+    // A userinfo-bearing PR URL is refused before any request is sent, driving
+    // both the refusal `warn!` and the `UntrustedOrigin` error through the
+    // sanitizing path.
     let authority = server.uri().replace("http://", "http://user:s3cret@");
     let pr_api = format!("{authority}/api/v1/repos/owner/repo/pulls/1");
     let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");
@@ -678,8 +672,8 @@ async fn credentialed_pr_url_is_refused_before_send_and_redacted() {
         kind_is_untrusted_origin,
         "expected GiteaError::UntrustedOrigin, got {err}"
     );
-    // Neither the captured debug/warn logs nor the surfaced error leak the
-    // password, but the host is preserved for diagnosis.
+    // No captured log or surfaced error may leak the password, but the host
+    // stays for diagnosis.
     assert!(!logs.contains("s3cret"), "logs leaked credential: {logs}");
     assert!(!err.contains("s3cret"), "error leaked credential: {err}");
     assert!(
@@ -697,9 +691,8 @@ async fn credentialed_pr_url_is_refused_before_send_and_redacted() {
 /// the enforceable invariant is URL disclosure, not credential disclosure.
 #[tokio::test]
 async fn transport_failure_log_carries_no_reqwest_url() {
-    // Loopback discard port (RFC 863): userinfo-free and `http` on loopback, so
-    // the origin guard trusts it and the request actually reaches `send`, where
-    // nothing is listening.
+    // Loopback discard port (RFC 863): trusted by the origin guard, so the
+    // request reaches `send`, where nothing is listening.
     let client = gitea_with_trust("http://127.0.0.1:9", "http://127.0.0.1:9");
 
     let logs = capture_logs(|| async {

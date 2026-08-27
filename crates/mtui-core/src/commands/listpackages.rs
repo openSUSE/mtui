@@ -13,29 +13,19 @@ use crate::session::Session;
 
 /// Lists packages and their installed versions on the reference hosts.
 ///
-/// For each selected
-/// host it queries the installed version of every package (the report's package
-/// list plus any `-p/--package` extras) and prints a colored state versus the
-/// version the report requires:
-/// * blue "not installed" — package absent,
-/// * yellow "update needed" — installed older than required,
-/// * green "updated" — installed at or above required,
-/// * red "too recent" — installed newer than required.
-///
-/// `-w/--wanted` instead prints the versions the report wants, without touching
-/// any host.
+/// For each selected host it queries the installed version of every package (the
+/// report's list plus any `-p/--package` extras) and prints a colored state
+/// versus the required version: blue "not installed", yellow "update needed"
+/// (older), green "updated" (at or above), red "too recent" (newer).
+/// `-w/--wanted` instead prints the versions the report wants, touching no host.
 pub struct ListPackages;
 
-/// The rendered state of a package on a host.
-///
-/// Distinguishes three outcomes a bare
-/// `Option<Ordering>` cannot express:
-/// * [`PkgState::Blank`] — installed but with no required version to compare
-///   against (no template loaded, the host was never seeded with this package —
-///   e.g. a `-p` extra or a host whose system failed to parse — or a seeded
-///   package with an empty required). Renders as an empty state column.
-/// * [`PkgState::NotInstalled`] — the querier found the package absent.
-/// * [`PkgState::Cmp`] — installed and comparable to a required version.
+/// The rendered state of a package on a host, distinguishing three outcomes a
+/// bare `Option<Ordering>` cannot express: [`PkgState::Blank`] — installed but
+/// nothing to compare against (no template loaded, the host never seeded with
+/// this package, or an empty required), rendering an empty state column;
+/// [`PkgState::NotInstalled`] — the querier found it absent; and
+/// [`PkgState::Cmp`] — installed and comparable to a required version.
 #[derive(Clone, Copy)]
 enum PkgState {
     Blank,
@@ -121,11 +111,9 @@ impl Command for ListPackages {
             return Err(CommandError::NoRefhostsDefined);
         }
 
-        // Query every selected host concurrently: a serial `.await` per host
-        // would turn an 11-host group into 11 sequential SSH round-trips.
-        // `values_mut()` hands back disjoint `&mut Target`, so
-        // each host's `rpm -q` is an independent future driven together by
-        // `join_all`; the per-host render then reads the snapshotted result.
+        // Concurrent: a serial `.await` per host would turn an 11-host group
+        // into 11 sequential SSH round-trips. `values_mut()` hands back disjoint
+        // `&mut Target`, so each `rpm -q` is an independent future.
         let selected: std::collections::HashSet<&str> = hosts.iter().map(String::as_str).collect();
         let queries = targets
             .targets_mut()
@@ -144,14 +132,8 @@ impl Command for ListPackages {
                             .iter()
                             .find(|p| &p.name == pkg)
                             .and_then(|p| p.required().cloned());
-                        // A package absent from the querier is "not installed"; an
-                        // installed package with no required version to compare
-                        // against renders BLANK — never "not installed". The
-                        // "no required version" case covers three situations: no
-                        // template loaded, the host's
-                        // seed does not carry this package (e.g. a `-p` extra, or
-                        // a host whose system failed to parse so it was never
-                        // seeded), and a seeded package with an empty required.
+                        // An installed package with nothing to compare against
+                        // renders BLANK, never "not installed".
                         let state = match (&current, &wanted) {
                             (None, _) => PkgState::NotInstalled,
                             (Some(c), Some(w)) => PkgState::Cmp(c.cmp(w)),
@@ -166,8 +148,8 @@ impl Command for ListPackages {
             .collect::<Vec<_>>();
         let mut rendered: Vec<(String, String, Vec<(String, String, PkgState)>)> =
             futures::future::join_all(queries).await;
-        // `values_mut()` yields sorted-by-hostname order; restore the caller's
-        // requested host order so `-t a,b` renders in the order given.
+        // `values_mut()` yields hostname-sorted order; `-t a,b` must render in
+        // the order given.
         rendered
             .sort_by_key(|(name, _, _)| hosts.iter().position(|h| h == name).unwrap_or(usize::MAX));
 
@@ -188,7 +170,7 @@ impl Command for ListPackages {
 }
 
 impl ListPackages {
-    /// The `-w/--wanted` path: print the versions the report wants, grouped by
+    /// The `-w/--wanted` path: the versions the report wants, grouped by
     /// product, without touching any host.
     fn run_wanted(&self, session: &mut Session) -> CommandResult {
         let packages = session.metadata().base().packages.clone();
@@ -232,11 +214,9 @@ mod tests {
 
     #[tokio::test]
     async fn loaded_template_extra_installed_but_unseeded_is_blank() {
-        // Template loaded (FakeReport) but `-p bash` is not seeded on the host
-        // (not part of the update), so it has no required version to compare
-        // against. Upstream's KeyError branch renders `"" if v` — BLANK for an
-        // installed package, NOT "not installed" and NOT "updated". This is the
-        // same path a host with an unparsed system (never seeded) takes.
+        // A template is loaded but `-p bash` is not seeded on the host, so there
+        // is no required version: BLANK, neither "not installed" nor "updated".
+        // The same path a host with an unparsed system takes.
         let (mut session, buf) =
             session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "bash 5.1-1\n");
         assert!(session.metadata().is_loaded());
@@ -248,7 +228,6 @@ mod tests {
         assert!(out.contains("5.1-1"), "{out}");
         assert!(!out.contains("not installed"), "{out}");
         assert!(!out.contains("updated"), "{out}");
-        // Installed + no required version ⇒ blank state column.
         assert!(
             out.lines().any(|l| l.starts_with("bash")
                 && l.contains("5.1-1")
@@ -259,9 +238,8 @@ mod tests {
 
     #[tokio::test]
     async fn no_template_installed_is_blank_state() {
-        // No template loaded: an installed package has no required version to
-        // compare against, so the state column is blank — never "updated",
-        // never "not installed" (case 1).
+        // No template loaded, so nothing to compare against: blank, never
+        // "updated" and never "not installed".
         let (mut session, buf) = session_host_no_template(&["h1"], "bash 5.1-1\n");
         assert!(!session.metadata().is_loaded());
         let args = matches(&ListPackages, &["-p", "bash", "-t", "h1"]);
@@ -271,8 +249,8 @@ mod tests {
         assert!(out.contains("5.1-1"), "{out}");
         assert!(!out.contains("updated"), "{out}");
         assert!(!out.contains("not installed"), "{out}");
-        // Lock the exact no-template line: version, then a blank state column
-        // (trailing whitespace where the colored word would be).
+        // The exact line: version, then trailing whitespace where the colored
+        // state word would be.
         assert!(
             out.lines().any(|l| l.starts_with("bash")
                 && l.contains("5.1-1")
@@ -283,7 +261,6 @@ mod tests {
 
     #[tokio::test]
     async fn no_template_absent_is_not_installed() {
-        // No template loaded + absent package → "not installed" (case 1, absent).
         let (mut session, buf) =
             session_host_no_template(&["h1"], "package ghostpkg is not installed\n");
         let args = matches(&ListPackages, &["-p", "ghostpkg", "-t", "h1"]);
@@ -360,11 +337,9 @@ mod tests {
 
     #[tokio::test]
     async fn seeded_report_package_installed_is_not_labeled_not_installed() {
-        // Regression for the reported bug: a report package that is *installed*
-        // (rpm -q returns a version) and seeded with its required version must
-        // render a comparison state — never "not installed" while a version is
-        // shown. Before seeding was wired, `wanted` was always None and this
-        // fell into the (Some, None) => NotInstalled arm.
+        // An installed package seeded with its required version must render a
+        // comparison state, never "not installed" beside a shown version.
+        // Unseeded, `wanted` is None and this hits `(Some, None) => NotInstalled`.
         use std::collections::HashMap;
 
         use mtui_types::package::Package;
@@ -374,10 +349,8 @@ mod tests {
             "hplip 3.26.4-150600.4.9.1\n",
         );
         {
-            // Populate the report's package metadata so `get_package_list()`
-            // surfaces hplip (mirrors a loaded report), and seed the target's
-            // tracked package with its required version (what
-            // `connect_and_add_hosts` now does in production).
+            // As a loaded report and `connect_and_add_hosts` would: metadata so
+            // `get_package_list()` surfaces hplip, plus the seeded required.
             let base = session.metadata_mut().base_mut();
             let mut per_product = HashMap::new();
             per_product.insert("hplip".to_owned(), "3.26.4-150600.4.12.1".to_owned());
@@ -391,8 +364,6 @@ mod tests {
         let args = matches(&ListPackages, &["-t", "h1"]);
         ListPackages.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        // Installed older than required → "update needed", and crucially the
-        // installed line must NOT say "not installed".
         assert!(out.contains("3.26.4-150600.4.9.1"), "version shown: {out}");
         assert!(out.contains("update needed"), "{out}");
         assert!(
@@ -435,9 +406,8 @@ mod tests {
 
     #[tokio::test]
     async fn multi_host_output_follows_requested_order_not_sorted() {
-        // The parallel query iterates `values_mut()` (hostname-sorted); the
-        // render must restore the caller's `-t` order. Request z8 before a1 and
-        // assert z8's block prints first.
+        // The query iterates hostname-sorted, so requesting z8 before a1 pins
+        // that the render restores the caller's `-t` order.
         let (mut session, buf) =
             session_with_hosts("SUSE:Maintenance:1:1", &["a1", "z8"], "bash 5.1-1\n");
         let args = matches(&ListPackages, &["-p", "bash", "-t", "z8", "-t", "a1"]);

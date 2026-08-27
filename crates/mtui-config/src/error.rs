@@ -1,13 +1,10 @@
 //! Error type for `mtui-config`.
 //!
-//! Parsing is **lenient** by design (see [`crate::Config::load`]): a missing or
-//! malformed config file is logged and skipped, and defaults are applied — a
-//! bad option never hard-fails startup.
-//!
+//! Loading is **lenient** by design (see [`crate::Config::load`]): a missing or
+//! malformed file is logged, skipped and defaulted, never hard-failing startup.
 //! [`ConfigError`] therefore surfaces only from the *internal* single-file read
-//! helper; the public loader converts it into a `tracing::error!` and continues.
-//! It is still a proper typed error so callers who want strict behaviour (e.g.
-//! a future `--strict-config`) can opt in.
+//! helper, but stays a proper typed error so a caller wanting strict behaviour
+//! (a future `--strict-config`) can opt in.
 
 use std::path::PathBuf;
 
@@ -53,7 +50,6 @@ mod tests {
 
     #[test]
     fn toml_error_message_names_path() {
-        // Produce a real toml::de::Error by parsing invalid TOML.
         let de_err = toml::from_str::<toml::Table>("= not valid").unwrap_err();
         let err = ConfigError::Toml {
             path: PathBuf::from("/bad.toml"),
