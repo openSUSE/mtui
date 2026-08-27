@@ -14,6 +14,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   --release` at the repo root now produces both the `mtui` REPL and the
   `mtui-mcp` server binaries with no `--features` flag; a build that only
   wants one uses `--no-default-features --features cli` (or `mcp`).
+- `run`, `lock` and `unlock` now name the owner of a contended host lock
+  (`held by alice since <time>`) instead of the anonymous `locked by another
+  owner (skipped)`, `already locked (skipped)` and `locked by another (use
+  --force)`; `unlock --pool` likewise names the claim's owner rather than
+  reporting `pool claim held by another (use --force)`. A lock stamped by your
+  own user is flagged as possibly a second mtui of yours — ownership matches on
+  the client PID too, so your own lock read as a colleague's — and every one of
+  these lines now points at `list_locks` first and spells out that `unlock
+  --force` releases the whole group, not only the contended host.
 - `unlock --pool` is now bounded by the same 45 s budget as `unlock --force`,
   so a dead reference host can no longer hold the command open for the full
   SSH timeout, and it reports an error instead of printing `pool claim removed

@@ -51,7 +51,7 @@ use super::operation::{
     HostCommandMap, HostPlan, OperationGroup, PlanProvider, RebootFailure, RebootFailureCause,
 };
 use super::repo_manager::{RepoOp, SetRepo};
-use super::{LockRow, Target};
+use super::{LockOwner, LockRow, Target};
 
 /// The per-host result of a group [`lock`](HostsGroup::lock) /
 /// [`unlock`](HostsGroup::unlock) fan-out.
@@ -78,7 +78,9 @@ pub enum LockOutcome {
     /// The operation lock was released (or there was nothing to release).
     Released,
     /// The lock is held by another owner — benign contention, not a failure.
-    Contended,
+    /// Carries the owner from the load the failure already did, so the report
+    /// can name them without a further round-trip (#521).
+    Contended(LockOwner),
     /// A real transport/SFTP error occurred; the string is the reason.
     Failed(String),
 }
@@ -664,7 +666,7 @@ impl HostsGroup {
                         Ok(()) => LockOutcome::Acquired,
                         Err(HostError::TargetLocked(msg)) => {
                             tracing::debug!(host = %t.hostname(), %msg, "lock: held by another owner, skipping");
-                            LockOutcome::Contended
+                            LockOutcome::Contended(t.loaded_lock_owner())
                         }
                         Err(e) => {
                             tracing::warn!(host = %t.hostname(), error = %e, "lock failed");
@@ -788,7 +790,9 @@ impl HostsGroup {
                 Box::pin(async move {
                     let outcome = match t.unlock_reporting(force).await {
                         Ok(()) => LockOutcome::Released,
-                        Err(HostError::TargetLocked(_)) => LockOutcome::Contended,
+                        Err(HostError::TargetLocked(_)) => {
+                            LockOutcome::Contended(t.loaded_lock_owner())
+                        }
                         Err(e) => LockOutcome::Failed(e.to_string()),
                     };
                     collected
@@ -845,7 +849,9 @@ impl HostsGroup {
                 Box::pin(async move {
                     let outcome = match t.pool_unlock_reporting(force).await {
                         Ok(()) => LockOutcome::Released,
-                        Err(HostError::TargetLocked(_)) => LockOutcome::Contended,
+                        Err(HostError::TargetLocked(_)) => {
+                            LockOutcome::Contended(t.loaded_pool_owner())
+                        }
                         Err(e) => LockOutcome::Failed(e.to_string()),
                     };
                     collected
@@ -1868,6 +1874,16 @@ mod tests {
 
     fn enabled(hostname: &str) -> Target {
         tgt(hostname, TargetState::Enabled)
+    }
+
+    /// The outcome the `1700000000:alice:4242:busy` lock fixture must produce:
+    /// contention carries the owner out of the load the failure already did
+    /// (#521), so a caller can name them.
+    fn contended_by_alice() -> LockOutcome {
+        LockOutcome::Contended(LockOwner {
+            by: "alice".to_owned(),
+            since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+        })
     }
 
     // --- construction / accessors ------------------------------------------
@@ -3176,7 +3192,7 @@ mod tests {
 
         let outcomes = g.lock("session").await;
         assert_eq!(outcomes["h1"], LockOutcome::Acquired);
-        assert_eq!(outcomes["h2"], LockOutcome::Contended);
+        assert_eq!(outcomes["h2"], contended_by_alice());
         assert!(
             matches!(&outcomes["h3"], LockOutcome::Failed(_)),
             "a non-contention lock error must be Failed, got {:?}",
@@ -3205,7 +3221,7 @@ mod tests {
         let outcomes = g.lock_selected("session", &names).await;
 
         assert_eq!(outcomes["h1"], LockOutcome::Acquired);
-        assert_eq!(outcomes["h2"], LockOutcome::Contended);
+        assert_eq!(outcomes["h2"], contended_by_alice());
         assert!(
             !outcomes.contains_key("h3"),
             "unselected host must be absent from the outcome map: {outcomes:?}"
@@ -3238,7 +3254,7 @@ mod tests {
 
         let outcomes = g.unlock().await;
         assert_eq!(outcomes["h1"], LockOutcome::Released);
-        assert_eq!(outcomes["h2"], LockOutcome::Contended);
+        assert_eq!(outcomes["h2"], contended_by_alice());
     }
 
     #[tokio::test]
@@ -3263,7 +3279,7 @@ mod tests {
 
         let plain = foreign();
         let mut g = group(plain.clone());
-        assert_eq!(g.unlock().await["h1"], LockOutcome::Contended);
+        assert_eq!(g.unlock().await["h1"], contended_by_alice());
         assert!(plain.file_contents(TARGET_LOCK_PATH).is_some());
 
         let forced = foreign();

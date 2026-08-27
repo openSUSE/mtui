@@ -332,7 +332,7 @@ impl AbortUnlock {
         for (host, outcome) in outcomes {
             match outcome {
                 LockOutcome::Released => self.unlocked.push(host),
-                LockOutcome::Contended => self.contended.push(host),
+                LockOutcome::Contended(_) => self.contended.push(host),
                 LockOutcome::Failed(reason) => self.failed.push((host, reason)),
                 // Unreachable on an unlock fan-out; ignored rather than folded
                 // into a bucket (as the `unlock` command's own match does) —

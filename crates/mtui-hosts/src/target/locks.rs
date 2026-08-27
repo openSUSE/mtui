@@ -155,6 +155,19 @@ pub struct LockSnapshot {
     pub(crate) rrid: String,
 }
 
+/// Who holds a contended lock, for reporting it.
+///
+/// Read off the load the failed acquisition/release already performed, so
+/// naming the owner costs no extra remote round-trip (#521); an empty
+/// [`by`](Self::by) means the lock state was never read (unconnected host).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LockOwner {
+    /// The user recorded in the lockfile.
+    pub by: String,
+    /// Human-readable lock timestamp, or `"unknown"`.
+    pub since: String,
+}
+
 impl RemoteLock {
     /// Serializes to a lockfile line: `timestamp:user:pid[:comment]`.
     ///
@@ -683,6 +696,27 @@ impl<C: Clock> TargetLock<C> {
         &self.lock
     }
 
+    /// The owner from the most recent [`load`](Self::load), with **no** remote
+    /// read.
+    ///
+    /// Never stale, only ever empty: [`load`](Self::load) resets the cache
+    /// before reading, so an unread lock yields blank fields rather than a
+    /// previous owner. The invariant callers must maintain is that the
+    /// [`HostError::TargetLocked`] they report came off a path that loaded — the
+    /// acquire/release paths do, via
+    /// [`locked_by_msg`](Self::locked_by_msg), whereas
+    /// [`is_mine`](Self::is_mine)'s "not locked" error raises with no load and
+    /// stays out of these reports only because every caller guards it with
+    /// [`is_locked`](Self::is_locked) first. Re-reading per field instead would
+    /// put two more SFTP round-trips on the contended path (#482, #521).
+    #[must_use]
+    pub(crate) fn loaded_owner(&self) -> LockOwner {
+        LockOwner {
+            by: self.lock.user.clone(),
+            since: self.lock.display_time(),
+        }
+    }
+
     /// Resolves the lock's on-disk state and ownership with a **single** remote
     /// read, for lock reporting ([`Target::lock_status`](crate::Target::lock_status)).
     ///
@@ -819,6 +853,12 @@ impl<C: Clock> PoolLock<C> {
             is_mine,
             rrid,
         })
+    }
+
+    /// [`TargetLock::loaded_owner`] for the pool claim — no remote read.
+    #[must_use]
+    pub(crate) fn loaded_owner(&self) -> LockOwner {
+        self.inner.loaded_owner()
     }
 
     /// Sets the ownership RRID (the report layer pushes this down after the

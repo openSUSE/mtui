@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_hosts::LockOutcome;
+use mtui_hosts::{LockOutcome, LockOwner};
 
-use super::support::{add_hosts_arg, host_op_budget};
+use super::support::{add_hosts_arg, contended_lock_reason, host_op_budget};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -24,7 +24,7 @@ use crate::session::Session;
 /// [`HostsGroup::pool_unlock_collecting`](mtui_hosts::HostsGroup::pool_unlock_collecting)
 /// out under the same budget; with `--force` a claim owned by another template
 /// goes too. Like `lock`, `-t` sub-selection is not yet honoured for the
-/// fan-out (whole active group).
+/// fan-out (whole group).
 pub struct HostsUnlock;
 
 #[async_trait]
@@ -161,11 +161,25 @@ impl UnlockKind {
         }
     }
 
-    /// [`LockOutcome::Contended`]'s per-host line, e.g. `"{host}: {label}"`.
-    fn contended_label(&self) -> &'static str {
+    /// [`LockOutcome::Contended`]'s per-host line, e.g. `"{host}: {label}"`,
+    /// naming the owner the fan-out carried out of the refused release.
+    fn contended_label(&self, owner: &LockOwner, session_user: &str) -> String {
         match self {
-            Self::Force => "locked by another (use --force)",
-            Self::Pool => "pool claim held by another (use --force)",
+            Self::Force => contended_lock_reason(owner, session_user),
+            // Pool ownership is RRID-based, so the owning *user* matching says
+            // nothing about which process holds the claim: no own/foreign split
+            // to draw, only the same list_locks-first steer and the same scope
+            // note, since `--pool --force` is whole-group too.
+            Self::Pool if owner.by.is_empty() => {
+                "pool claim held by an unknown owner; check list_locks \
+                 (unlock --pool --force clears the whole group)"
+                    .to_owned()
+            }
+            Self::Pool => format!(
+                "pool claim held by {} since {}; check list_locks \
+                 (unlock --pool --force clears the whole group)",
+                owner.by, owner.since
+            ),
         }
     }
 
@@ -224,15 +238,17 @@ fn report_outcomes(
     kind: &UnlockKind,
     outcomes: &BTreeMap<String, LockOutcome>,
 ) -> Vec<String> {
+    let session_user = session.config.session_user.clone();
     let mut failed: Vec<String> = Vec::new();
     for (host, outcome) in outcomes {
         match outcome {
             LockOutcome::Released => session
                 .display
                 .println(&format!("{host}: {}", kind.released_label())),
-            LockOutcome::Contended => session
-                .display
-                .println(&format!("{host}: {}", kind.contended_label())),
+            LockOutcome::Contended(owner) => session.display.println(&format!(
+                "{host}: {}",
+                kind.contended_label(owner, &session_user)
+            )),
             LockOutcome::Failed(reason) => {
                 session
                     .display
@@ -317,15 +333,51 @@ mod tests {
         let foreign = foreign_lock("h1");
         let (mut session, buf) =
             session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", foreign.clone())]);
+        session.config.session_user = "bob".to_owned();
         let args = matches(&HostsUnlock, &[]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
         assert!(
-            buf.contents()
-                .contains("h1: locked by another (use --force)"),
-            "{}",
-            buf.contents()
+            out.contains(
+                "h1: held by otheruser since Tuesday, 14.11.2023 22:13 UTC, possibly a live \
+                 mtui; check list_locks (unlock --force clears the whole group)"
+            ),
+            "{out}"
+        );
+        assert!(
+            !out.contains("(you)") && !out.contains("mtui of yours"),
+            "{out}"
         );
         assert!(foreign.file_contents(TARGET_LOCK_PATH).is_some());
+    }
+
+    #[tokio::test]
+    async fn unlock_names_the_caller_as_the_owner_of_their_stranded_lock() {
+        // Same user, foreign PID: `is_mine` still says no (the PID check is what
+        // serialises one tester's concurrent zypper transactions), so the lock
+        // survives — but the report names the caller instead of an anonymous
+        // "another", hedges (that signature is a live sibling mtui just as
+        // readily as a strand) and asks for `list_locks` first (#521).
+        let me = mtui_config::Config::default().session_user;
+        let line = format!("1700000000:{me}:{}", std::process::id() + 1).into_bytes();
+        let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, line.clone());
+        let (mut session, buf) =
+            session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", conn.clone())]);
+        let args = matches(&HostsUnlock, &[]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains(&format!("h1: held by {me} (you)")), "{out}");
+        assert!(out.contains("possibly another mtui of yours"), "{out}");
+        assert!(
+            out.contains("check list_locks and your other sessions"),
+            "{out}"
+        );
+        assert!(
+            out.contains("unlock --force clears the whole group"),
+            "{out}"
+        );
+        assert!(!out.contains("possibly a live mtui"), "{out}");
+        assert_eq!(conn.file_contents(TARGET_LOCK_PATH), Some(line));
     }
 
     /// The wire format of an operation lock this test process itself holds:
@@ -525,12 +577,32 @@ mod tests {
         HostsUnlock.call(&mut session, &args).await.unwrap();
 
         assert!(
-            buf.contents()
-                .contains("h1: pool claim held by another (use --force)"),
+            buf.contents().contains(
+                "h1: pool claim held by alice since Tuesday, 14.11.2023 22:13 UTC; check \
+                 list_locks (unlock --pool --force clears the whole group)"
+            ),
             "{}",
             buf.contents()
         );
         assert!(conn.file_contents(POOL_LOCK_PATH).is_some());
+    }
+
+    /// The pool claim's unnamed-owner fallback (the claim line was never read).
+    /// Uncovered before #521: with no owner to name it draws no inference to
+    /// hedge, so all it owes is the `list_locks`-first steer and `--force`'s
+    /// whole-group scope.
+    #[test]
+    fn pool_contended_label_without_an_owner_names_it_and_scopes_the_force_remedy() {
+        let line = UnlockKind::Pool.contended_label(&LockOwner::default(), "bob");
+        assert!(
+            line.contains("pool claim held by an unknown owner"),
+            "{line}"
+        );
+        assert!(line.contains("list_locks"), "{line}");
+        assert!(
+            line.contains("unlock --pool --force clears the whole group"),
+            "{line}"
+        );
     }
 
     #[tokio::test]
