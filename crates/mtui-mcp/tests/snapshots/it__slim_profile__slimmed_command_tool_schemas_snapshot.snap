@@ -203,6 +203,11 @@ expression: pretty
           "description": "Act on every loaded template",
           "type": "boolean"
         },
+        "allow_stale": {
+          "default": false,
+          "description": "Commit a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.",
+          "type": "boolean"
+        },
         "msg": {
           "items": {
             "description": "commit message",
@@ -296,6 +301,11 @@ expression: pretty
         "all_templates": {
           "default": false,
           "description": "Act on every loaded template",
+          "type": "boolean"
+        },
+        "allow_stale": {
+          "default": false,
+          "description": "Export a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.",
           "type": "boolean"
         },
         "allow_unverified": {
@@ -761,6 +771,11 @@ expression: pretty
         "background": {
           "default": false,
           "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "type": "boolean"
+        },
+        "force_continue": {
+          "default": false,
+          "description": "Load a stale checked-out template as-is, instead of aborting, once TeReGen has refused to regenerate it non-interactively.",
           "type": "boolean"
         },
         "kernel": {

@@ -218,7 +218,8 @@ async fn reload(session: &mut Session, rrid: &str, kernel_hint: bool) {
         }
     };
 
-    session.load_update(&update, false, kind).await;
+    // `false`: reloading a template TeReGen just regenerated, not one it refused.
+    session.load_update(&update, false, kind, false).await;
 }
 
 /// Reports the `--no-wait` enqueue outcome.

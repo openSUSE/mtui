@@ -147,6 +147,34 @@ pub(crate) fn require_update(
     })
 }
 
+/// Refuses a write (`commit`, `export`) against a template that loaded with a
+/// stale Gitea hash, unless `allow_stale` is set.
+///
+/// `load_template --force-continue` only gets a stale template loaded — it
+/// does not repair the recorded mismatch (`TestReportBase::stale_hash_warning`
+/// stays set on the report for as long as it is loaded) — so without a gate
+/// here, `commit`/`export` could publish or overwrite content non-interactively
+/// from a template known, at load time, to disagree with the Gitea PR.
+/// `approve`'s own live `check_hash()` re-query is unrelated and unaffected.
+///
+/// **Gap, not a guarantee:** this reads a load-time snapshot, not a live
+/// check — a report that loaded clean and only goes stale once the session
+/// is already open (a maintainer pushes to the PR while `mtui-mcp` still
+/// holds it loaded) passes silently. A live re-check here would need its own
+/// Gitea round-trip per call and is a separate change; this gate only ever
+/// catches what `load_template` already knew.
+pub(crate) fn stale_hash_gate(session: &Session, allow_stale: bool) -> Result<(), CommandError> {
+    if allow_stale {
+        return Ok(());
+    }
+    match &session.metadata().base().stale_hash_warning {
+        Some(warning) => Err(CommandError::Other(format!(
+            "{warning}; pass --allow-stale to proceed anyway"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Loaded template RRIDs starting with `text`, for the caller to merge with its
 /// flag candidates so `-T/--template` completes.
 #[must_use]

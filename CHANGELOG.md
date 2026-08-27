@@ -226,6 +226,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fanning out to several reference hosts stays cancellable via `job_cancel`
   instead of holding the request open for however long a black-hole candidate
   host takes to fail. Additive, optional schema change.
+- `load_template` gained `--force-continue` (MCP: `force_continue`), the
+  non-interactive equivalent of the REPL's "Force continue loading template
+  ?" fallback prompt: it loads a checked-out template as-is when its hash
+  still differs from the Gitea PR and TeReGen has already refused to
+  regenerate it (already hand-edited). Previously this prompt's
+  non-interactive default was unconditionally "no", so such a template was
+  permanently unloadable under `mtui-mcp` — reachable only from the REPL
+  (#517). A load that force-continues past a stale hash now also prints a
+  `warning:` line naming the mismatch, so the fact is visible in the tool
+  result and not just `mtui`'s own log output. Additive, optional schema
+  change; no behaviour change for existing callers that omit it.
 - `remove_host`, `unlock --force` and `reload_products` no longer hang for
   minutes per host on a peer that vanished without closing its SSH link
   (#477). Each now runs under the same 45-second teardown budget that already

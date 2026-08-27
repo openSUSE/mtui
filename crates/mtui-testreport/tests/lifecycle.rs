@@ -258,7 +258,7 @@ async fn make_testreport_auto_no_install_jobs_downgrades_to_manual() {
     let mut config = cfg(tmp.path().to_path_buf());
     point_dashboard(&mut config, &server);
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert_eq!(report.id(), RRID);
     assert_eq!(
@@ -286,7 +286,7 @@ async fn make_testreport_auto_with_install_jobs_stays_auto_no_connect() {
     let mut config = cfg(tmp.path().to_path_buf());
     point_dashboard(&mut config, &server);
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert_eq!(report.id(), RRID);
     assert_eq!(
@@ -317,6 +317,7 @@ async fn make_testreport_kernel_does_not_autoconnect() {
         true,
         false,
         None,
+        false,
     )
     .await;
 
@@ -340,7 +341,8 @@ async fn make_testreport_auto_respects_explicit_no_autoconnect() {
     let mut config = cfg(tmp.path().to_path_buf());
     point_dashboard(&mut config, &server);
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, false, false, None).await;
+    let report =
+        make_testreport(&update, config, UpdateKind::Auto, false, false, None, false).await;
 
     assert_eq!(report.workflow(), Workflow::Manual);
     assert!(!report.base().autoconnect_pending);
@@ -360,7 +362,16 @@ async fn make_testreport_sets_targets_is_repl_from_session_mode() {
     mount_dashboard_no_results(&server, "24993").await;
     let mut cfg_repl = cfg(tmp_repl.path().to_path_buf());
     point_dashboard(&mut cfg_repl, &server);
-    let repl = make_testreport(&update, cfg_repl, UpdateKind::Auto, false, true, None).await;
+    let repl = make_testreport(
+        &update,
+        cfg_repl,
+        UpdateKind::Auto,
+        false,
+        true,
+        None,
+        false,
+    )
+    .await;
     assert!(
         repl.base().targets.is_repl(),
         "REPL load must yield an is_repl targets group"
@@ -372,7 +383,16 @@ async fn make_testreport_sets_targets_is_repl_from_session_mode() {
     mount_dashboard_no_results(&server2, "24993").await;
     let mut cfg_head = cfg(tmp_head.path().to_path_buf());
     point_dashboard(&mut cfg_head, &server2);
-    let head = make_testreport(&update, cfg_head, UpdateKind::Auto, false, false, None).await;
+    let head = make_testreport(
+        &update,
+        cfg_head,
+        UpdateKind::Auto,
+        false,
+        false,
+        None,
+        false,
+    )
+    .await;
     assert!(
         !head.base().targets.is_repl(),
         "headless load must keep a non-interactive targets group"
@@ -389,7 +409,7 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
     config.svn_path = format!("file://{}/no-such-svn-repo", tmp.path().display());
     let update = UpdateID::parse(RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert!(
         !report.is_loaded(),
@@ -499,7 +519,7 @@ async fn make_testreport_slfo_hash_match_loads() {
     point_dashboard(&mut config, &dashboard);
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert!(report.is_loaded(), "matching hash should load the report");
     assert_eq!(report.id(), SLFO_RRID);
@@ -541,7 +561,7 @@ async fn make_testreport_slfo_1_1_git_served_resolves_git_source_and_gitrepopars
     point_dashboard(&mut config, &dashboard);
     let update = UpdateID::parse(SLFO_11_RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert!(
         report.is_loaded(),
@@ -582,7 +602,7 @@ async fn make_testreport_slfo_1_1_obs_served_resolves_obs_source_and_slrepoparse
     point_dashboard(&mut config, &dashboard);
     let update = UpdateID::parse(SLFO_11_RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert!(
         report.is_loaded(),
@@ -631,7 +651,7 @@ async fn make_testreport_slfo_real_metadata_populates_packages() {
     point_dashboard(&mut config, &dashboard);
     let update = UpdateID::parse(SLFO_11_RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert!(report.is_loaded(), "the captured SLFO record must load");
     assert_eq!(report.update_source(), UpdateSource::Obs);
@@ -681,7 +701,7 @@ async fn make_testreport_slfo_missing_token_yields_null() {
     assert!(config.gitea_token.is_empty(), "precondition: no token");
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert!(
         !report.is_loaded(),
@@ -720,7 +740,7 @@ async fn make_testreport_slfo_hash_mismatch_yields_null() {
     config.gitea_url = server.uri();
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, false).await;
 
     assert!(
         !report.is_loaded(),
@@ -795,6 +815,7 @@ async fn make_testreport_slfo_mismatch_force_continue_keeps_stale() {
         true,
         true,
         Some(&prompter),
+        false,
     )
     .await;
 
@@ -803,6 +824,115 @@ async fn make_testreport_slfo_mismatch_force_continue_keeps_stale() {
         "force-continue keeps the stale report loaded"
     );
     assert_eq!(report.id(), SLFO_RRID);
+    // A human answering "y" at the REPL gets the same `stale_hash_warning` a
+    // non-interactive force-continue does — `load_template` prints it either
+    // way, so this is not solely an mtui-mcp-visible signal.
+    assert!(
+        report.base().stale_hash_warning.is_some(),
+        "the interactive force-continue path must set the warning too"
+    );
+}
+
+/// Non-interactive, stale hash, **no prompter at all**: `force_continue=true`
+/// reaches the exact same outcome the REPL's own "y" answer does — the stale
+/// report is kept (loaded). This is the shape of every `mtui-mcp` session
+/// (`is_repl=false`, no `Prompter`), which before
+/// this argument existed had no way to reach `Some(None)` at all.
+#[tokio::test]
+async fn make_testreport_slfo_noninteractive_force_continue_keeps_stale() {
+    use wiremock::matchers::{method, path};
+
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "freshsha").await;
+
+    // The forced-continue report loads, so it reaches the auto enrichment; keep
+    // that offline by pointing the dashboard at a mock (no install jobs → the
+    // workflow downgrades to manual, which this test does not assert).
+    let dashboard = MockServer::start().await;
+    mount_dashboard_no_results(&dashboard, "4413").await;
+
+    // Pins the safety claim itself: `force_continue` must never drive a real
+    // TeReGen regeneration (only the REPL's "Regenerate?" prompt can, and
+    // that path is untouched). `expect(0)` fails the test if this is hit.
+    let teregen = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!("/reports/{SLFO_RRID}/regenerate")))
+        .respond_with(ResponseTemplate::new(202))
+        .expect(0)
+        .mount(&teregen)
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", server.uri()),
+        Some("stalesha"),
+    );
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    config.gitea_url = server.uri();
+    config.teregen_api = teregen.uri();
+    point_dashboard(&mut config, &dashboard);
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None, true).await;
+
+    assert!(
+        report.is_loaded(),
+        "force_continue=true keeps the stale report loaded without a prompter"
+    );
+    assert_eq!(report.id(), SLFO_RRID);
+}
+
+/// Interactive, stale hash: `force_continue=true` does **not** bypass the
+/// REPL's own prompt — a scripted decline still abandons the load. The
+/// argument only takes effect when there is no prompter to ask (the
+/// `(is_repl, prompter)` match's `_` arm); this pins that `(true, Some(p))`
+/// is unaffected, so no existing REPL behaviour changes.
+#[tokio::test]
+async fn make_testreport_slfo_interactive_force_continue_arg_ignored_when_prompter_present() {
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "freshsha").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(
+        tmp.path(),
+        SLFO_RRID,
+        &format!("{}/pulls/1", server.uri()),
+        Some("stalesha"),
+    );
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    config.gitea_url = server.uri();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    // Regenerate? no. Force continue? no (scripted decline) — even though the
+    // `force_continue` argument passed to `make_testreport` below is `true`.
+    // Delete? no.
+    let prompter = scripted_prompter(&[
+        ("Regenerate", "n"),
+        ("Force continue", "n"),
+        ("Delete", "n"),
+    ]);
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        true,
+        Some(&prompter),
+        true,
+    )
+    .await;
+
+    assert!(
+        !report.is_loaded(),
+        "an interactive decline must win over force_continue=true"
+    );
 }
 
 /// Interactive, stale hash, decline TeReGen and decline force-continue, then
@@ -841,6 +971,7 @@ async fn make_testreport_slfo_mismatch_decline_deletes_checkout() {
         true,
         true,
         Some(&prompter),
+        false,
     )
     .await;
 
@@ -888,6 +1019,7 @@ async fn make_testreport_slfo_mismatch_decline_keeps_checkout_when_delete_declin
         true,
         true,
         Some(&prompter),
+        false,
     )
     .await;
 
@@ -947,6 +1079,7 @@ async fn make_testreport_slfo_regenerate_refused_falls_back_to_manual() {
         true,
         true,
         Some(&prompter),
+        false,
     )
     .await;
 
@@ -1013,6 +1146,7 @@ async fn make_testreport_slfo_regenerate_job_unfinished_removes_checkout() {
         true,
         true,
         Some(&prompter),
+        false,
     )
     .await;
 
@@ -1067,6 +1201,7 @@ async fn make_testreport_slfo_regenerate_finished_but_reload_fails() {
         true,
         true,
         Some(&prompter),
+        false,
     )
     .await;
 

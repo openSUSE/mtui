@@ -423,6 +423,9 @@ Options:
   -m, --msg <MSG>...
           commit message
 
+      --allow-stale
+          Commit a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.
+
   -h, --help
           Print help
 ```
@@ -1026,6 +1029,9 @@ Options:
       --allow-unverified
           write the unverified scaffold even when no selected host has recorded package versions
 
+      --allow-stale
+          Export a template that loaded with a stale Gitea hash (load_template --force-continue); refused otherwise.
+
   -h, --help
           Print help
 ```
@@ -1077,7 +1083,7 @@ Options:
 Loads a maintenance-update template into the session and connects its reference hosts.
 
 ```text
-Usage: load_template <--auto-review-id <RequestReviewID>|--kernel-review-id <RequestReviewID>>
+Usage: load_template [OPTIONS] <--auto-review-id <RequestReviewID>|--kernel-review-id <RequestReviewID>>
 
 Options:
   -a, --auto-review-id <RequestReviewID>
@@ -1085,6 +1091,9 @@ Options:
 
   -k, --kernel-review-id <RequestReviewID>
           OBS kernel/live-patch request review id, e.g. SUSE:Maintenance:1:1
+
+      --force-continue
+          Load a stale checked-out template as-is, instead of aborting, once TeReGen has refused to regenerate it non-interactively.
 
   -h, --help
           Print help

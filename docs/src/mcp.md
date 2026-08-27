@@ -144,6 +144,22 @@ prompt at the REPL never blocks waiting for input:
   (at the REPL it prompts for confirmation, default no) rather than proceeding;
   a missing Gitea token or a failed Gitea call refuses on every surface, since
   the check never produced a verdict to confirm.
+- **`load_template`**'s interactive "Force continue loading template ?"
+  fallback — for a stale checkout hash that TeReGen also refuses to
+  regenerate (already hand-edited) — is exposed as the `--force-continue`
+  argument; without it the load is unconditionally abandoned, since the
+  question's non-interactive default used to be a hard-coded "no"
+  (openSUSE/mtui#517). A force-continued load neither repairs nor bypasses
+  the recorded mismatch, so it does not touch `approve`'s refusal above —
+  and `commit`/`export` refuse the same way, unless given their own
+  `--allow-stale`, so a stale-loaded report cannot be published or
+  overwritten non-interactively either. `approve`'s `check_hash()` re-query
+  is live (asks Gitea again, every call); the other three instead read
+  whether *the load itself* saw a mismatch, so a report that loaded clean
+  and only goes stale once the session is already open (a maintainer
+  pushes to the PR while `mtui-mcp` still holds it loaded) passes all
+  three silently — `commit` is the one of the three where that gap is most
+  likely to matter, since it is the publish step.
 - A **command timeout** aborts immediately instead of offering the REPL's
   wait/retry prompt.
 - **`comment`** and **`commit`** take their text/message as a required argument

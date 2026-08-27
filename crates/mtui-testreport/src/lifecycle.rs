@@ -92,6 +92,12 @@ fn null_with_error(config: Config, reason: String) -> NullReport {
 /// honoured by the composition root *after* wiring the host arbiter) is armed
 /// **only** when it is `true` **and** the auto load downgraded to `MANUAL` —
 /// never on the auto happy path, never for the kernel kind.
+///
+/// `force_continue` is the non-interactive escape hatch for a stale hash
+/// (`handle_stale_hash`): when `is_repl && prompter.is_some()`, the REPL's
+/// own "Force continue loading template ?" prompt governs and this argument
+/// is ignored; otherwise it takes the prompt's place. `false` reproduces the
+/// pre-existing non-interactive behaviour (abandon the load) exactly.
 pub async fn make_testreport(
     update: &UpdateID,
     config: Config,
@@ -99,6 +105,7 @@ pub async fn make_testreport(
     autoconnect: bool,
     is_repl: bool,
     prompter: Option<&Prompter>,
+    force_continue: bool,
 ) -> Box<dyn TestReport + Send + Sync> {
     let template_dir = config.template_dir.clone();
     let svn_path = config.svn_path.clone();
@@ -178,14 +185,22 @@ pub async fn make_testreport(
                 &trpath,
                 is_repl,
                 prompter,
+                force_continue,
             )
             .await
             {
                 Some(regenerated) => {
                     if let Some(fresh) = regenerated {
                         report = fresh;
+                    } else {
+                        // Force-continue kept the (stale) `report` as-is; flag it
+                        // so a non-interactive caller can surface the fact too.
+                        report.base_mut().stale_hash_warning = Some(
+                            "template hash mismatch (stale checkout); loaded as-is \
+                             via force-continue"
+                                .to_owned(),
+                        );
                     }
-                    // else: force-continue kept the (stale) `report` as-is.
                 }
                 None => {
                     return Box::new(null_with_error(
@@ -269,7 +284,11 @@ pub async fn make_testreport(
 ///
 /// `prompter` is `Some` only in interactive mode, so every prompt is gated on
 /// `is_repl && prompter.is_some()` and otherwise takes the non-interactive
-/// answer.
+/// answer — **except** the force-continue question, whose non-interactive
+/// default is `force_continue_arg` rather than a hard-coded `false` (#517).
+/// It reaches exactly the outcome the REPL's own "y" answer does — `Some(None)`
+/// — and does nothing else: no regeneration, no re-checkout, no write. The
+/// `regenerate` question is unaffected and stays interactive-only.
 #[allow(clippy::too_many_arguments)]
 async fn handle_stale_hash(
     update: &UpdateID,
@@ -279,6 +298,7 @@ async fn handle_stale_hash(
     trpath: &std::path::Path,
     is_repl: bool,
     prompter: Option<&Prompter>,
+    force_continue_arg: bool,
 ) -> Option<Option<Box<dyn TestReport + Send + Sync>>> {
     let rrid = update.id.clone();
     error!("Invalid Gitea hash");
@@ -306,13 +326,13 @@ async fn handle_stale_hash(
         );
     }
 
-    // Manual fallback.
+    // Manual fallback: non-interactive falls through to `force_continue_arg`.
     let force_continue = match (is_repl, prompter) {
         (true, Some(p)) => {
             p.confirm("Force continue loading template ? [y/N]: ", false)
                 .await
         }
-        _ => false,
+        _ => force_continue_arg,
     };
     if force_continue {
         warn!("Template is loaded, but hash differs");
