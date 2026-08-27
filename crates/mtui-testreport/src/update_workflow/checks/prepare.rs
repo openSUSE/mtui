@@ -315,10 +315,11 @@ mod tests {
     #[test]
     fn table_lookup() {
         assert!(prepare_check("11", false).is_some());
-        // Both keys have a preparer; with no check `run_checks` skipped them,
-        // so a prepare on an SL Micro or RHEL host contributed no verdict — and
-        // the transactional reboot gate is fed by check verdicts, so a prepare
-        // that failed with exit `0` rebooted into the failed transaction.
+        // Both keys have a preparer; with no check `run_checks_where` skipped
+        // them, so a prepare on an SL Micro or RHEL host contributed no verdict
+        // — and the transactional reboot gate is fed by check verdicts, so a
+        // prepare that failed with exit `0` rebooted into the failed
+        // transaction.
         assert!(prepare_check("YUM", false).is_some());
         assert!(prepare_check("slmicro", true).is_some());
         // The key shape still matters — `slmicro` is only ever transactional,

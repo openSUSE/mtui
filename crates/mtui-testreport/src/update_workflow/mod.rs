@@ -501,9 +501,10 @@ mod tests {
     #[test]
     fn registry_resolves_the_update_checks_that_used_to_be_missing() {
         // `("slmicro", true)` and `("YUM", false)` had an *updater* but no
-        // check, so `run_checks` skipped them and `update` reported success on
-        // those hosts whatever the command did. Resolved through the registry,
-        // the path `run_checks` takes, so the table wiring is pinned too.
+        // check, so `run_checks_where` skipped them and `update` reported
+        // success on those hosts whatever the command did. Resolved through the
+        // registry, the path that check takes, so the table wiring is pinned
+        // too.
         let reg = WorkflowRegistry::default();
         assert!(reg.check(Role::Update, "slmicro", true).is_some());
         assert!(reg.check(Role::Update, "YUM", false).is_some());

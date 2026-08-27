@@ -227,7 +227,7 @@ impl JSONParser {
                         }
                         // These are interpolated into root remote commands, so
                         // reject non-RPM names at ingestion (log, never fail).
-                        if let Err(e) = PackageSpec::parse(pkg) {
+                        if let Err(e) = PackageSpec::parse_name(pkg) {
                             error!(package = %pkg, error = %e, "skipping invalid package name in metadata");
                             continue;
                         }
@@ -290,11 +290,11 @@ impl JSONParser {
 /// the update ships. Over-inclusion degrades to today's behaviour; dropping a
 /// name silently shortens a host's list, which is what this index exists to
 /// prevent. For the same reason an entry that is *not* an RPM filename — or
-/// that yields a name [`PackageSpec`] rejects — abandons the whole index rather
-/// than poisoning one key: the block cannot be trusted. Abandoning is the
-/// fail-*open* direction (an empty index composes everything, exactly as before
-/// the index existed), so a hostile `binaries` block can at worst switch the
-/// narrowing off, never shorten what a host installs.
+/// that yields a name [`PackageSpec::parse_name`] rejects — abandons the whole
+/// index rather than poisoning one key: the block cannot be trusted. Abandoning
+/// is the fail-*open* direction (an empty index composes everything, exactly as
+/// before the index existed), so a hostile `binaries` block can at worst switch
+/// the narrowing off, never shorten what a host installs.
 ///
 /// `binaries` is untyped here because its shape is not a committed contract —
 /// a block of some other shape yields an empty index and a warning, never a
@@ -340,10 +340,7 @@ fn index_binaries(
                     );
                     return HashMap::new();
                 };
-                // Abandon rather than skip, as above: a block that yields a
-                // name no package can have cannot be trusted to narrow any
-                // host's list either.
-                if let Err(e) = PackageSpec::parse(name) {
+                if let Err(e) = PackageSpec::parse_name(name) {
                     warn!(
                         product = %key, arch = %arch, entry = %entry, error = %e,
                         "binaries entry names an invalid package; the composition index is abandoned"
