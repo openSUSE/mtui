@@ -100,6 +100,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `run`'s `command` argument now states its contract in the help text: argv
+  tokens, no shell, and a pipeline needs three tokens (`sh`, `-c`, the line).
+  It previously read only "Command to run on refhost", so `["cat /etc/os-release"]`
+  looked correct and reached the remote shell as one shlex-quoted word. Behaviour
+  is unchanged; the string propagates to `mtui-mcp`'s `command` property
+  description, `run --help` and `docs/src/cli.md`.
+
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
