@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_testreport::{TokioSvnRunner, detect_system, svn_commit_testreport, system_info};
 
-use super::support::complete_with_templates;
+use super::support::{complete_with_templates, stale_hash_gate};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -15,6 +15,10 @@ use crate::session::Session;
 /// Without `-m/--msg` a message is generated from the local system info (the
 /// export footer, via `system_info(..., prefix="committed from")`), so the
 /// commit never opens `svn`'s editor. Requires a loaded report.
+///
+/// Refuses on a template that loaded with a stale Gitea hash
+/// (`load_template --force-continue`) unless `--allow-stale` is given —
+/// `stale_hash_gate`.
 pub struct Commit;
 
 #[async_trait]
@@ -41,13 +45,30 @@ impl Command for Commit {
                 .value_name("MSG")
                 .help("commit message"),
         )
+        .arg(
+            Arg::new("allow_stale")
+                .long("allow-stale")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Commit a template that loaded with a stale Gitea hash \
+                     (load_template --force-continue); refused otherwise.",
+                ),
+        )
     }
 
     fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
-        complete_with_templates(session, &[&["-m", "--msg"]], Vec::new(), line, text)
+        complete_with_templates(
+            session,
+            &[&["-m", "--msg"], &["--allow-stale"]],
+            Vec::new(),
+            line,
+            text,
+        )
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        stale_hash_gate(session, args.get_flag("allow_stale"))?;
+
         let checkout = session
             .metadata()
             .base()
@@ -122,6 +143,23 @@ mod tests {
         assert!(matches!(err, CommandError::Other(_)));
     }
 
+    /// A template that loaded with a stale Gitea hash (`load_template
+    /// --force-continue`) refuses `commit` unless `--allow-stale` is given —
+    /// checked before any `svn` shell-out, same as `no_report_errors_before_shelling_out`.
+    #[tokio::test]
+    async fn refuses_stale_template_without_allow_stale() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().stale_hash_warning =
+            Some("template hash mismatch (stale checkout)".to_owned());
+
+        let args = matches(&Commit, &[]);
+        let err = Commit.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--allow-stale")),
+            "{err:?}"
+        );
+    }
+
     /// A successful commit must print the report URL, so the MCP result is never
     /// empty.
     #[tokio::test]
@@ -163,5 +201,47 @@ mod tests {
 
         let out = buf.contents();
         assert!(out.contains("testreport committed:"), "{out:?}");
+    }
+
+    /// `--allow-stale` permits committing a template that loaded with a stale
+    /// Gitea hash, past the gate `refuses_stale_template_without_allow_stale` pins.
+    #[tokio::test]
+    async fn allow_stale_permits_commit_of_a_stale_template() {
+        if std::process::Command::new("svn")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return; // svn not installed in this environment
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let wc = tmp.path().join("wc");
+        assert!(
+            std::process::Command::new("svnadmin")
+                .args(["create", repo.to_str().unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let repo_url = format!("file://{}", repo.display());
+        assert!(
+            std::process::Command::new("svn")
+                .args(["checkout", &repo_url, wc.to_str().unwrap()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::create_dir_all(wc.join("install_logs")).unwrap();
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().path = Some(wc.join("metadata.json"));
+        session.metadata_mut().base_mut().stale_hash_warning =
+            Some("template hash mismatch (stale checkout)".to_owned());
+
+        let args = matches(&Commit, &["-m", "test commit", "--allow-stale"]);
+        Commit.call(&mut session, &args).await.unwrap();
+
+        assert!(buf.contents().contains("testreport committed:"));
     }
 }

@@ -1,7 +1,7 @@
 //! The `load_template` command.
 
 use async_trait::async_trait;
-use clap::{Arg, ArgGroup, ArgMatches};
+use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
 use mtui_testreport::UpdateKind;
 use mtui_types::UpdateID;
 
@@ -23,6 +23,18 @@ use crate::session::Session;
 /// otherwise it would fan out under MCP and re-run the autoconnect, grabbing
 /// pool hosts, on every one. `-a` autoconnects; `-k` starts the kernel workflow
 /// and does not ([`Session::load_update`] honours that intent).
+///
+/// `--force-continue` is the non-interactive escape hatch for a stale
+/// template hash (openSUSE/mtui#517): the interactive REPL already offers
+/// this as its "Force continue loading template ?" fallback prompt, but that
+/// prompt is unreachable for any non-interactive caller (every `mtui-mcp`
+/// session), so a template TeReGen also refuses to regenerate (already
+/// hand-edited) was permanently unloadable outside the REPL. The flag reaches
+/// exactly the same outcome the REPL's own "y" answer does — load the
+/// existing checked-out report as-is — and nothing else; it does not affect
+/// the earlier "Regenerate via TeReGen?" question, which stays
+/// interactive-only (`regenerate` is the dedicated non-interactive tool for
+/// that).
 pub struct LoadTemplate;
 
 #[async_trait]
@@ -67,6 +79,15 @@ impl Command for LoadTemplate {
                 .required(true)
                 .multiple(false),
         )
+        .arg(
+            Arg::new("force_continue")
+                .long("force-continue")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "Load a stale checked-out template as-is, instead of aborting, once \
+                     TeReGen has refused to regenerate it non-interactively.",
+                ),
+        )
     }
 
     fn complete(&self, _session: &Session, text: &str, _line: &str) -> Vec<String> {
@@ -77,6 +98,7 @@ impl Command for LoadTemplate {
             "--auto-review-id",
             "-k",
             "--kernel-review-id",
+            "--force-continue",
         ]
         .into_iter()
         .filter(|c| c.starts_with(text))
@@ -102,9 +124,13 @@ impl Command for LoadTemplate {
         let update = UpdateID::parse(rrid)
             .map_err(|e| CommandError::Other(format!("invalid RRID {rrid:?}: {e}")))?;
 
+        let force_continue = args.get_flag("force_continue");
+
         // Autoconnect is always *requested*; the update kind decides whether a
         // connect actually happens.
-        let (loaded, reason) = session.load_update_reported(&update, true, kind).await;
+        let (loaded, reason) = session
+            .load_update_reported(&update, true, kind, force_continue)
+            .await;
         if loaded.is_empty() {
             return Err(CommandError::Other(match reason {
                 Some(why) => format!("could not load template for {rrid}: {why}"),
@@ -112,6 +138,14 @@ impl Command for LoadTemplate {
             }));
         }
         let connected = session.targets().len();
+        // Surface a force-continued stale hash in the tool result, not just
+        // `tracing::warn!` (never seen under mtui-mcp). Cloned first: holding
+        // `session.metadata()`'s borrow live would collide with `println`'s
+        // `&mut session.display` below.
+        let stale_warning = session.metadata().base().stale_hash_warning.clone();
+        if let Some(warning) = stale_warning {
+            session.display.println(&format!("warning: {warning}"));
+        }
         session
             .display
             .println(&format!("loaded {rrid} ({connected} hosts connected)"));
@@ -212,7 +246,97 @@ mod tests {
         let all = LoadTemplate.complete(&session, "", "load_template ");
         assert!(all.contains(&"SUSE:Maintenance:".to_owned()));
         assert!(all.contains(&"-a".to_owned()));
+        assert!(all.contains(&"--force-continue".to_owned()));
+        // Prefix filtering works.
         let filtered = LoadTemplate.complete(&session, "-k", "load_template -k");
         assert_eq!(filtered, vec!["-k".to_owned()]);
+    }
+
+    /// `--force-continue` defaults to unset and parses as a plain boolean flag
+    /// alongside the required `-a`/`-k` group.
+    #[test]
+    fn force_continue_flag_defaults_false_and_parses() {
+        let cmd = LoadTemplate.configure(clap::Command::new("load_template"));
+        let without = cmd
+            .clone()
+            .try_get_matches_from(["load_template", "-a", "SUSE:Maintenance:1:1"])
+            .unwrap();
+        assert!(!without.get_flag("force_continue"));
+
+        let with = cmd
+            .try_get_matches_from([
+                "load_template",
+                "-a",
+                "SUSE:Maintenance:1:1",
+                "--force-continue",
+            ])
+            .unwrap();
+        assert!(with.get_flag("force_continue"));
+    }
+
+    /// End-to-end: `--force-continue` reaches all the way from the parsed
+    /// clap flag through `Session::load_update_reported` to
+    /// `make_testreport`/`handle_stale_hash` and actually loads a
+    /// stale-hash SLFO template that would otherwise abandon the load — the
+    /// same shape `kernel_load_registers_and_activates` proves for `-k`
+    /// alone, but for the new flag specifically. Uses `-k`
+    /// (not `-a`) to skip the QEM-dashboard auto-openQA enrichment `-a`
+    /// would trigger on a successful load — `tr_factory` selects the report
+    /// class (and hence `check_hash`'s real Gitea comparison) from the RRID
+    /// kind, not from `-a`/`-k`, so the stale-hash path is identical either
+    /// way. Also pins that the force-continued load prints a `warning:` line
+    /// to the command's display output — the tool-result-visibility half of
+    /// the fix, not just that the load succeeds.
+    #[tokio::test]
+    async fn force_continue_flag_loads_stale_edited_template() {
+        let gitea = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "head": { "sha": "freshsha" } })),
+            )
+            .mount(&gitea)
+            .await;
+
+        let (mut session, buf) = empty_session();
+        let tmp = tempfile::tempdir().unwrap();
+        let rrid = "SUSE:SLFO:1.2:4413";
+        let dir = tmp.path().join(rrid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log"), "log\n").unwrap();
+        std::fs::write(
+            dir.join("metadata.json"),
+            serde_json::json!({
+                "rrid": rrid,
+                "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.2/",
+                "products": ["SLES 16.0 (x86_64)"],
+                "gitea_pr_api": format!("{}/pulls/1", gitea.uri()),
+                // Differs from the mocked PR head ("freshsha") — the hash
+                // mismatch this whole path exists to force-continue past.
+                "gitea_commit_hash": "stalesha",
+                "packages": {},
+                "testplatform": [],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.gitea_token = "tok".to_owned();
+        session.config.gitea_url = gitea.uri();
+
+        let args = matches(&LoadTemplate, &["-k", rrid, "--force-continue"]);
+        LoadTemplate.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            session.templates.contains(rrid),
+            "a stale-but-force-continued template must register"
+        );
+        assert_eq!(session.templates.active_rrid(), Some(rrid));
+        let out = buf.contents();
+        assert!(
+            out.contains("warning:") && out.contains("stale checkout"),
+            "the tool result must flag the stale hash, not just silently load: {out:?}"
+        );
+        assert!(out.contains(&format!("loaded {rrid}")), "{out:?}");
     }
 }

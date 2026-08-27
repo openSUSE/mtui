@@ -77,6 +77,15 @@ pub struct TestReportBase {
     /// can surface *why* (svn checkout / gitea / hash / read failure) rather than
     /// a bare "could not load". `None` on a successfully loaded report.
     pub load_error: Option<String>,
+    /// Set when this report **loaded successfully but its checked-out hash
+    /// still differs from the Gitea PR** — the operator (interactively) or
+    /// caller (`force_continue`, openSUSE/mtui#517) chose to proceed with
+    /// stale content anyway. `None` on every other load. A REPL session
+    /// already saw the equivalent `warn!` line on its own terminal; this
+    /// field exists so a non-interactive caller (`mtui-mcp`), which never
+    /// sees `tracing` output, can surface the same fact from the tool
+    /// result instead of silently trusting content that may be out of date.
+    pub stale_hash_warning: Option<String>,
     /// Bugzilla `id -> title` map.
     pub bugs: HashMap<String, String>,
     /// Jira `id -> title` map.
@@ -162,6 +171,7 @@ impl TestReportBase {
             slot_candidates: HashMap::new(),
             autoconnect_pending: false,
             load_error: None,
+            stale_hash_warning: None,
             bugs: HashMap::new(),
             jira: HashMap::new(),
             testplatforms: Vec::new(),

@@ -13,7 +13,7 @@ use mtui_types::package::VersionCheck;
 
 use super::support::{
     add_hosts_arg, build_auto_openqa, build_incident, named_hosts, require_update, select_names,
-    template_completion,
+    stale_hash_gate, template_completion,
 };
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -35,6 +35,12 @@ use crate::session::Session;
 /// A `Manual` export refuses to write at all when *no* selected host has
 /// recorded package versions — the signal that this session never ran `update`
 /// (#526); `--allow-unverified` writes the scaffold anyway.
+///
+/// Also refuses on a template that loaded with a stale Gitea hash
+/// (`load_template --force-continue`) unless `--allow-stale` is given —
+/// `stale_hash_gate`. Three independent guards on this command: `--force`
+/// only overrides [`DenyOverwrite`]; `--allow-unverified` and `--allow-stale`
+/// each waive one of the two refusals above.
 pub struct Export;
 
 #[async_trait]
@@ -85,9 +91,20 @@ impl Command for Export {
                     .value_name("FILENAME")
                     .help("output template file name (defaults to the loaded template)"),
             )
+            .arg(
+                Arg::new("allow_stale")
+                    .long("allow-stale")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "Export a template that loaded with a stale Gitea hash \
+                         (load_template --force-continue); refused otherwise.",
+                    ),
+            )
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        stale_hash_gate(session, args.get_flag("allow_stale"))?;
+
         let rrid = require_update(session)?;
         let workflow = session.metadata().workflow();
         let force = args.get_flag("force");
@@ -271,6 +288,39 @@ mod tests {
         let args = matches(&Export, &[]);
         let err = Export.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    /// A template that loaded with a stale Gitea hash (`load_template
+    /// --force-continue`) refuses `export` unless `--allow-stale` is given.
+    #[tokio::test]
+    async fn refuses_stale_template_without_allow_stale() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().workflow = Workflow::Auto;
+        session.metadata_mut().base_mut().stale_hash_warning =
+            Some("template hash mismatch (stale checkout)".to_owned());
+
+        let args = matches(&Export, &[]);
+        let err = Export.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("--allow-stale")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn allow_stale_permits_export_of_a_stale_template() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().workflow = Workflow::Auto;
+        session.metadata_mut().base_mut().stale_hash_warning =
+            Some("template hash mismatch (stale checkout)".to_owned());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("template.txt");
+        std::fs::write(&path, "source code change review:\n").unwrap();
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap(), "--allow-stale"]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        assert!(buf.contents().contains("template exported to"));
     }
 
     #[tokio::test]

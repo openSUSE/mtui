@@ -727,13 +727,22 @@ impl Session {
     /// Returns the loaded report's RRID, empty when the load failed and the null
     /// report was substituted. A thin wrapper over `load_update_reported` that
     /// discards the failure reason.
+    ///
+    /// `force_continue` is forwarded to [`make_testreport`]'s argument of the
+    /// same name — the non-interactive escape hatch for a stale template
+    /// hash. REPL startup and `regenerate`'s post-job reload pass `false`:
+    /// the former has a REPL prompter to answer the question interactively,
+    /// the latter reloads a template TeReGen just regenerated, not refused.
     pub async fn load_update(
         &mut self,
         update: &UpdateID,
         autoconnect: bool,
         kind: UpdateKind,
+        force_continue: bool,
     ) -> String {
-        self.load_update_reported(update, autoconnect, kind).await.0
+        self.load_update_reported(update, autoconnect, kind, force_continue)
+            .await
+            .0
     }
 
     /// [`load_update`](Self::load_update) that also returns *why* a load failed.
@@ -747,6 +756,7 @@ impl Session {
         update: &UpdateID,
         autoconnect: bool,
         kind: UpdateKind,
+        force_continue: bool,
     ) -> (String, Option<String>) {
         let report = make_testreport(
             update,
@@ -755,6 +765,7 @@ impl Session {
             autoconnect,
             self.is_repl,
             self.prompter.as_ref(),
+            force_continue,
         )
         .await;
         let rrid = report.id();
@@ -1928,7 +1939,9 @@ mod tests {
         let mut s = Session::new(config, false);
 
         let update = UpdateID::parse(rrid).unwrap();
-        let loaded = s.load_update(&update, true, UpdateKind::Kernel).await;
+        let loaded = s
+            .load_update(&update, true, UpdateKind::Kernel, false)
+            .await;
 
         assert_eq!(loaded, rrid);
         assert!(s.templates.contains(rrid));
@@ -1958,7 +1971,8 @@ mod tests {
         let mut s = Session::new(config, false);
 
         let update = UpdateID::parse(rrid).unwrap();
-        s.load_update(&update, true, UpdateKind::Kernel).await;
+        s.load_update(&update, true, UpdateKind::Kernel, false)
+            .await;
 
         assert_eq!(
             s.metadata().base().lock_comment,
@@ -1987,7 +2001,8 @@ mod tests {
         let mut s = Session::new(config, false);
 
         let update = UpdateID::parse(rrid).unwrap();
-        s.load_update(&update, true, UpdateKind::Kernel).await;
+        s.load_update(&update, true, UpdateKind::Kernel, false)
+            .await;
 
         assert_eq!(s.metadata().base().lock_comment, "");
     }
@@ -2012,7 +2027,8 @@ mod tests {
         let mut s = Session::new(config, false);
 
         let update = UpdateID::parse(rrid).unwrap();
-        s.load_update(&update, true, UpdateKind::Kernel).await;
+        s.load_update(&update, true, UpdateKind::Kernel, false)
+            .await;
 
         assert_eq!(s.metadata().base().lock_comment, "");
     }
@@ -2030,7 +2046,7 @@ mod tests {
 
         let update = UpdateID::parse("SUSE:Maintenance:1:1").unwrap();
         let (loaded, reason) = s
-            .load_update_reported(&update, true, UpdateKind::Auto)
+            .load_update_reported(&update, true, UpdateKind::Auto, false)
             .await;
 
         assert_eq!(loaded, "");

@@ -40,7 +40,10 @@ pub async fn seed_session(
             // else as the automatic default.
             _ => UpdateKind::Auto,
         };
-        let rrid = session.load_update(&update.id, autoconnect, kind).await;
+        // `false`: this call always has a REPL prompter, which handles a stale hash.
+        let rrid = session
+            .load_update(&update.id, autoconnect, kind, false)
+            .await;
         if rrid.is_empty() {
             // The load path already logged "does not exist".
             tracing::error!(update = %update.id, "requested update could not be loaded");
