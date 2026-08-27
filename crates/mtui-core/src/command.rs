@@ -154,7 +154,21 @@ pub trait Command: Send + Sync {
             // to the null report. `activate` drops the prior guard first, so a
             // registry-mutating command (`load_template`) can re-point/re-lock
             // the active entry from inside `call` without self-deadlocking.
-            session.activate(resolved.first().map_or("", String::as_str));
+            let target_rrid = resolved.first().map_or("", String::as_str);
+            if !session.activate(target_rrid) && !target_rrid.is_empty() {
+                // A lost `try_lock_owned` race on a *loaded* rrid: `call`
+                // proceeds against the fallback null report below. Harmless
+                // today only because `Session::fork_for_call`'s invariant note
+                // documents two mechanisms that keep it unreached — on a fork
+                // the null is private and discarded with no teardown able to
+                // reach it (#478), worse than the canonical session's own
+                // documented poisoned-state hazard.
+                tracing::error!(
+                    command = self.name(),
+                    rrid = %target_rrid,
+                    "activate failed: dispatching against the private null report"
+                );
+            }
             let out = self.call(session, args).await;
             restore_active(session, restore);
             return out;
@@ -364,4 +378,92 @@ fn arg_flag(args: &ArgMatches, id: &str) -> bool {
         .flatten()
         .copied()
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::commands::testkit::{log_capture, session_with_hosts};
+
+    const RRID: &str = "SUSE:Maintenance:1:1";
+
+    /// A single-call probe with no side effects: only `run`'s activation
+    /// handling is under test here, not the body it drives.
+    struct NoopSingle;
+
+    #[async_trait]
+    impl Command for NoopSingle {
+        fn name(&self) -> &'static str {
+            "noop_probe"
+        }
+        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    /// A fork racing the canonical session for the same entry (mechanism 2 of
+    /// [`Session::fork_for_call`]'s invariant note makes this unreachable via
+    /// MCP today, but not by construction): `activate` fails and `run` used to
+    /// silently dispatch against the fork's own discarded null report (#478).
+    #[tokio::test]
+    async fn fork_activate_failure_logs_error_for_non_empty_rrid() {
+        // `session_with_hosts` already calls `activate(RRID)`, so the
+        // canonical session holds the entry's lock when the fork is built.
+        let (session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        let display = crate::display::CommandPromptDisplay::with_sink(
+            Box::new(Vec::new()),
+            crate::display::ColorMode::Never,
+        );
+        let mut fork = session.fork_for_call(display);
+
+        let cmd = NoopSingle;
+        let parser = crate::engine::command_parser(&cmd);
+        let args = parser
+            .try_get_matches_from(["-T", RRID])
+            .expect("argv should parse");
+
+        log_capture::start();
+        cmd.run(&mut fork, &args)
+            .await
+            .expect("the body still runs, against the fork's fallback null");
+        let logged = log_capture::take();
+
+        assert!(
+            logged.iter().any(|c| c.message.as_deref()
+                == Some("activate failed: dispatching against the private null report")),
+            "a lost race on a non-empty rrid must log at ERROR; got: {:?}",
+            logged
+                .iter()
+                .filter_map(|c| c.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The legitimate empty-session case (nothing loaded) must stay silent:
+    /// only a *non-empty* rrid losing the race is diagnosable.
+    #[tokio::test]
+    async fn empty_session_activate_logs_nothing() {
+        use crate::commands::testkit::empty_session;
+
+        let (mut session, _buf) = empty_session();
+        let cmd = NoopSingle;
+        let args = crate::commands::testkit::matches(&cmd, &[]);
+
+        log_capture::start();
+        cmd.run(&mut session, &args)
+            .await
+            .expect("an empty session still dispatches against the null report");
+        let logged = log_capture::take();
+
+        assert!(
+            logged.iter().all(|c| c.message.is_none()),
+            "an empty rrid is the legitimate nothing-loaded case, not a lost race; got: {:?}",
+            logged
+                .iter()
+                .filter_map(|c| c.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
 }
