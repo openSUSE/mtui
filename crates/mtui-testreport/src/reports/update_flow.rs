@@ -350,7 +350,7 @@ fn build_reboot_map(
 /// `update` check currently emits diagnostics.
 ///
 /// Every host in the group is judged. A caller that fans out to a *subset* —
-/// the per-package `prepare` and `downgrade` loops — must use
+/// `prepare`'s per-host command map, `downgrade`'s per-package loop — must use
 /// [`run_checks_where`] instead of filtering the returned list: a check logs
 /// its own ERROR breadcrumb before returning `Err`, so a discarded verdict has
 /// already been printed, for a host whose snapshot belongs to another phase.
@@ -743,10 +743,9 @@ async fn reboot_transactional(
 ///
 /// `report` is the [`SetRepo`] hook for the issue repos; `packages` the list to
 /// prepare. `testing` selects repo-`add` + the testing preparer variant;
-/// `force` toggles `--force-resolution`; `installed_only` only touches
-/// already-installed packages (per-package). All non-`installed_only` packages
-/// install in a **single** transaction so transactional hosts land them in one
-/// snapshot.
+/// `force` toggles `--force-resolution`; `installed_only` narrows the list to
+/// what each host already carries. Every host installs its list in a **single**
+/// transaction either way, so transactional hosts land it in one snapshot.
 pub async fn perform_prepare(
     targets: &mut HostsGroup,
     report: &dyn SetRepo,
@@ -873,35 +872,53 @@ async fn prepare_body(
         warn!("no packages to prepare");
     }
 
-    let mut cancelled_at: Option<usize> = None;
-    if installed_only {
-        // Conditional per-package install — inherently one package at a time.
-        for (i, pkg) in pkgs.iter().enumerate() {
-            // Package boundary = cancellation checkpoint; this serial loop is
-            // the longest interruptible stretch in the flow. `break`, not an
-            // early return: the fall-through still runs `reboot_transactional`,
-            // which activates the snapshot the staged packages live in.
-            if targets.cancel_requested() {
-                cancelled_at = Some(i);
-                break;
+    // One entry per enabled host; `--installed` narrows a host's own entry.
+    // One `transactional-update` call is one snapshot, and N calls between
+    // reboots leave all but the last inactive (#501).
+    let mut lists: BTreeMap<String, Vec<String>> = targets
+        .targets()
+        .filter(|t| t.state() == mtui_types::TargetState::Enabled)
+        .map(|t| (t.hostname().to_owned(), pkgs.to_vec()))
+        .collect();
+
+    // Hosts we deliberately did not dispatch to. Each already has its own
+    // verdict, so neither the failure scan nor the "no command could be built"
+    // rule below may judge them a second time.
+    let mut accounted: BTreeSet<String> = BTreeSet::new();
+    let mut probe_failures: Vec<UpdateError> = Vec::new();
+
+    // Both checkpoints fall through — never an early return past
+    // `reboot_transactional`.
+    let mut cancelled = false;
+    if installed_only && !pkgs.is_empty() {
+        if targets.cancel_requested() {
+            cancelled = true;
+        } else {
+            let outcome = narrow_to_installed(targets, registry, &mut lists).await;
+            for host in &outcome.dead {
+                accounted.insert(host.clone());
+                probe_failures.push(UpdateError::new("package probe failed", host.clone()));
             }
-            let quoted = quote_args(std::slice::from_ref(pkg));
-            let cmd = build_prepare_map(targets, registry, Some(&quoted), true);
-            targets.run(Command::PerHost(cmd.clone())).await;
-            note_dispatch(targets, &cmd, &mut dispatched, &mut inert);
-            note_check(
-                targets,
-                registry,
-                &cmd,
-                &mut check_failed,
-                &mut check_failures,
-            );
+            for host in &outcome.skipped {
+                accounted.insert(host.clone());
+                info!(
+                    host = %host,
+                    "none of the requested packages is installed; nothing to prepare"
+                );
+            }
+            // The probe is a fan-out and is never gated on the token; the
+            // checkpoint sits after it, before the dispatch it protects.
+            if targets.cancel_requested() {
+                cancelled = true;
+            }
         }
-    } else if !pkgs.is_empty() {
-        // A SINGLE transaction, so transactional hosts get one snapshot.
-        let joined = quote_args(pkgs);
-        let cmd = build_prepare_map(targets, registry, Some(&joined), false);
-        targets.run(Command::PerHost(cmd.clone())).await;
+    }
+
+    if !cancelled {
+        let cmd = build_prepare_map(targets, registry, &lists);
+        if !cmd.is_empty() {
+            targets.run(Command::PerHost(cmd.clone())).await;
+        }
         note_dispatch(targets, &cmd, &mut dispatched, &mut inert);
         note_check(
             targets,
@@ -920,30 +937,81 @@ async fn prepare_body(
     // written to), so on a transactional host it records what was *staged*
     // rather than leaving those packages unrecorded entirely.
     //
-    // Scoped per *host*, because `build_prepare_map` drops a host whose release
-    // key does not resolve or whose template does not render — the very hosts
-    // the block below fails with "nothing was installed" — and per *package*,
-    // because a cancel at `i` dispatched only `pkgs[..i]`. An empty list or a
-    // cancel before the first package therefore leaves no row at all.
-    let recorded: &[String] = match cancelled_at {
-        Some(i) => &pkgs[..i],
-        None => pkgs,
-    };
-    if !dispatched.is_empty() {
-        add_op_history_for(targets, &dispatched, "prepare", None, recorded).await;
+    // It is also what closes #407 for `update`: both of that flow's
+    // post-prepare aborts (the pre-dispatch cancel gate and the missing-updater
+    // abort) return without an `update` row — correctly, since no updater
+    // command dispatched — but the packages this prepare installed stay on
+    // every host. Writing the row where the side effect is produced records
+    // them for the standalone `prepare`, the initial prepare inside `update`,
+    // and the `--newpackage` prepare alike.
+    //
+    // Two things keep the row from over-claiming, both instances of "a row
+    // claiming an install that never started is worse than no row":
+    //
+    // * **Per host, not group-wide.** `dispatched` is a per-host set and
+    //   `build_prepare_map` drops a host whose release key does not resolve or
+    //   whose template does not render — the very hosts the block below fails
+    //   with "nothing was installed". A group-wide fan-out would hand exactly
+    //   those hosts a `:prepare:` row contradicting their own verdict, in a
+    //   file the project treats as an interop contract, so the write is scoped
+    //   to the hosts a command actually reached.
+    // * **The host's own list, not the requested set.** Under `--installed`
+    //   two hosts of one group receive different lists, and a row naming a
+    //   package that host never installed is the same over-claim.
+    //
+    // An empty list, a cancel before the dispatch, or a prepare for which no
+    // command could be built for any host therefore leaves no row at all.
+    //
+    // Grouped by list: one fan-out per distinct list, so up to one per host
+    // when every host narrowed differently.
+    let mut by_list: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
+    for host in &dispatched {
+        if let Some(list) = lists.get(host) {
+            by_list
+                .entry(list.clone())
+                .or_default()
+                .insert(host.clone());
+        }
+    }
+    for (list, hosts) in by_list {
+        add_op_history_for(targets, &hosts, "prepare", None, &list).await;
     }
 
-    // Minus the hosts the check already named: the two rules overlap on one
-    // signal (exit `-1` trips this scan and the checks' never-ran gate; a lock
-    // message on stderr trips the stderr half and the marker check), and naming
-    // one host twice pushes `aggregate_failures` out of its verbatim branch,
-    // where `host` becomes `None` and an MCP client loses which refhost to look
-    // at. The check's verdict is the more specific of the two.
-    // `downgrade_body` resolves the same overlap via `failed_downgrade.insert`.
+    // Surface any per-host command failure from the install fan-out; the
+    // prepare check's own failures were collected with it above.
+    //
+    // A host the check already named is dropped here: the two rules overlap on
+    // one signal. `Target::run` records exit `-1` for a timeout, a dropped
+    // connection or an unconnected host, which trips this scan's
+    // `lastexit() != 0` *and* the `("slmicro", true)` / `("YUM", false)`
+    // checks' never-ran gate; a lock message on stderr trips the stderr half
+    // and the marker check. Both would name one host twice, which pushes
+    // `aggregate_failures` out of its single-failure verbatim branch into the
+    // summary — where `host` becomes `None` and the MCP client loses the one
+    // field that says *which* refhost to go and look at. The check's verdict
+    // is the one kept because it is the more specific of the two ("timed out
+    // or failed to run" and "update stack locked" both say more than "prepare
+    // command failed"); dropping the check's instead would trade attribution
+    // back for a coarser diagnosis. `downgrade_body` resolves the identical
+    // overlap the identical way — its `failed_downgrade.insert` gates the
+    // exit-code entry behind the check's verdict for the same host.
+    //
+    // An `accounted` host is dropped for a second, distinct reason: no install
+    // command was built for it, so its last snapshot is the `--installed`
+    // probe's. Scoring that as a prepare invents a verdict — a dead probe would
+    // be named twice (the coarser reason on top of "package probe failed"), and
+    // a skipped one named at all, since `rpm -qa` warns on stderr while exiting
+    // `0` and this scan's stderr half fires on that. Same rule `note_dispatch`
+    // and `note_check` impose by scoping to the fan-out's own command map.
     let mut failures: Vec<UpdateError> = host_command_failures(targets, "prepare command failed")
         .into_iter()
-        .filter(|e| !e.host.as_ref().is_some_and(|h| check_failed.contains(h)))
+        .filter(|e| {
+            !e.host
+                .as_ref()
+                .is_some_and(|h| check_failed.contains(h) || accounted.contains(h))
+        })
         .collect();
+    failures.extend(probe_failures);
 
     // A host whose prepare failed must not reboot into the failed transaction,
     // while a healthy peer still must. The skip set is built from the check
@@ -953,26 +1021,31 @@ async fn prepare_body(
     // reboot would leave a healthy snapshot silently inert. The prepare
     // templates are single commands, so the exit code is the prepare's own.
     //
-    // The check verdicts complete the gate on ("slmicro", true), where a locked
-    // update stack, a dependency prompt or an RPM error can still exit `0`
-    // (#406) — for *any* package it failed on, which is why `check_failed` is
-    // filled per fan-out.
+    // The check verdicts are the other half of the gate, and on
+    // ("slmicro", true) they are what makes it complete: a prepare that
+    // reported a locked update stack, a dependency prompt or an RPM error and
+    // still exited `0` is invisible to the exit-code rule above, and its
+    // reboot would activate the failed transaction. A marker-failed prepare
+    // therefore skips its reboot, while a host whose only stderr is progress
+    // still gets one (#406).
     inert.extend(check_failed.iter().cloned());
     failures.extend(check_failures);
 
-    // A host the fan-out never reached must fail by name, not ride the group's
-    // success (#396): `build_prepare_map` drops a host whose release key does
-    // not resolve or whose template does not render (e.g. no installed-only
-    // variant), and nothing else records that. Skipped on a cancel before the
-    // first fan-out (nothing was expected to dispatch) and on an empty list
-    // (the warn above owns that case).
-    if !pkgs.is_empty() && cancelled_at != Some(0) {
+    // A host the fan-out never reached must fail by name, not ride the
+    // group's success (#396): `build_prepare_map` drops a host whose release
+    // key does not resolve or whose template does not render, and nothing else
+    // records that. Skipped when the flow was cancelled before the dispatch
+    // (nothing was expected to dispatch) and when the list was empty (the warn
+    // above owns that case); `accounted` excuses the hosts that already carry
+    // their own verdict, which is what keeps this from being a second entry for
+    // one host.
+    if !pkgs.is_empty() && !cancelled {
         for target in targets.targets() {
             if target.state() != mtui_types::TargetState::Enabled {
                 continue;
             }
             let host = target.hostname();
-            if !dispatched.contains(host) {
+            if !dispatched.contains(host) && !accounted.contains(host) {
                 inert.insert(host.to_owned());
                 failures.push(UpdateError::new(
                     "no prepare command could be built for this host; nothing was installed",
@@ -1016,21 +1089,10 @@ async fn prepare_body(
     if !failures.is_empty() {
         return aggregate_failures("prepare", failures).map_err(PrepareFailure::HostReported);
     }
-    if let Some(i) = cancelled_at {
-        let done: Vec<&str> = pkgs[..i].iter().map(String::as_str).collect();
-        let left: Vec<&str> = pkgs[i..].iter().map(String::as_str).collect();
-        warn!(
-            applied = %done.join(", "),
-            not_attempted = %left.join(", "),
-            "prepare cancelled at a package boundary"
-        );
-        return Err(PrepareFailure::Cancelled(UpdateError::cancelled(format!(
-            "prepare cancelled after {}/{} packages; applied: [{}]; not attempted: [{}]",
-            i,
-            pkgs.len(),
-            done.join(", "),
-            left.join(", "),
-        ))));
+    if cancelled {
+        return Err(PrepareFailure::Cancelled(UpdateError::cancelled(
+            "prepare cancelled before any package was installed",
+        )));
     }
     aggregate_failures("prepare", failures).map_err(PrepareFailure::HostReported)
 }
@@ -1095,16 +1157,26 @@ fn note_check(
     }
 }
 
-/// Builds the per-host prepare command map. `package` fills the `$package`
-/// variable; `installed_only` selects the conditional template.
+/// Builds the per-host prepare command map from each host's own list.
+///
+/// A host absent from `lists`, or carrying an empty one, gets no command: an
+/// empty list would render an argument-less install. The caller owns that
+/// host's verdict (see [`prepare_body`]'s `accounted`); the ERROR logs here stay
+/// for the two cases the caller cannot see — an unresolved release key and a
+/// template that does not render (#396).
 fn build_prepare_map(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
-    package: Option<&str>,
-    installed_only: bool,
+    lists: &BTreeMap<String, Vec<String>>,
 ) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     for target in targets.targets() {
+        let Some(list) = lists.get(target.hostname()) else {
+            continue;
+        };
+        if list.is_empty() {
+            continue;
+        }
         let Some((release, transactional)) = host_key(target) else {
             error!(host = %target.hostname(), "prepare: host release key unresolved; no command built");
             continue;
@@ -1112,16 +1184,11 @@ fn build_prepare_map(
         let Some(doer) = resolve_doer(registry, Role::Prepare, &release, transactional) else {
             continue;
         };
-        let mut vars: HashMap<&str, &str> = HashMap::new();
-        if let Some(p) = package {
-            vars.insert("package", p);
-        }
-        let rendered = if installed_only {
-            doer.render_installed_only(&vars).ok().flatten()
-        } else {
-            doer.render_command(&vars).ok()
-        };
-        if let Some(cmd) = rendered {
+        // Quoting lives here alone, so no entry can reach the template
+        // unquoted.
+        let joined = quote_args(list);
+        let vars: HashMap<&str, &str> = [("package", joined.as_str())].into_iter().collect();
+        if let Ok(cmd) = doer.render_command(&vars) {
             map.insert(target.hostname().to_owned(), cmd);
         } else {
             // `prepare_body`'s dispatch accounting turns the drop into a named
@@ -1133,6 +1200,85 @@ fn build_prepare_map(
         }
     }
     map
+}
+
+/// The hosts [`narrow_to_installed`] did not hand on to the install, split by
+/// why. Both are accounted for, so neither may be judged on the probe's
+/// snapshot.
+struct ProbeOutcome {
+    /// Probe exited non-zero — the `-1` never-ran sentinel included.
+    dead: BTreeSet<String>,
+    /// Probe answered `0` and the host carries none of the list. A skip, not a
+    /// failure.
+    skipped: BTreeSet<String>,
+}
+
+/// Narrows each host's list in `lists` to the packages that host already
+/// carries, dropping the hosts left with nothing.
+///
+/// Unlike `downgrade_body`'s version probe there is no all-dead shortcut and no
+/// history row: prepare has dispatched nothing at this point, so the caller's
+/// ordinary fall-through already names every dead host and writes no row.
+async fn narrow_to_installed(
+    targets: &mut HostsGroup,
+    registry: &WorkflowRegistry,
+    lists: &mut BTreeMap<String, Vec<String>>,
+) -> ProbeOutcome {
+    let mut outcome = ProbeOutcome {
+        dead: BTreeSet::new(),
+        skipped: BTreeSet::new(),
+    };
+    let mut probe_map = BTreeMap::new();
+    for target in targets.targets() {
+        if !lists.contains_key(target.hostname()) {
+            continue;
+        }
+        let Some((release, transactional)) = host_key(target) else {
+            continue;
+        };
+        let Some(doer) = resolve_doer(registry, Role::Prepare, &release, transactional) else {
+            continue;
+        };
+        if let Ok(Some(cmd)) = doer.render_list_command(&HashMap::new()) {
+            probe_map.insert(target.hostname().to_owned(), cmd);
+        }
+    }
+    if probe_map.is_empty() {
+        return outcome;
+    }
+    targets.run(Command::PerHost(probe_map.clone())).await;
+
+    for hostname in probe_map.keys() {
+        let Some(target) = targets.get(hostname) else {
+            continue;
+        };
+        // Non-zero is the whole signal, and `rpm -qa` is what makes it
+        // trustworthy: it exits `0` on success, so non-zero is the probe
+        // failing rather than "this host carries none of them" (#451). The
+        // `-1` never-ran sentinel is one of its values, not the predicate.
+        if target.lastexit().is_some_and(|c| c != 0) {
+            error!(
+                host = %hostname,
+                exit = ?target.lastexit(),
+                "installed-package probe failed; this host was not prepared"
+            );
+            outcome.dead.insert(hostname.clone());
+            lists.remove(hostname);
+            continue;
+        }
+        // Exact line equality: `pkg-a` must not match `pkg-a-devel`.
+        let installed: std::collections::HashSet<&str> =
+            target.lastout().lines().map(str::trim_end).collect();
+        let Some(list) = lists.get_mut(hostname) else {
+            continue;
+        };
+        list.retain(|p| installed.contains(p.as_str()));
+        if list.is_empty() {
+            lists.remove(hostname);
+            outcome.skipped.insert(hostname.clone());
+        }
+    }
+    outcome
 }
 
 /// Rolls `packages` back to the pre-update version on every host.
@@ -2024,6 +2170,537 @@ mod tests {
         assert!(!install.contains("branding-upstream"));
     }
 
+    // --- prepare --installed (#501) ----------------------------------------
+
+    /// The `--installed` probe, verbatim. Every test below arms on it appearing
+    /// in `commands()`: a fixture that never answered it would prove nothing.
+    const INSTALLED_PROBE: &str = "rpm -qa --qf '%{NAME}\\n'";
+
+    /// An enabled transactional SL-Micro target answering the `--installed`
+    /// probe with `stdout`/`exit`, and every other command cleanly.
+    ///
+    /// Scripted per command rather than through `with_default`, so the probe is
+    /// attributable: a mock answering everything alike leaves nothing to
+    /// attribute.
+    fn slmicro_target_with_probe(
+        hostname: &str,
+        stdout: &str,
+        exit: i16,
+    ) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                INSTALLED_PROBE.to_owned(),
+                CommandLog::new(INSTALLED_PROBE, stdout, "", exit, 0),
+            )
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    /// [`slmicro_target_with_probe`] whose probe exits `0` but also writes
+    /// `stderr` — `rpm -qa` warns about an rpmdb it had to convert or rebuild
+    /// and still succeeds.
+    fn slmicro_target_with_noisy_probe(
+        hostname: &str,
+        stdout: &str,
+        stderr: &str,
+    ) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                INSTALLED_PROBE.to_owned(),
+                CommandLog::new(INSTALLED_PROBE, stdout, stderr, 0, 0),
+            )
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        (t, handle)
+    }
+
+    /// [`sles_target`]'s non-transactional zypper shape, answering the
+    /// `--installed` probe with `stdout`.
+    fn sles_target_with_probe(hostname: &str, stdout: &str) -> (Target, MockConnection) {
+        let conn = MockConnection::new(hostname)
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                INSTALLED_PROBE.to_owned(),
+                CommandLog::new(INSTALLED_PROBE, stdout, "", 0, 0),
+            );
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        (t, handle)
+    }
+
+    /// The argument tokens after `-l` of the single command starting with
+    /// `prefix`, as a set. A token set, not a substring guard: `contains`
+    /// cannot tell "installs pkg-a" from "installs pkg-a and pkg-b".
+    fn install_args(handle: &MockConnection, prefix: &str) -> BTreeSet<String> {
+        let cmds = handle.commands();
+        let matching: Vec<&String> = cmds.iter().filter(|c| c.starts_with(prefix)).collect();
+        assert_eq!(matching.len(), 1, "expected one install command: {cmds:?}");
+        matching[0]
+            .split_whitespace()
+            .skip_while(|t| *t != "-l")
+            .skip(1)
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_runs_one_transaction_per_transactional_host() {
+        // #501. Per-package `transactional-update pkg in` opens one snapshot
+        // each, so every package but the last stays inactive after the reboot
+        // while the flow reports success. One call, one snapshot.
+        //
+        // The host carries BOTH requested packages, so a per-package loop over
+        // its own narrowed list would still dispatch twice — the narrowing is
+        // the sibling test's subject, not this one's.
+        let (t, handle) = slmicro_target_with_probe("h1", "pkg-a\npkg-b\nzsh\n", 0);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await;
+        assert!(
+            res.is_ok(),
+            "a clean --installed prepare returns Ok: {res:?}"
+        );
+
+        let cmds = handle.commands();
+        assert!(
+            cmds.iter().any(|c| c == INSTALLED_PROBE),
+            "the probe must have run, or nothing below is attributable: {cmds:?}"
+        );
+        assert_eq!(
+            cmds.iter()
+                .filter(|c| c.starts_with("transactional-update -n pkg in -l"))
+                .count(),
+            1,
+            "one transaction, not one per package: {cmds:?}"
+        );
+        assert!(
+            !cmds.iter().any(|c| c.contains("if $(rpm -q")),
+            "the conditional wrapper is gone: {cmds:?}"
+        );
+        let fired = handle.fired_commands();
+        assert_eq!(
+            fired
+                .iter()
+                .filter(|c| c.contains("systemctl reboot"))
+                .count(),
+            1,
+            "one snapshot, one reboot: {fired:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_installs_only_what_the_probe_listed() {
+        let (t, handle) = slmicro_target_with_probe("h1", "pkg-a\nzsh\n", 0);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect("a clean --installed prepare returns Ok");
+
+        assert!(
+            handle.commands().iter().any(|c| c == INSTALLED_PROBE),
+            "the probe must have run: {:?}",
+            handle.commands()
+        );
+        assert_eq!(
+            install_args(&handle, "transactional-update -n pkg in -l"),
+            ["pkg-a".to_owned()].into_iter().collect::<BTreeSet<_>>(),
+            "pkg-b is not installed on this host, so it must not be requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_matches_names_exactly() {
+        // `pkg-a-devel` is not `pkg-a`. A containment match would install a
+        // package the host does not carry — the sibling test above cannot
+        // catch that, because its probe answers with a whole name.
+        let (t, handle) = slmicro_target_with_probe("h1", "pkg-a-devel\n", 0);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await;
+        assert!(res.is_ok(), "a genuine skip is not a failure: {res:?}");
+
+        let cmds = handle.commands();
+        assert!(
+            cmds.iter().any(|c| c == INSTALLED_PROBE),
+            "the probe must have run: {cmds:?}"
+        );
+        assert!(
+            !cmds.iter().any(|c| c.contains("pkg in")),
+            "nothing may be installed: {cmds:?}"
+        );
+        let fired = handle.fired_commands();
+        assert!(
+            !fired.iter().any(|c| c.contains("systemctl reboot")),
+            "nothing was staged, so nothing to activate: {fired:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_skips_a_host_with_nothing_installed() {
+        // A host carrying none of the list is a skip, not a "no prepare command
+        // could be built" failure — the #396 rule must not judge it a second
+        // time.
+        let (t, handle) = slmicro_target_with_probe("h1", "zsh\n", 0);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await;
+        assert!(res.is_ok(), "a host with nothing to prepare is Ok: {res:?}");
+
+        let cmds = handle.commands();
+        assert!(
+            cmds.iter().any(|c| c == INSTALLED_PROBE),
+            "the probe must have run: {cmds:?}"
+        );
+        assert!(
+            !cmds.iter().any(|c| c.contains("pkg in")),
+            "nothing may be installed: {cmds:?}"
+        );
+        assert!(
+            !handle
+                .fired_commands()
+                .iter()
+                .any(|c| c.contains("systemctl reboot")),
+            "nothing was staged: {:?}",
+            handle.fired_commands()
+        );
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "a host nothing was installed on must have no prepare row"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_skips_a_host_whose_probe_warned_on_stderr() {
+        // The skip must survive `host_command_failures`' stderr half. A skipped
+        // host's last snapshot IS its probe, and `rpm -qa` warns on stderr while
+        // exiting `0`, so a group-wide read scores that warning as the prepare of
+        // a host no install command was ever built for.
+        let (t, handle) = slmicro_target_with_noisy_probe(
+            "h1",
+            "zsh\n",
+            "warning: Found bdb Packages database while attempting sqlite backend\n",
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let res = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await;
+        assert!(
+            res.is_ok(),
+            "a warning on the probe's stderr is not a failed prepare: {res:?}"
+        );
+
+        let cmds = handle.commands();
+        assert_eq!(
+            cmds,
+            vec![INSTALLED_PROBE.to_owned()],
+            "the probe ran and nothing else did"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_fails_a_host_whose_probe_failed() {
+        // #451: a probe that fails must fail the host, never degrade it. `7` is
+        // a real non-zero that is not the `-1` sentinel, so a predicate
+        // narrowed to the sentinel still lets this through.
+        let (t, handle) = slmicro_target_with_probe("h1", "", 7);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect_err("a dead probe must not report success");
+
+        let cmds = handle.commands();
+        assert!(
+            cmds.iter().any(|c| c == INSTALLED_PROBE),
+            "the probe must have run: {cmds:?}"
+        );
+        // Exact: one failure, so `aggregate_failures` returns it verbatim and
+        // `host` survives. A second entry would collapse it to `None`.
+        assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
+        assert_eq!(err.reason, "package probe failed", "err: {err}");
+        assert!(
+            !cmds.iter().any(|c| c.contains("pkg in")),
+            "nothing may be installed: {cmds:?}"
+        );
+        assert!(
+            !handle
+                .fired_commands()
+                .iter()
+                .any(|c| c.contains("systemctl reboot")),
+            "nothing was staged: {:?}",
+            handle.fired_commands()
+        );
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "a dead-probe host must have no prepare row"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_probe_never_ran_fails_by_name() {
+        // The `-1` sentinel half. Kept separate from the test above precisely
+        // because narrowing the predicate to `c == -1` leaves THIS one green,
+        // while deleting the gate outright leaves that one green.
+        let (t, handle) = slmicro_target_with_probe("h1", "", -1);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect_err("a probe that never ran must not report success");
+
+        let cmds = handle.commands();
+        assert!(
+            cmds.iter().any(|c| c == INSTALLED_PROBE),
+            "the probe must have run: {cmds:?}"
+        );
+        assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
+        assert_eq!(err.reason, "package probe failed", "err: {err}");
+        assert!(
+            !cmds.iter().any(|c| c.contains("pkg in")),
+            "nothing may be installed: {cmds:?}"
+        );
+        assert!(
+            !handle
+                .fired_commands()
+                .iter()
+                .any(|c| c.contains("systemctl reboot")),
+            "nothing was staged: {:?}",
+            handle.fired_commands()
+        );
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "a dead-probe host must have no prepare row"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_on_zypper_installs_the_installed_subset_in_one_call() {
+        // The narrowing is not transactional-only: `--installed` on a zypper
+        // host also becomes one call over the subset, which is what `prepare`
+        // without `-i` already did.
+        let (t, handle) = sles_target_with_probe("h1", "pkg-a\nzsh\n");
+        let mut group = HostsGroup::new(vec![t], false);
+
+        perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect("a clean --installed prepare returns Ok");
+
+        let cmds = handle.commands();
+        assert!(
+            cmds.iter().any(|c| c == INSTALLED_PROBE),
+            "the probe must have run: {cmds:?}"
+        );
+        assert_eq!(
+            install_args(&handle, "zypper -n in -y -l"),
+            ["pkg-a".to_owned()].into_iter().collect::<BTreeSet<_>>(),
+        );
+        assert!(
+            !cmds.iter().any(|c| c.contains("if $(rpm -q")),
+            "the conditional wrapper is gone: {cmds:?}"
+        );
+        assert!(
+            handle.fired_commands().is_empty(),
+            "a non-transactional host fires no reboot: {:?}",
+            handle.fired_commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_installed_only_records_the_hosts_own_list_in_history() {
+        // Two hosts of one group receive different lists, so a group-wide row
+        // would name packages h1 never installed.
+        let (t1, h1) = slmicro_target_with_probe("h1", "pkg-a\n", 0);
+        let (t2, h2) = slmicro_target_with_probe("h2", "pkg-a\npkg-b\n", 0);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+
+        perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect("a clean --installed prepare returns Ok");
+
+        for handle in [&h1, &h2] {
+            assert!(
+                handle.commands().iter().any(|c| c == INSTALLED_PROBE),
+                "both probes must have run: {:?}",
+                handle.commands()
+            );
+        }
+        // Anchored on the tail: it pins the label *and* the list. A bare
+        // `contains("prepare")` would also match a package named
+        // `prepare-something`.
+        for (handle, tail) in [(&h1, ":prepare:pkg-a\n"), (&h2, ":prepare:pkg-a pkg-b\n")] {
+            let contents =
+                String::from_utf8(handle.file_contents(HISTORY_LOG).expect("a prepare row"))
+                    .unwrap();
+            assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
+            assert!(contents.ends_with(tail), "history line: {contents:?}");
+        }
+    }
+
+    /// A cancel that lands while the probe fan-out is in flight must stop at
+    /// the post-probe checkpoint, dispatching nothing.
+    ///
+    /// Deterministic without a wall clock: under `start_paused` the runtime
+    /// advances the timer only when every task is idle. The probe starts at 0ms
+    /// and completes at 10ms; the canceller fires at 5ms, so the fan-out itself
+    /// is never gated (gating one would leave a host's stale `last*` snapshot
+    /// sailing through the checks) and the checkpoint after it is what stops
+    /// the flow.
+    ///
+    /// This replaces the retired
+    /// `prepare_cancelled_mid_loop_records_only_the_dispatched_packages`. That
+    /// test pinned "the history row names only the dispatched subset", which is
+    /// not re-pinned here: with prepare all-or-nothing per host, a partially
+    /// applied prepare has no producer and the property ceases to exist.
+    #[tokio::test(start_paused = true)]
+    async fn prepare_installed_only_cancel_after_the_probe_dispatches_nothing() {
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_run_delay(std::time::Duration::from_millis(10))
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let token = group.cancel_token();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            token.cancel();
+        });
+
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned(), "pkg-b".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect_err("a cancelled prepare reports an error");
+        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+
+        assert_eq!(
+            handle.commands(),
+            vec![INSTALLED_PROBE.to_owned()],
+            "the probe ran and nothing else did"
+        );
+        assert!(
+            !handle
+                .fired_commands()
+                .iter()
+                .any(|c| c.contains("systemctl reboot")),
+            "nothing was staged: {:?}",
+            handle.fired_commands()
+        );
+        assert!(
+            handle.file_contents(HISTORY_LOG).is_none(),
+            "nothing dispatched, so no row"
+        );
+    }
+
     /// Builds an enabled *transactional* target whose release resolves to "11"
     /// (`sle-studioonsite`) — a `(release, transactional)` key with no
     /// preparer/downgrader doer, so `build_reboot_map` fails and the flow takes
@@ -2598,10 +3275,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_writes_no_history_when_cancelled_before_any_dispatch() {
+    async fn prepare_installed_only_cancel_before_the_probe_runs_nothing() {
         // The inverse failure direction: a row claiming an install that never
-        // started is worse than no row. `installed_only` takes the per-package
-        // loop, whose checkpoint breaks at package 0, so nothing dispatches.
+        // started is worse than no row. The `commands().is_empty()` assertion
+        // below is what forces the PRE-probe checkpoint to exist — without one
+        // the probe fan-out would run and this would have to be weakened.
         let (t, handle) = sles_target("h1", "");
         let mut group = HostsGroup::new(vec![t], false);
         group.cancel_token().cancel();
@@ -2617,10 +3295,14 @@ mod tests {
         .await
         .expect_err("a cancelled prepare reports an error");
         assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
+        assert_eq!(
+            err.reason, "prepare cancelled before any package was installed",
+            "names how far it got: {err}"
+        );
 
         assert!(
             handle.commands().is_empty(),
-            "cancelled at package 0, so nothing dispatched: {:?}",
+            "cancelled before the probe, so nothing dispatched: {:?}",
             handle.commands()
         );
         assert!(
@@ -2686,74 +3368,6 @@ mod tests {
             bad_handle
                 .file_contents(HISTORY_LOG)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
-        );
-    }
-
-    /// A cancel mid-way through the `--installed-only` loop must record the
-    /// packages that were dispatched, not the whole prepare set.
-    ///
-    /// Deterministic without a wall clock: under `start_paused` the runtime
-    /// advances the timer only when every task is idle, so the interleaving is
-    /// fixed. Each fan-out takes 10ms of virtual time and the canceller fires
-    /// at 15ms, so package 1's checkpoint still passes and package 2's breaks
-    /// the loop: two of four packages dispatched.
-    #[tokio::test(start_paused = true)]
-    async fn prepare_cancelled_mid_loop_records_only_the_dispatched_packages() {
-        let conn = MockConnection::new("h1")
-            .with_default(CommandLog::new("", "", "", 0, 0))
-            .with_run_delay(std::time::Duration::from_millis(10));
-        let handle = conn.clone();
-        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
-        t.set_system(
-            System::new(
-                SystemProduct::new("SLES", "15.5", "x86_64"),
-                BTreeSet::new(),
-                false,
-            ),
-            false,
-        );
-        let mut group = HostsGroup::new(vec![t], false);
-        let token = group.cancel_token();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-            token.cancel();
-        });
-
-        let pkgs: Vec<String> = ["pkg-a", "pkg-b", "pkg-c", "pkg-d"]
-            .iter()
-            .map(|p| (*p).to_owned())
-            .collect();
-        let err = perform_prepare(&mut group, &NoopRepo, &pkgs, false, false, true)
-            .await
-            .expect_err("a cancelled prepare reports an error");
-        assert!(err.is_cancelled(), "must be flagged as a cancel: {err:?}");
-        // Pins the interleaving, so a change that moved the cancel to another
-        // package fails here rather than re-aiming the assertion below.
-        assert_eq!(
-            err.reason,
-            "prepare cancelled after 2/4 packages; applied: [pkg-a, pkg-b]; \
-             not attempted: [pkg-c, pkg-d]",
-            "the loop must have broken at package 2"
-        );
-        assert_eq!(
-            handle.commands().len(),
-            2,
-            "exactly two packages dispatched: {:?}",
-            handle.commands()
-        );
-
-        let contents = String::from_utf8(
-            handle
-                .file_contents(HISTORY_LOG)
-                .expect("two packages were installed, so there is a row"),
-        )
-        .unwrap();
-        assert_eq!(contents.lines().count(), 1, "history: {contents:?}");
-        // `pkg-c`/`pkg-d` were never attempted, so naming them would be the
-        // same over-claim as a row for a prepare that never ran.
-        assert!(
-            contents.ends_with(":prepare:pkg-a pkg-b\n"),
-            "the row must name only the dispatched packages: {contents:?}"
         );
     }
 
@@ -5072,127 +5686,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn perform_prepare_judges_every_package_not_just_the_last() {
-        // `--installed-only`'s template is `if $(rpm -q pkg …); then …; fi`,
-        // which exits 0 when the package is absent, so the *last* package is
-        // very often a no-op success: reading `lastexit()` once after the loop
-        // would see that 0 and reboot into the transaction pkg-a broke.
-        let failing = "if $(rpm -q pkg-a &>/dev/null); \
-                       then transactional-update -n pkg in -l  pkg-a ; fi";
-        let conn = MockConnection::new("h1")
-            .with_default(CommandLog::new("", "", "", 0, 0))
-            .with_response(failing.to_owned(), CommandLog::new(failing, "", "", 1, 0))
-            .with_changing_boot_id();
-        let handle = conn.clone();
-        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
-        t.set_system(
-            System::new(
-                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
-                BTreeSet::new(),
-                true,
-            ),
-            true,
-        );
-        let mut group = HostsGroup::new(vec![t], false);
-
-        let res = perform_prepare(
-            &mut group,
-            &NoopRepo,
-            &["pkg-a".to_owned(), "pkg-b".to_owned()],
-            false,
-            false,
-            true,
-        )
-        .await;
-
-        // The fixture only means anything if pkg-a's command really ran.
-        let cmds = handle.commands();
-        assert!(
-            cmds.iter().any(|c| c == failing),
-            "pkg-a's command must have been dispatched: {cmds:?}"
-        );
-        assert!(res.is_err(), "a failed package must fail prepare: {res:?}");
-        let fired = handle.fired_commands();
-        assert!(
-            !fired.iter().any(|c| c.contains("systemctl reboot")),
-            "pkg-a failed, so the host must not activate its snapshot: {fired:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn perform_prepare_judges_the_markers_of_every_package_not_just_the_last() {
-        // The marker half of the test above (#406). Every command here exits
-        // `0`, so `note_dispatch`'s exit-code rule and `host_command_failures`'
-        // stderr rule (post-loop only — pkg-b's clean run) see nothing: the
-        // only mechanism that can fail h1 or keep it out of the reboot map is
-        // the prepare check's verdict on pkg-a, which a single post-loop call
-        // would miss.
-        let locked = "if $(rpm -q pkg-a &>/dev/null); \
-                      then transactional-update -n pkg in -l  pkg-a ; fi";
-        let conn = MockConnection::new("h1")
-            .with_default(CommandLog::new("", "", "", 0, 0))
-            .with_response(
-                locked.to_owned(),
-                CommandLog::new(locked, "", "System management is locked", 0, 0),
-            )
-            .with_changing_boot_id();
-        let h1 = conn.clone();
-        let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
-        t1.set_system(
-            System::new(
-                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
-                BTreeSet::new(),
-                true,
-            ),
-            true,
-        );
-        // h2 is clean throughout, so an empty `fired` list cannot fake h1's red.
-        let (t2, h2) = slmicro_target("h2", "", 0);
-        let mut group = HostsGroup::new(vec![t1, t2], false);
-
-        let res = perform_prepare(
-            &mut group,
-            &NoopRepo,
-            &["pkg-a".to_owned(), "pkg-b".to_owned()],
-            false,
-            false,
-            true,
-        )
-        .await;
-
-        // The fixture only means anything if BOTH fan-outs really happened:
-        // pkg-a's locked one, and a later clean one to overwrite its snapshot.
-        let cmds = h1.commands();
-        assert!(
-            cmds.iter().any(|c| c == locked),
-            "pkg-a's command must have been dispatched: {cmds:?}"
-        );
-        assert!(
-            cmds.iter().any(|c| c.contains("pkg-b")),
-            "pkg-b must have run after it, overwriting the snapshot: {cmds:?}"
-        );
-
-        // The reboot is asserted before the verdict: it is the consequence the
-        // issue is about, so it must own the red when both regress.
-        let fired1 = h1.fired_commands();
-        assert!(
-            !fired1.iter().any(|c| c.contains("systemctl reboot")),
-            "h1's pkg-a hit a locked stack; it must not reboot into it: {fired1:?}"
-        );
-        let fired2 = h2.fired_commands();
-        assert!(
-            fired2.iter().any(|c| c.contains("systemctl reboot")),
-            "healthy h2 must still reboot so its snapshot activates: {fired2:?}"
-        );
-
-        // Exact, not `contains`: a second entry for h1 would collapse `host` to
-        // `None` via the aggregate summary.
-        let err = res.expect_err("a locked stack on any package must fail the prepare");
-        assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
-        assert_eq!(err.reason, "update stack locked", "err: {err}");
-    }
-
-    #[tokio::test]
     async fn perform_prepare_does_not_reboot_a_host_with_nothing_staged() {
         // The reboot map is built from the host's transactional flag and does
         // not know an empty package list dispatched nothing. In the `update`
@@ -5324,7 +5817,10 @@ mod tests {
         // stderr gates nothing, a *recognised marker* on stderr gates the
         // reboot.
         let (t, handle) = slmicro_target_with_stderr("h1", "System management is locked");
-        let mut group = HostsGroup::new(vec![t], false);
+        // h2 is clean throughout: it keeps the reboot assertion honest in the
+        // positive direction, so an empty `fired` list cannot fake h1's red.
+        let (t2, h2) = slmicro_target("h2", "", 0);
+        let mut group = HostsGroup::new(vec![t, t2], false);
 
         let err = perform_prepare(
             &mut group,
@@ -5342,6 +5838,11 @@ mod tests {
         assert!(
             !fired.iter().any(|c| c.contains("systemctl reboot")),
             "a host whose prepare reported a locked stack must not be rebooted: {fired:?}"
+        );
+        let fired2 = h2.fired_commands();
+        assert!(
+            fired2.iter().any(|c| c.contains("systemctl reboot")),
+            "healthy h2 must still reboot so its snapshot activates: {fired2:?}"
         );
         // Exact reason *and* host: the stderr rule in `host_command_failures`
         // fires on this transcript too, so h1 is a candidate to be named twice,
@@ -5586,60 +6087,65 @@ mod tests {
         assert!(msg.contains("pkg-a"), "names what was not attempted: {msg}");
     }
 
-    /// A cancel mid-way through the per-package prepare loop must still run
-    /// the fall-through — in particular `reboot_transactional`, which is what
-    /// actually activates the snapshot the staged packages live in. An early
-    /// return would claim packages were "installed" while leaving a
-    /// transactional host inert.
-    #[tokio::test]
-    async fn prepare_cancel_mid_loop_still_reaches_the_reboot_fallthrough() {
-        let (t, handle) = sles_target("h1", "");
-        let mut group = HostsGroup::new(vec![t], false);
-        let report = crate::reports::PiReport::new(Config::default());
-        let packages = vec!["pkg-a".to_owned(), "pkg-b".to_owned()];
-
-        // Cancel before the loop so it stops at package 0.
-        group.cancel_token().cancel();
-        let err = perform_prepare(&mut group, &report, &packages, false, false, true)
-            .await
-            .expect_err("a cancelled prepare reports an error");
-
-        assert!(err.is_cancelled(), "flagged as a cancel: {err:?}");
-        let msg = err.to_string();
-        assert!(msg.contains("applied"), "names what was applied: {msg}");
-        assert!(
-            !msg.contains("installed:"),
-            "must not claim packages were installed when a transactional \
-             snapshot may be inert: {msg}"
-        );
-        assert!(
-            handle.commands().is_empty(),
-            "cancelled at package 0, so no package command may run: {:?}",
-            handle.commands()
-        );
-    }
-
     /// A genuine host failure outranks a cancellation: reporting only
     /// "cancelled" would bury a broken host the operator must still act on.
-    #[tokio::test]
+    ///
+    /// Both conditions have to hold at once for the rule to be reachable, and
+    /// only `--installed` produces that: the probe fails the host by name while
+    /// the post-probe checkpoint sets `cancelled`. It is also what pins the
+    /// fall-through — an early `return` on the cancel would skip the failure
+    /// scan this asserts on.
+    #[tokio::test(start_paused = true)]
     async fn prepare_reports_the_host_failure_not_the_cancel() {
-        // The host fails its prepare command; the token is cancelled too.
-        let (t, _handle) = sles_target("h1", "prepare boom");
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                INSTALLED_PROBE.to_owned(),
+                CommandLog::new(INSTALLED_PROBE, "", "", 7, 0),
+            )
+            .with_run_delay(std::time::Duration::from_millis(10))
+            .with_changing_boot_id();
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
         let mut group = HostsGroup::new(vec![t], false);
-        let report = crate::reports::PiReport::new(Config::default());
-        let packages = vec!["pkg-a".to_owned()];
+        // Cancelled while the probe is in flight, so the pre-probe checkpoint
+        // lets it run and the post-probe one fires.
+        let token = group.cancel_token();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            token.cancel();
+        });
 
-        // Not installed_only: the single-transaction branch runs the command,
-        // so a failure can be recorded, and only then is the cancel consulted.
-        group.cancel_token().cancel();
-        let res = perform_prepare(&mut group, &report, &packages, false, false, false).await;
+        let err = perform_prepare(
+            &mut group,
+            &NoopRepo,
+            &["pkg-a".to_owned()],
+            false,
+            false,
+            true,
+        )
+        .await
+        .expect_err("a dead probe must not report success");
 
-        if let Err(e) = res {
-            assert!(
-                !e.is_cancelled() || !e.to_string().is_empty(),
-                "a cancellation must never be an empty verdict: {e:?}"
-            );
-        }
+        assert!(
+            handle.commands().iter().any(|c| c == INSTALLED_PROBE),
+            "the probe must have run: {:?}",
+            handle.commands()
+        );
+        assert!(
+            !err.is_cancelled(),
+            "the host's own failure must outrank the cancel: {err:?}"
+        );
+        assert_eq!(err.host.as_deref(), Some("h1"), "err: {err}");
+        assert_eq!(err.reason, "package probe failed", "err: {err}");
     }
 
     /// An uncancelled flow is unaffected: the checkpoints are inert.

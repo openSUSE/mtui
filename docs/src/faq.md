@@ -125,8 +125,9 @@ run by name.
 `prepare` has three switches:
 
 - `prepare -f` / `--force` — force installation even on package conflicts.
-- `prepare -i` / `--installed` — only prepare packages already installed (skip
-  pulling in additional patchinfo packages).
+- `prepare -i` / `--installed` — narrow the package list to what each host
+  already carries (skip pulling in additional patchinfo packages). Each host
+  still installs its own list in a single transaction.
 - `prepare -u` / `--update` — enable the test-update repositories and install from
   there.
 
@@ -182,8 +183,9 @@ checkpoints are:
 - `update` checks between its steps, and for the last time just before the point
   of no return: once the patch command has been dispatched the update runs to its
   end (rolling back on failure) rather than leaving a half-applied update behind.
-- `prepare --installed-only`, and `downgrade` on non-transactional hosts, check
-  between packages. A transactional (SL-Micro) `downgrade` applies in one
+- `prepare --installed` checks before and after its installed-package probe,
+  and stops without installing anything; `downgrade` on non-transactional hosts
+  checks between packages. A transactional (SL-Micro) `downgrade` applies in one
   transaction, so it finishes first like the commands below.
 - A command applying to several loaded templates stops at the next template
   boundary, and reports how many it got through.

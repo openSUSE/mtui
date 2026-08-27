@@ -87,6 +87,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `prepare --installed` (`-i`) now probes each host once and installs the
+  packages that host already carries in a single transaction, instead of
+  running one conditional install per package. On transactional (SL-Micro)
+  hosts the previous per-package loop opened a fresh `transactional-update`
+  snapshot for every package, so every package but the last was left inactive
+  after the reboot while the run reported success. The flag is now a filter on
+  the package list rather than a different install shape, so `-i` and plain
+  `prepare` install the same way. A host whose probe fails is reported by name
+  and is not prepared; a host carrying none of the requested packages is
+  skipped without a failure.
+
 - MCP: a client that sends `notifications/cancelled` for an in-flight
   foreground tool call now actually drops the dispatch and releases the
   `CommandLock` it held, instead of the notification being silently ignored.

@@ -2,21 +2,22 @@
 //!
 //! Unlike the other actions, prepare entries are **parameterized** by `force`
 //! and `testing`: the flag is baked into the command string at construction.
-//! Prepare carries an `installed_only` variant ("run only if the package is
-//! already installed") and interpolates `$package`. The `slmicro` entry is
+//! Prepare interpolates `$package` and carries a `list_command`, the probe
+//! `--installed` narrows each host's list with. The `slmicro` entry is
 //! transactional with a reboot.
 //!
-//! ## Substitution mode: `Safe`
+//! ## The installed-package probe
 //!
-//! The `installed_only` template's shell command-substitution `$(rpm -q ...)`
-//! is not a valid `$name` / `${name}` placeholder, so strict substitution
-//! would reject it as a malformed `$` construct — the command could never
-//! actually run under strict mode. `safe_substitute` leaves `$(` verbatim
-//! instead, letting the intended command through. For the `command` template
-//! (no `$(`), `safe_substitute` is byte-identical to `substitute` when
-//! `package` is supplied, so the happy path is unaffected.
+//! `rpm -q <names>` exits `1` for a merely-absent name, so a broken rpmdb is
+//! indistinguishable from a negative answer (#451). `rpm -qa` exits `0` on
+//! success, so a non-zero status means the probe itself failed.
 
 use crate::update_workflow::actions::ActionCommands;
+
+/// Enumerates the installed package names, one per line — the `--installed`
+/// probe, shared by all three families. It carries no `$`, so it renders
+/// identically under [`Strict`](crate::update_workflow::actions::SubstMode).
+const INSTALLED_PROBE: &str = "rpm -qa --qf '%{NAME}\\n'";
 
 /// zypper prepare.
 ///
@@ -26,12 +27,9 @@ fn zypper(force: bool, _testing: bool) -> ActionCommands {
     let parameter = if force { "--force-resolution" } else { "" };
     ActionCommands {
         command: format!("zypper -n in -y -l {parameter} $package"),
-        installed_only: Some(format!(
-            "if $(rpm -q $package &>/dev/null); then zypper -n in -y -l {parameter} $package ; fi"
-        )),
         reboot: None,
-        list_command: None,
-        mode: crate::update_workflow::actions::SubstMode::Safe,
+        list_command: Some(INSTALLED_PROBE.to_owned()),
+        mode: crate::update_workflow::actions::SubstMode::Strict,
     }
 }
 
@@ -47,12 +45,9 @@ fn yum(_force: bool, testing: bool) -> ActionCommands {
     };
     ActionCommands {
         command: format!("yum -y {parameter} install $package"),
-        installed_only: Some(format!(
-            "rpm -q $package &>/dev/null && yum {parameter} -y install $package"
-        )),
         reboot: None,
-        list_command: None,
-        mode: crate::update_workflow::actions::SubstMode::Safe,
+        list_command: Some(INSTALLED_PROBE.to_owned()),
+        mode: crate::update_workflow::actions::SubstMode::Strict,
     }
 }
 
@@ -61,12 +56,9 @@ fn slmicro(force: bool, _testing: bool) -> ActionCommands {
     let parameter = if force { "--force-resolution" } else { "" };
     ActionCommands {
         command: format!("transactional-update -n pkg in -l {parameter} $package"),
-        installed_only: Some(format!(
-            "if $(rpm -q $package &>/dev/null); then transactional-update -n pkg in -l {parameter} $package ; fi"
-        )),
         reboot: Some("systemctl reboot".to_owned()),
-        list_command: None,
-        mode: crate::update_workflow::actions::SubstMode::Safe,
+        list_command: Some(INSTALLED_PROBE.to_owned()),
+        mode: crate::update_workflow::actions::SubstMode::Strict,
     }
 }
 
@@ -121,11 +113,20 @@ mod tests {
     }
 
     #[test]
-    fn zypper_installed_only_variant_renders() {
-        let cmds = preparer("12", false, false, false).unwrap();
-        let io = cmds.render_installed_only(&pkg("kernel")).unwrap().unwrap();
-        assert!(io.starts_with("if $(rpm -q kernel &>/dev/null); then zypper"));
-        assert!(io.ends_with("kernel ; fi"));
+    fn prepare_probe_enumerates_installed_names() {
+        // #501. The probe is the same string for every family, and the
+        // conditional `$(rpm -q ...)` wrapper is gone from all of them.
+        for (release, transactional) in [("15", false), ("YUM", false), ("slmicro", true)] {
+            let cmds = preparer(release, transactional, false, false).unwrap();
+            assert_eq!(
+                cmds.render_list_command(&HashMap::new()).unwrap(),
+                Some("rpm -qa --qf '%{NAME}\\n'".to_owned()),
+                "{release}"
+            );
+            let command = cmds.render_command(&pkg("pkg-a")).unwrap();
+            assert!(!command.contains("$(rpm -q"), "{release}: {command}");
+            assert!(!command.contains("rpm -q pkg-a &>"), "{release}: {command}");
+        }
     }
 
     #[test]

@@ -164,11 +164,11 @@ impl HostsGroup {
 
     /// `true` once cooperative cancellation has been requested for this group.
     ///
-    /// The long serial flows in `mtui-testreport` (the per-package prepare and
-    /// downgrade loops, and the `perform_update` step sequence) poll this at
-    /// their own boundaries. The parallel fan-out deliberately does **not**
-    /// consult it: a host dropped mid-batch would be indistinguishable from
-    /// one that ran and succeeded.
+    /// The long serial flows in `mtui-testreport` (`downgrade`'s per-package
+    /// loop, `prepare --installed`'s pre- and post-probe checkpoints, and the
+    /// `perform_update` step sequence) poll this at their own boundaries. The
+    /// parallel fan-out deliberately does **not** consult it: a host dropped
+    /// mid-batch would be indistinguishable from one that ran and succeeded.
     #[must_use]
     pub fn cancel_requested(&self) -> bool {
         self.cancel.is_cancelled()

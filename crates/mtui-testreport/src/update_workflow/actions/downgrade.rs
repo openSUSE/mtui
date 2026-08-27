@@ -124,7 +124,6 @@ fn zypper() -> ActionCommands {
         command: ZYPPER_CMD.to_owned(),
         list_command: Some(LIST_COMMAND.to_owned()),
         reboot: None,
-        installed_only: None,
         mode: SubstMode::Safe,
     }
 }
@@ -135,7 +134,6 @@ fn slmicro() -> ActionCommands {
         command: SLM_CMD.to_owned(),
         list_command: Some(LIST_COMMAND.to_owned()),
         reboot: Some("systemctl reboot".to_owned()),
-        installed_only: None,
         mode: SubstMode::Safe,
     }
 }
@@ -146,7 +144,6 @@ fn yum() -> ActionCommands {
         command: YUM_CMD.to_owned(),
         list_command: None,
         reboot: None,
-        installed_only: None,
         mode: SubstMode::Safe,
     }
 }

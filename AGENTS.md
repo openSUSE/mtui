@@ -210,9 +210,10 @@ next actionable task before working on a subsystem.
   `last*` snapshot sails through the post-run checks and the update reports
   success on a host it never touched (and every teardown is a fan-out too, so
   gating strands remote locks exactly when a cancel needs them released).
-  Long serial flows poll `targets.cancel_requested()` at
-  their own boundaries (the per-package `prepare`/`downgrade` loops, the
-  `update` step sequence) — but **never past a point of no return**: `update`
+  Long serial flows poll `targets.cancel_requested()` at their own boundaries
+  (`downgrade`'s non-transactional per-package loop, `prepare --installed`'s
+  pre- and post-probe checkpoints, the `update` step sequence) — but **never
+  past a point of no return**: `update`
   makes its last check before dispatching the patch command, and the
   post-failure rollback runs under `HostsGroup::suspend_cancellation` (its own
   per-package checkpoint would otherwise abort the recovery at package 0 and
