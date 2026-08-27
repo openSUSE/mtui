@@ -137,6 +137,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   when the call returned; it now dispatches against the canonical session.
   `config_show` stays on the shared path and keeps running concurrently. The
   REPL was never affected.
+- MCP: `config_set` now reaches the engine. Every call failed with `error: the
+  following required arguments were not provided: <ATTR> <VALUE>` (exit 2):
+  the tool's arguments live on the `set` subcommand, but argv was rebuilt from
+  the parent `config` parser, which does not declare them, so both were
+  dropped after validation had already accepted them. The same defect made
+  `config_show`'s `attributes` filter a no-op — it always printed all 41
+  attributes.
+
 
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
