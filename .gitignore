@@ -1,15 +1,62 @@
+# Rust build artifacts
 /target
 **/*.rs.bk
+
+# Profiling / coverage output (dhat, cargo-flamegraph, perf, valgrind, llvm-cov, tarpaulin)
+dhat-heap.json
+*.profraw
+*.profdata
+perf.data
+perf.data.old
+flamegraph.svg
+massif.out.*
+callgrind.out.*
+lcov.info
+tarpaulin-report.html
+cobertura.xml
+
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
 
-# bv (beads viewer) local config and caches
-.bv/
+# Linux
+*~
+.directory
+.Trash-*
+.nfs*
+.fuse_hidden*
 
-# Upstream mtui reference clone (behavioral reference, not part of this repo)
-python-mtui/
+# Editors / IDEs
+.vscode/
+.idea/
+*.iml
+.fleet/
+*.swp
+*.swo
+*.swn
+*.un~
+Session.vim
+.netrwhist
+\#*\#
+.#*
 
-# Local planning artifacts (work aids, not part of the repo)
-plans/
+# Generated mdBook output (source lives in docs/src/, built via docs/book.toml)
+/docs/book/
 
 # Local RRID template checkouts (svn working dirs created at runtime)
 SUSE:*/
