@@ -1939,30 +1939,48 @@ pub async fn perform_update(
         return aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed);
     }
 
+    // The set the rest of the flow operates on, fixed once here rather than
+    // filtered again at each fan-out. Every step below is group-wide by
+    // default, and leaving a refused host in one is a distinct defect per step:
+    // `update_lock` fails closed on *any* member, so a refused host with a
+    // contended or unreadable lock aborts the update for the peers that do
+    // compose it; the repo fan-out reconfigures a host already reported as
+    // excluded; and `build_update_maps` turns a refused host's missing updater
+    // into the whole group's `MissingUpdater`. Filtering after the fact — as
+    // the `commands`/`reboot` retain used to — is too late for all three.
+    let eligible: BTreeSet<String> = targets
+        .names()
+        .into_iter()
+        .filter(|host| !uncomposed.contains_key(host))
+        .collect();
+
     targets.package_check(false).await;
 
-    if let Err(e) = targets.update_lock().await {
+    if let Err(e) = targets.update_lock_selected(&eligible).await {
         return Err(UpdateFailure::Check(UpdateError::reason_only(
             e.to_string(),
         )));
     }
 
-    targets.fanout_set_repo(RepoOp::Add, report).await;
+    targets
+        .fanout_set_repo_for(&eligible, RepoOp::Add, report)
+        .await;
 
     let repa = repa_for(maintenance_id, review_id);
     let joined = quote_args(packages);
-    let (mut commands, mut reboot) = match build_update_maps(targets, &registry, &repa, &joined) {
+    let (commands, reboot) = match build_update_maps(targets, &registry, &repa, &joined, &eligible)
+    {
         Ok(maps) => maps,
         Err(e) => {
             // Remove the repo we just added and abort. A hard failure rather
             // than a logged success, so it never reports "finished".
-            targets.fanout_set_repo(RepoOp::Remove, report).await;
-            warn_on_unlock_failures("update", &targets.unlock().await);
+            targets
+                .fanout_set_repo_for(&eligible, RepoOp::Remove, report)
+                .await;
+            warn_on_unlock_failures("update", &targets.unlock_selected(&eligible).await);
             return Err(UpdateFailure::MissingUpdater(e));
         }
     };
-    commands.retain(|host, _| !uncomposed.contains_key(host));
-    reboot.retain(|host, _| !uncomposed.contains_key(host));
 
     // Last checkpoint before the point of no return: past this line a cancel
     // could leave a half-applied transaction, so cancellation is NOT checked
@@ -1971,8 +1989,10 @@ pub async fn perform_update(
     // genuinely undoes the repo add and the lock.
     if targets.cancel_requested() {
         tracing::info!("cancelled: stopping before the update command was dispatched");
-        targets.fanout_set_repo(RepoOp::Remove, report).await;
-        warn_on_unlock_failures("update", &targets.unlock().await);
+        targets
+            .fanout_set_repo_for(&eligible, RepoOp::Remove, report)
+            .await;
+        warn_on_unlock_failures("update", &targets.unlock_selected(&eligible).await);
         // With a prepare behind us the host is not untouched: the repo add is
         // undone, a completed prepare's packages are not.
         return Err(UpdateFailure::Cancelled(UpdateError::cancelled(
@@ -1993,6 +2013,7 @@ pub async fn perform_update(
     let update_result = update_run_phase(
         targets,
         &registry,
+        &eligible,
         commands,
         reboot,
         diagnostics,
@@ -2017,17 +2038,25 @@ pub async fn perform_update(
 
     targets.package_check(true).await;
 
-    remove_test_repos(targets, report).await;
+    remove_test_repos(targets, &eligible, report).await;
     aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed)
 }
 
 /// Removes the test update repositories after a successful update.
 ///
+/// Scoped to `eligible`, the hosts the update added a repo to: a host it
+/// excluded never received one, and locking it here would let its contention
+/// strand the repos on every peer (#409) over a cleanup it does not need.
+///
 /// Best-effort: a lock failure here does not turn a successful update into a
 /// failed one, so it warns — naming the error, that the repos are left
 /// configured, and the manual remedy.
-async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
-    if let Err(e) = targets.update_lock().await {
+async fn remove_test_repos(
+    targets: &mut HostsGroup,
+    eligible: &BTreeSet<String>,
+    report: &dyn SetRepo,
+) {
+    if let Err(e) = targets.update_lock_selected(eligible).await {
         warn!(
             error = %e,
             "could not lock hosts to remove the test update repositories; \
@@ -2036,11 +2065,21 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
         );
         return;
     }
-    targets.fanout_set_repo(RepoOp::Remove, report).await;
+    targets
+        .fanout_set_repo_for(eligible, RepoOp::Remove, report)
+        .await;
     // The lock succeeded but the removal command may still have failed on a
     // host — #409's complaint (a stale test repo) can happen silently here too,
     // not only on a lock failure. The noisy stderr rule is fine for a warn.
-    let failures = host_command_failures(targets, "failed to remove the test update repo");
+    //
+    // Post-filtered rather than scoped inside, unlike `run_checks_where`: this
+    // scan only reads `last*` and logs nothing on the way, so an excluded host
+    // dropped here has not already had a verdict printed for it.
+    let failures: Vec<UpdateError> =
+        host_command_failures(targets, "failed to remove the test update repo")
+            .into_iter()
+            .filter(|e| e.host.as_ref().is_some_and(|h| eligible.contains(h)))
+            .collect();
     if !failures.is_empty() {
         let hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
         warn!(
@@ -2049,7 +2088,7 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
              remove it manually with `set_repo --remove`"
         );
     }
-    warn_on_unlock_failures("update", &targets.unlock().await);
+    warn_on_unlock_failures("update", &targets.unlock_selected(eligible).await);
 }
 
 /// Runs the update commands, checks the hosts they reached (collecting
@@ -2057,6 +2096,9 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
 ///
 /// `commands` and `reboot` are the whole scope: a host the caller excluded is
 /// absent from both and is neither judged, rebooted, nor counted a success.
+/// `locked` is the set the caller took the operation lock on, which the final
+/// unlock must match exactly — releasing a host we never locked would report a
+/// stranded lock against a host that has none.
 ///
 /// Returns `Ok(())` when every check passed and every transactional host's
 /// reboot took effect — reconnecting is not sufficient, since a host can answer
@@ -2066,9 +2108,11 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
 /// entirely** on a check failure. The [`UpdateFailure`] variant is what routes
 /// the caller's rollback; a single failure is returned verbatim, more than one
 /// is summarised into `"update failed on {hosts} ({detail})"`.
+#[allow(clippy::too_many_arguments)]
 async fn update_run_phase(
     targets: &mut HostsGroup,
     registry: &WorkflowRegistry,
+    locked: &BTreeSet<String>,
     commands: BTreeMap<String, String>,
     reboot: BTreeMap<String, String>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -2154,22 +2198,31 @@ async fn update_run_phase(
         .map_err(wrap)
     };
 
-    warn_on_unlock_failures("update", &targets.unlock().await);
+    warn_on_unlock_failures("update", &targets.unlock_selected(locked).await);
     result
 }
 
 /// Builds the per-host updater command map (with `$repa` + `$packages`) and the
-/// transactional reboot map. Returns `Err` with the offending host's
-/// [`UpdateError`] if any host is missing an updater — a hard failure in mtui.
+/// transactional reboot map, over the hosts in `eligible`. Returns `Err` with
+/// the offending host's [`UpdateError`] if one of them is missing an updater —
+/// a hard failure in mtui.
+///
+/// A host outside `eligible` is not resolved at all, not resolved and then
+/// dropped: the update has already excluded it, and a `MissingUpdater` raised
+/// on its behalf would abort the peers it was excluded to spare.
 fn build_update_maps(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
     repa: &str,
     packages: &str,
+    eligible: &BTreeSet<String>,
 ) -> Result<UpdateMaps, UpdateError> {
     let mut commands = BTreeMap::new();
     let mut reboot = BTreeMap::new();
-    for target in targets.targets() {
+    for target in targets
+        .targets()
+        .filter(|t| eligible.contains(t.hostname()))
+    {
         let missing = || UpdateError::new("missing updater", target.hostname());
         let (release, transactional) = host_key(target).ok_or_else(missing)?;
         let doer = registry
@@ -2192,7 +2245,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use mtui_config::options::Config;
-    use mtui_hosts::{Check, CheckArgs, CheckFailure, Doer, HostsGroup, MockConnection, Target};
+    use mtui_hosts::{
+        Check, CheckArgs, CheckFailure, Doer, HostsGroup, MockConnection, TARGET_LOCK_PATH, Target,
+    };
     use mtui_types::enums::TargetState;
     use mtui_types::hostlog::CommandLog;
     use mtui_types::package::VersionCheck;
@@ -2808,11 +2863,11 @@ mod tests {
     }
 
     /// A [`SetRepo`] whose `composition()` answers a scripted index and which
-    /// records the [`RepoOp`]s its fan-out received.
+    /// records the [`RepoOp`]s its fan-out received, per host.
     #[derive(Default)]
     struct ComposingRepo {
         composed: HashMap<SystemProduct, BTreeSet<String>>,
-        ops: std::sync::Mutex<Vec<RepoOp>>,
+        ops: std::sync::Mutex<Vec<(String, RepoOp)>>,
     }
 
     impl ComposingRepo {
@@ -2824,14 +2879,28 @@ mod tests {
         }
 
         fn ops(&self) -> Vec<RepoOp> {
-            self.ops.lock().unwrap().clone()
+            self.ops.lock().unwrap().iter().map(|(_, op)| *op).collect()
+        }
+
+        /// The ops `host` alone received, in order.
+        fn ops_for(&self, host: &str) -> Vec<RepoOp> {
+            self.ops
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(h, _)| h == host)
+                .map(|(_, op)| *op)
+                .collect()
         }
     }
 
     #[async_trait::async_trait]
     impl SetRepo for ComposingRepo {
-        async fn set_repo(&self, _target: &mut Target, operation: RepoOp) {
-            self.ops.lock().unwrap().push(operation);
+        async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
+            self.ops
+                .lock()
+                .unwrap()
+                .push((target.hostname().to_owned(), operation));
         }
 
         fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
@@ -3478,6 +3547,219 @@ mod tests {
             repo.ops(),
             vec![RepoOp::Remove],
             "only the prepare's repo removal may have run"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_does_not_reconfigure_the_repos_of_the_host_it_excluded() {
+        // The exclusion is reported to the operator as "this host was left out
+        // of the update"; adding the test repo to it anyway (and removing it
+        // again on the way out) makes that report false.
+        let (t1, _h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (t2, _h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-z"]),
+            ),
+        ]);
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(
+            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            "res: {res:?}"
+        );
+        assert_eq!(
+            repo.ops_for("h2"),
+            vec![RepoOp::Remove],
+            "the excluded host may only see the prepare's own removal"
+        );
+        // Arms the assertion above: excluding the whole group would satisfy it.
+        assert_eq!(
+            repo.ops_for("h1"),
+            vec![RepoOp::Remove, RepoOp::Add, RepoOp::Remove],
+            "the composing host still gets the update's add and cleanup"
+        );
+    }
+
+    /// A [`ComposingRepo`] that overwrites `contended`'s operation lockfile
+    /// with another owner's line on every repo fan-out (idempotent).
+    ///
+    /// `update`'s embedded prepare takes the very group lock the update then
+    /// takes again, so a foreign lock seeded before the call aborts the
+    /// *prepare* and the update's own lock is never reached. The prepare's repo
+    /// fan-out runs between the two acquisitions, which is exactly where a
+    /// competing owner claims the host in production.
+    struct ContendingRepo {
+        composed: HashMap<SystemProduct, BTreeSet<String>>,
+        contended: MockConnection,
+    }
+
+    #[async_trait::async_trait]
+    impl SetRepo for ContendingRepo {
+        async fn set_repo(&self, _target: &mut Target, _operation: RepoOp) {
+            let _ = self
+                .contended
+                .clone()
+                .with_file(TARGET_LOCK_PATH, b"1700000000:otheruser:99999".to_vec());
+        }
+
+        fn composition(&self) -> Option<&HashMap<SystemProduct, BTreeSet<String>>> {
+            Some(&self.composed)
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_update_survives_a_contended_lock_on_the_host_it_excluded() {
+        // `update_lock` fails closed on *any* member of the group, so a refused
+        // host left in it hands one contended lock the power to abort the
+        // update for every peer that does compose it.
+        let (t1, h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (t2, h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ContendingRepo {
+            composed: [
+                (
+                    SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                    names(&["pkg-a"]),
+                ),
+                (
+                    SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                    names(&["pkg-z"]),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            contended: h2.clone(),
+        };
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(
+            was_patched(&h1),
+            "the eligible peer must still be patched: {:?}",
+            h1.commands()
+        );
+        assert!(
+            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            "the excluded host's contention is not the group's verdict: {res:?}"
+        );
+        // The foreign line is still there, so nothing unlocked a host this run
+        // never locked.
+        assert_eq!(
+            h2.file_contents(TARGET_LOCK_PATH).as_deref(),
+            Some(&b"1700000000:otheruser:99999"[..]),
+            "the excluded host's foreign lock must be left alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_ignores_a_missing_updater_on_the_host_it_excluded() {
+        // `build_update_maps` resolved an updater for every host and only then
+        // dropped the refused ones, so a refused host with no supported updater
+        // failed the whole group with `MissingUpdater` — the peers it was
+        // excluded to spare included.
+        let (t1, h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        // Unknown release, so no updater doer resolves — and non-transactional,
+        // so `build_reboot_map`'s pre-lock preparer scan skips it and the
+        // prepare gets far enough to refuse it for its composition instead.
+        let conn = MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0));
+        let h2 = conn.clone();
+        let mut t2 = Target::with_connection("h2", TargetState::Enabled, Box::new(conn));
+        t2.set_system(
+            System::new(
+                SystemProduct::new("gentoo", "1", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            ),
+            (
+                SystemProduct::new("gentoo", "1", "x86_64"),
+                names(&["pkg-z"]),
+            ),
+        ]);
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(
+            was_patched(&h1),
+            "the eligible peer must still be patched: {:?}",
+            h1.commands()
+        );
+        assert!(
+            !h2.commands().iter().any(|c| c.contains(":p=42:7")),
+            "no updater command may reach the excluded host: {:?}",
+            h2.commands()
+        );
+        assert!(
+            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            "an updater the update never needed must not fail the group: {res:?}"
         );
     }
 
@@ -6271,7 +6553,7 @@ mod tests {
         let mut group = HostsGroup::new(vec![t], false);
         let repo = RecordingRepo::default();
 
-        let ((), logs) = capture_logs(remove_test_repos(&mut group, &repo)).await;
+        let ((), logs) = capture_logs(remove_test_repos(&mut group, &names(&["h1"]), &repo)).await;
 
         let ops = repo.ops.lock().unwrap().clone();
         assert!(
@@ -6320,7 +6602,8 @@ mod tests {
             "https://example/repo".to_owned(),
         );
 
-        let ((), logs) = capture_logs(remove_test_repos(&mut group, &report)).await;
+        let ((), logs) =
+            capture_logs(remove_test_repos(&mut group, &names(&["h1"]), &report)).await;
 
         let warn_line = logs
             .lines()

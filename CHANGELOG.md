@@ -154,7 +154,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a report whose metadata carries no `binaries` block is unaffected. `update`
   excludes such a host from its patch, since its prepare established no package
   baseline there, and reports the failure naming it rather than patching it
-  anyway; the hosts that do compose the update are patched as before.
+  anyway; the hosts that do compose the update are patched as before. That
+  exclusion now happens before `update` takes the group operation lock, adds
+  the test repo and resolves each host's updater, so a refused host can no
+  longer abort its eligible peers with a contended lock or an unsupported
+  updater, nor have its own repositories reconfigured after being reported as
+  excluded.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
