@@ -358,6 +358,13 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
   or rely on the already-stripped error types. The Gitea token travels in an
   `Authorization` header and is never logged.
 - Never add SSH password auth — MTUI is **pubkey-only by design**; preserve that.
+- **Comments must not outweigh the code.** A one-line change gets at most a
+  one-line comment, and usually none — a three-line preamble explaining a
+  one-line fix is noise that goes stale the moment the line moves. Where the
+  code says what it does (a named function call, an obvious guard, a `match`
+  arm), no comment is needed. Comment only what the code cannot say: *why* a
+  non-obvious choice was made, a contract or invariant that must not be
+  regressed, or a subtlety that cost real debugging time.
 
 ## When adding or changing a command
 1. Implement the `Command` trait (name, aliases, `configure` args, async `run`,
