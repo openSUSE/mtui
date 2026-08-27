@@ -2660,6 +2660,74 @@ mod tests {
         );
     }
 
+    /// #524, generalising the `list_hosts` symptom above to a *path*-taking
+    /// command: a scoped dispatch that loses `Session::activate`'s
+    /// `try_lock_owned` on the report entry must refuse, never act on the
+    /// process cwd. The hold is on the **entry** — `lock_for(rrid)` would
+    /// serialise the dispatch instead of diverting it, so it cannot reproduce
+    /// this at all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scoped_dispatch_losing_the_entry_race_refuses_instead_of_reading_the_cwd() {
+        let sess = session(Config::default());
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_A,
+            &[("host-alpha", MockConnection::new("host-alpha"))],
+        )
+        .await;
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_B,
+            &[("host-beta", MockConnection::new("host-beta"))],
+        )
+        .await;
+
+        // A real checkout for A: without it the refusal below would pass
+        // vacuously, since an unset path refuses on the loaded report too.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("source.diff"),
+            "spec files:\n-----\n+Patch1:  fix-cve.patch\n",
+        )
+        .expect("write source.diff");
+        let entry = sess
+            .session()
+            .lock()
+            .await
+            .templates
+            .handle(LOCK_RRID_A)
+            .expect("A is loaded");
+        entry.lock().await.base_mut().path = Some(dir.path().join("log"));
+
+        let registry = Arc::new(register_all());
+        let argv = ["-T".to_owned(), LOCK_RRID_A.to_owned()];
+
+        let out = sess
+            .run_command(&registry, "analyze_diff", &argv)
+            .await
+            .expect("uncontended analyze_diff reads the checkout's source.diff");
+        assert!(out.contains("fix-cve.patch"), "anti-vacuity: {out}");
+
+        // The race, made deterministic: A's entry stays locked for the whole
+        // dispatch, so `activate` gives up and `metadata()` is the sentinel.
+        let held = entry.lock_owned().await;
+        let err = sess
+            .run_command(&registry, "analyze_diff", &argv)
+            .await
+            .expect_err("a lost entry race must refuse");
+        drop(held);
+
+        let cwd = std::env::current_dir().expect("cwd");
+        assert!(
+            !err.stderr.contains(&cwd.display().to_string()),
+            "the sentinel resolved to the process cwd: {err}"
+        );
+        assert!(
+            err.stderr.contains("no report working directory"),
+            "expected `read_source_diff`'s guard: {err}"
+        );
+    }
+
     /// The release is scoped to the cancelled job's own templates: a sibling job
     /// mid-operation elsewhere keeps its locks, and the cancel does not queue
     /// behind it.

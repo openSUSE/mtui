@@ -52,7 +52,7 @@ impl Command for Commit {
             .metadata()
             .base()
             .report_wd()
-            .map_err(|e| CommandError::Other(format!("no report loaded: {e}")))?;
+            .map_err(|e| CommandError::Other(format!("no report working directory: {e}")))?;
         let install_logs = session.config.install_logs.clone();
 
         let msg: Vec<String> = match args

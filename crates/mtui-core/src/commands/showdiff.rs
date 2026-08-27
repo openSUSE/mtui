@@ -153,7 +153,7 @@ fn read_source_diff(session: &Session) -> Result<String, CommandError> {
         .metadata()
         .base()
         .report_wd()
-        .map_err(|e| CommandError::Other(format!("no report loaded: {e}")))?;
+        .map_err(|e| CommandError::Other(format!("no report working directory: {e}")))?;
     let path = wd.join("source.diff");
     std::fs::read_to_string(&path)
         .map_err(|e| CommandError::Other(format!("{}: {e}", path.display())))
