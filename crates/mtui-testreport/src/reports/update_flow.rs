@@ -338,18 +338,29 @@ fn resolve_doer(
     }
 }
 
-/// Builds the transactional-only reboot map for `role` across the group.
+/// Builds the transactional-only reboot map for `role` over `selected`
+/// (`None` is the whole group).
 ///
-/// Returns `Err` if any transactional host is missing a doer, so the caller
-/// can early-return without locking.
+/// Returns `Err` if any transactional host **in scope** is missing a doer, so
+/// the caller can early-return without locking.
+///
+/// Scoping does not change which host is rebooted — [`prepare_body`]'s retain
+/// filter already refuses a host nothing was dispatched to — it changes what
+/// the operator is told: an out-of-scope host left in the map draws that
+/// filter's "skipping reboot" WARN, naming a host the caller had already
+/// reported as excluded from this run.
 fn build_reboot_map(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
     role: Role,
+    selected: Option<&BTreeSet<String>>,
 ) -> Result<BTreeMap<String, String>, ()> {
     let mut reboot = BTreeMap::new();
     for target in targets.targets() {
         if !target.transactional() {
+            continue;
+        }
+        if selected.is_some_and(|s| !s.contains(target.hostname())) {
             continue;
         }
         let Some((release, transactional)) = host_key(target) else {
@@ -779,7 +790,7 @@ pub async fn perform_prepare(
 }
 
 /// [`perform_prepare`] restricted to `hosts` — every fan-out, the operation
-/// lock and the missing-preparer gate included.
+/// lock and [`build_reboot_map`]'s pre-lock missing-preparer scan included.
 ///
 /// For a flow that has already excluded a host from the work it is doing: the
 /// group-wide variant would add the test repo to a host reported as excluded
@@ -849,7 +860,7 @@ async fn perform_prepare_classified(
         .collect();
 
     // Resolve the reboot map before locking; a missing preparer aborts early.
-    let Ok(reboot) = build_reboot_map(targets, &registry, Role::Prepare) else {
+    let Ok(reboot) = build_reboot_map(targets, &registry, Role::Prepare, selected) else {
         return Err(PrepareFailure::DidNotRun(UpdateError::reason_only(
             "missing preparer",
         )));
@@ -893,7 +904,10 @@ async fn perform_prepare_classified(
 /// `selected` scopes every fan-out and every by-host scan below; `None` is the
 /// whole group. Everything past the repo fan-out is driven by `lists`, so
 /// narrowing that one map carries the scope through `narrow_to_composed`,
-/// `narrow_to_installed`, `build_prepare_map` and the reboot gate.
+/// `narrow_to_installed` and `build_prepare_map`. `reboot` is the exception:
+/// it arrives already scoped from [`build_reboot_map`], because the retain
+/// filter below warns a host by name *before* `dispatched` (⊆ `lists`) gets to
+/// drop it.
 #[allow(clippy::too_many_arguments)]
 async fn prepare_body(
     targets: &mut HostsGroup,
@@ -1504,7 +1518,8 @@ pub async fn perform_downgrade(
 
     // Resolve reboot before locking so a missing downgrader early-returns
     // without leaving the group locked.
-    let Ok(reboot) = build_reboot_map(targets, &registry, Role::Downgrade) else {
+    // Downgrade has no scoped variant; the whole group is the scope.
+    let Ok(reboot) = build_reboot_map(targets, &registry, Role::Downgrade, None) else {
         return Err(UpdateError::reason_only("missing downgrader"));
     };
 
@@ -3725,6 +3740,14 @@ mod tests {
         assert!(
             !logs.contains("newpackage prepare after update failed"),
             "the excluded host must not fail the newpackage prepare it is not part of: {logs}"
+        );
+        // The reboot map is scoped too, so the excluded host draws no WARN for
+        // a fan-out it was never in. The one that remains is the initial
+        // group-wide prepare's, where h2 is in scope and genuinely refused.
+        assert_eq!(
+            logs.matches("skipping reboot").count(),
+            1,
+            "only the initial prepare may warn about h2's reboot: {logs}"
         );
         // Arms the assertion above, and pins that the second `Add` — the
         // newpackage prepare's — still happens where it belongs.
