@@ -106,6 +106,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   looked correct and reached the remote shell as one shlex-quoted word. Behaviour
   is unchanged; the string propagates to `mtui-mcp`'s `command` property
   description, `run --help` and `docs/src/cli.md`.
+- `export` in the `Manual` workflow now fails instead of writing a verdictless
+  testreport when *no* selected host has recorded package versions — the signal
+  that this session never ran `update` (the before/after versions are
+  process-local, so a second session holding the same hosts had them empty). It
+  used to print a `WARNING:` and exit 0, which an MCP client read as success.
+  The template is left untouched; a partially verified fleet still exports with
+  the per-host warning. New `export --allow-unverified` writes the unverified
+  scaffold anyway.
 
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
@@ -150,6 +158,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `export --allow-unverified` (MCP `allow_unverified`) writes the unverified
+  scaffold when no selected host has recorded package versions. Additive,
+  optional schema change.
 - `[connection] connect_timeout` (default 60s): the SSH connect handshake
   (TCP connect, banner, and auth) now has its own budget, separate from
   `connection_timeout`.

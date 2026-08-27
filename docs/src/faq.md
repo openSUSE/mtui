@@ -74,6 +74,11 @@ workflows, openQA data) into the testreport's text format. Its `regression tests
 section uses an idempotent `overview_inject` BEGIN/END block, so re-exporting
 updates in place rather than duplicating.
 
+A `Manual` export must run from the session that ran `update`: the before/after
+package versions exist only in that process, so from any other session `export`
+refuses rather than write a report with no verdict. `--allow-unverified` writes
+the unverified scaffold anyway.
+
 ## Where do OBS/Gitea credentials come from?
 
 - **OBS/IBS**: from your `oscrc`, located like `osc` itself — `$OSC_CONFIG`, then

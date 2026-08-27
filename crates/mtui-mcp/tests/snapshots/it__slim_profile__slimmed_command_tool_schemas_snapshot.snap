@@ -298,6 +298,11 @@ expression: pretty
           "description": "Act on every loaded template",
           "type": "boolean"
         },
+        "allow_unverified": {
+          "default": false,
+          "description": "write the unverified scaffold even when no selected host has recorded package versions",
+          "type": "boolean"
+        },
         "filename": {
           "description": "output template file name (defaults to the loaded template)",
           "type": "string"

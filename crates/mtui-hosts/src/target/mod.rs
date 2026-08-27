@@ -2444,6 +2444,35 @@ mod tests {
         assert_eq!(by_name["baz"].current_check(), &VersionCheck::NotChecked);
     }
 
+    /// #526: connecting and seeding is not a substitute for `update`. `add_host`
+    /// fills `current` only, so `before`/`after` stay `NotChecked` and an export
+    /// from such a session has no verdict to render — the premise of `export`'s
+    /// refusal.
+    #[tokio::test]
+    async fn connect_and_seed_leave_before_and_after_unchecked() {
+        use mtui_types::package::Package;
+
+        let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
+        let conn = MockConnection::new("h1")
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_file("/etc/products.d/SLES.prod", prod.to_vec())
+            .with_default(CommandLog::new("", "bash 5.1-1\n", "", 0, 0));
+        let mut t = enabled_with(conn);
+        t.connect().await.expect("connect");
+        t.set_packages(vec![Package::new("bash")]);
+        t.query_versions().await;
+
+        let pkg = &t.packages()[0];
+        assert!(
+            matches!(pkg.current_check(), VersionCheck::Installed(_)),
+            "connect+seed must populate current: {:?}",
+            pkg.current_check()
+        );
+        assert_eq!(pkg.before_check(), &VersionCheck::NotChecked);
+        assert_eq!(pkg.after_check(), &VersionCheck::NotChecked);
+    }
+
     #[tokio::test]
     async fn query_versions_is_noop_without_tracked_packages() {
         let conn = MockConnection::new("h1").with_default(CommandLog::new("", "x", "", 0, 0));
