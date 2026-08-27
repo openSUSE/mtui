@@ -1507,12 +1507,16 @@ mod tests {
                 .mount(&server)
                 .await;
         }
-        // Setting 12 hangs past the short timeout.
+        // Setting 12 loses the race. Two-sided bound: well above the budget
+        // below, but under reqwest's 30s READ_TIMEOUT (`http.rs`) — past that
+        // the transport errors first, `get_list` folds it to `Ok(vec![])`, the
+        // skip arm never runs, and a fan-out that ignored `per_fetch` would
+        // still pass this test (#539).
         Mock::given(method("GET"))
             .and(path("/api/jobs/incident/12"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(500))
+                    .set_delay(Duration::from_secs(10))
                     .set_body_json(
                         json!([{"job_id": 9999, "name": "should-not-appear", "status": "passed"}]),
                     ),
@@ -1522,9 +1526,14 @@ mod tests {
 
         let mut dashboard = dashboard_against(&server);
         // One settings endpoint answered, so the batch is Ok despite the single
-        // per-setting jobs timeout (warn-and-skip).
+        // per-setting jobs timeout (warn-and-skip). `per_fetch` bounds *every*
+        // fetch in the run, not just the hanging one, so it must stay far above
+        // any plausible loopback latency — only the delayed endpoint may lose
+        // the race. A tight budget here made the four fast requests flaky
+        // (#539). 2s is headroom, not a measured floor: 500ms already clears
+        // the worst starvation in that issue.
         dashboard
-            .run_with_timeout(Duration::from_millis(50))
+            .run_with_timeout(Duration::from_secs(2))
             .await
             .unwrap();
 
