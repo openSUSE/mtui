@@ -69,20 +69,26 @@ pub trait Command: Send + Sync {
         Scope::Active
     }
 
-    /// Whether this command must dispatch against the **canonical** session
+    /// Whether this *invocation* must dispatch against the **canonical** session
     /// rather than a [`fork_for_call`](crate::Session::fork_for_call), because it
     /// mutates state the fork clones by value (`config`) or owns outright (the
     /// [`TemplateRegistry`](crate::TemplateRegistry) *structure* — loading,
     /// replacing or removing an entry, or re-pointing the active template).
     ///
-    /// `false` by default; `load_template`, `unload`, `switch`, and `regenerate`
-    /// override it. It forces the headless MCP dispatch gate
+    /// Per-**invocation**, not per-command, hence `argv`: several MCP tools may be
+    /// synthesised from one registry command and differ only in argv
+    /// (`config_show` and `config_set` are both `config`), so a whole-command
+    /// answer would put the read-only ones on the exclusive gate too.
+    ///
+    /// `false` by default; `load_template`, `unload`, `switch` and `regenerate`
+    /// override it unconditionally, `config` for its `set` subcommand. It forces
+    /// the headless MCP dispatch gate
     /// ([`McpSession::command_lock`](../../mtui_mcp/session/struct.McpSession.html))
     /// onto the **exclusive** arm even at a single template, so the mutation
     /// lands on the canonical session rather than a discarded per-call fork. A
     /// command that only mutates an already-loaded report's *content* may run on
     /// a fork: those mutations reach the shared report through the entry lock.
-    fn requires_canonical_session(&self) -> bool {
+    fn requires_canonical_session(&self, _argv: &[String]) -> bool {
         false
     }
 

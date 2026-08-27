@@ -82,7 +82,7 @@ The trait has just **two required methods**; everything else has a default:
 | `aliases` | `fn aliases(&self) -> &'static [&'static str]` | `&[]` |
 | `about` | `fn about(&self) -> Option<&'static str>` | `None` |
 | `scope` | `fn scope(&self) -> Scope` | `Scope::Active` |
-| `requires_canonical_session` | `fn requires_canonical_session(&self) -> bool` | `false` |
+| `requires_canonical_session` | `fn requires_canonical_session(&self, argv: &[String]) -> bool` | `false` — answered per invocation, not per command |
 | `skip_hostless_templates` | `fn skip_hostless_templates(&self) -> bool` | `true` |
 | `configure` | `fn configure(&self, cmd: clap::Command) -> clap::Command` | identity (no args) |
 | `complete` | `fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String>` | `Vec::new()` |

@@ -41,7 +41,7 @@ impl Command for LoadTemplate {
         Scope::Single
     }
 
-    fn requires_canonical_session(&self) -> bool {
+    fn requires_canonical_session(&self, _argv: &[String]) -> bool {
         true
     }
 

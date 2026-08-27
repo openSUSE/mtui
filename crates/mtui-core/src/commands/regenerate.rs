@@ -49,7 +49,7 @@ impl Command for Regenerate {
         Scope::Single
     }
 
-    fn requires_canonical_session(&self) -> bool {
+    fn requires_canonical_session(&self, _argv: &[String]) -> bool {
         true
     }
 
