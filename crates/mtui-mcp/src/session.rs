@@ -640,7 +640,7 @@ impl McpSession {
             // concurrent path dispatches on a per-call fork whose config and
             // registry snapshot are discarded, so the mutation would be lost
             // unless it runs against the canonical session.
-            Some(command) if command.requires_canonical_session() => None,
+            Some(command) if command.requires_canonical_session(argv) => None,
             Some(command) => {
                 let session = self.session.lock().await;
                 resolve_command_rrids(command.as_ref(), &session, argv)
@@ -2093,24 +2093,29 @@ mod tests {
         assert!(matches!(lock, CommandLock::Scoped { .. }));
     }
 
+    /// Loads one template and points the active pointer at it, so a
+    /// `Scope::Single` command resolves to exactly one real RRID — the state in
+    /// which the scoped arm would fork.
+    async fn seed_one_template(sess: &McpSession, rrid: &str) {
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+
+        let mut guard = sess.session().lock().await;
+        let mut report = ObsReport::new(guard.config.clone());
+        report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
+        guard.templates.add(Box::new(report));
+        guard.templates.set_active(rrid);
+    }
+
     /// A canonical-session command takes the gate *exclusive* even when one
     /// template is loaded and `resolve_command_rrids` would give one RRID,
     /// because its mutation must not land on a discarded fork. A content command
     /// on that template still takes the scoped path.
     #[tokio::test]
     async fn command_lock_canonical_session_command_is_exclusive_even_when_scoped() {
-        use mtui_testreport::{ObsReport, TestReport};
-        use mtui_types::RequestReviewID;
-
         let sess = session(Config::default());
         let rrid = "SUSE:Maintenance:1:1";
-        {
-            let mut guard = sess.session().lock().await;
-            let mut report = ObsReport::new(guard.config.clone());
-            report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
-            guard.templates.add(Box::new(report));
-            guard.templates.set_active(rrid);
-        }
+        seed_one_template(&sess, rrid).await;
         let registry = register_all();
 
         let canonical = sess
@@ -2129,6 +2134,103 @@ mod tests {
             matches!(scoped, CommandLock::Scoped { .. }),
             "content command on one template stays on the scoped path"
         );
+    }
+
+    /// `config` resolves to one real RRID once a template is loaded, but must
+    /// still take the exclusive gate: its write lands on `Session::config`, which
+    /// a fork clones by value (#523).
+    #[tokio::test]
+    async fn command_lock_config_set_is_exclusive_with_a_template_loaded() {
+        let sess = session(Config::default());
+        seed_one_template(&sess, "SUSE:Maintenance:1:1").await;
+        let registry = register_all();
+
+        let lock = sess
+            .command_lock(
+                &registry,
+                "config",
+                &["set".to_owned(), "session_user".to_owned(), "x".to_owned()],
+            )
+            .await;
+        assert!(
+            matches!(lock, CommandLock::Exclusive(_)),
+            "config set must not be dispatched on a per-call fork"
+        );
+    }
+
+    /// The other half of the argv-aware predicate: `config_show` and `config_set`
+    /// are one registry command, and the read-only one must stay on the scoped
+    /// path — the exclusive gate is writer-preference, so serialising it would
+    /// park a diagnostic behind every background job (#523).
+    #[tokio::test]
+    async fn command_lock_config_show_stays_scoped_with_a_template_loaded() {
+        let sess = session(Config::default());
+        seed_one_template(&sess, "SUSE:Maintenance:1:1").await;
+        let registry = register_all();
+
+        let lock = sess
+            .command_lock(&registry, "config", &["show".to_owned()])
+            .await;
+        assert!(
+            matches!(lock, CommandLock::Scoped { .. }),
+            "a read-only config call must not take the exclusive gate"
+        );
+    }
+
+    /// The effect, asserted on the **canonical** session rather than the reply:
+    /// the tool answered `option: session_user set to value : forked` while
+    /// changing nothing, so a reply assertion passes vacuously and a lock-shape
+    /// one would go green again if the arms were merely restructured (#523).
+    #[tokio::test]
+    async fn config_set_with_a_template_loaded_mutates_the_canonical_session() {
+        let mut config = Config::default();
+        config.session_user = "before".to_owned();
+        let sess = session(config);
+        seed_one_template(&sess, "SUSE:Maintenance:1:1").await;
+        let registry = register_all();
+
+        sess.run_command(
+            &registry,
+            "config",
+            &[
+                "set".to_owned(),
+                "session_user".to_owned(),
+                "forked".to_owned(),
+            ],
+        )
+        .await
+        .expect("config set succeeds");
+
+        assert_eq!(
+            sess.session().lock().await.config.session_user,
+            "forked",
+            "the write must survive the call"
+        );
+    }
+
+    /// The half that already worked at this layer: with nothing loaded the call
+    /// resolves to no real RRID and takes the exclusive arm anyway. Guards
+    /// against a fix that only moves the state-dependence around.
+    #[tokio::test]
+    async fn config_set_with_nothing_loaded_mutates_the_canonical_session() {
+        let mut config = Config::default();
+        config.session_user = "before".to_owned();
+        let sess = session(config);
+        let registry = register_all();
+
+        sess.run_command(
+            &registry,
+            "config",
+            &[
+                "set".to_owned(),
+                "session_user".to_owned(),
+                "unforked".to_owned(),
+            ],
+        )
+        .await
+        .expect("config set succeeds");
+
+        assert_eq!(sess.session().lock().await.config.session_user, "unforked");
     }
 
     /// Cancelling a *finished* job succeeds as a no-op and does not rewrite it.

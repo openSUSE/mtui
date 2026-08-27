@@ -338,6 +338,39 @@ mod tests {
         }
     }
 
+    /// Every command that must dodge the per-call fork, reached through the
+    /// registry the way the MCP gate reaches it. `config` answers per invocation
+    /// (#523) and only a recognised `show` is scoped — an unknown subcommand and
+    /// an empty argv fall through to the canonical session, so a subcommand added
+    /// later cannot silently start writing a fork. The fallthrough is pinned
+    /// *here* and not on the lock shape: `resolve_command_rrids` also gives up on
+    /// an argv it cannot parse, so `command_lock` would answer `Exclusive` for
+    /// these rows whichever way the predicate went.
+    #[test]
+    fn requires_canonical_session_per_invocation() {
+        let r = register_all();
+        for (name, args, expected) in [
+            ("load_template", &["SUSE:Maintenance:1:1"][..], true),
+            ("unload", &[][..], true),
+            ("switch", &[][..], true),
+            ("regenerate", &[][..], true),
+            ("config", &["set", "session_user", "x"][..], true),
+            ("config", &["show"][..], false),
+            ("config", &["-T", "SUSE:Maintenance:1:1", "show"][..], false),
+            ("config", &[][..], true),
+            ("config", &["frobnicate"][..], true),
+            ("list_hosts", &[][..], false),
+        ] {
+            let argv: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
+            let cmd = r.get(name).expect("registered");
+            assert_eq!(
+                cmd.requires_canonical_session(&argv),
+                expected,
+                "{name} {args:?}"
+            );
+        }
+    }
+
     #[test]
     fn load_template_is_not_mcp_denylisted() {
         // A valid headless tool: it names its own RRID.

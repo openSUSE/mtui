@@ -5,6 +5,7 @@ use clap::{Arg, ArgMatches, Command as ClapCommand};
 use mtui_config::{Config, SslVerify};
 
 use crate::command::{Command, Scope};
+use crate::engine::command_parser;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
@@ -223,6 +224,19 @@ impl Command for ConfigCmd {
 
     fn scope(&self) -> Scope {
         Scope::Single
+    }
+
+    /// `set` writes `session.config`, which a fork clones by value (#523).
+    ///
+    /// Only a positively-identified `show` is scoped: an unknown subcommand, an
+    /// empty argv and a parse failure fall through to the canonical session —
+    /// safe by default, but that gate is exclusive and writer-preference, so add
+    /// a read-only subcommand here or it silently queues behind background jobs.
+    fn requires_canonical_session(&self, argv: &[String]) -> bool {
+        !matches!(
+            command_parser(self).try_get_matches_from(argv),
+            Ok(m) if m.subcommand_name() == Some("show")
+        )
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {

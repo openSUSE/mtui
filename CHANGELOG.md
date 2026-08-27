@@ -131,6 +131,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `install_logs/` directory (`[mtui] install_logs` is a relative name by
   definition, resolved against the checkout dir). They now refuse with `no
   report working directory`.
+- MCP: `config set` no longer runs on a per-call fork whose `Config` is a value
+  copy. `config` is `Scope::Single`, so with a template loaded it resolved to
+  one RRID, took the dispatch gate's scoped arm, and the write was discarded
+  when the call returned; it now dispatches against the canonical session.
+  `config_show` stays on the shared path and keeps running concurrently. The
+  REPL was never affected.
 
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
