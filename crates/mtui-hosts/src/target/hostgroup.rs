@@ -1006,12 +1006,15 @@ impl HostsGroup {
     /// Fans a repository add/remove out across *only* the named hosts,
     /// otherwise identical to [`fanout_set_repo`](Self::fanout_set_repo).
     ///
-    /// The host-scoped counterpart, mirroring
-    /// [`add_history_for`](Self::add_history_for): for a flow that has already
-    /// excluded a host from the work it is doing, since reconfiguring the
-    /// repositories of a host it reported as excluded is a side effect that
-    /// host's exclusion promised it would not have. A name not in the group is
-    /// ignored.
+    /// The host-scoped counterpart, following
+    /// [`unlock_selected`](Self::unlock_selected)'s shape — a public entry
+    /// point over a shared `_where` impl.
+    /// ([`add_history_for`](Self::add_history_for) is host-scoped too, but
+    /// duplicates `add_history`'s body rather than delegating.) For a flow that
+    /// has already excluded a host from the work it is doing, since
+    /// reconfiguring the repositories of a host it reported as excluded is a
+    /// side effect that host's exclusion promised it would not have. A name not
+    /// in the group is ignored.
     pub async fn fanout_set_repo_for(
         &mut self,
         hosts: &BTreeSet<String>,
