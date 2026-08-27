@@ -31,6 +31,10 @@ use crate::session::Session;
 /// an absent "auto" result is lazily built and run from the QEM Dashboard, then
 /// the connected-host results and any `openqa_overview` payload go into
 /// [`ManualExport`]. `Auto`/`Kernel` render their full local template.
+///
+/// A `Manual` export refuses to write at all when *no* selected host has
+/// recorded package versions — the signal that this session never ran `update`
+/// (#526); `--allow-unverified` writes the scaffold anyway.
 pub struct Export;
 
 #[async_trait]
@@ -68,6 +72,15 @@ impl Command for Export {
                     ),
             )
             .arg(
+                Arg::new("allow_unverified")
+                    .long("allow-unverified")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "write the unverified scaffold even when no selected host has \
+                         recorded package versions",
+                    ),
+            )
+            .arg(
                 Arg::new("filename")
                     .value_name("FILENAME")
                     .help("output template file name (defaults to the loaded template)"),
@@ -78,6 +91,7 @@ impl Command for Export {
         let rrid = require_update(session)?;
         let workflow = session.metadata().workflow();
         let force = args.get_flag("force");
+        let allow_unverified = args.get_flag("allow_unverified");
 
         // Nothing to fold, so report and skip rather than write an empty export.
         // A typo'd `-t` still fails loudly below via `select_names`.
@@ -126,23 +140,33 @@ impl Command for Export {
             let hosts = select_names(session.targets(), args, false)
                 .map_err(|e| CommandError::Other(e.to_string()))?;
             let results = manual_hosts(session, &hosts);
+            let unverified: Vec<&str> = results
+                .iter()
+                .filter(|h| is_unverified(h))
+                .map(|h| h.hostname.as_str())
+                .collect();
+            // #526: *every* selected host unverified is the "this session never
+            // ran `update`" signal — refuse before any write, since a
+            // plausible-but-verdictless testreport is worse than none. A
+            // partially verified fleet (a host added after the update) still
+            // writes with the per-host warning below.
+            if !unverified.is_empty() && unverified.len() == results.len() && !allow_unverified {
+                return Err(CommandError::Other(format!(
+                    "no package version data recorded for any selected host ({}); run \
+                     `update` in this session before exporting, or pass \
+                     --allow-unverified to write the unverified scaffold",
+                    unverified.join(", ")
+                )));
+            }
             // #396/#437: a host with no recorded package data — or seeded
             // packages the version query never answered for — keeps the
             // scaffold's unverified lines. Say so where the operator/MCP client
             // sees it, not only in the log.
-            for host in &results {
-                let unverified = host.packages.is_empty()
-                    || host.packages.iter().all(|p| {
-                        *p.before_check() == VersionCheck::NotChecked
-                            && *p.after_check() == VersionCheck::NotChecked
-                    });
-                if unverified {
-                    session.display.println(&format!(
-                        "WARNING: no package version data recorded for {}; its install \
-                         result was left unverified",
-                        host.hostname
-                    ));
-                }
+            for host in &unverified {
+                session.display.println(&format!(
+                    "WARNING: no package version data recorded for {host}; its install \
+                     result was left unverified"
+                ));
             }
             let overview = session.metadata().openqa().overview.clone();
             (Some((hosts, results)), overview)
@@ -199,6 +223,21 @@ fn build_http(session: &Session) -> Result<HttpClient, CommandError> {
         .map_err(|e| CommandError::Other(format!("could not build HTTP client: {e}")))
 }
 
+/// Whether the exporter has nothing to verify this host's install result
+/// against: not one tracked package the update flow checked on either side
+/// (#396/#437) — vacuously true, and deliberately so, for a host with no
+/// tracked packages at all. Either side alone can carry the verdict, so both
+/// are required: a standalone `downgrade` rotates a checked `after` in with
+/// `before` still `NotChecked`. `current` is not consulted — `add_host` fills
+/// it on connect, so it would make a session that never ran `update` look
+/// verified.
+fn is_unverified(host: &ManualHost) -> bool {
+    host.packages.iter().all(|p| {
+        *p.before_check() == VersionCheck::NotChecked
+            && *p.after_check() == VersionCheck::NotChecked
+    })
+}
+
 /// Builds the [`ManualHost`] views of the named connected targets, so the
 /// exporter never reads the live `Target`s directly.
 fn manual_hosts(session: &Session, hosts: &[String]) -> Vec<ManualHost> {
@@ -217,7 +256,8 @@ fn manual_hosts(session: &Session, hosts: &[String]) -> Vec<ManualHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{Buffer, empty_session, matches, session_with_hosts};
+    use wiremock::MockServer;
 
     #[test]
     fn name_and_fanout_scope() {
@@ -439,6 +479,9 @@ mod tests {
     async fn manual_lazily_builds_and_folds_openqa_auto() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
+        // #526: without recorded versions the export now refuses; this test is
+        // about the openQA fold, so give it a verified host.
+        record_versions(&mut session, "h1");
         let server = dashboard_server("1").await;
         session.config.qem_dashboard_api = format!("{}/api", server.uri());
         session.config.openqa_instance = server.uri();
@@ -458,11 +501,13 @@ mod tests {
         assert!(written.contains("## export MTUI:"));
     }
 
-    /// #396: a host with no recorded package version data must be flagged on the
-    /// operator-visible surface, not only in the tracing log.
-    #[tokio::test]
-    async fn manual_warns_about_unverified_hosts_on_display() {
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+    /// A manual-workflow session wired to `dashboard_server`, `n` hosts and a
+    /// scaffold template on disk. Returns the template path (and keeps `dir`
+    /// alive for the caller).
+    async fn manual_export_fixture(
+        hosts: &[&str],
+    ) -> (Session, Buffer, tempfile::TempDir, PathBuf, MockServer) {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", hosts, "ok");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
         let server = dashboard_server("1").await;
         session.config.qem_dashboard_api = format!("{}/api", server.uri());
@@ -470,43 +515,179 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
         let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
+        // The product-arch anchor is what lets the exporter create a per-host
+        // block, so the rendered verdict lines are assertable.
+        std::fs::write(
+            &path,
+            "Test results by product-arch:\n\nsource code change review:\n",
+        )
+        .unwrap();
+        (session, buf, dir, path, server)
+    }
+
+    /// Seeds `host`'s tracked packages with a recorded before/after pair, as a
+    /// completed `update` in this session would.
+    fn record_versions(session: &mut Session, host: &str) {
+        let t = session.targets_mut().get_mut(host).expect("host present");
+        let mut pkg = mtui_types::package::Package::new("bash");
+        pkg.set_before(Some("5.1-1")).unwrap();
+        pkg.set_after(Some("5.1-2")).unwrap();
+        t.set_packages(vec![pkg]);
+    }
+
+    /// #526: no host has package data at all — the whole selection is
+    /// unverified, so `export` must refuse and leave the template untouched,
+    /// naming *every* unverified host (the issue plan's wording).
+    /// Mutations caught: dropping the refusal (back to warn-and-write) makes the
+    /// `Err` assertion fail; writing first and erroring after makes the
+    /// byte-identity assertion fail; naming only the first host drops `h2`.
+    #[tokio::test]
+    async fn manual_errors_on_unverified_hosts_without_writing() {
+        let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&["h1", "h2"]).await;
+        let before = std::fs::read(&path).unwrap();
 
         let args = matches(&Export, &["-f", path.to_str().unwrap()]);
-        Export.call(&mut session, &args).await.unwrap();
+        let err = Export.call(&mut session, &args).await.unwrap_err();
 
-        let out = buf.contents();
+        let CommandError::Other(msg) = err else {
+            panic!("expected Other");
+        };
+        assert!(msg.contains("h1"), "{msg}");
         assert!(
-            out.contains("WARNING: no package version data recorded for h1"),
-            "{out}"
+            msg.contains("h2"),
+            "every unverified host must be named: {msg}"
+        );
+        assert!(msg.contains("update"), "{msg}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "no partial write may reach the template"
         );
     }
 
-    /// #437: a host seeded with packages the version query never answered for
-    /// must still be flagged; `packages.is_empty()` alone missed it, reachable
+    /// #437 + #526: a host seeded with packages the version query never answered
+    /// for is unverified too — `packages.is_empty()` alone missed it, reachable
     /// when a host dies between seed and check.
     #[tokio::test]
-    async fn manual_warns_about_seeded_but_unchecked_hosts_on_display() {
-        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.metadata_mut().base_mut().workflow = Workflow::Manual;
+    async fn manual_errors_on_seeded_but_unchecked_hosts_without_writing() {
+        let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
         for t in session.targets_mut().targets_mut() {
             t.set_packages(vec![mtui_types::package::Package::new("bash")]);
         }
-        let server = dashboard_server("1").await;
-        session.config.qem_dashboard_api = format!("{}/api", server.uri());
-        session.config.openqa_instance = server.uri();
-        let dir = tempfile::tempdir().unwrap();
-        session.config.template_dir = dir.path().to_path_buf();
-        let path = dir.path().join("template.txt");
-        std::fs::write(&path, "source code change review:\n").unwrap();
+        let before = std::fs::read(&path).unwrap();
 
         let args = matches(&Export, &["-f", path.to_str().unwrap()]);
-        Export.call(&mut session, &args).await.unwrap();
+        let err = Export.call(&mut session, &args).await.unwrap_err();
+
+        let CommandError::Other(msg) = err else {
+            panic!("expected Other");
+        };
+        assert!(msg.contains("h1"), "{msg}");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "no partial write");
+    }
+
+    /// #526: the predicate is **every** selected host, not **any**. One verified
+    /// host plus one unverified one still writes, warning only about the latter.
+    /// Mutation caught: widening the guard to `!unverified.is_empty()` turns this
+    /// into an `Err`.
+    #[tokio::test]
+    async fn manual_partially_verified_group_still_writes_with_warning() {
+        let (mut session, buf, _dir, path, _server) = manual_export_fixture(&["h1", "h2"]).await;
+        record_versions(&mut session, "h1");
+        // h2 keeps an empty package list: unverified.
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.expect("must write");
 
         let out = buf.contents();
         assert!(
-            out.contains("WARNING: no package version data recorded for h1"),
+            out.contains("WARNING: no package version data recorded for h2"),
             "{out}"
+        );
+        assert!(
+            !out.contains("recorded for h1"),
+            "the verified host must not be warned about: {out}"
+        );
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("## export MTUI:"), "{written}");
+    }
+
+    /// #526: `is_unverified` is per-host, not per-package — one checked package
+    /// verifies the host. `bash` is unchecked on both sides; `bash-doc` carries
+    /// only an `after` (the shape a standalone `downgrade` leaves behind, since
+    /// it rotates `after <- current` over a never-checked `before`).
+    /// Mutations caught: `all` -> `any` (the bare package would refuse the whole
+    /// export) and dropping either check-side conjunct (`bash-doc` then reads as
+    /// unchecked, so the host does too).
+    #[tokio::test]
+    async fn manual_mixed_checked_and_unchecked_packages_is_verified() {
+        let (mut session, buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
+        let t = session.targets_mut().get_mut("h1").expect("host present");
+        let mut after_only = mtui_types::package::Package::new("bash-doc");
+        after_only.set_after(Some("5.1-1")).unwrap();
+        t.set_packages(vec![mtui_types::package::Package::new("bash"), after_only]);
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.expect("must write");
+
+        assert!(
+            !buf.contents().contains("WARNING: no package version data"),
+            "{}",
+            buf.contents()
+        );
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("## export MTUI:"), "{written}");
+    }
+
+    /// #526: the guard's `!unverified.is_empty()` term. `-t all` opts out of the
+    /// host-less skip above, so a zero-host selection reaches the guard with
+    /// `unverified.len() == results.len()` trivially `0 == 0`.
+    /// Mutation caught: dropping the term refuses with an empty host list.
+    #[tokio::test]
+    async fn manual_zero_selected_hosts_does_not_refuse() {
+        let (mut session, _buf, _dir, path, _server) = manual_export_fixture(&[]).await;
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap(), "-t", "all"]);
+        Export.call(&mut session, &args).await.expect("must write");
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("## export MTUI:"), "{written}");
+    }
+
+    /// #526: `--allow-unverified` is the deliberate opt-out — the scaffold is
+    /// written, carries the `not checked` lines, and its verdict placeholder
+    /// stays unflipped (pins the `manual.rs` rendering the opt-out relies on).
+    #[tokio::test]
+    async fn manual_allow_unverified_writes_unflipped_scaffold() {
+        let (mut session, buf, _dir, path, _server) = manual_export_fixture(&["h1"]).await;
+        for t in session.targets_mut().targets_mut() {
+            t.set_packages(vec![mtui_types::package::Package::new("bash")]);
+        }
+
+        let args = matches(
+            &Export,
+            &["-f", "--allow-unverified", path.to_str().unwrap()],
+        );
+        Export.call(&mut session, &args).await.expect("must write");
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("package bash: not checked (no version data recorded)"),
+            "{written}"
+        );
+        assert!(
+            written.contains("=> PASSED/FAILED"),
+            "verdict must stay undecided:\n{written}"
+        );
+        assert!(
+            !written.contains("=> PASSED\n") && !written.contains("=> FAILED\n"),
+            "verdict must not be flipped:\n{written}"
+        );
+        assert!(
+            buf.contents()
+                .contains("WARNING: no package version data recorded for h1"),
+            "{}",
+            buf.contents()
         );
     }
 
@@ -543,6 +724,7 @@ mod tests {
         // An existing "auto" result must not be rebuilt.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.metadata_mut().base_mut().workflow = Workflow::Manual;
+        record_versions(&mut session, "h1");
         let dir = tempfile::tempdir().unwrap();
         session.config.template_dir = dir.path().to_path_buf();
         let path = dir.path().join("template.txt");

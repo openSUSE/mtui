@@ -1023,6 +1023,9 @@ Options:
   -f, --force
           force overwrite existing template and re-download openQA results present in the log
 
+      --allow-unverified
+          write the unverified scaffold even when no selected host has recorded package versions
+
   -h, --help
           Print help
 ```
