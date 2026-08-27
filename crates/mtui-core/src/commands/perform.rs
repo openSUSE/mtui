@@ -55,6 +55,14 @@ pub(super) enum PerformOp {
     Update { noprepare: bool, newpackage: bool },
 }
 
+/// The success confirmation shared by every [`drive`] op, so no successful
+/// dispatch is an empty MCP result.
+fn confirm(session: &mut Session, verb: &str, hosts_label: &str) {
+    session
+        .display
+        .println(&format!("{verb} completed on {hosts_label}"));
+}
+
 /// Maps a flow error onto a [`CommandError`]. The flow's own `cancelled` marker
 /// — **not** the session token — is the authority: sniffing the token would hide
 /// a genuine host failure that merely coincided with a cancel. The message names
@@ -157,18 +165,22 @@ pub(super) async fn drive(
                 .perform_update(&mut selected, *noprepare, *newpackage, &mut diagnostics)
                 .await;
             session.restore_split_targets(selected, remainder);
+            if update_result.is_ok() {
+                // Verdict before the unbounded diagnostics: `SharedBuf` keeps
+                // the head, so a trailing line is what `max_output_bytes` eats.
+                confirm(session, "update", &hosts_label);
+            }
             render_diagnostics(session, &diagnostics);
             // A cancellation checkpoint surfaces as an ordinary `UpdateError`;
             // map it so the caller sees `Cancelled`, not a generic failure.
-            return update_result.map_err(|e| map_flow_error(&e));
+            update_result.map_err(|e| map_flow_error(&e))?;
+            return Ok(());
         }
     };
 
     session.restore_split_targets(selected, remainder);
     outcome?;
-    session
-        .display
-        .println(&format!("{verb} completed on {hosts_label}"));
+    confirm(session, verb, &hosts_label);
     Ok(())
 }
 
@@ -241,5 +253,105 @@ mod tests {
         let (mut session, buf) = session_with_color(ColorMode::Always);
         render_diagnostics(&mut session, &[]);
         assert!(buf.contents().is_empty());
+    }
+
+    // --- success confirmation ----------------------------------------------
+
+    use crate::commands::Update;
+    use crate::commands::testkit::{
+        matches, session_with_cancelled_update, session_with_hosts, session_with_update_diagnostics,
+    };
+
+    const RRID: &str = "SUSE:Maintenance:1:1";
+
+    fn update_op() -> PerformOp {
+        PerformOp::Update {
+            noprepare: true,
+            newpackage: false,
+        }
+    }
+
+    /// `drive` only reads `-t` off the matches, so one command's parser serves
+    /// every op.
+    fn no_args() -> ArgMatches {
+        matches(&Update, &[])
+    }
+
+    /// #525: every op — `update` included, whose only other output is the
+    /// diagnostics a clean transaction never emits — confirms success in the
+    /// same shape and names every selected host.
+    #[tokio::test]
+    async fn every_op_confirms_success_naming_every_selected_host() {
+        let pkg = || vec!["pkg".to_owned()];
+        for (verb, op) in [
+            ("install", PerformOp::Install(pkg())),
+            ("uninstall", PerformOp::Uninstall(pkg())),
+            (
+                "prepare",
+                PerformOp::Prepare {
+                    packages: pkg(),
+                    force: false,
+                    testing: false,
+                    installed_only: false,
+                },
+            ),
+            ("downgrade", PerformOp::Downgrade(pkg())),
+            ("update", update_op()),
+        ] {
+            let (mut session, buf) = session_with_hosts(RRID, &["h1", "h2"], "ok");
+            drive(&mut session, &no_args(), op).await.unwrap();
+            assert_eq!(buf.contents().trim(), format!("{verb} completed on h1, h2"));
+        }
+    }
+
+    /// The label is the `-t` selection, not the whole group: naming the
+    /// restored remainder would claim work on a host the op never touched.
+    #[tokio::test]
+    async fn confirmation_names_only_the_selected_hosts() {
+        let (mut session, buf) = session_with_hosts(RRID, &["h1", "h2"], "ok");
+        drive(&mut session, &matches(&Update, &["-t", "h1"]), update_op())
+            .await
+            .unwrap();
+        assert_eq!(buf.contents().trim(), "update completed on h1");
+    }
+
+    #[tokio::test]
+    async fn update_diagnostics_do_not_replace_the_confirmation() {
+        let (mut session, buf) = session_with_update_diagnostics(RRID, &["h1"], false);
+        drive(&mut session, &no_args(), update_op()).await.unwrap();
+        let out = buf.contents();
+        let verdict = out.find("update completed on h1").expect("confirmed");
+        let diag = out.find("extra rpm output").expect("diagnostics rendered");
+        assert!(out.contains("not supported by its vendor"), "got: {out:?}");
+        // The diagnostics are unbounded and `SharedBuf` truncates the tail, so
+        // the verdict has to come first to survive `max_output_bytes`.
+        assert!(verdict < diag, "verdict must precede diagnostics: {out:?}");
+    }
+
+    #[tokio::test]
+    async fn failed_update_renders_diagnostics_but_claims_nothing() {
+        let (mut session, buf) = session_with_update_diagnostics(RRID, &["h1"], true);
+        drive(&mut session, &no_args(), update_op())
+            .await
+            .expect_err("a failing perform_update must not report success");
+        let out = buf.contents();
+        assert!(out.contains("extra rpm output"), "got: {out:?}");
+        assert!(!out.contains("completed"), "got: {out:?}");
+    }
+
+    /// A cancelled update stopped short of patching every host, so it must
+    /// surface as `Cancelled` and claim nothing.
+    #[tokio::test]
+    async fn cancelled_update_claims_nothing() {
+        let (mut session, buf) = session_with_cancelled_update(RRID, &["h1"]);
+        let err = drive(&mut session, &no_args(), update_op())
+            .await
+            .expect_err("a cancelled perform_update must not report success");
+        assert!(matches!(err, CommandError::Cancelled(_)), "got: {err:?}");
+        assert!(
+            !buf.contents().contains("completed"),
+            "{:?}",
+            buf.contents()
+        );
     }
 }

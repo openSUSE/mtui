@@ -280,6 +280,16 @@ pub(crate) mod testkit {
         /// `perform_update` returns an `Err`, exercising the failure path
         /// (error toast, non-`Ok` result).
         fail_update: bool,
+        /// `perform_update`'s `Err` is a cancellation, not a failure — the only
+        /// way to reach `map_flow_error`'s `Cancelled` arm from the command
+        /// layer, since `fail_update`'s error is not `is_cancelled()`.
+        cancel_update: bool,
+        /// `perform_update` emits both diagnostic shapes. **Off by default**:
+        /// a clean transaction emits none, and fabricating them unconditionally
+        /// left `update`'s only display output coming from the fixture, which
+        /// disarmed `mcp_nonempty_success_guard` for the one command that was
+        /// silent on success (#525).
+        update_diagnostics: bool,
         /// The `perform_install`/`uninstall`/`prepare`/`downgrade` flows return
         /// an `Err` naming host `h1`, exercising `perform::drive`'s failure path.
         fail_perform: bool,
@@ -332,14 +342,20 @@ pub(crate) mod testkit {
             _newpackage: bool,
             diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
-            // Both diagnostic shapes, so the render path is exercised fully.
-            diagnostics.push(mtui_testreport::Diagnostic::highlighted(
-                "\nwarning: extra rpm output\n",
-            ));
-            diagnostics.push(mtui_testreport::Diagnostic::plain(
-                "The following package is not supported by its vendor:\nfoo",
-            ));
-            if self.fail_update {
+            if self.update_diagnostics {
+                // Both shapes, so the render path is exercised fully.
+                diagnostics.push(mtui_testreport::Diagnostic::highlighted(
+                    "\nwarning: extra rpm output\n",
+                ));
+                diagnostics.push(mtui_testreport::Diagnostic::plain(
+                    "The following package is not supported by its vendor:\nfoo",
+                ));
+            }
+            if self.cancel_update {
+                Err(mtui_testreport::UpdateError::cancelled(
+                    "update cancelled before the patch command",
+                ))
+            } else if self.fail_update {
                 Err(mtui_testreport::UpdateError::new(
                     "update stack locked",
                     "h1",
@@ -536,6 +552,8 @@ pub(crate) mod testkit {
             base,
             rrid: rrid.to_owned(),
             fail_update: false,
+            cancel_update: false,
+            update_diagnostics: false,
             fail_perform: false,
             set_repo_enabled: false,
         }));
@@ -559,6 +577,8 @@ pub(crate) mod testkit {
             base,
             rrid: rrid.to_owned(),
             fail_update: false,
+            cancel_update: false,
+            update_diagnostics: false,
             fail_perform: false,
             set_repo_enabled: false,
         }));
@@ -584,6 +604,67 @@ pub(crate) mod testkit {
             base,
             rrid: rrid.to_owned(),
             fail_update: true,
+            cancel_update: false,
+            update_diagnostics: false,
+            fail_perform: false,
+            set_repo_enabled: false,
+        }));
+        assert!(session.activate(rrid), "seeded template must activate");
+        (session, buf)
+    }
+
+    /// A session whose active report's `perform_update` stops at a cancellation
+    /// checkpoint, so the `Err` is `is_cancelled()` — unlike
+    /// [`session_with_failing_update`]'s, which is a plain failure.
+    #[must_use]
+    pub(crate) fn session_with_cancelled_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut session = Session::with_display(Config::default(), false, display);
+
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
+        let mut base = TestReportBase::new(Config::default());
+        base.targets = HostsGroup::new(targets, false);
+        base.rrid = rrid.parse().ok();
+        session.templates.add(Box::new(FakeReport {
+            base,
+            rrid: rrid.to_owned(),
+            fail_update: false,
+            cancel_update: true,
+            update_diagnostics: false,
+            fail_perform: false,
+            set_repo_enabled: false,
+        }));
+        assert!(session.activate(rrid), "seeded template must activate");
+        (session, buf)
+    }
+
+    /// A session whose active report's `perform_update` emits both diagnostic
+    /// shapes, succeeding or failing per `fail`.
+    ///
+    /// Opt-in, because a clean transaction emits none: the default fixture must
+    /// stay zero-diagnostic so the non-empty-success guard reads `update`'s own
+    /// output and not the double's (#525).
+    #[must_use]
+    pub(crate) fn session_with_update_diagnostics(
+        rrid: &str,
+        hosts: &[&str],
+        fail: bool,
+    ) -> (Session, Buffer) {
+        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut session = Session::with_display(Config::default(), false, display);
+
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
+        let mut base = TestReportBase::new(Config::default());
+        base.targets = HostsGroup::new(targets, false);
+        base.rrid = rrid.parse().ok();
+        session.templates.add(Box::new(FakeReport {
+            base,
+            rrid: rrid.to_owned(),
+            fail_update: fail,
+            cancel_update: false,
+            update_diagnostics: true,
             fail_perform: false,
             set_repo_enabled: false,
         }));
@@ -644,6 +725,8 @@ pub(crate) mod testkit {
             base,
             rrid: rrid.to_owned(),
             fail_update: false,
+            cancel_update: false,
+            update_diagnostics: false,
             fail_perform: false,
             set_repo_enabled: true,
         }));
@@ -667,6 +750,8 @@ pub(crate) mod testkit {
             base,
             rrid: rrid.to_owned(),
             fail_update: false,
+            cancel_update: false,
+            update_diagnostics: false,
             fail_perform: true,
             set_repo_enabled: false,
         }));
@@ -691,6 +776,8 @@ pub(crate) mod testkit {
             base,
             rrid: rrid.to_owned(),
             fail_update: false,
+            cancel_update: false,
+            update_diagnostics: false,
             fail_perform: false,
             set_repo_enabled: false,
         })
@@ -710,6 +797,8 @@ pub(crate) mod testkit {
             base,
             rrid,
             fail_update: false,
+            cancel_update: false,
+            update_diagnostics: false,
             fail_perform: false,
             set_repo_enabled: false,
         })
