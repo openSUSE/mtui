@@ -192,6 +192,12 @@ call with the host named.
 - `export` emits `WARNING: no package version data recorded for <host>...`
   lines in its tool output when a host has no recorded package data and its
   install-result block was therefore left unverified in the report.
+- The `run` tool's `command` is **argv tokens, not a shell line**: the tokens
+  are re-quoted before dispatch, so `["cat /etc/os-release"]` reaches the host
+  as one quoted word (exit 127) and `["zypper","lr","|","grep","x"]` passes a
+  literal `|` as an argument. Split the words yourself
+  (`["cat","/etc/os-release"]`), and for anything needing a shell — pipes,
+  redirection, `;` — ask for one explicitly: `["sh","-c","zypper lr | grep x"]`.
 
 ## Testreport editing tools
 

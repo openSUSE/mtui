@@ -1218,7 +1218,7 @@ expression: pretty
         },
         "command": {
           "items": {
-            "description": "Command to run on refhost",
+            "description": "Command as argv tokens (no shell); pipelines need three tokens: sh, -c, <line>",
             "type": "string"
           },
           "type": "array"
