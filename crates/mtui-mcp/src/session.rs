@@ -13,9 +13,10 @@
 //! **Per-template lock discipline.** A shared/exclusive registry gate
 //! ([`crate::concurrency::RwGate`]) plus a lazily-created per-RRID lock map:
 //! `command_lock` takes the gate *shared* + one per-RRID lock for a
-//! single-template call, *exclusive* for fan-out and for registry mutators
-//! ([`Command::mutates_registry`](mtui_core::Command::mutates_registry)), which
-//! must land on the canonical session. The scoped path dispatches a *spawned*
+//! single-template call, *exclusive* for fan-out and for commands that must land
+//! on the canonical session
+//! ([`Command::requires_canonical_session`](mtui_core::Command::requires_canonical_session)).
+//! The scoped path dispatches a *spawned*
 //! [`dispatch_command`] on a [`Session::fork_for_call`] — sharing the reports'
 //! per-entry locks, carrying its own display, holding no session-wide mutex — so
 //! different-RRID calls get real concurrency and per-call output isolation.
@@ -472,7 +473,8 @@ pub struct McpSession {
     tools_deny: Vec<String>,
     /// The registry shared/exclusive gate: *shared* for a single-template
     /// command (so it cannot overlap a registry mutation), *exclusive* for
-    /// registry mutators and unscoped fan-out, draining in-flight per-RRID work.
+    /// canonical-session commands and unscoped fan-out, draining in-flight
+    /// per-RRID work.
     /// See [`command_lock`](Self::command_lock).
     gate: RwGate,
     /// Lazily-created per-RRID locks: same-RRID calls share one and serialise,
@@ -512,7 +514,8 @@ pub enum CommandLock {
         /// The registry gate held in shared mode (dropped second).
         _shared: SharedGuard,
     },
-    /// A registry-wide exclusive hold (mutators / unscoped fan-out).
+    /// A registry-wide exclusive hold (canonical-session commands / unscoped
+    /// fan-out).
     Exclusive(#[allow(dead_code)] ExclusiveGuard),
 }
 
@@ -623,9 +626,9 @@ impl McpSession {
     /// * **exactly one** loaded template → the gate *shared* **plus** that
     ///   template's per-RRID lock, so different-RRID commands run concurrently
     ///   while same-RRID ones serialise and none overlaps a registry mutation;
-    /// * fan-out / unscoped-multi, registry mutators, or anything resolving to no
-    ///   real template → the gate *exclusive*, draining in-flight per-RRID
-    ///   commands and blocking new ones for the duration.
+    /// * fan-out / unscoped-multi, canonical-session commands, or anything
+    ///   resolving to no real template → the gate *exclusive*, draining in-flight
+    ///   per-RRID commands and blocking new ones for the duration.
     ///
     /// A single call never holds two per-RRID locks and the exclusive path holds
     /// only the gate, so the lock order (gate-shared → one rrid lock) is total and
@@ -634,10 +637,10 @@ impl McpSession {
     async fn command_lock(&self, registry: &Registry, name: &str, argv: &[String]) -> CommandLock {
         let rrids = match registry.get(name) {
             // Exclusive even when it resolves to a single template: the
-            // concurrent path dispatches on a per-call fork whose registry
-            // snapshot is discarded, so a structural mutation would be lost
+            // concurrent path dispatches on a per-call fork whose config and
+            // registry snapshot are discarded, so the mutation would be lost
             // unless it runs against the canonical session.
-            Some(command) if command.mutates_registry() => None,
+            Some(command) if command.requires_canonical_session() => None,
             Some(command) => {
                 let session = self.session.lock().await;
                 resolve_command_rrids(command.as_ref(), &session, argv)
@@ -798,7 +801,7 @@ impl McpSession {
         cancel: Option<CancellationToken>,
     ) -> Result<String, McpCommandError> {
         // Taken *before* touching the session, so same-RRID and unscoped calls
-        // serialise and mutators drain in-flight per-RRID work.
+        // serialise and canonical-session commands drain in-flight per-RRID work.
         let lock = self.command_lock(registry, name, argv).await;
 
         // Per-call output isolation: its own capture buffer + display, so two
@@ -814,8 +817,9 @@ impl McpSession {
             // mutex is not held across the dispatch — that is what lets a
             // different-RRID call run in parallel. Content mutations stay visible
             // to the canonical session (same `Arc<Mutex<..>>`); the fork's own
-            // config/registry structure is discarded, sound because a per-RRID
-            // command never mutates them (that is the exclusive path below).
+            // config/registry structure is discarded, sound because anything
+            // mutating those declares `requires_canonical_session` and was
+            // routed to the exclusive path below.
             CommandLock::Scoped { .. } => {
                 // *Spawned*, because the caller drives us via `join!` on one
                 // task and only a separate task yields real parallelism — hence
@@ -2089,12 +2093,12 @@ mod tests {
         assert!(matches!(lock, CommandLock::Scoped { .. }));
     }
 
-    /// A registry mutator takes the gate *exclusive* even when one template is
-    /// loaded and `resolve_command_rrids` would give one RRID, because a
-    /// structural mutation must land on the canonical session, not a discarded
-    /// fork. A content command on that template still takes the scoped path.
+    /// A canonical-session command takes the gate *exclusive* even when one
+    /// template is loaded and `resolve_command_rrids` would give one RRID,
+    /// because its mutation must not land on a discarded fork. A content command
+    /// on that template still takes the scoped path.
     #[tokio::test]
-    async fn command_lock_registry_mutator_is_exclusive_even_when_scoped() {
+    async fn command_lock_canonical_session_command_is_exclusive_even_when_scoped() {
         use mtui_testreport::{ObsReport, TestReport};
         use mtui_types::RequestReviewID;
 
@@ -2109,14 +2113,14 @@ mod tests {
         }
         let registry = register_all();
 
-        let mutator = sess
+        let canonical = sess
             .command_lock(&registry, "load_template", &[rrid.to_owned()])
             .await;
         assert!(
-            matches!(mutator, CommandLock::Exclusive(_)),
-            "registry mutator must take the exclusive gate"
+            matches!(canonical, CommandLock::Exclusive(_)),
+            "a canonical-session command must take the exclusive gate"
         );
-        drop(mutator);
+        drop(canonical);
 
         let scoped = sess
             .command_lock(&registry, "list_hosts", &["-T".to_owned(), rrid.to_owned()])

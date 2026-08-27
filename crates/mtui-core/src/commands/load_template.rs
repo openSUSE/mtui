@@ -41,7 +41,7 @@ impl Command for LoadTemplate {
         Scope::Single
     }
 
-    fn mutates_registry(&self) -> bool {
+    fn requires_canonical_session(&self) -> bool {
         true
     }
 

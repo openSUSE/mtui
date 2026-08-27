@@ -2,8 +2,9 @@
 //!
 //! A minimal async readers-writer lock used as the **registry gate**. Many
 //! *shared* holders (per-RRID commands, each mutating only its own template) may
-//! run at once, but shared and exclusive holders exclude one another: registry
-//! mutators — `load_template` / `unload` — and unscoped fan-out run alone.
+//! run at once, but shared and exclusive holders exclude one another: commands
+//! that must run against the canonical session — `load_template` / `unload` —
+//! and unscoped fan-out run alone.
 //!
 //! **Writer-preference is intentional**: while an exclusive waiter is pending,
 //! new shared acquisitions block, so a steady stream of per-RRID commands cannot
@@ -13,8 +14,8 @@
 //! ## Locking depth
 //!
 //! This gate plus the per-RRID lock map in [`crate::session`] are the lock
-//! *discipline*: same-RRID and unscoped calls serialise, and registry mutators
-//! drain in-flight per-RRID work. The wall-clock concurrency between
+//! *discipline*: same-RRID and unscoped calls serialise, and canonical-session
+//! commands drain in-flight per-RRID work. The wall-clock concurrency between
 //! *different-RRID* calls comes from `mtui-core`'s per-entry `Arc<Mutex<..>>`
 //! report entries: a single-real-RRID call dispatches on a
 //! [`Session::fork_for_call`](mtui_core::Session::fork_for_call) — sharing the
