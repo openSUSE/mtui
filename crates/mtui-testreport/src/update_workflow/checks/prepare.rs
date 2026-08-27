@@ -157,19 +157,14 @@ mod tests {
         }
     }
 
-    /// The rendered `("YUM", false)` prepare templates, so the tests judge the
+    /// The rendered `("YUM", false)` prepare command, so the tests judge the
     /// command the flow really sends rather than a hand-written approximation.
-    fn yum_templates() -> (String, String) {
+    fn yum_templates() -> String {
         use std::collections::HashMap;
         let cmds = crate::update_workflow::actions::prepare::preparer("YUM", false, false, false)
             .expect("the YUM key has a preparer");
         let vars: HashMap<&str, &str> = [("package", "pkg-a")].into_iter().collect();
-        (
-            cmds.render_command(&vars).expect("renders"),
-            cmds.render_installed_only(&vars)
-                .expect("renders")
-                .expect("the YUM key has an installed-only variant"),
-        )
+        cmds.render_command(&vars).expect("renders")
     }
 
     #[test]
@@ -295,17 +290,10 @@ mod tests {
 
     #[test]
     fn yum_prepare_judges_only_whether_the_command_ran() {
-        let (plain, installed_only) = yum_templates();
-        // The installed-only template exits `1` on the routine "not installed
-        // here" skip the flag exists for, so a bare non-zero rule would fail
-        // every host that legitimately skipped a package.
-        assert!(
-            installed_only.starts_with("rpm -q pkg-a &>/dev/null &&"),
-            "the reason the exit code is unreadable here: {installed_only}"
-        );
-        assert!(yum(args_for(&installed_only, "", "", 1)).is_ok());
-        // No marker copying either: `Error:` is zypper vocabulary, and these
-        // strings were never written against a yum transcript.
+        let plain = yum_templates();
+        // No marker copying: `Error:` is zypper vocabulary, while `yum`
+        // prints its own errors in a transcript these strings were never
+        // written against.
         assert!(
             yum(args_for(
                 &plain,

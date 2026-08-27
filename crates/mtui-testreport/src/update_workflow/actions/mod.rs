@@ -54,24 +54,20 @@ pub struct ActionCommands {
     /// The transactional reboot template; present only for transactional
     /// (`slmicro`) entries.
     reboot: Option<String>,
-    /// The "only if already installed" variant; present only for `prepare`
-    /// actions.
-    installed_only: Option<String>,
-    /// The package-listing helper; present only for `downgrade` actions.
+    /// The package-listing helper: `downgrade`'s available-version probe and
+    /// `prepare`'s installed-package probe.
     list_command: Option<String>,
     /// The substitution mode for this action's templates.
     mode: SubstMode,
 }
 
 impl ActionCommands {
-    /// A strict command-only action set (no reboot / installed_only /
-    /// list_command).
+    /// A strict command-only action set (no reboot / list_command).
     #[must_use]
     fn command_only(command: impl Into<String>) -> Self {
         Self {
             command: command.into(),
             reboot: None,
-            installed_only: None,
             list_command: None,
             mode: SubstMode::Strict,
         }
@@ -83,7 +79,6 @@ impl ActionCommands {
         Self {
             command: command.into(),
             reboot: Some(reboot.into()),
-            installed_only: None,
             list_command: None,
             mode: SubstMode::Strict,
         }
@@ -138,23 +133,6 @@ impl ActionCommands {
     /// [`command_template`](Self::command_template).
     pub(crate) fn reboot_template(&self) -> Option<&str> {
         self.reboot.as_deref()
-    }
-
-    /// Renders [`installed_only`](Self::installed_only) with `vars` if present,
-    /// honouring the action's [`mode`](Self::mode).
-    ///
-    /// # Errors
-    ///
-    /// In strict mode, propagates [`TemplateError`] from the underlying
-    /// substitution.
-    pub(crate) fn render_installed_only(
-        &self,
-        vars: &HashMap<&str, &str>,
-    ) -> Result<Option<String>, TemplateError> {
-        match &self.installed_only {
-            Some(t) => Ok(Some(self.mode.render(t, vars)?)),
-            None => Ok(None),
-        }
     }
 
     /// Renders [`list_command`](Self::list_command) with `vars` if present,
