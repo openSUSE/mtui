@@ -82,7 +82,7 @@ The trait has just **two required methods**; everything else has a default:
 | `aliases` | `fn aliases(&self) -> &'static [&'static str]` | `&[]` |
 | `about` | `fn about(&self) -> Option<&'static str>` | `None` |
 | `scope` | `fn scope(&self) -> Scope` | `Scope::Active` |
-| `mutates_registry` | `fn mutates_registry(&self) -> bool` | `false` |
+| `requires_canonical_session` | `fn requires_canonical_session(&self) -> bool` | `false` |
 | `skip_hostless_templates` | `fn skip_hostless_templates(&self) -> bool` | `true` |
 | `configure` | `fn configure(&self, cmd: clap::Command) -> clap::Command` | identity (no args) |
 | `complete` | `fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String>` | `Vec::new()` |
@@ -132,7 +132,7 @@ display) passed into each call. There are no hidden globals.
    them from `args` in `call`; for completion, override `complete`; for a
    non-default fan-out policy, override `scope`. `commands/switch.rs` is a compact
    model that exercises all three (a required positional, `Scope::Single`,
-   `mutates_registry`, and a prefix completer).
+   `requires_canonical_session`, and a prefix completer).
 
 2. **Re-export** the type from `commands/mod.rs` (the `pub use` block).
 

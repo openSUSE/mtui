@@ -69,19 +69,20 @@ pub trait Command: Send + Sync {
         Scope::Active
     }
 
-    /// Whether this command's body mutates the [`TemplateRegistry`](crate::TemplateRegistry) *structure*
-    /// (loads/replaces/removes an entry or re-points the active template), as
-    /// opposed to only mutating an already-loaded report's *content*.
+    /// Whether this command must dispatch against the **canonical** session
+    /// rather than a [`fork_for_call`](crate::Session::fork_for_call), because it
+    /// mutates state the fork clones by value (`config`) or owns outright (the
+    /// [`TemplateRegistry`](crate::TemplateRegistry) *structure* — loading,
+    /// replacing or removing an entry, or re-pointing the active template).
     ///
     /// `false` by default; `load_template`, `unload`, `switch`, and `regenerate`
-    /// override it. The headless MCP dispatch gate
+    /// override it. It forces the headless MCP dispatch gate
     /// ([`McpSession::command_lock`](../../mtui_mcp/session/struct.McpSession.html))
-    /// forces such a command onto the **exclusive** registry gate even at a
-    /// single template, so its structural mutation lands on the canonical
-    /// session rather than a discarded per-call fork. A content-only per-RRID
-    /// command may run on a fork: its mutations reach the shared report through
-    /// the entry lock.
-    fn mutates_registry(&self) -> bool {
+    /// onto the **exclusive** arm even at a single template, so the mutation
+    /// lands on the canonical session rather than a discarded per-call fork. A
+    /// command that only mutates an already-loaded report's *content* may run on
+    /// a fork: those mutations reach the shared report through the entry lock.
+    fn requires_canonical_session(&self) -> bool {
         false
     }
 

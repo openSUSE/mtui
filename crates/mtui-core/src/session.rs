@@ -255,11 +255,13 @@ impl Session {
     /// shares the per-entry report locks, so a command on RRID `X` locks only
     /// `X`'s entry and its mutations stay visible to the canonical session.
     ///
-    /// It copies `is_repl`/`shuffle` — only mutated by `Scope::Single` commands,
-    /// which run against the *canonical* session under the MCP exclusive gate —
-    /// and starts with an empty `http_client` cache and no prompter/sinks. Only
-    /// a **single-real-template**, non-mutating command is therefore sound to
-    /// dispatch through a fork.
+    /// `config`/`is_repl`/`shuffle` are copied **by value**, so a fork's writes to
+    /// them die with it; a command that mutates any of them must declare
+    /// [`Command::requires_canonical_session`](crate::Command::requires_canonical_session),
+    /// which is what routes it to the MCP exclusive gate instead of here.
+    /// Starts with an empty `http_client` cache and no prompter/sinks. Only a
+    /// **single-real-template** command that mutates nothing beyond shared report
+    /// content is therefore sound to dispatch through a fork.
     #[must_use]
     pub fn fork_for_call(&self, display: CommandPromptDisplay) -> Self {
         // A host added on a fork while nothing is loaded would land in this
