@@ -903,3 +903,89 @@ fn json_parser_keys_composition_by_the_host_side_product_name() {
         report.composed
     );
 }
+
+#[test]
+fn binaries_index_composes_nothing_for_a_declared_arch_binaries_omit() {
+    let mut report = empty_report();
+    let (_, logs) = log_capture::capture_logs(|| {
+        JSONParser::parse_str(&mut report, SLFO_METADATA_JSON).unwrap();
+    });
+
+    // The fixture declares four arches per product and ships binaries for two:
+    // an arch `products` names and `binaries` omit ships nothing, and must be
+    // indexed as *empty* rather than left absent. Absent means "unknown", and
+    // `narrow_to_composed` hands an unknown host the full package list — the
+    // unavailable-package failure this index exists to prevent. Empty makes the
+    // host's intersection empty, which the prepare refuses by name.
+    for arch in ["ppc64le", "s390x"] {
+        for product in ["SL-Micro", "SL-Micro-Extras"] {
+            assert_eq!(
+                report
+                    .composed
+                    .get(&SystemProduct::new(product, "6.1", arch)),
+                Some(&BTreeSet::new()),
+                "{product} 6.1 {arch} must compose nothing, not be unknown: {:?}",
+                report.composed
+            );
+        }
+    }
+    // Not even the noarch names the product's *listed* arches union in: with no
+    // arch key there is no repo for this update on that arch to install from.
+    // This is what separates the empty set from a plain `pkg-a`-only set.
+    assert!(
+        report
+            .composed
+            .get(&SystemProduct::new("SL-Micro", "6.1", "x86_64"))
+            .is_some_and(|s| s.contains("pkg-a")),
+        "arms the noarch half: {:?}",
+        report.composed
+    );
+    let line = logs
+        .lines()
+        .find(|l| l.contains("binaries ship nothing for it"))
+        .unwrap_or_else(|| panic!("no missing-arch line captured: {logs}"));
+    assert!(line.starts_with("DEBUG"), "must be a DEBUG: {line}");
+}
+
+#[test]
+fn binaries_index_leaves_an_arch_the_metadata_never_declares_unknown() {
+    let mut report = empty_report();
+    let json = composition_envelope(
+        &["SL-Micro 6.1 (x86_64)"],
+        serde_json::json!({ "SL-Micro-6.1": { "x86_64": ["pkg-a-1.0-1.x86_64.rpm"] } }),
+    );
+    JSONParser::parse_str(&mut report, &json).unwrap();
+
+    // The other half of the pair above: "declared and empty" and "never
+    // mentioned" are different facts. Only the first licenses refusing a host;
+    // an arch the metadata knows nothing about must keep falling open, or a
+    // host the report simply does not describe would be refused instead.
+    assert_eq!(
+        report
+            .composed
+            .get(&SystemProduct::new("SL-Micro", "6.1", "s390x")),
+        None,
+        "an undeclared arch must stay absent: {:?}",
+        report.composed
+    );
+}
+
+#[test]
+fn binaries_index_stays_fail_open_for_a_product_listing_no_arch_at_all() {
+    let mut report = empty_report();
+    let json = composition_envelope(
+        &["SL-Micro 6.1 (x86_64, s390x)"],
+        serde_json::json!({ "SL-Micro-6.1": {} }),
+    );
+    JSONParser::parse_str(&mut report, &json).unwrap();
+
+    // An empty arch map is no enumeration to be absent from, so it says nothing
+    // about either declared arch. Composing empties here would turn a `binaries`
+    // block that lost its contents into "refuse every host", the widest possible
+    // blast radius for a metadata glitch.
+    assert!(
+        report.composed.is_empty(),
+        "an arch-less product must not compose empties: {:?}",
+        report.composed
+    );
+}

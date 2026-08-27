@@ -284,6 +284,17 @@ impl JSONParser {
 /// sets are built: a `noarch` binary is composed for every arch, but real
 /// metadata lists it under only some of them.
 ///
+/// `products` lists every arch a product *exists* on, `binaries` only what this
+/// update *built*: an arch in the former and absent from the latter ships
+/// nothing, and is indexed as an explicitly empty set so
+/// `narrow_to_composed` refuses that host by name rather than falling through
+/// to the full list — the `zypper 104` this index exists to prevent. Not even
+/// the product's `noarch` names: with no arch key at all there is no repo for
+/// this update on that arch to install them from. An arch the metadata never
+/// declares stays unknown and keeps falling open, and so does a product whose
+/// `binaries` map lists no arch whatsoever — absence is only informative
+/// against an enumeration that exists.
+///
 /// Every entry that parses as an RPM filename is indexed under its arch *key*,
 /// whatever arch the filename itself carries: a 32-bit compat binary listed
 /// under `x86_64` is installable there, and a source RPM merely names a package
@@ -358,24 +369,51 @@ fn index_binaries(
 
         for (arch, mut names) in per_arch {
             names.extend(noarch.iter().cloned());
-            // One key per normalizer the tree's repo parsers use — raw
-            // (`gitrepoparse`/`slrepoparse`), `normalize_16` (`reporepoparse`)
-            // and `normalize` (`obsrepoparse`) — because the host reports
-            // whichever form its own `/etc/products.d` carries. Where two
-            // agree the entry simply merges; where a normalizer's output
-            // collides with another product's raw name the sets union, which
-            // is over-inclusive and so degrades toward today's behaviour.
-            let raw = SystemProduct::new(&product.name, &product.version, arch);
-            for form in BTreeSet::from([
-                normalize_16(raw.clone()),
-                normalize(raw.clone()),
-                raw.clone(),
-            ]) {
-                out.entry(form).or_default().extend(names.iter().cloned());
+            register(
+                &mut out,
+                SystemProduct::new(&product.name, &product.version, arch),
+                &names,
+            );
+        }
+
+        // Only against a non-empty enumeration: a product for which `binaries`
+        // lists no arch at all says nothing about any of them, so it must stay
+        // fail-open rather than refuse every host on that product.
+        if !arch_map.is_empty() {
+            for declared in parsed.iter().filter(|p| {
+                p.name == product.name
+                    && p.version == product.version
+                    && !arch_map.contains_key(&p.arch)
+            }) {
+                debug!(
+                    product = %key, arch = %declared.arch,
+                    "products declares this arch but binaries ship nothing for it; composing nothing"
+                );
+                register(&mut out, declared.clone(), &BTreeSet::new());
             }
         }
     }
     out
+}
+
+/// Records `names` for `raw` under one key per normalizer the tree's repo
+/// parsers use — raw (`gitrepoparse`/`slrepoparse`), `normalize_16`
+/// (`reporepoparse`) and `normalize` (`obsrepoparse`) — because the host reports
+/// whichever form its own `/etc/products.d` carries. Where two agree the entry
+/// simply merges; where a normalizer's output collides with another product's
+/// raw name the sets union, which is over-inclusive and so degrades toward
+/// today's behaviour.
+///
+/// An empty `names` still creates the keys: "composes nothing here" is a
+/// statement, distinct from an absent key's "nothing is known here".
+fn register(
+    out: &mut HashMap<SystemProduct, BTreeSet<String>>,
+    raw: SystemProduct,
+    names: &BTreeSet<String>,
+) {
+    for form in BTreeSet::from([normalize_16(raw.clone()), normalize(raw.clone()), raw]) {
+        out.entry(form).or_default().extend(names.iter().cloned());
+    }
 }
 
 /// Maps `issue id -> title` from a checkout's `patchinfo.xml`.

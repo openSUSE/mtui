@@ -159,7 +159,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the test repo and resolves each host's updater, so a refused host can no
   longer abort its eligible peers with a contended lock or an unsupported
   updater, nor have its own repositories reconfigured after being reported as
-  excluded.
+  excluded. An architecture the metadata's `products` declares but its
+  `binaries` ship nothing for counts as composing nothing, so such a host is
+  refused by name too rather than treated as undescribed and sent the whole
+  list; an architecture the metadata never mentions at all still is.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
