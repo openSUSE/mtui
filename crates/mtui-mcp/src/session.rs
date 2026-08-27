@@ -1474,11 +1474,13 @@ impl McpSession {
     /// every template in `rrids`.
     ///
     /// An empty `rrids` means the job recorded no scope (see [`Job::rrids`]) and
-    /// falls back to every loaded template. The whole pass is bounded by
-    /// `budget`, **including the preamble**: a template not reached in time is
-    /// reported unknown rather than waited out, so `job_cancel` stays responsive.
-    /// Per template it does nothing but release the group's own held locks — no
-    /// disconnect, no pool release, no history row.
+    /// falls back to every loaded template **plus the null sentinel**. The whole
+    /// pass is bounded by `budget`, **including the preamble**: a template not
+    /// reached in time is reported unknown rather than waited out, so
+    /// `job_cancel` stays responsive. The sentinel is reserved one group's equal
+    /// share of the budget so a blocked template cannot starve it. Per template
+    /// it does nothing but release the group's own held locks — no disconnect,
+    /// no pool release, no history row.
     async fn unlock_after_abort(&self, rrids: &[String], budget: Duration) -> AbortUnlock {
         let mut summary = AbortUnlock::default();
         // Armed before the first await: the preamble takes the canonical session
@@ -1531,8 +1533,21 @@ impl McpSession {
             return summary;
         };
 
+        // One group's equal share of what the preamble left, reserved for the
+        // sentinel; the templates share the rest. Un-reserved, one blocked
+        // template (a wedged host, or a queued writer winning the
+        // writer-preferring gate) eats the whole budget and the sentinel
+        // release is never attempted.
+        let null_reserve = if with_null {
+            let groups = u32::try_from(targets.len().saturating_add(1)).unwrap_or(u32::MAX);
+            deadline.saturating_duration_since(Instant::now()) / groups
+        } else {
+            Duration::ZERO
+        };
+        let templates_deadline = deadline - null_reserve;
+
         for rrid in targets {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = templates_deadline.saturating_duration_since(Instant::now());
             match tokio::time::timeout(left, self.unlock_template(&rrid)).await {
                 Ok(outcomes) => summary.absorb(outcomes),
                 Err(_) => {
@@ -1542,12 +1557,12 @@ impl McpSession {
             }
         }
 
-        // The sentinel, after the registry entries. Unlocks its own held locks
-        // only (`unlock_held`); a dispatch that reached it was force-aborted, so
-        // leaving its `/var/lock/mtui.lock` held would otherwise survive until
-        // the session ends (teardown) — which under a long-lived MCP server may
-        // be never. Bounded by the same budget; on timeout the group is reported
-        // as unknown rather than silently omitted.
+        // The sentinel, on its reserved share plus whatever the templates left
+        // over. Unlocks its own held locks only (`unlock_held`); a dispatch that
+        // reached it was force-aborted, so leaving its `/var/lock/mtui.lock`
+        // held would otherwise survive until the session ends (teardown) —
+        // which under a long-lived MCP server may be never. On timeout the group
+        // is reported as unknown rather than silently omitted.
         if with_null {
             let left = deadline.saturating_duration_since(Instant::now());
             let null_unlock = async {
@@ -3037,6 +3052,171 @@ mod tests {
             still_locked(&null_host),
             "null-host's lock is gone after all"
         );
+    }
+
+    /// A template that consumes the whole budget must not stop the sentinel
+    /// release from being *attempted*: the sentinel holds a reserved share, so
+    /// the blocked template is reported unknown while the null-group lock is
+    /// still released.
+    ///
+    /// The block is the writer-preferring gate, not a slow host: a queued
+    /// `load_template`-grade writer bumps `writers_waiting` for its whole wait,
+    /// so `unlock_template`'s shared acquisition cannot proceed at all and no
+    /// budget can outwait it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_blocked_template_cannot_starve_the_null_group_unlock() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        let alpha = MockConnection::new("host-alpha").with_run_delay(Duration::from_secs(600));
+        // One real timer await in the sentinel's release path, so the reserve
+        // has to be a genuine slice of wall clock and not one lucky poll.
+        let null_host =
+            MockConnection::new("null-host").with_sftp_session_delay(Duration::from_millis(50));
+        let mut null_target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+        null_target.lock("").await.expect("null-host locked");
+
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            guard.targets_mut().add(null_target);
+        }
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+        assert!(
+            still_locked(&null_host),
+            "fixture must arm the assertion — the sentinel holds a lock before the cancel"
+        );
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+        // `start_job` records no template scope, so the fallback resolves the
+        // registry *and* the sentinel — the pass the budget has to cover.
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let writer = tokio::spawn({
+            let gate = sess.gate.clone();
+            let release = Arc::clone(&release);
+            async move {
+                let _exclusive = gate.exclusive().await;
+                release.notified().await;
+            }
+        });
+        // Barrier: the writer's bump is visible once a shared acquisition can no
+        // longer be taken. Without it the cancel could run before the writer
+        // queued and the template would not block at all.
+        let mut queued = false;
+        for _ in 0..400 {
+            if tokio::time::timeout(Duration::from_millis(5), sess.gate.shared())
+                .await
+                .is_err()
+            {
+                queued = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(queued, "the exclusive waiter never queued on the gate");
+
+        let budget = Duration::from_millis(600);
+        let before = Instant::now();
+        let msg = sess
+            .job_cancel_with_budget(&job_id, budget)
+            .await
+            .expect("cancel succeeds");
+        let elapsed = before.elapsed();
+
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            msg.contains(&format!("lock state unknown on {LOCK_RRID_A}")),
+            "the blocked template must still be reported unknown: {msg}"
+        );
+        assert!(
+            still_locked(&alpha) && !saw_unlock(&alpha),
+            "the reply claimed a release the blocked template never performed: {msg}"
+        );
+        assert!(
+            saw_unlock(&null_host),
+            "the blocked template consumed the sentinel's share of the budget: {msg}"
+        );
+        assert!(
+            !still_locked(&null_host),
+            "the null group's lock survived the release: {msg}"
+        );
+        assert!(msg.contains("unlocked: null-host"), "got: {msg}");
+        assert!(
+            !msg.contains("hosts attached with no report loaded"),
+            "the sentinel release did not time out, so its remedy must not appear: {msg}"
+        );
+        assert!(
+            elapsed < CANCEL_GRACE + budget + Duration::from_millis(700),
+            "reserving a share must not extend the pass beyond the budget: {elapsed:?}"
+        );
+
+        release.notify_one();
+        writer.await.expect("gate writer panicked");
+    }
+
+    /// The other half of the split: reserving the sentinel a share must not
+    /// starve the templates. Both groups hold a releasable lock and both are
+    /// released inside one budget, with nothing reported unknown.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forced_cancel_releases_the_template_and_the_null_group_in_one_budget() {
+        use mtui_hosts::Target;
+        use mtui_types::enums::TargetState;
+
+        // A real timer await in each release path, so neither side can be
+        // released on a single opportunistic poll of a zero-length slice.
+        let alpha = MockConnection::new("host-alpha")
+            .with_sftp_session_delay(Duration::from_millis(50))
+            .with_run_delay(Duration::from_secs(600));
+        let null_host =
+            MockConnection::new("null-host").with_sftp_session_delay(Duration::from_millis(50));
+        let mut null_target = Target::with_connection(
+            "null-host",
+            TargetState::Enabled,
+            Box::new(null_host.clone()),
+        );
+        null_target.lock("").await.expect("null-host locked");
+
+        let sess = session(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            guard.targets_mut().add(null_target);
+        }
+        load_with_hosts(&sess, LOCK_RRID_A, &[("host-alpha", alpha.clone())]).await;
+
+        let registry = registry_with_probe(LockAndPark::new(Park::Forever));
+        let job_id = sess
+            .start_job(Arc::clone(&registry), "lock_and_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        await_locked(&alpha, "host-alpha").await;
+
+        let msg = sess
+            .job_cancel_with_budget(&job_id, Duration::from_millis(600))
+            .await
+            .expect("cancel succeeds");
+
+        assert!(msg.contains("forced abort"), "got: {msg}");
+        assert!(
+            !still_locked(&alpha),
+            "the sentinel's reserve starved the template's release: {msg}"
+        );
+        assert!(
+            !still_locked(&null_host),
+            "the null group's lock survived the release: {msg}"
+        );
+        assert!(
+            msg.contains("unlocked: host-alpha, null-host"),
+            "both groups must be reported released, templates first: {msg}"
+        );
+        assert!(!msg.contains("unknown"), "nothing timed out: {msg}");
     }
 
     /// A scoped force-cancel must **not** touch the sentinel (#485): an
