@@ -77,6 +77,26 @@ impl PackageSpec {
 
         Ok(Self(raw.to_owned()))
     }
+
+    /// Validates and wraps a bare package *name*.
+    ///
+    /// [`parse`](Self::parse) reads `=` as the version separator, so a name
+    /// carrying one passes as `name=version`. A caller holding a string that
+    /// must be a name — one extracted from an RPM filename, say — needs this
+    /// instead, or `=` is the one illegal name character that gets through.
+    ///
+    /// # Errors
+    /// As [`parse`](Self::parse), plus
+    /// [`IllegalChar`](PackageSpecParseError::IllegalChar) for `=`.
+    pub fn parse_name(raw: &str) -> Result<Self, PackageSpecParseError> {
+        if raw.contains('=') {
+            return Err(PackageSpecParseError::IllegalChar {
+                ch: '=',
+                name: raw.to_owned(),
+            });
+        }
+        Self::parse(raw)
+    }
 }
 
 impl fmt::Display for PackageSpec {
@@ -140,6 +160,23 @@ mod tests {
         ] {
             assert!(PackageSpec::parse(ok).is_ok(), "expected {ok:?} to parse");
         }
+    }
+
+    #[test]
+    fn parse_name_rejects_the_spec_separator_parse_accepts() {
+        // The one character the two entry points disagree on: `parse` reads it
+        // as the version separator, so only `parse_name` can keep it out of a
+        // string that has to be a name.
+        assert!(PackageSpec::parse("foo=1.0").is_ok());
+        assert!(matches!(
+            PackageSpec::parse_name("foo=1.0"),
+            Err(PackageSpecParseError::IllegalChar { ch: '=', .. })
+        ));
+        assert!(PackageSpec::parse_name("kernel-default").is_ok());
+        assert!(matches!(
+            PackageSpec::parse_name("-rf"),
+            Err(PackageSpecParseError::OptionLike { .. })
+        ));
     }
 
     #[test]

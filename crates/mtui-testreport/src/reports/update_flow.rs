@@ -2018,8 +2018,6 @@ pub async fn perform_update(
     targets.package_check(true).await;
 
     remove_test_repos(targets, report).await;
-    // `Ok` when nothing was excluded; otherwise the update finished on the
-    // hosts it could reach, and says which it did not.
     aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed)
 }
 
@@ -2054,12 +2052,15 @@ async fn remove_test_repos(targets: &mut HostsGroup, report: &dyn SetRepo) {
     warn_on_unlock_failures("update", &targets.unlock().await);
 }
 
-/// Runs the update commands, checks every host (collecting failures), reboots on
-/// success, and **always** unlocks.
+/// Runs the update commands, checks the hosts they reached (collecting
+/// failures), reboots on success, and **always** unlocks.
 ///
-/// Returns `Ok(())` when every host's check passed and every transactional
-/// host's reboot took effect — reconnecting is not sufficient, since a host can
-/// answer without ever having gone down.
+/// `commands` and `reboot` are the whole scope: a host the caller excluded is
+/// absent from both and is neither judged, rebooted, nor counted a success.
+///
+/// Returns `Ok(())` when every check passed and every transactional host's
+/// reboot took effect — reconnecting is not sufficient, since a host can answer
+/// without ever having gone down.
 ///
 /// Otherwise `Err` with the aggregated failure, which **suppresses the reboot
 /// entirely** on a check failure. The [`UpdateFailure`] variant is what routes
@@ -2074,10 +2075,8 @@ async fn update_run_phase(
     id: Option<&str>,
     packages: &[String],
 ) -> Result<(), UpdateFailure> {
-    // The three rules below are scoped to this fan-out's own map, as
-    // `note_dispatch`/`note_check` scope `prepare_body`'s: a host the update
-    // excluded owes no `:update:` row, must not be judged on a snapshot from
-    // another phase, and must not be counted among the successes.
+    // Scoped to this fan-out's own map, as `note_dispatch`/`note_check` scope
+    // `prepare_body`'s: an absent host's last snapshot is another phase's.
     let dispatched: BTreeSet<String> = commands.keys().cloned().collect();
     targets.run(Command::PerHost(commands)).await;
 
@@ -3257,7 +3256,7 @@ mod tests {
             ),
         ]);
 
-        let res = perform_update(
+        let (res, logs) = capture_logs(perform_update(
             &mut group,
             &repo,
             &["pkg-a".to_owned()],
@@ -3267,7 +3266,7 @@ mod tests {
             false,
             false,
             &mut Vec::new(),
-        )
+        ))
         .await;
 
         assert!(
@@ -3281,6 +3280,18 @@ mod tests {
             "the composing host still gets its patch: {:?}",
             h1.commands()
         );
+        // Nothing was staged on it, so the reboot that activates a staged
+        // snapshot must not fire — and a reboot failure escalates to
+        // `RebootNotTaken`, which rolls the whole group back.
+        assert!(
+            h2.fired_commands().is_empty(),
+            "the excluded host must not be rebooted: {:?}",
+            h2.fired_commands()
+        );
+        assert!(
+            !h1.fired_commands().is_empty(),
+            "arms the assertion above: the patched host does reboot"
+        );
         assert!(
             h2.file_contents(HISTORY_LOG).is_none(),
             "nothing ran on it, so no row: {:?}",
@@ -3289,9 +3300,86 @@ mod tests {
         );
         let rows = String::from_utf8(h1.file_contents(HISTORY_LOG).expect("h1 has rows")).unwrap();
         assert!(rows.contains(":update:pkg-a"), "h1 history: {rows:?}");
+        // #396 itself: the group's roll-call must not speak for the host left
+        // out of it.
+        let roll_call = logs
+            .lines()
+            .find(|l| l.contains("update succeeded on"))
+            .unwrap_or_else(|| panic!("no roll-call line: {logs}"));
+        assert!(
+            roll_call.contains("h1"),
+            "names the patched host: {roll_call}"
+        );
+        assert!(
+            !roll_call.contains("h2"),
+            "must not name the excluded host: {roll_call}"
+        );
         assert!(
             matches!(res, Err(UpdateFailure::Uncomposed(_))),
             "an excluded host is a failed update, not a silent skip: {res:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_does_not_check_the_host_it_excluded() {
+        // An excluded host's last snapshot is an earlier phase's, from a
+        // fan-out it was not judged by. Scoring that as the update's verdict
+        // would fail a clean update with `Check` — the class that fires the
+        // group-wide rollback, downgrading every peer that patched correctly.
+        let (t1, _h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        // Every command h2 answers exits non-zero, which the `("slmicro", true)`
+        // update check reads as a failed patch.
+        let (mut t2, h2) = slmicro_target_on(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+            "",
+            "",
+            1,
+        );
+        // Gives h2 the stale snapshot: `package_check` queries versions on
+        // every host, excluded ones included, and is the last thing to touch
+        // h2 before the update's own check would read `lastexit`.
+        t2.set_packages(vec![mtui_types::package::Package::new("pkg-a")]);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-z"]),
+            ),
+        ]);
+
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        // Arms the case: a host that was patched would owe a real verdict, and
+        // the scoping would prove nothing.
+        assert!(
+            !was_patched(&h2),
+            "the refused host must not be patched: {:?}",
+            h2.commands()
+        );
+        assert!(
+            matches!(res, Err(UpdateFailure::Uncomposed(_))),
+            "the exclusion is the verdict, not a check failure it never earned: {res:?}"
         );
     }
 

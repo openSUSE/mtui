@@ -232,6 +232,7 @@ fn json_parser_drops_injection_shaped_package_names() {
         "packages": {"prod": [
             "bash 1.0 5.1-1",
             "foo;rm 1.0 2.0",
+            "foo=1.0 1.0 2.0",
             "kernel-default 1.0 5.14.21-150500"
         ]}
     }"#;
@@ -247,6 +248,12 @@ fn json_parser_drops_injection_shaped_package_names() {
     assert!(
         !prod.keys().any(|k| k.contains(';')),
         "injection-shaped name retained: {prod:?}"
+    );
+    // The metadata's name token is a name, and this one reaches `zypper` in a
+    // name position — where `=` would silently pin a version.
+    assert!(
+        !prod.keys().any(|k| k.contains('=')),
+        "a name the spec parser would accept as `name=version` was retained: {prod:?}"
     );
     assert_eq!(prod.len(), 2);
 }
@@ -737,6 +744,9 @@ fn json_parser_abandons_the_index_on_a_name_the_package_grammar_rejects() {
     for (entry, name) in [
         ("-rf-1.0-1.x86_64.rpm", "-rf"),
         ("pkg;rm -rf /-1.0-1.x86_64.rpm", "pkg;rm -rf /"),
+        // `PackageSpec::parse` would read this one as `name=version` and accept
+        // it; only the name grammar keeps `=` out of the index.
+        ("foo=1.0-1.0-1.x86_64.rpm", "foo=1.0"),
     ] {
         // Arms the case: an entry rejected by `parse_rpm_filename` would take
         // the sibling path above and prove nothing about the name check.
