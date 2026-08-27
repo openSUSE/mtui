@@ -44,7 +44,9 @@ impl Command for Run {
                 .trailing_var_arg(true)
                 .allow_hyphen_values(true)
                 .value_name("COMMAND")
-                .help("Command to run on refhost"),
+                .help(
+                    "Command as argv tokens (no shell); pipelines need three tokens: sh, -c, <line>",
+                ),
         )
     }
 
@@ -169,7 +171,9 @@ fn fmt_exit(code: Option<i16>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_scripting, session_with_hosts};
+    use crate::commands::testkit::{
+        empty_session, matches, session_scripting_multi, session_with_hosts,
+    };
 
     #[test]
     fn name_and_fanout_scope() {
@@ -229,8 +233,11 @@ mod tests {
     #[tokio::test]
     async fn quotes_metacharacters_as_a_single_token() {
         // The mock echoes the exact command it received into `lastin`.
-        let (mut session, buf) =
-            session_scripting("SUSE:Maintenance:1:1", "h1", "sh -c 'a; b'", "done");
+        let (mut session, buf) = session_scripting_multi(
+            "SUSE:Maintenance:1:1",
+            "h1",
+            &[("sh -c 'a; b'", "done"), ("sh -c 'a | b'", "done")],
+        );
         let args = matches(&Run, &["sh", "-c", "a; b"]);
         Run.call(&mut session, &args).await.unwrap();
         assert_eq!(
@@ -238,6 +245,15 @@ mod tests {
             "sh -c 'a; b'"
         );
         assert!(buf.contents().contains("h1:-> sh -c 'a; b' [0]"));
+
+        // The pipeline form the COMMAND help sends callers to must survive
+        // try_join as three tokens, not collapse into one quoted word.
+        let args = matches(&Run, &["sh", "-c", "a | b"]);
+        Run.call(&mut session, &args).await.unwrap();
+        assert_eq!(
+            session.targets().get("h1").unwrap().lastin(),
+            "sh -c 'a | b'"
+        );
     }
 
     #[tokio::test]

@@ -13,7 +13,7 @@ Usage: run [OPTIONS] [COMMAND]...
 
 Arguments:
   [COMMAND]...
-          Command to run on refhost
+          Command as argv tokens (no shell); pipelines need three tokens: sh, -c, <line>
 
 Options:
   -t, --target <HOST>
