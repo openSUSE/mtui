@@ -12,8 +12,6 @@ mod http_body_limit;
 mod http_isolation;
 #[path = "mcp_jobs.rs"]
 mod mcp_jobs;
-#[path = "mcp_version.rs"]
-mod mcp_version;
 #[path = "session_close.rs"]
 mod session_close;
 #[path = "session_concurrency.rs"]

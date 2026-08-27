@@ -100,9 +100,9 @@ Task breakdown is tracked in the project's issue tracker; check it for the
 next actionable task before working on a subsystem.
 
 ## Setup & commands
-- Build everything: `cargo build --workspace`
-- Run the REPL: `cargo run -p mtui-cli -- --help`
-- Run the MCP server: `cargo run -p mtui-mcp --features mcp -- --help`
+- Build everything: `cargo build --workspace` (produces both `mtui` and `mtui-mcp`)
+- Run the REPL: `cargo run -p mtui -- --help`
+- Run the MCP server: `cargo run -p mtui --bin mtui-mcp -- --help`
 - Format: `cargo fmt --all`
 - Lint (warnings are errors): `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - Docs (broken/private links are errors): `RUSTDOCFLAGS="-D warnings" cargo doc
@@ -134,11 +134,10 @@ next actionable task before working on a subsystem.
   CI: `cargo fmt --all --check` **and**
   `cargo clippy --workspace --all-targets --all-features -- -D warnings` **and**
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
-  --document-private-items` **and** `cargo test --workspace` (default features)
-  **and** `cargo test -p mtui-mcp -F
-  mcp` (the mcp server/transport tests are `-F mcp`-gated, so the default
-  workspace run never exercises them) **and** the compile-only feature matrix
-  `cargo build --workspace --no-default-features` +
+  --document-private-items` **and** `cargo test --workspace` (default features —
+  the root `mtui` facade's `mcp` feature is on by default, so this run already
+  covers `mtui-mcp`'s server/transport suite) **and** the compile-only feature
+  matrix `cargo build --workspace --no-default-features` +
   `cargo build --workspace --all-features`. Tests run against default features
   only — do **not** run `--all-features` *tests*. The long pole is cold
   compilation, not the test run itself, so give the first `cargo test --workspace`

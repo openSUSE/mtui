@@ -14,9 +14,9 @@ dev box runs a Homebrew `rustc`). Edition 2024, **MSRV 1.96**, pinned via
 
 | Task | Command |
 |------|---------|
-| Build everything | `cargo build --workspace` |
-| Run the REPL | `cargo run -p mtui-cli -- --help` |
-| Run the MCP server | `cargo run -p mtui-mcp --features mcp -- --help` |
+| Build everything | `cargo build --workspace` (produces both `mtui` and `mtui-mcp`) |
+| Run the REPL | `cargo run -p mtui -- --help` |
+| Run the MCP server | `cargo run -p mtui --bin mtui-mcp -- --help` |
 | Format | `cargo fmt --all` |
 | Lint (warnings are errors) | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | Docs (broken/private links are errors) | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --document-private-items` |
@@ -229,7 +229,7 @@ the server itself (schema synthesis, the deny-list, a new `testreport_*` tool).
 Start it under HTTP with debug logging:
 
 ```sh
-cargo run -p mtui-mcp --features mcp -- --transport http --port 8765 --debug
+cargo run -p mtui --bin mtui-mcp -- --transport http --port 8765 --debug
 ```
 
 Then drive it with the MCP Inspector without an LLM in the loop:

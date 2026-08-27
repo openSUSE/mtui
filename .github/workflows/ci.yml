@@ -112,17 +112,12 @@ jobs:
         run: cargo build --workspace
       - name: Run tests (default features)
         run: cargo test --workspace
-      # mtui-mcp's server/transport tests are gated behind `-F mcp`, so the
-      # default workspace test run never exercises them.
-      - name: Run mtui-mcp tests
-        run: cargo test -p mtui-mcp -F mcp
   macos:
     runs-on: macos-latest
     name: MTUI macOS (Apple Silicon)
     # Portability early-warning on aarch64-apple-darwin: clippy + the test
-    # suite (incl. the mcp-gated tests) so macOS stays viable for release
-    # binaries. No fmt leg — formatting is platform-independent and covered by
-    # the ubuntu `fmt` job.
+    # suite so macOS stays viable for release binaries. No fmt leg —
+    # formatting is platform-independent and covered by the ubuntu `fmt` job.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -148,8 +143,6 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Run tests (default features)
         run: cargo test --workspace
-      - name: Run mtui-mcp tests
-        run: cargo test -p mtui-mcp -F mcp
   beta:
     # Early warning on the upcoming compiler: never blocks, but surfaces
     # new-lint and regression noise before beta becomes stable. No fmt leg

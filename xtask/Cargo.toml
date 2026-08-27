@@ -24,7 +24,9 @@ workspace = true
 # The two binaries' top-level clap parsers, reached via the auto-derived
 # `CommandFactory` (`Args::command()` / `McpArgs::command()`). `mtui-mcp` is
 # pulled without its `mcp` feature so the MCP server graph (rmcp/axum) stays out
-# of this dev tool's build; only the ungated `args` module is used.
+# of a `-p xtask` build; only the ungated `args` module is used. A
+# `--workspace` build still unifies the root facade's `mcp` feature onto it,
+# since Cargo features are additive across the resolve graph.
 mtui-core.workspace = true
 mtui-mcp = { workspace = true }
 clap = { workspace = true }
