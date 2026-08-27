@@ -183,6 +183,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   degradations are counted: a check's own recognised sections (the
   vendor-support notice, extra rpm output) are routine on a healthy update and
   leave the confirmation bare.
+- `checkers` no longer prints a red `?          ?` row per run. An element
+  of the served `checkers` array is a *run* whose verdicts live in its
+  `results[]`, not a flat `{name, status}`, and the success vocabulary
+  (`passed`/`success`/`ok`/`done`) never matched the served `PASS`/`WARN`, so a
+  shape fix alone would still have painted green checks red. Output is now a
+  per-run header (`checker_type` plus the non-zero counts) and one
+  `<status> <check_type>` row per result — pass/skip green, warn yellow,
+  fail/error/recerror red, running/wait/unknown dim, anything else verbatim —
+  with the first line of a non-passing check's output. The payload schema is
+  **inferred from a single observed SLFO response**, so it is parsed
+  defensively: a run — or one verdict inside it — that does not match is
+  skipped with a warning naming its *key set* only, never the body, which
+  carries customer-visible check output, and a missing or non-array `checkers`
+  container warns rather than silently reporting no results.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
@@ -261,6 +275,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   budget cut short. A teardown abandoned at the budget can leave the remote
   lock file behind; the fleet's stale-lock reaping covers it, as for any
   crashed session.
+- `checkers` gained `--full-output`, printing every line of a non-passing
+  check's output instead of just the first, since some checks emit long diffs.
+  Available on both the REPL and MCP surfaces; additive, optional schema
+  change.
 - `show_log` gained `--offset`/`--limit` entry paging (per host, 1-based;
   windowed output labels each host header with the shown range and total, and
   `--limit 0` prints only the per-host headers with entry totals) on both the

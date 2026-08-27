@@ -26,6 +26,7 @@
 use std::time::Duration;
 
 use mtui_config::Config;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{HttpError, TeReGenError};
@@ -53,6 +54,110 @@ pub struct RegenOutcome {
     pub minion_error: Option<String>,
     /// The enqueued job id, for logging.
     pub job: Option<Value>,
+}
+
+/// One checker run for a report: the checker that produced it, its per-status
+/// counts, and the per-check verdicts in [`results`](Self::results).
+///
+/// **Only what the renderer reads is modelled.** Every other served key
+/// (`run_id`, `started`, `finished`, …) is left out on purpose: modelling a key
+/// is a liability, since one served as `null` or with a drifted type fails the
+/// whole element, and `null` is exactly what an in-progress run's `finished`
+/// looks like (#522).
+///
+/// Tolerance of an *added* key comes from serde ignoring unknown fields, i.e.
+/// from not setting `deny_unknown_fields`. The container-level
+/// `#[serde(default)]` covers the other direction: a **missing** key degrades to
+/// an empty value rather than the `?` this shape replaced. A *type* change on a
+/// modelled key still fails the element on purpose, so [`TeReGen::checkers`] can
+/// warn about the drift instead of silently substituting zeroes.
+///
+/// The run carries no status of its own — the status vocabulary is what the
+/// `*_count` fields enumerate.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct CheckerRun {
+    /// The checker that produced this run (the run's display name).
+    pub checker_type: String,
+    /// Number of `results` that passed.
+    pub pass_count: u64,
+    /// Number of `results` that failed.
+    pub fail_count: u64,
+    /// Number of `results` that warned.
+    pub warn_count: u64,
+    /// Number of `results` that were skipped.
+    pub skip_count: u64,
+    /// Number of `results` that errored.
+    pub error_count: u64,
+    /// Number of `results` that hit a recoverable error.
+    pub recerror_count: u64,
+    /// Number of `results` still running.
+    pub running_count: u64,
+    /// Number of `results` waiting to run.
+    pub wait_count: u64,
+    /// Number of `results` in an unknown state.
+    pub unknown_count: u64,
+    /// The per-check verdicts, parsed element-wise (see `lenient_results`).
+    /// Absent in the payload means "no rows", not `?`.
+    #[serde(deserialize_with = "lenient_results")]
+    pub results: Vec<CheckerResult>,
+}
+
+/// One check's verdict inside a [`CheckerRun`]. Modelled and defaulted on the
+/// same terms as its parent: only the three keys the renderer reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct CheckerResult {
+    /// The check that produced this verdict.
+    pub check_type: String,
+    /// The verdict, e.g. `PASS`/`WARN`. Compared case-insensitively and never
+    /// treated as a closed set — an unrecognised value is rendered verbatim.
+    pub status: String,
+    /// The check's output; the finding itself for a non-passing verdict.
+    pub output: String,
+}
+
+/// Deserialize a run's `results` element-wise, so one drifted verdict costs its
+/// own row instead of the whole run — header and good siblings included (#522).
+///
+/// A `results` served as something other than an array degrades to no rows for
+/// the same reason.
+fn lenient_results<'de, D>(de: D) -> Result<Vec<CheckerResult>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(de)?;
+    let Some(elements) = value.as_array() else {
+        tracing::warn!("TeReGen checkers: `results` is not an array; rendering the run with none");
+        return Ok(Vec::new());
+    };
+    Ok(lenient_elements("", "result", elements))
+}
+
+/// Deserialize `elements` one at a time, dropping any that does not match `T`.
+///
+/// The warning names the offending element's **key set only**: these payloads
+/// carry customer-visible check output, so neither the body nor serde's error
+/// (which quotes the offending value) may reach the log (#431, #439).
+/// `context` is appended to `TeReGen checkers` where the caller has an RRID.
+fn lenient_elements<T>(context: &str, what: &str, elements: &[Value]) -> Vec<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    elements
+        .iter()
+        .filter_map(|element| match T::deserialize(element) {
+            Ok(parsed) => Some(parsed),
+            Err(_) => {
+                tracing::warn!(
+                    "TeReGen checkers{context}: skipping a {what} that does not match the \
+                     expected schema; its keys were [{}]",
+                    json_keys(element)
+                );
+                None
+            }
+        })
+        .collect()
 }
 
 /// Best-effort read-only (plus one write) TeReGen Report API client.
@@ -189,12 +294,28 @@ impl TeReGen {
         d.is_object().then_some(d)
     }
 
-    /// Live checker (build-check) result runs for a report, or `None`.
+    /// Live checker (build-check) result runs for a report, or `None` when
+    /// TeReGen could not be asked and when the body carries no `checkers` array
+    /// — the caller cannot tell those apart, so the latter warns: the container
+    /// shape is the likeliest drift point of an inferred schema, and the only
+    /// one no per-element warning can see.
     ///
-    /// Unwraps the `checkers` key of the response object.
-    pub async fn checkers(&self, rrid: &str) -> Option<Value> {
-        let d = self.get(&format!("reports/{rrid}/checkers"), &[]).await?;
-        d.get("checkers").cloned()
+    /// An element that does not deserialise as a [`CheckerRun`] is skipped and
+    /// warned about by its **key set only** — never the body nor serde's error
+    /// (which quotes the offending value), both of which carry customer-visible
+    /// check output (#431, #439). A drifted verdict inside a run is skipped the
+    /// same way, so it costs one row rather than the whole run.
+    pub async fn checkers(&self, rrid: &str) -> Option<Vec<CheckerRun>> {
+        let body = self.get(&format!("reports/{rrid}/checkers"), &[]).await?;
+        let Some(elements) = body.get("checkers").and_then(Value::as_array) else {
+            tracing::warn!(
+                "TeReGen checkers for {rrid}: response carries no `checkers` array; its keys were \
+                 [{}]",
+                json_keys(&body)
+            );
+            return None;
+        };
+        Some(lenient_elements(&format!(" for {rrid}"), "run", elements))
     }
 
     /// The unreleased update queue (live from SMELT). Each [`UpdatesQuery`]
@@ -396,6 +517,15 @@ impl TeReGen {
             ..Default::default()
         }
     }
+}
+
+/// The comma-joined top-level key names of a JSON object, for a schema-drift
+/// warning. Names only — never values (#431, #439).
+fn json_keys(v: &Value) -> String {
+    v.as_object().map_or_else(
+        || "<not an object>".to_string(),
+        |o| o.keys().map(String::as_str).collect::<Vec<_>>().join(", "),
+    )
 }
 
 /// Build the percent-encoded `key=value&...` query string.
@@ -626,21 +756,153 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn checkers_unwraps_list() {
+    /// Mounts a `checkers` response carrying `runs`.
+    async fn checkers_server(runs: Value) -> MockServer {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path(format!("/reports/{RRID}/checkers")))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(json!({"checkers": [{"name": "rpmlint"}]})),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"checkers": runs})))
             .mount(&server)
             .await;
-        assert_eq!(
-            client(&server).checkers(RRID).await,
-            Some(json!([{"name": "rpmlint"}]))
+        server
+    }
+
+    #[tokio::test]
+    async fn checkers_parses_nested_runs() {
+        let server = checkers_server(json!([{
+            "checker_type": "checker-alpha",
+            "run_id": "run-0001",
+            "pass_count": 1,
+            "warn_count": 1,
+            "results": [
+                {"check_type": "check-01", "status": "PASS"},
+                {"check_type": "check-02", "status": "WARN", "output": "synthetic finding"},
+            ],
+        }]))
+        .await;
+        let runs = client(&server).checkers(RRID).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].checker_type, "checker-alpha");
+        assert_eq!(runs[0].pass_count, 1);
+        assert_eq!(runs[0].warn_count, 1);
+        assert_eq!(runs[0].results.len(), 2);
+        assert_eq!(runs[0].results[1].status, "WARN");
+        assert_eq!(runs[0].results[1].output, "synthetic finding");
+        // Missing keys default; the unmodelled `run_id` is ignored. Drop either
+        // tolerance and the element is dropped instead, i.e. the two lengths
+        // above go to 0 and 1.
+        assert_eq!(runs[0].fail_count, 0);
+        assert_eq!(runs[0].results[0].output, "");
+    }
+
+    /// A run whose *types* drift is dropped with a warning naming its keys —
+    /// and only its keys: the payload carries customer-visible check output
+    /// (#431, #439).
+    #[tokio::test]
+    async fn checkers_warns_with_key_set_on_schema_drift() {
+        let server = checkers_server(json!([
+            {"checker_type": "checker-alpha", "pass_count": "twelve",
+             "results": [{"check_type": "check-01", "status": "PASS",
+                          "output": "customer visible finding"}]},
+            {"checker_type": "checker-beta"},
+        ]))
+        .await;
+        let mut runs = Vec::new();
+        let logs = capture_logs(|| async {
+            runs = client(&server).checkers(RRID).await.unwrap();
+        })
+        .await;
+
+        // The good sibling survives the bad element.
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].checker_type, "checker-beta");
+        let line = failure_line(&logs, "skipping a run");
+        assert!(line.contains("checker_type, pass_count, results"), "{line}");
+        assert!(!line.contains("twelve"), "warning leaked a value: {line}");
+        assert!(
+            !line.contains("customer visible finding"),
+            "warning leaked check output: {line}"
         );
+    }
+
+    /// Regression (#522): `null` and unknown keys are what an in-progress run
+    /// and a server-side key addition look like on the wire, and a drifted
+    /// verdict must cost its own row — not the run, its header and its
+    /// siblings.
+    #[tokio::test]
+    async fn checkers_keeps_run_despite_unknown_keys_and_drifted_result() {
+        let server = checkers_server(json!([{
+            "checker_type": "checker-alpha",
+            "run_id": 1234,
+            "finished": null,
+            "pass_count": 1,
+            "results": [
+                {"check_type": "check-01", "status": "PASS", "output": "",
+                 "created": null},
+                {"check_type": "check-02", "status": 7,
+                 "output": "customer visible finding"},
+            ],
+        }]))
+        .await;
+        let mut runs = Vec::new();
+        let logs = capture_logs(|| async {
+            runs = client(&server).checkers(RRID).await.unwrap();
+        })
+        .await;
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].checker_type, "checker-alpha");
+        assert_eq!(runs[0].pass_count, 1);
+        assert_eq!(runs[0].results.len(), 1, "{:?}", runs[0].results);
+        assert_eq!(runs[0].results[0].check_type, "check-01");
+        let line = failure_line(&logs, "skipping a result");
+        assert!(line.contains("check_type, output, status"), "{line}");
+        assert!(
+            !line.contains("customer visible finding"),
+            "warning leaked check output: {line}"
+        );
+    }
+
+    /// A `results` served as something other than an array costs the rows, not
+    /// the run and its counts.
+    #[tokio::test]
+    async fn checkers_keeps_run_when_results_is_not_an_array() {
+        let server = checkers_server(json!([
+            {"checker_type": "checker-alpha", "pass_count": 3, "results": null},
+        ]))
+        .await;
+        let runs = client(&server).checkers(RRID).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].pass_count, 3);
+        assert!(runs[0].results.is_empty());
+    }
+
+    /// The container shape is the likeliest drift point of an inferred schema
+    /// and the only one no per-element warning can see: a renamed key or a
+    /// non-array `checkers` would otherwise reach the user as a bare "No checker
+    /// results", indistinguishable from an unreachable TeReGen.
+    #[tokio::test]
+    async fn checkers_warns_when_container_is_absent_or_not_an_array() {
+        for (body, expected_keys) in [
+            (json!({"other": 1}), "other"),
+            (json!({"checkers": {"run-1": {}}}), "checkers"),
+            (json!({"checkers": null}), "checkers"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(format!("/reports/{RRID}/checkers")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+                .mount(&server)
+                .await;
+            let mut runs = Some(Vec::new());
+            let logs = capture_logs(|| async {
+                runs = client(&server).checkers(RRID).await;
+            })
+            .await;
+            assert_eq!(runs, None, "{body}");
+            let line = failure_line(&logs, "no `checkers` array");
+            assert!(line.contains(expected_keys), "{body}: {line}");
+        }
     }
 
     #[tokio::test]
