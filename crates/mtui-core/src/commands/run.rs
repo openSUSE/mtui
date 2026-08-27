@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 use mtui_hosts::LockOutcome;
 
-use super::support::{add_hosts_arg, complete_fanout, page_output, per_host, select_names};
+use super::support::{
+    add_hosts_arg, complete_fanout, contended_lock_reason, page_output, per_host, select_names,
+};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -58,6 +60,7 @@ impl Command for Run {
         let command = shlex::try_join(tokens.iter().map(String::as_str))
             .map_err(|e| CommandError::Other(format!("invalid command: {e}")))?;
 
+        let session_user = session.config.session_user.clone();
         let targets = session.targets_mut();
         let hosts =
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
@@ -82,8 +85,11 @@ impl Command for Run {
                 LockOutcome::Acquired => {
                     acquired.insert(host.clone());
                 }
-                LockOutcome::Contended => {
-                    report.push(format!("{host}: locked by another owner (skipped)"));
+                LockOutcome::Contended(owner) => {
+                    report.push(format!(
+                        "{host}: skipped, {}",
+                        contended_lock_reason(owner, &session_user)
+                    ));
                     blocked.push(host.clone());
                 }
                 LockOutcome::Failed(reason) => {
@@ -367,6 +373,15 @@ mod tests {
         Target::with_connection(name, TargetState::Enabled, Box::new(conn))
     }
 
+    /// An enabled host carrying *this* user's lock stamped by a different PID.
+    ///
+    /// `TargetLock::is_mine` matches on the PID too, so this is contention —
+    /// but it is the caller's own leftover, and the report must say so (#521).
+    fn own_stranded_lock_line() -> Vec<u8> {
+        let me = mtui_config::Config::default().session_user;
+        format!("1700000000:{me}:{}", std::process::id() + 1).into_bytes()
+    }
+
     #[tokio::test]
     async fn contended_host_aborts_without_running_and_rolls_back() {
         // One `Contended` host must abort the whole run: neither host executes,
@@ -375,6 +390,9 @@ mod tests {
             "SUSE:Maintenance:1:1",
             vec![free_host("h1"), foreign_locked_host("h2")],
         );
+        // Pin the caller's identity so the "not you" branch is the one taken
+        // whatever `$USER` the suite runs as.
+        session.config.session_user = "bob".to_owned();
         let args = matches(&Run, &["true"]);
         let err = Run.call(&mut session, &args).await.unwrap_err();
 
@@ -382,7 +400,18 @@ mod tests {
             matches!(&err, CommandError::Other(m) if m.contains("could not lock") && m.contains("h2")),
             "expected lock-abort error naming h2, got {err:?}"
         );
-        assert!(buf.contents().contains("h2: locked by another owner"));
+        let out = buf.contents();
+        assert!(
+            out.contains(
+                "h2: skipped, held by alice since Tuesday, 14.11.2023 22:13 UTC, possibly a \
+                 live mtui; check list_locks (unlock --force clears the whole group)"
+            ),
+            "{out}"
+        );
+        assert!(
+            !out.contains("mtui of yours") && !out.contains("(you)"),
+            "a colleague's lock must not be reported as the caller's own: {out}"
+        );
 
         let targets = session.targets_mut();
         assert!(targets.get("h1").unwrap().lastexit().is_none(), "h1 ran");
@@ -390,6 +419,57 @@ mod tests {
         assert!(
             !targets.get_mut("h1").unwrap().is_locked().await.unwrap(),
             "h1 lock not rolled back"
+        );
+    }
+
+    #[tokio::test]
+    async fn contention_on_the_callers_own_stranded_lock_names_them() {
+        // Same user, foreign PID: still not `is_mine` (the PID check serialises
+        // one tester's concurrent zypper transactions), so the report must name
+        // the caller — hedged, because that signature is a *live* sibling mtui
+        // as readily as a strand — and send them to `list_locks` rather than at
+        // the whole-group `--force` (#521). The lock stays put.
+        let line = own_stranded_lock_line();
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "ok", "", 0, 0))
+            .with_file(LOCK_PATH, line.clone());
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn.clone()),
+            )],
+        );
+        let me = session.config.session_user.clone();
+        let args = matches(&Run, &["true"]);
+        let err = Run.call(&mut session, &args).await.unwrap_err();
+
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("could not lock") && m.contains("h1")),
+            "{err:?}"
+        );
+        let out = buf.contents();
+        assert!(out.contains(&format!("held by {me} (you)")), "{out}");
+        assert!(out.contains("possibly another mtui of yours"), "{out}");
+        assert!(
+            out.contains("check list_locks and your other sessions"),
+            "{out}"
+        );
+        assert!(
+            out.contains("unlock --force clears the whole group"),
+            "{out}"
+        );
+        assert!(!out.contains("possibly a live mtui"), "{out}");
+        assert_eq!(conn.file_contents(LOCK_PATH), Some(line));
+        assert!(
+            session
+                .targets_mut()
+                .get("h1")
+                .unwrap()
+                .lastexit()
+                .is_none(),
+            "h1 ran under a lock it does not hold"
         );
     }
 

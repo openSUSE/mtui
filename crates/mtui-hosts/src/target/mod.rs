@@ -51,7 +51,9 @@ pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::{HostsGroup, LockOutcome};
 #[cfg(test)]
 pub(crate) use locks::POOL_LOCK_PATH;
-pub use locks::{Clock, LockRow, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock};
+pub use locks::{
+    Clock, LockOwner, LockRow, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock,
+};
 pub use operation::{
     Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
     OperationGroup, OperationReport, PlanProvider, RebootFailure, RebootFailureCause,
@@ -546,6 +548,28 @@ impl Target {
     /// after establishing the host is locked. `None` when not connected.
     fn lock_mut(&mut self) -> Option<&mut TargetLock> {
         self.lock.as_mut()
+    }
+
+    /// The operation lock's owner as of its last load, with no remote read.
+    ///
+    /// Only meaningful right after a call that failed with
+    /// [`HostError::TargetLocked`], which loads before it reports; see
+    /// [`TargetLock::loaded_owner`]. Default (empty) when not connected.
+    #[must_use]
+    fn loaded_lock_owner(&self) -> LockOwner {
+        self.lock
+            .as_ref()
+            .map(TargetLock::loaded_owner)
+            .unwrap_or_default()
+    }
+
+    /// [`loaded_lock_owner`](Self::loaded_lock_owner) for the pool claim.
+    #[must_use]
+    fn loaded_pool_owner(&self) -> LockOwner {
+        self.pool_lock
+            .as_ref()
+            .map(PoolLock::loaded_owner)
+            .unwrap_or_default()
     }
 
     /// Resolves this target's current lock ownership into a [`LockRow`].

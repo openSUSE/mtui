@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_hosts::LockOutcome;
 
-use super::support::add_hosts_arg;
+use super::support::{add_hosts_arg, contended_lock_reason};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -16,7 +16,7 @@ use crate::session::Session;
 /// exit; a `-c` comment keeps the lock effective against other sessions too.
 ///
 /// `-t` host sub-selection is not yet honoured for the fan-out — the whole
-/// active group is locked, as with `run`'s group lock.
+/// active group is locked (unlike `run`, which locks only its selection).
 pub struct HostLock;
 
 #[async_trait]
@@ -59,6 +59,7 @@ impl Command for HostLock {
             .get_many::<String>("comment")
             .map(|it| it.cloned().collect::<Vec<_>>().join(" "))
             .unwrap_or_default();
+        let session_user = session.config.session_user.clone();
         let outcomes = session.targets_mut().lock(&comment).await;
 
         // `Contended` is benign — another owner holds the lock — so only a real
@@ -67,9 +68,10 @@ impl Command for HostLock {
         for (host, outcome) in &outcomes {
             match outcome {
                 LockOutcome::Acquired => session.display.println(&format!("{host}: locked")),
-                LockOutcome::Contended => session
-                    .display
-                    .println(&format!("{host}: already locked (skipped)")),
+                LockOutcome::Contended(owner) => session.display.println(&format!(
+                    "{host}: skipped, {}",
+                    contended_lock_reason(owner, &session_user)
+                )),
                 LockOutcome::Failed(reason) => {
                     session
                         .display
@@ -93,8 +95,13 @@ impl Command for HostLock {
 
 #[cfg(test)]
 mod tests {
+    use mtui_hosts::{MockConnection, TARGET_LOCK_PATH, Target};
+    use mtui_types::enums::TargetState;
+
     use super::*;
-    use crate::commands::testkit::{matches, session_with_hosts, session_with_lock_outcomes};
+    use crate::commands::testkit::{
+        matches, session_with_hosts, session_with_lock_outcomes, session_with_targets,
+    };
 
     #[test]
     fn name_and_fanout_scope() {
@@ -126,6 +133,39 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("h1: locked"), "{out}");
         assert!(out.contains("h2: FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn lock_names_the_owner_of_a_contended_host() {
+        // `lock`'s skip stayed anonymous while `run`/`unlock` learned to name
+        // the owner (#521), which would have left it the one contention report
+        // in the tree naming nobody. The payload is already in hand.
+        let conn = MockConnection::new("h2")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h2",
+                TargetState::Enabled,
+                Box::new(conn.clone()),
+            )],
+        );
+        session.config.session_user = "bob".to_owned();
+        let args = matches(&HostLock, &[]);
+        HostLock.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("h2: skipped, held by alice since Tuesday, 14.11.2023 22:13 UTC"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("(you)") && !out.contains("mtui of yours"),
+            "a colleague's lock must not read as the caller's own: {out}"
+        );
+        assert!(
+            conn.file_contents(TARGET_LOCK_PATH).is_some(),
+            "a contended lock must survive `lock`"
+        );
     }
 
     #[tokio::test]

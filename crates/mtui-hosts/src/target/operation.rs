@@ -499,7 +499,7 @@ pub trait Operation: Send + Sync {
             .into_iter()
             .filter_map(|(host, outcome)| match outcome {
                 LockOutcome::Failed(reason) => Some((host, reason)),
-                LockOutcome::Acquired | LockOutcome::Released | LockOutcome::Contended => None,
+                LockOutcome::Acquired | LockOutcome::Released | LockOutcome::Contended(_) => None,
             })
             .collect();
         Ok(OperationReport {
@@ -680,6 +680,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::target::LockOwner;
 
     /// One recorded interaction with the group, in call order.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1289,7 +1290,10 @@ mod tests {
         let mut group = MockGroup::new(Ok(plans)).with_unlock_outcomes(
             [
                 ("h1".to_owned(), LockOutcome::Failed("boom".to_owned())),
-                ("h2".to_owned(), LockOutcome::Contended),
+                (
+                    "h2".to_owned(),
+                    LockOutcome::Contended(LockOwner::default()),
+                ),
             ]
             .into_iter()
             .collect(),
