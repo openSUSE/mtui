@@ -200,6 +200,16 @@ impl CommandPromptDisplay {
         }
     }
 
+    /// Wraps `text` dimmed when color resolves on, else returns it unchanged.
+    #[must_use]
+    pub(crate) fn dim(&self, text: &str) -> String {
+        if self.color.resolve() {
+            OwoColorize::dimmed(&text).to_string()
+        } else {
+            text.to_owned()
+        }
+    }
+
     /// Wraps `text` in blue when color resolves on, else returns it unchanged.
     #[must_use]
     pub(crate) fn blue(&self, text: &str) -> String {
@@ -689,6 +699,7 @@ mod tests {
         let d = CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Never);
         assert_eq!(d.green("ok"), "ok");
         assert!(!d.red("bad").contains('\u{1b}'));
+        assert!(!d.dim("pending").contains('\u{1b}'));
     }
 
     #[test]
@@ -698,6 +709,7 @@ mod tests {
         assert!(d.red("bad").contains('\u{1b}'));
         assert!(d.yellow("warn").contains('\u{1b}'));
         assert!(d.blue("info").contains('\u{1b}'));
+        assert!(d.dim("pending").contains('\u{1b}'));
     }
 
     #[test]

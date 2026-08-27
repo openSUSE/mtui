@@ -138,6 +138,11 @@ expression: pretty
           "description": "Act on every loaded template",
           "type": "boolean"
         },
+        "full_output": {
+          "default": false,
+          "description": "print every line of a non-passing check's output instead of just the first (some checks emit long diffs)",
+          "type": "boolean"
+        },
         "template": {
           "description": "RRID of a single loaded template to act on",
           "type": "string"

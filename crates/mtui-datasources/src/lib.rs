@@ -34,4 +34,4 @@ pub use refhost::{Attributes, ProductDiff, Refhosts};
 pub use slack::{
     Message, PostedMessage, Reaction, Reply, Slack, is_ack_reaction, is_nack_reaction,
 };
-pub use teregen::{RegenOutcome, TeReGen, UpdatesQuery};
+pub use teregen::{CheckerResult, CheckerRun, RegenOutcome, TeReGen, UpdatesQuery};

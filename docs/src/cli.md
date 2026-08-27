@@ -685,9 +685,12 @@ Options:
 Lists the build-check (checker) result runs for the loaded update.
 
 ```text
-Usage: checkers
+Usage: checkers [OPTIONS]
 
 Options:
+      --full-output
+          print every line of a non-passing check's output instead of just the first (some checks emit long diffs)
+
   -h, --help
           Print help
 ```
