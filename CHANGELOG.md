@@ -172,6 +172,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   diagnostics, not only `tracing::warn!`. An MCP caller previously saw a bare
   success with no sign the run was partial; a REPL operator already saw these
   on the terminal, since `mtui`'s own subscriber writes there.
+- `update` now prints `update completed on <hosts>` on success, like every
+  other fan-out. Its only output was the update check's non-fatal diagnostics,
+  which a clean transaction never emits, so a successful `update` wrote nothing
+  and the MCP tool returned an empty result.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)

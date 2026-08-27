@@ -12,6 +12,8 @@ mod http_body_limit;
 mod http_isolation;
 #[path = "mcp_jobs.rs"]
 mod mcp_jobs;
+#[path = "nonempty_success.rs"]
+mod nonempty_success;
 #[path = "session_close.rs"]
 mod session_close;
 #[path = "session_concurrency.rs"]
