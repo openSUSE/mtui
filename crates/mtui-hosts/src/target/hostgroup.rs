@@ -999,13 +999,42 @@ impl HostsGroup {
     /// parallel. The per-host `last*` state is left in place so a caller can
     /// inspect `lasterr()` after the fan-out (prepare aborts on `lasterr`).
     pub async fn fanout_set_repo(&mut self, operation: RepoOp, report: &dyn SetRepo) {
+        self.fanout_set_repo_where(operation, report, |_t| true)
+            .await;
+    }
+
+    /// Fans a repository add/remove out across *only* the named hosts,
+    /// otherwise identical to [`fanout_set_repo`](Self::fanout_set_repo).
+    ///
+    /// The host-scoped counterpart, mirroring
+    /// [`add_history_for`](Self::add_history_for): for a flow that has already
+    /// excluded a host from the work it is doing, since reconfiguring the
+    /// repositories of a host it reported as excluded is a side effect that
+    /// host's exclusion promised it would not have. A name not in the group is
+    /// ignored.
+    pub async fn fanout_set_repo_for(
+        &mut self,
+        hosts: &BTreeSet<String>,
+        operation: RepoOp,
+        report: &dyn SetRepo,
+    ) {
+        self.fanout_set_repo_where(operation, report, |t| hosts.contains(t.hostname()))
+            .await;
+    }
+
+    /// Shared implementation for [`fanout_set_repo`](Self::fanout_set_repo) /
+    /// [`fanout_set_repo_for`](Self::fanout_set_repo_for).
+    async fn fanout_set_repo_where<S>(&mut self, operation: RepoOp, report: &dyn SetRepo, select: S)
+    where
+        S: FnMut(&Target) -> bool,
+    {
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             max_parallel,
             Some("set_repo"),
-            |_t| true,
+            select,
             |t| {
                 Box::pin(async move { t.repo_manager().set(operation, report).await })
                     as actions::BoxTargetFut<'_>
@@ -1205,7 +1234,32 @@ impl HostsGroup {
     /// Returns [`HostError::Update`] when one or more hosts were locked by
     /// another owner or could not be locked/read.
     pub async fn update_lock(&mut self) -> Result<()> {
+        self.update_lock_where(None).await
+    }
+
+    /// Acquires the shared operation lock on only the named hosts, otherwise
+    /// identical to [`update_lock`](Self::update_lock) — fail-closed included,
+    /// and the best-effort release on abort covers exactly the same subset.
+    ///
+    /// For a flow that has already excluded a host from the work it is about to
+    /// do. `update_lock` fails closed on *any* member, so one excluded host
+    /// whose lock is contended or unreadable aborts the operation for every
+    /// peer that is still eligible. A name not in the group is ignored.
+    ///
+    /// # Errors
+    ///
+    /// As [`update_lock`](Self::update_lock), restricted to `names`.
+    pub async fn update_lock_selected(&mut self, names: &BTreeSet<String>) -> Result<()> {
+        self.update_lock_where(Some(names)).await
+    }
+
+    /// Shared implementation for [`update_lock`](Self::update_lock) /
+    /// [`update_lock_selected`](Self::update_lock_selected): `None` is the whole
+    /// group.
+    async fn update_lock_where(&mut self, names: Option<&BTreeSet<String>>) -> Result<()> {
         use std::sync::Mutex;
+
+        let select = |t: &Target| names.is_none_or(|n| n.contains(t.hostname()));
 
         // Probe-and-acquire concurrently across the group via the shared
         // fan-out. Each host's probe+acquire is self-contained and
@@ -1219,7 +1273,7 @@ impl HostsGroup {
             is_repl,
             max_parallel,
             Some("update_lock"),
-            |_t| true,
+            select,
             |target| {
                 let reasons = &reasons;
                 Box::pin(async move {
@@ -1284,7 +1338,7 @@ impl HostsGroup {
             // signal the abort. Sort first: the fan-out is concurrent, so
             // collection order is nondeterministic.
             reasons.sort();
-            let _ = self.unlock().await;
+            let _ = self.unlock_collecting(select).await;
             return Err(HostError::Update(format!(
                 "Hosts locked: {}",
                 reasons.join("; ")
