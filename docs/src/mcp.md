@@ -15,11 +15,11 @@ the [Command reference](cli.md).
 
 ## Building and running
 
-The server lives behind the `mcp` feature so the default build and the `mtui`
-REPL never pull in the MCP SDK:
+The server lives behind the `mcp` feature, enabled by default alongside the
+`mtui` REPL's `cli` feature (see [Installation](installation.md)):
 
 ```sh
-cargo run -p mtui-mcp --features mcp -- --help
+cargo run -p mtui --bin mtui-mcp -- --help
 ```
 
 Two transports are served:

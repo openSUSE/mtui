@@ -10,6 +10,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- The MCP server is now built by default. `cargo build`/`cargo build
+  --release` at the repo root now produces both the `mtui` REPL and the
+  `mtui-mcp` server binaries with no `--features` flag; a build that only
+  wants one uses `--no-default-features --features cli` (or `mcp`).
 - `unlock --pool` is now bounded by the same 45 s budget as `unlock --force`,
   so a dead reference host can no longer hold the command open for the full
   SSH timeout, and it reports an error instead of printing `pool claim removed

@@ -2367,6 +2367,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtui"
+version = "26.3.0"
+dependencies = [
+ "anyhow",
+ "mtui-cli",
+ "mtui-mcp",
+ "tokio",
+]
+
+[[package]]
 name = "mtui-cli"
 version = "26.3.0"
 dependencies = [

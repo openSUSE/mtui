@@ -1,14 +1,12 @@
 //! Smoke test for the `mtui-mcp` binary's `--version` surface.
 //!
 //! The second-binary counterpart of
-//! `mtui-cli/tests/cli_smoke.rs::version_prints_provenance_block_and_exits_zero`:
-//! drive the built `mtui-mcp` via `CARGO_BIN_EXE_mtui-mcp` and assert the
+//! `cli_smoke.rs::version_prints_provenance_block_and_exits_zero`: drive the
+//! built `mtui-mcp` via `CARGO_BIN_EXE_mtui-mcp` and assert the
 //! `mtui-mcp <ver> (<ref>, <profile>, <target>)` block and a clean exit. Shape
 //! and presence only — never the exact SHA or version, which churn.
 //!
-//! Gated behind the `mcp` feature: without it the `[[bin]]` links a stub that
-//! exits 2, since clap's `--version` handling in `McpArgs` is compiled in only
-//! under `mcp`. Run with `cargo test -p mtui-mcp --features mcp`.
+//! Gated behind the `mcp` feature: the `mtui-mcp` binary only exists then.
 
 #![cfg(feature = "mcp")]
 

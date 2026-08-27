@@ -10,6 +10,10 @@
 //! is an `mtui-mcp` concern. The piped-stdin test below is the only one that
 //! drives the real `reedline` editor, so it is the only reach into
 //! `repl::Repl::run` itself.
+//!
+//! Gated behind the `cli` feature: the `mtui` binary only exists then.
+
+#![cfg(feature = "cli")]
 
 use std::io::Write;
 use std::process::{Command, Stdio};

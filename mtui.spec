@@ -61,9 +61,9 @@ test reports (the mtui testreport/export text format).
 %autosetup -p1 -a1
 
 %build
-# `mcp` feature enables the mtui-mcp server (see docs/src/installation.md).
-%{cargo_build} -p mtui-cli
-%{cargo_build} -p mtui-mcp --features mcp
+# The root `mtui` facade package builds both binaries by default (`cli` +
+# `mcp` features; see docs/src/installation.md).
+%{cargo_build}
 
 %install
 # The shipped binaries are `mtui` / `mtui-mcp` ([[bin]] names), not the crate

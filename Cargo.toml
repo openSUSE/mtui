@@ -1,6 +1,54 @@
+[package]
+name = "mtui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Maintenance Test Update Installer — SUSE QE maintenance-update validation tool"
+default-run = "mtui"
+autobins = false
+# Both smoke tests are consolidated into one `tests/it.rs` binary (see
+# `crates/mtui-mcp`'s convention) so the facade's already-linked `cli`/`mcp`
+# deps link once for the test run, not once per file.
+autotests = false
+
+[features]
+default = ["cli", "mcp"]
+cli = ["dep:mtui-cli"]
+# Names the inner feature explicitly so the facade keeps working if
+# mtui-mcp's own default set is ever changed.
+mcp = ["dep:mtui-mcp", "mtui-mcp/mcp"]
+# `?/` so enabling notify does not implicitly turn `cli` back on.
+notify = ["mtui-cli?/notify"]
+
+[[bin]]
+name = "mtui"
+path = "src/bin/mtui.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "mtui-mcp"
+path = "src/bin/mtui-mcp.rs"
+required-features = ["mcp"]
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+[dependencies]
+mtui-cli = { workspace = true, optional = true }
+mtui-mcp = { workspace = true, optional = true }
+tokio.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true
+
 [workspace]
 resolver = "3"
 members = ["crates/*", "xtask"]
+default-members = [".", "crates/*", "xtask"]
 
 [workspace.package]
 version = "26.3.0"
@@ -148,7 +196,8 @@ mtui-hosts = { path = "crates/mtui-hosts" }
 mtui-datasources = { path = "crates/mtui-datasources" }
 mtui-testreport = { path = "crates/mtui-testreport" }
 mtui-core = { path = "crates/mtui-core" }
-mtui-mcp = { path = "crates/mtui-mcp" }
+mtui-cli = { path = "crates/mtui-cli" }
+mtui-mcp = { path = "crates/mtui-mcp", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

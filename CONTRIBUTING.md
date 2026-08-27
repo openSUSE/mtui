@@ -35,7 +35,7 @@ keywords (`bsc#NNNN`, `boo#NNNN`) in the commit body when applicable.
 The project is a Cargo workspace and uses the standard Rust toolchain
 (edition 2024, MSRV 1.96); no `rustup` is assumed.
 
-Build everything:
+Build everything (produces both `mtui` and `mtui-mcp`):
 
 ```sh
 cargo build --workspace
@@ -44,8 +44,8 @@ cargo build --workspace
 Run mtui from the checkout:
 
 ```sh
-cargo run -p mtui-cli -- --help
-cargo run -p mtui-mcp --features mcp -- --help
+cargo run -p mtui -- --help
+cargo run -p mtui --bin mtui-mcp -- --help
 ```
 
 ## Quality gates

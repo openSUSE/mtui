@@ -14,12 +14,14 @@ package from the openSUSE Build Service (OBS); everywhere else, build from sourc
 
 ```sh
 # Both binaries, optimized.
-cargo build --release -p mtui-cli -p mtui-mcp --features mtui-mcp/mcp
+cargo build --release
 ```
 
-`mtui-mcp`'s server is behind the `mcp` feature so the default build and the
-`mtui` REPL never pull in the MCP SDK (`rmcp`/`axum`). Build it with that feature
-enabled as shown above.
+The root `mtui` facade package exposes a `cli` and an `mcp` feature, both
+**enabled by default**, so a plain `cargo build --release` produces both
+binaries. `--no-default-features --features cli` (or `mcp`) builds only the
+REPL (or only the MCP server), if you want to skip pulling in the MCP SDK
+(`rmcp`/`axum`) or the REPL's dependencies.
 
 The binaries land in `target/release/`:
 
@@ -195,7 +197,7 @@ binaries, completions, man pages, `term.*.sh`, `LICENSE`, `README`) into a
 `mtui-<version>-<target>.tar.gz` plus a `.sha256`:
 
 ```sh
-cargo build --release -p mtui-cli -p mtui-mcp --features mtui-mcp/mcp
+cargo build --release
 cargo xtask package --version v1.2.0 --target "$(rustc -vV | sed -n 's/host: //p')"
 # → dist/release/mtui-v1.2.0-<target>.tar.gz (+ .sha256)
 ```

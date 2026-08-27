@@ -7,20 +7,16 @@ license.workspace = true
 repository.workspace = true
 # Integration tests are consolidated into a single `tests/it.rs` binary so the
 # crate + its heavy deps (rmcp/axum under `--all-features`) link once, not once
-# per file. Only test autodiscovery is disabled; the `[[bin]]` is explicit.
+# per file.
 autotests = false
 
 [lib]
 name = "mtui_mcp"
 path = "src/lib.rs"
 
-[[bin]]
-name = "mtui-mcp"
-path = "src/main.rs"
-
 # Perf baseline bench. Requires the `mcp` feature (the session +
-# job model live behind it); `harness = false` -> criterion main. Run with
-# `cargo bench -p mtui-mcp --features mcp --bench mcp_jobs`.
+# job model live behind it, on by default); `harness = false` -> criterion
+# main. Run with `cargo bench -p mtui-mcp --bench mcp_jobs`.
 [[bench]]
 name = "mcp_jobs"
 path = "benches/mcp_jobs.rs"
@@ -28,8 +24,8 @@ harness = false
 required-features = ["mcp"]
 
 # Contention measurement for different-RRID dispatch. Requires
-# the `mcp` feature. Run with
-# `cargo bench -p mtui-mcp --features mcp --bench dispatch_concurrency`.
+# the `mcp` feature (on by default). Run with
+# `cargo bench -p mtui-mcp --bench dispatch_concurrency`.
 [[bench]]
 name = "dispatch_concurrency"
 path = "benches/dispatch_concurrency.rs"
@@ -44,8 +40,11 @@ path = "tests/it.rs"
 workspace = true
 
 [features]
-# Gates the rmcp server so the default build and the `mtui` REPL never drag in
-# the MCP SDK. The stdio runner + tool synthesiser live behind this.
+default = ["mcp"]
+# Gates the rmcp server so the root facade's `cli`-only build and the `mtui`
+# REPL never drag in the MCP SDK. The stdio runner + tool synthesiser live
+# behind this; the facade names it explicitly, so `-p mtui
+# --no-default-features` genuinely drops it.
 mcp = [
     "dep:rmcp",
     "dep:serde_json",
