@@ -60,6 +60,11 @@ impl Command for Quit {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Tears down its own teardown units, not the active report.
+        false
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("bootarg")

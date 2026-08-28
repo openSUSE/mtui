@@ -400,6 +400,35 @@ mod tests {
         );
     }
 
+    /// The busy-refusal exemption (`Command::reads_resolved_report` false) is a
+    /// per-command policy, so pin who has it: everything else — including the
+    /// other `Scope::Single` commands, `terms` and `regenerate` — is refused
+    /// rather than dispatched against the null sentinel (#524). The default is
+    /// the safe answer, so a new command can only join this list deliberately.
+    #[test]
+    fn report_independent_commands_are_pinned() {
+        let r = register_all();
+        let mut exempt: Vec<&str> = r
+            .names()
+            .filter(|n| !r.get(n).expect("registered").reads_resolved_report())
+            .collect();
+        exempt.sort_unstable();
+        assert_eq!(
+            exempt,
+            vec![
+                "config",
+                "help",
+                "list_refhosts",
+                "list_templates",
+                "load_template",
+                "quit",
+                "switch",
+                "unload",
+                "updates",
+            ]
+        );
+    }
+
     #[test]
     fn terms_is_fully_removed() {
         // Same contract as `lrun` above (#566): dropped, not denied — so it must

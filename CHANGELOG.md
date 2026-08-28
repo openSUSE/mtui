@@ -154,10 +154,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   had them. Under fan-out only the contended template fails, the rest still
   run — and a contended template is no longer reported as `skipped: no
   connected hosts`, which had let a fan-out (`update`, `run`, `reboot`, …) exit
-  0 having quietly not run on it. A `Scope::Single` command that names no
-  template (`unload <rrid>`, `load_template`, `config`, `help`) is unaffected:
-  it never reads the active report, so a hold on it is not that command's
-  problem.
+  0 having quietly not run on it. Nine commands that name no template and
+  ignore whatever was active (`unload`, `switch`, `load_template`, `config`,
+  `help`, `list_refhosts`, `list_templates`, `updates`, `quit`) are unaffected:
+  a hold on a template they never read is not their problem. `terms` and
+  `regenerate` are not among them — they are equally self-targeting but *do*
+  read what they were handed, so a bare `terms <name>` no longer spawns the
+  launcher with zero hosts.
 - MCP: `config set` no longer runs on a per-call fork whose `Config` is a value
   copy. `config` is `Scope::Single`, so with a template loaded it resolved to
   one RRID, took the dispatch gate's scoped arm, and the write was discarded

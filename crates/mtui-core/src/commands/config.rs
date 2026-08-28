@@ -221,6 +221,11 @@ impl Command for ConfigCmd {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Reads and writes `session.config`; no report involved.
+        false
+    }
+
     /// `set` writes `session.config`, which a fork clones by value (#523).
     ///
     /// Only a positively-identified `show` is scoped: an unknown subcommand, an

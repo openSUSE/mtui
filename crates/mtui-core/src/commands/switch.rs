@@ -29,6 +29,11 @@ impl Command for Switch {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Re-points the active pointer; reads no report.
+        false
+    }
+
     fn requires_canonical_session(&self, _argv: &[String]) -> bool {
         true
     }

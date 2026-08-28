@@ -42,6 +42,11 @@ impl Command for Updates {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Session-global query against the datasource.
+        false
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("review_group")

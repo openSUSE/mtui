@@ -29,6 +29,11 @@ impl Command for Unload {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Names its own RRID and drops the guard before removing the entry.
+        false
+    }
+
     fn requires_canonical_session(&self, _argv: &[String]) -> bool {
         true
     }
