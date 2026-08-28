@@ -18,6 +18,7 @@
 //! verify policy via [`resolve_verify`] before any request is made.
 
 use std::cmp::Ordering;
+use std::sync::LazyLock;
 
 use chrono::{DateTime, FixedOffset};
 use mtui_config::Config;
@@ -40,6 +41,17 @@ const DEFAULT_GROUP: &str = "qam-sle";
 const ASSIGN_TEMPLATE: &str = "<MTUI: PR - UV assigned to user: {user} - group: {group} >";
 /// Template for an unassignment marker comment (`user`, `group`).
 const UNASSIGN_TEMPLATE: &str = "<MTUI: PR - UV unassigned user: {user} - group: {group} >";
+
+/// Matches an assignment marker comment, capturing `user` and `group`.
+static ASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^<MTUI: PR - UV assigned to user: (?P<user>.*) - group: (?P<group>.*) >")
+        .expect("static assign regex is valid")
+});
+/// Matches an unassignment marker comment, capturing `user` and `group`.
+static UNASSIGN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^<MTUI: PR - UV unassigned user: (?P<user>.*) - group: (?P<group>.*) >")
+        .expect("static unassign regex is valid")
+});
 
 /// Format an assignment marker comment body for `user`/`group`.
 #[must_use]
@@ -250,8 +262,6 @@ pub struct Gitea {
     /// URL is checked against this before the `Authorization` header is
     /// attached; a mismatch is [`GiteaError::UntrustedOrigin`].
     trusted_origin: Origin,
-    assign_re: Regex,
-    unassign_re: Regex,
 }
 
 impl Gitea {
@@ -322,14 +332,6 @@ impl Gitea {
             pr: giteaprapi.to_string(),
             prissues,
             trusted_origin,
-            assign_re: Regex::new(
-                r"^<MTUI: PR - UV assigned to user: (?P<user>.*) - group: (?P<group>.*) >",
-            )
-            .expect("static assign regex is valid"),
-            unassign_re: Regex::new(
-                r"^<MTUI: PR - UV unassigned user: (?P<user>.*) - group: (?P<group>.*) >",
-            )
-            .expect("static unassign regex is valid"),
         })
     }
 
@@ -471,17 +473,17 @@ impl Gitea {
     /// sorted) and return the current assignee for `group`, or `None`.
     ///
     /// The last valid assignment or unassignment marker for the group wins; a
-    /// marker for another group is ignored. Static so the state machine can be
-    /// tested without any HTTP.
+    /// marker for another group is ignored. Touches no HTTP itself, so the
+    /// state machine can be tested by feeding in a canned comment list.
     #[must_use]
     fn assignee_from_comments(&self, comments: &[Comment], group: &str) -> Option<String> {
         let mut assignee: Option<String> = None;
         for c in comments {
-            if let Some(m) = self.assign_re.captures(&c.body) {
+            if let Some(m) = ASSIGN_RE.captures(&c.body) {
                 if &m["group"] == group {
                     assignee = Some(m["user"].to_string());
                 }
-            } else if let Some(m) = self.unassign_re.captures(&c.body)
+            } else if let Some(m) = UNASSIGN_RE.captures(&c.body)
                 && &m["group"] == group
             {
                 assignee = None;
