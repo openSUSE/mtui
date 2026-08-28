@@ -1,0 +1,57 @@
+---
+name: beta
+# Early warning on the upcoming compiler: runs off the PR path so it never
+# blocks a merge, but a red result on a scheduled run *is* the notification
+# — nobody watches the Actions tab on a cadence, but a failed scheduled run
+# notifies its last committer by default.
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  beta:
+    runs-on: ubuntu-latest
+    name: MTUI beta toolchain (early warning)
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install beta toolchain
+        run: rustup toolchain install beta --component clippy
+      - name: Restore cargo registry cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+      - name: Clippy (beta)
+        run: cargo +beta clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # Same fixture as ci.yml's test job: the SSH integration suite
+      # authenticates the client from an identity file and fails without one.
+      - name: SSH fixture
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+      - name: Test (beta)
+        run: cargo +beta test --workspace --locked
+      - name: Save cargo registry cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
