@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use mtui_config::options::Config;
 use mtui_datasources::openqa::kernel::KernelOpenQA;
@@ -20,6 +21,7 @@ use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
 use mtui_types::package::Package;
 use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, UpdateSource, Workflow};
+use regex::Regex;
 
 /// The concrete openQA state holder carried on a report.
 ///
@@ -756,11 +758,10 @@ pub trait TestReport {
         let path = self.base().path.clone().ok_or(ReviewerError::NoTemplate)?;
 
         let text = std::fs::read_to_string(&path).map_err(ReviewerError::Io)?;
-        let re = reviewer_line_re();
-        if !re.is_match(&text) {
+        if !REVIEWER_LINE_RE.is_match(&text) {
             return Err(ReviewerError::NoReviewerLine);
         }
-        let new_text = re
+        let new_text = REVIEWER_LINE_RE
             .replace(&text, format!("Test Plan Reviewer: {name}").as_str())
             .into_owned();
 
@@ -796,15 +797,15 @@ pub trait TestReport {
 
         let text = std::fs::read_to_string(&path).map_err(SlackReviewError::Io)?;
         let line = marker.to_line();
-        let existing = slack_review_line_re();
 
-        let new_text = if existing.is_match(&text) {
+        let new_text = if SLACK_REVIEW_LINE_RE.is_match(&text) {
             // `replace` hits the first marker; the collapse below removes any others.
-            let replaced = existing.replace(&text, line.as_str()).into_owned();
+            let replaced = SLACK_REVIEW_LINE_RE
+                .replace(&text, line.as_str())
+                .into_owned();
             collapse_extra_marker_lines(&replaced)
         } else {
-            let anchor = reviewer_line_re();
-            let Some(m) = anchor.find(&text) else {
+            let Some(m) = REVIEWER_LINE_RE.find(&text) else {
                 return Err(SlackReviewError::NoAnchor);
             };
             let mut out = String::with_capacity(text.len() + line.len() + 1);
@@ -852,15 +853,15 @@ fn collapse_extra_marker_lines(text: &str) -> String {
 ///
 /// [`TestReport::set_reviewer`] replaces it;
 /// [`TestReport::set_slack_review`] anchors its insert after it.
-fn reviewer_line_re() -> regex::Regex {
-    regex::Regex::new(r"(?m)^(?:Suggested )?Test Plan Reviewer:.*$")
+static REVIEWER_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^(?:Suggested )?Test Plan Reviewer:.*$")
         .expect("static reviewer-line regex is valid")
-}
+});
 
 /// Matches the `Slack Review:` marker line written by `request_review`.
-fn slack_review_line_re() -> regex::Regex {
-    regex::Regex::new(r"(?m)^Slack Review:.*$").expect("static slack-review regex is valid")
-}
+static SLACK_REVIEW_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^Slack Review:.*$").expect("static slack-review regex is valid")
+});
 
 /// The Slack message a review request was posted to.
 ///
