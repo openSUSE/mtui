@@ -19,7 +19,6 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "local_tempdir" => config.local_tempdir.display().to_string(),
         "session_user" => config.session_user.clone(),
         "install_logs" => config.install_logs.display().to_string(),
-        "chdir_to_template_dir" => config.chdir_to_template_dir.to_string(),
         "ssl_verify" => ssl_verify_to_string(&config.ssl_verify),
         "connection_timeout" => config.connection_timeout.to_string(),
         "connect_timeout" => config.connect_timeout.to_string(),
@@ -96,12 +95,11 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 41] = [
+const ATTRS: [&str; 40] = [
     "template_dir",
     "local_tempdir",
     "session_user",
     "install_logs",
-    "chdir_to_template_dir",
     "ssl_verify",
     "connection_timeout",
     "connect_timeout",
@@ -185,7 +183,6 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         // The same coercion as config-file loading, so a runtime `set` cannot
         // store a value the file would reject.
         "ssl_verify" => config.ssl_verify = SslVerify::parse(raw),
-        "chdir_to_template_dir" => config.chdir_to_template_dir = parse_bool(raw)?,
         "lock_reap_stale" => config.lock_reap_stale = parse_bool(raw)?,
         "pool_reap_stale" => config.pool_reap_stale = parse_bool(raw)?,
         "lock_pi_autolock" => config.lock_pi_autolock = parse_bool(raw)?,
@@ -512,19 +509,19 @@ mod tests {
     #[tokio::test]
     async fn set_bool_parses_config_spellings() {
         let (mut session, _buf) = empty_session();
-        let args = matches(&ConfigCmd, &["set", "chdir_to_template_dir", "yes"]);
+        let args = matches(&ConfigCmd, &["set", "lock_reap_stale", "no"]);
         ConfigCmd.call(&mut session, &args).await.unwrap();
-        assert!(session.config.chdir_to_template_dir);
+        assert!(!session.config.lock_reap_stale);
     }
 
     #[tokio::test]
     async fn set_invalid_bool_rejected_and_unchanged() {
         let (mut session, _buf) = empty_session();
-        let before = session.config.chdir_to_template_dir;
-        let args = matches(&ConfigCmd, &["set", "chdir_to_template_dir", "maybe"]);
+        let before = session.config.lock_reap_stale;
+        let args = matches(&ConfigCmd, &["set", "lock_reap_stale", "maybe"]);
         let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("invalid boolean")));
-        assert_eq!(session.config.chdir_to_template_dir, before);
+        assert_eq!(session.config.lock_reap_stale, before);
     }
 
     #[tokio::test]

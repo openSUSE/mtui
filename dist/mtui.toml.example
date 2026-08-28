@@ -20,8 +20,6 @@
 # user = "qauser"
 # Sub-directory (single relative name, no separators) where install logs are written per update.
 # install_logs = "install_logs"
-# chdir into the template dir on load.
-# chdir_to_template_dir = false
 # TLS verification for outbound HTTP: a bool, a boolean spelling
 # ("yes"/"no"/"on"/"off"/...), or a path to a custom CA bundle.
 # ssl_verify = true

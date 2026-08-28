@@ -36,8 +36,6 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.max_oqa_parallel, 4);
     assert_eq!(cfg.refhosts_https_expiration, 3600);
 
-    assert!(cfg.chdir_to_template_dir);
-
     // ssl_verify: a non-boolean string is treated as a CA bundle path.
     assert_eq!(
         cfg.ssl_verify,

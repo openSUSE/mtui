@@ -52,7 +52,6 @@ Defaults below are the built-in values.
 | `tempdir` | path | `$TMPDIR` or `/tmp` | Local scratch directory. |
 | `user` | string | current login user | User attributed to this session (locks, logs). |
 | `install_logs` | relative dir name | `install_logs` | Sub-directory (single relative name, no separators) where install logs are written per update. |
-| `chdir_to_template_dir` | bool | `false` | `chdir` into the template dir on load. |
 | `ssl_verify` | bool / string | `true` | TLS verification for outbound HTTP: a boolean, a boolean spelling (`yes`/`no`/`on`/`off`/…), or a path to a custom CA bundle. |
 
 ### `[connection]`
