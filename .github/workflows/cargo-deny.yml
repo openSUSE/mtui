@@ -1,5 +1,9 @@
 ---
 name: cargo-deny
+# Installed directly rather than via EmbarkStudios/cargo-deny-action: that
+# action's Docker image bakes in cargo-deny 0.18.0, whose bundled spdx crate
+# rejects the "-or-later"/"-only" SPDX suffix in `licenses.allow` entries
+# outright (a hard config-parse error, not a lint finding).
 on:
   pull_request:
   schedule:
@@ -25,10 +29,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@d8395c1c8c9df74d968a3bcbba5533e396ff43cf  # v2.0.9
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
         with:
-          command: check
-          command-arguments: advisories
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check advisories
   bans-sources-licenses:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -38,7 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@d8395c1c8c9df74d968a3bcbba5533e396ff43cf  # v2.0.9
+      - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
         with:
-          command: check
-          command-arguments: bans sources licenses
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check bans sources licenses
