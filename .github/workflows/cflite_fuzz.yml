@@ -4,7 +4,14 @@ name: fuzz
 # a short burst on every pull request and main push. A crash fails the
 # job and is uploaded as an artifact. Rust uses the address sanitizer.
 on:
+  # Path filters apply only to pull_request: tag pushes behave surprisingly
+  # under path filtering, and `main` should keep running everything.
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'plans/**'
+      - '.opencode/**'
   push:
     branches: [main]
 

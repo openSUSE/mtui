@@ -7,3 +7,7 @@ src = "src"
 
 [output.html]
 git-repository-url = "https://github.com/openSUSE/mtui"
+
+[output.linkcheck2]
+# Internal (relative) links only — no network access assumed in CI.
+follow-web-links = false
