@@ -254,9 +254,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - The dead `chdir_to_template_dir` config key has been dropped. It was fully
   plumbed but never read anywhere, so it never had an effect. `config set
-  chdir_to_template_dir <value>` now answers `unknown or read-only attribute`
-  instead of silently accepting a no-op. An existing `mtui.toml` still
-  carrying the key keeps loading without error — no config edit is required.
+  chdir_to_template_dir <value>` now answers `unknown or read-only attribute`,
+  and `config show chdir_to_template_dir` now fails with `unknown attribute`
+  instead of printing a no-op value. An existing `mtui.toml` still carrying
+  the key keeps loading without error — no config edit is required.
 
 ## [26.2.1] - 2026-08-21
 

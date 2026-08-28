@@ -508,10 +508,21 @@ mod tests {
 
     #[tokio::test]
     async fn set_bool_parses_config_spellings() {
-        let (mut session, _buf) = empty_session();
-        let args = matches(&ConfigCmd, &["set", "lock_reap_stale", "no"]);
-        ConfigCmd.call(&mut session, &args).await.unwrap();
-        assert!(!session.config.lock_reap_stale);
+        for (raw, want) in [
+            ("1", true),
+            ("yes", true),
+            ("true", true),
+            ("on", true),
+            ("0", false),
+            ("no", false),
+            ("false", false),
+            ("off", false),
+        ] {
+            let (mut session, _buf) = empty_session();
+            let args = matches(&ConfigCmd, &["set", "lock_reap_stale", raw]);
+            ConfigCmd.call(&mut session, &args).await.unwrap();
+            assert_eq!(session.config.lock_reap_stale, want, "spelling {raw}");
+        }
     }
 
     #[tokio::test]
