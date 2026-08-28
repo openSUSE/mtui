@@ -7,5 +7,7 @@
 
 #[path = "cli_smoke.rs"]
 mod cli_smoke;
+#[path = "doc_targets.rs"]
+mod doc_targets;
 #[path = "mcp_version.rs"]
 mod mcp_version;

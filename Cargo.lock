@@ -2373,6 +2373,7 @@ dependencies = [
  "anyhow",
  "mtui-cli",
  "mtui-mcp",
+ "serde_json",
  "tokio",
 ]
 
