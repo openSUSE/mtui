@@ -3,7 +3,10 @@
 //!
 //! Measurement-only, offline. `metadata/parse` measures `JSONParser::parse_str`
 //! populating a fresh `TestReportBase` from the golden `metadata.json` fixture —
-//! the parse hot path on the testreport-download workflow.
+//! the parse hot path on the testreport-download workflow. `metadata/
+//! reduced_parse` measures `ReducedMetadataParser::parse` over a synthetic
+//! whole-template line stream — the parse hot path `TestReport::read` drives
+//! for every line of the checkout, not just the `hosts` field.
 //!
 //! The `fs/*` benches measure the heavy filesystem operations moved off the
 //! async worker (recursive checkout deletion, the log-download write fan-out).
@@ -16,7 +19,9 @@ use std::hint::black_box;
 use async_trait::async_trait;
 use criterion::{Criterion, criterion_group, criterion_main};
 use mtui_config::options::Config;
-use mtui_testreport::{BytesFetcher, ErrorMode, JSONParser, TestReportBase, download_logs};
+use mtui_testreport::{
+    BytesFetcher, ErrorMode, JSONParser, ReducedMetadataParser, TestReportBase, download_logs,
+};
 use mtui_types::Test;
 
 /// The golden metadata.json pinned in the fixtures tree, embedded at compile
@@ -29,6 +34,46 @@ fn bench_metadata_parse(c: &mut Criterion) {
             let mut report = TestReportBase::new(Config::default());
             JSONParser::parse_str(&mut report, black_box(METADATA_JSON))
                 .expect("golden metadata.json parses");
+            black_box(report)
+        });
+    });
+}
+
+/// Builds `lines` lines of synthetic template text: one reference-host line,
+/// one bug line and one jira line per 500 lines, one bare-`Bug`-without-
+/// pattern line per 100 (real command logs mention "Bug" outside the marker
+/// shape, so a bench without this fraction would flatter a literal prescreen),
+/// the rest ~70-char command-log noise.
+fn synthetic_template(lines: usize) -> String {
+    let mut out = String::with_capacity(lines * 72);
+    for i in 0..lines {
+        if i % 500 == 0 {
+            out.push_str(&format!("some text (reference host: h{i})\n"));
+        } else if i % 500 == 1 {
+            out.push_str(&format!("Bug {i} (\"title for bug {i}\"):\n"));
+        } else if i % 500 == 2 {
+            out.push_str(&format!("Jira AB-{i} (\"title for jira {i}\"):\n"));
+        } else if i % 100 == 0 {
+            out.push_str(&format!(
+                "2026-01-01 12:00:{i:02} zypper: Bug tracker unrelated mention #{i}\n"
+            ));
+        } else {
+            out.push_str(&format!(
+                "2026-01-01 12:00:{i:02} host{i}: command exited with status 0 ok\n"
+            ));
+        }
+    }
+    out
+}
+
+fn bench_reduced_metadata_parse(c: &mut Criterion) {
+    let tpl = synthetic_template(20_000);
+    c.bench_function("metadata/reduced_parse", |b| {
+        b.iter(|| {
+            let mut report = TestReportBase::new(Config::default());
+            for line in black_box(&tpl).lines() {
+                ReducedMetadataParser::parse(&mut report, line);
+            }
             black_box(report)
         });
     });
@@ -147,6 +192,7 @@ fn bench_download_write(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_metadata_parse,
+    bench_reduced_metadata_parse,
     bench_remove_tree,
     bench_download_write
 );
