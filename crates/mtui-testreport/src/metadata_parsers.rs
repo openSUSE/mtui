@@ -68,7 +68,14 @@ impl ReducedMetadataParser {
             return;
         }
 
-        if let Some(caps) = HOSTNAMES_RE.captures(line) {
+        // Each guard is a mandatory literal substring of its regex, so a miss
+        // here means the pattern cannot match either; a hit still falls
+        // through to `captures()` (and on to the next pattern on a guarded
+        // non-match), so behaviour is unchanged, just cheaper for the common
+        // case of a line matching none of them.
+        if line.contains(" (reference host: ")
+            && let Some(caps) = HOSTNAMES_RE.captures(line)
+        {
             let host = &caps[1];
             if !host.contains('?') {
                 results.hostnames.insert(host.to_owned());
@@ -76,12 +83,16 @@ impl ReducedMetadataParser {
             return;
         }
 
-        if let Some(caps) = JIRA_RE.captures(line) {
+        if line.contains("Jira ")
+            && let Some(caps) = JIRA_RE.captures(line)
+        {
             results.jira.insert(caps[1].to_owned(), caps[2].to_owned());
             return;
         }
 
-        if let Some(caps) = BUGS_RE.captures(line) {
+        if line.contains("Bug ")
+            && let Some(caps) = BUGS_RE.captures(line)
+        {
             results.bugs.insert(caps[1].to_owned(), caps[2].to_owned());
         }
     }
