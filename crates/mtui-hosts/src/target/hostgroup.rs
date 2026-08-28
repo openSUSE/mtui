@@ -27,7 +27,8 @@
 //! [`PlanProvider`] behind [`HostsGroup`]'s `impl OperationGroup`, and the repo
 //! change fan-out ([`fanout_set_repo`](HostsGroup::fanout_set_repo)) drives the
 //! object-safe [`SetRepo`] hook whose report impls live in `mtui-testreport`.
-//! The pool-claim lock ([`pool_unlock`](HostsGroup::pool_unlock)),
+//! The pool-claim lock
+//! ([`pool_unlock_collecting`](HostsGroup::pool_unlock_collecting)),
 //! `query_versions` / system-product parsing, and lock reporting
 //! ([`report_locks`](HostsGroup::report_locks)) are all bound here.
 //!
@@ -805,33 +806,14 @@ impl HostsGroup {
         .await;
     }
 
-    /// Releases every host's pool claim, best-effort.
+    /// Releases every host's pool claim into the caller-owned `collected`,
+    /// best-effort.
     ///
-    /// Delegates to the per-target
-    /// [`Target::pool_unlock`] (which suppresses [`HostError::TargetLocked`] for
-    /// a claim owned by another template), so one contended host never aborts
-    /// the fan-out. `force` removes claims owned by other templates too.
-    pub async fn pool_unlock(&mut self, force: bool) {
-        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
-        actions::run_fanout(
-            &mut self.data,
-            is_repl,
-            max_parallel,
-            Some("pool_unlock"),
-            |_t| true,
-            |t| Box::pin(async move { t.pool_unlock(force).await }) as actions::BoxTargetFut<'_>,
-        )
-        .await;
-    }
-
-    /// Releases every host's pool claim, reporting each outcome, otherwise
-    /// identical to [`pool_unlock`](Self::pool_unlock).
-    ///
-    /// Outcomes land in `collected` as each host finishes rather than in a
-    /// return value, because the caller applies the wall-clock budget: a
-    /// returned map would be dropped with the abandoned future, costing the
-    /// attribution of every host that did complete. Mirrors
-    /// [`unlock_force`](Self::unlock_force).
+    /// A claim owned by another template lands as
+    /// [`Contended`](LockOutcome::Contended) instead of aborting the fan-out;
+    /// `force` removes those too. Mirrors
+    /// [`unlock_force`](Self::unlock_force), including why the map is
+    /// caller-owned.
     pub async fn pool_unlock_collecting(
         &mut self,
         force: bool,
@@ -3407,7 +3389,7 @@ mod tests {
     #[tokio::test]
     async fn pool_unlock_fans_out_over_group() {
         use crate::target::POOL_LOCK_PATH;
-        // Two hosts each carry our pool claim; pool_unlock removes both. The
+        // Two hosts each carry our pool claim; the fan-out removes both. The
         // claim's user must match the target's identity (config `session_user`,
         // which defaults to $USER), so stamp it dynamically.
         let me = mtui_config::Config::default().session_user;
@@ -3426,15 +3408,19 @@ mod tests {
         for t in g.data.values_mut() {
             t.set_rrid("SUSE:Maintenance:1:2");
         }
-        g.pool_unlock(false).await;
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        g.pool_unlock_collecting(false, &collected).await;
         assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
         assert!(h2.file_contents(POOL_LOCK_PATH).is_none());
+        let collected = collected.into_inner().unwrap();
+        assert_eq!(collected["h1"], LockOutcome::Released);
+        assert_eq!(collected["h2"], LockOutcome::Released);
     }
 
     #[tokio::test]
-    async fn pool_unlock_suppresses_foreign_claim_and_continues() {
+    async fn pool_unlock_reports_a_foreign_claim_as_contended_and_continues() {
         use crate::target::POOL_LOCK_PATH;
-        // h1 is ours, h2 is a foreign template's claim: pool_unlock skips h2
+        // h1 is ours, h2 is a foreign template's claim: the fan-out reports h2
         // without aborting and still removes h1's.
         let me = mtui_config::Config::default().session_user;
         let mine = format!("1700000000:{me}:1:mtui pool SUSE:Maintenance:1:2 [me]").into_bytes();
@@ -3452,10 +3438,19 @@ mod tests {
         for t in g.data.values_mut() {
             t.set_rrid("SUSE:Maintenance:1:2");
         }
-        g.pool_unlock(false).await;
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        g.pool_unlock_collecting(false, &collected).await;
         assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
-        // h2's foreign claim is left in place (the failure was suppressed).
+        // h2's foreign claim is left in place, and named — not swallowed, as
+        // the deleted `pool_unlock` did.
         assert!(h2.file_contents(POOL_LOCK_PATH).is_some());
+        let collected = collected.into_inner().unwrap();
+        assert_eq!(collected["h1"], LockOutcome::Released);
+        assert!(
+            matches!(&collected["h2"], LockOutcome::Contended(o) if o.by == "alice"),
+            "{:?}",
+            collected["h2"]
+        );
     }
 
     // --- report_locks (list_locks fan-out) ----------------------------------
