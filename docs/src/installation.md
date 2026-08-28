@@ -2,7 +2,9 @@
 
 mtui ships as two static binaries — `mtui` (the REPL) and `mtui-mcp` (the MCP
 server) — with no runtime interpreter or virtualenv. On openSUSE install the
-package from the openSUSE Build Service (OBS); everywhere else, build from source.
+package from the openSUSE Build Service (OBS); elsewhere take the
+[prebuilt x86_64 packages](#prebuilt-packages-github-releases) from the release
+page, or build from source.
 
 ## Requirements
 
@@ -103,19 +105,47 @@ your `oscrc`, located exactly like `osc` itself: `$OSC_CONFIG`, then
 `$XDG_CONFIG_HOME/osc/oscrc`, then `~/.oscrc`. See the `[obs]` table in
 [Configuration](configuration.md).
 
+## Prebuilt packages (GitHub releases)
+
+Every release carries `.deb` and `.rpm` packages next to the tarballs, built by
+the `package` job in `.github/workflows/release.yml`. They split the same way the
+spec does — `mtui` recommends `mtui-mcp`, so installing `mtui` alone still gets
+both — with four caveats the OBS build does not have:
+
+- **x86_64 only**, built for `x86_64-unknown-linux-musl`. No aarch64, no macOS.
+- **Same `Name:` as the OBS RPM.** In a repository carrying both, they compete by
+  version comparison alone. On openSUSE prefer the OBS package.
+- **No `mtui-vim-plugin`.**
+- **The `.rpm`s own no directories.** cargo-generate-rpm has no `%dir`, so
+  erasing them leaves the doc- and licensedirs behind.
+
+Because the binaries are static the packages declare no dependencies at all —
+no libc, and no shell either, since nothing they ship is a script.
+
+Verify with `sha256sum --ignore-missing -c mtui-packages.sha256` — one file
+covers all four packages, so a partial download needs `--ignore-missing`.
+
 ## Packaged install (openSUSE)
 
 On openSUSE, prefer the `mtui.spec` package build, which installs the binaries,
 completions, and man pages into the standard system paths and declares `svn` as a
-recommends.
+recommends. It builds three packages:
+
+- **`mtui`** — the REPL, its completions and man page. Recommends `mtui-mcp`, so
+  a plain `zypper in mtui` still gets both binaries as it did before they were
+  split.
+- **`mtui-mcp`** — the MCP server, its completions and man page. Installable on
+  its own; it reads the same config.
+- **`mtui-vim-plugin`** — see [above](#vim-syntax-highlighting).
 
 ## Cutting a release (maintainers)
 
-Releases are built and published from the Build Service, **not from CI**
-(gitlab.suse.de shared runners can't run `cross`/dind). The package sources at the
-repo root — `_service` and `mtui.spec` — build the RPM fully **offline from
-vendored crates** via the OBS source services, so nothing is fetched during the
-network-isolated build.
+The **supported** openSUSE RPM is built and published from the Build Service, not
+from CI. The package sources at the repo root — `_service` and `mtui.spec` —
+build it fully **offline from vendored crates** via the OBS source services, so
+nothing is fetched during the network-isolated build. CI's `.deb`/`.rpm` are a
+separate, x86_64-only convenience (see
+[above](#prebuilt-packages-github-releases)) and do not replace this recipe.
 
 ### One-time maintainer setup
 

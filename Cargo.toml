@@ -5,7 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Maintenance Test Update Installer — SUSE QE maintenance-update validation tool"
+# Doubles as the .deb synopsis for BOTH packages (cargo-deb has no per-variant
+# override), so keep it binary-neutral and under 79 *bytes* — past that cargo-deb
+# word-wraps it and the overflow becomes the first line of the long description.
+description = "Maintenance Test Update Installer for SUSE QE update validation"
 default-run = "mtui"
 autobins = false
 # Both smoke tests are consolidated into one `tests/it.rs` binary (see
@@ -40,6 +43,110 @@ doc = false
 [[test]]
 name = "it"
 path = "tests/it.rs"
+
+# ---------------------------------------------------------------------------
+# Distro packaging. One Cargo package, two distro packages: the base table is
+# the `mtui` package, the `mcp` variant is `mtui-mcp`. Both tools take
+# `--variant mcp`. Merge is per key and shallow: a key the variant omits is
+# inherited (`require-sh`), one it sets replaces the base's outright rather than
+# merging into it — so each `assets` list must be complete on its own.
+# ---------------------------------------------------------------------------
+
+[package.metadata.deb]
+name = "mtui"
+# `maintainer` is mandatory per Debian policy and cargo-deb emits no
+# Maintainer: field at all without it (the package has no [package] authors).
+maintainer = "openSUSE QE <qa-maintenance@suse.de>"
+# Holder only — the License: line of the generated DEP-5 copyright comes from
+# `package.license`, and `license-file` appends the full text (Policy 12.5).
+copyright = "2026 SUSE LLC"
+license-file = ["LICENSE", "0"]
+section = "utils"
+# Explicitly empty, not "$auto": the release binaries are static musl, so there
+# are no shared-library deps to find, and this skips the dpkg-shlibdeps call
+# (which otherwise only emits a warning and yields nothing anyway). Either way
+# cargo-deb still writes a syntactically empty `Depends:` — it emits the field
+# unconditionally once dependency resolution has run.
+depends = ""
+# Mirrors the spec: this package shipped `mtui-mcp` itself until the split, so
+# a plain install has to keep providing it. Unversioned — cargo-deb has no
+# substitution for the package's own version.
+recommends = "mtui-mcp, subversion"
+# Without this cargo-deb inlines the entire README as the extended description.
+extended-description = "Interactive REPL for validating SUSE maintenance updates: load a request by RRID, install and test it on reference hosts over SSH in parallel, then approve or reject."
+assets = [
+    ["target/release/mtui", "usr/bin/", "755"],
+    ["dist/completions/bash/mtui.bash", "usr/share/bash-completion/completions/mtui", "644"],
+    ["dist/completions/zsh/_mtui", "usr/share/zsh/site-functions/_mtui", "644"],
+    ["dist/completions/fish/mtui.fish", "usr/share/fish/vendor_completions.d/mtui.fish", "644"],
+    ["dist/man/mtui.1", "usr/share/man/man1/mtui.1", "644"],
+    ["dist/mtui.toml.example", "usr/share/doc/mtui/mtui.toml.example", "644"],
+]
+
+[package.metadata.deb.variants.mcp]
+# Explicit: the base sets `name`, which suppresses cargo-deb's automatic
+# "<pkg>-<variant>" suffixing, so without this both variants would be "mtui".
+name = "mtui-mcp"
+# `checkout`/`commit` are reachable over MCP, so the server needs svn on its own.
+recommends = "subversion"
+extended-description = "Model Context Protocol server exposing mtui's command registry as MCP tools over stdio or HTTP."
+assets = [
+    ["target/release/mtui-mcp", "usr/bin/", "755"],
+    ["dist/completions/bash/mtui-mcp.bash", "usr/share/bash-completion/completions/mtui-mcp", "644"],
+    ["dist/completions/zsh/_mtui-mcp", "usr/share/zsh/site-functions/_mtui-mcp", "644"],
+    ["dist/completions/fish/mtui-mcp.fish", "usr/share/fish/vendor_completions.d/mtui-mcp.fish", "644"],
+    ["dist/man/mtui-mcp.1", "usr/share/man/man1/mtui-mcp.1", "644"],
+    # Both binaries read the same file; ship it in each docdir so the MCP
+    # server is installable on its own.
+    ["dist/mtui.toml.example", "usr/share/doc/mtui-mcp/mtui.toml.example", "644"],
+]
+
+[package.metadata.generate-rpm]
+# cargo-generate-rpm adds `Requires: /bin/sh` unconditionally unless told not
+# to; nothing these rpms ship is a script, and a static binary needs no shell.
+require-sh = false
+# Without this both rpms inherit `package.description`, which describes the REPL.
+summary = "Interactive REPL for validating SUSE maintenance updates"
+# A table, not a list: cargo-generate-rpm keys each dependency by its version
+# constraint. "*" is unversioned.
+recommends = { mtui-mcp = "*", subversion = "*" }
+assets = [
+    { source = "target/release/mtui", dest = "/usr/bin/mtui", mode = "755" },
+    { source = "dist/completions/bash/mtui.bash", dest = "/usr/share/bash-completion/completions/mtui", mode = "644" },
+    { source = "dist/completions/zsh/_mtui", dest = "/usr/share/zsh/site-functions/_mtui", mode = "644" },
+    { source = "dist/completions/fish/mtui.fish", dest = "/usr/share/fish/vendor_completions.d/mtui.fish", mode = "644" },
+    { source = "dist/man/mtui.1", dest = "/usr/share/man/man1/mtui.1", mode = "644", doc = true },
+    # No %dir entries: unlike the spec, these rpms do not own the doc- and
+    # licensedirs, so erasing them leaves the dirs behind. cargo-generate-rpm
+    # 0.21.0 cannot express %dir and both ways of trying are worse than the
+    # orphan. `dir = true` parses and clears the source, but the entry still
+    # routes to rpm-rs's with_file(), which stats the now-empty path -> ENOENT,
+    # build fails (the mode is never even reached). `mode = "40755"` on a sourced
+    # asset is the trap: 0.21.0 masks it to a *regular file* at the directory
+    # path, and <= 0.20.0 keeps the S_IFDIR bits in the header while still
+    # writing the source's bytes as the entry's cpio body — rpm consumes no body
+    # for a directory, so the archive desyncs and every file after that entry
+    # becomes unextractable while `rpm -qpl` still lists it. The release job
+    # asserts the payload is walkable, catching both.
+    { source = "dist/mtui.toml.example", dest = "/usr/share/doc/mtui/mtui.toml.example", mode = "644", doc = true },
+    # cargo-generate-rpm has no %license; a GPL binary shipped standalone off a
+    # release page still has to carry its terms. doc = true is the closest flag.
+    { source = "LICENSE", dest = "/usr/share/licenses/mtui/LICENSE", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.variants.mcp]
+name = "mtui-mcp"
+summary = "Model Context Protocol server for mtui"
+recommends = { subversion = "*" }
+assets = [
+    { source = "target/release/mtui-mcp", dest = "/usr/bin/mtui-mcp", mode = "755" },
+    { source = "dist/completions/bash/mtui-mcp.bash", dest = "/usr/share/bash-completion/completions/mtui-mcp", mode = "644" },
+    { source = "dist/completions/zsh/_mtui-mcp", dest = "/usr/share/zsh/site-functions/_mtui-mcp", mode = "644" },
+    { source = "dist/completions/fish/mtui-mcp.fish", dest = "/usr/share/fish/vendor_completions.d/mtui-mcp.fish", mode = "644" },
+    { source = "dist/man/mtui-mcp.1", dest = "/usr/share/man/man1/mtui-mcp.1", mode = "644", doc = true },
+    { source = "dist/mtui.toml.example", dest = "/usr/share/doc/mtui-mcp/mtui.toml.example", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/mtui-mcp/LICENSE", mode = "644", doc = true },
+]
 
 [dependencies]
 mtui-cli = { workspace = true, optional = true }

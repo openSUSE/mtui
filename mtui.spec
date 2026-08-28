@@ -35,6 +35,11 @@ BuildRequires:  zstd
 ExclusiveArch:  %{rust_tier1_arches}
 # Optional runtime tool; mtui degrades gracefully when it is absent.
 Recommends:     subversion
+# Recommends, not Requires: this package shipped `mtui-mcp` itself until the
+# split, so a plain `zypper in mtui` has to keep providing it — and Requires
+# would defeat the split. Known gap: an upgrade run with --no-recommends (or
+# solver.onlyRequires) drops the mcp binary silently.
+Recommends:     %{name}-mcp = %{version}-%{release}
 
 %description
 An improved, idiomatic Rust successor to MTUI — the Maintenance Test Update
@@ -42,8 +47,19 @@ Installer, SUSE QE's tool for validating maintenance updates: load a request by
 RRID, install and test it on reference hosts over SSH in parallel, then approve
 or reject. It drives osc/svn/Gitea and openQA/QEM natively under the hood.
 
-This package ships two static binaries: %{name}'s `mtui` interactive REPL and
-the `mtui-mcp` Model Context Protocol server.
+This package ships the `mtui` interactive REPL. The Model Context Protocol
+server is the %{name}-mcp subpackage.
+
+%package mcp
+Summary:        Model Context Protocol server for mtui
+# Reachable over MCP (checkout/commit), so the subpackage needs it on its own.
+Recommends:     subversion
+
+%description mcp
+The `mtui-mcp` Model Context Protocol server exposes mtui's maintenance-update
+tooling to MCP clients. It reads the same configuration as the REPL and runs
+without it; the REPL-only commands — `shell` and `edit`, which spawn on the
+controlling TTY — stay unexposed.
 
 %package vim-plugin
 Summary:        VIM plugin with test report syntax
@@ -82,8 +98,9 @@ install -Dm644 dist/completions/fish/mtui-mcp.fish %{buildroot}%{_datadir}/fish/
 install -Dm644 dist/man/mtui.1     %{buildroot}%{_mandir}/man1/mtui.1
 install -Dm644 dist/man/mtui-mcp.1 %{buildroot}%{_mandir}/man1/mtui-mcp.1
 
-# Fully-commented example config, installed as documentation.
-install -Dm644 dist/mtui.toml.example %{buildroot}%{_docdir}/%{name}/mtui.toml.example
+# The example config is listed as %%doc from the source tree instead of being
+# installed here, so rpm drops a copy in each subpackage's own docdir — both
+# binaries read this same file.
 
 # Vim plugin: filetype detection + testreport syntax (vim-plugin subpackage).
 install -d %{buildroot}%{vimplugin_dir}/ftdetect
@@ -98,16 +115,21 @@ install -pm 0644 dist/vim-plugin/syntax/testreport.vim   %{buildroot}%{vimplugin
 %files
 %license LICENSE
 %doc README.md
-%doc %{_docdir}/%{name}/mtui.toml.example
+%doc dist/mtui.toml.example
 %{_bindir}/mtui
-%{_bindir}/mtui-mcp
 %{_datadir}/bash-completion/completions/mtui
-%{_datadir}/bash-completion/completions/mtui-mcp
 %{_datadir}/zsh/site-functions/_mtui
-%{_datadir}/zsh/site-functions/_mtui-mcp
 %{_datadir}/fish/vendor_completions.d/mtui.fish
-%{_datadir}/fish/vendor_completions.d/mtui-mcp.fish
 %{_mandir}/man1/mtui.1%{?ext_man}
+
+%files mcp
+%license LICENSE
+%doc README.md
+%doc dist/mtui.toml.example
+%{_bindir}/mtui-mcp
+%{_datadir}/bash-completion/completions/mtui-mcp
+%{_datadir}/zsh/site-functions/_mtui-mcp
+%{_datadir}/fish/vendor_completions.d/mtui-mcp.fish
 %{_mandir}/man1/mtui-mcp.1%{?ext_man}
 
 %files vim-plugin

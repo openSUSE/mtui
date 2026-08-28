@@ -284,6 +284,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- The first prebuilt packages: x86_64 `.deb` and `.rpm` on the release page,
+  next to the tarballs, split into an `mtui` and an `mtui-mcp` package. Static,
+  so no libc floor. On openSUSE prefer the OBS build — these are x86_64 only and
+  carry the same `Name:`, so the two compete by version alone.
 - `export --allow-unverified` (MCP `allow_unverified`) writes the unverified
   scaffold when no selected host has recorded package versions. Additive,
   optional schema change.

@@ -32,10 +32,13 @@ Repo automation lives in the `xtask` crate, invoked through the alias in
 | Regenerate generated docs | `cargo xtask gen-docs` | `docs/src/cli.md` + `docs/src/invocation.md` |
 | Build a release tarball | `cargo xtask package --version <VER> --target <TRIPLE>` | `dist/release/…tar.gz` |
 
+The `.deb`/`.rpm` on the release page have no xtask equivalent — they are built
+only by the `package` job in `.github/workflows/release.yml`.
+
 ## Quality gates
 
-CI (`.gitlab-ci.yml`) mirrors the local gate. Run the **whole workspace** before
-claiming done:
+CI (`.github/workflows/`) mirrors the local gate. Run the **whole workspace**
+before claiming done:
 
 ```sh
 cargo fmt --all --check
