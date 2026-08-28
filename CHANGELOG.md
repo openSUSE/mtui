@@ -161,6 +161,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `regenerate` are not among them — they are equally self-targeting but *do*
   read what they were handed, so a bare `terms <name>` no longer spawns the
   launcher with zero hosts.
+- `list_templates` now shows a template held by another dispatch as `busy (in
+  use by another command)` instead of dropping the row, which read as "not
+  loaded" — the same collapse-into-absent as above, in the listing.
 - MCP: `config set` no longer runs on a per-call fork whose `Config` is a value
   copy. `config` is `Scope::Single`, so with a template loaded it resolved to
   one RRID, took the dispatch gate's scoped arm, and the write was discarded
