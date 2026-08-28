@@ -205,6 +205,15 @@ call with the host named.
   path. These previously reached only `tracing::warn!`, which an MCP client
   never sees (the server's tracing goes to its own stderr, not the tool
   result).
+- Every workflow fan-out (`install`, `uninstall`, `prepare`, `downgrade`,
+  `update`) confirms success as `<verb> completed on <hosts>`, so a clean run is
+  never an empty tool result. `update`'s confirmation is printed *above* its
+  diagnostics — the head of the buffer is what survives `max_output_bytes` — and
+  is qualified whenever the run recorded a *degradation*: `update completed on
+  h1: the patch passed its checks, with 2 degradations reported below`. The
+  count is of degradations only; a check's own recognised sections (the
+  vendor-support notice, extra rpm output) ride in the same diagnostics and are
+  routine on a healthy update, so they leave the confirmation bare.
 - `export` emits `WARNING: no package version data recorded for <host>...`
   lines in its tool output when a host has no recorded package data and its
   install-result block was therefore left unverified in the report.

@@ -284,12 +284,18 @@ pub(crate) mod testkit {
         /// way to reach `map_flow_error`'s `Cancelled` arm from the command
         /// layer, since `fail_update`'s error is not `is_cancelled()`.
         cancel_update: bool,
-        /// `perform_update` emits both diagnostic shapes. **Off by default**:
+        /// `perform_update` emits both *check-section* diagnostic shapes — the
+        /// routine kind a healthy update produces. **Off by default**:
         /// a clean transaction emits none, and fabricating them unconditionally
         /// left `update`'s only display output coming from the fixture, which
         /// disarmed `mcp_nonempty_success_guard` for the one command that was
         /// silent on success (#525).
         update_diagnostics: bool,
+        /// `perform_update` succeeds but records two
+        /// [`Diagnostic::degradation`](mtui_testreport::Diagnostic::degradation)s
+        /// — the run's result was less than asked for. Distinct from
+        /// `update_diagnostics`, which is check output and means nothing failed.
+        update_degradations: bool,
         /// The `perform_install`/`uninstall`/`prepare`/`downgrade` flows return
         /// an `Err` naming host `h1`, exercising `perform::drive`'s failure path.
         fail_perform: bool,
@@ -349,6 +355,17 @@ pub(crate) mod testkit {
                 ));
                 diagnostics.push(mtui_testreport::Diagnostic::plain(
                     "The following package is not supported by its vendor:\nfoo",
+                ));
+            }
+            if self.update_degradations {
+                // The two sites #534's review names, verbatim in shape.
+                diagnostics.push(mtui_testreport::Diagnostic::degradation(
+                    "newpackage prepare after update failed (h1: RPM Error); the update \
+                     stands, the newpackage step did not happen",
+                ));
+                diagnostics.push(mtui_testreport::Diagnostic::degradation(
+                    "failed to remove the test update repo on h1; remove it manually with \
+                     `set_repo --remove`",
                 ));
             }
             if self.cancel_update {
@@ -554,6 +571,7 @@ pub(crate) mod testkit {
             fail_update: false,
             cancel_update: false,
             update_diagnostics: false,
+            update_degradations: false,
             fail_perform: false,
             set_repo_enabled: false,
         }));
@@ -579,6 +597,7 @@ pub(crate) mod testkit {
             fail_update: false,
             cancel_update: false,
             update_diagnostics: false,
+            update_degradations: false,
             fail_perform: false,
             set_repo_enabled: false,
         }));
@@ -606,6 +625,7 @@ pub(crate) mod testkit {
             fail_update: true,
             cancel_update: false,
             update_diagnostics: false,
+            update_degradations: false,
             fail_perform: false,
             set_repo_enabled: false,
         }));
@@ -632,6 +652,7 @@ pub(crate) mod testkit {
             fail_update: false,
             cancel_update: true,
             update_diagnostics: false,
+            update_degradations: false,
             fail_perform: false,
             set_repo_enabled: false,
         }));
@@ -665,6 +686,34 @@ pub(crate) mod testkit {
             fail_update: fail,
             cancel_update: false,
             update_diagnostics: true,
+            update_degradations: false,
+            fail_perform: false,
+            set_repo_enabled: false,
+        }));
+        assert!(session.activate(rrid), "seeded template must activate");
+        (session, buf)
+    }
+
+    /// A session whose active report's `perform_update` succeeds but records
+    /// two degradations — #534's review case, where the patch stands and the
+    /// `--newpackage` prepare and repo cleanup around it did not.
+    #[must_use]
+    pub(crate) fn session_with_degraded_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut session = Session::with_display(Config::default(), false, display);
+
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
+        let mut base = TestReportBase::new(Config::default());
+        base.targets = HostsGroup::new(targets, false);
+        base.rrid = rrid.parse().ok();
+        session.templates.add(Box::new(FakeReport {
+            base,
+            rrid: rrid.to_owned(),
+            fail_update: false,
+            cancel_update: false,
+            update_diagnostics: false,
+            update_degradations: true,
             fail_perform: false,
             set_repo_enabled: false,
         }));
@@ -727,6 +776,7 @@ pub(crate) mod testkit {
             fail_update: false,
             cancel_update: false,
             update_diagnostics: false,
+            update_degradations: false,
             fail_perform: false,
             set_repo_enabled: true,
         }));
@@ -752,6 +802,7 @@ pub(crate) mod testkit {
             fail_update: false,
             cancel_update: false,
             update_diagnostics: false,
+            update_degradations: false,
             fail_perform: true,
             set_repo_enabled: false,
         }));
@@ -778,6 +829,7 @@ pub(crate) mod testkit {
             fail_update: false,
             cancel_update: false,
             update_diagnostics: false,
+            update_degradations: false,
             fail_perform: false,
             set_repo_enabled: false,
         })
@@ -799,6 +851,7 @@ pub(crate) mod testkit {
             fail_update: false,
             cancel_update: false,
             update_diagnostics: false,
+            update_degradations: false,
             fail_perform: false,
             set_repo_enabled: false,
         })

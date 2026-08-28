@@ -2007,7 +2007,7 @@ pub async fn perform_update(
                 uncomposed: refused,
             }) => {
                 warn!(error = %error, "prepare before update reported a host failure; continuing");
-                diagnostics.push(Diagnostic::plain(format!(
+                diagnostics.push(Diagnostic::degradation(format!(
                     "prepare before update reported a host failure ({error}); continuing"
                 )));
                 uncomposed = refused;
@@ -2035,7 +2035,7 @@ pub async fn perform_update(
     // success and the failure path — not only via the final `Uncomposed`
     // return, which a later failure could otherwise win over (#543).
     for e in &excluded {
-        diagnostics.push(Diagnostic::plain(e.to_string()));
+        diagnostics.push(Diagnostic::degradation(e.to_string()));
     }
     if !uncomposed.is_empty()
         && targets
@@ -2150,7 +2150,7 @@ pub async fn perform_update(
             perform_prepare_for(targets, &eligible, report, packages, false, true, false).await
     {
         warn!(error = %e, "newpackage prepare after update failed");
-        diagnostics.push(Diagnostic::plain(format!(
+        diagnostics.push(Diagnostic::degradation(format!(
             "newpackage prepare after update failed ({e}); the update stands, the newpackage \
              step did not happen"
         )));
@@ -2189,7 +2189,7 @@ async fn remove_test_repos(
              they are left configured on every host (remove later with \
              `set_repo --remove`)"
         );
-        diagnostics.push(Diagnostic::plain(format!(
+        diagnostics.push(Diagnostic::degradation(format!(
             "could not lock hosts to remove the test update repositories ({e}); they are left \
              configured on every host (remove later with `set_repo --remove`)"
         )));
@@ -2217,7 +2217,7 @@ async fn remove_test_repos(
             "failed to remove the test update repo on one or more hosts; \
              remove it manually with `set_repo --remove`"
         );
-        diagnostics.push(Diagnostic::plain(format!(
+        diagnostics.push(Diagnostic::degradation(format!(
             "failed to remove the test update repo on {}; remove it manually with \
              `set_repo --remove`",
             hosts.join(", ")
@@ -2234,7 +2234,7 @@ async fn remove_test_repos(
         })
         .collect();
     if !unlock_failures.is_empty() {
-        diagnostics.push(Diagnostic::plain(unlock_failure_message(
+        diagnostics.push(Diagnostic::degradation(unlock_failure_message(
             "update",
             &unlock_failures,
         )));
@@ -6332,6 +6332,79 @@ mod tests {
         assert!(
             fired.iter().any(|c| c.contains("systemctl reboot")),
             "expected transactional reboot after a successful update: {fired:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_degraded_update_returns_ok_but_names_every_degradation() {
+        // #525's review case, end to end: the patch applies and passes its
+        // check, but *both* the `--newpackage` prepare and the test-repo
+        // cleanup fail. `perform_update` still returns `Ok` — so the only
+        // thing standing between the caller and "it all worked" is that both
+        // degradations are in `diagnostics`. The failing command is the repo
+        // fan-out's trailing refresh, which is the last thing to touch
+        // `last*` before `host_command_failures` reads it.
+        const REFRESH: &str = "transactional-update --continue --non-interactive run zypper \
+                               --gpg-auto-import-keys -n ref";
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                "transactional-update -n pkg in -l  pkg-a",
+                CommandLog::new("", "", "zypper: dependency problem", 1, 0),
+            )
+            .with_response(
+                REFRESH,
+                CommandLog::new("", "", "repo refresh failed", 1, 0),
+            )
+            .with_changing_boot_id();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            true,
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(res.is_ok(), "the patch itself stands: {res:?}");
+        // Degradation-flagged only: a caller summarising the run has to tell
+        // these from the check's own recognised sections (#534 review).
+        let texts: Vec<&str> = diagnostics
+            .iter()
+            .filter(|d| d.degradation)
+            .map(|d| d.text.as_str())
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("newpackage prepare after update failed")),
+            "no newpackage diagnostic: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("failed to remove the test update repo")
+                    && t.contains("h1")
+                    && t.contains("set_repo --remove")),
+            "no repo-cleanup diagnostic: {texts:?}"
         );
     }
 

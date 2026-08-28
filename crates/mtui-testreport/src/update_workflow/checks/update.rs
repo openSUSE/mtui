@@ -464,6 +464,9 @@ mod tests {
         let diags = zypper(args("zypper", stdout, "", ZYPPER_EXIT_INF_REPO_SKIPPED)).unwrap();
         assert_eq!(diags.len(), 1);
         assert!(diags[0].highlight_warning);
+        // Check output, not a degradation: the caller counts degradations to
+        // decide whether the run was whole (#534 review).
+        assert!(!diags[0].degradation);
         assert_eq!(diags[0].text, "\nwarning: stuff\n");
     }
 
@@ -474,6 +477,10 @@ mod tests {
         let diags = zypper(args("zypper", stdout, "", 0)).unwrap();
         assert_eq!(diags.len(), 1);
         assert!(!diags[0].highlight_warning);
+        // Routine on a healthy update — mtui patches from a test update repo
+        // whose vendor differs from the official one — so flagging it as a
+        // degradation would qualify almost every confirmation (#534 review).
+        assert!(!diags[0].degradation);
         assert_eq!(
             diags[0].text,
             "The following package is not supported by its vendor:\nfoo bar"
