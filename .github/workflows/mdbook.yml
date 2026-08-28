@@ -1,0 +1,38 @@
+---
+name: mdbook
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded PR runs, but let main runs finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  mdbook:
+    # Unfiltered, like `typos`: this is precisely the check a docs-only PR
+    # needs, so it must not inherit `ci.yml`'s paths-ignore.
+    runs-on: ubuntu-latest
+    name: MTUI mdBook
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install mdBook
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
+        with:
+          tool: mdbook
+      # taiki-e/install-action's manifest only carries the original
+      # mdbook-linkcheck, which does not parse mdbook 0.5's RenderContext
+      # JSON; this fork does. `cargo install` (not the manifest fallback)
+      # keeps the version pin explicit and reproducible.
+      - name: Install mdbook-linkcheck2
+        run: cargo install mdbook-linkcheck2 --locked --version 0.13.0
+      - name: Build book (renders HTML and checks internal links)
+        run: mdbook build docs
