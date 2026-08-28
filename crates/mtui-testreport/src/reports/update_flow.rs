@@ -2045,16 +2045,18 @@ pub async fn perform_update(
     // `update_lock` fails closed on *any* member, so a refused host with a
     // contended or unreadable lock aborts the update for the peers that do
     // compose it; the repo fan-out reconfigures a host already reported as
-    // excluded; and `build_update_maps` turns a refused host's missing updater
-    // into the whole group's `MissingUpdater`. Filtering after the fact — as
-    // the `commands`/`reboot` retain used to — is too late for all three.
+    // excluded; `build_update_maps` turns a refused host's missing updater
+    // into the whole group's `MissingUpdater`; and `package_check` would query
+    // and judge a host that drew no patch, earning it an update-sanity warning
+    // for work it never received. Filtering after the fact — as the
+    // `commands`/`reboot` retain used to — is too late for all four.
     let eligible: BTreeSet<String> = targets
         .names()
         .into_iter()
         .filter(|host| !uncomposed.contains_key(host))
         .collect();
 
-    targets.package_check(false).await;
+    targets.package_check_selected(false, &eligible).await;
 
     if let Err(e) = targets.update_lock_selected(&eligible).await {
         return Err(UpdateFailure::Check(UpdateError::reason_only(
@@ -2141,7 +2143,7 @@ pub async fn perform_update(
         warn!(error = %e, "newpackage prepare after update failed");
     }
 
-    targets.package_check(true).await;
+    targets.package_check_selected(true, &eligible).await;
 
     remove_test_repos(targets, &eligible, report).await;
     aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed)
@@ -3718,6 +3720,59 @@ mod tests {
             repo.ops_for("h1"),
             vec![RepoOp::Remove, RepoOp::Add, RepoOp::Remove],
             "the composing host still gets the update's add and cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_does_not_package_check_the_host_it_excluded() {
+        // `package_check` queries and judges a host that drew no patch, the
+        // same defect class as the lock/repo scoping above, one step later: an
+        // excluded host earning an update-sanity warning for work it never
+        // received.
+        let (t1, _h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (mut t2, h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        t2.set_packages(vec![mtui_types::package::Package::new("pkg-a")]);
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-z"]),
+            ),
+        ]);
+
+        let _ = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
+
+        assert!(
+            group.get("h2").unwrap().packages()[0].before().is_none(),
+            "the excluded host must draw no package_check verdict"
+        );
+        assert!(
+            h2.commands().iter().all(|c| !c.contains("rpm -q")),
+            "the excluded host must issue no version-query command: {:?}",
+            h2.commands()
         );
     }
 

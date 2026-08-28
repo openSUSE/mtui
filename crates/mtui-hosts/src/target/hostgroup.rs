@@ -1131,27 +1131,59 @@ impl HostsGroup {
     /// `run_fanout` primitive in parallel, so the
     /// pure per-package bookkeeping that follows never blocks on I/O.
     pub async fn query_versions(&mut self) {
+        self.query_versions_where(|_t| true).await;
+    }
+
+    /// Shared implementation for [`query_versions`](Self::query_versions) and
+    /// [`package_check`](Self::package_check)'s I/O phase.
+    async fn query_versions_where<S>(&mut self, select: S)
+    where
+        S: FnMut(&Target) -> bool,
+    {
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
         actions::run_fanout(
             &mut self.data,
             is_repl,
             max_parallel,
             Some("query_versions"),
-            |_t| true,
+            select,
             |t| Box::pin(async move { t.query_versions().await }) as actions::BoxTargetFut<'_>,
         )
         .await;
     }
 
     pub async fn package_check(&mut self, post: bool) {
-        // Phase 1 (I/O): query every host's installed versions concurrently,
-        // through the shared fan-out primitive.
-        self.query_versions().await;
+        self.package_check_where(post, |_t| true).await;
+    }
 
-        // Phase 2 (pure): fold each host's queried versions into its packages'
-        // before/after fields and emit the update-sanity warnings. No I/O, so
-        // this runs sequentially over the group (order-independent).
-        for target in self.data.values_mut() {
+    /// [`package_check`](Self::package_check) restricted to `names`, otherwise
+    /// identical.
+    ///
+    /// For a flow that has already excluded a host from the work it is about
+    /// to do: that host draws no `query_versions` command and its packages'
+    /// `before`/`after` stay untouched, so it never earns an update-sanity
+    /// warning for work it never received. A name not in the group is
+    /// ignored.
+    pub async fn package_check_selected(&mut self, post: bool, names: &BTreeSet<String>) {
+        self.package_check_where(post, |t| names.contains(t.hostname()))
+            .await;
+    }
+
+    /// Shared implementation for [`package_check`](Self::package_check) /
+    /// [`package_check_selected`](Self::package_check_selected): `select`
+    /// scopes both the I/O fan-out and the pure before/after fold below it.
+    async fn package_check_where<S>(&mut self, post: bool, mut select: S)
+    where
+        S: FnMut(&Target) -> bool,
+    {
+        // Phase 1 (I/O): query the selected hosts' installed versions
+        // concurrently, through the shared fan-out primitive.
+        self.query_versions_where(&mut select).await;
+
+        // Phase 2 (pure): fold each selected host's queried versions into its
+        // packages' before/after fields and emit the update-sanity warnings.
+        // No I/O, so this runs sequentially over the group (order-independent).
+        for target in self.data.values_mut().filter(|t| select(t)) {
             let hostname = target.hostname().to_owned();
 
             let mut not_installed: Vec<String> = Vec::new();
@@ -3612,5 +3644,39 @@ mod tests {
         g.package_check(false).await;
         let before_check = g.get("h1").unwrap().packages()[0].before_check().clone();
         assert_eq!(before_check, VersionCheck::NotChecked);
+    }
+
+    #[tokio::test]
+    async fn package_check_selected_leaves_the_omitted_host_untouched() {
+        use mtui_types::package::Package;
+
+        let conn1 =
+            MockConnection::new("h1").with_default(CommandLog::new("", "bash 5.1-1\n", "", 0, 0));
+        let conn2 =
+            MockConnection::new("h2").with_default(CommandLog::new("", "bash 5.1-1\n", "", 0, 0));
+        let h2 = conn2.clone();
+        let mut t1 = Target::with_connection("h1", TargetState::Enabled, Box::new(conn1));
+        let mut t2 = Target::with_connection("h2", TargetState::Enabled, Box::new(conn2));
+        let mut pkg1 = Package::new("bash");
+        pkg1.set_required(Some("5.2-1")).unwrap();
+        let mut pkg2 = Package::new("bash");
+        pkg2.set_required(Some("5.2-1")).unwrap();
+        t1.set_packages(vec![pkg1]);
+        t2.set_packages(vec![pkg2]);
+        let mut g = HostsGroup::new(vec![t1, t2], false);
+        let names: BTreeSet<String> = ["h1".to_owned()].into_iter().collect();
+
+        g.package_check_selected(false, &names).await;
+
+        assert!(g.get("h1").unwrap().packages()[0].before().is_some());
+        assert!(
+            g.get("h2").unwrap().packages()[0].before().is_none(),
+            "the omitted host's before/after must stay untouched"
+        );
+        assert!(
+            h2.commands().is_empty(),
+            "the omitted host must draw no query_versions command: {:?}",
+            h2.commands()
+        );
     }
 }
