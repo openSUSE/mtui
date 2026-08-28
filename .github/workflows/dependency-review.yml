@@ -24,19 +24,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Dependency review
+        # Licence policy now lives entirely in deny.toml (cargo-deny gates it
+        # across the whole tree, not just the PR delta); this job is left to
+        # vulnerability severity only.
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
         with:
           fail-on-severity: high
           comment-summary-in-pr: on-failure
-          # Gate on licenses incompatible with mtui's GPL-3.0-or-later. mtui was
-          # previously GPL-2.0-only, under which Apache-2.0-only deps (russh,
-          # rmcp, ring) read as incompatible, so we could not enable license
-          # review at all. GPL-3.0-or-later can incorporate Apache-2.0 code per
-          # FSF guidance, so we now deny only licenses that remain genuinely
-          # GPLv3-incompatible.
-          deny-licenses: >-
-            GPL-2.0-only,
-            LGPL-2.0-only,
-            OpenSSL,
-            BSD-4-Clause,
-            CC-BY-NC-4.0
