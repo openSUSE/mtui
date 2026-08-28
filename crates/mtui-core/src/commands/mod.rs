@@ -573,7 +573,10 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: false,
         }));
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
         (session, buf)
     }
 
@@ -601,7 +604,10 @@ pub(crate) mod testkit {
         }));
         // Install the active handle so direct `command.call()` tests (which
         // bypass the fan-out driver) read the report through `metadata()`.
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
         (session, buf)
     }
 
@@ -627,7 +633,10 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: false,
         }));
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
         (session, buf)
     }
 
@@ -654,7 +663,10 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: false,
         }));
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
         (session, buf)
     }
 
@@ -688,7 +700,10 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: false,
         }));
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
         (session, buf)
     }
 
@@ -715,7 +730,10 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: false,
         }));
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
         (session, buf)
     }
 
@@ -778,7 +796,10 @@ pub(crate) mod testkit {
             fail_perform: false,
             set_repo_enabled: true,
         }));
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
         (session, buf)
     }
 
@@ -804,7 +825,10 @@ pub(crate) mod testkit {
             fail_perform: true,
             set_repo_enabled: false,
         }));
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
         (session, buf)
     }
 

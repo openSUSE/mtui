@@ -267,8 +267,9 @@ fn resolve_rrid(
 ///
 /// The release is load-bearing (the `run_command` exclusive-arm contract): the
 /// session must hold no active guard between calls, or a later forked (scoped)
-/// call's `try_lock_owned` fails in `activate` and silently dispatches that
-/// command against the null report.
+/// call's `try_lock_owned` fails in `activate` and that command is refused as
+/// `template busy` (#524) — before which it silently answered from the null
+/// report instead.
 fn restore_active(session: &mut mtui_core::Session, prev: Option<String>) {
     match prev {
         Some(rrid) => {
@@ -302,7 +303,7 @@ async fn transfer_get(
     let mut guard = session.session().lock().await;
     let rrid = resolve_rrid(&guard, template)?;
     let prev = guard.templates.active_rrid().map(str::to_owned);
-    if !guard.activate(&rrid) {
+    if !guard.activate(&rrid).is_active() {
         restore_active(&mut guard, prev);
         return Err(refuse(format!("could not activate template {rrid}")));
     }
@@ -490,7 +491,7 @@ async fn transfer_put(
     let mut guard = session.session().lock().await;
     let rrid = resolve_rrid(&guard, template)?;
     let prev = guard.templates.active_rrid().map(str::to_owned);
-    if !guard.activate(&rrid) {
+    if !guard.activate(&rrid).is_active() {
         restore_active(&mut guard, prev);
         return Err(refuse(format!("could not activate template {rrid}")));
     }
@@ -566,7 +567,7 @@ mod tests {
         guard.templates.add(Box::new(report));
         // `activate`, not bare `set_active`: it installs the active guard, so
         // `targets_mut()` reaches THIS report's group, not the null object.
-        assert!(guard.activate(rrid), "activate {rrid}");
+        assert!(guard.activate(rrid).is_active(), "activate {rrid}");
         for t in targets {
             guard.targets_mut().add(t);
         }
@@ -1163,7 +1164,7 @@ mod tests {
 
     /// After a transfer call the canonical session must hold NO active entry
     /// guard, or the next scoped (forked) command's `try_lock_owned` fails and
-    /// silently dispatches against the null report.
+    /// that command is refused as `template busy`.
     #[tokio::test]
     async fn transfer_leaves_no_active_guard() {
         let (session, tmp) = session_with(|_| {});

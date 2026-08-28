@@ -587,7 +587,7 @@ mod tests {
         session
             .templates
             .add(fake_report("SUSE:Maintenance:1:1", &["h1"], "ok"));
-        assert!(session.activate("SUSE:Maintenance:1:1"));
+        assert!(session.activate("SUSE:Maintenance:1:1").is_active());
         let tmp = tempfile::tempdir().unwrap();
 
         let repo = tmp.path().join("repo");

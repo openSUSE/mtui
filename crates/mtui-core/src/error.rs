@@ -18,6 +18,20 @@ pub enum CommandError {
     #[error("Template not loaded: {0}")]
     TemplateNotLoaded(String),
 
+    /// A dispatch could not claim the template's report entry: someone else
+    /// holds it — an asynchronously-aborted job's dispatch task still
+    /// unwinding, a gate-free teardown, or the resolve-then-acquire window.
+    /// (Not the testreport tools: they take the same gate-shared + per-RRID
+    /// pair `command_lock` does, so a same-RRID dispatch serialises behind them
+    /// instead of racing.) Refusing *is* the fix — before #524 the dispatch ran
+    /// on the null sentinel instead and answered about nothing.
+    ///
+    /// Lower-case to match the same refusal from
+    /// `mtui-mcp`'s `testreport_tools::resolve_path`, which operators already
+    /// grep for.
+    #[error("template busy: {0}")]
+    TemplateBusy(String),
+
     /// A command resolved to no runnable target — every candidate template was
     /// skipped for lack of a connected host.
     #[error("No refhosts defined")]
@@ -111,6 +125,12 @@ mod tests {
     fn template_not_loaded_message_is_stable() {
         let e = CommandError::TemplateNotLoaded("SUSE:Maintenance:1:1".into());
         assert_eq!(e.to_string(), "Template not loaded: SUSE:Maintenance:1:1");
+    }
+
+    #[test]
+    fn template_busy_message_is_stable() {
+        let e = CommandError::TemplateBusy("SUSE:Maintenance:1:1".into());
+        assert_eq!(e.to_string(), "template busy: SUSE:Maintenance:1:1");
     }
 
     #[test]
