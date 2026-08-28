@@ -77,3 +77,21 @@ fn config_toml_fixture_parses_all_sections() {
 
     assert_eq!(cfg.fancy_reports_url, "https://qam.suse.de/reports");
 }
+
+/// An `mtui.toml` still carrying the retired `[mtui] tempdir` key must keep
+/// loading — and applying its other keys — rather than erroring on the
+/// now-unknown field.
+#[test]
+fn retired_mtui_tempdir_key_is_ignored_not_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mtui.toml");
+    std::fs::write(
+        &path,
+        "[mtui]\ntempdir = \"/scratch\"\nuser = \"leniencyuser\"\n",
+    )
+    .unwrap();
+
+    let cfg = Config::load(Some(path));
+
+    assert_eq!(cfg.session_user, "leniencyuser");
+}

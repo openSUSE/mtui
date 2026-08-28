@@ -14,8 +14,6 @@
 [mtui]
 # Directory holding checked-out testreport templates.
 # template_dir = "."
-# Local scratch directory.
-# tempdir = "/tmp"
 # User attributed to this session (locks, logs). Defaults to the current login user.
 # user = "qauser"
 # Sub-directory (single relative name, no separators) where install logs are written per update.

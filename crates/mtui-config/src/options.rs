@@ -265,11 +265,6 @@ fn default_template_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
-fn default_local_tempdir() -> PathBuf {
-    std::env::var_os("TMPDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-}
 fn default_session_user() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
@@ -340,7 +335,6 @@ fn default_obs_request_timeout() -> u64 {
 #[serde(default)]
 pub(crate) struct MtuiSection {
     pub template_dir: Option<PathBuf>,
-    pub tempdir: Option<PathBuf>,
     pub user: Option<String>,
     pub install_logs: Option<PathBuf>,
     pub ssl_verify: Option<SslVerify>,
@@ -528,7 +522,6 @@ impl RawConfig {
             };
         }
         take!(mtui, template_dir);
-        take!(mtui, tempdir);
         take!(mtui, user);
         take!(mtui, install_logs);
         take!(mtui, ssl_verify);
@@ -594,8 +587,6 @@ pub struct Config {
     // [mtui]
     /// Directory holding checked-out test-report templates.
     pub template_dir: PathBuf,
-    /// Local scratch directory.
-    pub local_tempdir: PathBuf,
     /// User name attributed to this session (locks, logs).
     pub session_user: String,
     /// Directory where install logs are written.
@@ -788,7 +779,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             template_dir: default_template_dir(),
-            local_tempdir: default_local_tempdir(),
             session_user: default_session_user(),
             install_logs: default_install_logs(),
             ssl_verify: SslVerify::Enabled,
@@ -891,7 +881,6 @@ impl Config {
                 .mtui
                 .template_dir
                 .map_or(d.template_dir, |p| expanduser(&p)),
-            local_tempdir: raw.mtui.tempdir.map_or(d.local_tempdir, |p| expanduser(&p)),
             session_user: raw.mtui.user.unwrap_or(d.session_user),
             install_logs: match raw.mtui.install_logs {
                 Some(p) if is_relative_dir_name(&p.to_string_lossy()) => p,
