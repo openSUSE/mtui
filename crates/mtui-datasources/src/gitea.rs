@@ -175,12 +175,17 @@ fn parse_trusted_origin(gitea_url: &str) -> Result<Origin, GiteaError> {
 /// Whether it *still* stands is [`Gitea::has_review`]'s question.
 #[must_use]
 fn decision_present(comments: &[Comment], group: &str) -> bool {
-    let done = Regex::new(&format!(
-        r"^@{}-review: (LGTM|approved?|declined?)",
-        regex::escape(group)
-    ))
-    .expect("decision regex is valid");
-    comments.iter().any(|c| done.is_match(&c.body))
+    comments.iter().any(|c| {
+        c.body
+            .strip_prefix('@')
+            .and_then(|r| r.strip_prefix(group))
+            .and_then(|r| r.strip_prefix("-review: "))
+            .is_some_and(|rest| {
+                rest.starts_with("LGTM")
+                    || rest.starts_with("approve")
+                    || rest.starts_with("decline")
+            })
+    })
 }
 
 /// A Gitea comment, sortable by its `updated_at` timestamp.
