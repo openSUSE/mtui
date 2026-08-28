@@ -23,8 +23,14 @@
 # ssl_verify = true
 
 [connection]
-# SSH connect + command timeout, in seconds.
+# SSH per-command no-output timeout, in seconds. Does not bound the connect
+# handshake — see `connect_timeout`.
 # connection_timeout = 300
+# SSH connect handshake budget (TCP connect, banner, auth), in seconds. Also
+# bounds each SFTP request (the lock/history files). Raise it for a host with a
+# genuinely slow banner or link (a loaded s390x LPAR, a jump-path host, a WAN
+# refhost).
+# connect_timeout = 60
 # Backoff base (seconds) for reconnecting after a reboot (prepare/reboot/update).
 # Sleeps grow as 2*(reboot_timeout + 5*count) across attempts.
 # reboot_timeout = 10
@@ -124,6 +130,10 @@
 [mcp]
 # Upper bound (bytes) on a single mtui-mcp tool result. 0 disables the cap.
 # max_output_bytes = 100000
+# Upper bound (bytes) on what a tool reads per host before returning it
+# (testreport reads, `get` downloads; a larger `put` payload is refused).
+# 0 disables the cap.
+# max_input_bytes = 10000000
 # Upper bound (bytes) on an inbound HTTP request body under --transport http.
 # 0 disables mtui's limit entirely, dropping even axum's implicit 2 MB floor.
 # max_request_bytes = 10000000
