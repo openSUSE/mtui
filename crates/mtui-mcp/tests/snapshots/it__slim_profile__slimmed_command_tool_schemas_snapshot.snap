@@ -140,7 +140,7 @@ expression: pretty
         },
         "full_output": {
           "default": false,
-          "description": "print every line of a non-passing check's output instead of just the first (some checks emit long diffs)",
+          "description": "print every line of a non-passing check's output, untruncated, instead of a bounded first-line summary (some checks emit long diffs)",
           "type": "boolean"
         },
         "template": {
