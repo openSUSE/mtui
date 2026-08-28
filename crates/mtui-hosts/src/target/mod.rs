@@ -450,18 +450,10 @@ impl Target {
         let _ = self.pool_unlock_reporting(force).await;
     }
 
-    /// Releases this target's pool claim, returning the raw outcome so the
+    /// Releases this target's pool claim, returning the raw outcome for the
     /// group [`pool_unlock_collecting`](HostsGroup::pool_unlock_collecting)
-    /// fan-out can distinguish a benign foreign claim
-    /// ([`HostError::TargetLocked`]) from a real transport failure. Unlike
-    /// [`pool_unlock`](Self::pool_unlock) — which swallows both — this still
-    /// logs each branch but hands the result back to the caller. Mirrors
-    /// [`unlock_reporting`](Self::unlock_reporting).
-    ///
-    /// `Ok(())` means released (or a no-op: not connected, or nothing to
-    /// release). `Err(HostError::TargetLocked(_))` means the claim is owned by
-    /// another template (benign contention). Any other `Err` is a real
-    /// failure.
+    /// fan-out. Mirrors [`unlock_reporting`](Self::unlock_reporting), with
+    /// RRID-based ownership in place of PID.
     ///
     /// # Errors
     ///

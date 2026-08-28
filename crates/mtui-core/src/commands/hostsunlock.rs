@@ -119,6 +119,9 @@ impl Command for HostsUnlock {
             );
         }
 
+        // `Force` picks labels only; `--force` never emits `Contended`
+        // (`TargetLock::unlock`'s only contended arm is `&& !force`), so that
+        // variant's contended line is plain unlock's alone.
         let outcomes = session.targets_mut().unlock().await;
         verdict(
             &UnlockKind::Force,
@@ -382,7 +385,7 @@ mod tests {
 
     /// The wire format of an operation lock this test process itself holds:
     /// `TargetLock::is_mine` matches on user *and* pid, unlike the pool claim's
-    /// RRID-only check.
+    /// RRID-based check (user + RRID, pid ignored; user-only with no RRID).
     fn own_op_lock() -> Vec<u8> {
         let me = mtui_config::Config::default().session_user;
         let pid = std::process::id();
