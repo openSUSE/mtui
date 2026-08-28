@@ -94,6 +94,34 @@ fn reduced_metadata_parser_ignores_a_malformed_slack_marker() {
 }
 
 #[test]
+fn reduced_metadata_parser_falls_through_a_guarded_non_match() {
+    // Contains "Jira " so the guard passes, but JIRA_RE misses; the line must
+    // still fall through to the bug pattern, pinning both that the guard is
+    // not itself a match test and that fall-through order is unchanged.
+    let mut report = empty_report();
+
+    ReducedMetadataParser::parse(&mut report, r#"Jira notanid Bug 42 ("t"):"#);
+
+    assert!(report.jira.is_empty());
+    assert_eq!(report.bugs["42"], "t");
+}
+
+#[test]
+fn reduced_metadata_parser_matches_a_mid_line_marker() {
+    // The literal is not at line position 0: fails under `starts_with`,
+    // passes under `contains`, which is the guard the patterns require (none
+    // are anchored).
+    let mut report = empty_report();
+
+    ReducedMetadataParser::parse(
+        &mut report,
+        r#"2026-01-01 12:00:00 zypper: Bug 99 ("late"):"#,
+    );
+
+    assert_eq!(report.bugs["99"], "late");
+}
+
+#[test]
 fn reduced_metadata_parser_skips_placeholder_host_and_ignores_other_lines() {
     // A `?` host is a placeholder; unmatched lines are no-ops.
     let mut report = empty_report();
