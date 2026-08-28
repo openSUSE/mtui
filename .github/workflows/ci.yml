@@ -18,6 +18,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     name: MTUI format
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -29,6 +30,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     name: MTUI lint
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -38,39 +40,46 @@ jobs:
       # Shared with `docs`: both run --all-features and both consume
       # dependency metadata (`.rmeta` check artifacts / rustdoc JSON) rather
       # than fully-codegenned rlibs, so their target/ sets genuinely overlap.
-      # The two race to save this key on `main`; the loser gets a 409 that
-      # rust-cache logs as a warning, not a failure.
+      # `clippy` is the key's sole writer (see `docs`'s `save-if: false`), so
+      # there is no save race to warn about.
       - name: Rust dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           shared-key: check-all-features
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Clippy (warnings as errors)
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   docs:
     runs-on: ubuntu-latest
     name: MTUI docs
-    env:
-      RUSTDOCFLAGS: -D warnings
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       # Shared with `clippy` — see the comment on that job's cache step.
+      # `RUSTDOCFLAGS` lives on the `cargo doc` step below, not this job's
+      # `env:`, so rust-cache (which runs before it) never sees it and the
+      # key genuinely collapses to the one `clippy` writes. `save-if: false`
+      # makes `clippy` the sole writer: `cargo clippy --all-targets` produces
+      # a superset of the dependency metadata rustdoc needs.
       - name: Rust dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           shared-key: check-all-features
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
       - name: Check rustdoc (warnings as errors)
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: |
           set -o pipefail
-          cargo doc --workspace --no-deps --all-features --document-private-items \
+          cargo doc --workspace --no-deps --all-features --document-private-items --locked \
             2>&1 | tee "$RUNNER_TEMP/doc.log"
           ! grep -q 'output filename collision' "$RUNNER_TEMP/doc.log"
   feature-matrix:
     runs-on: ubuntu-latest
     name: MTUI feature matrix (compile-only)
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -84,19 +93,20 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build with no default features
-        run: cargo build --workspace --no-default-features
+        run: cargo build --workspace --no-default-features --locked
       - name: Build with all features
-        run: cargo build --workspace --all-features
+        run: cargo build --workspace --all-features --locked
   test:
     runs-on: ubuntu-latest
-    name: MTUI tests
+    name: MTUI tests + coverage
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      # Full registry + target/ cache. This is the only job carrying it in
-      # Phase A of the CI-caching plan, so its real compressed key size can be
-      # measured before widening to other jobs.
+      # Full registry + target/ cache, own key: `cargo-llvm-cov` builds under
+      # instrumentation RUSTFLAGS into `target/llvm-cov-target`, sharing
+      # nothing with the check-only `clippy`/`docs`/`feature-matrix` keys.
       - name: Rust dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
@@ -112,13 +122,30 @@ jobs:
       # skip cleanly when absent, so install it to keep those paths covered.
       - name: SVN fixture
         run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
-      - name: Build tests
-        run: cargo build --workspace
-      - name: Run tests (default features)
-        run: cargo test --workspace
+      - name: Install llvm-tools
+        run: rustup component add llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        # SHA-pinned like every other action (Scorecard Pinned-Dependencies);
+        # the tool is selected via the input, not the mutable `@cargo-llvm-cov`
+        # tag alias.
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
+        with:
+          tool: cargo-llvm-cov
+      # This is CI's only run of the test suite: `cargo llvm-cov` builds and
+      # runs it once, instrumented, replacing the separate uninstrumented
+      # `cargo test --workspace` that used to run here.
+      - name: Generate coverage
+        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Upload coverage to CodeCov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
   macos:
     runs-on: macos-latest
     name: MTUI macOS (Apple Silicon)
+    timeout-minutes: 20
     # Portability early-warning on aarch64-apple-darwin: clippy + the test
     # suite so macOS stays viable for release binaries. No fmt leg —
     # formatting is platform-independent and covered by the ubuntu `fmt` job.
@@ -144,22 +171,22 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
       - name: Clippy (warnings as errors)
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Run tests (default features)
-        run: cargo test --workspace
-  beta:
-    # Early warning on the upcoming compiler: never blocks, but surfaces
-    # new-lint and regression noise before beta becomes stable. No fmt leg
-    # (beta rustfmt formatting may legitimately drift).
+        run: cargo test --workspace --locked
+  msrv:
     runs-on: ubuntu-latest
-    name: MTUI beta toolchain (early warning)
-    continue-on-error: true
+    name: MTUI MSRV (1.96)
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: Install beta toolchain
-        run: rustup toolchain install beta --component clippy
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@01ba1edad32c6f80dbcce879d3e0fa5a00b2a84e  # 1.96.0
+      # Registry-only: the budget cannot afford another full `target/` key
+      # for a toolchain that is otherwise identical to the `clippy`/`docs`
+      # build. This job checks compile viability, not lint or test behavior.
       - name: Restore cargo registry cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -170,16 +197,8 @@ jobs:
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
-      - name: Clippy (beta)
-        run: cargo +beta clippy --workspace --all-targets --all-features -- -D warnings
-      # Same fixture as the test job: the SSH integration suite authenticates
-      # the client from an identity file and fails without one.
-      - name: SSH fixture
-        run: |
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
-      - name: Test (beta)
-        run: cargo +beta test --workspace
+      - name: Check (MSRV)
+        run: cargo +1.96 check --workspace --all-features --locked
       - name: Save cargo registry cache
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -189,51 +208,3 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
-  coverage:
-    runs-on: ubuntu-latest
-    name: MTUI coverage
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Restore cargo registry cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-      - name: SSH fixture
-        run: |
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
-      - name: SVN fixture
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq subversion
-      - name: Install llvm-tools
-        run: rustup component add llvm-tools-preview
-      - name: Install cargo-llvm-cov
-        # SHA-pinned like every other action (Scorecard Pinned-Dependencies);
-        # the tool is selected via the input, not the mutable `@cargo-llvm-cov`
-        # tag alias.
-        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
-        with:
-          tool: cargo-llvm-cov
-      - name: Generate coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - name: Save cargo registry cache
-        if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
-      - name: Upload coverage to CodeCov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
-        with:
-          files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
