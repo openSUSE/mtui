@@ -147,6 +147,33 @@ fn slot_key(slot: &mtui_datasources::refhost::Slot) -> String {
     format!("{product}|{version}|{arch}|{}", addons.join(","))
 }
 
+/// The outcome of [`Session::activate`].
+///
+/// Only [`Active`](Self::Active) installs the per-call guard; the other three
+/// leave `metadata()` on the null sentinel and are *not* interchangeable —
+/// [`Empty`](Self::Empty) is the legitimate nothing-loaded session, the other
+/// two are the #524 race a caller must refuse on rather than answer from the
+/// sentinel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activation {
+    /// The entry was claimed; `metadata()` is that template's report.
+    Active,
+    /// Empty rrid: pointer and guard cleared on purpose.
+    Empty,
+    /// No registry entry under that rrid — unloaded between resolve and claim.
+    NotLoaded,
+    /// The entry is locked elsewhere, so `try_lock_owned` gave up.
+    Busy,
+}
+
+impl Activation {
+    /// Whether the per-call guard was installed.
+    #[must_use]
+    pub fn is_active(self) -> bool {
+        self == Self::Active
+    }
+}
+
 /// The log levels `set_log_level` accepts (`info`/`warning`/`error`/
 /// `debug`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,20 +443,22 @@ impl Session {
     /// The unified activation seam. Any prior guard is dropped first, so
     /// re-activating the same entry never self-deadlocks — and `try_lock_owned`
     /// then suffices, the outer session mutex having serialised dispatch.
-    /// Returns `false` (guard cleared) if `rrid` is not loaded; an empty `rrid`
-    /// clears pointer and guard so `metadata()` falls back to the null object.
+    /// An empty `rrid` clears pointer and guard so `metadata()` falls back to
+    /// the null object.
     ///
-    /// Dropping the `false` is how a lost race silently redirected a whole
-    /// dispatch onto the sentinel (#524), hence `#[must_use]`.
-    #[must_use = "a false activation leaves the dispatch on the null report"]
-    pub fn activate(&mut self, rrid: &str) -> bool {
+    /// Dropping the outcome is how a lost race silently redirected a whole
+    /// dispatch onto the sentinel (#524), hence `#[must_use]`; the three
+    /// non-[`Active`](Activation::Active) outcomes are distinguished because
+    /// only [`Empty`](Activation::Empty) is legitimate.
+    #[must_use = "a non-Active activation leaves the dispatch on the null report"]
+    pub fn activate(&mut self, rrid: &str) -> Activation {
         self.active_guard = None;
         if rrid.is_empty() {
             self.templates.set_active_none();
-            return false;
+            return Activation::Empty;
         }
         if !self.templates.set_active(rrid) {
-            return false;
+            return Activation::NotLoaded;
         }
         self.active_guard = self
             .templates
@@ -443,7 +472,11 @@ impl Session {
         if let Some(guard) = self.active_guard.as_mut() {
             guard.base_mut().targets.set_cancel_token(cancel);
         }
-        self.active_guard.is_some()
+        if self.active_guard.is_some() {
+            Activation::Active
+        } else {
+            Activation::Busy
+        }
     }
 
     /// Drops the per-call active handle *without* changing the active pointer.
@@ -552,17 +585,19 @@ impl Session {
         self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid)
     }
 
-    /// Whether the report loaded under `rrid` has no connected hosts.
+    /// Whether the report loaded under `rrid` has no connected hosts, or `None`
+    /// when the entry is held elsewhere.
     ///
     /// The guard-aware counterpart of
     /// [`TemplateRegistry::is_hostless`](crate::TemplateRegistry::is_hostless):
     /// the active entry is already locked by this session's
     /// [`active_guard`](Self::active_guard), so it must be read through the
-    /// guard rather than a `try_lock` that would fail.
+    /// guard rather than a `try_lock` that would fail. That covers only *this*
+    /// session's hold; a foreign holder still yields `None`.
     #[must_use]
-    pub(crate) fn is_hostless(&self, rrid: &str) -> bool {
+    pub(crate) fn is_hostless(&self, rrid: &str) -> Option<bool> {
         if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
-            self.metadata().base().targets.is_empty()
+            Some(self.metadata().base().targets.is_empty())
         } else {
             self.templates.is_hostless(rrid)
         }
@@ -1687,7 +1722,7 @@ mod tests {
         seed_report_with_host(&mut s, "SUSE:Maintenance:1:1", "t1");
         seed_report_with_host(&mut s, "SUSE:Maintenance:2:2", "t2");
         assert!(
-            s.activate("SUSE:Maintenance:1:1"),
+            s.activate("SUSE:Maintenance:1:1").is_active(),
             "seeded template must activate"
         );
 
@@ -1838,7 +1873,10 @@ mod tests {
         }
         report.base_mut().testplatforms = testplatforms.iter().map(|s| (*s).to_owned()).collect();
         session.templates.add(Box::new(report));
-        assert!(session.activate(rrid), "seeded template must activate");
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
     }
 
     /// The pre-pool autoconnect host set: reference hosts merged with the
@@ -2655,7 +2693,7 @@ mod tests {
         let display = CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Always);
         let mut fork = s.fork_for_call(display);
         assert_eq!(fork.display.color(), ColorMode::Always);
-        assert!(fork.activate("SUSE:Maintenance:1:1"));
+        assert!(fork.activate("SUSE:Maintenance:1:1").is_active());
         fork.set_workflow(Workflow::Auto);
         // So the canonical read below can lock the shared entry.
         fork.release_active_guard();

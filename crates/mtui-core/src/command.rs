@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use clap::ArgMatches;
 
 use crate::error::{CommandError, CommandResult};
-use crate::session::Session;
+use crate::session::{Activation, Session};
 
 /// Fan-out scope policy for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -153,6 +153,13 @@ pub trait Command: Send + Sync {
     /// invocation named no `-t` hosts; every template skipped means the command
     /// ran nowhere and yields [`CommandError::NoRefhostsDefined`].
     ///
+    /// A template whose report entry cannot be claimed is refused
+    /// ([`CommandError::TemplateBusy`]) rather than dispatched against the null
+    /// sentinel; under fan-out that refusal is that template's failure alone,
+    /// and a contended entry is never mistaken for a host-less one and skipped.
+    /// The exception is a [`Scope::Single`] command invoked without `-T`, which
+    /// addressed no template — its claim stays best-effort.
+    ///
     /// Cancellation (MCP `job_cancel`): the driver is the seam's chokepoint. It
     /// bails with [`CommandError::Cancelled`] before dispatching, and re-checks
     /// between templates so a cancelled fan-out stops at the next boundary. A
@@ -181,8 +188,24 @@ pub trait Command: Send + Sync {
             // registry-mutating command (`load_template`) can re-point/re-lock
             // the active entry from inside `call` without self-deadlocking.
             let target_rrid = resolved.first().map_or("", String::as_str);
-            if !session.activate(target_rrid) {
-                log_activate_failure(self.name(), target_rrid);
+            // A `Scope::Single` command with no explicit `-T` did not address a
+            // template at all: `resolve_templates` handed back whatever is
+            // active, which `unload <rrid>` / `load_template` / `config` /
+            // `help` never read. Refusing those because some *other* dispatch
+            // holds the active entry fails a command over a template the
+            // operator never named. For them the claim stays best-effort, as
+            // before, and a body that does read the report (`regenerate`'s
+            // `require_update` fallback) keeps its own guard.
+            //
+            // `claim` runs either way — it is what points the session at the
+            // template. Only the *refusal* is conditional, so the order here
+            // matters and must not be flipped.
+            let addressed = self.scope() != Scope::Single || arg_str(args, "template").is_some();
+            if let Err(exc) = claim(self.name(), session, target_rrid)
+                && addressed
+            {
+                restore_active(session, restore);
+                return Err(exc);
             }
             let out = self.call(session, args).await;
             restore_active(session, restore);
@@ -201,7 +224,8 @@ pub trait Command: Send + Sync {
 
         let restore = session.templates.active_rrid().map(str::to_owned);
         // `is_hostless` locks the entry it inspects, so a guard still held on it
-        // would make that entry read as skippable. Each iteration re-activates.
+        // would make that entry unreadable. Each iteration re-activates. This
+        // sheds only *our* guard; a foreign holder is the `None` case below.
         session.release_active_guard();
         let mut failures: Vec<(String, CommandError)> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
@@ -222,14 +246,21 @@ pub trait Command: Send + Sync {
                 cancelled = true;
                 break;
             }
-            let is_empty = session.is_hostless(rrid);
-            if skippable && is_empty {
+            // `None` = held elsewhere, host set unreadable. Only a *readable*
+            // empty entry is skippable: treating the contended one as hostless
+            // skipped it with this warning and exited 0, which is the #524
+            // symptom, reached before `claim` below could refuse it.
+            if skippable && session.is_hostless(rrid) == Some(true) {
                 tracing::warn!(command = self.name(), rrid = %rrid, "skipped: no connected hosts");
                 skipped.push(rrid.clone());
                 continue;
             }
-            if !session.activate(rrid) {
-                log_activate_failure(self.name(), rrid);
+            // A template that cannot be claimed is this fan-out's failure, not
+            // the whole command's: bank it and keep going, like any other
+            // per-template error.
+            if let Err(exc) = claim(self.name(), session, rrid) {
+                failures.push((rrid.clone(), exc));
+                continue;
             }
             session.display.template_banner(rrid);
             match self.call(session, args).await {
@@ -300,22 +331,29 @@ pub trait Command: Send + Sync {
     }
 }
 
-/// Reports a dispatch that lost [`Session::activate`]'s `try_lock_owned` race
-/// on a resolved, *loaded* rrid and will run against the fallback null report.
+/// Points the session at `rrid` for this dispatch, or refuses.
 ///
-/// An empty rrid is the legitimate nothing-loaded case and stays silent. The
-/// null's `report_wd()` now errors rather than resolving to the process cwd
-/// (#524), so a path-taking body refuses instead of acting there — but a body
-/// that only reads hosts/metadata still answers about nothing, hence the log.
-fn log_activate_failure(command: &'static str, rrid: &str) {
-    if rrid.is_empty() {
-        return;
+/// An empty rrid is the legitimate nothing-loaded session and dispatches on the
+/// sentinel as before. Anything else that fails to claim the entry is the #524
+/// race, and running anyway is what made it silent: `report_wd()` errors on the
+/// sentinel now, but a body that only reads hosts/metadata (`list_hosts`,
+/// `list_packages`) would still answer about nothing, with exit 0. Refuse
+/// instead, and name the template — the ERROR log alone never reaches the MCP
+/// caller, whose reply is a per-call display capture.
+fn claim(command: &'static str, session: &mut Session, rrid: &str) -> CommandResult {
+    match session.activate(rrid) {
+        Activation::Active | Activation::Empty => Ok(()),
+        Activation::Busy => {
+            tracing::error!(command, rrid = %rrid, "activate lost the entry race");
+            Err(CommandError::TemplateBusy(rrid.to_owned()))
+        }
+        // Resolution already checked the registry, so this is an unload that
+        // landed in between — not a user naming a bad rrid.
+        Activation::NotLoaded => {
+            tracing::error!(command, rrid = %rrid, "activate found no entry");
+            Err(CommandError::TemplateNotLoaded(rrid.to_owned()))
+        }
     }
-    tracing::error!(
-        command,
-        rrid = %rrid,
-        "activate failed: dispatching against the fallback null report"
-    );
 }
 
 /// Restores the active-template pointer (and its per-call handle) after
@@ -329,7 +367,7 @@ fn log_activate_failure(command: &'static str, rrid: &str) {
 fn restore_active(session: &mut Session, restore: Option<String>) {
     match restore {
         Some(rrid) => {
-            if !session.activate(&rrid) {
+            if !session.activate(&rrid).is_active() {
                 // Prior active template gone (e.g. `unload`d).
                 session.refresh_active_guard();
             }
@@ -419,6 +457,8 @@ fn arg_flag(args: &ArgMatches, id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use async_trait::async_trait;
 
     use super::*;
@@ -440,16 +480,60 @@ mod tests {
         }
     }
 
-    /// The fan-out counterpart of [`NoopSingle`].
-    struct NoopFanout;
+    /// The fan-out counterpart of [`NoopSingle`], recording the rrid each
+    /// dispatch was pointed at so "which templates actually ran" is observable.
+    struct RecordingFanout(Arc<Mutex<Vec<String>>>);
 
     #[async_trait]
-    impl Command for NoopFanout {
+    impl Command for RecordingFanout {
         fn name(&self) -> &'static str {
-            "noop_fanout_probe"
+            "recording_fanout_probe"
         }
         fn scope(&self) -> Scope {
             Scope::Fanout
+        }
+        async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            let rrid = session.templates.active_rrid().unwrap_or("").to_owned();
+            self.0.lock().expect("probe mutex").push(rrid);
+            Ok(())
+        }
+    }
+
+    /// [`RecordingFanout`] plus the `-t` arg, which is what makes a template
+    /// *skippable*: `skip_hostless_templates` is true by default, so a real
+    /// host-action command (`update`, `run`, `reboot`, …) takes the skip path
+    /// the plain probe never reaches.
+    struct SkippableFanout(Arc<Mutex<Vec<String>>>);
+
+    #[async_trait]
+    impl Command for SkippableFanout {
+        fn name(&self) -> &'static str {
+            "skippable_fanout_probe"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Fanout
+        }
+        fn configure(&self, cmd: clap::Command) -> clap::Command {
+            crate::commands::support::add_hosts_arg(cmd)
+        }
+        async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            let rrid = session.templates.active_rrid().unwrap_or("").to_owned();
+            self.0.lock().expect("probe mutex").push(rrid);
+            Ok(())
+        }
+    }
+
+    /// A [`Scope::Single`] probe: it resolves to whatever is active and never
+    /// reads the report, like `unload <rrid>` / `config` / `help`.
+    struct NoopSingleScope;
+
+    #[async_trait]
+    impl Command for NoopSingleScope {
+        fn name(&self) -> &'static str {
+            "noop_single_scope_probe"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Single
         }
         async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
             Ok(())
@@ -459,9 +543,10 @@ mod tests {
     /// A fork racing the canonical session for the same entry (mechanism 2 of
     /// [`Session::fork_for_call`]'s invariant note makes this unreachable via
     /// MCP today, but not by construction): `activate` fails and `run` used to
-    /// silently dispatch against the fork's own discarded null report (#478).
+    /// silently dispatch against the fork's own discarded null report (#478),
+    /// then to log and dispatch anyway (#524). It now refuses.
     #[tokio::test]
-    async fn fork_activate_failure_logs_error_for_non_empty_rrid() {
+    async fn fork_activate_failure_refuses_for_non_empty_rrid() {
         // `session_with_hosts` already calls `activate(RRID)`, so the
         // canonical session holds the entry's lock when the fork is built.
         let (session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
@@ -478,15 +563,21 @@ mod tests {
             .expect("argv should parse");
 
         log_capture::start();
-        cmd.run(&mut fork, &args)
+        let err = cmd
+            .run(&mut fork, &args)
             .await
-            .expect("the body still runs, against the fork's fallback null");
+            .expect_err("a lost race must refuse, not answer from the fallback null");
         let logged = log_capture::take();
 
         assert!(
-            logged.iter().any(|c| c.message.as_deref()
-                == Some("activate failed: dispatching against the fallback null report")),
-            "a lost race on a non-empty rrid must log at ERROR; got: {:?}",
+            matches!(err, CommandError::TemplateBusy(ref r) if r == RRID),
+            "the refusal must name the contended template; got: {err:?}"
+        );
+        assert!(
+            logged
+                .iter()
+                .any(|c| c.message.as_deref() == Some("activate lost the entry race")),
+            "a lost race on a non-empty rrid must also log at ERROR; got: {:?}",
             logged
                 .iter()
                 .filter_map(|c| c.message.clone())
@@ -521,11 +612,10 @@ mod tests {
     }
 
     /// The fan-out dispatch site has the same contract as the single-template
-    /// one, and must name the template that lost: an entry locked from outside
-    /// diverts only *its* iteration onto the null report, while its siblings
-    /// activate normally (#524).
+    /// one, and the failure is *per template*: the locked entry is banked as
+    /// that template's error while its siblings run normally (#524).
     #[tokio::test]
-    async fn fanout_activate_failure_logs_error_for_the_losing_template() {
+    async fn fanout_activate_failure_fails_only_the_losing_template() {
         const OTHER: &str = "SUSE:Maintenance:2:2";
 
         let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
@@ -538,27 +628,139 @@ mod tests {
         let entry = session.templates.handle(RRID).expect("RRID is loaded");
         let _held = entry.try_lock_owned().expect("uncontended");
 
-        let cmd = NoopFanout;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let cmd = RecordingFanout(Arc::clone(&seen));
         let args = crate::commands::testkit::matches(&cmd, &[]);
 
         log_capture::start();
-        cmd.run(&mut session, &args)
+        let err = cmd
+            .run(&mut session, &args)
             .await
-            .expect("both templates still dispatch");
+            .expect_err("the locked template must fail the fan-out");
         let logged = log_capture::take();
 
-        let losers: Vec<String> = logged
+        // The operator-side diagnostic still names which template lost, which
+        // the aggregate alone does not distinguish from a body failure.
+        let losers_logged: Vec<String> = logged
             .iter()
-            .filter(|c| {
-                c.message.as_deref()
-                    == Some("activate failed: dispatching against the fallback null report")
-            })
+            .filter(|c| c.message.as_deref() == Some("activate lost the entry race"))
             .filter_map(|c| c.rrid.clone())
             .collect();
+        assert_eq!(losers_logged, vec![RRID.to_owned()]);
+
+        let CommandError::FanOut { failures, .. } = &err else {
+            panic!("expected a per-template aggregate; got: {err:?}");
+        };
+        let losers: Vec<&str> = failures.iter().map(|(r, _)| r.as_str()).collect();
+        assert_eq!(losers, vec![RRID], "exactly the locked template must fail");
+        assert!(
+            matches!(failures[0].1, CommandError::TemplateBusy(_)),
+            "the banked error must be the refusal: {:?}",
+            failures[0].1
+        );
+        // The body ran for the sibling and *only* the sibling — a refusal that
+        // also skipped the healthy template would be a worse bug than the one
+        // it fixes.
         assert_eq!(
-            losers,
-            vec![RRID.to_owned()],
-            "exactly the locked template must be reported"
+            seen.lock().expect("probe mutex").as_slice(),
+            [OTHER.to_owned()]
+        );
+    }
+
+    /// The refusal is reached *before* the host-less skip, not after it.
+    ///
+    /// `is_hostless` inspects the entry with `try_lock`, so a contended one used
+    /// to read as empty and take the skip path — `skipped: no connected hosts`,
+    /// `continue`, and (with a healthy sibling to keep `completed` non-empty)
+    /// **exit 0**. That is #524's symptom on the default fan-out path, which is
+    /// every host-action command, so it has to be a refusal like any other.
+    #[tokio::test]
+    async fn fanout_contended_template_fails_rather_than_reading_as_hostless() {
+        const OTHER: &str = "SUSE:Maintenance:2:2";
+
+        let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        session
+            .templates
+            .add(crate::commands::testkit::fake_report(OTHER, &["h2"], "ok"));
+        session.release_active_guard();
+        let entry = session.templates.handle(RRID).expect("RRID is loaded");
+        let _held = entry.try_lock_owned().expect("uncontended");
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let cmd = SkippableFanout(Arc::clone(&seen));
+        // No `-t`: this is exactly the invocation shape that enables skipping.
+        let args = crate::commands::testkit::matches(&cmd, &[]);
+        assert!(
+            cmd.skip_hostless_templates(),
+            "anti-vacuity: the skip path must be live for this test to mean anything"
+        );
+
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("a contended template must fail, not be skipped as host-less");
+
+        let CommandError::FanOut { failures, .. } = &err else {
+            panic!("expected a per-template aggregate; got: {err:?}");
+        };
+        assert!(
+            matches!(&failures[..], [(r, CommandError::TemplateBusy(_))] if r == RRID),
+            "the contended template must be the one banked failure; got: {failures:?}"
+        );
+        assert_eq!(
+            seen.lock().expect("probe mutex").as_slice(),
+            [OTHER.to_owned()],
+            "the healthy sibling must still run"
+        );
+    }
+
+    /// A `Scope::Single` command that named no template must not be refused
+    /// because something holds the *active* entry.
+    ///
+    /// `resolve_templates` hands `Scope::Single` the active rrid as a fallback,
+    /// but `unload <rrid>` / `load_template` / `config` / `help` never read that
+    /// report. Refusing them on a contended active entry fails a command over a
+    /// template the operator never mentioned — worse than the bug being fixed,
+    /// because it is reachable without any race of the caller's own making.
+    #[tokio::test]
+    async fn single_scope_without_an_explicit_template_is_not_refused() {
+        let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        session.release_active_guard();
+        let entry = session.templates.handle(RRID).expect("RRID is loaded");
+        let _held = entry.try_lock_owned().expect("uncontended");
+
+        let cmd = NoopSingleScope;
+        let args = crate::commands::testkit::matches(&cmd, &[]);
+
+        cmd.run(&mut session, &args).await.expect(
+            "a Single-scope command that addressed no template must survive a hold on the \
+             active entry",
+        );
+    }
+
+    /// The counterpart: the same scope *does* refuse once the caller names the
+    /// contended template with `-T`, so the carve-out above is scoped to the
+    /// fallback and is not a blanket exemption.
+    #[tokio::test]
+    async fn single_scope_with_an_explicit_template_still_refuses() {
+        let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        session.release_active_guard();
+        let entry = session.templates.handle(RRID).expect("RRID is loaded");
+        let _held = entry.try_lock_owned().expect("uncontended");
+
+        let cmd = NoopSingleScope;
+        let parser = crate::engine::command_parser(&cmd);
+        let args = parser
+            .try_get_matches_from(["-T", RRID])
+            .expect("argv should parse");
+
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("an explicitly addressed contended template must still refuse");
+        assert!(
+            matches!(err, CommandError::TemplateBusy(ref r) if r == RRID),
+            "got: {err:?}"
         );
     }
 }

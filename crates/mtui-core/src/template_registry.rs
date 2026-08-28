@@ -215,17 +215,22 @@ impl TemplateRegistry {
         self.active.as_deref().and_then(|rrid| self.handle(rrid))
     }
 
-    /// Whether the report loaded under `rrid` has no connected hosts.
+    /// Whether the report loaded under `rrid` has no connected hosts, or `None`
+    /// when the entry is held elsewhere so its host set cannot be read.
     ///
-    /// `true` when `rrid` is absent: nothing to act on, so the fan-out skips it.
-    /// Locks the entry (uncontended under the outer session mutex).
+    /// `Some(true)` when `rrid` is absent: nothing to act on, so the fan-out
+    /// skips it. The contended case must NOT collapse into that — reading a
+    /// merely-unlockable entry as hostless skipped the template with a "no
+    /// connected hosts" warning and exit 0, which is #524's symptom reached
+    /// before the dispatcher gets to refuse.
     #[must_use]
-    pub(crate) fn is_hostless(&self, rrid: &str) -> bool {
+    pub(crate) fn is_hostless(&self, rrid: &str) -> Option<bool> {
         match self.entries.get(rrid) {
             Some(entry) => entry
                 .try_lock()
-                .map_or(true, |report| report.base().targets.is_empty()),
-            None => true,
+                .ok()
+                .map(|report| report.base().targets.is_empty()),
+            None => Some(true),
         }
     }
 

@@ -103,7 +103,10 @@ mod tests {
         report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
         report.base_mut().workflow = workflow;
         s.templates.add(Box::new(report));
-        assert!(s.activate(rrid), "seeded template must activate");
+        assert!(
+            s.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
     }
 
     #[test]

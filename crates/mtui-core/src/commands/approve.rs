@@ -608,7 +608,7 @@ mod tests {
             .templates
             .add(Box::new(FixedHashReport { base, verdict }));
         assert!(
-            session.activate("SUSE:SLFO:1.2:5"),
+            session.activate("SUSE:SLFO:1.2:5").is_active(),
             "seeded template must activate"
         );
         (session, buf)

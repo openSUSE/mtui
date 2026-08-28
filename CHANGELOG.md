@@ -146,6 +146,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `install_logs/` directory (`[mtui] install_logs` is a relative name by
   definition, resolved against the checkout dir). They now refuse with `no
   report working directory`.
+- A dispatch that lost the race for its template's entry now refuses with
+  `template busy: <rrid>` instead of running against the no-report sentinel.
+  Unsetting the sentinel's path (above) only covered commands that touch a
+  path; one reading just hosts or metadata answered *about nothing* and exited
+  0 — `list_hosts -T <rrid>` reported `No hosts connected.` for a template that
+  had them. Under fan-out only the contended template fails, the rest still
+  run — and a contended template is no longer reported as `skipped: no
+  connected hosts`, which had let a fan-out (`update`, `run`, `reboot`, …) exit
+  0 having quietly not run on it. A `Scope::Single` command that names no
+  template (`unload <rrid>`, `load_template`, `config`, `help`) is unaffected:
+  it never reads the active report, so a hold on it is not that command's
+  problem.
 - MCP: `config set` no longer runs on a per-call fork whose `Config` is a value
   copy. `config` is `Scope::Single`, so with a template loaded it resolved to
   one RRID, took the dispatch gate's scoped arm, and the write was discarded

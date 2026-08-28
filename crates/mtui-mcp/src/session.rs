@@ -1498,8 +1498,8 @@ impl McpSession {
         // then resolve the fallback scope. Doing it before, and independently of,
         // the per-template holds is load-bearing — that guard blocks
         // `Session::activate`'s `try_lock_owned`, so every later scoped dispatch
-        // on the template would silently run against the null report, the
-        // `list_locks` the reply recommends included. Dropped only inside the
+        // on the template would be refused as `template busy`, the `list_locks`
+        // the reply recommends included. Dropped only inside the
         // per-template pass, a busy gate (RwGate is writer-preferring, so one
         // pending `load_template` blocks shared acquisition) could burn the
         // budget and leave the session poisoned.
@@ -1587,9 +1587,10 @@ impl McpSession {
     ///
     /// The gate-shared + per-RRID hold is what makes locking the report entry
     /// safe: [`Session::activate`] claims an entry with a *non-blocking*
-    /// `try_lock_owned` and falls back to the null report when it fails, so a
-    /// dispatch racing an entry lock this pass holds would silently act on
-    /// nothing.
+    /// `try_lock_owned`, so a dispatch racing an entry lock this pass holds is
+    /// refused outright (`template busy`). Taking the same holds is what keeps
+    /// that from reaching an operator who did nothing wrong — it is no longer a
+    /// silent wrong answer, but it is still a failed command.
     ///
     /// They shut out a same-RRID dispatch and any exclusive one, which is all
     /// this pass needs, but they are not a crate-wide guarantee: `command_lock`
@@ -2720,8 +2721,8 @@ mod tests {
 
     /// The exclusive dispatch path: an aborted unscoped fan-out leaves the
     /// canonical session holding the active entry's guard, so the release must
-    /// drop it first — otherwise `job_cancel` deadlocks on the entry, and a
-    /// later scoped dispatch silently falls back to the null report.
+    /// drop it first — otherwise `job_cancel` deadlocks on the entry, and every
+    /// later scoped dispatch on the template is refused as `template busy`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn forced_cancel_on_the_exclusive_path_unlocks_and_clears_the_active_guard() {
         let alpha = MockConnection::new("host-alpha");
@@ -2750,8 +2751,8 @@ mod tests {
         assert!(!still_locked(&alpha), "host-alpha is still locked");
 
         // No active guard may remain: a scoped dispatch claims the entry with a
-        // *non-blocking* `try_lock_owned`, so a lingering one would not error —
-        // it would silently list the null report's empty host set.
+        // *non-blocking* `try_lock_owned`, so a lingering one now makes the
+        // next `list_hosts` fail with `template busy` instead of answering.
         let out = sess
             .run_command(
                 &registry,
@@ -2828,9 +2829,63 @@ mod tests {
             !err.stderr.contains(&cwd.display().to_string()),
             "the sentinel resolved to the process cwd: {err}"
         );
+        // The dispatcher now refuses before the body runs, so the refusal names
+        // the template rather than `read_source_diff`'s downstream
+        // `no report working directory`.
         assert!(
-            err.stderr.contains("no report working directory"),
-            "expected `read_source_diff`'s guard: {err}"
+            err.stderr
+                .contains(&format!("template busy: {LOCK_RRID_A}")),
+            "expected the dispatcher's refusal: {err}"
+        );
+    }
+
+    /// The half of #524 the sentinel's unset path could not cover: a command
+    /// that reads only hosts/metadata never touches `report_wd`, so losing the
+    /// entry race used to answer *about nothing* with exit 0 — `list_hosts` on
+    /// a template with a connected host reported none. The refusal has to come
+    /// from the dispatcher, before the body.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scoped_dispatch_losing_the_entry_race_refuses_a_pathless_command_too() {
+        let sess = session(Config::default());
+        load_with_hosts(
+            &sess,
+            LOCK_RRID_A,
+            &[("host-alpha", MockConnection::new("host-alpha"))],
+        )
+        .await;
+
+        let entry = sess
+            .session()
+            .lock()
+            .await
+            .templates
+            .handle(LOCK_RRID_A)
+            .expect("A is loaded");
+
+        let registry = Arc::new(register_all());
+        let argv = ["-T".to_owned(), LOCK_RRID_A.to_owned()];
+
+        let out = sess
+            .run_command(&registry, "list_hosts", &argv)
+            .await
+            .expect("uncontended list_hosts succeeds");
+        assert!(out.contains("host-alpha"), "anti-vacuity: {out}");
+
+        let held = entry.lock_owned().await;
+        let err = sess
+            .run_command(&registry, "list_hosts", &argv)
+            .await
+            .expect_err("a lost entry race must refuse, not report zero hosts");
+        drop(held);
+
+        assert!(
+            err.stderr
+                .contains(&format!("template busy: {LOCK_RRID_A}")),
+            "expected the dispatcher's refusal: {err}"
+        );
+        assert!(
+            !err.stderr.contains("No hosts connected"),
+            "the sentinel answered for the template: {err}"
         );
     }
 
@@ -4002,8 +4057,8 @@ mod tests {
     /// The exclusive dispatch path: a force-aborted unscoped fan-out leaves the
     /// canonical session holding the active entry's guard, so the dispatch future
     /// must be dropped *before* the unlock pass — otherwise the pass deadlocks on
-    /// the entry (or, bounded, reports `stalled`) and a later scoped dispatch
-    /// silently falls back to the null report.
+    /// the entry (or, bounded, reports `stalled`) and every later scoped dispatch
+    /// on the template is refused as `template busy`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn client_cancel_on_the_exclusive_path_clears_the_active_guard() {
         let alpha = MockConnection::new("host-alpha");
