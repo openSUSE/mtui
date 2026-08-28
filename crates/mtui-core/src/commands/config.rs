@@ -16,7 +16,6 @@ use crate::session::Session;
 fn attr_value(config: &Config, attr: &str) -> Option<String> {
     let v = match attr {
         "template_dir" => config.template_dir.display().to_string(),
-        "local_tempdir" => config.local_tempdir.display().to_string(),
         "session_user" => config.session_user.clone(),
         "install_logs" => config.install_logs.display().to_string(),
         "ssl_verify" => ssl_verify_to_string(&config.ssl_verify),
@@ -95,9 +94,8 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 40] = [
+const ATTRS: [&str; 39] = [
     "template_dir",
-    "local_tempdir",
     "session_user",
     "install_logs",
     "ssl_verify",

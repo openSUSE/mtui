@@ -309,6 +309,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   and `config show chdir_to_template_dir` now fails with `unknown attribute`
   instead of printing a no-op value. An existing `mtui.toml` still carrying
   the key keeps loading without error — no config edit is required.
+- The dead `[mtui] tempdir` (`local_tempdir`) config key has been dropped. It
+  was fully plumbed but never read anywhere, so it never had an effect;
+  `config set local_tempdir <value>` already answered `unknown or read-only
+  attribute` before this change. `config show local_tempdir` now fails with
+  `unknown attribute: local_tempdir` instead of printing a no-op value, and
+  `config show` with no argument now lists 39 attributes instead of 40. An
+  existing `mtui.toml` still carrying `[mtui] tempdir` keeps loading without
+  error — no config edit is required. The unrelated `[target] tempdir`
+  (`target_tempdir`, the remote scratch directory on target hosts) is
+  unaffected and stays.
 
 ## [26.2.1] - 2026-08-21
 
