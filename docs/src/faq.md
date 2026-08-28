@@ -118,9 +118,8 @@ packages right after the update applies.
 ## Why does `prepare` (or `update`) refuse to run?
 
 When the loaded report's metadata names no package versions, `prepare` and
-`update` refuse with an error instead of printing an unqualified success over
-a no-op (#396) — an empty-metadata report used to produce
-`prepare completed on <hosts>` while installing nothing. Check
+`update` refuse with an error rather than reporting `prepare completed on
+<hosts>` over a no-op that installs nothing (#396). Check
 `list_packages -w` and the report metadata; a host the fan-out cannot build a
 command for (unresolvable release, no matching template) likewise fails the
 run by name.
