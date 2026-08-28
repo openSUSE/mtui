@@ -165,6 +165,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   nothing for now composes nothing, so a host on it is refused by name instead
   of falling through to the whole package list. An architecture the metadata
   never mentions, and a product listing no architecture at all, still fall open.
+- `update` now surfaces its non-fatal degradations — a composition refusal, a
+  prepare host failure it warns past, a failed `--newpackage` step, and the
+  three ways the post-update test-repo cleanup can go wrong (a lock failure, a
+  stale repo, a stranded operation lock) — in the command's returned
+  diagnostics, not only `tracing::warn!`. An MCP caller previously saw a bare
+  success with no sign the run was partial; a REPL operator already saw these
+  on the terminal, since `mtui`'s own subscriber writes there.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)

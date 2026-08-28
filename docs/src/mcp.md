@@ -192,9 +192,19 @@ call with the host named.
 - On a report whose metadata carries a `binaries` block, `prepare` narrows the
   package list per host to what that host's products compose, and fails by name
   a host whose products compose none of it — rather than sending a list zypper
-  refuses with "capability not found" (104). `update` excludes such a host from
-  its patch and reports a failure naming it, instead of patching a host its own
-  prepare established no baseline on.
+  refuses with "capability not found" (104). An architecture a product
+  declares but the metadata never mentions composes nothing, not the full
+  list, so it gets the same named refusal. `update` excludes such a host from
+  its patch, scopes its own lock/repository/package-check to the hosts that do
+  compose it, and reports a failure naming it, instead of patching a host its
+  own prepare established no baseline on.
+- `update`'s tool result now carries diagnostics for every non-fatal
+  degradation of the run — a composition refusal, a prepare host failure it
+  continues past, a failed `--newpackage` step, and the three ways the
+  post-update test-repo cleanup can fail — on both the success and the failure
+  path. These previously reached only `tracing::warn!`, which an MCP client
+  never sees (the server's tracing goes to its own stderr, not the tool
+  result).
 - `export` emits `WARNING: no package version data recorded for <host>...`
   lines in its tool output when a host has no recorded package data and its
   install-result block was therefore left unverified in the report.

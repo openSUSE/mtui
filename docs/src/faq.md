@@ -141,10 +141,20 @@ Independently of those switches, on a report whose metadata carries a
 actually compose (base product plus addons). A host whose products compose
 none of the list is failed by name rather than sent a list zypper will refuse
 with "capability not found" (104); a host no product of which the metadata
-names keeps the full list and logs a warning. `update`'s own prepare narrows
-the same way, and a host it refuses is left out of the patch — no prepare ran
-on it, so there is no package baseline to patch — and named in the update's
-error instead of being patched anyway.
+names keeps the full list and logs a warning. An architecture a product
+declares but the `binaries` block never mentions at all composes nothing
+rather than falling back to the full list — it is treated as known-and-empty,
+not unknown, so it gets the same named refusal as any other host whose
+products compose none of the requested packages.
+
+`update`'s own prepare narrows the same way, and a host it refuses is left out
+of the patch — no prepare ran on it, so there is no package baseline to patch
+— and named in the update's error instead of being patched anyway. `update`'s
+own operation lock, repository add/remove and pre/post package version check
+are scoped to the hosts that actually compose it, so a refused host draws none
+of them either: it cannot contend the group's lock, have its repository
+configuration changed, or block a composing peer's patch behind its own
+unresolvable updater.
 
 ## Can I run a command on only some of the connected hosts?
 
