@@ -7,7 +7,7 @@ use mtui_datasources::CheckerRun;
 use crate::command::{Command, Scope};
 use crate::commands::apicall::teregen_client;
 use crate::commands::support::{require_update, template_completion};
-use crate::display::CommandPromptDisplay;
+use crate::display::{CommandPromptDisplay, sanitize_external};
 use crate::error::CommandResult;
 use crate::session::Session;
 
@@ -16,6 +16,19 @@ use crate::session::Session;
 /// output line, which is printed inline after `check_type` so a one-line finding
 /// costs one row.
 const OUTPUT_INDENT: usize = 13;
+
+/// Characters of server-supplied text a single row may show before it is cut
+/// and marked.
+///
+/// The whole payload is untrusted and only capped at `MAX_API_BODY` (16 MiB), so
+/// `output.lines().next()` on a newline-free body would put all of it on one row
+/// — flooding scrollback and the MCP transcript, and holding the worker for the
+/// duration of the write. A real summary is one diagnostic (an rpmlint verdict,
+/// an install-check `requires … but none of the providers can be installed`),
+/// 80–140 characters, so 200 keeps every genuine one whole while bounding the
+/// row at roughly two 80-column lines. `--full-output` lifts it for the check
+/// *output* only; a label is an identifier and stays bounded there too.
+const ROW_LIMIT: usize = 200;
 
 /// How a checker status renders.
 ///
@@ -80,9 +93,9 @@ fn run_header(rrid: &str, run: &CheckerRun) -> String {
         .map(|(name, n)| format!("{n} {name}"))
         .collect();
     let label = if run.checker_type.is_empty() {
-        "unnamed"
+        "unnamed".to_owned()
     } else {
-        &run.checker_type
+        sanitize_external(&run.checker_type, Some(ROW_LIMIT))
     };
     let mut header = format!("Checker results for {rrid} — {label} run");
     if !summary.is_empty() {
@@ -96,27 +109,42 @@ fn run_header(rrid: &str, run: &CheckerRun) -> String {
 ///
 /// A non-passing result also carries its output — its first line inline, the
 /// rest only under `full_output`, since some checks emit long diffs.
+///
+/// **Every field printed here comes from the TeReGen payload**, so all of them
+/// go through [`sanitize_external`]: status and label included, not just the
+/// output body. `full_output` waives the [`ROW_LIMIT`] cut but never the
+/// filtering — a `--full-output` body is more escape surface, not less.
 fn print_run(display: &mut CommandPromptDisplay, rrid: &str, run: &CheckerRun, full_output: bool) {
     let header = run_header(rrid, run);
     display.println(&header);
+    let summary_limit = if full_output { None } else { Some(ROW_LIMIT) };
     for result in &run.results {
-        let verdict = Verdict::classify(&result.status);
-        let status = verdict.paint(display, &format!("{:<10}", result.status));
-        let mut row = format!("  {status} {}", result.check_type);
+        // Classify the *sanitized* status, so the verdict and the text the user
+        // reads are decided by the same string.
+        let status = sanitize_external(&result.status, Some(ROW_LIMIT));
+        let verdict = Verdict::classify(&status);
+        let status = verdict.paint(display, &format!("{status:<10}"));
+        let check_type = sanitize_external(&result.check_type, Some(ROW_LIMIT));
+        let mut row = format!("  {status} {check_type}");
         let body = if verdict == Verdict::Pass {
             ""
         } else {
             result.output.as_str()
         };
         let mut lines = body.lines();
-        if let Some(first) = lines.next() {
+        let summary = lines.next().map(|l| sanitize_external(l, summary_limit));
+        if let Some(summary) = summary.filter(|s| !s.is_empty()) {
             row.push_str("  ");
-            row.push_str(first);
+            row.push_str(&summary);
         }
         display.println(&row);
         if full_output {
             for line in lines {
-                display.println(&format!("{:OUTPUT_INDENT$}{line}", ""));
+                display.println(&format!(
+                    "{:OUTPUT_INDENT$}{}",
+                    "",
+                    sanitize_external(line, None)
+                ));
             }
         }
     }
@@ -128,6 +156,10 @@ fn print_run(display: &mut CommandPromptDisplay, rrid: &str, run: &CheckerRun, f
 /// (`GET /reports/{id}/checkers`) and prints, per run, a header with the run's
 /// non-zero counts followed by one colored `<status> <check_type>` row per
 /// result. Requires a loaded update.
+///
+/// The payload is external, so every field it contributes is filtered of
+/// terminal control sequences and bounded to 200 characters per row before
+/// printing; `--full-output` waives the bound on the check output alone.
 pub struct Checkers;
 
 #[async_trait]
@@ -150,8 +182,8 @@ impl Command for Checkers {
                 .long("full-output")
                 .action(ArgAction::SetTrue)
                 .help(
-                    "print every line of a non-passing check's output instead of \
-                     just the first (some checks emit long diffs)",
+                    "print every line of a non-passing check's output, untruncated, \
+                     instead of a bounded first-line summary (some checks emit long diffs)",
                 ),
         )
     }
@@ -188,7 +220,7 @@ impl Command for Checkers {
 mod tests {
     use super::*;
     use crate::commands::testkit::{Buffer, empty_session, matches, session_with_hosts};
-    use crate::display::ColorMode;
+    use crate::display::{ColorMode, TRUNCATION_MARK};
     use crate::error::CommandError;
     use mtui_config::Config;
     use wiremock::matchers::{method, path};
@@ -201,6 +233,8 @@ mod tests {
     const YELLOW: &str = "\u{1b}[33m";
     const RED: &str = "\u{1b}[31m";
     const DIM: &str = "\u{1b}[2m";
+    /// owo-colors' foreground reset, closing a `red()`/`yellow()` span.
+    const RESET: &str = "\u{1b}[39m";
 
     /// A session pointed at a wiremock TeReGen serving `body`, with color forced
     /// on: with the default `ColorMode::Never` the green/red assertions below
@@ -481,6 +515,130 @@ mod tests {
         Checkers.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
         assert!(out.contains(&format!("{DIM}RUNNING")), "{out:?}");
+    }
+
+    /// A checker output with no newline in it is a whole 16 MiB response body on
+    /// one row unless the summary is bounded. Also pins the mark, so a cut row
+    /// cannot read as the complete finding.
+    #[tokio::test]
+    async fn summary_is_bounded_and_marked() {
+        let output = format!("{}TAIL", "x".repeat(10_000));
+        let (_server, mut session, buf) = session_serving(run_with_status("FAIL", &output)).await;
+        let args = matches(&Checkers, &[]);
+        Checkers.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(!out.contains("TAIL"), "unbounded summary");
+        assert!(out.contains(&"x".repeat(ROW_LIMIT)), "{out}");
+        assert!(!out.contains(&"x".repeat(ROW_LIMIT + 1)), "{out}");
+        assert!(out.contains(TRUNCATION_MARK), "{out}");
+    }
+
+    /// A multibyte body must cut on a `char`: `&s[..200]` panics mid-UTF-8.
+    #[tokio::test]
+    async fn multibyte_summary_cuts_without_panicking() {
+        let (_server, mut session, buf) =
+            session_serving(run_with_status("FAIL", &"é".repeat(10_000))).await;
+        let args = matches(&Checkers, &[]);
+        Checkers.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains(&format!("{}{TRUNCATION_MARK}", "é".repeat(ROW_LIMIT))),
+            "{out}"
+        );
+    }
+
+    /// `--full-output` is the escape-*worse* path, so it waives the cut on the
+    /// output body and nothing else.
+    #[tokio::test]
+    async fn full_output_waives_the_cut_for_the_body_only() {
+        let output = format!("{}TAIL", "x".repeat(1_000));
+        let (_server, mut session, buf) = session_serving(run_with_status("FAIL", &output)).await;
+        let args = matches(&Checkers, &["--full-output"]);
+        Checkers.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("TAIL"), "{out}");
+        assert!(!out.contains(TRUNCATION_MARK), "{out}");
+
+        // A label is an identifier, not output: the flag does not unbound it.
+        let body = serde_json::json!({"checkers": [{
+            "checker_type": "c".repeat(1_000),
+            "results": [{"check_type": "n".repeat(1_000), "status": "FAIL"}],
+        }]});
+        let (_server, mut session, buf) = session_serving(body).await;
+        let args = matches(&Checkers, &["--full-output"]);
+        Checkers.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(!out.contains(&"c".repeat(ROW_LIMIT + 1)), "{out}");
+        assert!(!out.contains(&"n".repeat(ROW_LIMIT + 1)), "{out}");
+        assert_eq!(out.matches(TRUNCATION_MARK).count(), 2, "{out}");
+    }
+
+    /// Regression: TeReGen's payload is external. A control sequence in it must
+    /// never reach the terminal — OSC 52 writes the user's clipboard, CSI
+    /// repaints the screen, CR overwrites the row's own `<status> <check_type>`
+    /// prefix — on either the summary or the `--full-output` path.
+    #[tokio::test]
+    async fn control_sequences_never_reach_the_terminal() {
+        let output = concat!(
+            "start\u{1b}[2J\u{1b}]52;c;cGF5bG9hZA==\u{7}mid\r  PASS       forged\n",
+            "second\u{9b}31m\u{9d}52;c;bQ==\u{9c}line\u{202e}rtl",
+        );
+        for flags in [vec![], vec!["--full-output"]] {
+            let (_server, mut session, buf) =
+                session_serving(run_with_status("FAIL", output)).await;
+            let args = matches(&Checkers, &flags);
+            Checkers.call(&mut session, &args).await.unwrap();
+            let out = buf.contents();
+            // Strip the row color mtui itself emits, then nothing may remain.
+            let external: String = out.replace(RED, "").replace(RESET, "");
+            for bad in ['\u{1b}', '\u{7}', '\r', '\u{9b}', '\u{9d}', '\u{202e}'] {
+                assert!(!external.contains(bad), "{flags:?} leaked {bad:?}: {out:?}");
+            }
+            // The text around the sequences survives; only the control does not.
+            assert!(out.contains("startmid  PASS       forged"), "{out:?}");
+            if !flags.is_empty() {
+                assert!(out.contains("secondlinertl"), "{out:?}");
+            }
+        }
+    }
+
+    /// The label, status and check name come from the same untrusted payload as
+    /// the output body, and are printed outside it.
+    #[tokio::test]
+    async fn label_status_and_check_name_are_sanitized() {
+        let body = serde_json::json!({"checkers": [{
+            "checker_type": "alpha\u{1b}]0;pwned\u{7}beta",
+            "results": [{
+                "check_type": "check\u{1b}[2J-99",
+                "status": "WARN\u{9b}31m",
+                "output": "",
+            }],
+        }]});
+        let (_server, mut session, buf) = session_serving(body).await;
+        let args = matches(&Checkers, &[]);
+        Checkers.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("alphabeta run:"), "{out}");
+        assert!(out.contains("check-99"), "{out}");
+        assert!(!out.contains("pwned"), "{out:?}");
+        assert!(!out.contains('\u{9b}'), "{out:?}");
+        // The sanitized status still classifies, so the row keeps its color.
+        assert!(out.contains(&format!("{YELLOW}WARN")), "{out:?}");
+    }
+
+    /// Ordinary whitespace is not a control sequence: a tab-aligned or indented
+    /// finding must survive the filter unchanged.
+    #[tokio::test]
+    async fn ordinary_whitespace_survives() {
+        let (_server, mut session, buf) =
+            session_serving(run_with_status("FAIL", "  col\tone\tcol two")).await;
+        let args = matches(&Checkers, &[]);
+        Checkers.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("check-99    col\tone\tcol two"),
+            "{}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

@@ -689,7 +689,7 @@ Usage: checkers [OPTIONS]
 
 Options:
       --full-output
-          print every line of a non-passing check's output instead of just the first (some checks emit long diffs)
+          print every line of a non-passing check's output, untruncated, instead of a bounded first-line summary (some checks emit long diffs)
 
   -h, --help
           Print help

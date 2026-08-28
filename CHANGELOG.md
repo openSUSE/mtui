@@ -196,7 +196,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   defensively: a run — or one verdict inside it — that does not match is
   skipped with a warning naming its *key set* only, never the body, which
   carries customer-visible check output, and a missing or non-array `checkers`
-  container warns rather than silently reporting no results.
+  container warns rather than silently reporting no results. Every field the
+  payload contributes to a row — output, `checker_type`, `check_type`, `status`
+  — is bounded to 200 characters, cut on a character boundary and marked
+  `…[truncated]`, so a newline-free output cannot put a whole 16 MiB response on
+  one row; `--full-output` waives the bound for the check output only.
+- Text mtui did not author is filtered of terminal control sequences before it
+  is printed: `ESC`-introduced sequences, the 8-bit C1 introducers (U+009B CSI,
+  U+009D OSC — invisible to the previous `ESC`-only filter, so an OSC 52
+  clipboard write got through), stray control characters including `\r`, and the
+  bidi overrides. `\n` and `\t` are kept. This covers `checkers` on both the
+  summary and `--full-output` paths, and the interactive pager, which
+  `run`/`show_log`/`show_diff` feed with host and diff output.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
@@ -276,9 +287,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   lock file behind; the fleet's stale-lock reaping covers it, as for any
   crashed session.
 - `checkers` gained `--full-output`, printing every line of a non-passing
-  check's output instead of just the first, since some checks emit long diffs.
-  Available on both the REPL and MCP surfaces; additive, optional schema
-  change.
+  check's output untruncated instead of a bounded first-line summary, since some
+  checks emit long diffs. Available on both the REPL and MCP surfaces; additive,
+  optional schema change.
 - `show_log` gained `--offset`/`--limit` entry paging (per host, 1-based;
   windowed output labels each host header with the shown range and total, and
   `--limit 0` prints only the per-host headers with entry totals) on both the
