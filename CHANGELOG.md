@@ -154,11 +154,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   a report whose metadata carries no `binaries` block is unaffected.
 - `update` now excludes such a host — its prepare established no package
   baseline there — *before* taking the group operation lock, adding the test
-  repo and resolving each host's updater; the `--newpackage` prepare that
-  follows the update is scoped the same way. One refused host can no longer
-  abort the update for the peers that do compose it, whether by a contended
-  lock or an unsupported updater, nor have its own repositories reconfigured —
-  nor be named in a log line — after being reported as excluded.
+  repo, resolving each host's updater and running its pre/post package version
+  check; the `--newpackage` prepare that follows the update is scoped the same
+  way. One refused host can no longer abort the update for the peers that do
+  compose it, whether by a contended lock or an unsupported updater, nor have
+  its own repositories reconfigured, nor draw an update-sanity warning for a
+  patch it never received — nor be named in a log line — after being reported
+  as excluded.
 - An architecture the metadata's `products` declares but its `binaries` ship
   nothing for now composes nothing, so a host on it is refused by name instead
   of falling through to the whole package list. An architecture the metadata
