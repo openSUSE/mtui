@@ -63,7 +63,11 @@ jobs:
           shared-key: check-all-features
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check rustdoc (warnings as errors)
-        run: cargo doc --workspace --no-deps --all-features --document-private-items
+        run: |
+          set -o pipefail
+          cargo doc --workspace --no-deps --all-features --document-private-items \
+            2>&1 | tee "$RUNNER_TEMP/doc.log"
+          ! grep -q 'output filename collision' "$RUNNER_TEMP/doc.log"
   feature-matrix:
     runs-on: ubuntu-latest
     name: MTUI feature matrix (compile-only)

@@ -22,15 +22,20 @@ mcp = ["dep:mtui-mcp", "mtui-mcp/mcp"]
 # `?/` so enabling notify does not implicitly turn `cli` back on.
 notify = ["mtui-cli?/notify"]
 
+# Both bins are two-line `main` stubs with nothing worth documenting; `mtui-mcp`
+# also collides on `target/doc/mtui_mcp/` with the `mtui_mcp` library's own
+# rustdoc output, which the bin would otherwise win silently (Cargo only warns).
 [[bin]]
 name = "mtui"
 path = "src/bin/mtui.rs"
 required-features = ["cli"]
+doc = false
 
 [[bin]]
 name = "mtui-mcp"
 path = "src/bin/mtui-mcp.rs"
 required-features = ["mcp"]
+doc = false
 
 [[test]]
 name = "it"
@@ -41,6 +46,9 @@ mtui-cli = { workspace = true, optional = true }
 mtui-mcp = { workspace = true, optional = true }
 tokio.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true
