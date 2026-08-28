@@ -63,6 +63,9 @@ SUSE:*/
 
 # Release artifacts produced by `cargo xtask package` (built in CI, not committed)
 /dist/release/
+# .deb/.rpm staging for the release workflow's package job, plus the listings
+# its check step writes there — build.rs stamps `git describe --dirty`
+/dist/packages/
 
 # cargo-fuzz build state (fuzz/ is a detached crate; its lockfile, corpus and
 # crash artifacts are machine-local)

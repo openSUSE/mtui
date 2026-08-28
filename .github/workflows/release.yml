@@ -4,10 +4,13 @@ name: release
 on:
   push:
     tags:
-      # Version tags: 26.0.1, optionally with a pre-release suffix
-      # (26.0.1rc1). The project tags without a "v" prefix.
+      # Version tags: 26.0.1, optionally with a semver pre-release suffix
+      # (26.0.1-rc1). The project tags without a "v" prefix.
       - '[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+*'
+  # Builds and checks everything without publishing (the release job is
+  # tag-only), so the package job is testable before a tag exists.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -49,14 +52,15 @@ jobs:
       # No cargo cache here: releases are built hermetically so restored
       # build state can never influence published artifacts.
 
-      - name: Verify tag matches workspace version
+      - name: Resolve version
         shell: bash
         run: |
           pkg="$(sed -n 's/^version = "\(.*\)".*/\1/p' Cargo.toml | head -1)"
-          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$pkg" != "$GITHUB_REF_NAME" ]; then
             echo "::error::tag '$GITHUB_REF_NAME' != workspace version '$pkg'"
             exit 1
           fi
+          echo "PKGVER=$pkg" >> "$GITHUB_ENV"
 
       - name: Add Rust target
         run: rustup target add "${{ matrix.target }}"
@@ -76,7 +80,7 @@ jobs:
       # dist/ and writes a `sha256sum -c`-compatible checksum (sha256sum on Linux,
       # shasum -a 256 on macOS) into dist/release/.
       - name: Package release tarball
-        run: cargo xtask package --version "$GITHUB_REF_NAME" --target "${{ matrix.target }}"
+        run: cargo xtask package --version "$PKGVER" --target "${{ matrix.target }}"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -85,10 +89,314 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  package:
+    # Distro packages for the musl leg only. The binaries are static, so one
+    # x86_64 build serves every glibc and musl distro; there is no aarch64 or
+    # macOS equivalent. On openSUSE the OBS build stays the supported path
+    # (docs/src/installation.md) — these compete with it by version alone.
+    runs-on: ubuntu-latest
+    # Two uncached `cargo install`s plus a full LTO workspace build.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c  # master
+        with:
+          toolchain: stable
+
+      - name: Resolve version
+        shell: bash
+        run: |
+          pkg="$(sed -n 's/^version = "\(.*\)".*/\1/p' Cargo.toml | head -1)"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag '$GITHUB_REF_NAME' != workspace version '$pkg'"
+            exit 1
+          fi
+          # cargo-deb rewrites a semver pre-release's '-' to rpm/dpkg's '~' only
+          # when it holds BOTH a digit and a non-digit (parse/manifest.rs). For
+          # anything else the .deb and .rpm versions diverge and the check step
+          # below fails ~30 minutes in — refuse it here instead.
+          case "$pkg" in
+            *-*)
+              pre="${pkg#*-}"
+              bad=""
+              case "$pre" in *[0-9]*) ;; *) bad="has no digit" ;; esac
+              case "$pre" in *[!0-9]*) ;; *) bad="is all digits" ;; esac
+              # cargo-deb splits on the FIRST hyphen; the `tr` below converts
+              # every one. A second hyphen makes the two disagree.
+              case "$pre" in *-*) bad="has a second hyphen" ;; esac
+              [ -z "$bad" ] || {
+                echo "::error::pre-release '$pre' $bad, so cargo-deb will" \
+                     "not convert '-' to '~'"
+                exit 1
+              }
+              ;;
+          esac
+          echo "PKGVER=$pkg" >> "$GITHUB_ENV"
+
+      - name: Add Rust target
+        run: rustup target add x86_64-unknown-linux-musl
+
+      # `rpm` is for the check step; the runner image has no rpm tooling.
+      # rpm2archive is what unpacks a payload there — fail here, with a name to
+      # google, rather than 30 minutes later on a missing command.
+      - name: Install musl and rpm tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y musl-tools rpm
+          for t in rpm rpm2archive dpkg-deb; do
+            command -v "$t" > /dev/null || {
+              echo "::error::$t not on PATH after apt-get install"; exit 1; }
+          done
+
+      # Both pinned, and the pins are asserted: a floated cargo-generate-rpm is
+      # how the directory-ownership trap in Cargo.toml gets re-armed.
+      - name: Install packaging tools
+        run: |
+          set -euo pipefail
+          cargo install cargo-deb --locked --version 3.7.0
+          cargo install cargo-generate-rpm --locked --version 0.21.0
+          # `cargo install` writes to $CARGO_HOME/bin, which cargo searches for
+          # subcommands ahead of $PATH — so `cargo deb` would find the pin. The
+          # bare-binary form below does not, hence the explicit check.
+          [ "$(cargo-deb --version)" = "cargo-deb 3.7.0" ] || {
+            echo "::error::$(cargo-deb --version) != 3.7.0"; exit 1; }
+          [ "$(cargo-generate-rpm --version)" = "cargo-generate-rpm 0.21.0" ] || {
+            echo "::error::$(cargo-generate-rpm --version) != 0.21.0"; exit 1; }
+
+      - name: Build release binaries
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Build packages
+        run: |
+          set -euo pipefail
+          mkdir -p dist/packages
+          tgt=x86_64-unknown-linux-musl
+
+          # --no-build reuses the binaries above; --no-strip because
+          # [profile.release] already strips.
+          cargo-deb --target "$tgt" --no-build --no-strip --output dist/packages/
+          cargo-deb --target "$tgt" --no-build --no-strip --variant mcp \
+            --output dist/packages/
+
+          # rpm has no pre-release ordering syntax for '-': cargo-generate-rpm
+          # would emit `Version: 26.4.0-rc1`, which rpm sorts NEWER than the
+          # 26.4.0 GA. '~' is the pre-release separator rpm actually understands
+          # (cargo-deb does this conversion itself). --auto-req builtin so the
+          # dependency scan does not depend on the runner having rpm-build's
+          # find-requires.
+          rpmver="$(printf '%s' "$PKGVER" | tr -- - '~')"
+          cargo-generate-rpm --target "$tgt" --auto-req builtin \
+            -s "version = \"${rpmver}\"" --output dist/packages/
+          cargo-generate-rpm --target "$tgt" --auto-req builtin --variant mcp \
+            -s "version = \"${rpmver}\"" --output dist/packages/
+
+      - name: Check the packages before they can be released
+        run: |
+          set -euo pipefail
+          # Without this a zero-package glob would reach the case below as the
+          # literal pattern and report "unexpected name" instead of "none built".
+          shopt -s nullglob
+          d=dist/packages
+          ls -l "$d"
+
+          # Resolve by declared package name, not by filename: the split is the
+          # point of this job and a naming slip must not pass silently.
+          for f in "$d"/*.deb; do
+            case "$(dpkg-deb -f "$f" Package)" in
+              mtui) deb_main="$f" ;;
+              mtui-mcp) deb_mcp="$f" ;;
+              *) echo "::error::unexpected deb package name in $f"; exit 1 ;;
+            esac
+          done
+          for f in "$d"/*.rpm; do
+            case "$(rpm -qp --qf '%{NAME}' "$f")" in
+              mtui) rpm_main="$f" ;;
+              mtui-mcp) rpm_mcp="$f" ;;
+              *) echo "::error::unexpected rpm package name in $f"; exit 1 ;;
+            esac
+          done
+          : "${deb_main:?no mtui .deb}" "${deb_mcp:?no mtui-mcp .deb}"
+          : "${rpm_main:?no mtui .rpm}" "${rpm_mcp:?no mtui-mcp .rpm}"
+
+          # Normalise both payload listings to absolute paths. Under $d, not the
+          # repo root: build.rs stamps `git describe --dirty` into the binary.
+          dpkg-deb -c "$deb_main" | awk '{sub(/^\./, "", $6); print $6}' > "$d/deb_main.lst"
+          dpkg-deb -c "$deb_mcp"  | awk '{sub(/^\./, "", $6); print $6}' > "$d/deb_mcp.lst"
+          rpm -qpl "$rpm_main" > "$d/rpm_main.lst"
+          rpm -qpl "$rpm_mcp"  > "$d/rpm_mcp.lst"
+
+          # Every assertion greps a FILE, never a pipeline: under `pipefail`,
+          # `! producer | grep -q x` fails OPEN, because grep -q exits on the
+          # first match, the producer takes SIGPIPE, and `!` turns the resulting
+          # non-zero pipeline into success.
+          #
+          # grep also exits 2 on a missing or unreadable file, which a bare
+          # `! grep` would likewise turn into a pass, so the status is branched
+          # on rather than negated.
+          has() {
+            rc=0
+            grep -F "$1" -e "$2" -- "$3" > /dev/null || rc=$?
+            [ "$rc" -le 1 ] || {
+              echo "::error::$3: grep failed (rc=$rc)"; exit 1; }
+            return "$rc"
+          }
+          expect() { l="$1"; shift; for p in "$@"; do
+            has -xq "$p" "$l" || { echo "::error::$l: missing $p"; exit 1; }
+          done; }
+          # `reject` is substring-matched, so it also catches a path merely
+          # under the rejected prefix; `reject_line` is for a path that is a
+          # prefix of a legitimate one (/usr/bin/mtui vs /usr/bin/mtui-mcp).
+          reject() { l="$1"; shift; for p in "$@"; do
+            ! has -q "$p" "$l" || { echo "::error::$l: unexpected $p"; exit 1; }
+          done; }
+          reject_line() { l="$1"; shift; for p in "$@"; do
+            ! has -xq "$p" "$l" || { echo "::error::$l: unexpected $p"; exit 1; }
+          done; }
+
+          # cargo-deb gzips man pages, cargo-generate-rpm does not.
+          expect "$d/deb_main.lst" /usr/bin/mtui \
+            /usr/share/bash-completion/completions/mtui \
+            /usr/share/zsh/site-functions/_mtui \
+            /usr/share/fish/vendor_completions.d/mtui.fish \
+            /usr/share/man/man1/mtui.1.gz \
+            /usr/share/doc/mtui/mtui.toml.example \
+            /usr/share/doc/mtui/copyright
+          expect "$d/rpm_main.lst" /usr/bin/mtui \
+            /usr/share/man/man1/mtui.1 \
+            /usr/share/licenses/mtui/LICENSE
+          expect "$d/deb_mcp.lst" /usr/bin/mtui-mcp \
+            /usr/share/bash-completion/completions/mtui-mcp \
+            /usr/share/man/man1/mtui-mcp.1.gz \
+            /usr/share/doc/mtui-mcp/copyright
+          expect "$d/rpm_mcp.lst" /usr/bin/mtui-mcp \
+            /usr/share/man/man1/mtui-mcp.1 \
+            /usr/share/licenses/mtui-mcp/LICENSE
+
+          # Disjoint payloads: neither package may carry the other's binary.
+          reject "$d/deb_main.lst" mtui-mcp
+          reject "$d/rpm_main.lst" mtui-mcp
+          reject_line "$d/deb_mcp.lst" /usr/bin/mtui
+          reject_line "$d/rpm_mcp.lst" /usr/bin/mtui
+
+          # The rpms deliberately own no directory (Cargo.toml explains why).
+          # A path here means someone re-armed `mode = "40755"`, which ships a
+          # regular file over a directory on 0.21.x.
+          reject_line "$d/rpm_main.lst" /usr/share/doc/mtui \
+            /usr/share/licenses/mtui
+          reject_line "$d/rpm_mcp.lst" /usr/share/doc/mtui-mcp \
+            /usr/share/licenses/mtui-mcp
+
+          # The header lists files the payload may not actually contain: the
+          # same `mode = "40755"` on <= 0.20.0 desyncs the cpio stream, and
+          # `rpm -qpl` still shows every entry. Walk the payload and count.
+          for f in "$rpm_main" "$rpm_mcp"; do
+            rpm2archive -n "$f" > "$d/payload.tar" || {
+              echo "::error::$f: payload is not walkable"; exit 1; }
+            got="$(tar tf "$d/payload.tar" | wc -l)"
+            hdr="$(rpm -qpl "$f" | wc -l)"
+            [ "$got" = "$hdr" ] || {
+              echo "::error::$f: payload has $got entries, header lists $hdr"
+              exit 1
+            }
+          done
+          rm -f "$d/payload.tar"
+
+          # Assign first, then test: `[ -z "$(cmd)" ]` fails OPEN, because errexit
+          # ignores a command substitution used as an operand — an erroring tool
+          # yields an empty string and passes. A bare assignment does propagate.
+          for f in "$rpm_main" "$rpm_mcp"; do
+            scripts="$(rpm -qp --scripts "$f")"
+            [ -z "$scripts" ] || {
+              echo "::error::$f ships a scriptlet"; exit 1; }
+          done
+
+          # Static musl, so — unlike a dynamically linked build — a libc
+          # dependency here means the wrong binary got packaged.
+          for f in "$rpm_main" "$rpm_mcp"; do
+            rpm -qpR "$f" > "$d/reqs.lst"
+            ! grep -q libc "$d/reqs.lst" || {
+              echo "::error::$f depends on libc; expected a static binary"; exit 1; }
+          done
+          # cargo-deb emits the field unconditionally, so this is `Depends: `
+          # with an empty value rather than no field at all.
+          for f in "$deb_main" "$deb_mcp"; do
+            dep="$(dpkg-deb -f "$f" Depends)"
+            [ -z "$dep" ] || {
+              echo "::error::$f depends on '$dep'; expected none"; exit 1; }
+          done
+
+          # Nothing else pins the output to the musl cross-build: without this a
+          # dropped --target would package the runner's own glibc binaries and
+          # every other assertion here would still pass.
+          for f in "$rpm_main" "$rpm_mcp"; do
+            arch="$(rpm -qp --qf '%{ARCH}' "$f")"
+            [ "$arch" = x86_64 ] || {
+              echo "::error::$f arch '$arch' != x86_64"; exit 1; }
+          done
+          for f in "$deb_main" "$deb_mcp"; do
+            arch="$(dpkg-deb -f "$f" Architecture)"
+            [ "$arch" = amd64 ] || {
+              echo "::error::$f arch '$arch' != amd64"; exit 1; }
+          done
+
+          # The split must stay invisible to someone who just installs `mtui`,
+          # exactly as the spec's Recommends keeps it on openSUSE.
+          dpkg-deb -f "$deb_main" Recommends > "$d/deb_rec.lst"
+          grep -q mtui-mcp "$d/deb_rec.lst" || {
+            echo "::error::$deb_main does not recommend mtui-mcp"; exit 1; }
+          rpm -qp --recommends "$rpm_main" > "$d/rpm_rec.lst"
+          expect "$d/rpm_rec.lst" mtui-mcp
+
+          # require-sh = false and nothing shipped is a script, so auto-req must
+          # not resurrect a shell dep. One reappearing means a script crept back
+          # into the payload without the packaging noticing.
+          rpm -qpR "$rpm_main" > "$d/reqs.lst"
+          reject "$d/reqs.lst" /bin/sh /bin/bash
+
+          # A hyphenated pre-release must have become '~' (see Build packages).
+          want="$(printf '%s' "$PKGVER" | tr -- - '~')"
+          for f in "$rpm_main" "$rpm_mcp"; do
+            got="$(rpm -qp --qf '%{VERSION}' "$f")"
+            [ "$got" = "$want" ] || {
+              echo "::error::$f version '$got' != '$want'"; exit 1; }
+          done
+          for f in "$deb_main" "$deb_mcp"; do
+            got="$(dpkg-deb -f "$f" Version)"
+            [ "${got%-*}" = "$want" ] || {
+              echo "::error::$f version '$got' != '$want'-<rev>"; exit 1; }
+          done
+
+      - name: Collect packages
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          for f in dist/packages/*.deb dist/packages/*.rpm; do
+            # GitHub rewrites characters outside this set in a release asset
+            # name; do it here so the published name matches the checksum.
+            safe="$(printf '%s' "$(basename "$f")" | tr -c 'A-Za-z0-9._-' '.')"
+            mv "$f" "dist/release/$safe"
+          done
+          cd dist/release && sha256sum -- *.deb *.rpm > mtui-packages.sha256
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: packages-x86_64
+          path: dist/release/*
+          if-no-files-found: error
+
   release:
     # Publish only after every platform built successfully, so a release never
-    # ships a partial artifact set.
-    needs: build
+    # ships a partial artifact set. Push-of-a-tag only: workflow_dispatch also
+    # accepts a tag as its ref, so the ref test alone would let a manual run
+    # publish (or fail 45 minutes in on an existing release).
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [build, package]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

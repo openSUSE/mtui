@@ -66,7 +66,22 @@ authenticated boundary trusted to operate the remaining maintenance tools.
   (SVN and Gitea backends).
 - File transfer (`put`/`get`) over SFTP.
 - Vim syntax highlighting for testreport files, packaged separately as
-  `vim-plugin`.
+  `mtui-vim-plugin`.
+
+## Install
+
+Each release carries x86_64 `.deb` and `.rpm` packages plus the portable
+tarballs. The REPL and the MCP server are packaged separately, so a host that
+only serves MCP clients need not carry the REPL:
+
+- `mtui` — the REPL, completions, man page, example config. Recommends
+  `mtui-mcp`, so installing it alone still gets both.
+- `mtui-mcp` — the MCP server, completions, man page, example config.
+
+The binaries are static, so the packages declare no libc floor and install on
+any x86_64 distro.
+**On openSUSE prefer the OBS package** — it covers every tier-1 arch, not just
+x86_64. See [docs/installation](docs/src/installation.md).
 
 ## Build
 
