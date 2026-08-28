@@ -41,8 +41,7 @@ deny-list that keeps REPL-only commands off the wire.
 
 Commands operate on an explicit `Session` (config, the `HostsGroup` targets, the
 loaded templates/metadata, the display) passed into each call — there are no
-hidden globals. This is the Rust replacement for MTUI's `CommandPrompt`
-god-object.
+hidden globals.
 
 ## Trait injection and the no-cycles rule
 
@@ -114,5 +113,5 @@ implementation detail. The `crates/*/tests/` fixtures are the authority.
   `gitea_commit_hash`, `Obs` otherwise, resolved once at load. On a
   dual-served update `Git` wins by design, and mtui leaves that update's OBS
   review request untouched — `assign`/`approve`/`reject`/`comment` only ever
-  reach the Gitea side. See [`approve`](commands.md) for the operator-facing
+  reach the Gitea side. See [`approve`](cli.md#approve) for the operator-facing
   consequence.
