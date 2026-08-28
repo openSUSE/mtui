@@ -124,7 +124,7 @@ the report is unloaded or the session quits, matching how every non-PI
 report's pool claims already behave. A host added later with `add_host`
 (including a pool-selected host, with no `-t`) is locked too, since the lock
 comment is seeded on load and every connect path applies it. Review actions
-(`assign`/`unassign`/`approve`/`reject`) no longer lock or unlock hosts
+(`assign`/`unassign`/`approve`/`reject`) do not lock or unlock hosts
 themselves. A [`reboot`](cli.md#reboot) clears `/var/lock`, so the per-host
 testing lock is re-applied after the host comes back.
 

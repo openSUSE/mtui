@@ -148,9 +148,9 @@ prompt at the REPL never blocks waiting for input:
   fallback — for a stale checkout hash that TeReGen also refuses to
   regenerate (already hand-edited) — is exposed as the `--force-continue`
   argument; without it the load is unconditionally abandoned, since the
-  question's non-interactive default used to be a hard-coded "no"
-  (openSUSE/mtui#517). A force-continued load neither repairs nor bypasses
-  the recorded mismatch, so it does not touch `approve`'s refusal above —
+  question's non-interactive default is "no" (openSUSE/mtui#517). A
+  force-continued load neither repairs nor bypasses the recorded
+  mismatch, so it does not touch `approve`'s refusal above —
   and `commit`/`export` refuse the same way, unless given their own
   `--allow-stale`, so a stale-loaded report cannot be published or
   overwritten non-interactively either. `approve`'s `check_hash()` re-query
@@ -173,7 +173,7 @@ the host as unreachable; `mtui-mcp` never falls back to a password prompt.
 
 The hand-written `get` and `put` tools replace the synthesized commands of the
 same names (#434), carrying content in-band in both directions. The REPL
-`get`/`put` commands are unchanged — literal paths, and downloads still land in
+`get`/`put` commands work on literal paths instead, with downloads landing in
 `{report_wd}/downloads/{name}.{host}`.
 
 ### `get` (read-only)
@@ -203,8 +203,8 @@ call with the host named.
 
 - The `prepare` tool fails — instead of reporting success — when the loaded
   report's metadata names no package versions, and when no prepare command
-  could be built for a connected host (#396). Automation keying on `prepare`'s
-  success no longer sees a false positive on a metadata-empty report.
+  could be built for a connected host (#396), so automation keying on
+  `prepare`'s success does not see a false positive on a metadata-empty report.
 - On a report whose metadata carries a `binaries` block, `prepare` narrows the
   package list per host to what that host's products compose, and fails by name
   a host whose products compose none of it — rather than sending a list zypper
@@ -214,13 +214,12 @@ call with the host named.
   its patch, scopes its own lock/repository/package-check to the hosts that do
   compose it, and reports a failure naming it, instead of patching a host its
   own prepare established no baseline on.
-- `update`'s tool result now carries diagnostics for every non-fatal
-  degradation of the run — a composition refusal, a prepare host failure it
-  continues past, a failed `--newpackage` step, and the three ways the
-  post-update test-repo cleanup can fail — on both the success and the failure
-  path. These previously reached only `tracing::warn!`, which an MCP client
-  never sees (the server's tracing goes to its own stderr, not the tool
-  result).
+- `update`'s tool result carries diagnostics for every non-fatal degradation of
+  the run — a composition refusal, a prepare host failure it continues past, a
+  failed `--newpackage` step, and the three ways the post-update test-repo
+  cleanup can fail — on both the success and the failure path. The server's
+  tracing goes to its own stderr, not the tool result, so a `tracing::warn!`
+  alone would never reach an MCP client.
 - Every workflow fan-out (`install`, `uninstall`, `prepare`, `downgrade`,
   `update`) confirms success as `<verb> completed on <hosts>`, so a clean run is
   never an empty tool result. `update`'s confirmation is printed *above* its
