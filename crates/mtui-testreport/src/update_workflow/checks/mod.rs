@@ -35,12 +35,25 @@ use crate::update_workflow::UpdateError;
 /// the "Additional rpm output" section, printed with the word `warning`
 /// recolored yellow; every other diagnostic — including a flow-level one — is
 /// printed plain.
+///
+/// The two kinds this doc describes are **not interchangeable to a caller
+/// summarising a run**, so `degradation` makes the distinction machine-
+/// readable rather than leaving it to prose. A check section says the patch's
+/// own output contained something worth reading and is routine — mtui installs
+/// from a test update repo whose vendor differs from the official one, so the
+/// vendor notice fires on ordinary successful updates. A flow-level push says
+/// the caller got *less than it asked for*. Counting the first as if it were
+/// the second would make a healthy update look degraded (#534 review).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     /// The section text to print, verbatim as sliced from stdout.
     pub text: String,
     /// When `true`, the renderer recolors occurrences of `warning` yellow.
     pub highlight_warning: bool,
+    /// When `true`, this reports a *degradation of the result* — a step that
+    /// did not happen or did not stick — rather than a recognised section of
+    /// a check's output.
+    pub degradation: bool,
 }
 
 impl Diagnostic {
@@ -51,6 +64,7 @@ impl Diagnostic {
         Self {
             text: text.into(),
             highlight_warning: true,
+            degradation: false,
         }
     }
 
@@ -61,6 +75,18 @@ impl Diagnostic {
         Self {
             text: text.into(),
             highlight_warning: false,
+            degradation: false,
+        }
+    }
+
+    /// A flow-level degradation: printed plain like [`plain`](Self::plain),
+    /// but counted by a caller that has to say whether the run was whole.
+    #[must_use]
+    pub fn degradation(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            highlight_warning: false,
+            degradation: true,
         }
     }
 }

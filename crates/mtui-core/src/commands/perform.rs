@@ -63,6 +63,36 @@ fn confirm(session: &mut Session, verb: &str, hosts_label: &str) {
         .println(&format!("{verb} completed on {hosts_label}"));
 }
 
+/// `update`'s confirmation, qualified when the flow recorded a
+/// [`Diagnostic::degradation`].
+///
+/// `perform_update` returns `Ok` for a run whose patch applied but whose
+/// `--newpackage` prepare or test-repo cleanup degraded; those arrive as
+/// diagnostics rather than `tracing` alone, but the verdict is printed *above*
+/// them (the head is what survives `mcp_max_output_bytes`), so an unqualified
+/// "update completed on …" would still be the only line a truncated or
+/// skim-read result carries.
+///
+/// Only degradations are counted. The check's own recognised sections ride in
+/// the same vec and are **routine** — mtui patches from a test update repo
+/// whose vendor differs from the official one, so zypper's "not supported by
+/// its vendor" notice fires on ordinary healthy updates. Counting those would
+/// make the qualified line the common case and the bare one the exception, and
+/// would be false besides: the thing it points at *is* the patch's own check
+/// output, and the patch's checks are exactly what passed (#534 review).
+fn confirm_update(session: &mut Session, hosts_label: &str, diagnostics: &[Diagnostic]) {
+    let n = diagnostics.iter().filter(|d| d.degradation).count();
+    if n == 0 {
+        confirm(session, "update", hosts_label);
+        return;
+    }
+    let plural = if n == 1 { "" } else { "s" };
+    session.display.println(&format!(
+        "update completed on {hosts_label}: the patch passed its checks, with {n} \
+         degradation{plural} reported below"
+    ));
+}
+
 /// Maps a flow error onto a [`CommandError`]. The flow's own `cancelled` marker
 /// — **not** the session token — is the authority: sniffing the token would hide
 /// a genuine host failure that merely coincided with a cancel. The message names
@@ -168,7 +198,7 @@ pub(super) async fn drive(
             if update_result.is_ok() {
                 // Verdict before the unbounded diagnostics: `SharedBuf` keeps
                 // the head, so a trailing line is what `max_output_bytes` eats.
-                confirm(session, "update", &hosts_label);
+                confirm_update(session, &hosts_label, &diagnostics);
             }
             render_diagnostics(session, &diagnostics);
             // A cancellation checkpoint surfaces as an ordinary `UpdateError`;
@@ -259,7 +289,8 @@ mod tests {
 
     use crate::commands::Update;
     use crate::commands::testkit::{
-        matches, session_with_cancelled_update, session_with_hosts, session_with_update_diagnostics,
+        matches, session_with_cancelled_update, session_with_degraded_update, session_with_hosts,
+        session_with_update_diagnostics,
     };
 
     const RRID: &str = "SUSE:Maintenance:1:1";
@@ -326,6 +357,66 @@ mod tests {
         // The diagnostics are unbounded and `SharedBuf` truncates the tail, so
         // the verdict has to come first to survive `max_output_bytes`.
         assert!(verdict < diag, "verdict must precede diagnostics: {out:?}");
+    }
+
+    /// #525 review: `perform_update` returns `Ok` for a run whose patch applied
+    /// but whose `--newpackage` prepare and repo cleanup degraded. Those reach
+    /// the caller as diagnostics, but they are printed *below* the verdict, so
+    /// the verdict line itself must not read as an unqualified full success —
+    /// it is the only line a truncated result is guaranteed to carry.
+    #[tokio::test]
+    async fn a_degraded_update_qualifies_its_confirmation_and_counts_the_degradations() {
+        let (mut session, buf) = session_with_degraded_update(RRID, &["h1"]);
+        drive(&mut session, &no_args(), update_op()).await.unwrap();
+        let out = buf.contents();
+        let head = out.lines().next().unwrap_or_default();
+        assert!(head.starts_with("update completed on h1:"), "got: {out:?}");
+        assert!(
+            head.contains("2 degradations reported below"),
+            "got: {out:?}"
+        );
+        assert!(
+            head.contains("the patch passed its checks"),
+            "the head must claim only the checked patch: {out:?}"
+        );
+    }
+
+    /// #534 review: a *healthy* update still emits check sections — mtui patches
+    /// from a test update repo whose vendor differs from the official one, so
+    /// the vendor notice is routine. Counting those would qualify almost every
+    /// run and would be false besides: they are the checks' own output, and the
+    /// checks passed. Only degradations qualify the verdict.
+    #[tokio::test]
+    async fn check_sections_alone_leave_the_confirmation_bare() {
+        let (mut session, buf) = session_with_update_diagnostics(RRID, &["h1"], false);
+        drive(&mut session, &no_args(), update_op()).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("not supported by its vendor"), "got: {out:?}");
+        assert_eq!(
+            out.lines().next().unwrap_or_default(),
+            "update completed on h1",
+            "check output must not read as a degradation: {out:?}"
+        );
+    }
+
+    /// The clean run keeps the bare shape every other op prints — the
+    /// qualification is a statement about degradations, not about `update`.
+    #[tokio::test]
+    async fn a_clean_update_confirms_without_qualification() {
+        let (mut session, buf) = session_with_hosts(RRID, &["h1"], "ok");
+        drive(&mut session, &no_args(), update_op()).await.unwrap();
+        assert_eq!(buf.contents().trim(), "update completed on h1");
+    }
+
+    #[test]
+    fn one_degradation_is_counted_in_the_singular() {
+        let (mut session, buf) = session_with_color(ColorMode::Never);
+        confirm_update(&mut session, "h1", &[Diagnostic::degradation("something")]);
+        assert!(
+            buf.contents().contains("with 1 degradation reported below"),
+            "{:?}",
+            buf.contents()
+        );
     }
 
     #[tokio::test]

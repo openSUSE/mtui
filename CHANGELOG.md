@@ -175,7 +175,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `update` now prints `update completed on <hosts>` on success, like every
   other fan-out. Its only output was the update check's non-fatal diagnostics,
   which a clean transaction never emits, so a successful `update` wrote nothing
-  and the MCP tool returned an empty result.
+  and the MCP tool returned an empty result. The confirmation is printed above
+  those diagnostics (the head of an MCP result is what survives
+  `max_output_bytes`), so a run that recorded a degradation is qualified —
+  `update completed on h1: the patch passed its checks, with 2 degradations
+  reported below` — rather than claiming the whole run succeeded. Only
+  degradations are counted: a check's own recognised sections (the
+  vendor-support notice, extra rpm output) are routine on a healthy update and
+  leave the confirmation bare.
 - `prepare --installed` (`-i`) now probes each host once and installs the
   packages that host already carries in a single transaction, instead of
   running one conditional install per package. On transactional (SL-Micro)
