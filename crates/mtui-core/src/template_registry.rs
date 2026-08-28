@@ -38,6 +38,15 @@ use crate::session::HOST_CLOSE_TIMEOUT;
 /// uncontended.
 pub type ReportEntry = Arc<Mutex<Box<dyn TestReport + Send + Sync>>>;
 
+/// What a `list_templates` row could be read from a loaded entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TemplateRow {
+    /// Connected-host count and workflow label.
+    Read(usize, &'static str),
+    /// Held by another dispatch, so neither could be read.
+    Busy,
+}
+
 /// The per-report close budget: always [`HOST_CLOSE_TIMEOUT`] in production,
 /// test-overridable so the wedged-host path need not wait the full budget.
 #[cfg(not(test))]
@@ -235,12 +244,22 @@ impl TemplateRegistry {
     }
 
     /// Reads the connected-host count and workflow label for `rrid`, or `None`
-    /// if absent (for `list_templates`). Locks the entry (uncontended).
+    /// if absent (for `list_templates`). Locks the entry.
+    ///
+    /// A held entry is [`TemplateRow::Busy`], never `None`: collapsing it into
+    /// absent dropped the template from the listing altogether, telling the
+    /// operator it is not loaded. Same shape as [`is_hostless`](Self::is_hostless)
+    /// above, and reachable without a leak — `list_templates` runs concurrently
+    /// with a different-RRID dispatch by design.
     #[must_use]
-    pub(crate) fn template_row(&self, rrid: &str) -> Option<(usize, &'static str)> {
+    pub(crate) fn template_row(&self, rrid: &str) -> Option<TemplateRow> {
         let entry = self.entries.get(rrid)?;
-        let report = entry.try_lock().ok()?;
-        Some((report.base().targets.len(), report.base().workflow.as_str()))
+        Some(match entry.try_lock() {
+            Ok(report) => {
+                TemplateRow::Read(report.base().targets.len(), report.base().workflow.as_str())
+            }
+            Err(_) => TemplateRow::Busy,
+        })
     }
 
     /// The active RRID, or `None` when nothing is loaded.

@@ -26,7 +26,7 @@ use tracing::{info, warn};
 
 use crate::display::CommandPromptDisplay;
 use crate::error::CommandError;
-use crate::template_registry::{ReportEntry, TemplateRegistry};
+use crate::template_registry::{ReportEntry, TemplateRegistry, TemplateRow};
 
 /// Wall-clock budget for a host-close fan-out.
 ///
@@ -603,15 +603,19 @@ impl Session {
         }
     }
 
-    /// The connected-host count and workflow label for `rrid`, or `None` if
-    /// absent (for `list_templates`).
+    /// A `list_templates` row for `rrid`, or `None` if it is not loaded.
     ///
-    /// Guard-aware, like [`is_hostless`](Self::is_hostless).
+    /// Guard-aware, like [`is_hostless`](Self::is_hostless) — but a foreign
+    /// holder yields [`TemplateRow::Busy`], not `None`: unlike `is_hostless`'s
+    /// caller, this one would drop the template from the listing entirely.
     #[must_use]
-    pub(crate) fn template_row(&self, rrid: &str) -> Option<(usize, &'static str)> {
+    pub(crate) fn template_row(&self, rrid: &str) -> Option<TemplateRow> {
         if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
             let base = self.metadata().base();
-            Some((base.targets.len(), base.workflow.as_str()))
+            Some(TemplateRow::Read(
+                base.targets.len(),
+                base.workflow.as_str(),
+            ))
         } else {
             self.templates.template_row(rrid)
         }

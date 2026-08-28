@@ -30,7 +30,8 @@ impl Command for Help {
     }
 
     fn reads_resolved_report(&self) -> bool {
-        // Renders the command registry.
+        // This body only defers; the rendering the engine intercepts reads the
+        // registry. Neither touches a report.
         false
     }
 

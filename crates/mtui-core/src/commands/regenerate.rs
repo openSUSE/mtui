@@ -556,6 +556,31 @@ mod tests {
         assert!(out.contains("regenerated — reloading"), "{out}");
     }
 
+    /// `regenerate` is `Scope::Single` but reads the report it was handed
+    /// (`require_update`), so the busy refusal applies: off the null sentinel a
+    /// bare `regenerate` reported "no update loaded" over a template that very
+    /// much is (#524).
+    #[tokio::test]
+    async fn contended_template_is_refused() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.release_active_guard();
+        let entry = session
+            .templates
+            .handle("SUSE:Maintenance:1:1")
+            .expect("seeded");
+        let _held = entry.try_lock_owned().expect("uncontended");
+
+        let args = matches(&Regenerate, &[]);
+        let err = Regenerate
+            .run(&mut session, &args)
+            .await
+            .expect_err("a report-reading Single-scope command must refuse a held entry");
+        assert!(
+            matches!(err, CommandError::TemplateBusy(ref r) if r == "SUSE:Maintenance:1:1"),
+            "got: {err:?}"
+        );
+    }
+
     /// A standalone `-k <RRID>` loads with the kernel workflow, proving the
     /// success path registers the RRID (`load_update`'s registration is
     /// kind-agnostic). Also drives `Command::run` (not `call`) with a different
