@@ -5,7 +5,6 @@
 
 [mtui]
 user = "qauser"
-chdir_to_template_dir = true      # inline comment: boolean value
 # ssl_verify accepts a native bool (true/false), a boolean-spelling string
 # ("yes"/"no"/"on"/"off"/...), or a path to a custom certificate/CA bundle:
 ssl_verify = "warn.example/ca.pem"

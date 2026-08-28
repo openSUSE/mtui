@@ -343,7 +343,6 @@ pub(crate) struct MtuiSection {
     pub tempdir: Option<PathBuf>,
     pub user: Option<String>,
     pub install_logs: Option<PathBuf>,
-    pub chdir_to_template_dir: Option<bool>,
     pub ssl_verify: Option<SslVerify>,
 }
 
@@ -532,7 +531,6 @@ impl RawConfig {
         take!(mtui, tempdir);
         take!(mtui, user);
         take!(mtui, install_logs);
-        take!(mtui, chdir_to_template_dir);
         take!(mtui, ssl_verify);
         take!(connection, connection_timeout);
         take!(connection, connect_timeout);
@@ -602,8 +600,6 @@ pub struct Config {
     pub session_user: String,
     /// Directory where install logs are written.
     pub install_logs: PathBuf,
-    /// Whether to `chdir` into the template dir on load.
-    pub chdir_to_template_dir: bool,
     /// TLS verification policy for outbound HTTP.
     pub ssl_verify: SslVerify,
 
@@ -795,7 +791,6 @@ impl Default for Config {
             local_tempdir: default_local_tempdir(),
             session_user: default_session_user(),
             install_logs: default_install_logs(),
-            chdir_to_template_dir: false,
             ssl_verify: SslVerify::Enabled,
             connection_timeout: default_connection_timeout(),
             connect_timeout: default_connect_timeout(),
@@ -910,10 +905,6 @@ impl Config {
                 }
                 None => d.install_logs,
             },
-            chdir_to_template_dir: raw
-                .mtui
-                .chdir_to_template_dir
-                .unwrap_or(d.chdir_to_template_dir),
             ssl_verify: raw.mtui.ssl_verify.unwrap_or(d.ssl_verify),
             connection_timeout: validated_positive!(
                 raw.connection.connection_timeout,
@@ -1067,7 +1058,6 @@ mod tests {
         assert_eq!(c.max_parallel, 50);
         assert_eq!(c.max_oqa_parallel, 8);
         assert_eq!(c.refhosts_https_expiration, 3600 * 12);
-        assert!(!c.chdir_to_template_dir);
         assert_eq!(c.ssl_verify, SslVerify::Enabled);
         assert_eq!(c.ssh_strict_host_key_checking, "auto_add");
         assert_eq!(c.refhosts_resolvers, "https,path");
@@ -1347,7 +1337,6 @@ mod tests {
         raw.connection.reboot_retries = Some(5);
         raw.connection.max_parallel = Some(8);
         raw.connection.max_oqa_parallel = Some(3);
-        raw.mtui.chdir_to_template_dir = Some(true);
         raw.url.bugzilla = Some("https://bugzilla.example.com".to_owned());
         let c = Config::from_raw(raw);
         assert_eq!(c.connection_timeout, 450);
@@ -1356,7 +1345,6 @@ mod tests {
         assert_eq!(c.reboot_retries, 5);
         assert_eq!(c.max_parallel, 8);
         assert_eq!(c.max_oqa_parallel, 3);
-        assert!(c.chdir_to_template_dir);
         assert_eq!(c.bugzilla_url, "https://bugzilla.example.com");
         assert_eq!(c.reports_url, "https://qam.suse.de/testreports");
     }
