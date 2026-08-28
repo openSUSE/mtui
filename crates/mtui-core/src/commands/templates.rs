@@ -30,6 +30,11 @@ impl Command for ListTemplates {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Lists the registry, not any report's contents.
+        false
+    }
+
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let rrids = session.templates.rrids();
         if rrids.is_empty() {

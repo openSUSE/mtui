@@ -211,6 +211,11 @@ impl Command for ListRefhosts {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Inventory query, as above.
+        false
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("testplatform")

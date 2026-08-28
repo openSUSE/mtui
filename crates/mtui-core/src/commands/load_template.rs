@@ -53,6 +53,11 @@ impl Command for LoadTemplate {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Reads the report it just loaded, never the one it was handed.
+        false
+    }
+
     fn requires_canonical_session(&self, _argv: &[String]) -> bool {
         true
     }

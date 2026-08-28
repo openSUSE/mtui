@@ -29,6 +29,11 @@ impl Command for Help {
         Scope::Single
     }
 
+    fn reads_resolved_report(&self) -> bool {
+        // Renders the command registry.
+        false
+    }
+
     fn about(&self) -> Option<&'static str> {
         Some("List commands, or show help for one command.")
     }
