@@ -22,14 +22,19 @@ pub(crate) mod update;
 
 use crate::update_workflow::UpdateError;
 
-/// A recognised-but-non-fatal diagnostic section a check wants surfaced to
-/// the operator's terminal.
+/// Any non-fatal degradation a flow wants surfaced to the operator's
+/// terminal — a check's recognised stdout section, or a flow-level
+/// side-effect that changed what the caller got (a composition refusal, a
+/// stranded lock, a repo left configured) with nothing else to report it but
+/// a log line.
 ///
-/// Carried out on the `Ok` path and rendered by the command layer through
-/// `session.display`, so the check stays free of any display or color
-/// dependency. `highlight_warning` marks the "Additional rpm output" section,
-/// printed with the word `warning` recolored yellow; the "not supported by its
-/// vendor" section is printed plain.
+/// Carried out on the `Ok` path (and, for a flow-level push, the `Err` path
+/// too — a real failure should not hide an unrelated degradation) and
+/// rendered by the command layer through `session.display`, so the source
+/// stays free of any display or color dependency. `highlight_warning` marks
+/// the "Additional rpm output" section, printed with the word `warning`
+/// recolored yellow; every other diagnostic — including a flow-level one — is
+/// printed plain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     /// The section text to print, verbatim as sliced from stdout.

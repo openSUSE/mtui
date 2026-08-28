@@ -2007,6 +2007,9 @@ pub async fn perform_update(
                 uncomposed: refused,
             }) => {
                 warn!(error = %error, "prepare before update reported a host failure; continuing");
+                diagnostics.push(Diagnostic::plain(format!(
+                    "prepare before update reported a host failure ({error}); continuing"
+                )));
                 uncomposed = refused;
             }
         }
@@ -2028,6 +2031,12 @@ pub async fn perform_update(
             )
         })
         .collect();
+    // Host-attributed, pushed here so it reaches an MCP caller on both the
+    // success and the failure path — not only via the final `Uncomposed`
+    // return, which a later failure could otherwise win over (#543).
+    for e in &excluded {
+        diagnostics.push(Diagnostic::plain(e.to_string()));
+    }
     if !uncomposed.is_empty()
         && targets
             .targets()
@@ -2141,11 +2150,15 @@ pub async fn perform_update(
             perform_prepare_for(targets, &eligible, report, packages, false, true, false).await
     {
         warn!(error = %e, "newpackage prepare after update failed");
+        diagnostics.push(Diagnostic::plain(format!(
+            "newpackage prepare after update failed ({e}); the update stands, the newpackage \
+             step did not happen"
+        )));
     }
 
     targets.package_check_selected(true, &eligible).await;
 
-    remove_test_repos(targets, &eligible, report).await;
+    remove_test_repos(targets, &eligible, report, diagnostics).await;
     aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed)
 }
 
@@ -2157,11 +2170,17 @@ pub async fn perform_update(
 ///
 /// Best-effort: a lock failure here does not turn a successful update into a
 /// failed one, so it warns — naming the error, that the repos are left
-/// configured, and the manual remedy.
+/// configured, and the manual remedy. Each of the three ways this can degrade
+/// (lock failure, a removal command failing, an unlock failing) also pushes a
+/// [`Diagnostic`] onto `diagnostics`, alongside the `warn!`: `tracing` reaches
+/// an operator's terminal but not an MCP caller's tool result (#543), and a
+/// stale test repo or a stranded lock on a shared reference host is exactly
+/// the kind of degradation that must not be silent there.
 async fn remove_test_repos(
     targets: &mut HostsGroup,
     eligible: &BTreeSet<String>,
     report: &dyn SetRepo,
+    diagnostics: &mut Vec<Diagnostic>,
 ) {
     if let Err(e) = targets.update_lock_selected(eligible).await {
         warn!(
@@ -2170,6 +2189,10 @@ async fn remove_test_repos(
              they are left configured on every host (remove later with \
              `set_repo --remove`)"
         );
+        diagnostics.push(Diagnostic::plain(format!(
+            "could not lock hosts to remove the test update repositories ({e}); they are left \
+             configured on every host (remove later with `set_repo --remove`)"
+        )));
         return;
     }
     targets
@@ -2194,8 +2217,28 @@ async fn remove_test_repos(
             "failed to remove the test update repo on one or more hosts; \
              remove it manually with `set_repo --remove`"
         );
+        diagnostics.push(Diagnostic::plain(format!(
+            "failed to remove the test update repo on {}; remove it manually with \
+             `set_repo --remove`",
+            hosts.join(", ")
+        )));
     }
-    warn_on_unlock_failures("update", &targets.unlock_selected(eligible).await);
+
+    let unlock_outcomes = targets.unlock_selected(eligible).await;
+    warn_on_unlock_failures("update", &unlock_outcomes);
+    let unlock_failures: Vec<(String, String)> = unlock_outcomes
+        .iter()
+        .filter_map(|(host, outcome)| match outcome {
+            LockOutcome::Failed(reason) => Some((host.clone(), reason.clone())),
+            _ => None,
+        })
+        .collect();
+    if !unlock_failures.is_empty() {
+        diagnostics.push(Diagnostic::plain(unlock_failure_message(
+            "update",
+            &unlock_failures,
+        )));
+    }
 }
 
 /// Runs the update commands, checks the hosts they reached (collecting
@@ -3608,6 +3651,64 @@ mod tests {
                 && e.reason.contains("excluded from the update"),
             "reason: {}",
             e.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_pushes_diagnostics_for_the_excluded_host() {
+        // #543 + the composition refusal: both the per-host exclusion and the
+        // prepare-`HostReported` warning it rides in on must reach the
+        // returned `diagnostics`, not only `tracing::warn!` — an MCP caller
+        // never sees the log, and a later failure could otherwise win over the
+        // final `Uncomposed` return.
+        let (t1, _h1) = composed_host(
+            "h1",
+            SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+            BTreeSet::new(),
+        );
+        let (t2, _h2) = composed_host(
+            "h2",
+            SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+            BTreeSet::new(),
+        );
+        let mut group = HostsGroup::new(vec![t1, t2], false);
+        let repo = ComposingRepo::new(vec![
+            (
+                SystemProduct::new("SL-Micro", "6.1", "x86_64"),
+                names(&["pkg-a"]),
+            ),
+            (
+                SystemProduct::new("SL-Micro", "6.1", "aarch64"),
+                names(&["pkg-z"]),
+            ),
+        ]);
+        let mut diagnostics = Vec::new();
+
+        let _ = perform_update(
+            &mut group,
+            &repo,
+            &["pkg-a".to_owned()],
+            "42",
+            "7",
+            None,
+            false,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+
+        let texts: Vec<&str> = diagnostics.iter().map(|d| d.text.as_str()).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("h2") && t.contains("excluded from the update")),
+            "no per-host exclusion diagnostic: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("prepare before update reported a host failure")),
+            "no prepare-HostReported diagnostic: {texts:?}"
         );
     }
 
@@ -6235,6 +6336,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn perform_update_pushes_a_diagnostic_when_the_newpackage_prepare_fails() {
+        // #543's second site: the update stands but the newpackage step did
+        // not happen. `noprepare` skips the initial embedded prepare so the
+        // only prepare command dispatched is the `--newpackage` one, scripted
+        // to fail; the patch/reboot commands still use the default success
+        // response.
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                "transactional-update -n pkg in -l  pkg-a",
+                CommandLog::new("", "", "zypper: dependency problem", 1, 0),
+            )
+            .with_changing_boot_id();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SL-Micro", "6.0", "x86_64"),
+                BTreeSet::new(),
+                true,
+            ),
+            true,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            true,
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(res.is_ok(), "the update itself must still stand: {res:?}");
+        let texts: Vec<&str> = diagnostics.iter().map(|d| d.text.as_str()).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("newpackage prepare after update failed")),
+            "{texts:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn perform_update_fails_a_transactional_host_whose_stack_is_locked() {
         // End-to-end proof that the `("slmicro", true)` check is reached:
         // without one, the check lookup hits its `else { continue }` and `update`
@@ -6937,13 +7089,29 @@ mod tests {
         let t = Target::with_connection("h1", TargetState::Enabled, Box::new(foreign));
         let mut group = HostsGroup::new(vec![t], false);
         let repo = RecordingRepo::default();
+        let mut diagnostics = Vec::new();
 
-        let ((), logs) = capture_logs(remove_test_repos(&mut group, &names(&["h1"]), &repo)).await;
+        let ((), logs) = capture_logs(remove_test_repos(
+            &mut group,
+            &names(&["h1"]),
+            &repo,
+            &mut diagnostics,
+        ))
+        .await;
 
         let ops = repo.ops.lock().unwrap().clone();
         assert!(
             !ops.contains(&RepoOp::Remove),
             "cleanup must not run when the lock fails: {ops:?}"
+        );
+        // The lock failure must reach an MCP caller's tool result too (#543),
+        // not only the operator's terminal.
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].text.contains("could not lock hosts")
+                && diagnostics[0].text.contains("set_repo --remove"),
+            "{:?}",
+            diagnostics[0]
         );
         // Both the lock error and the remedy must be on the *same* line:
         // `update_lock`'s internal fan-out also WARNs about the foreign-locked
@@ -6987,8 +7155,14 @@ mod tests {
             "https://example/repo".to_owned(),
         );
 
-        let ((), logs) =
-            capture_logs(remove_test_repos(&mut group, &names(&["h1"]), &report)).await;
+        let mut diagnostics = Vec::new();
+        let ((), logs) = capture_logs(remove_test_repos(
+            &mut group,
+            &names(&["h1"]),
+            &report,
+            &mut diagnostics,
+        ))
+        .await;
 
         let warn_line = logs
             .lines()
@@ -7001,6 +7175,45 @@ mod tests {
         assert!(
             warn_line.contains("set_repo --remove"),
             "warning must name the manual remedy: {warn_line}"
+        );
+        // The removal failure must reach an MCP caller's tool result too
+        // (#543), not only the operator's terminal.
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].text.contains("h1") && diagnostics[0].text.contains("set_repo --remove"),
+            "{:?}",
+            diagnostics[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_test_repos_pushes_a_diagnostic_when_the_unlock_fails() {
+        // #543's fifth site: a stranded operation lock on a shared reference
+        // host is exactly the kind of trap for the next tester that must reach
+        // an MCP caller's tool result, not only the operator's terminal.
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("zypper", "", "", 0, 0))
+            .failing_sftp_remove();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
+        let mut diagnostics = Vec::new();
+
+        remove_test_repos(&mut group, &names(&["h1"]), &repo, &mut diagnostics).await;
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].text.contains("did not release") && diagnostics[0].text.contains("h1"),
+            "{:?}",
+            diagnostics[0]
         );
     }
 
