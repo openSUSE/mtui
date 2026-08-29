@@ -23,7 +23,7 @@ testreport/export text format, and the remote-lock wire format.
 ## This book
 
 - [Installation](installation.md) — build from source, install the binaries,
-  completions, man pages, and terminal-launcher scripts.
+  completions, and man pages.
 - [Invocation](invocation.md) — the `mtui` and `mtui-mcp` binary flags and how to
   start a session.
 - [Configuration](configuration.md) — the TOML config file, its resolution order,
