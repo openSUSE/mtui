@@ -53,6 +53,12 @@ impl Command for Regenerate {
         true
     }
 
+    /// A successfully regenerated **standalone** RRID is loaded *and* becomes
+    /// active, even with another template already active.
+    fn repoints_active(&self) -> bool {
+        true
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("force")
@@ -275,7 +281,7 @@ fn println_retry_hint(session: &mut Session, force: bool, ignore_inconsistent: b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{empty_session, fake_report, matches, session_with_hosts};
     use crate::error::CommandError;
     use mtui_config::Config;
     use wiremock::matchers::{method, path};
@@ -533,7 +539,11 @@ mod tests {
 
     /// A standalone `-k <RRID>` loads with the kernel workflow, proving the
     /// success path registers the RRID (`load_update`'s registration is
-    /// kind-agnostic).
+    /// kind-agnostic). Also drives `Command::run` (not `call`) with a different
+    /// template already active, to prove the regenerated RRID ends up active —
+    /// though the leading `svn`-absence early return makes this corroboration
+    /// only; the always-running evidence for the mechanism is
+    /// `switch`/`load_template`'s own `run`-driven tests.
     #[tokio::test]
     async fn standalone_rrid_kernel_hint_loads_kernel_workflow() {
         // `reload` deletes `template_dir/<rrid>`, so the report must come back
@@ -552,6 +562,12 @@ mod tests {
         mount_success(&server, rrid).await;
 
         let (mut session, _buf) = empty_session();
+        // A different template is already active; the regenerated RRID must
+        // still end up active (openSUSE/mtui#564).
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:1:1", &["h1"], "ok"));
+        assert!(session.activate("SUSE:Maintenance:1:1"));
         let tmp = tempfile::tempdir().unwrap();
 
         let repo = tmp.path().join("repo");
@@ -590,13 +606,18 @@ mod tests {
         session.config.svn_path = repo_url;
 
         let args = matches(&Regenerate, &["-k", rrid]);
-        Regenerate.call(&mut session, &args).await.unwrap();
+        Regenerate.run(&mut session, &args).await.unwrap();
 
         assert!(
             session.templates.contains(rrid),
             "RRID should be registered"
         );
         assert_eq!(session.metadata().workflow(), Workflow::Kernel);
+        assert_eq!(
+            session.templates.active_rrid(),
+            Some(rrid),
+            "the regenerated RRID must end up active, even with another already active"
+        );
     }
 
     /// `--no-wait` with an explicit RRID on an empty session enqueues and

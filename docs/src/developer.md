@@ -186,6 +186,10 @@ display) passed into each call. There are no hidden globals.
   same applies to the fix itself — when the leaf you are gating has other callers
   (`Target::reboot` is reached by `close` and the `reboot` command, not just the
   fan-out), gate on the layer that owns the state and probe the sibling paths.
+- **A command whose body repoints the active template must be exercised
+  through `run`, not `call`.** `Command::run` is what restores the
+  pre-dispatch pointer after `call` returns; a `call`-only test cannot observe
+  that restore, so it cannot see a body-level pointer move get reverted.
 
 ### The one-`it.rs`-per-crate rule
 
