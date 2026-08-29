@@ -157,10 +157,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   0 having quietly not run on it. Nine commands that name no template and
   ignore whatever was active (`unload`, `switch`, `load_template`, `config`,
   `help`, `list_refhosts`, `list_templates`, `updates`, `quit`) are unaffected:
-  a hold on a template they never read is not their problem. `terms` and
-  `regenerate` are not among them — they are equally self-targeting but *do*
-  read what they were handed, so a bare `terms <name>` no longer spawns the
-  launcher with zero hosts.
+  a hold on a template they never read is not their problem. `regenerate` is
+  not among them — equally self-targeting, but it *does* read what it was
+  handed, so a bare `regenerate` against a held entry now says `template busy`
+  instead of the misleading `Metadata not loaded`.
 - `list_templates` now shows a template held by another dispatch as `busy (in
   use by another command)` instead of dropping the row, which read as "not
   loaded" — the same collapse-into-absent as above, in the listing.

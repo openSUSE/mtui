@@ -401,9 +401,10 @@ mod tests {
     }
 
     /// The busy-refusal exemption (`Command::reads_resolved_report` false) is a
-    /// per-command policy, so pin who has it: everything else — including the
-    /// other `Scope::Single` commands, `terms` and `regenerate` — is refused
-    /// rather than dispatched against the null sentinel (#524). The default is
+    /// per-command policy, so pin who has it: everything else — including
+    /// `regenerate`, the one remaining `Scope::Single` command that reads what
+    /// it was handed — is refused rather than dispatched against the null
+    /// sentinel (#524). The default is
     /// the safe answer, so a new command can only join this list deliberately.
     #[test]
     fn report_independent_commands_are_pinned() {

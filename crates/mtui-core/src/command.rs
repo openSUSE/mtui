@@ -209,9 +209,9 @@ pub trait Command: Send + Sync {
             // template at all: `resolve_templates` handed back whatever is
             // active. Refusing it because some *other* dispatch holds that
             // entry fails a command over a template the operator never named.
-            // The exemption is per-command, not per-scope — `terms` and
-            // `regenerate` are also `Scope::Single` but do read what they were
-            // handed, and reading it off the null sentinel is #524 itself.
+            // The exemption is per-command, not per-scope — `regenerate` is
+            // also `Scope::Single` but does read what it was handed, and
+            // reading that off the null sentinel is #524 itself.
             //
             // `claim` runs either way — it is what points the session at the
             // template. Only the *refusal* is conditional, so the order here
@@ -562,9 +562,9 @@ mod tests {
     }
 
     /// The other kind of [`Scope::Single`]: it reads the report it was handed,
-    /// like `terms` (`select_names(session.targets(), …)`) and `regenerate`
-    /// (`require_update`). Answering off the null sentinel is #524, so the
-    /// default `reads_resolved_report` stands and the refusal applies.
+    /// like `regenerate` (`require_update`). Answering off the null sentinel is
+    /// #524, so the default `reads_resolved_report` stands and the refusal
+    /// applies.
     struct ReportReadingSingleScope(Arc<Mutex<Vec<usize>>>);
 
     #[async_trait]
@@ -810,8 +810,8 @@ mod tests {
 
     /// The exemption is per-command, not per-scope: a `Scope::Single` command
     /// that reads what it was handed is refused even bare. Deriving it from the
-    /// scope alone let `terms <name>` spawn the launcher with zero hosts and
-    /// `regenerate` answer `Metadata not loaded`, both off the null sentinel.
+    /// scope alone let `regenerate` answer `Metadata not loaded` off the null
+    /// sentinel.
     #[tokio::test]
     async fn single_scope_reading_the_report_is_refused_even_without_a_template() {
         let seen = Arc::new(Mutex::new(Vec::new()));
