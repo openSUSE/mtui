@@ -113,12 +113,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `load_template` now makes the newly loaded template active even when
   another was already active, as `list_templates`, the REPL prompt and the
   docs already described — the same restore-after-dispatch defect as
-  `switch`. Under `mtui-mcp` this also moves the default target of the
-  `testreport_*` tools (the ones that fall back to the active template when
-  given no RRID) onto the newest load.
-- `regenerate <RRID>` on a template that was not loaded now leaves that
-  template active after the reload, instead of reverting to whatever was
-  active before.
+  `switch`. Under `mtui-mcp`, the active pointer is the resolution target of
+  every `Scope::Single` tool that falls back to it when given no RRID, so an
+  unscoped call to one of those (e.g. `regenerate`) now resolves against the
+  newest load instead of a stale one.
+- `regenerate <RRID>` now leaves the regenerated template active after the
+  reload unconditionally — even one already loaded but inactive, or with a
+  different template active — instead of reverting to whatever was active
+  before; announced in the command's output when it moves the pointer.
 - `run`'s `command` argument now states its contract in the help text: argv
   tokens, no shell, and a pipeline needs three tokens (`sh`, `-c`, the line).
   It previously read only "Command to run on refhost", so `["cat /etc/os-release"]`
