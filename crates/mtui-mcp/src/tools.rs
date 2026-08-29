@@ -603,9 +603,7 @@ mod tests {
     fn deny_listed_commands_are_not_synthesised() {
         let tools = build_tools(&register_all());
         let routes = tool_routes(&register_all());
-        for denied in [
-            "quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch",
-        ] {
+        for denied in ["quit", "exit", "EOF", "edit", "shell", "help", "switch"] {
             assert!(
                 !names(&tools).contains(&denied),
                 "denied command {denied} leaked into tools"

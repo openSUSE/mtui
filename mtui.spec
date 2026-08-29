@@ -33,10 +33,8 @@ BuildRequires:  cargo
 BuildRequires:  cargo-packaging >= 1.2.0
 BuildRequires:  zstd
 ExclusiveArch:  %{rust_tier1_arches}
-# Optional runtime tools; mtui degrades gracefully when they are absent.
+# Optional runtime tool; mtui degrades gracefully when it is absent.
 Recommends:     subversion
-# Any of these terminal emulators satisfies the `terms`/`switch` launchers.
-Recommends:     (gnome-terminal or konsole or sakura or rxvt-unicode or xterm or tmux or screen)
 
 %description
 An improved, idiomatic Rust successor to MTUI — the Maintenance Test Update
@@ -84,9 +82,6 @@ install -Dm644 dist/completions/fish/mtui-mcp.fish %{buildroot}%{_datadir}/fish/
 install -Dm644 dist/man/mtui.1     %{buildroot}%{_mandir}/man1/mtui.1
 install -Dm644 dist/man/mtui-mcp.1 %{buildroot}%{_mandir}/man1/mtui-mcp.1
 
-# Terminal-launcher scripts for `terms`/`switch` (shared datadir).
-install -Dm755 dist/terms/*.sh -t %{buildroot}%{_datadir}/mtui/terms/
-
 # Fully-commented example config, installed as documentation.
 install -Dm644 dist/mtui.toml.example %{buildroot}%{_docdir}/%{name}/mtui.toml.example
 
@@ -106,9 +101,6 @@ install -pm 0644 dist/vim-plugin/syntax/testreport.vim   %{buildroot}%{vimplugin
 %doc %{_docdir}/%{name}/mtui.toml.example
 %{_bindir}/mtui
 %{_bindir}/mtui-mcp
-%dir %{_datadir}/mtui
-%dir %{_datadir}/mtui/terms
-%{_datadir}/mtui/terms/term.*.sh
 %{_datadir}/bash-completion/completions/mtui
 %{_datadir}/bash-completion/completions/mtui-mcp
 %{_datadir}/zsh/site-functions/_mtui

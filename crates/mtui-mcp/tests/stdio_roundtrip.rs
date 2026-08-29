@@ -77,8 +77,8 @@ async fn tools_list_reflects_synthesised_surface_and_denylist() {
                 "expected job tool `{expected}` in tools/list, got: {names:?}"
             );
         }
-        // Deny-listed commands must never surface, nor the removed `lrun`, nor
-        // the bare `config` (it is fanned out into config_show/config_set).
+        // Deny-listed commands must never surface, nor the removed `lrun` and
+        // `terms`, nor the bare `config` (fanned out into config_show/config_set).
         for denied in [
             "quit", "exit", "EOF", "edit", "shell", "lrun", "help", "terms", "switch", "config",
         ] {

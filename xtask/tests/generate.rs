@@ -194,7 +194,7 @@ fn checked_in_generated_docs_are_up_to_date() {
 
 /// Build a minimal fixture tree under `root`, returning `(bin_dir, dist_dir)`.
 /// Mirrors the layout `stage_package` reads:
-/// `target/<triple>/release/{mtui,mtui-mcp}`, `dist/{completions,man,terms}` and
+/// `target/<triple>/release/{mtui,mtui-mcp}`, `dist/{completions,man,vim-plugin}` and
 /// `LICENSE`/`README.md` at the root.
 fn make_fixture(root: &Path, target: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let bin_dir = root.join("target").join(target).join("release");
@@ -212,8 +212,6 @@ fn make_fixture(root: &Path, target: &str) -> (std::path::PathBuf, std::path::Pa
     .unwrap();
     std::fs::create_dir_all(dist.join("man")).unwrap();
     std::fs::write(dist.join("man").join("mtui.1"), b".TH mtui 1").unwrap();
-    std::fs::create_dir_all(dist.join("terms")).unwrap();
-    std::fs::write(dist.join("terms").join("term.xterm.sh"), b"#!/bin/sh").unwrap();
     std::fs::create_dir_all(dist.join("vim-plugin").join("ftdetect")).unwrap();
     std::fs::write(
         dist.join("vim-plugin")
@@ -267,7 +265,6 @@ fn stage_package_lays_out_documented_tree() {
             .is_file()
     );
     assert!(staging.join("man").join("mtui.1").is_file());
-    assert!(staging.join("terms").join("term.xterm.sh").is_file());
     assert!(
         staging
             .join("vim-plugin")

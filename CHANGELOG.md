@@ -303,6 +303,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Removed
 
+- The `terms` command has been removed, along with the `term.*.sh` launcher
+  scripts in `dist/terms/` and the `MTUI_TERMS_DIR` override. It duplicated
+  `shell` and was effectively unused, and it was dead on any packaged install
+  anyway: nothing set `MTUI_TERMS_DIR` and there was no system-datadir fallback,
+  so the installed scripts were unreachable (#566). Use `shell` for an
+  interactive session on a host, or `run` for one command across all of them.
 - The dead `chdir_to_template_dir` config key has been dropped. It was fully
   plumbed but never read anywhere, so it never had an effect. `config set
   chdir_to_template_dir <value>` now answers `unknown or read-only attribute`,

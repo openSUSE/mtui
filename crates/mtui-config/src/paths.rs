@@ -24,9 +24,6 @@ const ETC_CONFIG: &str = "/etc/mtui.toml";
 /// Environment variable holding an explicit config-file override.
 const ENV_CONFIG: &str = "MTUI_CONF";
 
-/// Environment variable overriding the `term.*.sh` script directory.
-const ENV_TERMS: &str = "MTUI_TERMS_DIR";
-
 /// Basename of the per-user config file, used both for the home dotfile
 /// (`~/.mtui.toml`, with a leading dot) and inside the XDG config directory
 /// (`$XDG_CONFIG_HOME/mtui/mtui.toml`).
@@ -81,32 +78,6 @@ fn home_config_file() -> Option<PathBuf> {
 #[must_use]
 pub fn data_dir() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.data_dir().to_path_buf())
-}
-
-/// The directory holding the `term.*.sh` terminal-launcher scripts, if it can be
-/// resolved. The `terms` command derives the available term names by globbing it.
-///
-/// * A set, non-empty `$MTUI_TERMS_DIR` is used verbatim (with `~` expanded):
-///   how a package install points at its shared datadir (e.g.
-///   `/usr/share/mtui/terms`) without copying scripts into the per-user XDG tree.
-/// * Otherwise `$XDG_DATA_HOME/mtui/terms`, consistent with [`data_dir`].
-///
-/// Rust has no package-data concept, so mtui ships the scripts under
-/// `dist/terms/` and lets packaging install them.
-#[must_use]
-pub fn terms_path() -> Option<PathBuf> {
-    resolve_terms_path(std::env::var_os(ENV_TERMS).map(PathBuf::from), data_dir())
-}
-
-/// Pure core of [`terms_path`], with the environment override and data dir
-/// injected so it can be unit-tested without mutating global process state.
-fn resolve_terms_path(env_terms: Option<PathBuf>, data: Option<PathBuf>) -> Option<PathBuf> {
-    if let Some(env) = env_terms
-        && !env.as_os_str().is_empty()
-    {
-        return Some(expanduser(&env));
-    }
-    data.map(|d| d.join("terms"))
 }
 
 /// Compute the ordered list of config files to load, lowest precedence first.
@@ -263,54 +234,6 @@ mod tests {
                 "data dir should end in `mtui`, got {dir:?}"
             );
         }
-    }
-
-    #[test]
-    fn terms_path_lives_under_the_mtui_data_dir() {
-        // The override is forced off so an ambient `MTUI_TERMS_DIR` in the test
-        // environment cannot perturb the default-path invariant.
-        if let Some(dir) = resolve_terms_path(None, data_dir()) {
-            assert!(
-                dir.ends_with("terms"),
-                "terms path should end in `terms`, got {dir:?}"
-            );
-            assert!(
-                dir.parent().is_some_and(|p| p.ends_with("mtui")),
-                "terms parent should be the mtui data dir, got {dir:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn terms_path_env_override_wins_and_expands_tilde() {
-        // A set, non-empty override wins over the data dir.
-        assert_eq!(
-            resolve_terms_path(
-                Some(PathBuf::from("/usr/share/mtui/terms")),
-                Some(PathBuf::from("/data/mtui")),
-            ),
-            Some(PathBuf::from("/usr/share/mtui/terms"))
-        );
-        if let Some(home) = home_dir() {
-            assert_eq!(
-                resolve_terms_path(Some(PathBuf::from("~/terms")), None),
-                Some(home.join("terms"))
-            );
-        }
-    }
-
-    #[test]
-    fn terms_path_falls_back_to_data_dir_when_override_absent_or_empty() {
-        assert_eq!(
-            resolve_terms_path(None, Some(PathBuf::from("/data/mtui"))),
-            Some(PathBuf::from("/data/mtui/terms"))
-        );
-        // An empty override is unset, as for `$MTUI_CONF`.
-        assert_eq!(
-            resolve_terms_path(Some(PathBuf::new()), Some(PathBuf::from("/data/mtui"))),
-            Some(PathBuf::from("/data/mtui/terms"))
-        );
-        assert_eq!(resolve_terms_path(None, None), None);
     }
 
     #[test]
