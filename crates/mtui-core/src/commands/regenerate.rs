@@ -27,7 +27,10 @@ use crate::session::Session;
 /// After a successful wait the freshly built template is loaded in place via
 /// [`Session::load_update`] without autoconnect. The kind is inferred from the
 /// loaded report when one exists; for a standalone RRID it is
-/// [`UpdateKind::Auto`], or [`UpdateKind::Kernel`] with `-k/--kernel`.
+/// [`UpdateKind::Auto`], or [`UpdateKind::Kernel`] with `-k/--kernel`. The
+/// regenerated RRID becomes the active template afterwards unconditionally —
+/// even one already loaded but inactive, or with a different template
+/// active — announced in the command's output when it moves the pointer.
 ///
 /// It names its own target and never fans out ([`Scope::Single`]).
 pub struct Regenerate;
@@ -53,8 +56,9 @@ impl Command for Regenerate {
         true
     }
 
-    /// A successfully regenerated **standalone** RRID is loaded *and* becomes
-    /// active, even with another template already active.
+    /// The regenerated RRID always becomes active unconditionally — not only a
+    /// standalone one — so `call` announces the move when it changes the
+    /// pointer.
     fn repoints_active(&self) -> bool {
         true
     }
@@ -177,7 +181,18 @@ impl Command for Regenerate {
         session
             .display
             .println(&format!("Template for {rrid_str} regenerated — reloading"));
+        let previously_active = session.templates.active_rrid().map(str::to_owned);
         reload(session, &rrid_str, kernel).await;
+        // `repoints_active` leaves the reloaded RRID active unconditionally, so
+        // announce it whenever that actually moved the pointer away from what
+        // was active before — the reload's own output otherwise gives no hint.
+        if session.templates.active_rrid() == Some(rrid_str.as_str())
+            && previously_active.as_deref() != Some(rrid_str.as_str())
+        {
+            session
+                .display
+                .println(&format!("{rrid_str} is now the active template"));
+        }
         Ok(())
     }
 }
@@ -405,6 +420,10 @@ mod tests {
             !trdir.exists(),
             "stale checkout dir should have been removed"
         );
+        assert!(
+            !out.contains("is now the active template"),
+            "regenerating the already-active template must not announce a move: {out}"
+        );
     }
 
     #[tokio::test]
@@ -540,10 +559,11 @@ mod tests {
     /// A standalone `-k <RRID>` loads with the kernel workflow, proving the
     /// success path registers the RRID (`load_update`'s registration is
     /// kind-agnostic). Also drives `Command::run` (not `call`) with a different
-    /// template already active, to prove the regenerated RRID ends up active —
-    /// though the leading `svn`-absence early return makes this corroboration
-    /// only; the always-running evidence for the mechanism is
-    /// `switch`/`load_template`'s own `run`-driven tests.
+    /// template already active: the regenerated RRID must end up active, and a
+    /// reverted pointer would fail the `workflow() == Kernel` assert below too
+    /// (the restored template carries no workflow). Skipped where `svn` is
+    /// absent — it still runs on CI's Ubuntu leg, which is where this
+    /// regression would otherwise resurface unnoticed.
     #[tokio::test]
     async fn standalone_rrid_kernel_hint_loads_kernel_workflow() {
         // `reload` deletes `template_dir/<rrid>`, so the report must come back
@@ -561,7 +581,7 @@ mod tests {
         let server = MockServer::start().await;
         mount_success(&server, rrid).await;
 
-        let (mut session, _buf) = empty_session();
+        let (mut session, buf) = empty_session();
         // A different template is already active; the regenerated RRID must
         // still end up active (openSUSE/mtui#564).
         session
@@ -617,6 +637,13 @@ mod tests {
             session.templates.active_rrid(),
             Some(rrid),
             "the regenerated RRID must end up active, even with another already active"
+        );
+        assert!(
+            buf.contents()
+                .contains(&format!("{rrid} is now the active template")),
+            "moving the pointer away from the prior active template must be \
+             announced: {:?}",
+            buf.contents()
         );
     }
 
