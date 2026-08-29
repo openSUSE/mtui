@@ -1280,6 +1280,33 @@ mod mcp_nonempty_success_guard {
     }
 }
 
+/// Registry-wide consistency check for
+/// [`Command::repoints_active`](crate::Command::repoints_active): [`Command::run`](crate::Command::run)
+/// only honours the opt-out on the single-template path, so a command that
+/// sets the flag with a non-[`Scope::Single`] scope would silently keep
+/// restoring the pointer under fan-out while the flag claimed otherwise.
+#[cfg(test)]
+mod repoints_active_scope_guard {
+    use crate::command::Scope;
+    use crate::register_all;
+
+    #[test]
+    fn every_repoints_active_command_is_single_scope() {
+        let registry = register_all();
+        for name in registry.names() {
+            let command = registry.get(name).expect("registered");
+            if command.repoints_active() {
+                assert_eq!(
+                    command.scope(),
+                    Scope::Single,
+                    "{name:?} sets repoints_active() but is not Scope::Single — \
+                     run only honours the opt-out on the single-template path",
+                );
+            }
+        }
+    }
+}
+
 /// Driver-level tests for the cancellation seam (`Session::cancel` +
 /// [`Command::run`](crate::Command::run) checkpoints), here rather than in
 /// `command.rs` because the [`testkit`] multi-template builders are

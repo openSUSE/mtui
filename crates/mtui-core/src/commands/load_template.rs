@@ -57,6 +57,12 @@ impl Command for LoadTemplate {
         true
     }
 
+    /// The newly loaded template must become active unconditionally, even with
+    /// another one already active.
+    fn repoints_active(&self) -> bool {
+        true
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("auto")
@@ -156,7 +162,7 @@ impl Command for LoadTemplate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches};
+    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
     fn name_and_single_scope() {
@@ -238,6 +244,48 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains(&format!("loaded {rrid}")), "{out:?}");
         assert!(out.contains("hosts connected"), "{out:?}");
+    }
+
+    /// Through `Command::run`, not `call` — `run` is what restores the
+    /// pre-dispatch pointer, so only driving it this way can see the revert
+    /// `call`-only tests can't.
+    #[tokio::test]
+    async fn load_over_a_prior_active_template_activates_the_new_one() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let tmp = tempfile::tempdir().unwrap();
+        let rrid = "SUSE:Maintenance:24993:275518";
+        let dir = tmp.path().join(rrid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log"), "log\n").unwrap();
+        std::fs::write(
+            dir.join("metadata.json"),
+            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
+        )
+        .unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+
+        let args = matches(&LoadTemplate, &["-k", rrid]);
+        LoadTemplate.run(&mut session, &args).await.unwrap();
+
+        assert_eq!(session.templates.active_rrid(), Some(rrid));
+    }
+
+    /// The opt-out does not strand the pointer when `load_update_reported`
+    /// never moved it: an unloadable RRID leaves the prior template active.
+    #[tokio::test]
+    async fn failed_load_keeps_the_prior_active_template() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let tmp = tempfile::tempdir().unwrap();
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+
+        let args = matches(&LoadTemplate, &["-k", "SUSE:Maintenance:2:2"]);
+        let err = LoadTemplate.run(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+        assert_eq!(
+            session.templates.active_rrid(),
+            Some("SUSE:Maintenance:1:1")
+        );
     }
 
     #[test]

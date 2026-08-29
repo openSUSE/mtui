@@ -33,6 +33,11 @@ impl Command for Switch {
         true
     }
 
+    /// The whole point of the command is to leave the pointer moved.
+    fn repoints_active(&self) -> bool {
+        true
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("rrid")
@@ -103,6 +108,48 @@ mod tests {
             err,
             CommandError::TemplateNotLoaded(r) if r == "SUSE:Maintenance:9:9"
         ));
+    }
+
+    /// The issue's reproducer: `switch` through `Command::run`, not `call`
+    /// directly — `run` is what restores the pre-dispatch pointer, so only
+    /// driving it this way can observe the revert `call`-only tests can't see.
+    #[tokio::test]
+    async fn switch_through_run_moves_active_pointer() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+        assert_eq!(
+            session.templates.active_rrid(),
+            Some("SUSE:Maintenance:1:1")
+        );
+        let args = matches(&Switch, &["SUSE:Maintenance:2:2"]);
+        Switch.run(&mut session, &args).await.unwrap();
+        assert_eq!(
+            session.templates.active_rrid(),
+            Some("SUSE:Maintenance:2:2")
+        );
+        assert!(
+            session.active_report_is_guarded("SUSE:Maintenance:2:2"),
+            "the guard must follow the pointer, or metadata() keeps answering \
+             about the old report"
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_through_run_to_unloaded_leaves_active_intact() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&Switch, &["SUSE:Maintenance:9:9"]);
+        let err = Switch.run(&mut session, &args).await.unwrap_err();
+        assert!(matches!(
+            err,
+            CommandError::TemplateNotLoaded(r) if r == "SUSE:Maintenance:9:9"
+        ));
+        assert_eq!(
+            session.templates.active_rrid(),
+            Some("SUSE:Maintenance:1:1")
+        );
+        assert!(session.active_report_is_guarded("SUSE:Maintenance:1:1"));
     }
 
     #[test]

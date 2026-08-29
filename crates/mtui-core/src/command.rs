@@ -104,6 +104,18 @@ pub trait Command: Send + Sync {
         true
     }
 
+    /// Whether this command's body deliberately repoints the active template,
+    /// so [`run`](Self::run) must keep the move instead of restoring the
+    /// pre-dispatch pointer.
+    ///
+    /// `false` by default; only honoured on the single-template path, which is
+    /// where a [`Scope::Single`] command always lands. `switch`, whose entire
+    /// point is to leave the pointer moved, and `load_template`/`regenerate`,
+    /// whose loaded RRID must become active, override it unconditionally.
+    fn repoints_active(&self) -> bool {
+        false
+    }
+
     /// Contributes this command's arguments to its `clap` subcommand.
     ///
     /// Default is the identity: a command with no arguments. `REMAINDER`,
@@ -132,12 +144,14 @@ pub trait Command: Send + Sync {
     /// Drives [`call`](Self::call) across the resolved templates.
     ///
     /// Single-template resolution calls [`call`](Self::call) directly so the
-    /// error contract is unchanged (errors propagate). Beyond one, each template
-    /// gets a banner and its own boundary: failures are collected, the loop
-    /// continues, and [`CommandError::FanOut`] is returned if any failed. A
-    /// host-less template is skipped up front when the invocation named no `-t`
-    /// hosts; every template skipped means the command ran nowhere and yields
-    /// [`CommandError::NoRefhostsDefined`].
+    /// error contract is unchanged (errors propagate), then restores the
+    /// pre-dispatch active pointer — unless [`Command::repoints_active`] says the
+    /// body's move is deliberate, in which case the new pointer stands. Beyond
+    /// one, each template gets a banner and its own boundary: failures are
+    /// collected, the loop continues, and [`CommandError::FanOut`] is returned
+    /// if any failed. A host-less template is skipped up front when the
+    /// invocation named no `-t` hosts; every template skipped means the command
+    /// ran nowhere and yields [`CommandError::NoRefhostsDefined`].
     ///
     /// Cancellation (MCP `job_cancel`): the driver is the seam's chokepoint. It
     /// bails with [`CommandError::Cancelled`] before dispatching, and re-checks
@@ -155,7 +169,12 @@ pub trait Command: Send + Sync {
         let resolved = resolve_templates(self.scope(), session, args)?;
 
         if resolved.len() <= 1 {
-            let restore = session.templates.active_rrid().map(str::to_owned);
+            // `repoints_active` opts out of the restore below: the body's move
+            // (`switch`, a loading `load_template`/`regenerate`) is the point of
+            // the call, not a side effect to undo.
+            let restore = (!self.repoints_active())
+                .then(|| session.templates.active_rrid().map(str::to_owned))
+                .flatten();
             // Install this call's active handle (the entry's lock). An empty
             // RRID (empty session) clears the guard so `metadata()` falls back
             // to the null report. `activate` drops the prior guard first, so a
@@ -302,9 +321,11 @@ fn log_activate_failure(command: &'static str, rrid: &str) {
 /// Restores the active-template pointer (and its per-call handle) after
 /// dispatch.
 ///
-/// A prior active template is re-activated. When nothing was active before, the
-/// guard is refreshed onto whatever the call left active, so a `load_template`
-/// that added and activated a brand-new template keeps it active.
+/// A prior active template is re-activated. `restore` is `None` both when
+/// nothing was active before *and* when [`Command::repoints_active`] opted the
+/// call out of the restore — either way the guard is refreshed onto whatever
+/// the call left active, so a body that deliberately moved the pointer
+/// (`switch`, a loading `load_template`/`regenerate`) keeps the move.
 fn restore_active(session: &mut Session, restore: Option<String>) {
     match restore {
         Some(rrid) => {

@@ -106,6 +106,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `switch <RRID>` now actually moves the active template. It reported success
+  and left the pointer untouched: `Command::run` snapshots the active RRID
+  before dispatch and restored it afterwards, undoing the whole point of the
+  command. REPL-only; `switch` is on the MCP deny-list.
+- `load_template` now makes the newly loaded template active even when
+  another was already active, as `list_templates`, the REPL prompt and the
+  docs already described — the same restore-after-dispatch defect as
+  `switch`. Under `mtui-mcp` this also moves the default target of the
+  `testreport_*` tools (the ones that fall back to the active template when
+  given no RRID) onto the newest load.
+- `regenerate <RRID>` on a template that was not loaded now leaves that
+  template active after the reload, instead of reverting to whatever was
+  active before.
 - `run`'s `command` argument now states its contract in the help text: argv
   tokens, no shell, and a pipeline needs three tokens (`sh`, `-c`, the line).
   It previously read only "Command to run on refhost", so `["cat /etc/os-release"]`
