@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 pub(crate) use error::ConfigError;
 pub use options::{Config, SslVerify};
 pub(crate) use paths::config_search_paths;
-pub use paths::{data_dir, terms_path};
+pub use paths::data_dir;
 
 use options::RawConfig;
 

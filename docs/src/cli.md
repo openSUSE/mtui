@@ -1133,22 +1133,3 @@ Options:
   -h, --help
           Print help
 ```
-
-## `terms`
-
-Spawn terminal screens onto the connected hosts.
-
-```text
-Usage: terms [OPTIONS] [TERMNAME]
-
-Arguments:
-  [TERMNAME]
-          Terminal emulator script to spawn consoles with
-
-Options:
-  -t, --target <HOST>
-          Host to act on. Can be used multiple times. If omitted all hosts are used
-
-  -h, --help
-          Print help
-```

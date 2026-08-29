@@ -17,6 +17,5 @@ regenerate            reject                reload_openqa         reload_product
 remove_host           request_review        run                   set_host_state
 set_log_level         set_repo              set_timeout           set_workflow
 shell                 show_diff             show_log              show_update_repos
-switch                terms                 unassign              uninstall
-unload                unlock                update                updates
-whoami
+switch                unassign              uninstall             unload
+unlock                update                updates               whoami

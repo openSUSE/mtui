@@ -69,22 +69,6 @@ install -Dm644 dist/man/mtui.1     /usr/share/man/man1/mtui.1
 install -Dm644 dist/man/mtui-mcp.1 /usr/share/man/man1/mtui-mcp.1
 ```
 
-## Terminal-launcher scripts
-
-The `terms`/`switch` REPL commands open reference-host sessions in a terminal
-emulator using the `term.*.sh` launcher scripts shipped in `dist/terms/`
-(gnome-terminal, konsole/kde, sakura, screen, tmux, urxvtc, xterm). Install them
-into the datadir:
-
-```sh
-install -Dm755 dist/terms/*.sh -t /usr/share/mtui/terms/
-```
-
-`mtui` looks for the scripts under `$MTUI_TERMS_DIR` if that is set (this is how a
-system install points at its shared datadir, e.g.
-`MTUI_TERMS_DIR=/usr/share/mtui/terms`); otherwise it uses
-`$XDG_DATA_HOME/mtui/terms`.
-
 ## Vim syntax highlighting
 
 A Vim plugin for editing QAM test reports ships in `dist/vim-plugin/`: filetype
@@ -108,11 +92,10 @@ directory instead (`~/.vim/{ftdetect,syntax}/testreport.vim`, or
 
 ## Runtime dependencies
 
-Some backends shell out to external tools. They are optional — mtui degrades
-gracefully when they are absent:
+One backend shells out to an external tool. It is optional — mtui degrades
+gracefully when it is absent:
 
 - **`svn`** — testreport checkout/commit (the SVN backend).
-- **a terminal emulator** — for `terms`/`switch` (see above).
 
 The QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`) talks
 to the OBS/IBS API **natively** — no `osc` subprocess. It reads credentials from
@@ -123,8 +106,8 @@ your `oscrc`, located exactly like `osc` itself: `$OSC_CONFIG`, then
 ## Packaged install (openSUSE)
 
 On openSUSE, prefer the `mtui.spec` package build, which installs the binaries,
-completions, man pages, and `term.*.sh` scripts into the standard system paths
-and declares the optional runtime tools as recommends.
+completions, and man pages into the standard system paths and declares `svn` as a
+recommends.
 
 ## Cutting a release (maintainers)
 
@@ -193,7 +176,7 @@ escape hatch, not a default. `update=false` in `_service` pins the checked-in
 
 To build a plain binary tarball locally (e.g. to test the install layout) without
 OBS, use the `xtask package` helper — it assembles the documented tree (both
-binaries, completions, man pages, `term.*.sh`, `LICENSE`, `README`) into a
+binaries, completions, man pages, the Vim plugin, `LICENSE`, `README`) into a
 `mtui-<version>-<target>.tar.gz` plus a `.sha256`:
 
 ```sh

@@ -92,8 +92,8 @@ impl Registry {
 /// replaced by richer hand-written tools: `edit` → the `testreport_*` tools, and
 /// `get`/`put` → the in-band transfer tools (#434), because their synthesised
 /// forms exchange server-local paths a remote `--transport http` client cannot
-/// reach. Local process execution is not a category here: `lrun` was removed
-/// outright rather than denied.
+/// reach. Neither local process execution nor terminal launching is a category
+/// here: `lrun` and `terms` were removed outright rather than denied.
 ///
 /// The synthesiser skips every registry command whose name or alias appears
 /// here and warns at boot if an entry no longer resolves; the
@@ -105,7 +105,6 @@ pub const MCP_DENYLIST: &[&str] = &[
     "shell",  // interactive PTY attach, REPL-only (Wave 2)
     "help",   // registry listing / per-command help, REPL-only
     "edit",   // $EDITOR spawn on the controlling TTY, REPL-only
-    "terms",  // spawn terminal-launcher scripts to hosts, REPL-only
     "get",
     "put", // path-based SFTP transfers; replaced by hand-written in-band MCP tools (#434)
 ];
@@ -186,7 +185,6 @@ pub fn register_all() -> Registry {
     // REPL-only command-surface additions.
     registry.register(Arc::new(commands::Help));
     registry.register(Arc::new(commands::Edit));
-    registry.register(Arc::new(commands::Terms));
     registry
 }
 
@@ -326,8 +324,8 @@ mod tests {
     fn register_all_command_count() {
         // 9 Wave 1 + 14 Wave 2 + 17 Wave 3 + 12 Wave 4 + 4 follow-ups
         // (export, list_refhosts, load_template, list_locks) + reload_openqa +
-        // set_workflow + 3 REPL-only (help, edit, terms) = 61.
-        assert_eq!(register_all().names().count(), 61);
+        // set_workflow + 2 REPL-only (help, edit) = 60.
+        assert_eq!(register_all().names().count(), 60);
     }
 
     #[test]
@@ -403,6 +401,21 @@ mod tests {
     }
 
     #[test]
+    fn terms_is_fully_removed() {
+        // Same contract as `lrun` above (#566): dropped, not denied — so it must
+        // be absent from both the registry and the deny-list. Reinstating either
+        // half alone is the failure this pins.
+        assert!(
+            !register_all().contains("terms"),
+            "terms must not be a registered command"
+        );
+        assert!(
+            !MCP_DENYLIST.contains(&"terms"),
+            "a removed command must not linger on the deny-list"
+        );
+    }
+
+    #[test]
     fn mcp_denylist_is_consistent() {
         // The loop only rules out duplicates; that every entry resolves is
         // asserted below against the full expected list.
@@ -412,8 +425,8 @@ mod tests {
             assert!(seen.insert(*name), "duplicate deny-list entry: {name}");
             let _reserved_or_registered = r.contains(name);
         }
-        // The REPL-only set (quit+aliases, switch, shell, help, edit, terms)
-        // plus the transfer pair re-served as in-band MCP tools (#434).
+        // The REPL-only set (quit+aliases, switch, shell, help, edit) plus the
+        // transfer pair re-served as in-band MCP tools (#434).
         let registered_denied: Vec<&str> = MCP_DENYLIST
             .iter()
             .copied()
@@ -422,7 +435,7 @@ mod tests {
         assert_eq!(
             registered_denied,
             vec![
-                "quit", "exit", "EOF", "switch", "shell", "help", "edit", "terms", "get", "put"
+                "quit", "exit", "EOF", "switch", "shell", "help", "edit", "get", "put"
             ]
         );
     }

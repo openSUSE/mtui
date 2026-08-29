@@ -3,8 +3,8 @@
 //! Each entry either cannot meaningfully run outside an interactive terminal
 //! session, or is replaced by a richer hand-written tool; [`crate::tools`]
 //! filters them out when synthesising tools from the command
-//! [`mtui_core::Registry`]. (`lrun` needs no denying: the command was removed
-//! from mtui entirely.)
+//! [`mtui_core::Registry`]. (`lrun` and `terms` need no denying: both commands
+//! were removed from mtui entirely.)
 //!
 //! The deny surface is **not** re-declared here: it is the single
 //! [`mtui_core::MCP_DENYLIST`], which sits beside `register_all` and is
@@ -16,7 +16,6 @@
 //!   operate on the loaded report file directly instead.
 //! - `shell`: an interactive root PTY needs a TTY the MCP transports lack.
 //! - `help`: the MCP protocol already advertises tool descriptions.
-//! - `terms`: launches terminal-emulator scripts on the operator's `$DISPLAY`.
 //! - `switch`: REPL-only active-template pointer; tools select a template per
 //!   call via the `template` parameter.
 //! - `get`, `put`: their synthesized forms exchange **server-local paths** a
@@ -44,7 +43,7 @@ mod tests {
     #[test]
     fn blocked_commands_are_denied() {
         for name in [
-            "quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch", "get", "put",
+            "quit", "exit", "EOF", "edit", "shell", "help", "switch", "get", "put",
         ] {
             assert!(is_denied(name), "{name} must be denied");
         }

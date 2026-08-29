@@ -72,7 +72,6 @@ mod load_template;
 // REPL-only command-surface additions.
 mod edit;
 mod help;
-mod terms;
 
 pub use downgrade::Downgrade;
 pub use prepare::Prepare;
@@ -131,7 +130,6 @@ pub use sftpget::SftpGet;
 pub use sftpput::SftpPut;
 pub use showdiff::{AnalyzeDiff, ShowDiff};
 pub use showlog::ShowLog;
-pub use terms::Terms;
 
 /// Shared test scaffolding: a [`Session`](crate::Session) whose active report
 /// carries scripted [`MockConnection`](mtui_hosts::MockConnection) hosts and a

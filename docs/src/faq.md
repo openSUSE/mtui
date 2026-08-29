@@ -61,12 +61,6 @@ flattened, and de-duplicated at load.
 `edit` spawns your `$EDITOR` (or `$VISUAL`) on the controlling terminal, as usual.
 Set it in your shell environment.
 
-## Can I spawn a terminal emulator on all refhosts?
-
-Yes — that is what `terms`/`switch` do, using the `term.*.sh` launcher scripts.
-See [Installation](installation.md#terminal-launcher-scripts) for installing them
-and the `$MTUI_TERMS_DIR` override.
-
 ## How do I export results into the testreport?
 
 `export` writes the collected run/update logs (and, for the openQA-sourced
@@ -93,8 +87,8 @@ the unverified scaffold anyway.
 
 No. The QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`)
 talks to the OBS/IBS API natively — no `osc` subprocess. `svn` is still used for
-the SVN testreport backend, and a terminal emulator for `terms`/`switch`; both
-are optional and mtui degrades gracefully when they are absent.
+the SVN testreport backend; it is optional and mtui degrades gracefully when it
+is absent.
 
 ## Why does `assign`/`approve` go to Gitea when I expected OBS (or vice versa)?
 

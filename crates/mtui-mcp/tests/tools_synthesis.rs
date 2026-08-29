@@ -17,9 +17,7 @@ use serde_json::Value;
 fn deny_list_is_filtered() {
     let tools = build_tools(&register_all());
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-    for denied in [
-        "quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch",
-    ] {
+    for denied in ["quit", "exit", "EOF", "edit", "shell", "help", "switch"] {
         assert!(!names.contains(&denied), "{denied} leaked into tools");
     }
     // A representative exposed command is present.

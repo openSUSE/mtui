@@ -72,7 +72,7 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --locked --target "${{ matrix.target }}"
 
-      # xtask stages the two binaries with completions/man/terms/vim-plugin from
+      # xtask stages the two binaries with completions/man/vim-plugin from
       # dist/ and writes a `sha256sum -c`-compatible checksum (sha256sum on Linux,
       # shasum -a 256 on macOS) into dist/release/.
       - name: Package release tarball

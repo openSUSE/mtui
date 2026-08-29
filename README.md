@@ -29,11 +29,12 @@ the SUSE maintenance ecosystem.
 
 ### MCP security boundary
 
-Interactive/REPL-only commands (`shell`, `edit`, `terms`, …) are permanently
+Interactive/REPL-only commands (`shell`, `edit`, `help`, …) are permanently
 deny-listed: MCP synthesis and routing never expose them over stdio or HTTP,
 under every MCP profile, and the deny cannot be reversed with
-`[mcp] tools_allow`. Local process execution is not exposed at all — the former
-`lrun` command was removed from mtui entirely.
+`[mcp] tools_allow`. Local process execution and terminal launching are not
+exposed at all — the `lrun` and `terms` commands were removed from mtui
+entirely.
 
 MCP profiles reduce the advertised tool surface; they are not authentication or
 authorization. HTTP session isolation is likewise not caller authentication.
@@ -85,15 +86,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings   # lint ga
 
 ## Runtime dependencies
 
-Some backends shell out to external tools (kept optional; degrade gracefully when
-absent):
+One backend shells out to an external tool (kept optional; degrades gracefully
+when absent):
 
 - `svn` — testreport checkout/commit (SVN backend)
-- a terminal emulator — for the `terms`/`switch` commands. The `term.*.sh`
-  launcher scripts ship in [`dist/terms/`](dist/terms); packaging installs them
-  into the datadir (`$XDG_DATA_HOME/mtui/terms`), and `MTUI_TERMS_DIR` overrides
-  where the `terms` command looks for them (e.g. a system path like
-  `/usr/share/mtui/terms`).
 
 The QAM review workflow talks to the OBS/IBS API natively (no `osc` subprocess);
 it reads credentials from the user's oscrc — located exactly like `osc` itself

@@ -193,13 +193,14 @@ next actionable task before working on a subsystem.
 - **MCP is a thin adapter.** `mtui-mcp` builds one tool per non-denied command by
   converting the command's `clap` arg spec to a JSON schema, reconstructing argv
   from tool kwargs, and dispatching through the **same engine** as the REPL.
-  REPL-only commands (`quit`, `exit`, `EOF`, `edit`, `shell`, `help`, `terms`,
-  `switch`) are deny-listed, as are `get`/`put`, which are re-served under the
-  same names as hand-written in-band transfer tools (#434) — a deny-listed
-  command may be replaced by a richer hand-written tool (`edit` → the
-  `testreport_*` tools is the same pattern). The deny-list ∩ registry is
-  consistency-tested and drift is warned about at boot. Local process execution has no command at all —
-  `lrun` was removed by design; do not reintroduce it.
+  REPL-only commands (`quit`, `exit`, `EOF`, `edit`, `shell`, `help`, `switch`)
+  are deny-listed, as are `get`/`put`, which are re-served under the same names
+  as hand-written in-band transfer tools (#434) — a deny-listed command may be
+  replaced by a richer hand-written tool (`edit` → the `testreport_*` tools is
+  the same pattern). The deny-list ∩ registry is consistency-tested and drift is
+  warned about at boot. Local process execution and terminal launching have no
+  entry because they have no command: `lrun` and `terms` were removed by design;
+  do not reintroduce either.
 - **Cancellation is cooperative-first.** `Session` carries a
   `CancellationToken` (the seam); the `Command::run` driver checks it before
   dispatch and between fan-out templates. `Session::activate` pushes the token
@@ -377,11 +378,11 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
 5. Update the command reference docs (prefer generating from the registry).
 
 ## Runtime dependencies (subprocess, not crates)
-`svn` (testreport checkout) and terminal emulators for `terms/switch`. Declare as
-packaging recommends; keep them optional and degrade gracefully when absent. The
-QAM review workflow (`assign`/`unassign`/`approve`/`reject`/`comment`) no longer
-shells out to `osc`/`osc-plugin-qam` — it talks to the OBS/IBS API natively (see
-the native OBS backend and `[obs]` config), reading credentials from `oscrc`.
+`svn` (testreport checkout). Declare as a packaging recommends; keep it optional
+and degrade gracefully when absent. The QAM review workflow (`assign`/`unassign`/
+`approve`/`reject`/`comment`) no longer shells out to `osc`/`osc-plugin-qam` — it
+talks to the OBS/IBS API natively (see the native OBS backend and `[obs]`
+config), reading credentials from `oscrc`.
 
 ## Further reading
 - `docs/src/architecture.md` — architecture map (crate layout, trait injection,
