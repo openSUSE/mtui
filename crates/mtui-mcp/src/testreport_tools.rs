@@ -40,7 +40,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use mtui_core::Session;
+use mtui_core::{Session, SingleTemplate, ambiguous_template_message};
 use mtui_testreport::atomic_write_file;
 use serde_json::{Map, Value, json};
 
@@ -88,7 +88,9 @@ fn refuse(msg: impl Into<String>) -> McpCommandError {
 ///
 /// * `template` given → that loaded template (`templates.get`); unknown → refuse
 ///   `"template not loaded: <rrid>"`.
-/// * `template` omitted with >1 loaded → refuse `"multiple templates loaded (…)"`.
+/// * `template` omitted with >1 loaded → refuse with the shared
+///   [`mtui_core::ambiguous_template_message`] wording (matching this tool
+///   family's own descriptions, which already say "more than one template").
 /// * `template` omitted with 0/1 loaded → the active report.
 ///
 /// The report must then be loaded and have a path, else
@@ -106,16 +108,16 @@ fn resolve_path(session: &Session, template: Option<&str>) -> Result<PathBuf, Mc
     let rrid = if let Some(rrid) = template {
         rrid.to_owned()
     } else {
-        if session.templates.len() > 1 {
-            let rrids = session.templates.rrids().join(", ");
-            return Err(refuse(format!(
-                "multiple templates loaded ({rrids}); pass template=<rrid>"
-            )));
-        }
-        match session.templates.active_rrid() {
-            Some(r) => r.to_owned(),
+        match session.resolve_single_template(None, false) {
+            SingleTemplate::One(rrid) => rrid,
+            SingleTemplate::Ambiguous(loaded) => {
+                return Err(refuse(ambiguous_template_message(
+                    &loaded,
+                    "pass `template=<rrid>`",
+                )));
+            }
             // Read the null active report so the refusal message is consistent.
-            None => {
+            SingleTemplate::NothingLoaded | SingleTemplate::NotLoaded(_) => {
                 let report = session.metadata();
                 return validate(report.is_loaded(), report.base().path.clone());
             }
@@ -1422,7 +1424,10 @@ mod tests {
         let err = testreport_read(&session, None, 1, None, None)
             .await
             .expect_err("ambiguous");
-        assert!(err.stderr.contains("multiple templates loaded"), "{err:?}");
+        assert!(
+            err.stderr.contains("more than one template is loaded"),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

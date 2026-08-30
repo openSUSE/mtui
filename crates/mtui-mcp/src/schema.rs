@@ -73,6 +73,19 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
     let is_list = is_list_arg(arg);
     let base = base_type(arg);
 
+    // A tri-state `Set`-action bool (`--all-templates`, `require_equals`): a
+    // bare boolean type, never wrapped `X | null` (unlike every other optional
+    // scalar without a default) and never required — the absent/true/false
+    // states are exactly JSON's own optional-boolean shape.
+    if matches!(base, BaseType::Scalar(ScalarKind::Boolean)) {
+        let mut inner = Map::new();
+        inner.insert("type".to_owned(), Value::String("boolean".to_owned()));
+        if let Some(desc) = description(arg) {
+            inner.insert("description".to_owned(), Value::String(desc));
+        }
+        return (Value::Object(inner), false);
+    }
+
     let mut inner = Map::new();
     match &base {
         BaseType::Enum(values) => {
@@ -152,6 +165,7 @@ enum BaseType {
 #[derive(Clone, Copy)]
 enum ScalarKind {
     Integer,
+    Boolean,
     String,
 }
 
@@ -159,6 +173,7 @@ impl ScalarKind {
     fn json_type(self) -> &'static str {
         match self {
             ScalarKind::Integer => "integer",
+            ScalarKind::Boolean => "boolean",
             ScalarKind::String => "string",
         }
     }
@@ -170,6 +185,15 @@ impl ScalarKind {
 /// output [`TypeId`] selects integer vs string, an unrecognised one degrading to
 /// string with a WARNING rather than failing schema synthesis.
 fn base_type(arg: &Arg) -> BaseType {
+    // Checked before `get_possible_values()`: clap's `BoolValueParser` reports
+    // `["true", "false"]` as possible values (it drives `--flag=true|false`
+    // parsing/completion), which would otherwise mis-render a `Set`-action
+    // bool (`--all-templates=<bool>`, tri-state so it cannot use
+    // `SetTrue`/`SetFalse`) as a string enum instead of a JSON boolean.
+    if arg.get_value_parser().type_id() == TypeId::of::<bool>() {
+        return BaseType::Scalar(ScalarKind::Boolean);
+    }
+
     let choices = arg.get_possible_values();
     if !choices.is_empty() {
         return BaseType::Enum(choices.iter().map(|pv| pv.get_name().to_owned()).collect());
@@ -285,6 +309,11 @@ fn default_scalar(arg: &Arg, base: &BaseType) -> Option<Value> {
             .ok()
             .map(|n| json!(n))
             .or(Some(Value::String(s))),
+        BaseType::Scalar(ScalarKind::Boolean) => s
+            .parse::<bool>()
+            .ok()
+            .map(Value::Bool)
+            .or(Some(Value::String(s))),
         _ => Some(Value::String(s)),
     }
 }
@@ -377,6 +406,21 @@ mod tests {
         assert_eq!(timeout["type"], "integer");
         assert!(required(&schema).contains(&"timeout"));
         assert!(timeout.get("default").is_none());
+    }
+
+    #[test]
+    fn all_templates_is_a_defaultless_boolean() {
+        // The shared base flag is tri-state (`Set` + bool value parser), not
+        // `SetTrue`: it must render as a plain `{"type":"boolean"}` with no
+        // `default` — a tri-state absent/true/false has none to state.
+        let registry: Registry = register_all();
+        let cmd = registry.get("whoami").expect("whoami is registered");
+        let parser = mtui_core::command_parser(cmd.as_ref());
+        let schema = command_input_schema(&parser);
+        let all_templates = &props(&schema)["all_templates"];
+        assert_eq!(all_templates["type"], "boolean");
+        assert!(all_templates.get("default").is_none());
+        assert!(!required(&schema).contains(&"all_templates"));
     }
 
     // --------------------------------------------------------------- booleans

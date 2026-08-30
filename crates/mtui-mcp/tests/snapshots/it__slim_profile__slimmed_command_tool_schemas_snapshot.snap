@@ -8,8 +8,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -44,8 +43,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -63,8 +61,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "group": {
@@ -98,8 +95,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "force": {
@@ -134,8 +130,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "full_output": {
@@ -158,8 +153,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -177,8 +171,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "message": {
@@ -204,8 +197,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "allow_stale": {
@@ -273,8 +265,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -304,8 +295,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "allow_stale": {
@@ -349,8 +339,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -391,8 +380,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -410,8 +398,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "event": {
@@ -451,8 +438,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -470,8 +456,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "hosts": {
@@ -501,8 +486,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -520,8 +504,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "hosts": {
@@ -558,8 +541,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "hosts": {
@@ -591,8 +573,7 @@ expression: pretty
           "type": "array"
         },
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "arch": {
@@ -649,8 +630,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "hosts": {
@@ -675,8 +655,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "template": {
@@ -694,8 +673,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -713,8 +691,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -732,8 +709,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "hosts": {
@@ -765,8 +741,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "auto": {
@@ -802,8 +777,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "comment": {
@@ -841,8 +815,7 @@ expression: pretty
           "type": "boolean"
         },
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "arch": {
@@ -890,8 +863,7 @@ expression: pretty
           "type": "array"
         },
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "days": {
@@ -945,8 +917,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -991,8 +962,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -1022,8 +992,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -1070,8 +1039,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "group": {
@@ -1124,8 +1092,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -1143,8 +1110,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "hosts": {
@@ -1169,8 +1135,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "hosts": {
@@ -1195,8 +1160,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -1232,8 +1196,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -1270,8 +1233,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "hosts": {
@@ -1307,8 +1269,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "level": {
@@ -1344,8 +1305,7 @@ expression: pretty
           "type": "boolean"
         },
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -1380,8 +1340,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "hosts": {
@@ -1413,8 +1372,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -1444,8 +1402,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -1463,8 +1420,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "hosts": {
@@ -1498,8 +1454,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (the default for this command); --all-templates=false narrows to one instead",
           "type": "boolean"
         },
         "template": {
@@ -1517,8 +1472,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "group": {
@@ -1548,8 +1502,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -1590,8 +1543,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "rrid": {
@@ -1616,8 +1568,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "force": {
@@ -1652,8 +1603,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise never implicitly fans out — it acts on the active template (or the sole one loaded), refusing headlessly with several loaded and none named",
           "type": "boolean"
         },
         "background": {
@@ -1698,8 +1648,7 @@ expression: pretty
           "type": "boolean"
         },
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "assignee": {
@@ -1755,8 +1704,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "all_templates": {
-          "default": false,
-          "description": "Act on every loaded template",
+          "description": "Act on every loaded template (bare); this command otherwise acts on the active template, fanning out only headlessly with several loaded and none named",
           "type": "boolean"
         },
         "template": {

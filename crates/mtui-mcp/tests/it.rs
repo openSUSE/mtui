@@ -6,6 +6,8 @@
 //! per file. Add new integration tests as a module here, not as a new top-level
 //! `tests/*.rs`. Each module keeps its own `#![cfg(feature = "mcp")]` gate.
 
+#[path = "ambiguous_template.rs"]
+mod ambiguous_template;
 #[path = "http_body_limit.rs"]
 mod http_body_limit;
 #[path = "http_isolation.rs"]

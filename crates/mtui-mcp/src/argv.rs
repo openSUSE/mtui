@@ -75,6 +75,17 @@ pub(crate) fn kwargs_to_argv(
             continue;
         }
 
+        // A `require_equals` `Set` arg (tri-state `--all-templates`, the only
+        // one today) never accepts a space-separated value — clap would parse
+        // it as a positional. Emit `--flag=value` in one token instead of
+        // `long_flag`+space, the shape `flags.push`/`flags.extend` produces
+        // below for every other scalar option.
+        if arg.is_require_equals_set() {
+            let value = items.into_iter().next().unwrap_or_default();
+            flags.push(format!("{}={value}", long_flag(arg)));
+            continue;
+        }
+
         if is_positional(arg) {
             tail.extend(items);
             continue;
@@ -415,16 +426,26 @@ mod tests {
 
     #[test]
     fn all_templates_bool_round_trips() {
+        // `--all-templates` is a tri-state `require_equals` flag, not
+        // `SetTrue`: it must emit `--flag=value` in one token, never a bare
+        // flag nor a space-separated value (which `require_equals` rejects).
         let out = argv("whoami", json!({ "all_templates": true }));
-        assert_eq!(out, vec!["--all-templates"]);
+        assert_eq!(out, vec!["--all-templates=true"]);
         assert_reparses("whoami", &out);
+    }
+
+    #[test]
+    fn all_templates_false_round_trips() {
+        let out = argv("update", json!({ "all_templates": false }));
+        assert_eq!(out, vec!["--all-templates=false"]);
+        assert_reparses("update", &out);
     }
 
     #[test]
     fn per_command_flags_precede_tail_routed_multi() {
         // A plain scalar flag comes before an append flag routed to the tail.
         let out = argv("commit", json!({ "msg": ["m"], "all_templates": true }));
-        assert_eq!(out, vec!["--all-templates", "--msg", "m"]);
+        assert_eq!(out, vec!["--all-templates=true", "--msg", "m"]);
         assert_reparses("commit", &out);
     }
 
