@@ -429,9 +429,12 @@ pub(crate) fn forced_abort_note(unlocked: &AbortUnlock) -> String {
 /// *parse error* instead of scoping it. That job therefore stays unpinned, and
 /// its recorded scope can drift if the loaded set changes mid-flight.
 fn scope_argv(rrid: &str, argv: &[String]) -> Vec<String> {
-    let already_scoped = argv
-        .iter()
-        .any(|a| a == "-T" || a == "--template" || a == "--all-templates");
+    let already_scoped = argv.iter().any(|a| {
+        a == "-T"
+            || a == "--template"
+            || a == "--all-templates"
+            || a.starts_with("--all-templates=")
+    });
     if already_scoped {
         return argv.to_vec();
     }
@@ -2616,6 +2619,7 @@ mod tests {
             vec!["-T".to_owned(), "R:2".to_owned()],
             vec!["--template".to_owned(), "R:2".to_owned()],
             vec!["--all-templates".to_owned()],
+            vec!["--all-templates=false".to_owned()],
         ] {
             assert_eq!(
                 scope_argv("R:1", &already),

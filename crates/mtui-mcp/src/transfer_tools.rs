@@ -23,6 +23,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use base64ct::{Base64, Encoding};
+use mtui_core::{SingleTemplate, ambiguous_template_message};
 use serde_json::{Map, Value, json};
 
 use crate::session::{
@@ -231,34 +232,33 @@ fn opt_str<'a>(
 ///
 /// Refuses when nothing is loaded, when `template` names an unloaded rrid, and
 /// when more than one is loaded with no `template`, as the testreport tools do.
+/// The ambiguous case shares its wording with every other surface via
+/// [`mtui_core::ambiguous_template_message`]; the other two refusals are this
+/// tool family's own, pre-existing and grepped.
 fn resolve_rrid(
     session: &mtui_core::Session,
     template: Option<&str>,
 ) -> Result<String, McpCommandError> {
-    let rrids = session.templates.rrids();
-    match template {
-        Some(t) => {
-            if rrids.iter().any(|r| r == t) {
-                Ok(t.to_owned())
-            } else {
-                Err(refuse(format!(
-                    "template {t} is not loaded (loaded: {})",
-                    if rrids.is_empty() {
-                        "none".to_owned()
-                    } else {
-                        rrids.join(", ")
-                    }
-                )))
-            }
+    match session.resolve_single_template(template, false) {
+        SingleTemplate::One(rrid) => Ok(rrid),
+        SingleTemplate::NothingLoaded => {
+            Err(refuse("no report loaded, please use load_template first"))
         }
-        None => match rrids.len() {
-            0 => Err(refuse("no report loaded, please use load_template first")),
-            1 => Ok(rrids[0].clone()),
-            _ => Err(refuse(format!(
-                "more than one template is loaded ({}); pass `template=<rrid>`",
-                rrids.join(", ")
-            ))),
-        },
+        SingleTemplate::NotLoaded(t) => {
+            let rrids = session.templates.rrids();
+            Err(refuse(format!(
+                "template {t} is not loaded (loaded: {})",
+                if rrids.is_empty() {
+                    "none".to_owned()
+                } else {
+                    rrids.join(", ")
+                }
+            )))
+        }
+        SingleTemplate::Ambiguous(loaded) => Err(refuse(ambiguous_template_message(
+            &loaded,
+            "pass `template=<rrid>`",
+        ))),
     }
 }
 
