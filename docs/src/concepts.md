@@ -20,16 +20,33 @@ Navigation and single-target commands (`load_template`, `edit`, `switch`,
 
 ## Fan-out across templates
 
-When more than one template is loaded, **action commands fan out across every
-loaded template by default**, each acting on that template's own hosts (or its own
-report, for report-scoped commands). Each template's output is prefixed with an
-`=== <RRID> ===` banner so results stay attributable.
+When more than one template is loaded, a command falls into one of two groups:
 
-Scope a single call two ways:
+- **Read/annotate commands** (`list_*`, `show_*`, `openqa_*`, `checkers`,
+  `checkout`, `export`, `set_workflow`, `comment`, …) **fan out across every
+  loaded template by default** — none of them mutates shared remote state, and
+  re-running one is always safe. Each template's output is prefixed with an
+  `=== <RRID> ===` banner so results stay attributable.
+- **Host-mutating and remote-write commands** (`update`, `prepare`, `downgrade`,
+  `install`, `uninstall`, `set_repo`, `run`, `reboot`, `lock`, `unlock`,
+  `add_host`, `remove_host`, `get`, `put`, `approve`, `reject`, `assign`,
+  `unassign`, `request_review`, `commit`) **never implicitly fan out**: bare,
+  they act on exactly one template — the active one in the REPL, or the sole
+  loaded one — and refuse rather than guess when several are loaded headlessly
+  and none is named.
+
+Scope a single call three ways:
 
 - **`-T <RRID>` / `--template <RRID>`** — act on one loaded template only.
-- **`--all-templates`** — force fan-out explicitly (already the default; useful in
-  scripts). Mutually exclusive with `-T`.
+- **`--all-templates`** — force fan-out explicitly, on either group. Mutually
+  exclusive with `-T`.
+- **`--all-templates=false`** — suppress fan-out on a read/annotate command,
+  narrowing it to the same single-template resolution the other group uses by
+  default.
+
+A headless caller (MCP) with several templates loaded and neither flag named
+gets [`AmbiguousTemplate`](cli.md), not a silent guess — the error names the
+loaded RRIDs and how to scope the call.
 
 Failure handling is per-template: if a fanned-out command fails on one template it
 **keeps running on the rest** and reports an aggregate failure at the end. When a
