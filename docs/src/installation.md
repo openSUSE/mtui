@@ -119,8 +119,10 @@ both — with four caveats the OBS build does not have:
 - **The `.rpm`s own no directories.** cargo-generate-rpm has no `%dir`, so
   erasing them leaves the doc- and licensedirs behind.
 
-Because the binaries are static the packages declare no dependencies at all —
-no libc, and no shell either, since nothing they ship is a script.
+Because the binaries are static the packages declare no *mandatory* runtime or
+library dependencies — no libc, and no shell either, since nothing they ship is
+a script. Both are asserted by the release job. They do declare recommends:
+`subversion` on both, plus `mtui-mcp` from `mtui`.
 
 Verify with `sha256sum --ignore-missing -c mtui-packages.sha256` — one file
 covers all four packages, so a partial download needs `--ignore-missing`.
@@ -163,11 +165,14 @@ osc -A ibs whoami        # confirms the `ibs` alias resolves
 
 1. **Tag the release commit** so `tar_scm`'s `revision=@PARENT_TAG@` resolves and
    `git describe --tags` stamps the version into the binaries. The `_service`
-   `versionrewrite` strips a leading `v`, so `v1.2.0` becomes `Version: 1.2.0`.
+   `versionrewrite` pattern (`v?([0-9].*)`) tolerates a leading `v` but does not
+   require one, and mtui's tags carry none: `26.4.1` becomes `Version: 26.4.1`.
+   The format is `XX.Y.Z` — year-based line, major, patch. A `v`-prefixed tag is
+   invalid and does not trigger the release workflow.
 
    ```sh
-   git tag v1.2.0
-   git push origin v1.2.0
+   git tag 26.4.1
+   git push origin 26.4.1
    ```
 
 2. **Check out the IBS package and drop in the sources:**
@@ -211,8 +216,8 @@ binaries, completions, man pages, the Vim plugin, `LICENSE`, `README`) into a
 
 ```sh
 cargo build --release
-cargo xtask package --version v1.2.0 --target "$(rustc -vV | sed -n 's/host: //p')"
-# → dist/release/mtui-v1.2.0-<target>.tar.gz (+ .sha256)
+cargo xtask package --version 26.4.1 --target "$(rustc -vV | sed -n 's/host: //p')"
+# → dist/release/mtui-26.4.1-<target>.tar.gz (+ .sha256)
 ```
 
 This tarball is a local convenience only; the OBS build uses the git-tag source

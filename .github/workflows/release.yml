@@ -153,16 +153,52 @@ jobs:
               echo "::error::$t not on PATH after apt-get install"; exit 1; }
           done
 
-      # Both pinned, and the pins are asserted: a floated cargo-generate-rpm is
-      # how the directory-ownership trap in Cargo.toml gets re-armed.
-      - name: Install packaging tools
+      # These two produce the bytes that get published as release assets, so
+      # `cargo install` off the live index is not enough — but the two tools
+      # need different treatment, because only one is in install-action's
+      # manifest.
+      #
+      # `cargo-deb` is: the SHA-pinned action resolves it to a prebuilt binary
+      # whose SHA256 (and attestation, where published) it verifies, the same
+      # provenance path `cargo-deny` and `cargo-llvm-cov` already use here.
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518  # v2.86.5
+        with:
+          tool: cargo-deb@3.7.0
+
+      # `cargo-generate-rpm` is not in that manifest, so install-action would
+      # silently fall back to `cargo install` off the index. The expected crate
+      # hash is therefore recorded *here*, making the input repository-
+      # controlled: this fails closed if crates.io ever serves different bytes
+      # for the pinned version, rather than trusting whatever the index says at
+      # release time.
+      #
+      # Unpacked in RUNNER_TEMP, never in the checkout: an extracted crate under
+      # the workspace root is not one of its `members`, and `cargo install
+      # --path` on it dies with "current package believes it's in a workspace
+      # when it's not". This job does not run on pull requests, so that would
+      # only have surfaced at release time.
+      - name: Install cargo-generate-rpm
+        working-directory: ${{ runner.temp }}
+        env:
+          CGR_VERSION: '0.21.0'
+          CGR_SHA256: 3187e19f0e00274b3b24f017559038722388889bd1a2ecd2281cd748e7d52ec6
         run: |
           set -euo pipefail
-          cargo install cargo-deb --locked --version 3.7.0
-          cargo install cargo-generate-rpm --locked --version 0.21.0
-          # `cargo install` writes to $CARGO_HOME/bin, which cargo searches for
-          # subcommands ahead of $PATH — so `cargo deb` would find the pin. The
-          # bare-binary form below does not, hence the explicit check.
+          crate="cargo-generate-rpm-${CGR_VERSION}.crate"
+          curl -sSLf --proto '=https' --tlsv1.2 \
+            -o "$crate" \
+            "https://static.crates.io/crates/cargo-generate-rpm/${crate}"
+          echo "${CGR_SHA256}  ${crate}" | sha256sum -c -
+          tar -xf "$crate"
+          cargo install --locked --path "cargo-generate-rpm-${CGR_VERSION}"
+
+      - name: Assert the packaging-tool pins
+        run: |
+          set -euo pipefail
+          # The bare-binary form, not `cargo deb`: cargo would resolve a
+          # subcommand from $CARGO_HOME/bin ahead of $PATH and could report a
+          # different build than the one the package steps invoke.
           [ "$(cargo-deb --version)" = "cargo-deb 3.7.0" ] || {
             echo "::error::$(cargo-deb --version) != 3.7.0"; exit 1; }
           [ "$(cargo-generate-rpm --version)" = "cargo-generate-rpm 0.21.0" ] || {
@@ -403,11 +439,69 @@ jobs:
       # required for `gh release create`
       contents: write
     steps:
-      - name: Download build artifacts
+      # By exact name into separate directories, never `merge-multiple` over
+      # whatever the run happened to produce: this job holds `contents: write`,
+      # and the previous shape published `dist/*` unchecked, so any artifact
+      # reaching the run — from a future job, or a re-run of a changed
+      # workflow — would have been published as a release asset unexamined.
+      - name: Download the linux build artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: dist
-          merge-multiple: true
+          name: x86_64-unknown-linux-musl
+          path: dist/in/x86_64-unknown-linux-musl
+      - name: Download the macos build artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: aarch64-apple-darwin
+          path: dist/in/aarch64-apple-darwin
+      - name: Download the package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: packages-x86_64
+          path: dist/in/packages-x86_64
+
+      # Every artifact ships a `sha256sum -c`-compatible manifest, so the
+      # manifest *is* the expected file list — checked both ways: `-c` proves
+      # every listed file is present and intact, and the count comparison
+      # proves nothing unlisted rode along. Package filenames carry a version
+      # and an arch, so enumerating them literally here would be a second place
+      # to update; the manifest is generated beside them.
+      - name: Verify the artifacts and assemble the publish set
+        run: |
+          set -euo pipefail
+          mkdir -p dist/publish
+          for d in dist/in/*/; do
+            name="$(basename "$d")"
+            shopt -s nullglob
+            manifests=("$d"*.sha256)
+            shopt -u nullglob
+            [ "${#manifests[@]}" -eq 1 ] || {
+              echo "::error::$name: expected exactly 1 .sha256 manifest, found ${#manifests[@]}"
+              exit 1; }
+            manifest="${manifests[0]}"
+
+            ( cd "$d" && sha256sum -c --strict -- "$(basename "$manifest")" )
+
+            listed="$(wc -l < "$manifest")"
+            present="$(find "$d" -type f ! -name '*.sha256' -printf '.' | wc -c)"
+            [ "$present" -eq "$listed" ] || {
+              echo "::error::$name: $present files present but $listed listed in $(basename "$manifest")"
+              find "$d" -type f -printf '  %P\n' >&2
+              exit 1; }
+
+            for f in "$d"*; do
+              base="$(basename "$f")"
+              [ -e "dist/publish/$base" ] && {
+                echo "::error::duplicate asset name across artifacts: $base"; exit 1; }
+              cp -- "$f" "dist/publish/$base"
+            done
+            echo "$name: $listed file(s) verified"
+          done
+
+          count="$(find dist/publish -type f -printf '.' | wc -c)"
+          [ "$count" -gt 0 ] || { echo "::error::no assets to publish"; exit 1; }
+          echo "publishing $count asset(s):"
+          find dist/publish -type f -printf '  %P\n' | sort
 
       # Needed only for the tag list that picks the release-notes base below.
       # `fetch-depth: 0` because a shallow clone carries no tags.
@@ -435,16 +529,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # An explicit walk rather than `grep -B1`: the step runs under
-          # `bash -e`, where a grep that matches nothing exits 1 and would fail
-          # the release. This cannot fail, and yields an empty base for the
-          # oldest tag — the first-release case, where generating from the
-          # repository root is correct.
-          prev=""
-          while read -r tag; do
-            [ "$tag" = "$GITHUB_REF_NAME" ] && break
-            prev="$tag"
-          done < <(git tag --list '[0-9]*.[0-9]*.[0-9]*' | sort -V)
+          # Ordering lives in a script so it can be tested (`sort -V` puts
+          # 26.4.0 *before* 26.4.0-rc1, which is what this replaces); it fails
+          # if the release tag is not in the set, rather than silently taking a
+          # neighbour. See xtask/tests/release_notes_base.rs.
+          prev="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' \
+            | bash .github/scripts/release-notes-base.sh "$GITHUB_REF_NAME")"
           echo "NOTES_START_TAG=$prev" >> "$GITHUB_ENV"
           echo "release-notes base: ${prev:-<repository root: first release>}"
 
@@ -457,4 +547,4 @@ jobs:
           if [ -n "$NOTES_START_TAG" ]; then
             args+=(--notes-start-tag "$NOTES_START_TAG")
           fi
-          gh release create "$GITHUB_REF_NAME" "${args[@]}" dist/*
+          gh release create "$GITHUB_REF_NAME" "${args[@]}" dist/publish/*
