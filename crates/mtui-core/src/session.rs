@@ -649,6 +649,23 @@ impl Session {
         }
     }
 
+    /// Whether none of `named` belong to `rrid`'s host group, or `None` when
+    /// the entry is held elsewhere. The guard-aware counterpart of
+    /// [`TemplateRegistry::owns_none_of`](crate::TemplateRegistry::owns_none_of),
+    /// exactly like [`is_hostless`](Self::is_hostless) above.
+    #[must_use]
+    pub(crate) fn owns_none_of(&self, rrid: &str, named: &[String]) -> Option<bool> {
+        if self.active_guard.is_some() && self.templates.active_rrid() == Some(rrid) {
+            Some(
+                !named
+                    .iter()
+                    .any(|h| self.metadata().base().targets.contains(h)),
+            )
+        } else {
+            self.templates.owns_none_of(rrid, named)
+        }
+    }
+
     /// A `list_templates` row for `rrid`, or `None` if it is not loaded.
     ///
     /// Guard-aware, like [`is_hostless`](Self::is_hostless) — but a foreign

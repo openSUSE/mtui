@@ -10,6 +10,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Destructive and remote-write commands (`update`, `prepare`, `downgrade`,
+  `install`, `uninstall`, `set_repo`, `run`, `reboot`, `lock`, `unlock`,
+  `add_host`, `remove_host`, `get`, `put`, `approve`, `reject`, `assign`,
+  `unassign`, `request_review`, `commit`) no longer fan out over every loaded
+  template by default (#575). Bare, each now acts on exactly one template —
+  the active one in the REPL, or the sole loaded one — and, over MCP with
+  several loaded and none named, refuses with an error naming the loaded RRIDs
+  instead of silently acting on all of them. Pass `-T`/`template=` to target
+  one explicitly, or `--all-templates`/`all_templates=true` to fan out as
+  before. `get`/`put` are REPL-only here: the MCP `get`/`put` tools are the
+  hand-written in-band transfer tools (#434), untouched by this change and
+  already refusing the same way.
+- `--all-templates` is now tri-state (`--all-templates=false` suppresses
+  fan-out) instead of a plain flag; it was previously inert on every
+  fan-out-by-default command (`list_*`/`show_*`/`openqa_*`/etc.), which always
+  fanned out regardless of the flag's value. The MCP `all_templates` tool
+  parameter follows: it is now a plain `boolean` with no default (was
+  `{"type":"boolean","default":false}`), and its description states each
+  command's actual default rather than a generic one.
+- The `testreport_*` MCP tools' "several templates loaded, none named"
+  refusal now reads `more than one template is loaded (…)` instead of
+  `multiple templates loaded (…)`, matching the wording every other surface
+  (the `get`/`put` transfer tools, and the new core-dispatch refusal above)
+  already used and that the tools' own descriptions already advertised.
 - `get` in a session with no template loaded (`add_host` without a
   `load_template`) now refuses with `no report working directory` instead of
   downloading into `<cwd>/downloads/` — the download target is the report
@@ -106,6 +130,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- An unqualified `update`/`downgrade`/`set_repo`/… over MCP with several
+  templates loaded used to run on **every** loaded template — a request about
+  one RRID could patch, downgrade, or re-point the repos of every other
+  loaded update in the session (#575). It now refuses instead, per the
+  `Changed` entry above.
+- `--all-templates -t <host>` now skips a loaded template that does not own
+  `<host>`, instead of dispatching into it and failing with `HostNotConnected`
+  — the same host-less skip a `-t`-less fan-out already applies, extended to a
+  named host that simply belongs to a different template (#575).
 - A failed `update` now reports, in its tool result and on the display, that
   the test update repositories are left configured on the hosts for
   retry/diagnosis and that `set_repo --remove` clears them. The fact was

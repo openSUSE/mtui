@@ -32,7 +32,7 @@ impl Command for Commit {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(Commit.name(), "commit");
-        assert_eq!(Commit.scope(), Scope::Fanout);
+        assert_eq!(Commit.scope(), Scope::Explicit);
     }
 
     #[tokio::test]

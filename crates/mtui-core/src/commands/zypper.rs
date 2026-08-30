@@ -46,7 +46,7 @@ impl Command for Install {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -85,7 +85,7 @@ impl Command for Uninstall {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -120,8 +120,8 @@ mod tests {
     fn names_and_scopes() {
         assert_eq!(Install.name(), "install");
         assert_eq!(Uninstall.name(), "uninstall");
-        assert_eq!(Install.scope(), Scope::Fanout);
-        assert_eq!(Uninstall.scope(), Scope::Fanout);
+        assert_eq!(Install.scope(), Scope::Explicit);
+        assert_eq!(Uninstall.scope(), Scope::Explicit);
     }
 
     #[test]

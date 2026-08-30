@@ -27,7 +27,7 @@ impl Command for SftpGet {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(SftpGet.name(), "get");
-        assert_eq!(SftpGet.scope(), Scope::Fanout);
+        assert_eq!(SftpGet.scope(), Scope::Explicit);
     }
 
     #[tokio::test]

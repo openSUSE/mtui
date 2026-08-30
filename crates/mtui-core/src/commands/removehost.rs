@@ -35,7 +35,7 @@ impl Command for RemoveHost {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(RemoveHost.name(), "remove_host");
-        assert_eq!(RemoveHost.scope(), Scope::Fanout);
+        assert_eq!(RemoveHost.scope(), Scope::Explicit);
     }
 
     #[tokio::test]

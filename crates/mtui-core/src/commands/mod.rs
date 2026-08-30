@@ -1331,6 +1331,116 @@ mod repoints_active_scope_guard {
     }
 }
 
+/// Registry-wide guard pinning exactly which commands are
+/// [`Scope::Explicit`] and which are (deliberately) left [`Scope::Fanout`]
+/// (#575), as golden lists: a newly registered or reclassified command
+/// landing on either scope must update this list by hand, rather than
+/// silently defaulting into (or keeping) implicit fan-out unreviewed.
+#[cfg(test)]
+mod explicit_and_fanout_scope_guard {
+    use crate::command::Scope;
+    use crate::register_all;
+
+    /// Host-mutating and remote-write commands (#575): never implicitly fan
+    /// out; `--all-templates` is opt-in.
+    const EXPLICIT: &[&str] = &[
+        "update",
+        "prepare",
+        "downgrade",
+        "install",
+        "uninstall",
+        "set_repo",
+        "run",
+        "reboot",
+        "lock",
+        "unlock",
+        "add_host",
+        "remove_host",
+        "put",
+        "get",
+        "approve",
+        "reject",
+        "assign",
+        "unassign",
+        "request_review",
+        "commit",
+    ];
+
+    /// Left `Fanout` deliberately: per-template output is the point, none
+    /// mutates shared remote state, and their per-host reach is a read a
+    /// caller can repeat safely.
+    const FANOUT: &[&str] = &[
+        "comment",
+        "checkers",
+        "checkout",
+        "export",
+        "list_bugs",
+        "list_history",
+        "list_hosts",
+        "list_locks",
+        "list_metadata",
+        "list_packages",
+        "list_sessions",
+        "list_timeout",
+        "list_update_commands",
+        "list_versions",
+        "openqa_jobs",
+        "openqa_overview",
+        "reload_openqa",
+        "show_diff",
+        "analyze_diff",
+        "show_log",
+        "show_update_repos",
+        "set_workflow",
+    ];
+
+    #[test]
+    fn every_golden_command_carries_its_pinned_scope() {
+        let registry = register_all();
+        for name in EXPLICIT {
+            let command = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("{name:?} not registered"));
+            assert_eq!(
+                command.scope(),
+                Scope::Explicit,
+                "{name:?} must be Scope::Explicit"
+            );
+        }
+        for name in FANOUT {
+            let command = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("{name:?} not registered"));
+            assert_eq!(
+                command.scope(),
+                Scope::Fanout,
+                "{name:?} must stay Scope::Fanout"
+            );
+        }
+    }
+
+    #[test]
+    fn no_unlisted_command_is_explicit_or_fanout() {
+        let registry = register_all();
+        for name in registry.names() {
+            let command = registry.get(name).expect("registered");
+            match command.scope() {
+                Scope::Explicit => assert!(
+                    EXPLICIT.contains(&name),
+                    "{name:?} is Scope::Explicit but missing from the golden list — a newly \
+                     reclassified command must be added here deliberately"
+                ),
+                Scope::Fanout => assert!(
+                    FANOUT.contains(&name),
+                    "{name:?} is Scope::Fanout but missing from the golden list — a newly \
+                     registered command must not silently default into implicit fan-out"
+                ),
+                Scope::Active | Scope::Single => {}
+            }
+        }
+    }
+}
+
 /// Driver-level tests for the cancellation seam (`Session::cancel` +
 /// [`Command::run`](crate::Command::run) checkpoints), here rather than in
 /// `command.rs` because the [`testkit`] multi-template builders are

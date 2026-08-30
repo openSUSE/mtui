@@ -30,7 +30,7 @@ impl Command for HostLock {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(HostLock.name(), "lock");
-        assert_eq!(HostLock.scope(), Scope::Fanout);
+        assert_eq!(HostLock.scope(), Scope::Explicit);
     }
 
     #[tokio::test]

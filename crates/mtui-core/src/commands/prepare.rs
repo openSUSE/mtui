@@ -31,7 +31,7 @@ impl Command for Prepare {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(Prepare.name(), "prepare");
-        assert_eq!(Prepare.scope(), Scope::Fanout);
+        assert_eq!(Prepare.scope(), Scope::Explicit);
     }
 
     #[test]

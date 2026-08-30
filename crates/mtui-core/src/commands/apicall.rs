@@ -198,7 +198,7 @@ impl Command for Assign {
         Some("Assigns a review request to a user or group.")
     }
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         add_common_args(cmd).arg(
@@ -248,7 +248,7 @@ impl Command for Unassign {
         Some("Unassigns a review request.")
     }
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         add_common_args(cmd)
@@ -302,7 +302,7 @@ impl Command for Reject {
         Some("Rejects a review request.")
     }
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         add_common_args(cmd)
@@ -429,19 +429,18 @@ mod tests {
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
-    fn names_and_fanout_scopes() {
+    fn names_and_scopes() {
         assert_eq!(Assign.name(), "assign");
         assert_eq!(Unassign.name(), "unassign");
         assert_eq!(Reject.name(), "reject");
         assert_eq!(Comment.name(), "comment");
-        for c in [
-            Assign.scope(),
-            Unassign.scope(),
-            Reject.scope(),
-            Comment.scope(),
-        ] {
-            assert_eq!(c, Scope::Fanout);
+        // Remote-write commands (#575): never implicitly fan out.
+        for c in [Assign.scope(), Unassign.scope(), Reject.scope()] {
+            assert_eq!(c, Scope::Explicit);
         }
+        // `comment` is left `Fanout`: annotating every loaded template is safe
+        // to repeat and does not mutate a remote review's state.
+        assert_eq!(Comment.scope(), Scope::Fanout);
     }
 
     /// The dispatch reads the report's own `UpdateSource`, not the RRID's
