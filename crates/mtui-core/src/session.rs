@@ -2758,6 +2758,69 @@ mod tests {
         );
     }
 
+    /// `fork_for_call` shares the `http_client` cache slot with the parent, so
+    /// a stable posture builds exactly once no matter how many forks call it,
+    /// and a posture change on the parent rebuilds exactly once more — the
+    /// build count a per-fork cache could not produce (each fork would build
+    /// its own).
+    #[test]
+    fn fork_for_call_shares_the_http_client_cache() {
+        use crate::display::{ColorMode, CommandPromptDisplay};
+        use mtui_config::SslVerify;
+
+        let mut s = Session::new(config(), false);
+        let display = || CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Never);
+
+        let fork1 = s.fork_for_call(display());
+        let fork2 = s.fork_for_call(display());
+        let _ = fork1.http_client().expect("fork1 builds");
+        let _ = fork2.http_client().expect("fork2 reuses fork1's build");
+        let _ = s.http_client().expect("parent reuses the same build");
+        assert_eq!(s.http_builds(), 1, "one build shared across parent + forks");
+
+        s.config.ssl_verify = SslVerify::Disabled;
+        let fork3 = s.fork_for_call(display());
+        let _ = fork3
+            .http_client()
+            .expect("fork3 rebuilds under new posture");
+        let _ = s.http_client().expect("parent sees the rebuilt client");
+        assert_eq!(s.http_builds(), 2, "posture change rebuilds exactly once");
+    }
+
+    /// `fork_for_call` shares the `openqa_transport` cache slot with the
+    /// parent, mirroring [`fork_for_call_shares_the_http_client_cache`].
+    #[test]
+    fn fork_for_call_shares_the_openqa_transport_cache() {
+        use crate::display::{ColorMode, CommandPromptDisplay};
+        use mtui_config::SslVerify;
+
+        let mut s = Session::new(config(), false);
+        let display = || CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Never);
+
+        let fork1 = s.fork_for_call(display());
+        let fork2 = s.fork_for_call(display());
+        let _ = fork1.openqa_transport().expect("fork1 builds");
+        let _ = fork2
+            .openqa_transport()
+            .expect("fork2 reuses fork1's build");
+        let _ = s.openqa_transport().expect("parent reuses the same build");
+        assert_eq!(
+            s.openqa_builds(),
+            1,
+            "one build shared across parent + forks"
+        );
+
+        s.config.ssl_verify = SslVerify::Disabled;
+        let fork3 = s.fork_for_call(display());
+        let _ = fork3
+            .openqa_transport()
+            .expect("fork3 rebuilds under new posture");
+        let _ = s
+            .openqa_transport()
+            .expect("parent sees the rebuilt client");
+        assert_eq!(s.openqa_builds(), 2, "posture change rebuilds exactly once");
+    }
+
     /// The composition root wires the arbiter + owner onto every added report
     /// (`_pool_selection_active`), so autoconnect takes the pool path.
     #[test]
