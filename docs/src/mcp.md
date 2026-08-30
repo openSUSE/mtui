@@ -123,13 +123,25 @@ parameters in its schema:
 
 - **`template="<RRID>"`** — scope this one call to a single loaded template (the
   analogue of the REPL `-T` flag). An unknown RRID returns a clean error.
-- **`all_templates=true`** — force fan-out across every loaded template (already
-  the default for fan-out tools, so this is only for explicitness).
+- **`all_templates=true`** — force fan-out across every loaded template.
+- **`all_templates=false`** — suppress fan-out on a tool whose command fans out
+  by default, narrowing it to one template instead.
 
-Omitting both fans a fan-out tool out across every loaded template, prefixing each
-template's output with an `=== <RRID> ===` banner. A fanned-out call that fails on
-one template keeps running on the others and reports an aggregate failure at the
-end.
+Omitting both parameters resolves per command: a read/annotate tool
+(`list_*`/`show_*`/`openqa_*`/`checkers`/`checkout`/`export`/`set_workflow`/
+`comment`) fans out across every loaded template, prefixing each template's
+output with an `=== <RRID> ===` banner. A host-mutating or remote-write tool
+(`update`, `prepare`, `downgrade`, `install`, `uninstall`, `set_repo`, `run`,
+`reboot`, `lock`, `unlock`, `add_host`, `remove_host`, `approve`, `reject`,
+`assign`, `unassign`, `request_review`, `commit`, plus the hand-written `get`/
+`put` transfer tools) **never implicitly fans out**: with several templates
+loaded and neither parameter set, the call is refused rather than guessed at —
+the error names the loaded RRIDs and the `template=`/`all_templates=true`
+escape hatches. This is the same rule the `testreport_*` tools use for their own
+required-with-several-loaded `template` parameter (below).
+
+A fanned-out call that fails on one template keeps running on the others and
+reports an aggregate failure at the end.
 
 > `switch` is **not** an MCP tool (moving the active-template pointer is REPL-only
 > navigation): over MCP you target a template per call with `template=`.
@@ -246,9 +258,11 @@ call with the host named.
 Five hand-written tools operate on the loaded test report's checkout, replacing
 the REPL's `$EDITOR`-based `edit` flow (which is deny-listed). Each accepts an
 optional **`template="<RRID>"`** selecting which loaded template's checkout to act
-on; with more than one template loaded an unscoped call is refused (pass
-`template=`), and with zero or one it may be omitted. All refuse cleanly when no
-test report is loaded.
+on; with more than one template loaded an unscoped call is refused — the same
+"one template, or refuse" rule described under [Multiple templates: scoping and
+fan-out](#multiple-templates-scoping-and-fan-out) above, pass `template=` to
+resolve it — and with zero or one loaded it may be omitted. All refuse cleanly
+when no test report is loaded.
 
 ### `testreport_read` (read-only)
 
