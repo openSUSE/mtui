@@ -9,7 +9,7 @@
 //! grows past one entry.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mtui_config::Config;
@@ -35,6 +35,13 @@ use crate::template_registry::{ReportEntry, TemplateRegistry, TemplateRow};
 /// idle-sweep's `close`: each bounds its fan-out with this budget and abandons
 /// the straggler.
 pub const HOST_CLOSE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Cache slot for [`Session::http_client`], shared across [`fork_for_call`](Session::fork_for_call).
+type HttpClientCache = Arc<Mutex<Option<(VerifyPolicy, HttpClient)>>>;
+
+/// Cache slot for [`Session::openqa_transport`], shared across
+/// [`fork_for_call`](Session::fork_for_call).
+type OpenqaTransportCache = Arc<Mutex<Option<(VerifyPolicy, reqwest::Client)>>>;
 
 /// The explicitly-passed state every command operates on.
 pub struct Session {
@@ -92,8 +99,15 @@ pub struct Session {
     prompter: Option<Prompter>,
     /// Test-only count of how many times [`http_client`](Self::http_client)
     /// actually *built* a client, as opposed to handing back a cached clone.
+    /// Shared (`Arc`) with every fork so a regression to per-fork caching shows
+    /// up as extra builds on the parent's counter.
     #[cfg(test)]
-    http_builds: std::sync::atomic::AtomicUsize,
+    http_builds: Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only count of how many times
+    /// [`openqa_transport`](Self::openqa_transport) actually *built* a
+    /// transport, mirroring [`http_builds`](Self::http_builds).
+    #[cfg(test)]
+    openqa_builds: Arc<std::sync::atomic::AtomicUsize>,
     /// Per-slot candidate shuffle, so pool selection spreads load across
     /// interchangeable refhosts instead of always taking the first in
     /// `refhosts.yml` order. Tests override it with the identity.
@@ -116,15 +130,22 @@ pub struct Session {
     /// `reqwest` fixes TLS and owns its connection pool at build time, so a
     /// per-command client means a cold pool per command; this one is built once
     /// and cloned, rebuilding only when the posture changes. Interior mutability
-    /// lets the `&Session` call sites (`export::build_http`) populate it lazily;
-    /// the lock is uncontended (one dispatch at a time).
-    http_client: Mutex<Option<(VerifyPolicy, HttpClient)>>,
+    /// lets the `&Session` call sites (`export::build_http`) populate it lazily.
+    /// The `Arc` is **shared** with every [`fork_for_call`](Self::fork_for_call)
+    /// descendant of this session, not just this instance: on the MCP
+    /// single-RRID path the canonical session never dispatches directly, so a
+    /// per-fork slot would never warm. Contention is possible but near-zero —
+    /// `run_command` awaits its own fork's join handle immediately, so it needs
+    /// concurrent distinct-RRID tool calls to overlap at all — and the guard is
+    /// held across the build deliberately, so concurrent cold forks convoy on
+    /// one build instead of doing N.
+    http_client: HttpClientCache,
     /// Lazily-built, session-scoped openQA transport: a redirect-less,
     /// no-reqwest-retry `reqwest::Client` for
-    /// `ruoqa::ClientBuilder::http_client`, cached like
+    /// `ruoqa::ClientBuilder::http_client`, cached and shared across forks like
     /// [`http_client`](Self::http_client) so back-to-back openQA connectors
     /// (`reload_openqa`'s primary + baremetal instances) share one pool.
-    openqa_transport: Mutex<Option<(VerifyPolicy, reqwest::Client)>>,
+    openqa_transport: OpenqaTransportCache,
 }
 
 /// A candidate-order shuffle seam: mutates the slot's candidate list in place
@@ -241,10 +262,12 @@ impl Session {
             prompter: None,
             shuffle: random_shuffle,
             cancel: CancellationToken::new(),
-            http_client: Mutex::new(None),
-            openqa_transport: Mutex::new(None),
+            http_client: Arc::new(Mutex::new(None)),
+            openqa_transport: Arc::new(Mutex::new(None)),
             #[cfg(test)]
-            http_builds: std::sync::atomic::AtomicUsize::new(0),
+            http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            openqa_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -266,10 +289,12 @@ impl Session {
             prompter: None,
             shuffle: random_shuffle,
             cancel: CancellationToken::new(),
-            http_client: Mutex::new(None),
-            openqa_transport: Mutex::new(None),
+            http_client: Arc::new(Mutex::new(None)),
+            openqa_transport: Arc::new(Mutex::new(None)),
             #[cfg(test)]
-            http_builds: std::sync::atomic::AtomicUsize::new(0),
+            http_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            openqa_builds: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -286,9 +311,17 @@ impl Session {
     /// them die with it; a command that mutates any of them must declare
     /// [`Command::requires_canonical_session`](crate::Command::requires_canonical_session),
     /// which is what routes it to the MCP exclusive gate instead of here.
-    /// Starts with an empty `http_client` cache and no prompter/sinks. Only a
-    /// **single-real-template** command that mutates nothing beyond shared report
-    /// content is therefore sound to dispatch through a fork.
+    /// The `http_client`/`openqa_transport` caches are **shared** with the
+    /// parent — like the report entry locks and the cancel token — rather than
+    /// starting cold: on the MCP path the canonical session never dispatches
+    /// directly, so a per-fork slot would never warm and every call would pay a
+    /// fresh TLS/CA-root build. Sharing is sound because a posture change lands
+    /// only through the MCP exclusive arm, which drains every live fork first,
+    /// and the `VerifyPolicy` cache key turns any residual mismatch into a
+    /// rebuild rather than a stale hand-out. Only the prompter/sinks start
+    /// empty. Only a **single-real-template** command that mutates nothing
+    /// beyond shared report content is therefore sound to dispatch through a
+    /// fork.
     #[must_use]
     pub fn fork_for_call(&self, display: CommandPromptDisplay) -> Self {
         // A host added on a fork while nothing is loaded would land in this
@@ -317,10 +350,13 @@ impl Session {
             // Cancelling either side — the canonical session or the per-job
             // token MCP installs on this fork — must be observable on both.
             cancel: self.cancel.clone(),
-            http_client: Mutex::new(None),
-            openqa_transport: Mutex::new(None),
+            // Shared with the parent, not reset — see the doc comment above.
+            http_client: Arc::clone(&self.http_client),
+            openqa_transport: Arc::clone(&self.openqa_transport),
             #[cfg(test)]
-            http_builds: std::sync::atomic::AtomicUsize::new(0),
+            http_builds: Arc::clone(&self.http_builds),
+            #[cfg(test)]
+            openqa_builds: Arc::clone(&self.openqa_builds),
         }
     }
 
@@ -406,6 +442,13 @@ impl Session {
         self.http_builds.load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Test-only count of transports actually built by
+    /// [`openqa_transport`](Self::openqa_transport).
+    #[cfg(test)]
+    fn openqa_builds(&self) -> usize {
+        self.openqa_builds.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// The session-scoped openQA transport, built lazily and reused.
     ///
     /// Caches by [`VerifyPolicy`] like [`http_client`](Self::http_client), but
@@ -433,6 +476,9 @@ impl Session {
             return Ok(transport.clone());
         }
         let transport = HttpClient::openqa_transport(policy.clone())?;
+        #[cfg(test)]
+        self.openqa_builds
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         *cache = Some((policy, transport.clone()));
         Ok(transport)
     }
