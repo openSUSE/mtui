@@ -106,6 +106,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A failed `update` now reports, in its tool result and on the display, that
+  the test update repositories are left configured on the hosts for
+  retry/diagnosis and that `set_repo --remove` clears them. The fact was
+  `tracing::warn!`-only, so an MCP client — whose result never carries the
+  server's stderr — was told nothing, even though the same fact was already
+  reported when the post-update cleanup failed.
 - `switch <RRID>` now actually moves the active template. It reported success
   and left the pointer untouched: `Command::run` snapshots the active RRID
   before dispatch and restored it afterwards, undoing the whole point of the

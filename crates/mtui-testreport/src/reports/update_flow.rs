@@ -2138,6 +2138,10 @@ pub async fn perform_update(
             "update did not complete; leaving the test update repositories in place \
              for retry/diagnosis (remove later with `set_repo --remove`)"
         );
+        diagnostics.push(Diagnostic::degradation(
+            "update did not complete; the test update repositories are left in place for \
+             retry/diagnosis (remove later with `set_repo --remove`)",
+        ));
         return Err(e);
     }
 
@@ -6856,6 +6860,51 @@ mod tests {
         assert!(
             cmds.contains(&patch),
             "the patch command must have been dispatched: {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_pushes_a_diagnostic_when_the_update_fails() {
+        // 104 on the patch ⇒ the check flags "package not found" and the flow
+        // returns Err before reaching `remove_test_repos`. The diagnostic must
+        // still tell an MCP caller the repos are left configured — asserted on
+        // the text (the check itself pushes its own sections into the same
+        // vec, so asserting on emptiness could never fail), and that the
+        // matching entry is a `degradation`, not a plain/highlighted section.
+        let report = report_with_rrid();
+        let packages = report.get_package_list();
+        let (t, _handle, _patch) = sles_target_with_patch_exit("h1", &packages, 104);
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+        assert!(
+            matches!(res, Err(UpdateFailure::Check(_))),
+            "a failed patch returns Err(Check): {res:?}"
+        );
+
+        let repo_left_diagnostic = diagnostics.iter().find(|d| {
+            d.text
+                .contains("test update repositories are left in place")
+        });
+        assert!(
+            repo_left_diagnostic.is_some(),
+            "no repo-left diagnostic: {diagnostics:?}"
+        );
+        assert!(
+            repo_left_diagnostic.unwrap().degradation,
+            "the repo-left diagnostic must be a degradation, not a check section"
         );
     }
 
