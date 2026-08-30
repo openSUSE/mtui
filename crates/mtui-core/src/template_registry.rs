@@ -243,6 +243,25 @@ impl TemplateRegistry {
         }
     }
 
+    /// Whether none of `named` belong to `rrid`'s host group, or `None` when
+    /// the entry is held elsewhere so its host set cannot be read.
+    ///
+    /// Same contention contract as [`is_hostless`](Self::is_hostless): a
+    /// contended entry must not read as "does not own the host" and be
+    /// skipped, or a `-t`-scoped fan-out would silently skip a template racing
+    /// a different dispatch instead of refusing it (#524's shape, applied to
+    /// this second skip path).
+    #[must_use]
+    pub(crate) fn owns_none_of(&self, rrid: &str, named: &[String]) -> Option<bool> {
+        match self.entries.get(rrid) {
+            Some(entry) => entry
+                .try_lock()
+                .ok()
+                .map(|report| !named.iter().any(|h| report.base().targets.contains(h))),
+            None => Some(true),
+        }
+    }
+
     /// Reads the connected-host count and workflow label for `rrid`, or `None`
     /// if absent (for `list_templates`). Locks the entry.
     ///

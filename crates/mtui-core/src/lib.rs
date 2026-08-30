@@ -32,6 +32,7 @@ pub mod log_filter;
 pub mod registry;
 pub mod session;
 pub mod template_registry;
+pub mod template_scope;
 
 pub use args::{Args, ColorArg, Sut, Update};
 pub use command::{Command, Scope, resolve_command_rrids};
@@ -46,3 +47,4 @@ pub use log_filter::{
 pub use registry::{MCP_DENYLIST, Registry, register_all};
 pub use session::{Activation, HOST_CLOSE_TIMEOUT, LogLevel, LogLevelSink, NotifySink, Session};
 pub use template_registry::{ReportEntry, TemplateRegistry};
+pub use template_scope::{SingleTemplate, ambiguous_template_message};

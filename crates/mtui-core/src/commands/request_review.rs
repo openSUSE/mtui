@@ -268,7 +268,7 @@ impl Command for RequestReview {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -426,6 +426,13 @@ mod tests {
 
     const CHANNEL: &str = "C0123456789";
     const TS: &str = "1700000000.000100";
+
+    #[test]
+    fn scope_is_explicit() {
+        // A remote-write command (#575): posting a Slack review request must
+        // never implicitly fan out over every loaded template.
+        assert_eq!(RequestReview.scope(), Scope::Explicit);
+    }
 
     fn slack_for(server: &MockServer) -> Slack {
         let http = HttpClient::new(VerifyPolicy::Default(true)).expect("client builds");

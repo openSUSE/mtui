@@ -31,7 +31,7 @@ impl Command for Update {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(Update.name(), "update");
-        assert_eq!(Update.scope(), Scope::Fanout);
+        assert_eq!(Update.scope(), Scope::Explicit);
     }
 
     #[test]

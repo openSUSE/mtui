@@ -31,7 +31,7 @@ impl Command for AddHost {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(AddHost.name(), "add_host");
-        assert_eq!(AddHost.scope(), Scope::Fanout);
+        assert_eq!(AddHost.scope(), Scope::Explicit);
     }
 
     #[test]

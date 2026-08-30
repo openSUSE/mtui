@@ -32,6 +32,30 @@ pub enum CommandError {
     #[error("template busy: {0}")]
     TemplateBusy(String),
 
+    /// A [`Scope::Explicit`](crate::Scope::Explicit) (or headless
+    /// [`Scope::Active`](crate::Scope::Active)/[`Scope::Fanout`](crate::Scope::Fanout))
+    /// command named no template with several loaded and no addressable active
+    /// pointer — see [`Session::resolve_single_template`](crate::Session::resolve_single_template).
+    /// `Display` is the shared [`ambiguous_template_message`](crate::ambiguous_template_message)
+    /// wording, so this refusal reads identically to the MCP tools' own.
+    #[error(
+        "{}",
+        crate::ambiguous_template_message(
+            .loaded,
+            &format!(
+                "pass -T/--template <RRID> (template=<RRID> over MCP), or --all-templates to run \
+                 it on all {}",
+                .loaded.len()
+            )
+        )
+    )]
+    AmbiguousTemplate {
+        /// The command that was refused, for logging.
+        command: &'static str,
+        /// The loaded RRIDs, in registry order.
+        loaded: Vec<String>,
+    },
+
     /// A command resolved to no runnable target — every candidate template was
     /// skipped for lack of a connected host.
     #[error("No refhosts defined")]
@@ -131,6 +155,20 @@ mod tests {
     fn template_busy_message_is_stable() {
         let e = CommandError::TemplateBusy("SUSE:Maintenance:1:1".into());
         assert_eq!(e.to_string(), "template busy: SUSE:Maintenance:1:1");
+    }
+
+    #[test]
+    fn ambiguous_template_message_is_stable() {
+        let e = CommandError::AmbiguousTemplate {
+            command: "update",
+            loaded: vec!["SUSE:Maintenance:1:1".into(), "SUSE:Maintenance:2:2".into()],
+        };
+        assert_eq!(
+            e.to_string(),
+            "more than one template is loaded (SUSE:Maintenance:1:1, SUSE:Maintenance:2:2); \
+             pass -T/--template <RRID> (template=<RRID> over MCP), or --all-templates to run it \
+             on all 2"
+        );
     }
 
     #[test]

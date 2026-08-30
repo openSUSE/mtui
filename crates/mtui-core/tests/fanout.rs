@@ -7,7 +7,8 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use clap::{Arg, ArgAction, ArgMatches};
+use clap::ArgMatches;
+use mtui_core::commands::support::add_hosts_arg;
 use mtui_core::{Command, CommandError, CommandResult, Scope, Session};
 use support::FakeReport;
 
@@ -62,6 +63,9 @@ impl Command for MockCommand {
     fn skip_hostless_templates(&self) -> bool {
         self.skip_hostless
     }
+    fn configure(&self, cmd: clap::Command) -> clap::Command {
+        add_hosts_arg(cmd)
+    }
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let rrid = session.metadata().id();
         self.ran.lock().unwrap().push(rrid.clone());
@@ -72,23 +76,13 @@ impl Command for MockCommand {
     }
 }
 
-/// Builds `ArgMatches` for a command exposing `-t/--target`, `-T/--template`,
-/// and `--all-templates`, from a set of raw argv tokens.
+/// Builds `ArgMatches` for [`MockCommand`] from a set of raw argv tokens,
+/// through the real [`mtui_core::engine::command_parser`] — the shared base
+/// parser (`-T/--template`, `--all-templates`) plus `MockCommand`'s own `-t`,
+/// so the flags' shape can never drift from what `run` actually parses.
 fn matches(argv: &[&str]) -> ArgMatches {
-    clap::Command::new("mock")
-        .no_binary_name(true)
-        .arg(
-            Arg::new("hosts")
-                .short('t')
-                .long("target")
-                .action(ArgAction::Append),
-        )
-        .arg(Arg::new("template").short('T').long("template"))
-        .arg(
-            Arg::new("all_templates")
-                .long("all-templates")
-                .action(ArgAction::SetTrue),
-        )
+    let cmd = MockCommand::new(Scope::Active);
+    mtui_core::engine::command_parser(&cmd)
         .try_get_matches_from(argv)
         .expect("parse mock argv")
 }
@@ -162,6 +156,99 @@ async fn headless_multi_load_defaults_to_fanout() {
     let mut s = session(false, &[("a", &["h1"]), ("b", &["h2"])]);
     let cmd = MockCommand::new(Scope::Active);
     cmd.run(&mut s, &matches(&[])).await.unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned(), "b".to_owned()]);
+}
+
+// --- tri-state `--all-templates` ---
+
+#[tokio::test]
+async fn suppressed_all_templates_headless_multi_load_is_ambiguous() {
+    // `--all-templates=false` must not read as unset (today's inertness): a
+    // `Fanout` command headlessly with several loaded and no active pointer
+    // to fall back to must refuse, not silently fan out anyway.
+    let mut s = session(false, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Fanout);
+    let err = cmd
+        .run(&mut s, &matches(&["--all-templates=false"]))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CommandError::AmbiguousTemplate { .. }),
+        "got: {err:?}"
+    );
+    assert!(cmd.ran().is_empty(), "the body must not have run at all");
+}
+
+#[tokio::test]
+async fn suppressed_all_templates_repl_multi_load_runs_active_once() {
+    let mut s = session(true, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Fanout);
+    cmd.run(&mut s, &matches(&["--all-templates=false"]))
+        .await
+        .unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned()]);
+}
+
+#[tokio::test]
+async fn absent_all_templates_flag_still_fans_out() {
+    // Anti-vacuity for the two tests above: over-reading the tri-state as
+    // `Some(false)` when the flag is simply absent must not also refuse.
+    let mut s = session(false, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Fanout);
+    cmd.run(&mut s, &matches(&[])).await.unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned(), "b".to_owned()]);
+}
+
+// --- `Scope::Explicit` ---
+
+#[tokio::test]
+async fn explicit_scope_headless_multi_load_with_no_flags_is_ambiguous() {
+    let mut s = session(false, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Explicit);
+    let err = cmd.run(&mut s, &matches(&[])).await.unwrap_err();
+    assert!(
+        matches!(err, CommandError::AmbiguousTemplate { .. }),
+        "got: {err:?}"
+    );
+    assert!(cmd.ran().is_empty(), "the body must have run zero times");
+}
+
+#[tokio::test]
+async fn explicit_scope_single_loaded_runs_without_naming_it() {
+    // Anti-vacuity for the test above: a lone loaded template must still run,
+    // never refused just for having `Scope::Explicit`.
+    let mut s = session(false, &[("a", &["h1"])]);
+    let cmd = MockCommand::new(Scope::Explicit);
+    cmd.run(&mut s, &matches(&[])).await.unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned()]);
+}
+
+#[tokio::test]
+async fn explicit_scope_repl_multi_load_runs_the_active_one_once() {
+    let mut s = session(true, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Explicit);
+    cmd.run(&mut s, &matches(&[])).await.unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned()]);
+}
+
+#[tokio::test]
+async fn explicit_scope_all_templates_flag_still_fans_out() {
+    let mut s = session(false, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Explicit);
+    cmd.run(&mut s, &matches(&["--all-templates"]))
+        .await
+        .unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned(), "b".to_owned()]);
+}
+
+#[tokio::test]
+async fn bare_all_templates_flag_still_forces_fanout() {
+    // `default_missing_value` must still make the bare flag mean `Some(true)`.
+    let mut s = session(false, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Fanout);
+    cmd.run(&mut s, &matches(&["--all-templates"]))
+        .await
+        .unwrap();
     assert_eq!(cmd.ran(), vec!["a".to_owned(), "b".to_owned()]);
 }
 
@@ -249,14 +336,46 @@ async fn default_trait_methods_are_sensible() {
 }
 
 #[tokio::test]
-async fn named_hosts_disable_skip() {
-    // With an explicit -t, a host-less template is NOT skipped (it runs and,
-    // here, succeeds because the MockCommand body ignores hosts): named hosts
-    // must keep failing/running loudly.
+async fn named_host_skips_a_template_that_does_not_own_it() {
+    // `-t h1` names a host only template "a" owns: "b" (host-less here, but
+    // the same rule applies to a template owning other, non-named hosts) is
+    // skipped rather than dispatched into an `HostNotConnected` failure
+    // (#575) — the named-host analogue of the host-less skip above.
     let mut s = session(true, &[("a", &["h1"]), ("b", &[])]);
     let cmd = MockCommand::new(Scope::Fanout);
     cmd.run(&mut s, &matches(&["-t", "h1"])).await.unwrap();
-    assert_eq!(cmd.ran(), vec!["a".to_owned(), "b".to_owned()]);
+    assert_eq!(cmd.ran(), vec!["a".to_owned()]);
+}
+
+#[tokio::test]
+async fn named_host_in_one_of_two_templates_only_that_one_runs() {
+    // Anti-vacuity for the skip above, on hosts that are genuinely connected
+    // rather than merely absent: "b" owns "h2", not the named "h1", and must
+    // still be skipped rather than run or fail.
+    let mut s = session(true, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Fanout);
+    cmd.run(&mut s, &matches(&["--all-templates", "-t", "h1"]))
+        .await
+        .unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned()]);
+}
+
+#[tokio::test]
+async fn named_unknown_host_across_all_templates_is_no_refhosts_not_fanout() {
+    // No loaded template owns "nosuchhost": every one is skipped, which must
+    // still surface as `NoRefhostsDefined` (ran nowhere), not a silent Ok and
+    // not a `FanOut` aggregate of per-template `HostNotConnected` failures.
+    let mut s = session(true, &[("a", &["h1"]), ("b", &["h2"])]);
+    let cmd = MockCommand::new(Scope::Fanout);
+    let err = cmd
+        .run(&mut s, &matches(&["-t", "nosuchhost"]))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CommandError::NoRefhostsDefined),
+        "got: {err:?}"
+    );
+    assert!(cmd.ran().is_empty());
 }
 
 #[tokio::test]

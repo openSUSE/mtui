@@ -25,6 +25,7 @@ use clap::ArgMatches;
 
 use crate::error::{CommandError, CommandResult};
 use crate::session::{Activation, Session};
+use crate::template_scope::SingleTemplate;
 
 /// Fan-out scope policy for a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -35,6 +36,16 @@ pub enum Scope {
     Active,
     /// Run once per loaded template. Action commands safe to repeat opt in.
     Fanout,
+    /// Never implicitly fans out: with no `-T`/`--all-templates`, resolves to
+    /// exactly one template via
+    /// [`Session::resolve_single_template`](crate::Session::resolve_single_template) —
+    /// the sole loaded one, the active one in the REPL, or
+    /// [`CommandError::AmbiguousTemplate`]
+    /// headlessly with several loaded. Fan-out is opt-in only, via an explicit
+    /// `--all-templates`. For destructive or remote-write commands (`update`,
+    /// `downgrade`, `approve`, …) where every-template-by-default is the bug,
+    /// not the feature (#575).
+    Explicit,
     /// Run exactly once regardless of how many templates are loaded — for
     /// commands that name their own target template (`load_template`, `unload
     /// <rrid>`) and must never auto-fan-out.
@@ -190,7 +201,7 @@ pub trait Command: Send + Sync {
     /// pads the failure list nor leaves never-reached templates looking clean.
     async fn run(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         session.check_cancelled()?;
-        let resolved = resolve_templates(self.scope(), session, args)?;
+        let resolved = resolve_templates(self.name(), self.scope(), session, args)?;
 
         if resolved.len() <= 1 {
             // `repoints_active` opts out of the restore below: the body's move
@@ -232,13 +243,24 @@ pub trait Command: Send + Sync {
 
         // A `-t`-taking command invoked without explicit hosts applies
         // opportunistically, so a host-less template is skipped rather than
-        // failing the fan-out; explicitly named hosts must keep failing loudly.
-        // `try_get_many` separates "never declared `-t`" (`Err`) from "declared
-        // but unset" (`Ok(None)`) and "named hosts" (`Ok(Some)`).
+        // failing the fan-out. `try_get_many` separates "never declared `-t`"
+        // (`Err`) from "declared but unset" (`Ok(None)`) and "named hosts"
+        // (`Ok(Some)`).
         let hosts = args.try_get_many::<String>("hosts");
         let declares_hosts = hosts.is_ok();
-        let named_hosts = hosts.ok().flatten().is_some_and(|mut v| v.next().is_some());
-        let skippable = declares_hosts && !named_hosts && self.skip_hostless_templates();
+        let named: Vec<String> = hosts
+            .ok()
+            .flatten()
+            .map(|v| v.cloned().collect())
+            .unwrap_or_default();
+        let skippable_hostless =
+            declares_hosts && named.is_empty() && self.skip_hostless_templates();
+        // Named hosts must still fail loudly *within* a template that owns at
+        // least one of them (an unknown host is a real error there) — only a
+        // template owning **none** of the named hosts is skippable, mirroring
+        // the host-less skip above so `--all-templates -t <host-of-one>` does
+        // not fail every sibling template with `HostNotConnected`.
+        let skippable_unowned = declares_hosts && !named.is_empty();
 
         let restore = session.templates.active_rrid().map(str::to_owned);
         // `is_hostless` locks the entry it inspects, so a guard still held on it
@@ -268,8 +290,21 @@ pub trait Command: Send + Sync {
             // empty entry is skippable: treating the contended one as hostless
             // skipped it with this warning and exited 0, which is the #524
             // symptom, reached before `claim` below could refuse it.
-            if skippable && session.is_hostless(rrid) == Some(true) {
+            if skippable_hostless && session.is_hostless(rrid) == Some(true) {
                 tracing::warn!(command = self.name(), rrid = %rrid, "skipped: no connected hosts");
+                skipped.push(rrid.clone());
+                continue;
+            }
+            // Same contention contract: a contended entry must fall through to
+            // `claim` and be refused, never be mistaken for one that simply
+            // does not own the named host.
+            if skippable_unowned && session.owns_none_of(rrid, &named) == Some(true) {
+                tracing::warn!(
+                    command = self.name(),
+                    rrid = %rrid,
+                    hosts = ?named,
+                    "skipped: none of the named hosts belong to this template"
+                );
                 skipped.push(rrid.clone());
                 continue;
             }
@@ -397,8 +432,10 @@ fn restore_active(session: &mut Session, restore: Option<String>) {
 /// Returns the ordered RRIDs this invocation should act on.
 ///
 /// An empty session resolves to a single empty-RRID entry (the active null
-/// report), so `run` takes the single-call fast path.
+/// report), so `run` takes the single-call fast path. `command` names the
+/// invocation for [`CommandError::AmbiguousTemplate`]'s payload.
 fn resolve_templates(
+    command: &'static str,
     scope: Scope,
     session: &Session,
     args: &ArgMatches,
@@ -417,15 +454,36 @@ fn resolve_templates(
         return Ok(active());
     }
 
-    // Every loaded template, falling back to the active entry when none is.
-    let all_templates = arg_flag(args, "all_templates");
-    if all_templates || scope == Scope::Fanout {
+    // `Forced` (bare `--all-templates`) fans out regardless of scope.
+    let all_templates = arg_all_templates(args);
+    if all_templates == Some(true) {
         let all = session.templates.rrids();
         return Ok(if all.is_empty() { active() } else { all });
     }
 
-    // Headless with several loaded: no interactive `switch`, so the active
-    // pointer is unaddressable state — fan out rather than silently pick one.
+    // `Suppressed` (`--all-templates=false`), and `Unset` on `Scope::Explicit`:
+    // narrow to one template via the same "one template, or refuse" rule the
+    // MCP tools use, rather than any implicit fan-out.
+    if all_templates == Some(false) || scope == Scope::Explicit {
+        return match session.resolve_single_template(None, session.is_repl) {
+            SingleTemplate::One(rrid) => Ok(vec![rrid]),
+            SingleTemplate::NothingLoaded => Ok(active()),
+            SingleTemplate::Ambiguous(loaded) => {
+                Err(CommandError::AmbiguousTemplate { command, loaded })
+            }
+            SingleTemplate::NotLoaded(rrid) => Err(CommandError::TemplateNotLoaded(rrid)),
+        };
+    }
+
+    // `Unset` on `Scope::Fanout`: always fan out.
+    if scope == Scope::Fanout {
+        let all = session.templates.rrids();
+        return Ok(if all.is_empty() { active() } else { all });
+    }
+
+    // `Unset` on `Scope::Active`: headless with several loaded, no interactive
+    // `switch`, so the active pointer is unaddressable state — fan out rather
+    // than silently pick one.
     if !session.is_repl && session.templates.len() > 1 {
         return Ok(session.templates.rrids());
     }
@@ -453,7 +511,7 @@ pub fn resolve_command_rrids(
 ) -> Option<Vec<String>> {
     let parser = crate::engine::command_parser(command);
     let matches = parser.try_get_matches_from(argv).ok()?;
-    let resolved = resolve_templates(command.scope(), session, &matches).ok()?;
+    let resolved = resolve_templates(command.name(), command.scope(), session, &matches).ok()?;
     let real: Vec<String> = resolved.into_iter().filter(|r| !r.is_empty()).collect();
     if real.is_empty() { None } else { Some(real) }
 }
@@ -464,13 +522,14 @@ fn arg_str(args: &ArgMatches, id: &str) -> Option<String> {
     args.try_get_one::<String>(id).ok().flatten().cloned()
 }
 
-/// Reads a boolean flag, tolerating a subcommand that never declared it.
-fn arg_flag(args: &ArgMatches, id: &str) -> bool {
-    args.try_get_one::<bool>(id)
+/// Reads the tri-state `--all-templates` flag: `Some(true)` (forced),
+/// `Some(false)` (suppressed), or `None` (absent). Tolerates a subcommand that
+/// never declared it.
+fn arg_all_templates(args: &ArgMatches) -> Option<bool> {
+    args.try_get_one::<bool>("all_templates")
         .ok()
         .flatten()
         .copied()
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -758,6 +817,46 @@ mod tests {
         );
     }
 
+    /// The named-host analogue of the test above (#575): a contended template
+    /// must fail rather than be mistaken for one that simply does not own the
+    /// named `-t` host.
+    #[tokio::test]
+    async fn fanout_contended_template_with_named_host_fails_rather_than_being_skipped() {
+        const OTHER: &str = "SUSE:Maintenance:2:2";
+
+        let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        session
+            .templates
+            .add(crate::commands::testkit::fake_report(OTHER, &["h2"], "ok"));
+        session.release_active_guard();
+        let entry = session.templates.handle(RRID).expect("RRID is loaded");
+        let _held = entry.try_lock_owned().expect("uncontended");
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let cmd = SkippableFanout(Arc::clone(&seen));
+        // `-t h1`: RRID owns h1, OTHER does not — without the contention guard
+        // the locked RRID could misread as "does not own h1" and be skipped
+        // instead of refused.
+        let args = crate::commands::testkit::matches(&cmd, &["-t", "h1"]);
+
+        let err = cmd
+            .run(&mut session, &args)
+            .await
+            .expect_err("a contended template must fail, not be skipped as not owning the host");
+
+        let CommandError::FanOut { failures, .. } = &err else {
+            panic!("expected a per-template aggregate; got: {err:?}");
+        };
+        assert!(
+            matches!(&failures[..], [(r, CommandError::TemplateBusy(_))] if r == RRID),
+            "the contended template must be the one banked failure; got: {failures:?}"
+        );
+        assert!(
+            seen.lock().expect("probe mutex").is_empty(),
+            "OTHER does not own h1 and must be skipped, not run"
+        );
+    }
+
     /// A `Scope::Single` command that named no template must not be refused
     /// because something holds the *active* entry.
     ///
@@ -840,6 +939,44 @@ mod tests {
             *seen.lock().expect("probe mutex"),
             vec![1],
             "the body must not have run a second time and reported the sentinel's zero hosts"
+        );
+    }
+
+    /// A `Scope::Explicit` probe, for `resolve_command_rrids`'s own contract.
+    struct ExplicitProbe;
+
+    #[async_trait]
+    impl Command for ExplicitProbe {
+        fn name(&self) -> &'static str {
+            "explicit_probe"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Explicit
+        }
+        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    /// `resolve_command_rrids` swallows [`CommandError::AmbiguousTemplate`]
+    /// via `.ok()?` exactly like any other resolution error: an ambiguous
+    /// headless call yields `None`, so the MCP per-template lock gate falls
+    /// back to serialising exclusively and the real refusal surfaces at
+    /// dispatch instead of here.
+    #[test]
+    fn resolve_command_rrids_swallows_an_ambiguous_resolution() {
+        const OTHER: &str = "SUSE:Maintenance:2:2";
+        let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
+        session
+            .templates
+            .add(crate::commands::testkit::fake_report(OTHER, &["h2"], "ok"));
+        session.is_repl = false;
+
+        let rrids = resolve_command_rrids(&ExplicitProbe, &session, &[]);
+        assert_eq!(
+            rrids, None,
+            "an ambiguous resolution must fall back to the exclusive gate, not panic or leak \
+             the error"
         );
     }
 }

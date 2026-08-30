@@ -50,7 +50,7 @@ impl Command for SftpPut {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(SftpPut.name(), "put");
-        assert_eq!(SftpPut.scope(), Scope::Fanout);
+        assert_eq!(SftpPut.scope(), Scope::Explicit);
     }
 
     #[test]

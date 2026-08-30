@@ -18,7 +18,7 @@
 
 use clap::ArgMatches;
 
-use crate::command::Command;
+use crate::command::{Command, Scope};
 use crate::error::CommandError;
 use crate::registry::Registry;
 use crate::session::Session;
@@ -154,7 +154,7 @@ fn render_help(
         message: format!("No help available: '{topic}' is not a known command"),
         help_or_version: false,
     })?;
-    let mut base = base_subcommand(command.name());
+    let mut base = base_subcommand(command.name(), command.scope());
     if let Some(about) = command.about() {
         base = base.about(about);
     }
@@ -213,7 +213,7 @@ fn print_help_columns(session: &mut Session, names: &[&str]) {
 /// reconstructs argv from it, locking schema/argv fidelity to real dispatch.
 #[must_use]
 pub fn command_parser(command: &dyn Command) -> clap::Command {
-    command.configure(base_subcommand(command.name()))
+    command.configure(base_subcommand(command.name(), command.scope()))
 }
 
 /// Builds `command`'s clap parser and parses `argv` into [`ArgMatches`] without
@@ -237,7 +237,28 @@ fn parse_command(command: &dyn Command, argv: &[String]) -> Result<ArgMatches, E
 /// template-selection flags every command honours through [`Command::run`]'s
 /// fan-out resolver, so [`configure`](Command::configure) need only add the
 /// command's own arguments.
-fn base_subcommand(name: &'static str) -> clap::Command {
+///
+/// `scope` picks the `--all-templates` help text truthfully per command
+/// (#575): the LLM-facing half of the fan-out fix, since the tool schema
+/// description is what an MCP client actually reads.
+fn base_subcommand(name: &'static str, scope: Scope) -> clap::Command {
+    let all_templates_help = match scope {
+        Scope::Fanout => {
+            "Act on every loaded template (the default for this command); \
+             --all-templates=false narrows to one instead"
+        }
+        Scope::Explicit => {
+            "Act on every loaded template (bare); this command otherwise never \
+             implicitly fans out — it acts on the active template (or the sole \
+             one loaded), refusing headlessly with several loaded and none named"
+        }
+        Scope::Active | Scope::Single => {
+            "Act on every loaded template (bare); this command otherwise acts on \
+             the active template, fanning out only headlessly with several \
+             loaded and none named"
+        }
+    };
+
     clap::Command::new(name)
         .no_binary_name(true)
         .arg(
@@ -250,9 +271,15 @@ fn base_subcommand(name: &'static str) -> clap::Command {
         .arg(
             clap::Arg::new("all_templates")
                 .long("all-templates")
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::Set)
+                .value_parser(clap::value_parser!(bool))
+                .num_args(0..=1)
+                // Mandatory, not style: without it `--all-templates uname -a`
+                // parses `uname` as the flag's own value.
+                .require_equals(true)
+                .default_missing_value("true")
                 .conflicts_with("template")
-                .help("Act on every loaded template"),
+                .help(all_templates_help),
         )
 }
 
@@ -412,6 +439,120 @@ mod tests {
             err,
             EngineError::Command(CommandError::TemplateNotLoaded(rrid)) if rrid == "SUSE:Maintenance:1:1"
         ));
+    }
+
+    /// A `run`-shaped command: a trailing var-arg positional after the shared
+    /// base flags, exactly like the real `run` command's `command` argument.
+    struct RunLikeCmd;
+
+    #[async_trait]
+    impl Command for RunLikeCmd {
+        fn name(&self) -> &'static str {
+            "runlike"
+        }
+        fn configure(&self, cmd: clap::Command) -> clap::Command {
+            cmd.arg(
+                clap::Arg::new("command")
+                    .num_args(0..)
+                    .trailing_var_arg(true)
+                    .allow_hyphen_values(true),
+            )
+        }
+        async fn call(&self, _s: &mut Session, _a: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn all_templates_absent_is_unset() {
+        let matches = command_parser(&RunLikeCmd)
+            .try_get_matches_from::<_, &str>([])
+            .unwrap();
+        assert_eq!(matches.get_one::<bool>("all_templates"), None);
+    }
+
+    #[test]
+    fn all_templates_bare_forces_true() {
+        let matches = command_parser(&RunLikeCmd)
+            .try_get_matches_from(["--all-templates"])
+            .unwrap();
+        assert_eq!(matches.get_one::<bool>("all_templates"), Some(&true));
+    }
+
+    #[test]
+    fn all_templates_equals_false_suppresses() {
+        let matches = command_parser(&RunLikeCmd)
+            .try_get_matches_from(["--all-templates=false"])
+            .unwrap();
+        assert_eq!(matches.get_one::<bool>("all_templates"), Some(&false));
+    }
+
+    #[test]
+    fn all_templates_without_equals_leaves_the_positional_alone() {
+        // Without `require_equals`, `--all-templates uname -a` would parse
+        // `uname` as the flag's own value, stranding the actual command.
+        let matches = command_parser(&RunLikeCmd)
+            .try_get_matches_from(["--all-templates", "uname", "-a"])
+            .unwrap();
+        assert_eq!(matches.get_one::<bool>("all_templates"), Some(&true));
+        let command: Vec<&str> = matches
+            .get_many::<String>("command")
+            .unwrap()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(command, vec!["uname", "-a"]);
+    }
+
+    /// A `Scope::Explicit`-shaped command, for the per-scope help text test.
+    struct ExplicitLikeCmd;
+
+    #[async_trait]
+    impl Command for ExplicitLikeCmd {
+        fn name(&self) -> &'static str {
+            "explicitlike"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Explicit
+        }
+        async fn call(&self, _s: &mut Session, _a: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    /// A `Scope::Fanout`-shaped command, for the same test.
+    struct FanoutLikeCmd;
+
+    #[async_trait]
+    impl Command for FanoutLikeCmd {
+        fn name(&self) -> &'static str {
+            "fanoutlike"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Fanout
+        }
+        async fn call(&self, _s: &mut Session, _a: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    fn all_templates_help(command: &dyn Command) -> String {
+        command_parser(command)
+            .get_arguments()
+            .find(|a| a.get_id().as_str() == "all_templates")
+            .and_then(clap::Arg::get_help)
+            .map(|h| h.to_string())
+            .expect("all_templates arg carries help text")
+    }
+
+    #[test]
+    fn all_templates_help_text_differs_by_scope() {
+        // The LLM-facing half of #575: the tool schema description a client
+        // actually reads must tell the truth about each command's default.
+        let fanout_help = all_templates_help(&FanoutLikeCmd);
+        let explicit_help = all_templates_help(&ExplicitLikeCmd);
+        assert_ne!(fanout_help, explicit_help);
+        assert!(fanout_help.contains("the default for this command"));
+        assert!(explicit_help.contains("never implicitly fans out"));
     }
 
     /// A documented stub command (returns `Some` from `about`).

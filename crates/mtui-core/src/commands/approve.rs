@@ -34,7 +34,7 @@ impl Command for Approve {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Explicit
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(Approve.name(), "approve");
-        assert_eq!(Approve.scope(), Scope::Fanout);
+        assert_eq!(Approve.scope(), Scope::Explicit);
     }
 
     #[test]
