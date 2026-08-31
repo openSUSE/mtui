@@ -119,9 +119,8 @@ pub fn render_cli_reference() -> String {
         }
 
         // The command's *own* surface, not `command_parser`'s: that injects the
-        // shared base flags, which a command may legitimately shadow with its own
-        // short (`list_refhosts` reuses `-T`), and `render_long_help` panics on
-        // the duplicate. The preamble documents the shared flags once instead.
+        // shared base flags, and duplicating them into every command block would
+        // make for a large, noisy doc diff the preamble already covers instead.
         // No `.version()` either: per-command parsers carry no auto `--version`,
         // and `list_refhosts` declares its own, which would collide.
         let base = clap::Command::new(command.name())

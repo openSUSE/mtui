@@ -244,7 +244,6 @@ impl Command for ListRefhosts {
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("testplatform")
-                .short('T')
                 .long("testplatform")
                 .value_name("QUERY")
                 .help("match a SMELT testplatform query"),
@@ -317,7 +316,7 @@ impl Command for ListRefhosts {
     fn complete(&self, _session: &Session, text: &str, line: &str) -> Vec<String> {
         super::support::complete_choices(
             &[
-                &["-T", "--testplatform"],
+                &["--testplatform"],
                 &["-n", "--name"],
                 &["-a", "--arch"],
                 &["-p", "--product"],
@@ -829,7 +828,6 @@ mod tests {
         let (session, _buf) = empty_session();
         let all = ListRefhosts.complete(&session, "", "list_refhosts ");
         for f in [
-            "-T",
             "--testplatform",
             "-n",
             "--name",
@@ -859,7 +857,7 @@ mod tests {
         let args = matches(
             &ListRefhosts,
             &[
-                "-T",
+                "--testplatform",
                 "base=sles(major=15,minor=6);arch=[x86_64]",
                 "-n",
                 "whale-*",
