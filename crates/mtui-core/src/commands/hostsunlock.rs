@@ -13,9 +13,14 @@ use crate::session::Session;
 
 /// Unlocks hosts previously locked with `lock`.
 ///
-/// By default removes the zypper/operation lock on the target hosts (or only
-/// those named with `-t`); `-f`/`--force` also removes locks set by other
-/// users or sessions, fanning
+/// By default releases only the operation lock **this session's own group
+/// took** on the target hosts (or only those named with `-t`), fanning
+/// [`HostsGroup::unlock_taken`](mtui_hosts::HostsGroup::unlock_taken) out — a
+/// lock this session never took (a stranger's, or a sibling loaded template's
+/// hold on a shared refhost) is skipped rather than swept up, since the wire's
+/// PID-based ownership check cannot tell two same-process holders apart.
+/// `-f`/`--force` also removes locks set by other users or sessions
+/// regardless of who took them, fanning
 /// [`HostsGroup::unlock_force`](mtui_hosts::HostsGroup::unlock_force) out under
 /// the [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) teardown
 /// budget so a dead peer cannot hold the session.
@@ -127,7 +132,12 @@ impl Command for HostsUnlock {
         // `Force` picks labels only; `--force` never emits `Contended`
         // (`TargetLock::unlock`'s only contended arm is `&& !force`), so that
         // variant's contended line is plain unlock's alone.
-        let outcomes = session.targets_mut().unlock_selected(&selected).await;
+        //
+        // `unlock_taken` (not `unlock_selected`): a plain `unlock` must
+        // release only the lock **this session's own group** took, so a
+        // sibling `HostsGroup` sharing a refhost (a second loaded template, a
+        // second MCP session) is never stripped of its hold.
+        let outcomes = session.targets_mut().unlock_taken(&selected).await;
         verdict(
             &UnlockKind::Force,
             report_outcomes(session, &UnlockKind::Force, &outcomes),
@@ -316,6 +326,9 @@ mod tests {
     #[tokio::test]
     async fn unlock_op_lock_succeeds() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        // This session must have taken the lock itself for a plain `unlock`
+        // to release it (#C: it skips a lock it never took).
+        session.targets_mut().lock("").await;
         let args = matches(&HostsUnlock, &[]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
         assert!(
@@ -376,36 +389,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unlock_reports_a_foreign_lock_as_contended_without_force() {
-        // Benign contention: left in place, and not counted as a failure.
+    async fn unlock_skips_a_foreign_lock_without_probing_it() {
+        // Commit C: a plain `unlock` only releases what *this session's own
+        // group* took (`Target::holds_operation_lock`), so a foreign lock is
+        // skipped without even a wire read — no owner-naming round trip, just
+        // a pointer at `list_locks`/`--force` (the detailed "held by X since
+        // Y" report is still `--force`'s and `run`'s, via
+        // `contended_lock_reason`). Mutation to catch: reverting to
+        // `unlock_selected` re-attempts the release and reports `Contended`
+        // with the owner detail instead.
         let foreign = foreign_lock("h1");
         let (mut session, buf) =
             session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", foreign.clone())]);
-        session.config.session_user = "bob".to_owned();
         let args = matches(&HostsUnlock, &[]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
-        let out = buf.contents();
         assert!(
-            out.contains(
-                "h1: held by otheruser since Tuesday, 14.11.2023 22:13 UTC, possibly a live \
-                 mtui; check list_locks (unlock --force clears every selected host)"
+            buf.contents().contains(
+                "h1: skipped, not locked by this session; check list_locks, or unlock --force"
             ),
-            "{out}"
-        );
-        assert!(
-            !out.contains("(you)") && !out.contains("mtui of yours"),
-            "{out}"
+            "{}",
+            buf.contents()
         );
         assert!(foreign.file_contents(TARGET_LOCK_PATH).is_some());
     }
 
     #[tokio::test]
-    async fn unlock_names_the_caller_as_the_owner_of_their_stranded_lock() {
-        // Same user, foreign PID: `is_mine` still says no (the PID check is what
-        // serialises one tester's concurrent zypper transactions), so the lock
-        // survives — but the report names the caller instead of an anonymous
-        // "another", hedges (that signature is a live sibling mtui just as
-        // readily as a strand) and asks for `list_locks` first (#521).
+    async fn unlock_skips_the_callers_own_stranded_lock_without_probing_it() {
+        // Same user, foreign PID: this instance never took the lock either
+        // way (its own `held` is unset), so Commit C skips it exactly like a
+        // stranger's lock — the hedge that used to name the caller as the
+        // likely owner (#521) is `--force`'s reporting now, not plain
+        // `unlock`'s.
         let me = mtui_config::Config::default().session_user;
         let line = format!("1700000000:{me}:{}", std::process::id() + 1).into_bytes();
         let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, line.clone());
@@ -413,18 +427,13 @@ mod tests {
             session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", conn.clone())]);
         let args = matches(&HostsUnlock, &[]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
-        let out = buf.contents();
-        assert!(out.contains(&format!("h1: held by {me} (you)")), "{out}");
-        assert!(out.contains("possibly another mtui of yours"), "{out}");
         assert!(
-            out.contains("check list_locks and your other sessions"),
-            "{out}"
+            buf.contents().contains(
+                "h1: skipped, not locked by this session; check list_locks, or unlock --force"
+            ),
+            "{}",
+            buf.contents()
         );
-        assert!(
-            out.contains("unlock --force clears every selected host"),
-            "{out}"
-        );
-        assert!(!out.contains("possibly a live mtui"), "{out}");
         assert_eq!(conn.file_contents(TARGET_LOCK_PATH), Some(line));
     }
 
@@ -442,14 +451,17 @@ mod tests {
         // The reporter's verbatim repro: `unlock -t h2` with both h1 and h2
         // locked by this session must leave h1's lock file byte-identical.
         // Mutation to catch: reverting to the whole-group `targets.unlock()`
-        // fan-out would also unlock h1.
-        let (line1, line2) = (own_op_lock(), own_op_lock());
-        let c1 = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, line1.clone());
-        let c2 = MockConnection::new("h2").with_file(TARGET_LOCK_PATH, line2);
+        // fan-out would also unlock h1. Locked via the API (not a raw wire
+        // fixture) so this session's own group actually took both locks
+        // (#C: a plain `unlock` skips a lock it never took).
+        let c1 = MockConnection::new("h1");
+        let c2 = MockConnection::new("h2");
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
             vec![target("h1", c1.clone()), target("h2", c2.clone())],
         );
+        session.targets_mut().lock("").await;
+        let line1 = c1.file_contents(TARGET_LOCK_PATH);
         let args = matches(&HostsUnlock, &["-t", "h2"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
         assert!(
@@ -459,7 +471,7 @@ mod tests {
         );
         assert_eq!(
             c1.file_contents(TARGET_LOCK_PATH),
-            Some(line1),
+            line1,
             "unselected h1's lock must survive"
         );
         assert!(c2.file_contents(TARGET_LOCK_PATH).is_none());
@@ -503,14 +515,15 @@ mod tests {
     #[tokio::test]
     async fn unlock_reports_a_real_failure_without_timing_out() {
         // A removal that errors for real (not "already gone") must propagate as
-        // `Failed`, not `Contended`. No wedge involved.
-        let broken = MockConnection::new("broken")
-            .with_file(TARGET_LOCK_PATH, own_op_lock())
-            .failing_sftp_remove();
+        // `Failed`, not `Contended`. No wedge involved. This session must have
+        // taken the lock itself first (#C: a plain `unlock` skips a lock it
+        // never took), so lock via the API before the failing removal.
+        let broken = MockConnection::new("broken").failing_sftp_remove();
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
             vec![target("broken", broken.clone())],
         );
+        session.targets_mut().lock("").await;
         let args = matches(&HostsUnlock, &[]);
         let err = HostsUnlock.call(&mut session, &args).await.unwrap_err();
         assert!(

@@ -443,6 +443,18 @@ impl Target {
         self.lock.as_ref().is_some_and(TargetLock::holds_unmarked)
     }
 
+    /// Whether **this** target object took the operation lock, marked or not.
+    ///
+    /// See [`TargetLock::holds`]: unlike
+    /// [`holds_unmarked_operation_lock`](Self::holds_unmarked_operation_lock),
+    /// a comment-marked hold counts too. Backs the `unlock` command's plain
+    /// (no `--force`) path, so `lock -c "reservation"` stays releasable by a
+    /// plain `unlock` in the same session.
+    #[must_use]
+    pub fn holds_operation_lock(&self) -> bool {
+        self.lock.as_ref().is_some_and(TargetLock::holds)
+    }
+
     /// Whether this target has a built operation lock, i.e. is connected.
     ///
     /// No remote I/O: an unconnected target ([`Target::new`], never

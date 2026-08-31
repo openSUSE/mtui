@@ -354,6 +354,18 @@ impl<C: Clock> TargetLock<C> {
         self.held.as_ref().is_some_and(String::is_empty)
     }
 
+    /// Whether **this** instance is holding the lock, marked or not.
+    ///
+    /// Unlike [`holds_unmarked`](Self::holds_unmarked), a comment-marked
+    /// (exclusive) hold counts too — so `lock -c "reservation"` stays
+    /// releasable by a plain `unlock` in the same session, while a sibling
+    /// `TargetLock` object (a second loaded template, a second MCP session)
+    /// sharing this refhost — whose `held` this instance never set — does not.
+    #[must_use]
+    pub(crate) fn holds(&self) -> bool {
+        self.held.is_some()
+    }
+
     /// The lockfile path this lock manages. Set at construction; defaults to
     /// [`TARGET_LOCK_PATH`], overridden to [`POOL_LOCK_PATH`] for [`PoolLock`].
     fn filename(&self) -> PathBuf {
