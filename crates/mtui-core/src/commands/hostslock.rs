@@ -83,6 +83,9 @@ impl Command for HostLock {
                         .println(&format!("{host}: FAILED ({reason})"));
                     failed.push(host.clone());
                 }
+                LockOutcome::Skipped(reason) => session
+                    .display
+                    .println(&format!("{host}: skipped, {reason}")),
                 LockOutcome::Released => {}
             }
         }
@@ -236,6 +239,20 @@ mod tests {
             buf.contents()
         );
         assert!(c2.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn lock_reports_an_unconnected_host_as_skipped_not_locked() {
+        // Mutation to catch: dropping `lock_where`'s `has_operation_lock` guard
+        // makes an unconnected target print `locked` again (`Target::lock` is
+        // a no-op `Ok(())` on `self.lock == None`).
+        let unconnected = Target::new(&mtui_config::Config::default(), "h1", TargetState::Enabled);
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![unconnected]);
+        let args = matches(&HostLock, &[]);
+        HostLock.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("h1: skipped, not connected"), "{out}");
+        assert!(!out.contains("h1: locked"), "{out}");
     }
 
     #[tokio::test]
