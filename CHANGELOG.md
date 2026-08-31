@@ -8,6 +8,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `list_refhosts --free` no longer force-removes stale operation locks on the
+  hosts it lists (#573).
+
 ### Changed
 
 - Destructive and remote-write commands (`update`, `prepare`, `downgrade`,

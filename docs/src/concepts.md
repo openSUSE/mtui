@@ -130,7 +130,9 @@ cooperate rather than clobber one another.
 `unlock -f` force-removes a lock held by another user or session. mtui also reaps
 a pre-existing lock older than `[lock] stale_age` on connect (almost always
 left over from a crashed session); see [Configuration](configuration.md) for
-`reap_stale`, `stale_age`, `wait`, and `wait_poll`.
+`reap_stale`, `stale_age`, `wait`, and `wait_poll`. The one exception is
+[`list_refhosts --free`](cli.md#list_refhosts): its connect is a read-only
+survey, so it never reaps.
 
 ### Product-Increment autolock
 
