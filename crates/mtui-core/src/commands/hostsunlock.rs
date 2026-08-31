@@ -299,7 +299,7 @@ fn verdict(kind: &UnlockKind, failed: Vec<String>) -> CommandResult {
 mod tests {
     use std::time::Duration;
 
-    use mtui_hosts::{MockConnection, TARGET_LOCK_PATH, Target};
+    use mtui_hosts::{MockConnection, POOL_LOCK_PATH, TARGET_LOCK_PATH, Target};
     use mtui_types::enums::TargetState;
 
     use super::*;
@@ -669,11 +669,6 @@ mod tests {
         let args = matches(&HostsUnlock, &["-p", "-f"]);
         HostsUnlock.call(&mut session, &args).await.unwrap();
     }
-
-    /// Wire path of the pool-claim lock file; `mtui_hosts`'s own constant is
-    /// `pub(crate)` and unreachable here, as with `/var/lock/mtui.lock` in
-    /// `commands::run`'s tests.
-    const POOL_LOCK_PATH: &str = "/var/lock/mtui-pool.lock";
 
     /// A pool claim this session's identity owns, in the wire format
     /// `timestamp:user:pid:mtui pool <rrid> [<owner>]`. The built target still

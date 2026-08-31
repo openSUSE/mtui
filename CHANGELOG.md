@@ -150,6 +150,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   one RRID could patch, downgrade, or re-point the repos of every other
   loaded update in the session (#575). It now refuses instead, per the
   `Changed` entry above.
+- `lock`/`unlock` now honour `-t`/`--target`: a bare call used to fan out over
+  the whole active template regardless of `-t`, so `unlock -t <host>` released
+  every host's lock, not just the named one (#571). A bare `lock`/`unlock`
+  also now excludes disabled hosts, matching `list_locks`.
+- `lock`/`unlock`/`unlock --force`/`unlock --pool` no longer report `locked`/
+  `unlocked` for a host they never actually reached (#571): an unconnected
+  host now reports `skipped, not connected` instead of a false success.
+- A plain `unlock` (no `--force`) now releases only the operation lock **this
+  session's own group took** (#571): on a refhost shared by two loaded
+  templates or two MCP sessions, it used to release the other one's lock too,
+  since ownership on the wire is per-process, not per-template. A lock this
+  session never took — a stranger's, or a sibling template's — is now skipped
+  with a `list_locks`/`--force` pointer instead.
+- `lock` no longer overwrites another loaded template's deliberate,
+  comment-marked reservation (the PI assignment lock, an operator's
+  `lock -c <text>`) when the wire's PID-based ownership check cannot tell the
+  two `TargetLock` instances apart (#571); it now refuses instead.
 - `--all-templates -t <host>` now skips a loaded template that does not own
   `<host>`, instead of dispatching into it and failing with `HostNotConnected`
   — the same host-less skip a `-t`-less fan-out already applies, extended to a

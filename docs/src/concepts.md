@@ -127,10 +127,16 @@ cooperate rather than clobber one another.
   the `-p`/`--pool` flag on [`list_locks`](cli.md#list_locks) /
   [`unlock`](cli.md#unlock).
 
-`unlock -f` force-removes a lock held by another user or session. mtui also reaps
-a pre-existing lock older than `[lock] stale_age` on connect (almost always
-left over from a crashed session); see [Configuration](configuration.md) for
-`reap_stale`, `stale_age`, `wait`, and `wait_poll`. The one exception is
+By default, `lock`/`unlock` act on the whole active template's hosts; pass
+`-t <host>` (repeatable) to scope either to a subset. Plain `unlock` releases
+only the operation lock **this session took**: a lock it never took — another
+user's, or a live sibling template's on a refhost shared inside the same
+process — is left alone and reported `skipped`, pointing at `list_locks` or
+`--force` instead. `unlock -f` force-removes a lock held by another user or
+session regardless of who took it. mtui also reaps a pre-existing lock older
+than `[lock] stale_age` on connect (almost always left over from a crashed
+session); see [Configuration](configuration.md) for `reap_stale`, `stale_age`,
+`wait`, and `wait_poll`. The one exception is
 [`list_refhosts --free`](cli.md#list_refhosts): its connect is a read-only
 survey, so it never reaps. Its `lock` column reports one of `free`, `locked`,
 `pool` (free but pool-claimed), `locked+pool`, `unreachable` (the host could
