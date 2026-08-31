@@ -770,6 +770,73 @@ impl HostsGroup {
             .await
     }
 
+    /// Releases the named hosts' operation lock **only where this group's own
+    /// [`Target`] object took it** ([`Target::holds_operation_lock`]),
+    /// best-effort, otherwise identical to [`unlock`](Self::unlock).
+    ///
+    /// Backs the `unlock` command's plain (no `--force`) path: a sibling
+    /// [`HostsGroup`] sharing this refhost (a second loaded template, a second
+    /// MCP session) survives, unlike the wire's PID-based `is_mine` — which
+    /// cannot separate two `TargetLock` objects inside one process — would let
+    /// a bare `unlock` believe. A comment-marked hold counts too (unlike
+    /// [`unlock_held`](Self::unlock_held)), so `lock -c "reservation"` stays
+    /// releasable by a plain `unlock` in the same session.
+    ///
+    /// A host with no built lock at all reports
+    /// [`Skipped`](LockOutcome::Skipped)`("not connected")`; one connected but
+    /// not held by this instance reports `Skipped` with a `list_locks`/
+    /// `--force` pointer, never attempting the release.
+    ///
+    /// **Residual**: [`TargetLock::holds`] is per-object and a
+    /// [`reboot`](Self::reboot) reconnect rebuilds `TargetLock` from scratch,
+    /// clearing it — so a lock this session logically owns becomes
+    /// `--force`-only for a plain `unlock` after a reconnect.
+    /// [`reboot`](Self::reboot) already re-locks with the same comment when
+    /// `relock_comment` is non-empty, which restores the hold this method
+    /// scopes on.
+    pub async fn unlock_taken(
+        &mut self,
+        names: &std::collections::BTreeSet<String>,
+    ) -> BTreeMap<String, LockOutcome> {
+        let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
+        let collected: std::sync::Mutex<BTreeMap<String, LockOutcome>> =
+            std::sync::Mutex::new(BTreeMap::new());
+        actions::run_fanout(
+            &mut self.data,
+            is_repl,
+            max_parallel,
+            Some("unlock"),
+            |t| names.contains(t.hostname()),
+            |t| {
+                let collected = &collected;
+                Box::pin(async move {
+                    let outcome = if !t.has_operation_lock() {
+                        LockOutcome::Skipped("not connected".to_owned())
+                    } else if !t.holds_operation_lock() {
+                        LockOutcome::Skipped(
+                            "not locked by this session; check list_locks, or unlock --force"
+                                .to_owned(),
+                        )
+                    } else {
+                        match t.unlock_reporting(false).await {
+                            Ok(()) => LockOutcome::Released,
+                            Err(HostError::TargetLocked(_)) => {
+                                LockOutcome::Contended(t.loaded_lock_owner())
+                            }
+                            Err(e) => LockOutcome::Failed(e.to_string()),
+                        }
+                    };
+                    collected
+                        .lock()
+                        .unwrap()
+                        .insert(t.hostname().to_owned(), outcome);
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+        collected.into_inner().unwrap()
+    }
+
     /// [`unlock_where`](Self::unlock_where) with `force = false` and a local
     /// map, for the callers that just want the outcomes back.
     async fn unlock_collecting<S>(&mut self, select: S) -> BTreeMap<String, LockOutcome>
@@ -3210,6 +3277,72 @@ mod tests {
             reserved_handle.file_contents(TARGET_LOCK_PATH).is_some(),
             "the reservation was removed"
         );
+    }
+
+    #[tokio::test]
+    async fn unlock_taken_leaves_a_sibling_groups_hold_untouched() {
+        // Two `HostsGroup`s over the *same* wire connection — as if one
+        // refhost were attached to two loaded templates sharing this
+        // process, the shape defect C fixes: group A locks, group B's
+        // `unlock_taken` must not release it even though the wire's
+        // PID-based `is_mine` cannot tell the two `Target` objects apart.
+        // Mutation to catch: swapping `unlock_taken` for `unlock_selected`
+        // removes A's lock from group B.
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "ok", "", 0, 0));
+        let mut group_a = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn.clone()),
+            )],
+            false,
+        );
+        let mut group_b = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(conn.clone()),
+            )],
+            false,
+        );
+
+        let names: BTreeSet<String> = ["h1".to_owned()].into();
+        let locked = group_a.lock_selected("", &names).await;
+        assert_eq!(locked["h1"], LockOutcome::Acquired);
+
+        let outcome = group_b.unlock_taken(&names).await;
+        assert!(
+            matches!(&outcome["h1"], LockOutcome::Skipped(reason) if reason.contains("not locked by this session")),
+            "{outcome:?}"
+        );
+        assert!(
+            conn.file_contents(TARGET_LOCK_PATH).is_some(),
+            "group B must not release group A's hold"
+        );
+
+        // Group A's own `unlock_taken` still releases what it took.
+        let released = group_a.unlock_taken(&names).await;
+        assert_eq!(released["h1"], LockOutcome::Released);
+        assert!(conn.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn unlock_taken_releases_a_comment_marked_hold_from_the_same_session() {
+        // `lock -c "reservation"` then a plain `unlock` in the *same* group
+        // must still release it: `unlock_taken` checks
+        // `holds_operation_lock` (marked or not), not
+        // `holds_unmarked_operation_lock` (`unlock_held`'s predicate, which
+        // deliberately excludes a comment-marked reservation).
+        // Mutation to catch: swapping `holds_operation_lock` for
+        // `holds_unmarked_operation_lock` makes this skip instead of release.
+        let mut g = HostsGroup::new(vec![enabled("h1")], false);
+        let names: BTreeSet<String> = ["h1".to_owned()].into();
+        let locked = g.lock_selected("reservation", &names).await;
+        assert_eq!(locked["h1"], LockOutcome::Acquired);
+
+        let released = g.unlock_taken(&names).await;
+        assert_eq!(released["h1"], LockOutcome::Released);
+        assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
     }
 
     /// The hold record survives a plain read and is cleared by a release, so
