@@ -230,21 +230,40 @@ impl Target {
         }
     }
 
-    /// Builds a target around an already-established [`Connection`].
+    /// Builds a target around an already-established [`Connection`], with
+    /// [`Config::default`].
     ///
     /// This is the offline test seam: inject a
     /// [`MockConnection`](crate::MockConnection) so the whole state machine can
     /// be exercised without a live host. The timeout and policy carry defaults;
-    /// they are unused when a connection is pre-supplied.
+    /// they are unused when a connection is pre-supplied. Use
+    /// [`with_connection_and_config`](Self::with_connection_and_config) when the
+    /// test needs a non-default config (e.g. `lock_reap_stale`).
     #[must_use]
     pub fn with_connection(
         hostname: impl Into<String>,
         state: TargetState,
         connection: Box<dyn Connection>,
     ) -> Self {
+        Self::with_connection_and_config(&Config::default(), hostname, state, connection)
+    }
+
+    /// Builds a target around an already-established [`Connection`], from an
+    /// explicit `config`.
+    ///
+    /// Same offline test seam as [`with_connection`](Self::with_connection), for
+    /// tests that need to exercise a non-default config value (e.g.
+    /// `lock_reap_stale`) without a live host.
+    #[must_use]
+    pub fn with_connection_and_config(
+        config: &Config,
+        hostname: impl Into<String>,
+        state: TargetState,
+        connection: Box<dyn Connection>,
+    ) -> Self {
         let hostname = hostname.into();
         let (host, port) = split_host_port(&hostname);
-        let config = Config::default();
+        let config = config.clone();
         // Build the operation lock from a clone of the injected connection so
         // the test seam mirrors the connected state: `unlock` / the RepoManager
         // force-unlock safeguard have a live lock without a `connect()` call.

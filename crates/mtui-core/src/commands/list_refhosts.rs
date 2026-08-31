@@ -5,7 +5,8 @@
 //! SSH, no lock, no loaded template, so refhosts can be found through mtui
 //! instead of by parsing `refhosts.yml`. Results are de-duplicated by name.
 //! `--free` additionally connects to report live mtui-lock state — the only part
-//! that goes on the wire.
+//! that goes on the wire — without reaping: it is a survey, not a session
+//! connect, so a matched host's stale operation lock is left alone.
 //!
 //! # Testability seam
 //! [`gather`], [`render_table`] and [`render_json`] are pure over an in-memory
@@ -369,13 +370,26 @@ impl Command for ListRefhosts {
     }
 }
 
+/// Clones `config` with reaping disabled.
+///
+/// A `--free` probe is a read-only survey, not a session connect: it must not
+/// force-remove another tester's operation lock just for being listed.
+#[must_use]
+fn probe_config(config: &mtui_config::Config) -> mtui_config::Config {
+    let mut config = config.clone();
+    config.lock_reap_stale = false;
+    config
+}
+
 /// Connect to each matched host in parallel and record its live mtui-lock state
 /// under [`Record::lock`]: `locked`/`free` when it answers, `unreachable` when
-/// the connect or probe fails.
+/// the connect or probe fails. Connects without reaping ([`probe_config`]): a
+/// survey must not force-remove another tester's lock just for being listed.
 ///
 /// The only on-wire part of the command; failures are swallowed per host so one
 /// dead host never aborts the listing.
 async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
+    let config = probe_config(config);
     // Caps peak concurrent connections on large inventories: one task per
     // record, but at most `[connection] max_parallel` connecting at once.
     let bound = (config.max_parallel as usize).max(1);
@@ -561,6 +575,37 @@ mod tests {
         assert!(out.contains("== sles-15-5 x86_64 =="));
         assert!(out.contains("== sles-15-6 x86_64 =="));
         assert!(out.contains("  whale-01"));
+    }
+
+    #[tokio::test]
+    async fn probe_does_not_reap_a_stale_foreign_lock() {
+        use mtui_hosts::{MockConnection, MockSftpOp, TARGET_LOCK_PATH, Target};
+        use std::path::PathBuf;
+
+        // Years-old, so `connect()`'s normal stale-reap would remove it if the
+        // probe didn't disable reaping first.
+        let conn = MockConnection::new("whale-01")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let handle = conn.clone();
+        let mut target = Target::with_connection_and_config(
+            &probe_config(&mtui_config::Config::default()),
+            "whale-01",
+            mtui_types::enums::TargetState::Enabled,
+            Box::new(conn),
+        );
+
+        target.connect().await.expect("connect");
+
+        assert!(
+            !handle
+                .sftp_ops()
+                .contains(&MockSftpOp::Remove(PathBuf::from(TARGET_LOCK_PATH))),
+            "a --free probe must not reap a foreign lock"
+        );
+        assert!(
+            target.is_locked().await.expect("is_locked ok"),
+            "the foreign lock must still be reported as held"
+        );
     }
 
     #[test]
