@@ -130,6 +130,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `list_refhosts --testplatform` no longer declares `-T`, which collided with
+  the shared `-T/--template` flag every command carries — the short bound to
+  `--template` instead, so `list_refhosts -T <query>` reported the query as an
+  unloaded template, and building the parser panicked outright in a debug
+  build (#562). `--testplatform` is long-form only now; `-T` on `list_refhosts`
+  unambiguously selects a loaded template, as on every other command.
 - `list_refhosts --free` no longer force-removes stale operation locks on the
   hosts it lists (#573).
 - `list_refhosts --free` now also reports the pool claim, not just the

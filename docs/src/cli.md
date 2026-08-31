@@ -1047,7 +1047,7 @@ Lists reference hosts from `refhosts.yml` (offline search, no connect).
 Usage: list_refhosts [OPTIONS]
 
 Options:
-  -T, --testplatform <QUERY>
+      --testplatform <QUERY>
           match a SMELT testplatform query
 
   -n, --name <GLOB>

@@ -1441,6 +1441,26 @@ mod explicit_and_fanout_scope_guard {
     }
 }
 
+/// Registry-wide guard that every command's full parser — base template flags
+/// plus its own [`Command::configure`](crate::Command::configure) surface —
+/// builds without a clap arg-id/short/long collision. `testkit::matches`
+/// deliberately builds a bare `clap::Command` and is not a substitute: only
+/// [`crate::engine::command_parser`] assembles the same parser dispatch uses.
+#[cfg(test)]
+mod parser_construction_guard {
+    use crate::engine::command_parser;
+    use crate::register_all;
+
+    #[test]
+    fn every_command_parser_builds_without_collision() {
+        let registry = register_all();
+        for name in registry.names() {
+            let command = registry.get(name).expect("registered");
+            command_parser(command.as_ref()).debug_assert();
+        }
+    }
+}
+
 /// Driver-level tests for the cancellation seam (`Session::cancel` +
 /// [`Command::run`](crate::Command::run) checkpoints), here rather than in
 /// `command.rs` because the [`testkit`] multi-template builders are
