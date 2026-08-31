@@ -1,22 +1,22 @@
 //! The `lock` command (host operation lock).
 
+use std::collections::BTreeSet;
+
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_hosts::LockOutcome;
 
-use super::support::{add_hosts_arg, contended_lock_reason};
+use super::support::{add_hosts_arg, contended_lock_reason, select_names};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Locks hosts for exclusive usage (the operation/zypper lock).
 ///
-/// Locks all repository transactions on the target hosts with a
-/// `timestamp:user:pid[:comment]` remote lock, removed automatically on session
-/// exit; a `-c` comment keeps the lock effective against other sessions too.
-///
-/// `-t` host sub-selection is not yet honoured for the fan-out — the whole
-/// active group is locked (unlike `run`, which locks only its selection).
+/// Locks all repository transactions on the target hosts (or only those named
+/// with `-t`) with a `timestamp:user:pid[:comment]` remote lock, removed
+/// automatically on session exit; a `-c` comment keeps the lock effective
+/// against other sessions too.
 pub struct HostLock;
 
 #[async_trait]
@@ -60,7 +60,12 @@ impl Command for HostLock {
             .map(|it| it.cloned().collect::<Vec<_>>().join(" "))
             .unwrap_or_default();
         let session_user = session.config.session_user.clone();
-        let outcomes = session.targets_mut().lock(&comment).await;
+        let targets = session.targets_mut();
+        let names: BTreeSet<String> = select_names(targets, args, true)
+            .map_err(|e| CommandError::Other(e.to_string()))?
+            .into_iter()
+            .collect();
+        let outcomes = targets.lock_selected(&comment, &names).await;
 
         // `Contended` is benign — another owner holds the lock — so only a real
         // transport error (`Failed`) fails the command.
@@ -166,6 +171,71 @@ mod tests {
             conn.file_contents(TARGET_LOCK_PATH).is_some(),
             "a contended lock must survive `lock`"
         );
+    }
+
+    #[tokio::test]
+    async fn lock_scoped_by_t_never_touches_the_unselected_host() {
+        // Mutation to catch: reverting to the whole-group `targets.lock(..)`
+        // fan-out would also lock h2, and this only fails on the file, not the
+        // printed lines.
+        let c1 = MockConnection::new("h1");
+        let c2 = MockConnection::new("h2");
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(c1.clone())),
+                Target::with_connection("h2", TargetState::Enabled, Box::new(c2.clone())),
+            ],
+        );
+        let args = matches(&HostLock, &["-t", "h1"]);
+        HostLock.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("h1: locked"), "{}", buf.contents());
+        assert!(
+            c2.file_contents(TARGET_LOCK_PATH).is_none(),
+            "an unselected host must never be locked"
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_named_host_not_connected_errors_and_writes_nothing() {
+        let c1 = MockConnection::new("h1");
+        let (mut session, _buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(c1.clone()),
+            )],
+        );
+        let args = matches(&HostLock, &["-t", "nosuchhost"]);
+        let err = HostLock.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("nosuchhost") && m.contains("not connected")),
+            "{err}"
+        );
+        assert!(c1.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn lock_excludes_a_disabled_host() {
+        let c1 = MockConnection::new("h1");
+        let c2 = MockConnection::new("h2");
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![
+                Target::with_connection("h1", TargetState::Enabled, Box::new(c1.clone())),
+                Target::with_connection("h2", TargetState::Disabled, Box::new(c2.clone())),
+            ],
+        );
+        let args = matches(&HostLock, &[]);
+        HostLock.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("h1: locked"), "{}", buf.contents());
+        assert!(
+            !buf.contents().contains("h2"),
+            "a disabled host must not appear in a bare lock: {}",
+            buf.contents()
+        );
+        assert!(c2.file_contents(TARGET_LOCK_PATH).is_none());
     }
 
     #[tokio::test]

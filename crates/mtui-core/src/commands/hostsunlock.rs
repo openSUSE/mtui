@@ -1,20 +1,21 @@
 //! The `unlock` command (host operation lock / pool claim).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_hosts::{LockOutcome, LockOwner};
 
-use super::support::{add_hosts_arg, contended_lock_reason, host_op_budget};
+use super::support::{add_hosts_arg, contended_lock_reason, host_op_budget, select_names};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
 /// Unlocks hosts previously locked with `lock`.
 ///
-/// By default removes the zypper/operation lock; `-f`/`--force` also removes
-/// locks set by other users or sessions, fanning
+/// By default removes the zypper/operation lock on the target hosts (or only
+/// those named with `-t`); `-f`/`--force` also removes locks set by other
+/// users or sessions, fanning
 /// [`HostsGroup::unlock_force`](mtui_hosts::HostsGroup::unlock_force) out under
 /// the [`HOST_CLOSE_TIMEOUT`](crate::session::HOST_CLOSE_TIMEOUT) teardown
 /// budget so a dead peer cannot hold the session.
@@ -23,8 +24,7 @@ use crate::session::Session;
 /// fanning
 /// [`HostsGroup::pool_unlock_collecting`](mtui_hosts::HostsGroup::pool_unlock_collecting)
 /// out under the same budget; with `--force` a claim owned by another template
-/// goes too. Like `lock`, `-t` sub-selection is not yet honoured for the
-/// fan-out (whole group).
+/// goes too.
 pub struct HostsUnlock;
 
 #[async_trait]
@@ -70,17 +70,21 @@ impl Command for HostsUnlock {
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let force = args.get_flag("force");
+        let targets = session.targets_mut();
+        let names =
+            select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
+        let selected: BTreeSet<String> = names.iter().cloned().collect();
+
         if args.get_flag("pool") {
             // Reaches the same possibly-dead links as `unlock_force`, so it gets
             // the same budget and per-host attribution.
-            let names = session.targets().names();
             let budget = host_op_budget();
             let collected = std::sync::Mutex::new(BTreeMap::new());
             let timed_out = tokio::time::timeout(
                 budget,
                 session
                     .targets_mut()
-                    .pool_unlock_collecting(force, &collected),
+                    .pool_unlock_collecting(force, &selected, &collected),
             )
             .await
             .is_err();
@@ -99,15 +103,16 @@ impl Command for HostsUnlock {
             // `unlock_force` reaches foreign locks, which the plain fan-out
             // reports as contended instead. Bounded: remote work over a link that
             // may be open locally but dead.
-            let names = session.targets().names();
             let budget = host_op_budget();
             // Caller-owned, so hosts that finished before the budget expired are
             // still attributed once the fan-out future is dropped.
             let collected = std::sync::Mutex::new(BTreeMap::new());
-            let timed_out =
-                tokio::time::timeout(budget, session.targets_mut().unlock_force(&collected))
-                    .await
-                    .is_err();
+            let timed_out = tokio::time::timeout(
+                budget,
+                session.targets_mut().unlock_force(&selected, &collected),
+            )
+            .await
+            .is_err();
             let outcomes = collected.into_inner().unwrap();
             return bounded_unlock(
                 session,
@@ -122,7 +127,7 @@ impl Command for HostsUnlock {
         // `Force` picks labels only; `--force` never emits `Contended`
         // (`TargetLock::unlock`'s only contended arm is `&& !force`), so that
         // variant's contended line is plain unlock's alone.
-        let outcomes = session.targets_mut().unlock().await;
+        let outcomes = session.targets_mut().unlock_selected(&selected).await;
         verdict(
             &UnlockKind::Force,
             report_outcomes(session, &UnlockKind::Force, &outcomes),
@@ -175,12 +180,12 @@ impl UnlockKind {
             // note, since `--pool --force` is whole-group too.
             Self::Pool if owner.by.is_empty() => {
                 "pool claim held by an unknown owner; check list_locks \
-                 (unlock --pool --force clears the whole group)"
+                 (unlock --pool --force clears every selected host)"
                     .to_owned()
             }
             Self::Pool => format!(
                 "pool claim held by {} since {}; check list_locks \
-                 (unlock --pool --force clears the whole group)",
+                 (unlock --pool --force clears every selected host)",
                 owner.by, owner.since
             ),
         }
@@ -343,7 +348,7 @@ mod tests {
         assert!(
             out.contains(
                 "h1: held by otheruser since Tuesday, 14.11.2023 22:13 UTC, possibly a live \
-                 mtui; check list_locks (unlock --force clears the whole group)"
+                 mtui; check list_locks (unlock --force clears every selected host)"
             ),
             "{out}"
         );
@@ -376,7 +381,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("unlock --force clears the whole group"),
+            out.contains("unlock --force clears every selected host"),
             "{out}"
         );
         assert!(!out.contains("possibly a live mtui"), "{out}");
@@ -390,6 +395,69 @@ mod tests {
         let me = mtui_config::Config::default().session_user;
         let pid = std::process::id();
         format!("1700000000:{me}:{pid}").into_bytes()
+    }
+
+    #[tokio::test]
+    async fn unlock_scoped_by_t_leaves_the_unselected_hosts_lock_intact() {
+        // The reporter's verbatim repro: `unlock -t h2` with both h1 and h2
+        // locked by this session must leave h1's lock file byte-identical.
+        // Mutation to catch: reverting to the whole-group `targets.unlock()`
+        // fan-out would also unlock h1.
+        let (line1, line2) = (own_op_lock(), own_op_lock());
+        let c1 = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, line1.clone());
+        let c2 = MockConnection::new("h2").with_file(TARGET_LOCK_PATH, line2);
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![target("h1", c1.clone()), target("h2", c2.clone())],
+        );
+        let args = matches(&HostsUnlock, &["-t", "h2"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("h2: unlocked"),
+            "{}",
+            buf.contents()
+        );
+        assert_eq!(
+            c1.file_contents(TARGET_LOCK_PATH),
+            Some(line1),
+            "unselected h1's lock must survive"
+        );
+        assert!(c2.file_contents(TARGET_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn force_unlock_scoped_by_t_leaves_the_unselected_hosts_foreign_lock() {
+        let (c1, c2) = (foreign_lock("h1"), foreign_lock("h2"));
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![target("h1", c1.clone()), target("h2", c2.clone())],
+        );
+        let args = matches(&HostsUnlock, &["-f", "-t", "h1"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        assert!(
+            buf.contents().contains("h1: unlocked"),
+            "{}",
+            buf.contents()
+        );
+        assert!(c1.file_contents(TARGET_LOCK_PATH).is_none());
+        assert!(
+            c2.file_contents(TARGET_LOCK_PATH).is_some(),
+            "an unselected host's foreign lock must survive --force"
+        );
+    }
+
+    #[tokio::test]
+    async fn unlock_named_host_not_connected_errors() {
+        let c1 = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, own_op_lock());
+        let (mut session, _buf) =
+            session_with_targets("SUSE:Maintenance:1:1", vec![target("h1", c1.clone())]);
+        let args = matches(&HostsUnlock, &["-t", "nosuchhost"]);
+        let err = HostsUnlock.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("nosuchhost") && m.contains("not connected")),
+            "{err}"
+        );
+        assert!(c1.file_contents(TARGET_LOCK_PATH).is_some());
     }
 
     #[tokio::test]
@@ -569,6 +637,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pool_unlock_scoped_by_t_leaves_the_unselected_hosts_claim() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let c1 = MockConnection::new("h1").with_file(POOL_LOCK_PATH, own_pool_claim(rrid));
+        let c2 = MockConnection::new("h2").with_file(POOL_LOCK_PATH, own_pool_claim(rrid));
+        let mut h1 = target("h1", c1.clone());
+        h1.set_rrid(rrid);
+        let mut h2 = target("h2", c2.clone());
+        h2.set_rrid(rrid);
+        let (mut session, buf) = session_with_targets(rrid, vec![h1, h2]);
+
+        let args = matches(&HostsUnlock, &["-p", "-t", "h1"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+
+        assert!(
+            buf.contents().contains("h1: pool claim removed"),
+            "{}",
+            buf.contents()
+        );
+        assert!(c1.file_contents(POOL_LOCK_PATH).is_none());
+        assert!(
+            c2.file_contents(POOL_LOCK_PATH).is_some(),
+            "an unselected host's pool claim must survive"
+        );
+    }
+
+    #[tokio::test]
     async fn pool_unlock_reports_a_foreign_claim_as_contended_without_force() {
         let rrid = "SUSE:Maintenance:1:1";
         let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign_pool_claim());
@@ -582,7 +676,7 @@ mod tests {
         assert!(
             buf.contents().contains(
                 "h1: pool claim held by alice since Tuesday, 14.11.2023 22:13 UTC; check \
-                 list_locks (unlock --pool --force clears the whole group)"
+                 list_locks (unlock --pool --force clears every selected host)"
             ),
             "{}",
             buf.contents()
@@ -603,7 +697,7 @@ mod tests {
         );
         assert!(line.contains("list_locks"), "{line}");
         assert!(
-            line.contains("unlock --pool --force clears the whole group"),
+            line.contains("unlock --pool --force clears every selected host"),
             "{line}"
         );
     }
