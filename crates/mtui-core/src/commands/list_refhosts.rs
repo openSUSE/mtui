@@ -420,12 +420,21 @@ use probe_config::ProbeConfig;
 
 /// Probes one connected target's operation-lock and pool-claim state.
 ///
-/// An `Err` from *either* read collapses to `("unreachable", None)`: a
-/// half-answered probe is not a trustworthy `free`/`locked` verdict.
-async fn probe_state(target: &mut Target) -> (String, Option<String>) {
-    match (target.is_locked().await, target.pool_claim_rrid().await) {
-        (Ok(locked), Ok(pool)) => ((if locked { "locked" } else { "free" }).to_owned(), pool),
-        _ => ("unreachable".to_owned(), None),
+/// The operation-lock read decides reachability; a pool-claim read that fails
+/// (a garbled `/var/lock/mtui-pool.lock`, a permission-denied read) degrades
+/// to "no claim" with a warning rather than mislabelling a host that answered
+/// as `unreachable`.
+async fn probe_state(target: &mut Target, host: &str) -> (String, Option<String>) {
+    let Ok(locked) = target.is_locked().await else {
+        return ("unreachable".to_owned(), None);
+    };
+    let state = if locked { "locked" } else { "free" }.to_owned();
+    match target.pool_claim_rrid().await {
+        Ok(pool) => (state, pool),
+        Err(e) => {
+            tracing::warn!(host, error = %e, "pool claim unreadable; reporting no claim");
+            (state, None)
+        }
     }
 }
 
@@ -451,7 +460,7 @@ async fn probe_locks(config: &ProbeConfig, records: &mut [Record]) {
             let _permit = sem.acquire_owned().await.expect("semaphore is not closed");
             let mut target = Target::new(&config, name.clone(), TargetState::Enabled);
             let (state, pool) = match target.connect().await {
-                Ok(()) => probe_state(&mut target).await,
+                Ok(()) => probe_state(&mut target, &name).await,
                 Err(_) => ("unreachable".to_owned(), None),
             };
             (name, state, pool)
@@ -734,11 +743,58 @@ mod tests {
             Box::new(conn),
         );
 
-        let (state, pool) = probe_state(&mut target).await;
+        let (state, pool) = probe_state(&mut target, "whale-01").await;
 
         assert_eq!(state, "free");
         assert_eq!(pool.as_deref(), Some("SUSE:Maintenance:9:9"));
         assert_eq!(lock_label(Some(&state), pool.as_deref()), "pool");
+    }
+
+    #[tokio::test]
+    async fn probe_state_keeps_op_verdict_when_pool_lock_is_garbled() {
+        use mtui_hosts::{MockConnection, POOL_LOCK_PATH, TARGET_LOCK_PATH, Target};
+
+        // "not-a-lock" has <3 colon fields, so `RemoteLock::from_lockfile`
+        // rejects it — a valid line here would disarm this test under both
+        // implementations.
+        let conn = MockConnection::new("whale-01")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec())
+            .with_file(POOL_LOCK_PATH, b"not-a-lock".to_vec());
+        let mut target = Target::with_connection(
+            "whale-01",
+            mtui_types::enums::TargetState::Enabled,
+            Box::new(conn),
+        );
+
+        let (state, pool) = probe_state(&mut target, "whale-01").await;
+
+        assert_eq!(state, "locked");
+        assert_eq!(pool, None);
+    }
+
+    #[tokio::test]
+    async fn probe_state_unreachable_when_op_lock_read_fails() {
+        use mtui_hosts::{MockConnection, MockSftpOp, POOL_LOCK_PATH, TARGET_LOCK_PATH, Target};
+        use std::path::PathBuf;
+
+        let conn = MockConnection::new("whale-01").with_open_error(TARGET_LOCK_PATH);
+        let handle = conn.clone();
+        let mut target = Target::with_connection(
+            "whale-01",
+            mtui_types::enums::TargetState::Enabled,
+            Box::new(conn),
+        );
+
+        let (state, pool) = probe_state(&mut target, "whale-01").await;
+
+        assert_eq!(state, "unreachable");
+        assert_eq!(pool, None);
+        assert!(
+            !handle
+                .sftp_ops()
+                .contains(&MockSftpOp::Open(PathBuf::from(POOL_LOCK_PATH))),
+            "an unreachable op-lock read must not pay a second round-trip for the pool lock"
+        );
     }
 
     #[test]

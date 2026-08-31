@@ -16,6 +16,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   operation lock (#574). The table's `lock` column gains `pool` and
   `locked+pool` values; `--json` keeps `lock`'s existing vocabulary and adds a
   `pool` key (the claiming RRID, or `null`).
+- `list_refhosts --free` no longer reports a reachable host as `unreachable`
+  just because its pool-claim lock is garbled or unreadable; it keeps the
+  operation-lock verdict and reports the pool claim as unset instead.
 
 ### Changed
 
