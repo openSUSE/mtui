@@ -132,7 +132,11 @@ a pre-existing lock older than `[lock] stale_age` on connect (almost always
 left over from a crashed session); see [Configuration](configuration.md) for
 `reap_stale`, `stale_age`, `wait`, and `wait_poll`. The one exception is
 [`list_refhosts --free`](cli.md#list_refhosts): its connect is a read-only
-survey, so it never reaps.
+survey, so it never reaps. Its `lock` column reports one of `free`, `locked`,
+`pool` (free but pool-claimed), `locked+pool`, `unreachable` (the host could
+not be probed), or `unknown` (the probe never completed for it); `--json`
+keeps this vocabulary and adds a `pool` key: the claiming RRID, or `null` when
+unclaimed.
 
 ### Product-Increment autolock
 
