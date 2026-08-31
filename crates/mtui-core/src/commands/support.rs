@@ -34,13 +34,12 @@ pub(crate) fn host_op_budget() -> std::time::Duration {
     crate::commands::testkit::host_op_budget_override()
 }
 
-/// The caveat every contention line carries. `unlock --force` fans out over the
-/// **whole group** (`HostsGroup::unlock_force` passes `|_t| true`, and `unlock`
-/// does not honour `-t`) once per *loaded* template (`Scope::Fanout`), so a line
-/// reached from a `-t`-scoped command must not let it read as "force this one
-/// host" — complying would rip a colleague's in-flight lock off hosts that were
-/// never contended.
-const FORCE_IS_WHOLE_GROUP: &str = "(unlock --force clears the whole group)";
+/// The caveat every contention line carries. `unlock --force` clears the lock
+/// on **every selected host** (the whole group with no `-t`, or exactly the
+/// named hosts under one), so a line reached from a `-t`-scoped command must
+/// not let it read as "force this one host" — complying would rip a
+/// colleague's in-flight lock off hosts that were never contended.
+const FORCE_CLEARS_SELECTION: &str = "(unlock --force clears every selected host)";
 
 /// Names the owner of a contended operation lock and the next safe step.
 ///
@@ -56,19 +55,19 @@ pub(crate) fn contended_lock_reason(owner: &LockOwner, session_user: &str) -> St
     if owner.by.is_empty() {
         return format!(
             "held by an unknown owner, possibly a live mtui; check list_locks \
-             {FORCE_IS_WHOLE_GROUP}"
+             {FORCE_CLEARS_SELECTION}"
         );
     }
     if owner.by == session_user {
         format!(
             "held by {} (you) since {}, possibly another mtui of yours; check list_locks \
-             and your other sessions {FORCE_IS_WHOLE_GROUP}",
+             and your other sessions {FORCE_CLEARS_SELECTION}",
             owner.by, owner.since
         )
     } else {
         format!(
             "held by {} since {}, possibly a live mtui; check list_locks \
-             {FORCE_IS_WHOLE_GROUP}",
+             {FORCE_CLEARS_SELECTION}",
             owner.by, owner.since
         )
     }
@@ -552,7 +551,7 @@ mod tests {
         for line in [&foreign, &mine, &unknown] {
             assert!(line.contains("list_locks"), "{line}");
             assert!(
-                line.contains("unlock --force clears the whole group"),
+                line.contains("unlock --force clears every selected host"),
                 "{line}"
             );
             assert!(line.contains("possibly"), "hedge missing: {line}");

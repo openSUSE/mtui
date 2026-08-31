@@ -697,8 +697,8 @@ impl HostsGroup {
         self.unlock_collecting(|_t| true).await
     }
 
-    /// Releases every host's operation lock **including one owned by another
-    /// user or session**, best-effort, otherwise identical to
+    /// Releases the named hosts' operation lock **including one owned by
+    /// another user or session**, best-effort, otherwise identical to
     /// [`unlock`](Self::unlock).
     ///
     /// The fan-out behind `unlock --force`: a foreign lock is removed rather than
@@ -710,9 +710,11 @@ impl HostsGroup {
     /// every host that did complete.
     pub async fn unlock_force(
         &mut self,
+        names: &BTreeSet<String>,
         collected: &std::sync::Mutex<BTreeMap<String, LockOutcome>>,
     ) {
-        self.unlock_where(|_t| true, true, collected).await;
+        self.unlock_where(|t| names.contains(t.hostname()), true, collected)
+            .await;
     }
 
     /// Releases only the operation locks **this group's own targets took**,
@@ -806,7 +808,7 @@ impl HostsGroup {
         .await;
     }
 
-    /// Releases every host's pool claim into the caller-owned `collected`,
+    /// Releases the named hosts' pool claim into the caller-owned `collected`,
     /// best-effort.
     ///
     /// A claim owned by another template lands as
@@ -817,6 +819,7 @@ impl HostsGroup {
     pub async fn pool_unlock_collecting(
         &mut self,
         force: bool,
+        names: &BTreeSet<String>,
         collected: &std::sync::Mutex<BTreeMap<String, LockOutcome>>,
     ) {
         let (is_repl, max_parallel) = (self.is_repl, self.max_parallel);
@@ -825,7 +828,7 @@ impl HostsGroup {
             is_repl,
             max_parallel,
             Some("pool_unlock"),
-            |_t| true,
+            |t| names.contains(t.hostname()),
             |t| {
                 let collected = &collected;
                 Box::pin(async move {
@@ -3355,8 +3358,9 @@ mod tests {
 
         let forced = foreign();
         let mut g = group(forced.clone());
+        let names: BTreeSet<String> = ["h1".to_owned()].into();
         let collected = std::sync::Mutex::new(BTreeMap::new());
-        g.unlock_force(&collected).await;
+        g.unlock_force(&names, &collected).await;
         assert_eq!(collected.into_inner().unwrap()["h1"], LockOutcome::Released);
         assert!(forced.file_contents(TARGET_LOCK_PATH).is_none());
     }
@@ -3408,8 +3412,9 @@ mod tests {
         for t in g.data.values_mut() {
             t.set_rrid("SUSE:Maintenance:1:2");
         }
+        let names: BTreeSet<String> = ["h1".to_owned(), "h2".to_owned()].into();
         let collected = std::sync::Mutex::new(BTreeMap::new());
-        g.pool_unlock_collecting(false, &collected).await;
+        g.pool_unlock_collecting(false, &names, &collected).await;
         assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
         assert!(h2.file_contents(POOL_LOCK_PATH).is_none());
         let collected = collected.into_inner().unwrap();
@@ -3438,8 +3443,9 @@ mod tests {
         for t in g.data.values_mut() {
             t.set_rrid("SUSE:Maintenance:1:2");
         }
+        let names: BTreeSet<String> = ["h1".to_owned(), "h2".to_owned()].into();
         let collected = std::sync::Mutex::new(BTreeMap::new());
-        g.pool_unlock_collecting(false, &collected).await;
+        g.pool_unlock_collecting(false, &names, &collected).await;
         assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
         // h2's foreign claim is left in place, and named — not swallowed, as
         // the deleted `pool_unlock` did.

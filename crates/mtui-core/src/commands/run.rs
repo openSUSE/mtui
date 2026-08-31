@@ -420,7 +420,7 @@ mod tests {
         assert!(
             out.contains(
                 "h2: skipped, held by alice since Tuesday, 14.11.2023 22:13 UTC, possibly a \
-                 live mtui; check list_locks (unlock --force clears the whole group)"
+                 live mtui; check list_locks (unlock --force clears every selected host)"
             ),
             "{out}"
         );
@@ -473,7 +473,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("unlock --force clears the whole group"),
+            out.contains("unlock --force clears every selected host"),
             "{out}"
         );
         assert!(!out.contains("possibly a live mtui"), "{out}");
