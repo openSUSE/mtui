@@ -2361,6 +2361,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pool_claim_rrid_empty_when_comment_is_not_a_pool_stamp() {
+        let conn = MockConnection::new("h1").with_file(
+            POOL_LOCK_PATH,
+            b"1700000000:bob:99:some other comment".to_vec(),
+        );
+        let mut t = enabled_with(conn);
+        assert_eq!(
+            t.pool_claim_rrid().await.expect("read ok"),
+            Some(String::new())
+        );
+    }
+
+    #[tokio::test]
     async fn lock_status_unconnected_is_unlocked() {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
         assert!(!t.lock_status(false).await.is_locked);

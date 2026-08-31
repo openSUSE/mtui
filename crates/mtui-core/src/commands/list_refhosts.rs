@@ -622,6 +622,7 @@ mod tests {
         let cases: &[(Option<&str>, Option<&str>, &str)] = &[
             (Some("free"), None, "free"),
             (Some("free"), Some("SUSE:Maintenance:9:9"), "pool"),
+            (Some("free"), Some(""), "pool"),
             (Some("locked"), None, "locked"),
             (Some("locked"), Some("SUSE:Maintenance:9:9"), "locked+pool"),
             (
@@ -725,6 +726,20 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed[0]["lock"], "free");
         assert_eq!(parsed[0]["pool"], "SUSE:Maintenance:9:9");
+    }
+
+    #[test]
+    fn render_json_includes_empty_pool_string_for_unparseable_claim() {
+        // `pool_claim_rrid` returns `Some("")` for a claim whose comment is not
+        // a `mtui pool <RRID>` stamp — still claimed, just unparseable. `""` is
+        // JS-falsy, so this pins the shape as a decision rather than an
+        // accident.
+        let mut recs = gather(&store(), &Filters::default());
+        recs[0].lock = Some("free".to_owned());
+        recs[0].pool = Some(String::new());
+        let json = render_json(&recs);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed[0]["pool"], "");
     }
 
     #[tokio::test]
