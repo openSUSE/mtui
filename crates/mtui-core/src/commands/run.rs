@@ -98,6 +98,10 @@ impl Command for Run {
                     report.push(format!("{host}: lock FAILED ({reason})"));
                     blocked.push(host.clone());
                 }
+                LockOutcome::Skipped(reason) => {
+                    report.push(format!("{host}: skipped, {reason}"));
+                    blocked.push(host.clone());
+                }
                 LockOutcome::Released => {}
             }
         }

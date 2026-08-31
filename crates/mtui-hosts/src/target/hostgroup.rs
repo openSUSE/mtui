@@ -72,6 +72,11 @@ use super::{LockOwner, LockRow, Target};
 ///   failure.
 /// * [`Failed`](LockOutcome::Failed) — a real transport/SFTP error acquiring or
 ///   releasing the lock; the caller may name the host.
+/// * [`Skipped`](LockOutcome::Skipped) — nothing was attempted on the wire (an
+///   unconnected host has no built lock to act on); the reason is
+///   display-ready. Distinct from `Acquired`/`Released`'s own "nothing to do"
+///   no-op: those mean the verb ran and found no work, this means the verb
+///   never ran at all, so a caller must not report it as success.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LockOutcome {
     /// The operation lock was acquired (or was already ours / a no-op).
@@ -84,6 +89,9 @@ pub enum LockOutcome {
     Contended(LockOwner),
     /// A real transport/SFTP error occurred; the string is the reason.
     Failed(String),
+    /// Nothing was attempted on the wire — the string is a display-ready
+    /// reason (e.g. `"not connected"`).
+    Skipped(String),
 }
 
 /// A composite over a group of [`Target`]s, keyed by hostname.
@@ -663,15 +671,19 @@ impl HostsGroup {
                 let comment = comment.to_owned();
                 let collected = &collected;
                 Box::pin(async move {
-                    let outcome = match t.lock(&comment).await {
-                        Ok(()) => LockOutcome::Acquired,
-                        Err(HostError::TargetLocked(msg)) => {
-                            tracing::debug!(host = %t.hostname(), %msg, "lock: held by another owner, skipping");
-                            LockOutcome::Contended(t.loaded_lock_owner())
-                        }
-                        Err(e) => {
-                            tracing::warn!(host = %t.hostname(), error = %e, "lock failed");
-                            LockOutcome::Failed(e.to_string())
+                    let outcome = if !t.has_operation_lock() {
+                        LockOutcome::Skipped("not connected".to_owned())
+                    } else {
+                        match t.lock(&comment).await {
+                            Ok(()) => LockOutcome::Acquired,
+                            Err(HostError::TargetLocked(msg)) => {
+                                tracing::debug!(host = %t.hostname(), %msg, "lock: held by another owner, skipping");
+                                LockOutcome::Contended(t.loaded_lock_owner())
+                            }
+                            Err(e) => {
+                                tracing::warn!(host = %t.hostname(), error = %e, "lock failed");
+                                LockOutcome::Failed(e.to_string())
+                            }
                         }
                     };
                     collected.lock().unwrap().insert(t.hostname().to_owned(), outcome);
@@ -791,12 +803,16 @@ impl HostsGroup {
             |t| {
                 let collected = &collected;
                 Box::pin(async move {
-                    let outcome = match t.unlock_reporting(force).await {
-                        Ok(()) => LockOutcome::Released,
-                        Err(HostError::TargetLocked(_)) => {
-                            LockOutcome::Contended(t.loaded_lock_owner())
+                    let outcome = if !t.has_operation_lock() {
+                        LockOutcome::Skipped("not connected".to_owned())
+                    } else {
+                        match t.unlock_reporting(force).await {
+                            Ok(()) => LockOutcome::Released,
+                            Err(HostError::TargetLocked(_)) => {
+                                LockOutcome::Contended(t.loaded_lock_owner())
+                            }
+                            Err(e) => LockOutcome::Failed(e.to_string()),
                         }
-                        Err(e) => LockOutcome::Failed(e.to_string()),
                     };
                     collected
                         .lock()
@@ -832,12 +848,16 @@ impl HostsGroup {
             |t| {
                 let collected = &collected;
                 Box::pin(async move {
-                    let outcome = match t.pool_unlock_reporting(force).await {
-                        Ok(()) => LockOutcome::Released,
-                        Err(HostError::TargetLocked(_)) => {
-                            LockOutcome::Contended(t.loaded_pool_owner())
+                    let outcome = if !t.has_pool_lock() {
+                        LockOutcome::Skipped("not connected".to_owned())
+                    } else {
+                        match t.pool_unlock_reporting(force).await {
+                            Ok(()) => LockOutcome::Released,
+                            Err(HostError::TargetLocked(_)) => {
+                                LockOutcome::Contended(t.loaded_pool_owner())
+                            }
+                            Err(e) => LockOutcome::Failed(e.to_string()),
                         }
-                        Err(e) => LockOutcome::Failed(e.to_string()),
                     };
                     collected
                         .lock()
@@ -3311,6 +3331,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lock_and_unlock_skip_an_unconnected_host_without_touching_the_wire() {
+        // Mutation to catch: deleting `lock_where`'s/`unlock_where`'s
+        // `has_operation_lock` guard reports `Acquired`/`Released` for a
+        // target that built no `TargetLock` at all (`Target::lock`/
+        // `unlock_reporting` are no-op `Ok(())` when `self.lock == None`).
+        let unconnected = Target::new(
+            &mtui_config::Config::default(),
+            "unconnected",
+            TargetState::Enabled,
+        );
+        let mut g = HostsGroup::new(vec![enabled("h1"), unconnected], false);
+
+        let locked = g.lock("").await;
+        assert_eq!(locked["h1"], LockOutcome::Acquired);
+        assert_eq!(
+            locked["unconnected"],
+            LockOutcome::Skipped("not connected".to_owned())
+        );
+
+        let unlocked = g.unlock().await;
+        assert_eq!(unlocked["h1"], LockOutcome::Released);
+        assert_eq!(
+            unlocked["unconnected"],
+            LockOutcome::Skipped("not connected".to_owned())
+        );
+    }
+
+    #[tokio::test]
     async fn unlock_reports_benign_contention_distinct_from_release() {
         // h1 is ours (locked below) -> Released; h2 is foreign -> benign
         // Contended (not a failure).
@@ -3420,6 +3468,25 @@ mod tests {
         let collected = collected.into_inner().unwrap();
         assert_eq!(collected["h1"], LockOutcome::Released);
         assert_eq!(collected["h2"], LockOutcome::Released);
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_skips_an_unconnected_host_without_touching_the_wire() {
+        // Mutation to catch: deleting the `has_pool_lock` guard reports
+        // `Released` for a target with no built `PoolLock` at all.
+        let unconnected = Target::new(
+            &mtui_config::Config::default(),
+            "unconnected",
+            TargetState::Enabled,
+        );
+        let mut g = HostsGroup::new(vec![unconnected], false);
+        let names: BTreeSet<String> = ["unconnected".to_owned()].into();
+        let collected = std::sync::Mutex::new(BTreeMap::new());
+        g.pool_unlock_collecting(false, &names, &collected).await;
+        assert_eq!(
+            collected.into_inner().unwrap()["unconnected"],
+            LockOutcome::Skipped("not connected".to_owned())
+        );
     }
 
     #[tokio::test]

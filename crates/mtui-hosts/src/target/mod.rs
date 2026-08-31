@@ -443,6 +443,23 @@ impl Target {
         self.lock.as_ref().is_some_and(TargetLock::holds_unmarked)
     }
 
+    /// Whether this target has a built operation lock, i.e. is connected.
+    ///
+    /// No remote I/O: an unconnected target ([`Target::new`], never
+    /// [`connect`](Self::connect)ed) never built a [`TargetLock`], so a group
+    /// fan-out can tell "nothing to attempt" apart from "attempted and found
+    /// unlocked" before touching the wire.
+    #[must_use]
+    pub(crate) fn has_operation_lock(&self) -> bool {
+        self.lock.is_some()
+    }
+
+    /// [`has_operation_lock`](Self::has_operation_lock) for the pool claim.
+    #[must_use]
+    pub(crate) fn has_pool_lock(&self) -> bool {
+        self.pool_lock.is_some()
+    }
+
     /// Sets the owning template's RRID, the [`PoolLock`] ownership identity.
     ///
     /// The report layer pushes the RRID down onto each target (see

@@ -263,6 +263,9 @@ fn report_outcomes(
                     .println(&format!("{host}: FAILED ({reason})"));
                 failed.push(host.clone());
             }
+            LockOutcome::Skipped(reason) => session
+                .display
+                .println(&format!("{host}: skipped, {reason}")),
             LockOutcome::Acquired => {}
         }
     }
@@ -333,6 +336,43 @@ mod tests {
             "{}",
             buf.contents()
         );
+    }
+
+    #[tokio::test]
+    async fn unlock_reports_an_unconnected_host_as_skipped_not_unlocked() {
+        // Mutation to catch: dropping `unlock_where`'s `has_operation_lock`
+        // guard makes an unconnected target print `unlocked` again
+        // (`Target::unlock_reporting` is a no-op `Ok(())` on `self.lock ==
+        // None`).
+        let unconnected = Target::new(&mtui_config::Config::default(), "h1", TargetState::Enabled);
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![unconnected]);
+        let args = matches(&HostsUnlock, &[]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("h1: skipped, not connected"), "{out}");
+        assert!(!out.contains("h1: unlocked"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn force_unlock_reports_an_unconnected_host_as_skipped_not_unlocked() {
+        let unconnected = Target::new(&mtui_config::Config::default(), "h1", TargetState::Enabled);
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![unconnected]);
+        let args = matches(&HostsUnlock, &["-f"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("h1: skipped, not connected"), "{out}");
+        assert!(!out.contains("h1: unlocked"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_reports_an_unconnected_host_as_skipped_not_removed() {
+        let unconnected = Target::new(&mtui_config::Config::default(), "h1", TargetState::Enabled);
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![unconnected]);
+        let args = matches(&HostsUnlock, &["-p"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("h1: skipped, not connected"), "{out}");
+        assert!(!out.contains("h1: pool claim removed"), "{out}");
     }
 
     #[tokio::test]

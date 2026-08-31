@@ -499,7 +499,10 @@ pub trait Operation: Send + Sync {
             .into_iter()
             .filter_map(|(host, outcome)| match outcome {
                 LockOutcome::Failed(reason) => Some((host, reason)),
-                LockOutcome::Acquired | LockOutcome::Released | LockOutcome::Contended(_) => None,
+                LockOutcome::Acquired
+                | LockOutcome::Released
+                | LockOutcome::Contended(_)
+                | LockOutcome::Skipped(_) => None,
             })
             .collect();
         Ok(OperationReport {

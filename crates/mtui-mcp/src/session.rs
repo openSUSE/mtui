@@ -335,11 +335,14 @@ impl AbortUnlock {
                 LockOutcome::Released => self.unlocked.push(host),
                 LockOutcome::Contended(_) => self.contended.push(host),
                 LockOutcome::Failed(reason) => self.failed.push((host, reason)),
-                // Unreachable on an unlock fan-out; ignored rather than folded
-                // into a bucket (as the `unlock` command's own match does) —
-                // inventing a verdict for an impossible outcome is how a reply
-                // starts claiming things that did not happen.
-                LockOutcome::Acquired => {}
+                // Unreachable on `unlock_held`'s fan-out: its select predicate
+                // (`Target::holds_unmarked_operation_lock`) already excludes an
+                // unconnected target, so `Skipped` never reaches here either.
+                // Ignored rather than folded into a bucket (as the `unlock`
+                // command's own match does) — inventing a verdict for an
+                // impossible outcome is how a reply starts claiming things
+                // that did not happen.
+                LockOutcome::Acquired | LockOutcome::Skipped(_) => {}
             }
         }
     }
