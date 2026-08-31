@@ -8,18 +8,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-### Fixed
-
-- `list_refhosts --free` no longer force-removes stale operation locks on the
-  hosts it lists (#573).
-- `list_refhosts --free` now also reports the pool claim, not just the
-  operation lock (#574). The table's `lock` column gains `pool` and
-  `locked+pool` values; `--json` keeps `lock`'s existing vocabulary and adds a
-  `pool` key (the claiming RRID, or `null`).
-- `list_refhosts --free` no longer reports a reachable host as `unreachable`
-  just because its pool-claim lock is garbled or unreadable; it keeps the
-  operation-lock verdict and reports the pool claim as unset instead.
-
 ### Changed
 
 - Destructive and remote-write commands (`update`, `prepare`, `downgrade`,
@@ -142,6 +130,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `list_refhosts --free` no longer force-removes stale operation locks on the
+  hosts it lists (#573).
+- `list_refhosts --free` now also reports the pool claim, not just the
+  operation lock (#574). The table's `lock` column gains `pool` and
+  `locked+pool` values; `--json` keeps `lock`'s existing vocabulary and adds a
+  `pool` key (the claiming RRID, or `null`).
+- `list_refhosts --free` no longer reports a reachable host as `unreachable`
+  just because its pool-claim lock is garbled or unreadable; it keeps the
+  operation-lock verdict and reports the pool claim as unset instead.
 - An unqualified `update`/`downgrade`/`set_repo`/… over MCP with several
   templates loaded used to run on **every** loaded template — a request about
   one RRID could patch, downgrade, or re-point the repos of every other
