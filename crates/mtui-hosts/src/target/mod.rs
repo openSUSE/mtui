@@ -445,7 +445,7 @@ impl Target {
 
     /// Whether **this** target object took the operation lock, marked or not.
     ///
-    /// See [`TargetLock::holds`]: unlike
+    /// Unlike
     /// [`holds_unmarked_operation_lock`](Self::holds_unmarked_operation_lock),
     /// a comment-marked hold counts too. Backs the `unlock` command's plain
     /// (no `--force`) path, so `lock -c "reservation"` stays releasable by a
