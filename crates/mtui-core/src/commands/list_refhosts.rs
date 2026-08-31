@@ -379,7 +379,7 @@ impl Command for ListRefhosts {
         let mut records = gather(&store, &filters);
 
         if free && !records.is_empty() {
-            probe_locks(&config, &mut records).await;
+            probe_locks(&ProbeConfig::new(&config), &mut records).await;
         }
 
         if as_json {
@@ -397,16 +397,26 @@ impl Command for ListRefhosts {
     }
 }
 
-/// Clones `config` with reaping disabled.
-///
-/// A `--free` probe is a read-only survey, not a session connect: it must not
-/// force-remove another tester's operation lock just for being listed.
-#[must_use]
-fn probe_config(config: &mtui_config::Config) -> mtui_config::Config {
-    let mut config = config.clone();
-    config.lock_reap_stale = false;
-    config
+/// A `Config` that provably cannot reap: the only constructor clears both
+/// reap flags, so a `--free` survey cannot force-remove another tester's
+/// operation lock or pool claim just for listing the host (#573).
+mod probe_config {
+    pub(super) struct ProbeConfig(mtui_config::Config);
+
+    impl ProbeConfig {
+        pub(super) fn new(config: &mtui_config::Config) -> Self {
+            let mut config = config.clone();
+            config.lock_reap_stale = false;
+            config.pool_reap_stale = false;
+            Self(config)
+        }
+
+        pub(super) fn get(&self) -> &mtui_config::Config {
+            &self.0
+        }
+    }
 }
+use probe_config::ProbeConfig;
 
 /// Probes one connected target's operation-lock and pool-claim state.
 ///
@@ -421,20 +431,19 @@ async fn probe_state(target: &mut Target) -> (String, Option<String>) {
 
 /// Connect to each matched host in parallel and record its live operation-lock
 /// and pool-claim state under [`Record::lock`] / [`Record::pool`].
-/// Connects without reaping ([`probe_config`]): a survey must not force-remove
+/// Connects without reaping ([`ProbeConfig`]): a survey must not force-remove
 /// another tester's lock just for being listed.
 ///
 /// The only on-wire part of the command; failures are swallowed per host so one
 /// dead host never aborts the listing.
-async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
-    let config = probe_config(config);
+async fn probe_locks(config: &ProbeConfig, records: &mut [Record]) {
     // Caps peak concurrent connections on large inventories: one task per
     // record, but at most `[connection] max_parallel` connecting at once.
-    let bound = (config.max_parallel as usize).max(1);
+    let bound = (config.get().max_parallel as usize).max(1);
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(bound));
     let mut set: JoinSet<(String, String, Option<String>)> = JoinSet::new();
     for r in records.iter() {
-        let config = config.clone();
+        let config = config.get().clone();
         let name = r.name.clone();
         let sem = std::sync::Arc::clone(&sem);
         set.spawn(async move {
@@ -635,6 +644,16 @@ mod tests {
         assert!(out.contains("  whale-01"));
     }
 
+    #[test]
+    fn probe_config_disables_both_reap_flags() {
+        let config = mtui_config::Config::default();
+        assert!(config.lock_reap_stale);
+        assert!(config.pool_reap_stale);
+        let probe = ProbeConfig::new(&config);
+        assert!(!probe.get().lock_reap_stale);
+        assert!(!probe.get().pool_reap_stale);
+    }
+
     #[tokio::test]
     async fn probe_does_not_reap_a_stale_foreign_lock() {
         use mtui_hosts::{MockConnection, MockSftpOp, TARGET_LOCK_PATH, Target};
@@ -646,7 +665,7 @@ mod tests {
             .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
         let handle = conn.clone();
         let mut target = Target::with_connection_and_config(
-            &probe_config(&mtui_config::Config::default()),
+            ProbeConfig::new(&mtui_config::Config::default()).get(),
             "whale-01",
             mtui_types::enums::TargetState::Enabled,
             Box::new(conn),
