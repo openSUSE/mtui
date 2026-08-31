@@ -787,7 +787,7 @@ impl HostsGroup {
     /// not held by this instance reports `Skipped` with a `list_locks`/
     /// `--force` pointer, never attempting the release.
     ///
-    /// **Residual**: [`TargetLock::holds`] is per-object and a
+    /// **Residual**: the in-memory hold record is per-object and a
     /// [`reboot`](Self::reboot) reconnect rebuilds `TargetLock` from scratch,
     /// clearing it — so a lock this session logically owns becomes
     /// `--force`-only for a plain `unlock` after a reconnect.

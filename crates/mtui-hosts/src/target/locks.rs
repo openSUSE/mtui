@@ -520,15 +520,24 @@ impl<C: Clock> TargetLock<C> {
     ///
     /// **Race-safe**: a foreign lock is never blind-overwritten. The only
     /// non-exclusive (truncating) write is a re-stamp of a lock this process
-    /// *already owns* — clobbering "the winner" there means clobbering
-    /// ourselves. When wait/reap frees the host, the acquisition is a **retried
-    /// atomic exclusive create**, so a racer that took the lock in the TOCTOU
-    /// window between our last check and the write wins and we reconcile again
-    /// rather than stomping their line.
+    /// *already owns*. Ownership on the wire is PID-based, so "already owns"
+    /// alone cannot separate this instance from a sibling `TargetLock` in the
+    /// same process (a second loaded template, a second MCP session) that
+    /// took a deliberate, comment-marked reservation under our identical
+    /// identity: the re-stamp additionally refuses when this instance never
+    /// took *this* lock (`held.is_none()`) and the loaded comment is a
+    /// reservation that differs from the one about to be written — a
+    /// same-comment re-apply (the PI autolock after a reconnect) still
+    /// succeeds. When wait/reap frees the host, the acquisition is a
+    /// **retried atomic exclusive create**, so a racer that took the lock in
+    /// the TOCTOU window between our last check and the write wins and we
+    /// reconcile again rather than stomping their line.
     ///
     /// # Errors
     /// Returns [`HostError::TargetLocked`] when the host is held by another
-    /// owner and cannot be acquired, or an SFTP error from the read/write path.
+    /// owner and cannot be acquired, when a sibling `TargetLock`'s deliberate
+    /// reservation would otherwise be overwritten, or an SFTP error from the
+    /// read/write path.
     pub async fn lock(&mut self, comment: &str) -> Result<()> {
         let rl = RemoteLock {
             user: self.i_am_user.clone(),
@@ -575,6 +584,23 @@ impl<C: Clock> TargetLock<C> {
                 continue;
             }
             if self.is_mine()? {
+                // The wire's ownership check is PID-based, so it cannot tell
+                // this instance apart from a sibling `TargetLock` in the same
+                // process (a second loaded template, a second MCP session)
+                // that stamped a deliberate reservation under our identical
+                // identity. Refuse the re-stamp rather than clobber it: this
+                // instance never took *this* lock (`held.is_none()`), the
+                // loaded comment is non-empty (a reservation — an operation
+                // lock stamps `""`, so this never blocks a plain re-lock), and
+                // it differs from the comment we are about to write (a
+                // same-comment re-apply, e.g. the PI autolock after a
+                // reconnect, is not a clobber).
+                if self.held.is_none()
+                    && !self.lock.comment.is_empty()
+                    && self.lock.comment != rl.comment
+                {
+                    return Err(HostError::TargetLocked(self.locked_by_msg().await?));
+                }
                 if timeout_reconciled {
                     // The line on the host is the one our timed-out create
                     // just wrote: adopt it as-is rather than risking a second
@@ -1242,6 +1268,49 @@ mod tests {
         assert_eq!(
             handle.file_contents(TARGET_LOCK_PATH).unwrap(),
             format!("1700000000:testuser:{}:new comment", std::process::id()).into_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_refuses_to_overwrite_a_sibling_reservation_with_a_different_comment() {
+        // Two `TargetLock` instances share one connection and the same
+        // process identity (`tl()`'s shared `cfg()` user, the real PID) — as
+        // if two loaded templates attached the same refhost. `lock_a` takes a
+        // deliberate reservation; `lock_b` — a fresh instance that never took
+        // it (`held == None`) — must not clobber it with a different comment,
+        // even though the wire's PID-based `is_mine` reads `lock_b` as the
+        // owner too.
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut lock_a = tl(conn.clone(), FakeClock::new(now()));
+        lock_a.lock("reservation A").await.unwrap();
+
+        let mut lock_b = tl(conn, FakeClock::new(now()));
+        let err = lock_b.lock("reservation B").await.unwrap_err();
+        assert!(matches!(err, HostError::TargetLocked(_)), "{err}");
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH).unwrap(),
+            format!("1700000000:testuser:{}:reservation A", std::process::id()).into_bytes(),
+            "A's reservation must survive byte-identical"
+        );
+    }
+
+    #[tokio::test]
+    async fn lock_reapplies_the_same_comment_after_a_reconnect_without_refusing() {
+        // A reconnect rebuilds `TargetLock` from scratch, clearing `held` —
+        // but the PI autolock re-applies the *same* comment on every
+        // connect/reboot, and that must still succeed: the loaded comment
+        // matches what is about to be written, so this is not a clobber.
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut first = tl(conn.clone(), FakeClock::new(now()));
+        first.lock("PI assignment").await.unwrap();
+
+        let mut reconnected = tl(conn, FakeClock::new(now()));
+        reconnected.lock("PI assignment").await.unwrap();
+        assert_eq!(
+            handle.file_contents(TARGET_LOCK_PATH).unwrap(),
+            format!("1700000000:testuser:{}:PI assignment", std::process::id()).into_bytes()
         );
     }
 
