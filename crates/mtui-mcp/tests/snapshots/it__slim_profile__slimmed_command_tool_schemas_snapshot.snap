@@ -585,7 +585,7 @@ expression: pretty
         },
         "free": {
           "default": false,
-          "description": "also probe live mtui-lock state (connects to each matched host)",
+          "description": "also probe live operation-lock and pool-claim state (connects to each matched host)",
           "type": "boolean"
         },
         "json": {

@@ -290,8 +290,9 @@ pub struct TargetLock<C: Clock = SystemClock> {
 /// contract (other tools on the fleet parse the same layout).
 pub const TARGET_LOCK_PATH: &str = "/var/lock/mtui.lock";
 
-/// The default pool-claim-lock path, `/var/lock/mtui-pool.lock`.
-pub(crate) const POOL_LOCK_PATH: &str = "/var/lock/mtui-pool.lock";
+/// The default pool-claim-lock path, `/var/lock/mtui-pool.lock` — a
+/// cross-process contract, like [`TARGET_LOCK_PATH`].
+pub const POOL_LOCK_PATH: &str = "/var/lock/mtui-pool.lock";
 
 impl TargetLock<SystemClock> {
     /// Builds a `TargetLock` over `connection` using config-derived identity and

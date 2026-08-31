@@ -12,6 +12,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - `list_refhosts --free` no longer force-removes stale operation locks on the
   hosts it lists (#573).
+- `list_refhosts --free` now also reports the pool claim, not just the
+  operation lock (#574). The table's `lock` column gains `pool` and
+  `locked+pool` values; `--json` keeps `lock`'s existing vocabulary and adds a
+  `pool` key (the claiming RRID, or `null`).
 
 ### Changed
 

@@ -1072,7 +1072,7 @@ Options:
           emit JSON
 
       --free
-          also probe live mtui-lock state (connects to each matched host)
+          also probe live operation-lock and pool-claim state (connects to each matched host)
 
   -v, --verbose
           include addons in the output

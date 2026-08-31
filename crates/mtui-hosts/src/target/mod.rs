@@ -49,10 +49,9 @@ pub mod spinner;
 pub use actions::Command;
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::{HostsGroup, LockOutcome};
-#[cfg(test)]
-pub(crate) use locks::POOL_LOCK_PATH;
 pub use locks::{
-    Clock, LockOwner, LockRow, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH, TargetLock,
+    Clock, LockOwner, LockRow, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
+    TargetLock,
 };
 pub use operation::{
     Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
@@ -549,6 +548,30 @@ impl Target {
             Some(lock) => lock.is_locked().await,
             None => Ok(false),
         }
+    }
+
+    /// Reports the RRID claiming this target's pool lock, if any.
+    ///
+    /// `None` when the target is not connected (no pool lock built yet) or the
+    /// pool claim is unset; `Some(rrid)` when claimed, parsed from the
+    /// `mtui pool <RRID> [<owner>]` stamp — `Some(String::new())` when the
+    /// claim exists but its comment is not that shape (still claimed, just
+    /// unparseable).
+    ///
+    /// # Errors
+    ///
+    /// Propagates any transport error raised while reading the remote lock
+    /// file (unlike [`lock_status`](Self::lock_status), which degrades a read
+    /// error to "unlocked" for display purposes).
+    pub async fn pool_claim_rrid(&mut self) -> Result<Option<String>> {
+        let Some(pool) = self.pool_lock.as_mut() else {
+            return Ok(None);
+        };
+        let snap = pool.snapshot().await?;
+        if snap.lock.user.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(snap.rrid))
     }
 
     /// Returns this target's operation lock, loaded, for inspecting ownership.
@@ -2308,6 +2331,33 @@ mod tests {
         assert_eq!(row.locked_by, "bob");
         // The pool path fills the detail slot with the parsed RRID.
         assert_eq!(row.comment, "SUSE:Maintenance:9:9");
+    }
+
+    // --- pool_claim_rrid -----------------------------------------------------
+
+    #[tokio::test]
+    async fn pool_claim_rrid_none_when_unclaimed() {
+        let mut t = enabled_with(MockConnection::new("h1"));
+        assert_eq!(t.pool_claim_rrid().await.expect("read ok"), None);
+    }
+
+    #[tokio::test]
+    async fn pool_claim_rrid_some_when_claimed() {
+        let conn = MockConnection::new("h1").with_file(
+            POOL_LOCK_PATH,
+            b"1700000000:bob:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec(),
+        );
+        let mut t = enabled_with(conn);
+        assert_eq!(
+            t.pool_claim_rrid().await.expect("read ok"),
+            Some("SUSE:Maintenance:9:9".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_claim_rrid_none_when_unconnected() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled);
+        assert_eq!(t.pool_claim_rrid().await.expect("read ok"), None);
     }
 
     #[tokio::test]

@@ -4,9 +4,10 @@
 //! [`RefhostsFactory`] — and prints matching hosts **without connecting**: no
 //! SSH, no lock, no loaded template, so refhosts can be found through mtui
 //! instead of by parsing `refhosts.yml`. Results are de-duplicated by name.
-//! `--free` additionally connects to report live mtui-lock state — the only part
-//! that goes on the wire — without reaping: it is a survey, not a session
-//! connect, so a matched host's stale operation lock is left alone.
+//! `--free` additionally connects to report live operation-lock and pool-claim
+//! state — the only part that goes on the wire — without reaping: it is a
+//! survey, not a session connect, so a matched host's stale operation lock is
+//! left alone.
 //!
 //! # Testability seam
 //! [`gather`], [`render_table`] and [`render_json`] are pure over an in-memory
@@ -44,13 +45,17 @@ pub struct Record {
     pub addons: Vec<String>,
     /// The test-target slot key when `--pool` grouped the result, else `None`.
     pub slot: Option<String>,
-    /// Live mtui-lock state from `--free` (`locked` / `free` / `unreachable`),
-    /// else `None`. Omitted from JSON when absent.
+    /// Live operation-lock state from `--free` (`locked` / `free` /
+    /// `unreachable`), else `None`. Omitted from JSON when absent. Keeps its
+    /// original vocabulary regardless of the pool claim — see [`Self::pool`].
     pub lock: Option<String>,
+    /// The RRID claiming the pool lock from `--free`, or `None` when unclaimed
+    /// (or unset — same "only under `--free`" gate as [`Self::lock`]).
+    pub pool: Option<String>,
 }
 
 impl Record {
-    /// Omits `lock` when unset (it is only set under `--free`).
+    /// Omits `lock`/`pool` when unset (only set under `--free`).
     fn to_json(&self) -> Value {
         let mut obj = json!({
             "name": self.name,
@@ -62,6 +67,7 @@ impl Record {
         });
         if let Some(lock) = &self.lock {
             obj["lock"] = json!(lock);
+            obj["pool"] = json!(self.pool);
         }
         obj
     }
@@ -96,6 +102,7 @@ fn record(host: &Host, with_slot: bool) -> Record {
         addons: host.addons.iter().map(|a| a.name.clone()).collect(),
         slot,
         lock: None,
+        pool: None,
     }
 }
 
@@ -139,6 +146,20 @@ pub struct Filters<'a> {
     pub pool: bool,
 }
 
+/// Combines a record's operation-lock and pool-claim states into one table
+/// label: `free`/`locked` widen to `pool`/`locked+pool` when a pool claim
+/// exists; `unreachable`/`unknown` (and an unset `lock`) pass straight
+/// through, since the probe never resolved a trustworthy state to combine.
+#[must_use]
+fn lock_label(lock: Option<&str>, pool: Option<&str>) -> String {
+    match lock {
+        Some("free") if pool.is_some() => "pool".to_owned(),
+        Some("locked") if pool.is_some() => "locked+pool".to_owned(),
+        Some(other) => other.to_owned(),
+        None => String::new(),
+    }
+}
+
 /// Render `records` as one aligned multi-line table, grouped by slot when
 /// `pool`.
 #[must_use]
@@ -152,7 +173,10 @@ pub fn render_table(records: &[Record], pool: bool, free: bool, verbose: bool) -
             format!("{:<8}", r.arch),
         ];
         if free {
-            cols.push(format!("{:<22}", r.lock.as_deref().unwrap_or("")));
+            cols.push(format!(
+                "{:<22}",
+                lock_label(r.lock.as_deref(), r.pool.as_deref())
+            ));
         }
         if verbose {
             cols.push(r.addons.join(","));
@@ -276,7 +300,10 @@ impl Command for ListRefhosts {
             Arg::new("free")
                 .long("free")
                 .action(ArgAction::SetTrue)
-                .help("also probe live mtui-lock state (connects to each matched host)"),
+                .help(
+                    "also probe live operation-lock and pool-claim state \
+                     (connects to each matched host)",
+                ),
         )
         .arg(
             Arg::new("verbose")
@@ -381,10 +408,21 @@ fn probe_config(config: &mtui_config::Config) -> mtui_config::Config {
     config
 }
 
-/// Connect to each matched host in parallel and record its live mtui-lock state
-/// under [`Record::lock`]: `locked`/`free` when it answers, `unreachable` when
-/// the connect or probe fails. Connects without reaping ([`probe_config`]): a
-/// survey must not force-remove another tester's lock just for being listed.
+/// Probes one connected target's operation-lock and pool-claim state.
+///
+/// An `Err` from *either* read collapses to `("unreachable", None)`: a
+/// half-answered probe is not a trustworthy `free`/`locked` verdict.
+async fn probe_state(target: &mut Target) -> (String, Option<String>) {
+    match (target.is_locked().await, target.pool_claim_rrid().await) {
+        (Ok(locked), Ok(pool)) => ((if locked { "locked" } else { "free" }).to_owned(), pool),
+        _ => ("unreachable".to_owned(), None),
+    }
+}
+
+/// Connect to each matched host in parallel and record its live operation-lock
+/// and pool-claim state under [`Record::lock`] / [`Record::pool`].
+/// Connects without reaping ([`probe_config`]): a survey must not force-remove
+/// another tester's lock just for being listed.
 ///
 /// The only on-wire part of the command; failures are swallowed per host so one
 /// dead host never aborts the listing.
@@ -394,7 +432,7 @@ async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
     // record, but at most `[connection] max_parallel` connecting at once.
     let bound = (config.max_parallel as usize).max(1);
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(bound));
-    let mut set: JoinSet<(String, String)> = JoinSet::new();
+    let mut set: JoinSet<(String, String, Option<String>)> = JoinSet::new();
     for r in records.iter() {
         let config = config.clone();
         let name = r.name.clone();
@@ -403,30 +441,27 @@ async fn probe_locks(config: &mtui_config::Config, records: &mut [Record]) {
             // Held for the task's lifetime, so at most `bound` probes run.
             let _permit = sem.acquire_owned().await.expect("semaphore is not closed");
             let mut target = Target::new(&config, name.clone(), TargetState::Enabled);
-            let state = match target.connect().await {
-                Ok(()) => match target.is_locked().await {
-                    Ok(true) => "locked",
-                    Ok(false) => "free",
-                    Err(_) => "unreachable",
-                },
-                Err(_) => "unreachable",
+            let (state, pool) = match target.connect().await {
+                Ok(()) => probe_state(&mut target).await,
+                Err(_) => ("unreachable".to_owned(), None),
             };
-            (name, state.to_owned())
+            (name, state, pool)
         });
     }
     let mut states = std::collections::HashMap::new();
     while let Some(res) = set.join_next().await {
-        if let Ok((name, state)) = res {
-            states.insert(name, state);
+        if let Ok((name, state, pool)) = res {
+            states.insert(name, (state, pool));
         }
     }
     for r in records.iter_mut() {
-        r.lock = Some(
-            states
-                .get(&r.name)
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_owned()),
-        );
+        match states.get(&r.name) {
+            Some((state, pool)) => {
+                r.lock = Some(state.clone());
+                r.pool = pool.clone();
+            }
+            None => r.lock = Some("unknown".to_owned()),
+        }
     }
 }
 
@@ -565,6 +600,29 @@ mod tests {
     }
 
     #[test]
+    fn lock_label_combines_op_and_pool_state() {
+        let cases: &[(Option<&str>, Option<&str>, &str)] = &[
+            (Some("free"), None, "free"),
+            (Some("free"), Some("SUSE:Maintenance:9:9"), "pool"),
+            (Some("locked"), None, "locked"),
+            (Some("locked"), Some("SUSE:Maintenance:9:9"), "locked+pool"),
+            (
+                Some("unreachable"),
+                Some("SUSE:Maintenance:9:9"),
+                "unreachable",
+            ),
+            (Some("unknown"), Some("SUSE:Maintenance:9:9"), "unknown"),
+        ];
+        for (lock, pool, expected) in cases {
+            assert_eq!(
+                lock_label(*lock, *pool),
+                *expected,
+                "lock={lock:?} pool={pool:?}"
+            );
+        }
+    }
+
+    #[test]
     fn render_table_pool_groups_by_slot() {
         let f = Filters {
             pool: true,
@@ -615,8 +673,9 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed[0]["name"], "whale-01");
         assert_eq!(parsed[0]["version"], "15-6");
-        // lock absent → key omitted
+        // lock/pool absent → keys omitted
         assert!(parsed[0].get("lock").is_none());
+        assert!(parsed[0].get("pool").is_none());
     }
 
     #[test]
@@ -626,6 +685,41 @@ mod tests {
         let json = render_json(&recs);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed[0]["lock"], "free");
+        assert!(parsed[0]["pool"].is_null());
+    }
+
+    #[test]
+    fn render_json_includes_pool_rrid_when_claimed() {
+        let mut recs = gather(&store(), &Filters::default());
+        recs[0].lock = Some("free".to_owned());
+        recs[0].pool = Some("SUSE:Maintenance:9:9".to_owned());
+        let json = render_json(&recs);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed[0]["lock"], "free");
+        assert_eq!(parsed[0]["pool"], "SUSE:Maintenance:9:9");
+    }
+
+    #[tokio::test]
+    async fn probe_state_reports_pool_claim() {
+        use mtui_hosts::{MockConnection, POOL_LOCK_PATH, Target};
+
+        // Only the pool lock is seeded — the op lock is deliberately absent, so
+        // the pool claim is the only thing that can make the label non-`free`.
+        let conn = MockConnection::new("whale-01").with_file(
+            POOL_LOCK_PATH,
+            b"1700000000:bob:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec(),
+        );
+        let mut target = Target::with_connection(
+            "whale-01",
+            mtui_types::enums::TargetState::Enabled,
+            Box::new(conn),
+        );
+
+        let (state, pool) = probe_state(&mut target).await;
+
+        assert_eq!(state, "free");
+        assert_eq!(pool.as_deref(), Some("SUSE:Maintenance:9:9"));
+        assert_eq!(lock_label(Some(&state), pool.as_deref()), "pool");
     }
 
     #[test]
