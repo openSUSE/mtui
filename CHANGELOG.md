@@ -355,6 +355,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - An `update` whose automatic rollback also fails now reports that in its
   result instead of only in the server's tracing, so an MCP client is told the
   hosts are left partly updated (#558).
+- `update` no longer patches a host whose test update repository failed to
+  register: it excludes the host, undoes the partial add, releases its lock,
+  and reports a failure naming it, instead of running the patch script
+  against a repo that was never added and silently reporting success on a
+  host it never touched (#551). A repo that was already registered (the
+  documented `update --noprepare` retry after a failed run) is no longer
+  mistaken for a failed add. A failed repository *refresh* alone leaves the
+  host in the update as a degradation, not an exclusion — an unrelated broken
+  third-party repo must not cost a good host its patch.
+- `set_repo --remove` and the post-`update` cleanup now report a failed
+  `zypper rr`, instead of silently treating it as success: zypper's `rr` exits
+  non-zero on a genuine failure, but a bare `--remove` previously trusted the
+  fan-out's own exit code, which only ever reflected the trailing `zypper ref`.
+- `prepare` now aborts when its repo add/remove failed but the trailing
+  `zypper ref` still succeeded — previously that masked failure went
+  unnoticed and prepare proceeded to install packages against a repo that was
+  never actually (un)registered.
 
 ### Added
 
