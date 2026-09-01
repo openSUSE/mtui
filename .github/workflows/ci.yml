@@ -148,7 +148,10 @@ jobs:
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
+          # Dependabot and fork PRs run without secrets, and Codecov rejects a
+          # tokenless upload against a protected branch — that must not turn a
+          # green test suite red.
+          fail_ci_if_error: ${{ secrets.CODECOV_TOKEN != '' }}
   macos:
     runs-on: macos-latest
     name: MTUI macOS (Apple Silicon)
