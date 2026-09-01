@@ -143,6 +143,29 @@ fn resolve_path(session: &Session, template: Option<&str>) -> Result<PathBuf, Mc
     }
 }
 
+/// The file a testreport tool targets: the report `log` by default, or a
+/// traversal-guarded `relpath` under the checkout. `must_exist` refuses a
+/// `relpath` that is not an existing file (irrelevant when `relpath` is
+/// `None`, since the `log` file is always expected to exist).
+fn resolve_target_path(
+    session: &Session,
+    relpath: Option<&str>,
+    template: Option<&str>,
+    must_exist: bool,
+) -> Result<PathBuf, McpCommandError> {
+    let Some(rel) = relpath else {
+        return resolve_path(session, template);
+    };
+    let base = resolve_dir(session, template)?;
+    let path = safe_template_file(&base, rel)?;
+    if must_exist && !path.is_file() {
+        return Err(refuse(format!(
+            "no such file in testreport checkout: {rel}"
+        )));
+    }
+    Ok(path)
+}
+
 /// The checkout directory (parent of the `log` file) for the resolved report.
 fn resolve_dir(session: &Session, template: Option<&str>) -> Result<PathBuf, McpCommandError> {
     let path = resolve_path(session, template)?;
@@ -386,18 +409,7 @@ async fn testreport_read(
         // path resolution.
         let _scope = session.scoped_lock(template).await;
         let guard = session.session().lock().await;
-        if let Some(rel) = relpath {
-            let base = resolve_dir(&guard, template)?;
-            let p = safe_template_file(&base, rel)?;
-            if !p.is_file() {
-                return Err(refuse(format!(
-                    "no such file in testreport checkout: {rel}"
-                )));
-            }
-            p
-        } else {
-            resolve_path(&guard, template)?
-        }
+        resolve_target_path(&guard, relpath, template, true)?
     };
 
     let windowed = offset != 1 || limit.is_some();
@@ -480,10 +492,11 @@ async fn testreport_logs(
 /// non-empty `replacement` is forced to end in exactly one `\n`.
 ///
 /// # Errors
-/// Refuses on an out-of-bounds range, no loaded report, or ambiguous/unknown
-/// template.
+/// Refuses on an out-of-bounds range, no loaded report, ambiguous/unknown
+/// template, path traversal, or a missing `relpath` file.
 async fn testreport_patch(
     session: &McpSession,
+    relpath: Option<&str>,
     start_line: i64,
     end_line: i64,
     replacement: &str,
@@ -492,7 +505,7 @@ async fn testreport_patch(
     let _scope = session.scoped_lock(template).await;
     let (path, new_text) = {
         let guard = session.session().lock().await;
-        let path = resolve_path(&guard, template)?;
+        let path = resolve_target_path(&guard, relpath, template, true)?;
         let content = read_lossy(&path)?;
         let lines = split_keepends(&content);
         let n = lines.len() as i64;
@@ -538,18 +551,30 @@ async fn testreport_patch(
 /// Overwrite the loaded testreport file with `content`, atomically.
 ///
 /// Fallback for when line drift makes [`testreport_patch`] unreliable.
+/// `relpath` may name a not-yet-existing file, but its parent directory must
+/// already exist — `atomic_write_file` would otherwise silently create it,
+/// turning a typo'd path into new structure in a published checkout.
 ///
 /// # Errors
-/// Refuses when no report is loaded or the template is ambiguous/unknown.
+/// Refuses when no report is loaded, the template is ambiguous/unknown, the
+/// `relpath` escapes the checkout, or its parent directory does not exist.
 async fn testreport_write(
     session: &McpSession,
+    relpath: Option<&str>,
     content: &str,
     template: Option<&str>,
 ) -> Result<Value, McpCommandError> {
     let _scope = session.scoped_lock(template).await;
     let (path, bytes_written) = {
         let guard = session.session().lock().await;
-        let path = resolve_path(&guard, template)?;
+        let path = resolve_target_path(&guard, relpath, template, false)?;
+        if let Some(rel) = relpath
+            && !path.parent().is_some_and(Path::is_dir)
+        {
+            return Err(refuse(format!(
+                "parent directory does not exist for {rel:?}"
+            )));
+        }
         let bytes = write_atomic(&path, content)?;
         (path, bytes)
     };
@@ -768,12 +793,19 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
     let patch = ToolDescriptor {
         name: "testreport_patch".to_owned(),
         description: format!(
-            "Splice an inclusive 1-indexed line range in the currently loaded testreport \
-             file. `end_line == start_line - 1` inserts before `start_line` without \
-             replacing anything. The write is atomic. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+            "Splice an inclusive 1-indexed line range in a testreport checkout file, \
+             atomically. By default (no `relpath`) targets the report's `log` file; pass \
+             `relpath` to patch another checkout file instead, e.g. \
+             'install_logs/<host>.log' — the path may not escape the checkout directory \
+             and must already exist. `end_line == start_line - 1` inserts before \
+             `start_line` without replacing anything. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
+                (
+                    "relpath",
+                    json!({ "type": "string", "description": "Checkout-relative file to patch; defaults to the `log` file. Must already exist." }),
+                ),
                 (
                     "start_line",
                     json!({ "type": "integer", "description": "First line of the inclusive range (1-based)." }),
@@ -796,12 +828,20 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
     let write = ToolDescriptor {
         name: "testreport_write".to_owned(),
         description: format!(
-            "Overwrite the currently loaded testreport file with the given content. \
-             Atomic. Use this as the fallback when patching would require tracking \
-             line-number drift across many edits. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+            "Overwrite a testreport checkout file with the given content, atomically. By \
+             default (no `relpath`) targets the report's `log` file; pass `relpath` to \
+             write another checkout file instead, e.g. 'install_logs/<host>.log' — the \
+             path may not escape the checkout directory. `relpath` may name a \
+             not-yet-existing file, but its parent directory must already exist. Use this \
+             as the fallback when patching would require tracking line-number drift \
+             across many edits. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
+                (
+                    "relpath",
+                    json!({ "type": "string", "description": "Checkout-relative file to write; defaults to the `log` file. May name a new file whose parent directory exists." }),
+                ),
                 (
                     "content",
                     json!({ "type": "string", "description": "The full new file content." }),
@@ -946,14 +986,24 @@ async fn dispatch_testreport_tool_inner(
         }
         "testreport_logs" => testreport_logs(session, template).await,
         "testreport_patch" => {
+            let relpath = opt_str(kwargs, "relpath")?;
             let start_line = int_field(kwargs, "start_line", 0)?;
             let end_line = int_field(kwargs, "end_line", 0)?;
             let replacement = req_str(kwargs, "replacement")?;
-            testreport_patch(session, start_line, end_line, replacement, template).await
+            testreport_patch(
+                session,
+                relpath,
+                start_line,
+                end_line,
+                replacement,
+                template,
+            )
+            .await
         }
         "testreport_write" => {
+            let relpath = opt_str(kwargs, "relpath")?;
             let content = req_str(kwargs, "content")?;
-            testreport_write(session, content, template).await
+            testreport_write(session, relpath, content, template).await
         }
         "testreport_fill" => {
             let reproducer = opt_str(kwargs, "reproducer")?;
@@ -1027,7 +1077,7 @@ mod tests {
     #[tokio::test]
     async fn patch_refuses_without_loaded_report() {
         let (session, _tmp) = session_with_tmp();
-        let err = testreport_patch(&session, 1, 1, "x", None)
+        let err = testreport_patch(&session, None, 1, 1, "x", None)
             .await
             .expect_err("null report refuses");
         assert!(err.stderr.contains("no testreport loaded"), "{err:?}");
@@ -1036,7 +1086,7 @@ mod tests {
     #[tokio::test]
     async fn write_refuses_without_loaded_report() {
         let (session, _tmp) = session_with_tmp();
-        let err = testreport_write(&session, "x", None)
+        let err = testreport_write(&session, None, "x", None)
             .await
             .expect_err("null report refuses");
         assert!(err.stderr.contains("no testreport loaded"), "{err:?}");
@@ -1258,7 +1308,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "a\nb\nc\nd\n").await;
 
-        let res = testreport_patch(&session, 2, 3, "X\nY\nZ", None)
+        let res = testreport_patch(&session, None, 2, 3, "X\nY\nZ", None)
             .await
             .unwrap();
         assert_eq!(res["new_line_count"], 5);
@@ -1273,7 +1323,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "a\nb\n").await;
 
-        let res = testreport_patch(&session, 1, 0, "HEAD", None)
+        let res = testreport_patch(&session, None, 1, 0, "HEAD", None)
             .await
             .unwrap();
         assert_eq!(res["new_line_count"], 3);
@@ -1286,7 +1336,7 @@ mod tests {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "a\nb\n").await;
-        testreport_patch(&session, 1, 1, "no-newline", None)
+        testreport_patch(&session, None, 1, 1, "no-newline", None)
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "no-newline\nb\n");
@@ -1297,7 +1347,9 @@ mod tests {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "a\nb\nc\n").await;
-        let res = testreport_patch(&session, 2, 2, "", None).await.unwrap();
+        let res = testreport_patch(&session, None, 2, 2, "", None)
+            .await
+            .unwrap();
         assert_eq!(res["new_line_count"], 2);
         assert_eq!(res["inserted_lines"], 0);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nc\n");
@@ -1308,10 +1360,110 @@ mod tests {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "a\nb\n").await;
-        let err = testreport_patch(&session, 1, 9, "x", None)
+        let err = testreport_patch(&session, None, 1, 9, "x", None)
             .await
             .expect_err("out of range");
         assert!(err.stderr.contains("file has 2 line(s)"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn patch_relpath_edits_another_checkout_file() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+        let checkout = path.parent().unwrap();
+        std::fs::create_dir_all(checkout.join("install_logs")).unwrap();
+        std::fs::write(checkout.join("install_logs/h1.log"), "old\n").unwrap();
+
+        let res = testreport_patch(&session, Some("install_logs/h1.log"), 1, 1, "new", None)
+            .await
+            .unwrap();
+        assert_eq!(res["new_line_count"], 1);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("install_logs/h1.log")).unwrap(),
+            "new\n"
+        );
+        // The `log` file itself is untouched.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "log\n");
+    }
+
+    #[tokio::test]
+    async fn patch_relpath_refuses_missing_file() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+
+        let err = testreport_patch(&session, Some("install_logs/nope.log"), 1, 1, "x", None)
+            .await
+            .expect_err("missing relpath refused");
+        assert!(
+            err.stderr.contains("no such file in testreport checkout"),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_relpath_refuses_traversal_and_absolute() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+
+        let escape = testreport_patch(&session, Some("../../etc/passwd"), 1, 1, "x", None)
+            .await
+            .expect_err("traversal refused");
+        assert!(
+            escape.stderr.contains("escapes the testreport directory"),
+            "{escape:?}"
+        );
+
+        let absolute = testreport_patch(&session, Some("/etc/passwd"), 1, 1, "x", None)
+            .await
+            .expect_err("absolute path refused");
+        assert!(
+            absolute.stderr.contains("escapes the testreport directory"),
+            "{absolute:?}"
+        );
+    }
+
+    /// A `relpath` that is lexically inside the checkout but crosses a symlink
+    /// pointing out of it must refuse — on the write tools a miss here is an
+    /// arbitrary-file overwrite, not just a disclosure.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn patch_and_write_relpath_refuse_in_tree_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+        let checkout = path.parent().unwrap();
+
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret"), "top secret\n").unwrap();
+        symlink(&outside, checkout.join("escape")).unwrap();
+
+        let patched = testreport_patch(&session, Some("escape/secret"), 1, 1, "PWNED", None)
+            .await
+            .expect_err("patch through a symlink escape refused");
+        assert!(
+            patched.stderr.contains("escapes the testreport directory"),
+            "{patched:?}"
+        );
+
+        let written = testreport_write(&session, Some("escape/secret"), "PWNED\n", None)
+            .await
+            .expect_err("write through a symlink escape refused");
+        assert!(
+            written.stderr.contains("escapes the testreport directory"),
+            "{written:?}"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(outside.join("secret")).unwrap(),
+            "top secret\n",
+            "the file outside the checkout must be untouched"
+        );
     }
 
     // ---- write ------------------------------------------------------------ //
@@ -1321,12 +1473,70 @@ mod tests {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "old\n").await;
-        let res = testreport_write(&session, "new1\nnew2\n", None)
+        let res = testreport_write(&session, None, "new1\nnew2\n", None)
             .await
             .unwrap();
         assert_eq!(res["line_count"], 2);
         assert_eq!(res["bytes_written"], 10);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new1\nnew2\n");
+    }
+
+    #[tokio::test]
+    async fn write_relpath_creates_new_file() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+        let checkout = path.parent().unwrap();
+        std::fs::create_dir_all(checkout.join("install_logs")).unwrap();
+
+        let res = testreport_write(&session, Some("install_logs/new.log"), "hello\n", None)
+            .await
+            .unwrap();
+        assert_eq!(res["bytes_written"], 6);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("install_logs/new.log")).unwrap(),
+            "hello\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_relpath_refuses_missing_parent_and_creates_nothing() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+        let checkout = path.parent().unwrap();
+
+        let err = testreport_write(&session, Some("nosuchdir/x.log"), "hello\n", None)
+            .await
+            .expect_err("missing parent refused");
+        assert!(
+            err.stderr.contains("parent directory does not exist"),
+            "{err:?}"
+        );
+        assert!(!checkout.join("nosuchdir").exists(), "no stray directory");
+    }
+
+    #[tokio::test]
+    async fn write_relpath_refuses_traversal_and_absolute() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+
+        let escape = testreport_write(&session, Some("../../etc/passwd"), "x", None)
+            .await
+            .expect_err("traversal refused");
+        assert!(
+            escape.stderr.contains("escapes the testreport directory"),
+            "{escape:?}"
+        );
+
+        let absolute = testreport_write(&session, Some("/etc/passwd"), "x", None)
+            .await
+            .expect_err("absolute path refused");
+        assert!(
+            absolute.stderr.contains("escapes the testreport directory"),
+            "{absolute:?}"
+        );
     }
 
     // ---- fill ------------------------------------------------------------- //
@@ -1542,6 +1752,34 @@ mod tests {
             err.stderr.contains("unknown argument(s): relpat"),
             "{err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_accepts_relpath_on_patch_and_write() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+        let checkout = path.parent().unwrap();
+        std::fs::create_dir_all(checkout.join("install_logs")).unwrap();
+        std::fs::write(checkout.join("install_logs/h1.log"), "old\n").unwrap();
+
+        let mut kwargs = Map::new();
+        kwargs.insert("relpath".into(), json!("install_logs/h1.log"));
+        kwargs.insert("start_line".into(), json!(1));
+        kwargs.insert("end_line".into(), json!(1));
+        kwargs.insert("replacement".into(), json!("new"));
+        let patched = dispatch_testreport_tool(&session, "testreport_patch", &kwargs, None)
+            .await
+            .unwrap();
+        assert_eq!(patched["new_line_count"], 1);
+
+        let mut kwargs = Map::new();
+        kwargs.insert("relpath".into(), json!("install_logs/h1.log"));
+        kwargs.insert("content".into(), json!("rewritten\n"));
+        let written = dispatch_testreport_tool(&session, "testreport_write", &kwargs, None)
+            .await
+            .unwrap();
+        assert_eq!(written["bytes_written"], 10);
     }
 
     #[test]

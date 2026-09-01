@@ -296,9 +296,12 @@ Splices an **inclusive, 1-indexed** line range. Atomic write (temp file +
 `fsync` + rename).
 
 - Parameters (required): `start_line`, `end_line`, `replacement`. Plus optional
-  `template`. `end_line == start_line - 1` is a pure insertion before
-  `start_line`; an empty `replacement` deletes the range. A non-empty replacement
-  is normalised to end with exactly one newline.
+  `relpath` and `template`. `end_line == start_line - 1` is a pure insertion
+  before `start_line`; an empty `replacement` deletes the range. A non-empty
+  replacement is normalised to end with exactly one newline.
+- `relpath` targets another checkout file instead of the report's `log` file,
+  with the same traversal guard as `testreport_read` — but the file must
+  already exist; a missing `relpath` refuses.
 - Returns `{ "path", "new_line_count", "replaced_lines", "inserted_lines",
   "bytes_written" }`.
 
@@ -307,7 +310,12 @@ Splices an **inclusive, 1-indexed** line range. Atomic write (temp file +
 Full-file overwrite (same atomic write). Use when line drift makes patching
 unreliable.
 
-- Parameters (required): `content`. Plus optional `template`.
+- Parameters (required): `content`. Plus optional `relpath` and `template`.
+- `relpath` targets another checkout file instead of the report's `log` file,
+  with the same traversal guard as `testreport_read` — and unlike
+  `testreport_patch`, it **may name a not-yet-existing file**. Its parent
+  directory must already exist, though: a `relpath` whose parent is missing
+  refuses rather than silently creating a new directory in the checkout.
 - Returns `{ "path", "bytes_written", "line_count" }`.
 
 ### `testreport_fill`

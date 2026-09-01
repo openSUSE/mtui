@@ -64,13 +64,17 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Splice an inclusive 1-indexed line range in the currently loaded testreport file. `end_line == start_line - 1` inserts before `start_line` without replacing anything. The write is atomic. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
+    "description": "Splice an inclusive 1-indexed line range in a testreport checkout file, atomically. By default (no `relpath`) targets the report's `log` file; pass `relpath` to patch another checkout file instead, e.g. 'install_logs/<host>.log' — the path may not escape the checkout directory and must already exist. `end_line == start_line - 1` inserts before `start_line` without replacing anything. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
         "end_line": {
           "description": "Last line of the inclusive range; start_line-1 to insert.",
           "type": "integer"
+        },
+        "relpath": {
+          "description": "Checkout-relative file to patch; defaults to the `log` file. Must already exist.",
+          "type": "string"
         },
         "replacement": {
           "description": "Replacement text; empty deletes the range.",
@@ -126,12 +130,16 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Overwrite the currently loaded testreport file with the given content. Atomic. Use this as the fallback when patching would require tracking line-number drift across many edits. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
+    "description": "Overwrite a testreport checkout file with the given content, atomically. By default (no `relpath`) targets the report's `log` file; pass `relpath` to write another checkout file instead, e.g. 'install_logs/<host>.log' — the path may not escape the checkout directory. `relpath` may name a not-yet-existing file, but its parent directory must already exist. Use this as the fallback when patching would require tracking line-number drift across many edits. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
         "content": {
           "description": "The full new file content.",
+          "type": "string"
+        },
+        "relpath": {
+          "description": "Checkout-relative file to write; defaults to the `log` file. May name a new file whose parent directory exists.",
           "type": "string"
         },
         "template": {
