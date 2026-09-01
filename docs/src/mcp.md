@@ -230,10 +230,10 @@ call with the host named.
 - `update`'s tool result carries diagnostics for every non-fatal degradation of
   the run — a composition refusal, a prepare host failure it continues past, a
   failed `--newpackage` step, a failed update leaving the test repositories
-  configured, and the three ways the post-update test-repo cleanup can fail —
-  on both the success and the failure path. The server's tracing goes to its
-  own stderr, not the tool result, so a `tracing::warn!` alone would never
-  reach an MCP client.
+  configured, a failed automatic rollback, and the three ways the post-update
+  test-repo cleanup can fail — on both the success and the failure path. The
+  server's tracing goes to its own stderr, not the tool result, so a
+  `tracing::warn!` alone would never reach an MCP client.
 - Every workflow fan-out (`install`, `uninstall`, `prepare`, `downgrade`,
   `update`) confirms success as `<verb> completed on <hosts>`, so a clean run is
   never an empty tool result. `update`'s confirmation is printed *above* its

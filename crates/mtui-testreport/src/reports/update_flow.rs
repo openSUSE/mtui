@@ -217,9 +217,13 @@ where
             // package 0 and leave exactly the half-applied state it undoes.
             let token = targets.suspend_cancellation();
             // Best-effort: a failed downgrade must never bury the original
-            // update error, so its result is logged, not returned.
+            // update error, so its result is logged and diagnosed, not returned.
             if let Err(de) = perform_downgrade(targets, report, &pkgs, id.as_deref()).await {
                 warn!(error = %de, "rollback downgrade failed");
+                diagnostics.push(Diagnostic::degradation(format!(
+                    "the update failed and the automatic rollback also failed ({de}); \
+                     one or more hosts are left partly updated"
+                )));
             }
             targets.set_cancel_token(token);
             Err(e)
@@ -7036,6 +7040,56 @@ mod tests {
             cmds.iter()
                 .any(|c| c.contains("pkg-a") && c.contains("1.0-1")),
             "rollback must issue a downgrade command: {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_with_rollback_diagnoses_a_rollback_that_also_fails() {
+        // No probe override this time: `with_default`'s exit 104 applies to
+        // every command including the probe, so the probe is dead and
+        // `perform_downgrade` itself fails.
+        let (t, _handle) = sles_target_with_exit("h1", "pkg-a = 1.0-1\n", 104);
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        // Confirm the fixture can actually drive the rollback to Err before
+        // trusting the assertions below on the combined flow.
+        let (t2, _handle2) = sles_target_with_exit("h1", "pkg-a = 1.0-1\n", 104);
+        let mut probe_group = HostsGroup::new(vec![t2], false);
+        let downgrade_res =
+            perform_downgrade(&mut probe_group, &report, &report.get_package_list(), None).await;
+        assert!(
+            downgrade_res.is_err(),
+            "fixture must drive the rollback itself to Err: {downgrade_res:?}"
+        );
+
+        let mut diagnostics = Vec::new();
+        let res = report
+            .perform_update(&mut group, true, false, &mut diagnostics)
+            .await;
+
+        let err = res.expect_err("check failure still surfaces");
+        assert!(
+            !err.to_string().contains("package version probe failed"),
+            "returned error must be the original check failure, not the rollback's: {err}"
+        );
+
+        let rollback_diagnostics: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.degradation && d.text.contains("rollback"))
+            .collect();
+        assert_eq!(
+            rollback_diagnostics.len(),
+            1,
+            "exactly one degradation diagnostic about the rollback: {diagnostics:?}"
+        );
+        assert!(
+            rollback_diagnostics[0]
+                .text
+                .contains("package version probe failed"),
+            "diagnostic carries the rollback error's text: {}",
+            rollback_diagnostics[0].text
         );
     }
 
