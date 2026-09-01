@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use mtui_hosts::{
     Command, HostError, HostsGroup, InstallOperation, LockOutcome, Operation, OperationGroup,
-    RebootFailure, RebootFailureCause, RepoOp, SetRepo, UninstallOperation,
+    RebootFailure, RebootFailureCause, RepoFailure, RepoOp, SetRepo, UninstallOperation,
 };
 use mtui_types::shellquote::quote_args;
 use tracing::{debug, error, info, warn};
@@ -115,6 +115,17 @@ pub enum UpdateFailure {
     /// Skips the rollback: an excluded host received no patch to undo, and the
     /// group-wide downgrade would revert the peers that updated correctly.
     Uncomposed(UpdateError),
+    /// One or more hosts' test update repository genuinely failed to
+    /// register (a verified `zypper ar` failure, a failed `rr`, or the
+    /// unknown-cmd safeguard) after the `RepoOp::Add` fan-out. Each such host
+    /// is excluded, its partial add undone, and its lock released before the
+    /// patch is dispatched to its peers; when every eligible host failed,
+    /// nothing was dispatched at all.
+    ///
+    /// Skips the rollback for the same reason as
+    /// [`Uncomposed`](Self::Uncomposed): an excluded host received no patch,
+    /// and the group-wide downgrade would revert the peers that did.
+    RepoAdd(UpdateError),
 }
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
@@ -205,6 +216,10 @@ where
         }
         Err(UpdateFailure::Uncomposed(e)) => {
             error!(error = %e, "update did not run on every host");
+            Err(e)
+        }
+        Err(UpdateFailure::RepoAdd(e)) => {
+            error!(error = %e, "update did not run on every host: test repository add failed");
             Err(e)
         }
         Err(UpdateFailure::Check(e) | UpdateFailure::RebootNotTaken(e)) => {
@@ -502,6 +517,36 @@ fn host_command_failures(targets: &HostsGroup, reason: &str) -> Vec<UpdateError>
         }
     }
     failures
+}
+
+/// Reads each `hosts` member's [`Target::last_repo`](mtui_hosts::Target::last_repo) verdict after a
+/// `RepoOp::Add` fan-out, splitting it into hosts that must be excluded from
+/// the patch (`Add`/`Remove`/`UnknownCommand` — the repo genuinely did not
+/// register, or the unknown-cmd safeguard already force-unlocked the target)
+/// and hosts that stay in but degrade (`Refresh` — the repo registered, only
+/// its metadata may be stale).
+///
+/// `Some(Ok(()))` and `None` are both benign and produce nothing: `None`
+/// covers a report with no RRID yet and every `SetRepo` test stub that never
+/// drives `run_zypper`, neither of which attempted a repo change worth
+/// judging.
+fn repo_add_failures(
+    targets: &HostsGroup,
+    hosts: &BTreeSet<String>,
+) -> (Vec<UpdateError>, Vec<String>) {
+    let mut blocking = Vec::new();
+    let mut degraded = Vec::new();
+    for host in hosts {
+        let Some(target) = targets.get(host) else {
+            continue;
+        };
+        match target.last_repo() {
+            Some(Err(RepoFailure::Refresh { .. })) => degraded.push(host.clone()),
+            Some(Err(err)) => blocking.push(UpdateError::new(err.to_string(), host.clone())),
+            Some(Ok(())) | None => {}
+        }
+    }
+    (blocking, degraded)
 }
 
 /// Installs `packages` on every host in `targets`.
@@ -2023,7 +2068,7 @@ pub async fn perform_update(
     // premise the refusal denied. It is dropped from the fan-out below and
     // named in the verdict — a skip the group's success spoke for is #396
     // itself, one layer up.
-    let excluded: Vec<UpdateError> = uncomposed
+    let mut excluded: Vec<UpdateError> = uncomposed
         .iter()
         .map(|(host, products)| {
             UpdateError::new(
@@ -2063,7 +2108,7 @@ pub async fn perform_update(
     // and judge a host that drew no patch, earning it an update-sanity warning
     // for work it never received. Filtering after the fact — as the
     // `commands`/`reboot` retain used to — is too late for all four.
-    let eligible: BTreeSet<String> = targets
+    let mut eligible: BTreeSet<String> = targets
         .names()
         .into_iter()
         .filter(|host| !uncomposed.contains_key(host))
@@ -2080,6 +2125,45 @@ pub async fn perform_update(
     targets
         .fanout_set_repo_for(&eligible, RepoOp::Add, report)
         .await;
+
+    // A repo genuinely absent after the add means the patch below would find
+    // nothing to patch and exit 0, masking a no-op as a success (#551). Read
+    // each host's aggregated verdict rather than trusting the trailing
+    // `zypper ref`'s exit code, which cannot see an earlier masked `ar`/`rr`.
+    let mut repo_add_seen = false;
+    let (blocking, degraded_repo_hosts) = repo_add_failures(targets, &eligible);
+    for host in &degraded_repo_hosts {
+        warn!(host = %host, "repository refresh failed after the add; its metadata may be stale");
+        diagnostics.push(Diagnostic::degradation(format!(
+            "repository refresh failed on {host} after the test update repository was added; \
+             its metadata may be stale"
+        )));
+    }
+    if !blocking.is_empty() {
+        repo_add_seen = true;
+        let failed: BTreeSet<String> = blocking.iter().filter_map(|e| e.host.clone()).collect();
+        warn!(
+            hosts = %failed.iter().cloned().collect::<Vec<_>>().join(", "),
+            "test update repository failed to register; excluding from the patch"
+        );
+        for e in &blocking {
+            diagnostics.push(Diagnostic::degradation(e.to_string()));
+        }
+        // Undo the partial add and release the lock while it is still scoped
+        // to these hosts — `eligible` shrinks right after, and the lock scope
+        // must shrink with it or these hosts strand a lock nobody releases.
+        targets
+            .fanout_set_repo_for(&failed, RepoOp::Remove, report)
+            .await;
+        warn_on_unlock_failures("update", &targets.unlock_selected(&failed).await);
+        eligible.retain(|h| !failed.contains(h));
+        excluded.extend(blocking);
+        if eligible.is_empty() {
+            // Nothing left to patch; the repos just added are removed and
+            // every lock released, so there is nothing left to unwind.
+            return aggregate_failures("update", excluded).map_err(UpdateFailure::RepoAdd);
+        }
+    }
 
     let repa = repa_for(maintenance_id, review_id);
     let joined = quote_args(packages);
@@ -2167,7 +2251,14 @@ pub async fn perform_update(
     targets.package_check_selected(true, &eligible).await;
 
     remove_test_repos(targets, &eligible, report, diagnostics).await;
-    aggregate_failures("update", excluded).map_err(UpdateFailure::Uncomposed)
+    // A repo-add failure outranks a composition refusal in the label; both
+    // kinds of message survive in `excluded`'s joined detail either way.
+    let wrap: fn(UpdateError) -> UpdateFailure = if repo_add_seen {
+        UpdateFailure::RepoAdd
+    } else {
+        UpdateFailure::Uncomposed
+    };
+    aggregate_failures("update", excluded).map_err(wrap)
 }
 
 /// Removes the test update repositories after a successful update.
@@ -8171,5 +8262,264 @@ mod tests {
             "OBS must inherit perform_downgrade: {:?}",
             handle.commands()
         );
+    }
+
+    // --- perform_update: repo-add verdict (#551) ---------------------------
+
+    /// A `SLES 15.5` target whose every command fails, for the repo-add
+    /// exclusion tests: `run_zypper`'s `ar` fails, its `lr` postcondition
+    /// probe also fails (so the repo is genuinely absent, not a collision),
+    /// and no patch may reach it either.
+    fn sles_target_all_commands_fail(hostname: &str) -> (Target, MockConnection) {
+        let conn =
+            MockConnection::new(hostname).with_default(CommandLog::new("", "", "boom", 1, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection(hostname, TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        (t, handle)
+    }
+
+    /// [`report_with_rrid`] plus a real `update_repos` entry for `SLES 15.5`,
+    /// so `set_repo` drives an actual `zypper ar`/`rr` instead of the no-op
+    /// empty-map path every other `perform_update` test relies on.
+    fn report_with_repo() -> SlReport {
+        let mut report = report_with_rrid();
+        report.base_mut().update_repos.insert(
+            SystemProduct::new("SLES", "15.5", "x86_64"),
+            "https://example/repo".to_owned(),
+        );
+        report
+    }
+
+    #[tokio::test]
+    async fn perform_update_excludes_a_host_whose_repo_add_failed() {
+        let (h1, h1_handle) = sles_target("h1", "");
+        let (h2, h2_handle) = sles_target_all_commands_fail("h2");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_repo();
+        let packages = report.get_package_list();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+
+        let Err(UpdateFailure::RepoAdd(e)) = res else {
+            panic!("expected a RepoAdd failure naming h2, got {res:?}");
+        };
+        assert_eq!(e.host.as_deref(), Some("h2"), "{e}");
+
+        let h2_cmds = h2_handle.commands();
+        assert!(
+            !h2_cmds
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h2 must never receive the patch: {h2_cmds:?}"
+        );
+        let h1_cmds = h1_handle.commands();
+        assert!(
+            h1_cmds
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h1 must still be patched: {h1_cmds:?}"
+        );
+        assert!(
+            diagnostics.iter().any(|d| d.text.contains("h2")),
+            "a degradation must name h2: {diagnostics:?}"
+        );
+        assert!(
+            h2_handle.file_contents(TARGET_LOCK_PATH).is_none(),
+            "h2's operation lock must be released"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_already_registered_repo_does_not_exclude_the_host() {
+        // The documented `update --noprepare` retry: `ar` fails (already
+        // exists) but the `lr` probe confirms the repo IS registered, so the
+        // host must be patched normally, with no degradation.
+        let report = report_with_repo();
+        let ar_cmd = "zypper -n ar -cfGkn 'issue-SLES:15.5:p=42:7' https://example/repo 'issue-SLES:15.5:p=42:7'";
+        let lr_cmd = "zypper -n lr 'issue-SLES:15.5:p=42:7'";
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                ar_cmd,
+                CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
+            )
+            .with_response(lr_cmd, CommandLog::new(lr_cmd, "some repo info", "", 0, 0));
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let packages = report.get_package_list();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(
+            res.is_ok(),
+            "an already-registered repo must not fail: {res:?}"
+        );
+        assert!(
+            handle
+                .commands()
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h1 must be patched: {:?}",
+            handle.commands()
+        );
+        assert!(
+            diagnostics.is_empty(),
+            "no degradation for a benign collision: {diagnostics:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_refresh_alone_does_not_exclude_the_host() {
+        // `ar` succeeds but the trailing `ref` fails: a degradation, not an
+        // exclusion (decision 4 — an unrelated broken third-party repo must
+        // not cost the host its patch).
+        let report = report_with_repo();
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                "zypper -n ref",
+                CommandLog::new("zypper -n ref", "", "boom", 1, 0),
+            );
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let packages = report.get_package_list();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(
+            res.is_ok(),
+            "a refresh-only failure must not fail update: {res:?}"
+        );
+        assert!(
+            handle
+                .commands()
+                .iter()
+                .any(|c| c.contains("zypper -n in -l -y -t patch")),
+            "h1 must still be patched: {:?}",
+            handle.commands()
+        );
+        // The cleanup phase's own trailing `ref` also fails against this mock
+        // (unrelated to what's under test here) and pushes its own
+        // degradation, so filter to the one the repo-add verdict produces.
+        let refresh_degradations: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.text.contains("refresh failed"))
+            .collect();
+        assert_eq!(refresh_degradations.len(), 1, "{diagnostics:?}");
+        assert!(
+            refresh_degradations[0].text.contains("h1"),
+            "the degradation must name h1: {:?}",
+            refresh_degradations[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn every_host_failing_the_repo_add_aborts_before_the_patch() {
+        let (h1, h1_handle) = sles_target_all_commands_fail("h1");
+        let (h2, h2_handle) = sles_target_all_commands_fail("h2");
+        let mut group = HostsGroup::new(vec![h1, h2], false);
+        let report = report_with_repo();
+        let packages = report.get_package_list();
+        let mut diagnostics = Vec::new();
+
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            None,
+            true,
+            false,
+            &mut diagnostics,
+        )
+        .await;
+
+        assert!(
+            matches!(res, Err(UpdateFailure::RepoAdd(_))),
+            "expected RepoAdd, got {res:?}"
+        );
+        for handle in [&h1_handle, &h2_handle] {
+            assert!(
+                !handle
+                    .commands()
+                    .iter()
+                    .any(|c| c.contains("zypper -n in -l -y -t patch")),
+                "no patch may be dispatched anywhere: {:?}",
+                handle.commands()
+            );
+            // The partial add is undone: an `rr` ran on every host.
+            assert!(
+                handle.commands().iter().any(|c| c.contains(" rr ")),
+                "expected a removal fan-out to undo the partial add: {:?}",
+                handle.commands()
+            );
+            assert!(
+                handle.file_contents(TARGET_LOCK_PATH).is_none(),
+                "every lock must be released"
+            );
+        }
     }
 }
