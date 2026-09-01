@@ -183,7 +183,11 @@ impl<'a> RepoManager<'a> {
     ///   `issue-<name>:<version>:p=<maintenance_id>:<review_id>`. A non-zero
     ///   exit is surfaced as a WARNING (the repo was *not* registered), not
     ///   swallowed.
-    /// * **`rr`** (remove-repo, `cmd` contains `"rr"`) → `zypper <cmd> <url>`.
+    /// * **`rr`** (remove-repo, `cmd` contains `"rr"`) → `zypper <cmd> <url>`. A
+    ///   non-zero exit is surfaced as a WARNING and recorded, same as `ar`:
+    ///   zypper exits 0 (not an error) when the repo being removed was never
+    ///   registered, so a non-zero exit here is always a genuine failure, not
+    ///   a benign no-op.
     ///
     /// The metadata-derived `alias` and `url` are shell-quoted at this exec
     /// boundary (they run as root), so a crafted value cannot inject a command;
@@ -292,6 +296,19 @@ impl<'a> RepoManager<'a> {
                 info!("Removing repo {url} on {hostname}");
                 let args = quote_args(&[url.as_str()]);
                 self.target.run(&format!("zypper {cmd} {args}")).await;
+                // Unlike a bare `ar`, a non-zero `rr` here is never a benign
+                // "not registered" no-op: zypper exits 0 in that case (it only
+                // reports "not found" on stderr), so a non-zero exit is a real
+                // removal failure.
+                if self.target.lastexit() != Some(0) {
+                    let err = last_error_line(self.target);
+                    warn!(
+                        "removing repo {url} on {hostname} failed: zypper exited {}{}",
+                        exit_display(self.target.lastexit()),
+                        err,
+                    );
+                    failure.get_or_insert_with(|| RepoFailure::Remove { url: url.clone() });
+                }
             } else {
                 // Unknown sub-command: force-unlock the target and bail.
                 // The `Target` owns its `TargetLock` (built in
@@ -755,6 +772,37 @@ mod tests {
             t.last_repo(),
             Some(&Err(RepoFailure::Refresh {
                 command: "zypper -n ref".to_owned()
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn last_repo_records_a_failed_rr_as_remove() {
+        use mtui_types::hostlog::CommandLog;
+
+        // `rr` exits non-zero but the trailing `ref` succeeds, so `lastexit()`
+        // reads 0 — masking the removal failure the same way a masked `ar`
+        // does. Fact 1 (see plans/551): a non-zero `rr` is always a real
+        // problem, since zypper exits 0 even when the repo was never there.
+        let sles = product("SLES", "15-SP5");
+        let rr_cmd = "zypper rr https://example/repo";
+        let conn = MockConnection::new("host1.example.com").with_response(
+            rr_cmd,
+            CommandLog::new(rr_cmd, "", "Repository not found.", 1, 0),
+        );
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("rr", &repos, &rrid()).await;
+
+        assert_eq!(t.lastexit(), Some(0));
+        assert_eq!(
+            t.last_repo(),
+            Some(&Err(RepoFailure::Remove {
+                url: "https://example/repo".to_owned()
             }))
         );
     }
