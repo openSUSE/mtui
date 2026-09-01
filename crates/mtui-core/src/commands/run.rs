@@ -18,7 +18,7 @@ use crate::session::Session;
 /// Dispatched in parallel across every selected target; each host's input line,
 /// exit code, stdout and any stderr are then paged to the display.
 ///
-/// The positional tokens are re-quoted with `shlex::join`, so a token carrying
+/// The positional tokens are re-quoted with `shlex::try_join`, so a token carrying
 /// shell metacharacters (`sh -c "a; b"`, `$(...)`) reaches the remote shell
 /// intact instead of being re-split by it.
 pub struct Run;
