@@ -70,6 +70,52 @@ impl RepoOp {
     }
 }
 
+/// Why a [`RepoManager::run_zypper`] fan-out failed on one host.
+///
+/// [`run_zypper`](RepoManager::run_zypper) drives several `zypper` commands per
+/// host and records the *first* one that fails as the run's verdict — see
+/// [`Target::last_repo`](super::Target::last_repo). The variant is what a
+/// consumer routes on; `Display` renders the exact wording `set_repo` has
+/// always printed, so a caller reading only the message sees no change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepoFailure {
+    /// `zypper ar` did not register the alias.
+    Add {
+        /// The repo alias that failed to register.
+        alias: String,
+    },
+    /// `zypper rr` did not remove the URL.
+    Remove {
+        /// The repo URL that failed to be removed.
+        url: String,
+    },
+    /// The trailing `zypper ref` (or its `transactional-update` wrapper)
+    /// failed.
+    Refresh {
+        /// The refresh command that failed.
+        command: String,
+    },
+    /// `run_zypper` was asked to drive a `cmd` that is neither an `ar` nor an
+    /// `rr` — the safeguard path, which also force-unlocks the target.
+    UnknownCommand {
+        /// The unrecognised sub-command.
+        command: String,
+    },
+}
+
+impl std::fmt::Display for RepoFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Add { alias } => write!(f, "adding repo {alias} failed"),
+            Self::Remove { url } => write!(f, "removing repo {url} failed"),
+            Self::Refresh { command } => write!(f, "refreshing repos failed: {command}"),
+            Self::UnknownCommand { command } => {
+                write!(f, "unknown zypper sub-command: {command}")
+            }
+        }
+    }
+}
+
 /// The report-side hook a `RepoManager::set` forwards into — the injection
 /// point for `testreport.set_repo(target, operation)`, and the seam the update
 /// flow reads the report's composition through.
@@ -177,7 +223,7 @@ impl<'a> RepoManager<'a> {
         // zypper exit (a failed `ar`/`rr`, or the trailing `ref`) is a per-host
         // failure, even though only the *last* command lands in the `HostLog` and
         // so is visible via `lasterr()`/`lastexit()`. Recorded at every return.
-        let mut failure: Option<String> = None;
+        let mut failure: Option<RepoFailure> = None;
 
         // Snapshot the flattened system once so the borrow of `self.target`
         // does not overlap the mutable `run`/`unlock` calls below.
@@ -238,7 +284,9 @@ impl<'a> RepoManager<'a> {
                         exit_display(self.target.lastexit()),
                         err,
                     );
-                    failure.get_or_insert_with(|| format!("adding repo {alias} failed"));
+                    failure.get_or_insert_with(|| RepoFailure::Add {
+                        alias: alias.clone(),
+                    });
                 }
             } else if is_rr {
                 info!("Removing repo {url} on {hostname}");
@@ -255,8 +303,9 @@ impl<'a> RepoManager<'a> {
                     "unknown zypper sub-command; force-unlocking target and bailing"
                 );
                 self.target.unlock(true).await;
-                self.target
-                    .set_last_repo(Err(format!("unknown zypper sub-command: {cmd}")));
+                self.target.set_last_repo(Err(RepoFailure::UnknownCommand {
+                    command: cmd.to_owned(),
+                }));
                 return false;
             }
         }
@@ -280,7 +329,9 @@ impl<'a> RepoManager<'a> {
                 exit_display(self.target.lastexit()),
                 err,
             );
-            failure.get_or_insert_with(|| format!("refreshing repos failed: {ref_cmd}"));
+            failure.get_or_insert_with(|| RepoFailure::Refresh {
+                command: ref_cmd.to_owned(),
+            });
         }
 
         self.target.set_last_repo(failure.map_or(Ok(()), Err));
@@ -671,10 +722,41 @@ mod tests {
         // The trailing refresh succeeded, so the log's last exit is 0 …
         assert_eq!(t.lastexit(), Some(0));
         // … but the aggregated verdict still reports the masked add failure.
-        let Some(Err(reason)) = t.last_repo() else {
-            panic!("expected recorded failure, got {:?}", t.last_repo());
-        };
-        assert!(reason.contains("adding repo"), "reason was {reason:?}");
+        assert_eq!(
+            t.last_repo(),
+            Some(&Err(RepoFailure::Add {
+                alias: "issue-SLES:15-SP5:p=1:2".to_owned()
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn last_repo_records_a_ref_only_failure_as_refresh() {
+        use mtui_types::hostlog::CommandLog;
+
+        // The `ar` succeeds but the trailing `ref` fails: a distinct variant
+        // from a masked `ar` failure, since a consumer treats the two
+        // differently (Refresh is a degradation, not an exclusion — see
+        // `update_flow::repo_add_failures`).
+        let sles = product("SLES", "15-SP5");
+        let conn = MockConnection::new("host1.example.com").with_response(
+            "zypper -n ref",
+            CommandLog::new("zypper -n ref", "", "", 1, 0),
+        );
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+
+        assert_eq!(
+            t.last_repo(),
+            Some(&Err(RepoFailure::Refresh {
+                command: "zypper -n ref".to_owned()
+            }))
+        );
     }
 
     #[tokio::test]
@@ -686,10 +768,12 @@ mod tests {
 
         t.repo_manager().run_zypper("nosuch", &repos, &rrid()).await;
 
-        let Some(Err(reason)) = t.last_repo() else {
-            panic!("expected recorded failure, got {:?}", t.last_repo());
-        };
-        assert!(reason.contains("unknown"), "reason was {reason:?}");
+        assert_eq!(
+            t.last_repo(),
+            Some(&Err(RepoFailure::UnknownCommand {
+                command: "nosuch".to_owned()
+            }))
+        );
     }
 
     // --- set: forwards to SetRepo ------------------------------------------
