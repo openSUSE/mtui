@@ -372,6 +372,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `zypper ref` still succeeded — previously that masked failure went
   unnoticed and prepare proceeded to install packages against a repo that was
   never actually (un)registered.
+- An exported `install_logs/<host>.log` for a host where no
+  `zypper`/`transactional-update` command ever ran (lock contention, a dropped
+  link, or `export` run without `update`) now says so outright instead of
+  being header-only or, for a host `export` never collected data for,
+  zero-byte (#487).
 
 ### Added
 
