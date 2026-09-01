@@ -181,8 +181,11 @@ impl<'a> RepoManager<'a> {
     /// * **`ar`** (add-repo, `cmd` contains `"ar"`) →
     ///   `zypper <cmd> <alias> <url> <alias>` with alias
     ///   `issue-<name>:<version>:p=<maintenance_id>:<review_id>`. A non-zero
-    ///   exit is surfaced as a WARNING (the repo was *not* registered), not
-    ///   swallowed.
+    ///   exit does not by itself mean the repo is absent — zypper also exits
+    ///   non-zero on an already-registered alias — so it is verified with a
+    ///   `zypper -n lr <alias>` postcondition probe: a `0` probe means the
+    ///   repo is registered (a benign collision, WARNING only), a non-zero
+    ///   probe means it genuinely is not (recorded as a failure).
     /// * **`rr`** (remove-repo, `cmd` contains `"rr"`) → `zypper <cmd> <url>`. A
     ///   non-zero exit is surfaced as a WARNING and recorded, same as `ar`:
     ///   zypper exits 0 (not an error) when the repo being removed was never
@@ -288,9 +291,25 @@ impl<'a> RepoManager<'a> {
                         exit_display(self.target.lastexit()),
                         err,
                     );
-                    failure.get_or_insert_with(|| RepoFailure::Add {
-                        alias: alias.clone(),
-                    });
+                    // A bare non-zero `ar` cannot tell "not added" from
+                    // "already there": zypper's RepoAlreadyExistsException also
+                    // exits non-zero, and mtui's own documented
+                    // `update --noprepare` retry after a failed update
+                    // deliberately re-runs `ar` against a host where the repo
+                    // is already correctly registered. Probe the postcondition
+                    // with `zypper -n lr <alias>` before calling it a failure.
+                    let probe_args = quote_args(&[alias.as_str()]);
+                    self.target.run(&format!("zypper -n lr {probe_args}")).await;
+                    if self.target.lastexit() == Some(0) {
+                        warn!(
+                            "repo {alias} on {hostname} is already registered; \
+                             treating the failed add as a benign collision"
+                        );
+                    } else {
+                        failure.get_or_insert_with(|| RepoFailure::Add {
+                            alias: alias.clone(),
+                        });
+                    }
                 }
             } else if is_rr {
                 info!("Removing repo {url} on {hostname}");
@@ -699,6 +718,83 @@ mod tests {
         );
     }
 
+    // --- run_zypper: ar failure verification via `zypper lr` probe --------
+
+    #[tokio::test]
+    async fn a_failed_add_of_an_already_registered_repo_is_not_a_failure() {
+        use mtui_types::hostlog::CommandLog;
+
+        // `ar` exits 4 (zypper's RepoAlreadyExistsException) but the alias IS
+        // registered, per the `lr` postcondition probe — the documented
+        // `update --noprepare` retry hits exactly this collision.
+        let sles = product("SLES", "15-SP5");
+        let ar_cmd =
+            "zypper ar 'issue-SLES:15-SP5:p=1:2' https://example/repo 'issue-SLES:15-SP5:p=1:2'";
+        let lr_cmd = "zypper -n lr 'issue-SLES:15-SP5:p=1:2'";
+        let conn = MockConnection::new("host1.example.com")
+            .with_response(
+                ar_cmd,
+                CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
+            )
+            .with_response(lr_cmd, CommandLog::new(lr_cmd, "some repo info", "", 0, 0));
+        let handle = conn.clone();
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+
+        assert_eq!(t.last_repo(), Some(&Ok(())));
+        assert!(
+            handle.commands().iter().any(|c| c == lr_cmd),
+            "expected the `lr` probe to run, got {:?}",
+            handle.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_add_of_a_missing_repo_is_a_failure() {
+        use mtui_types::hostlog::CommandLog;
+
+        // `ar` exits 4 and the `lr` probe also fails: the repo is genuinely
+        // absent, not an already-exists collision.
+        let sles = product("SLES", "15-SP5");
+        let ar_cmd =
+            "zypper ar 'issue-SLES:15-SP5:p=1:2' https://example/repo 'issue-SLES:15-SP5:p=1:2'";
+        let lr_cmd = "zypper -n lr 'issue-SLES:15-SP5:p=1:2'";
+        let conn = MockConnection::new("host1.example.com")
+            .with_response(
+                ar_cmd,
+                CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
+            )
+            .with_response(
+                lr_cmd,
+                CommandLog::new(lr_cmd, "", "Repository not found.", 3, 0),
+            );
+        let handle = conn.clone();
+        let mut t =
+            Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
+        t.set_system(system_of(sles.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        t.repo_manager().run_zypper("ar", &repos, &rrid()).await;
+
+        assert_eq!(
+            t.last_repo(),
+            Some(&Err(RepoFailure::Add {
+                alias: "issue-SLES:15-SP5:p=1:2".to_owned()
+            }))
+        );
+        assert!(
+            handle.commands().iter().any(|c| c == lr_cmd),
+            "expected the `lr` probe to run, got {:?}",
+            handle.commands()
+        );
+    }
+
     // --- run_zypper: last_repo outcome aggregation -------------------------
 
     #[tokio::test]
@@ -717,17 +813,24 @@ mod tests {
     async fn last_repo_records_failure_when_add_fails_but_ref_succeeds() {
         use mtui_types::hostlog::CommandLog;
 
-        // The `ar` fails (exit 4) but the trailing `ref` succeeds (exit 0), so
-        // `lastexit()` reads 0 — yet `last_repo` must still record the failure the
-        // masked `ar` produced. This is the exact case `lasterr()`/`lastexit()`
-        // cannot report.
+        // The `ar` fails (exit 4) and the `lr` postcondition probe confirms the
+        // repo is genuinely absent (exit 3), but the trailing `ref` succeeds
+        // (exit 0), so `lastexit()` reads 0 — yet `last_repo` must still
+        // record the failure the masked `ar` produced. This is the exact case
+        // `lasterr()`/`lastexit()` cannot report.
         let sles = product("SLES", "15-SP5");
         let ar_cmd =
             "zypper ar 'issue-SLES:15-SP5:p=1:2' https://example/repo 'issue-SLES:15-SP5:p=1:2'";
-        let conn = MockConnection::new("host1.example.com").with_response(
-            ar_cmd,
-            CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
-        );
+        let lr_cmd = "zypper -n lr 'issue-SLES:15-SP5:p=1:2'";
+        let conn = MockConnection::new("host1.example.com")
+            .with_response(
+                ar_cmd,
+                CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
+            )
+            .with_response(
+                lr_cmd,
+                CommandLog::new(lr_cmd, "", "Repository not found.", 3, 0),
+            );
         let mut t =
             Target::with_connection("host1.example.com", TargetState::Enabled, Box::new(conn));
         t.set_system(system_of(sles.clone(), &[]), false);
