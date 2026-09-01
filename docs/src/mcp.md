@@ -228,12 +228,16 @@ call with the host named.
   compose it, and reports a failure naming it, instead of patching a host its
   own prepare established no baseline on.
 - `update`'s tool result carries diagnostics for every non-fatal degradation of
-  the run — a composition refusal, a prepare host failure it continues past, a
-  failed `--newpackage` step, a failed update leaving the test repositories
-  configured, a failed automatic rollback, and the three ways the post-update
-  test-repo cleanup can fail — on both the success and the failure path. The
-  server's tracing goes to its own stderr, not the tool result, so a
-  `tracing::warn!` alone would never reach an MCP client.
+  the run — a composition refusal, a host excluded because its test update
+  repository genuinely failed to register (its partial add is undone and its
+  lock released before the patch reaches its peers), a repository refresh that
+  may have left stale metadata on a host that still gets patched, a prepare
+  host failure it continues past, a failed `--newpackage` step, a failed
+  update leaving the test repositories configured, a failed automatic
+  rollback, and the three ways the post-update test-repo cleanup can fail — on
+  both the success and the failure path. The server's tracing goes to its own
+  stderr, not the tool result, so a `tracing::warn!` alone would never reach an
+  MCP client.
 - Every workflow fan-out (`install`, `uninstall`, `prepare`, `downgrade`,
   `update`) confirms success as `<verb> completed on <hosts>`, so a clean run is
   never an empty tool result. `update`'s confirmation is printed *above* its
