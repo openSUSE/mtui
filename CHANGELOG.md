@@ -352,6 +352,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   process and an operation lock taken on it was never released — not even by
   process exit. `quit reboot` / `quit poweroff` now apply the boot action to
   these hosts too. (#478)
+- An `update` whose automatic rollback also fails now reports that in its
+  result instead of only in the server's tracing, so an MCP client is told the
+  hosts are left partly updated (#558).
 
 ### Added
 
