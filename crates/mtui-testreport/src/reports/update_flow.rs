@@ -549,6 +549,26 @@ fn repo_add_failures(
     (blocking, degraded)
 }
 
+/// Reads every in-scope host's [`Target::last_repo`](mtui_hosts::Target::last_repo)
+/// verdict, returning one [`UpdateError`] per recorded failure.
+///
+/// The `host_command_failures`-shaped analogue for a caller whose own gate is
+/// already all-or-nothing ([`prepare_body`]) or best-effort
+/// ([`remove_test_repos`]): unlike [`repo_add_failures`], every
+/// [`RepoFailure`] variant is treated alike here — there is no `Refresh`
+/// carve-out, because neither caller's decision (abort everything / warn and
+/// move on) depends on which zypper step failed.
+fn repo_set_failures(targets: &HostsGroup, in_scope: impl Fn(&str) -> bool) -> Vec<UpdateError> {
+    targets
+        .targets()
+        .filter(|t| in_scope(t.hostname()))
+        .filter_map(|t| match t.last_repo() {
+            Some(Err(err)) => Some(UpdateError::new(err.to_string(), t.hostname())),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Installs `packages` on every host in `targets`.
 ///
 /// The shared body behind every report's `perform_install`. Injects the
@@ -976,23 +996,20 @@ async fn prepare_body(
     }
 
     // The issue repo could not be set on some host, so prepare never ran.
-    // Post-filtered: the scan only reads `last*`, and out of scope that is some
-    // earlier phase's record.
-    let repo_failures: Vec<UpdateError> =
-        host_command_failures(targets, "failed to set issue repo")
-            .into_iter()
-            .filter(|e| e.host.as_ref().is_none_or(|h| in_scope(h)))
-            .collect();
+    // Reads the aggregated `Target::last_repo` verdict rather than
+    // `host_command_failures`' `lasterr()`/`lastexit()`, which only see the
+    // *last* zypper command of the fan-out and so miss an earlier `ar`/`rr`
+    // failure masked by a successful trailing `ref` (#551). Every
+    // `RepoFailure` variant aborts here — prepare's own gate is already
+    // all-or-nothing, so what changes is what it can see, not what it does.
+    let repo_failures: Vec<UpdateError> = repo_set_failures(targets, in_scope);
     if !repo_failures.is_empty() {
-        for target in targets.targets() {
-            if in_scope(target.hostname()) && !target.lasterr().is_empty() {
-                warn!(
-                    host = %target.hostname(),
-                    stderr = %target.lasterr(),
-                    exit = ?target.lastexit(),
-                    "failed to prepare host; stopping"
-                );
-            }
+        for e in &repo_failures {
+            warn!(
+                host = %e.host.as_deref().unwrap_or("?"),
+                reason = %e.reason,
+                "failed to prepare host; stopping"
+            );
         }
         return aggregate_failures("prepare", repo_failures).map_err(PrepareFailure::DidNotRun);
     }
@@ -2299,16 +2316,10 @@ async fn remove_test_repos(
         .await;
     // The lock succeeded but the removal command may still have failed on a
     // host — #409's complaint (a stale test repo) can happen silently here too,
-    // not only on a lock failure. The noisy stderr rule is fine for a warn.
-    //
-    // Post-filtered rather than scoped inside, unlike `run_checks_where`: this
-    // scan only reads `last*` and logs nothing on the way, so an excluded host
-    // dropped here has not already had a verdict printed for it.
-    let failures: Vec<UpdateError> =
-        host_command_failures(targets, "failed to remove the test update repo")
-            .into_iter()
-            .filter(|e| e.host.as_ref().is_some_and(|h| eligible.contains(h)))
-            .collect();
+    // not only on a lock failure. Reads `Target::last_repo` rather than
+    // `host_command_failures`, which only sees the *last* zypper command and
+    // so misses a failed `rr` masked by a successful trailing `ref` (#551).
+    let failures: Vec<UpdateError> = repo_set_failures(targets, |h| eligible.contains(h));
     if !failures.is_empty() {
         let hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
         warn!(
@@ -2631,6 +2642,58 @@ mod tests {
             .unwrap();
         assert!(install.contains("pkg-a"));
         assert!(!install.contains("branding-upstream"));
+    }
+
+    #[tokio::test]
+    async fn prepare_aborts_when_an_ar_failed_behind_a_successful_ref() {
+        // `testing = true` selects repo-`add`. The `ar` fails (exit 4) and the
+        // `lr` probe confirms the repo is genuinely absent (exit 3), but the
+        // trailing `ref` succeeds — the exact masking `Target::last_repo`
+        // exists to see through.
+        let report = report_with_repo();
+        let ar_cmd = "zypper -n ar -cfGkn 'issue-SLES:15.5:p=42:7' https://example/repo \
+                      'issue-SLES:15.5:p=42:7'";
+        let lr_cmd = "zypper -n lr 'issue-SLES:15.5:p=42:7'";
+        let conn = MockConnection::new("h1")
+            .with_default(CommandLog::new("", "", "", 0, 0))
+            .with_response(
+                ar_cmd,
+                CommandLog::new(ar_cmd, "", "Repository already exists.", 4, 0),
+            )
+            .with_response(
+                lr_cmd,
+                CommandLog::new(lr_cmd, "", "Repository not found.", 3, 0),
+            );
+        let handle = conn.clone();
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+
+        let err = perform_prepare(
+            &mut group,
+            &report,
+            &["pkg-a".to_owned()],
+            false,
+            true,
+            false,
+        )
+        .await
+        .expect_err("a masked `ar` failure must abort prepare");
+
+        assert_eq!(err.host.as_deref(), Some("h1"), "{err}");
+        assert!(err.to_string().contains("adding repo"), "{err}");
+        assert!(
+            !handle.commands().iter().any(|c| c.contains("zypper -n in")),
+            "no install may reach a host whose repo add failed: {:?}",
+            handle.commands()
+        );
     }
 
     // --- prepare --installed (#501) ----------------------------------------
@@ -7445,6 +7508,45 @@ mod tests {
         );
         // The removal failure must reach an MCP caller's tool result too
         // (#543), not only the operator's terminal.
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].text.contains("h1") && diagnostics[0].text.contains("set_repo --remove"),
+            "{:?}",
+            diagnostics[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_test_repos_diagnoses_a_masked_rr_failure() {
+        // The `rr` fails but the trailing `ref` succeeds — the same masking
+        // `Target::last_repo` exists to see through, on the removal side.
+        // `host_command_failures` (stderr/exit on the *last* command only)
+        // cannot see this; only the aggregated verdict can (#551).
+        let conn = MockConnection::new("h1").with_response(
+            "zypper -n rr https://example/repo",
+            CommandLog::new(
+                "zypper -n rr https://example/repo",
+                "",
+                "Repository not found.",
+                1,
+                0,
+            ),
+        );
+        let mut t = Target::with_connection("h1", TargetState::Enabled, Box::new(conn));
+        t.set_system(
+            System::new(
+                SystemProduct::new("SLES", "15.5", "x86_64"),
+                BTreeSet::new(),
+                false,
+            ),
+            false,
+        );
+        let mut group = HostsGroup::new(vec![t], false);
+        let report = report_with_repo();
+        let mut diagnostics = Vec::new();
+
+        remove_test_repos(&mut group, &names(&["h1"]), &report, &mut diagnostics).await;
+
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(
             diagnostics[0].text.contains("h1") && diagnostics[0].text.contains("set_repo --remove"),
