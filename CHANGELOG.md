@@ -427,6 +427,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   windowed output labels each host header with the shown range and total, and
   `--limit 0` prints only the per-host headers with entry totals) on both the
   REPL and MCP surfaces. Additive, optional schema change.
+- The MCP `testreport_patch` and `testreport_write` tools gained `relpath`,
+  the same traversal-guarded parameter `testreport_read` already has, so any
+  file in the checkout — an `install_logs/<host>.log` in particular — can be
+  corrected without shelling out around mtui (#487). `testreport_patch`
+  refuses a `relpath` that does not already exist; `testreport_write` may
+  create one, but refuses when its parent directory does not exist. Additive,
+  optional schema change.
 
 ### Security
 
