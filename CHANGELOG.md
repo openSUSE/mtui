@@ -16,6 +16,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   with its exit code, followed by `FAILED on …` when any host exited non-zero.
   In the REPL only, the `FAILED on …` line is also repeated after the paged
   output, so a terminal user reading the bottom of the screen still sees it.
+- The MCP truncation notice no longer advertises the `show_log`/testreport
+  offset/limit paging as if it applied to every tool; it now frames that
+  recourse as tool-conditional and also names narrowing the call and raising
+  `[mcp] max_output_bytes` as universally-available alternatives.
 - Destructive and remote-write commands (`update`, `prepare`, `downgrade`,
   `install`, `uninstall`, `set_repo`, `run`, `reboot`, `lock`, `unlock`,
   `add_host`, `remove_host`, `get`, `put`, `approve`, `reject`, `assign`,
