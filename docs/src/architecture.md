@@ -19,8 +19,9 @@ higher ones; `mtui-core` is the composition root that wires everything together.
 | `mtui-datasources` | Shared HTTP; refhosts resolve/search/verify; the openQA/QEM/Gitea/OBS/oqa-search clients. Async. |
 | `mtui-testreport` | Testreport lifecycle, metadata parsers, SVN/Gitea checkout, and the update workflow (actions/checks/export). |
 | `mtui-core` | The `Command` trait + registry, `Session`, the dispatch engine, and the wiring that ties the crates together. |
-| `mtui-cli` | The reedline REPL and the `mtui` binary. |
-| `mtui-mcp` | The rmcp server and the `mtui-mcp` binary. |
+| `mtui` (root) | Facade package owning `src/bin/{mtui,mtui-mcp}.rs` behind the `cli`/`mcp` features; its integration tests are in `tests/it.rs`. |
+| `mtui-cli` | The reedline REPL library. |
+| `mtui-mcp` | The rmcp server library. |
 
 ## The command registry is the single source of truth
 

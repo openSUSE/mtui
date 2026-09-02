@@ -21,7 +21,6 @@ checklist below. See CONTRIBUTING.md for the full workflow.
 - [ ] `cargo fmt --all --check` is clean.
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` is clean.
 - [ ] `cargo test --workspace` passes.
-- [ ] `cargo test -p mtui-mcp -F mcp` passes (when touching commands, `Session`, the registry, or entrypoints).
 - [ ] The compile-only feature matrix builds: `cargo build --workspace --no-default-features` and `--all-features`.
 - [ ] New/changed code is covered (>= 80% patch coverage).
 - [ ] User-visible changes are recorded in `CHANGELOG.md`.

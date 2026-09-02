@@ -80,6 +80,8 @@ Cargo workspace; each crate has one job. Lower crates never depend on higher one
 `mtui-core` is the composition root that wires everything.
 
 ```
+mtui (root)         facade package owning `src/bin/{mtui,mtui-mcp}.rs` behind
+                    the `cli`/`mcp` features; integration tests in `tests/it.rs`
 crates/
   mtui-types/        domain types + error hierarchy (no I/O)
   mtui-config/       TOML config + XDG paths
@@ -87,8 +89,8 @@ crates/
   mtui-datasources/  shared HTTP, refhosts resolve/search/verify, openQA/QEM/Gitea/native-OBS-QAM/oqa-search  [async]
   mtui-testreport/   TestReport lifecycle, metadata parsers, SVN/Gitea checkout, update workflow (actions/checks/export)
   mtui-core/         Command trait + registry + Session + engine + dispatch
-  mtui-cli/          reedline REPL + `mtui` binary
-  mtui-mcp/          rmcp server + `mtui-mcp` binary
+  mtui-cli/          reedline REPL library
+  mtui-mcp/          rmcp server library
 fuzz/                cargo-fuzz harness over the untrusted-input parsers.
                      Detached from the workspace (own empty [workspace] table):
                      fuzzing needs nightly and must not affect the MSRV,
@@ -113,8 +115,10 @@ next actionable task before working on a subsystem.
   only when compiling from cold, so allow ≥300000 ms (5 min) on the first run of
   a session; a second run against a warm `target/` cache is seconds.
 - Coverage: `cargo llvm-cov --workspace --lcov --output-path lcov.info`
-- Feature matrix (catches feature-gate rot) — **compile-only, and ~doubles build
-  time** (the `mcp` feature pulls in `axum` + `rmcp` streamable-http):
+- Feature matrix (catches feature-gate rot) — **compile-only**. On a 10-core,
+  32 GiB Mac16,10, switching from the default graph took 25 s for
+  `--no-default-features` and 4 s for `--all-features`: the former changes feature
+  unification by dropping `cli`/`mcp`, while the latter adds only `notify-rust`:
   `cargo build --workspace --no-default-features` and `--all-features`. Do **not**
   routinely *test* `--all-features`; CI only compiles it
   (`.github/workflows/ci.yml` feature-matrix job).
@@ -123,9 +127,10 @@ next actionable task before working on a subsystem.
 - **Keep the cache warm and scope tight.** During dev, run
   `cargo test -p <crate>` for the crate you're touching, not the whole workspace
   — reserve `cargo test --workspace` for the final gate.
-- **Test default features only while iterating.** `--all-features` relinks the
-  whole mcp/axum tree (~95s even warm) for no runtime signal beyond what the
-  compile-only feature matrix already gives.
+- **Test default features only while iterating.** On a 10-core, 32 GiB Mac16,10,
+  `cargo test --workspace --all-features` took 36 s versus 28 s with default
+  features; it adds only `notify-rust` and no extra runtime signal beyond the
+  compile-only feature matrix.
 - **`mtui-cli`'s lib suite is the slow one (~8s).** Its `edit`/`shell` tests spawn
   real editor/shell subprocesses. When working elsewhere, don't rerun it.
 
@@ -279,7 +284,8 @@ next actionable task before working on a subsystem.
 The `tests/` fixtures are the authority for these formats; treat them as golden.
 
 ## Testing conventions
-- Unit tests colocated (`#[cfg(test)]`); integration tests in `crates/*/tests/`.
+- Unit tests colocated (`#[cfg(test)]`); integration tests in `crates/*/tests/` and
+  the facade's root `tests/`.
 - **One integration-test binary per crate.** Each crate's integration tests are
   consolidated into a single `tests/it.rs` (`#[path = "<file>.rs"] mod <file>;`
   per file) with `autotests = false` + `[[test]] name = "it"` in `Cargo.toml`, so
