@@ -166,7 +166,7 @@ members = ["crates/*", "xtask"]
 default-members = [".", "crates/*", "xtask"]
 
 [workspace.package]
-version = "26.3.0"
+version = "26.4.0"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-or-later"   # intentional deviation from upstream mtui (GPL-2.0-only); see LICENSE
