@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.3.1] - 2026-09-02
+
 ### Changed
 
 - `run` now prints its verdict above the per-host output, so it survives the
