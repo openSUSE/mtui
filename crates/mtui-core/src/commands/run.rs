@@ -128,10 +128,12 @@ impl Command for Run {
         // summary line below is the signal. Collected under the `targets`
         // borrow; hosts that ran nothing are skipped.
         let mut failed: Vec<(String, i16)> = Vec::new();
+        let mut roll: Vec<String> = Vec::new();
         for name in &hosts {
             let Some(t) = targets.get(name) else {
                 continue;
             };
+            roll.push(roll_entry(name, t.lastexit()));
             output.push(format!(
                 "{name}:-> {} [{}]",
                 t.lastin(),
@@ -148,16 +150,33 @@ impl Command for Run {
                 failed.push((name.clone(), code));
             }
         }
-
-        page_output(session, &output).await;
-
-        if !failed.is_empty() {
-            failed.sort();
-            let summary = failed
+        failed.sort();
+        let summary = (!failed.is_empty()).then(|| {
+            failed
                 .iter()
                 .map(|(name, code)| format!("{name} (exit {code})"))
                 .collect::<Vec<_>>()
-                .join(", ");
+                .join(", ")
+        });
+
+        // Printed above the paged body so the verdict survives
+        // `mcp_max_output_bytes`'s head-keeping cap even when the body is cut.
+        if !roll.is_empty() {
+            session
+                .display
+                .println(&format!("run completed on {}", roll.join(", ")));
+        }
+        if let Some(summary) = &summary {
+            session.display.println(&format!("FAILED on {summary}"));
+        }
+
+        page_output(session, &output).await;
+
+        // The REPL also gets a trailing verdict, since a terminal user reads
+        // the bottom of a paged screen, not the (already scrolled-off) head.
+        if session.is_repl
+            && let Some(summary) = &summary
+        {
             session.display.println(&format!("FAILED on {summary}"));
         }
         Ok(())
@@ -170,6 +189,13 @@ fn fmt_exit(code: Option<i16>) -> String {
         Some(c) => c.to_string(),
         None => "None".to_owned(),
     }
+}
+
+/// One roll-call entry, e.g. `h1 (exit 0)`, via [`fmt_exit`] so a host that
+/// never ran (`exit` is `None`) matches the per-host banner's `[None]` rather
+/// than silently rendering `(exit 0)`.
+fn roll_entry(name: &str, exit: Option<i16>) -> String {
+    format!("{name} (exit {})", fmt_exit(exit))
 }
 
 #[cfg(test)]
@@ -282,9 +308,15 @@ mod tests {
         Run.call(&mut session, &args).await.unwrap();
 
         let out = buf.contents();
-        assert!(
-            out.contains("FAILED on h2 (exit 1), h3 (exit 127)"),
-            "missing/wrong summary: {out}"
+        let verdict = out
+            .find("FAILED on h2 (exit 1), h3 (exit 127)")
+            .expect("missing/wrong summary");
+        let diag = out.find("h1:->").expect("missing h1 banner");
+        assert!(verdict < diag, "verdict must precede the body: {out:?}");
+        assert_eq!(
+            out.matches("FAILED on").count(),
+            1,
+            "headless session prints the verdict exactly once: {out:?}"
         );
     }
 
@@ -293,11 +325,23 @@ mod tests {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "linux");
         let args = matches(&Run, &["true"]);
         Run.call(&mut session, &args).await.unwrap();
-        assert!(
-            !buf.contents().contains("FAILED on"),
-            "unexpected summary: {}",
-            buf.contents()
-        );
+
+        let out = buf.contents();
+        assert!(!out.contains("FAILED on"), "unexpected summary: {out}");
+        let roll = out
+            .find("run completed on h1 (exit 0), h2 (exit 0)")
+            .expect("missing roll-call");
+        let diag = out.find("h1:->").expect("missing h1 banner");
+        assert!(roll < diag, "roll-call must precede the body: {out:?}");
+    }
+
+    #[test]
+    fn roll_entry_renders_none_exit_not_zero() {
+        // Guards the roll-call composition against a silent `unwrap_or(0)`: a
+        // host that never ran must render `(exit None)`, matching the
+        // per-host banner's `[None]`.
+        assert_eq!(roll_entry("h1", None), "h1 (exit None)");
+        assert_eq!(roll_entry("h1", Some(0)), "h1 (exit 0)");
     }
 
     #[tokio::test]
@@ -340,10 +384,14 @@ mod tests {
         }
 
         let out = buf.contents();
-        assert!(
-            out.contains("FAILED on h2 (exit 1)"),
-            "summary must survive an early quit: {out}"
+        assert_eq!(
+            out.matches("FAILED on h2 (exit 1)").count(),
+            2,
+            "REPL prints the verdict above the body and again after it: {out}"
         );
+        let first = out.find("FAILED on h2 (exit 1)").expect("verdict present");
+        let diag = out.find("h1:->").expect("missing h1 banner");
+        assert!(first < diag, "first verdict must precede the body: {out}");
     }
 
     #[tokio::test]

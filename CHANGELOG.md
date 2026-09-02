@@ -10,6 +10,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `run` now prints its verdict above the per-host output, so it survives the
+  MCP `mcp_max_output_bytes` cap even when the body is truncated: a `run
+  completed on h1 (exit 0), h2 (exit 1)` roll-call naming every host it ran on
+  with its exit code, followed by `FAILED on …` when any host exited non-zero.
+  In the REPL only, the `FAILED on …` line is also repeated after the paged
+  output, so a terminal user reading the bottom of the screen still sees it.
 - Destructive and remote-write commands (`update`, `prepare`, `downgrade`,
   `install`, `uninstall`, `set_repo`, `run`, `reboot`, `lock`, `unlock`,
   `add_host`, `remove_host`, `get`, `put`, `approve`, `reject`, `assign`,
