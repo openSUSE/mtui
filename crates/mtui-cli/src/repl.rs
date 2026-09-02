@@ -21,7 +21,7 @@
 //! Tab completion, persistent history + Ctrl-R + inline hint, and the
 //! workflow-aware prompt/highlighter live in the [`Reedline`] builder /
 //! [`MtuiPrompt`] in [`Repl::new`]; the command-timeout prompter is wired at the
-//! composition root (`main.rs`).
+//! composition root, `run()` in `lib.rs`.
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
@@ -183,7 +183,7 @@ impl Repl {
     /// columnar menu bound to <kbd>Tab</kbd>, a `file_backed_history` persisting
     /// to `$XDG_DATA_HOME/mtui/history` (Ctrl-R comes from the default emacs
     /// bindings), a [`DefaultHinter`], and [`MtuiPrompt`]. The command-timeout
-    /// prompter is wired separately at the composition root (`main.rs`).
+    /// prompter is wired separately at the composition root, `run()` in `lib.rs`.
     #[must_use]
     pub fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
         let completer = Box::new(MtuiCompleter::new(

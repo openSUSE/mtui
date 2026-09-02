@@ -55,9 +55,10 @@ Notes that save time:
   `cargo build --workspace --tests` is ~80 s; the test *run* is ~20-25 s. Give the
   first `cargo test --workspace` of a session a generous timeout (≥5 min) and
   don't treat a cold-cache timeout as a failure.
-- **Test default features only while iterating.** `--all-features` relinks the
-  whole `mcp`/`axum` tree for no runtime signal beyond what the compile-only
-  feature matrix already gives. CI only *compiles* `--all-features`; it does not
+- **Test default features only while iterating.** On a 10-core, 32 GiB Mac16,10,
+  `cargo test --workspace --all-features` took 36 s versus 28 s with default
+  features; it adds only `notify-rust` and no extra runtime signal beyond the
+  compile-only feature matrix. CI only *compiles* `--all-features`; it does not
   *test* it.
 - **Scope tight during dev:** `cargo test -p <crate>` for the crate you're
   touching; reserve `cargo test --workspace` for the final gate.
@@ -225,7 +226,7 @@ these crates: `it__<module>__<name>.snap`.
 > **Exception: `mtui-core`.** It does *not* use the `it.rs` pattern — its
 > integration tests are per-file and its snapshots are named `<module>__<name>.snap`
 > (no `it__` prefix). Add a `mtui-core` integration test as a normal top-level
-> `tests/*.rs` there; use the `it.rs` `mod` convention in `mtui-hosts`,
+> `tests/*.rs` there; use the `it.rs` `mod` convention in root `mtui`, `mtui-hosts`,
 > `mtui-datasources`, `mtui-testreport`, and `mtui-mcp`.
 
 ## Debugging the MCP server

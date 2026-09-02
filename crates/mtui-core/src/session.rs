@@ -91,7 +91,7 @@ pub struct Session {
     /// The session-level serialised interactive [`Prompter`], or `None`
     /// headlessly, where a command timeout aborts immediately.
     ///
-    /// The composition root (`mtui-cli`'s `main.rs`) installs a
+    /// The composition root (`mtui-cli`'s `run()`) installs a
     /// [`Prompter::stdin`]-backed one via [`set_prompter`](Self::set_prompter).
     /// It reaches two places: the command-timeout prompt on each freshly-built
     /// [`Target`] in [`connect_and_add_hosts`](Self::connect_and_add_hosts), and
@@ -1701,7 +1701,7 @@ impl Session {
 
     /// Installs the session-level serialised interactive [`Prompter`].
     ///
-    /// The composition root (`mtui-cli`'s `main.rs`) wires a
+    /// The composition root (`mtui-cli`'s `run()`) wires a
     /// [`Prompter::stdin`](mtui_hosts::Prompter::stdin)-backed prompter here;
     /// `mtui-mcp` leaves it unset. It also reaches the active report's
     /// [`HostsGroup`], so already-connected hosts pick up the derived

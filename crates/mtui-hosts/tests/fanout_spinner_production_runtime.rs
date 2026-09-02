@@ -2,7 +2,7 @@
 //! with `block_on` — driving a long interactive fan-out, and assert the spinner
 //! paints DURING the await, not only via an on-drop repaint.
 //!
-//! The REPL (`mtui-cli/src/main.rs`) builds its runtime with
+//! The REPL (`mtui-cli/src/lib.rs`'s `run()`) builds its runtime with
 //! `tokio::runtime::Runtime::new()` and drives every command via `block_on`.
 //! The paint task is `tokio::spawn`ed inside `run_parallel`. If that runtime
 //! does not actually schedule the spawned paint task concurrently with the
