@@ -250,6 +250,12 @@ call with the host named.
 - `export` emits `WARNING: no package version data recorded for <host>...`
   lines in its tool output when a host has no recorded package data and its
   install-result block was therefore left unverified in the report.
+- `run` prints its own verdict above its per-host output, for the same
+  head-survives-`max_output_bytes` reason: `run completed on h1 (exit 0), h2
+  (exit 1)` names every host it ran on with its exit code, followed by `FAILED
+  on h2 (exit 1)` when any host exited non-zero. `run` returns `Ok` on a
+  non-zero remote exit — a non-zero exit is often expected — so this verdict,
+  not the tool's success/failure status, is the signal to check.
 - The `run` tool's `command` is **argv tokens, not a shell line**: the tokens
   are re-quoted before dispatch, so `["cat /etc/os-release"]` reaches the host
   as one quoted word (exit 127) and `["zypper","lr","|","grep","x"]` passes a
