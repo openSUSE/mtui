@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "mtui"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "anyhow",
  "mtui-cli",
@@ -2379,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "mtui-cli"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2406,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "mtui-config"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "directories",
  "mtui-types",
@@ -2419,7 +2419,7 @@ dependencies = [
 
 [[package]]
 name = "mtui-core"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2453,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "mtui-datasources"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "async-trait",
  "base64ct",
@@ -2488,7 +2488,7 @@ dependencies = [
 
 [[package]]
 name = "mtui-hosts"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "async-trait",
  "criterion",
@@ -2515,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "mtui-mcp"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2542,7 +2542,7 @@ dependencies = [
 
 [[package]]
 name = "mtui-testreport"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2567,7 +2567,7 @@ dependencies = [
 
 [[package]]
 name = "mtui-types"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "insta",
  "sandogasa-rpmvercmp",
@@ -5469,7 +5469,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "26.3.1"
+version = "26.3.2"
 dependencies = [
  "anyhow",
  "clap",
