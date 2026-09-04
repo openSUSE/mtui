@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.3.2] - 2026-09-04
+
 ### Fixed
 
 - `mtui-mcp` over stdio now advertises the `2026-07-28` protocol revision, so
