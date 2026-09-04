@@ -149,9 +149,10 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     session_manager.session_config = session_config;
     // `legacy_session_mode` is already rmcp's default; set explicitly so a future
     // default flip cannot silently make mtui stateless (per-client http isolation
-    // depends on that session lifecycle — see
-    // `McpServer::supported_protocol_versions`). `max_request_body_bytes` governs
-    // rmcp's own pre-session body buffering, below the `body_layer` below.
+    // depends on that session lifecycle, which is why http declines the
+    // 2026-07-28 protocol revision — see `SUPPORTED_PROTOCOL_VERSIONS_HTTP` in
+    // `server.rs`). `max_request_body_bytes` governs rmcp's own pre-session body
+    // buffering, below the `body_layer` below.
     let service = StreamableHttpService::new(
         move || factory_sessions.try_make_server(),
         Arc::new(session_manager),

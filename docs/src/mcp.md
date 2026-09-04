@@ -105,11 +105,19 @@ inactivity (disconnecting its hosts — the SDK gives no per-session teardown
 callback, so this sweep is what releases a vanished client's SSH connections).
 
 This isolation depends on rmcp's legacy `Mcp-Session-Id` session lifecycle, so
-`mtui-mcp` advertises protocol revisions `2024-11-05` through `2025-11-25` and
-declines `2026-07-28`: that revision removes protocol-level sessions and is
-served statelessly (a throwaway session per request) regardless of config, which
-would defeat per-client isolation under HTTP. A client asking for it falls back
-to the latest revision `mtui-mcp` does support.
+over **HTTP** `mtui-mcp` advertises protocol revisions `2024-11-05` through
+`2025-11-25` and declines `2026-07-28`: that revision removes protocol-level
+sessions, and rmcp's transport layer classifies any non-`initialize` request
+carrying complete 2026-07-28 metadata as stateless regardless of config, mints
+a throwaway server for it, and serves it inline — which would tear down and
+rebuild the per-client `McpSession` (its SSH connections, pool claims) on every
+such request. A client asking for it over HTTP falls back to the latest
+revision `mtui-mcp` does support.
+
+Over **stdio** there is one client per process and no per-request session to
+protect, so that inline lifecycle is harmless: `mtui-mcp` advertises
+`2026-07-28` there too, so a client that opens with `server/discover` at that
+revision succeeds instead of being refused.
 
 ## Multiple templates: scoping and fan-out
 

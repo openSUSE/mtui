@@ -10,6 +10,10 @@
 //! 2. `call_tool("whoami")` routes through the *same* engine the REPL uses and
 //!    returns the `User: <user>, app pid: …` banner the command prints.
 //! 3. A deny-listed tool call is rejected (`method_not_found`) — no route exists.
+//! 4. #591: opening with `server/discover` at the 2026-07-28 draft succeeds
+//!    (not `-32022`), and a follow-up `tools/call` on the same connection
+//!    works too — driven over raw JSON-RPC lines, since rmcp's client-side
+//!    `ServiceExt::serve` always opens with `initialize`.
 
 #![cfg(feature = "mcp")]
 
@@ -250,5 +254,107 @@ async fn tools_deny_removes_transfer_tool_from_surface_and_dispatch() {
     );
 
     drop(client);
+    let _ = server_task.await;
+}
+
+/// #591: writes one raw JSON-RPC line and reads one back over a duplex half,
+/// bypassing rmcp's client `ServiceExt`, which always opens with `initialize`
+/// and has no public API for a `server/discover` opener.
+async fn send_line(write: &mut (impl tokio::io::AsyncWrite + Unpin), value: serde_json::Value) {
+    use tokio::io::AsyncWriteExt;
+    let mut line = serde_json::to_string(&value).expect("serialize request");
+    line.push('\n');
+    write
+        .write_all(line.as_bytes())
+        .await
+        .expect("write request");
+}
+
+async fn recv_line(reader: &mut (impl tokio::io::AsyncBufRead + Unpin)) -> serde_json::Value {
+    use tokio::io::AsyncBufReadExt;
+    let mut line = String::new();
+    reader.read_line(&mut line).await.expect("read response");
+    serde_json::from_str(&line).expect("parse response")
+}
+
+/// #591: a `server/discover` opener at the 2026-07-28 draft, carrying the
+/// `_meta` fields the inline lifecycle requires, must succeed over stdio
+/// rather than being refused with `-32022` — and the connection must stay
+/// usable for a follow-up `tools/call`, which the inline lifecycle also
+/// requires conforming `_meta` on (row B of the investigation).
+#[tokio::test]
+async fn discover_2026_07_28_succeeds_over_stdio_and_the_session_stays_usable() {
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let server = build_server().await;
+    let server_task = tokio::spawn(async move {
+        let running = server.serve(server_io).await.expect("server serve");
+        running.waiting().await.expect("server run");
+    });
+
+    let (read_half, mut write_half) = tokio::io::split(client_io);
+    let mut reader = tokio::io::BufReader::new(read_half);
+
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            }
+        }),
+    )
+    .await;
+
+    let discover_response = recv_line(&mut reader).await;
+    assert!(
+        discover_response.get("error").is_none(),
+        "discover must not be refused: {discover_response}"
+    );
+    let supported = discover_response["result"]["supportedVersions"]
+        .as_array()
+        .expect("supportedVersions array");
+    assert!(
+        supported.iter().any(|v| v.as_str() == Some("2026-07-28")),
+        "stdio must advertise 2026-07-28: {discover_response}"
+    );
+
+    send_line(
+        &mut write_half,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "whoami",
+                "arguments": {},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                }
+            }
+        }),
+    )
+    .await;
+
+    let call_response = recv_line(&mut reader).await;
+    assert!(
+        call_response.get("error").is_none(),
+        "the follow-up tool call must succeed on the same connection: {call_response}"
+    );
+    let text = call_response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text content block");
+    assert!(
+        text.starts_with("User: testuser, app pid: "),
+        "unexpected tool output: {text}"
+    );
+
+    drop(reader);
+    drop(write_half);
     let _ = server_task.await;
 }

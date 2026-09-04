@@ -8,6 +8,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `mtui-mcp` over stdio now advertises the `2026-07-28` protocol revision, so
+  an MCP client that opens with `server/discover` at that revision connects
+  instead of being refused with `-32022` (#591). HTTP still declines it, since
+  rmcp serves that revision statelessly and would tear down mtui's per-client
+  session on every request.
+
 ## [26.3.1] - 2026-09-02
 
 ### Changed

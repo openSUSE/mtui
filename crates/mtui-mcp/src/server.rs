@@ -80,6 +80,19 @@ pub struct McpServer {
     /// an `Arc` so `McpServer` stays `Clone` — the slot is freed when the last
     /// clone drops.
     _guard: Option<Arc<SessionGuard>>,
+    /// Which transport this server was built for, deciding
+    /// [`supported_protocol_versions`](ServerHandler::supported_protocol_versions).
+    transport: Transport,
+}
+
+/// The transport an [`McpServer`] was built for.
+///
+/// Set once by the constructor that built it ([`McpServer::new`] → `Stdio`,
+/// [`McpServer::new_tracked`] → `Http`) and never changed afterwards.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Transport {
+    Stdio,
+    Http,
 }
 
 impl McpServer {
@@ -91,7 +104,13 @@ impl McpServer {
     #[must_use]
     pub fn new(registry: Arc<Registry>, session: Arc<McpSession>) -> Self {
         // Untracked: stdio (one process, one client) and unit tests.
-        Self::build(registry, session, None, Arc::new(AtomicU64::new(0)))
+        Self::build(
+            registry,
+            session,
+            None,
+            Arc::new(AtomicU64::new(0)),
+            Transport::Stdio,
+        )
     }
 
     /// Builds a server tracked by the http [`SessionRegistry`](crate::provider::SessionRegistry).
@@ -107,7 +126,13 @@ impl McpServer {
         guard: SessionGuard,
         last_touch: Arc<AtomicU64>,
     ) -> Self {
-        Self::build(registry, session, Some(Arc::new(guard)), last_touch)
+        Self::build(
+            registry,
+            session,
+            Some(Arc::new(guard)),
+            last_touch,
+            Transport::Http,
+        )
     }
 
     /// Shared synthesis body for [`new`](Self::new) / [`new_tracked`](Self::new_tracked).
@@ -116,6 +141,7 @@ impl McpServer {
         session: Arc<McpSession>,
         guard: Option<Arc<SessionGuard>>,
         last_touch: Arc<AtomicU64>,
+        transport: Transport,
     ) -> Self {
         let command_descriptors = build_tools(&registry);
         let job_descriptors = job_tool_descriptors();
@@ -178,6 +204,7 @@ impl McpServer {
             transfer_tools: Arc::new(transfer_tools),
             last_touch,
             _guard: guard,
+            transport,
         }
     }
 
@@ -235,23 +262,38 @@ impl ProgressSink for PeerProgressSink {
     }
 }
 
-/// The protocol revisions `initialize` and `server/discover` negotiate down to:
-/// [`rmcp::model::ProtocolVersion::KNOWN_VERSIONS`] minus `V_2026_07_28`.
+/// The protocol revisions `initialize` and `server/discover` negotiate down to
+/// on **http**: [`rmcp::model::ProtocolVersion::KNOWN_VERSIONS`] minus
+/// `V_2026_07_28`.
 ///
-/// mtui's http per-client isolation *is* the legacy session model: rmcp calls
-/// [`crate::provider::SessionRegistry::try_make_server`] once per
-/// `Mcp-Session-Id` session, and the minted [`McpServer`] owns that client's
-/// [`McpSession`]. Revision 2026-07-28 removes protocol-level sessions and is
-/// served statelessly (a throwaway session per request) regardless of
-/// `legacy_session_mode`, so it must never be among the versions a client can
-/// negotiate. A client that asks for it gets `-32022` and falls back to one of
-/// these four.
-const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
+/// Revision 2026-07-28 removes protocol-level sessions: rmcp's
+/// `streamable_http_server` tower layer classifies any non-`initialize`
+/// request carrying complete 2026-07-28 `_meta` as stateless and mints a
+/// throwaway [`McpServer`] to serve it inline — bypassing
+/// [`crate::provider::SessionRegistry::try_make_server`]'s one-server-per-
+/// `Mcp-Session-Id` allocation entirely. That would tear down and rebuild the
+/// per-session `McpSession` (its SSH connections, pool claims) on every such
+/// request, so http must keep refusing the revision: a client that asks for it
+/// gets `-32022` and falls back to one of these four.
+///
+/// This does **not** apply to stdio, which has one client per process and no
+/// per-request session churn to protect — see [`SUPPORTED_PROTOCOL_VERSIONS_STDIO`].
+const SUPPORTED_PROTOCOL_VERSIONS_HTTP: &[ProtocolVersion] = &[
     ProtocolVersion::V_2024_11_05,
     ProtocolVersion::V_2025_03_26,
     ProtocolVersion::V_2025_06_18,
     ProtocolVersion::V_2025_11_25,
 ];
+
+/// The protocol revisions `initialize` and `server/discover` negotiate down to
+/// on **stdio**: every revision this rmcp build knows, including
+/// `V_2026_07_28`.
+///
+/// stdio has exactly one client per process, so the inline (stateless)
+/// lifecycle 2026-07-28 requests is harmless — there is no per-session state to
+/// tear down. Refusing the revision here only breaks clients that open with
+/// `server/discover` at 2026-07-28 and have no working fallback (#591).
+const SUPPORTED_PROTOCOL_VERSIONS_STDIO: &[ProtocolVersion] = ProtocolVersion::KNOWN_VERSIONS;
 
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
@@ -259,7 +301,10 @@ impl ServerHandler for McpServer {
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-        Cow::Borrowed(SUPPORTED_PROTOCOL_VERSIONS)
+        Cow::Borrowed(match self.transport {
+            Transport::Stdio => SUPPORTED_PROTOCOL_VERSIONS_STDIO,
+            Transport::Http => SUPPORTED_PROTOCOL_VERSIONS_HTTP,
+        })
     }
 
     async fn list_tools(
@@ -504,12 +549,23 @@ mod tests {
     }
 
     #[test]
-    fn supported_protocol_versions_excludes_the_stateless_revision() {
+    fn stdio_supported_protocol_versions_includes_the_stateless_revision() {
+        // stdio has one client per process, so the inline 2026-07-28 lifecycle
+        // is safe (#591) and must be negotiable.
+        let server = server_with(Config::default());
+        let versions = server.supported_protocol_versions();
+        assert!(versions.contains(&rmcp::model::ProtocolVersion::V_2026_07_28));
+    }
+
+    #[test]
+    fn http_supported_protocol_versions_excludes_the_stateless_revision() {
         // 2026-07-28 is served statelessly regardless of `legacy_session_mode`
-        // (rmcp classifies it from the request), so it must never be negotiable.
+        // (rmcp classifies it from the request), which would bypass the http
+        // per-session `McpServer` allocation, so it must never be negotiable.
         // Anti-vacuity: the latest legacy revision must be present, so an
         // accidentally emptied list cannot green this.
-        let server = server_with(Config::default());
+        let registry = SessionRegistry::new(Arc::new(register_all()), Config::default());
+        let server = registry.try_make_server().expect("http server");
         let versions = server.supported_protocol_versions();
         assert!(!versions.contains(&rmcp::model::ProtocolVersion::V_2026_07_28));
         assert!(versions.contains(&rmcp::model::ProtocolVersion::V_2025_11_25));
