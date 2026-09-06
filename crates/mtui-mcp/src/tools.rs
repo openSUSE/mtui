@@ -68,6 +68,31 @@ const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 /// (`reload_products` is intentionally absent — it re-reads from the hosts.)
 const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs"];
 
+/// Tool-call keys still accepted, and ignored, after their property left the
+/// tool's schema in 26.4 (#597): inert there, and a pinned client must not start
+/// failing on a minor release. Keyed by tool name, which equals the command name
+/// for every entry (`dispatch_tool` looks up `route.command`). Delete with the
+/// 26.5 version bump; `deprecated_kwargs_expire_with_26_5` fails that bump until
+/// this is empty. `load_template` is absent on purpose: its `-T` failed the call
+/// before it ran, so its keys are refused outright.
+const DEPRECATED_KWARGS: &[(&str, &[&str])] = &[
+    ("list_refhosts", &["template", "all_templates"]),
+    ("list_templates", &["template", "all_templates"]),
+    ("regenerate", &["all_templates"]),
+    ("set_log_level", &["template", "all_templates"]),
+    ("unload", &["template", "all_templates"]),
+    ("updates", &["template", "all_templates"]),
+    ("whoami", &["template", "all_templates"]),
+];
+
+/// The deprecated keys of `tool` (empty for every other tool).
+fn deprecated_kwargs(tool: &str) -> &'static [&'static str] {
+    match DEPRECATED_KWARGS.iter().find(|(name, _)| *name == tool) {
+        Some((_, keys)) => keys,
+        None => &[],
+    }
+}
+
 /// A synthesised MCP tool as plain data; [`crate::server`] converts it into an
 /// `rmcp::model::Tool` with its `ToolAnnotations { read_only_hint }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,19 +341,33 @@ pub(crate) async fn dispatch_tool(
     // this tool's schema — for a fanned-out tool (`config_show`) the *subcommand*,
     // where its args live, not the parent. `background` was popped above.
     let arg_source = subparser_layer(&parser, &route.argv_prefix).unwrap_or(&parser);
+    // Deprecated keys stay accepted for one release; `kwargs_to_argv` walks the
+    // parser's args, so they never reach argv.
+    let deprecated = deprecated_kwargs(route.command);
+    let sent: Vec<&str> = deprecated
+        .iter()
+        .copied()
+        .filter(|key| kwargs.contains_key(*key))
+        .collect();
+    if !sent.is_empty() {
+        tracing::warn!(
+            tool = route.command,
+            keys = ?sent,
+            "ignoring deprecated tool-call keys: dropped from the schema in 26.4, refused from 26.5 (#597)"
+        );
+    }
     let allowed = arg_source
         .get_arguments()
         .map(|a| a.get_id().as_str())
-        .filter(|id| *id != "help" && *id != "version");
+        .filter(|id| *id != "help" && *id != "version")
+        .chain(deprecated.iter().copied());
     if let Err(err) = reject_unknown_kwargs(&kwargs, allowed) {
         return Err::<String, _>(err).into();
     }
 
     // The same layer, or reconstruction drops every kwarg the parent does not
     // declare: `config set` emitted a bare `["set"]` and clap rejected it for the
-    // missing required positionals, `config show`'s filter vanished. The parent's
-    // own `-T`/`--all-templates` are not lost, because a fanned-out tool's schema
-    // is synthesised from the subcommand too, so they are already refused above.
+    // missing required positionals, `config show`'s filter vanished.
     let argv = crate::argv::kwargs_to_argv(arg_source, &kwargs, &route.argv_prefix);
 
     if background {
@@ -648,6 +687,258 @@ mod tests {
             .collect();
         assert!(required.contains(&"attribute"), "attribute required");
         assert!(required.contains(&"value"), "value required");
+    }
+
+    fn prop_names(tools: &[ToolDescriptor], name: &str) -> Vec<String> {
+        descriptor(tools, name)
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .map(|p| p.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// A tool whose command addresses no template exposes neither `template`
+    /// nor `all_templates`; a `Scope::Single` one that reads the report keeps
+    /// only `template` (#597).
+    #[test]
+    fn session_level_tools_declare_neither_template_property() {
+        let tools = build_tools(&register_all());
+        for name in [
+            "load_template",
+            "unload",
+            "list_templates",
+            "list_refhosts",
+            "updates",
+            "whoami",
+            "set_log_level",
+        ] {
+            let props = prop_names(&tools, name);
+            assert!(!props.contains(&"template".to_owned()), "{name}: {props:?}");
+            assert!(
+                !props.contains(&"all_templates".to_owned()),
+                "{name}: {props:?}"
+            );
+        }
+        let regenerate = prop_names(&tools, "regenerate");
+        assert!(
+            regenerate.contains(&"template".to_owned()),
+            "{regenerate:?}"
+        );
+        assert!(
+            !regenerate.contains(&"all_templates".to_owned()),
+            "{regenerate:?}"
+        );
+        let list_hosts = prop_names(&tools, "list_hosts");
+        assert!(
+            list_hosts.contains(&"template".to_owned()),
+            "{list_hosts:?}"
+        );
+        assert!(
+            list_hosts.contains(&"all_templates".to_owned()),
+            "{list_hosts:?}"
+        );
+    }
+
+    /// `template=` on `load_template` is an unknown key, refused before argv
+    /// reconstruction — not a `TemplateNotLoaded` from the resolver (#597).
+    /// Both keys, because `load_template` is the one command whose `-T` failed
+    /// the call before it ran: it is exempt from the one-release shim the other
+    /// session-level tools get, so neither key may be listed for it.
+    #[tokio::test]
+    async fn load_template_with_a_template_kwarg_is_refused_as_unknown() {
+        let session = McpSession::new(Config::default());
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("load_template").expect("load_template route");
+        let kwargs = json!({
+            "auto": "SUSE:Maintenance:2:2",
+            "template": "SUSE:Maintenance:2:2",
+            "all_templates": true,
+        });
+        let err = completed(
+            dispatch_tool(
+                &registry,
+                &session,
+                route,
+                kwargs.as_object().unwrap(),
+                None,
+                None,
+            )
+            .await,
+        )
+        .expect_err("template kwargs refused");
+        assert_eq!(err.stderr, "unknown argument(s): all_templates, template");
+        assert_eq!(err.exit_code, 1);
+    }
+
+    /// The `template`/`all_templates` keys dropped from these tools' schemas in
+    /// 26.4 stay accepted and inert for one release: identical output to
+    /// omitting them, and the unloaded RRID is never resolved (#597).
+    /// `set_log_level` is deliberately not exercised here — its body mutates the
+    /// process-wide log filter, which this crate's tests share.
+    #[tokio::test]
+    async fn deprecated_template_kwargs_are_ignored_on_session_level_tools() {
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        for (tool, expected) in [
+            ("whoami", "User: "),
+            ("list_templates", "no templates loaded"),
+        ] {
+            let session = McpSession::new(Config::default());
+            let route = routes.get(tool).unwrap_or_else(|| panic!("{tool} route"));
+            let mut outputs = Vec::new();
+            for kwargs in [
+                json!({}),
+                json!({ "template": "SUSE:Maintenance:9:9" }),
+                json!({ "all_templates": true }),
+            ] {
+                let out = completed(
+                    dispatch_tool(
+                        &registry,
+                        &session,
+                        route,
+                        kwargs.as_object().unwrap(),
+                        None,
+                        None,
+                    )
+                    .await,
+                )
+                .unwrap_or_else(|e| panic!("{tool} with {kwargs}: {e}"));
+                assert!(out.contains(expected), "{tool} with {kwargs}: {out:?}");
+                outputs.push(out);
+            }
+            assert_eq!(
+                outputs[0], outputs[1],
+                "{tool}: template= changed the output"
+            );
+            assert_eq!(
+                outputs[0], outputs[2],
+                "{tool}: all_templates= changed the output"
+            );
+        }
+    }
+
+    /// `regenerate` kept `-T` but lost `--all-templates`, so only that key is
+    /// shimmed: the call runs and fails on its own terms, not on the key (#597).
+    #[tokio::test]
+    async fn regenerate_all_templates_kwarg_is_ignored() {
+        let session = McpSession::new(Config::default());
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("regenerate").expect("regenerate route");
+        let mut errors = Vec::new();
+        for kwargs in [json!({}), json!({ "all_templates": true })] {
+            let err = completed(
+                dispatch_tool(
+                    &registry,
+                    &session,
+                    route,
+                    kwargs.as_object().unwrap(),
+                    None,
+                    None,
+                )
+                .await,
+            )
+            .expect_err("nothing loaded, so regenerate fails either way");
+            assert!(
+                !err.stderr.contains("unknown argument"),
+                "{kwargs}: {:?}",
+                err.stderr
+            );
+            errors.push(err);
+        }
+        assert_eq!(errors[0].stderr, errors[1].stderr);
+        assert_eq!(errors[0].exit_code, errors[1].exit_code);
+        assert!(
+            errors[0].stderr.contains("Metadata not loaded"),
+            "{:?}",
+            errors[0].stderr
+        );
+    }
+
+    /// The shim exempts named keys, not unknown keys at large: a typo on a
+    /// shimmed tool is still refused. Green before the shim landed too — its job
+    /// is to stay green after it (#597).
+    #[tokio::test]
+    async fn typo_keys_are_still_refused_on_a_shimmed_tool() {
+        let session = McpSession::new(Config::default());
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("whoami").expect("whoami route");
+        let kwargs = json!({ "temlate": "x" });
+        let err = completed(
+            dispatch_tool(
+                &registry,
+                &session,
+                route,
+                kwargs.as_object().unwrap(),
+                None,
+                None,
+            )
+            .await,
+        )
+        .expect_err("a misspelled key is not shimmed");
+        assert_eq!(err.stderr, "unknown argument(s): temlate");
+        assert_eq!(err.exit_code, 1);
+    }
+
+    /// Every shimmed row names a live tool that routes straight to the command
+    /// of the same name, and whose schema really has dropped the key. Kills a
+    /// renamed tool leaving a dead row, and a property re-added while the shim
+    /// still exempts it (#597).
+    #[test]
+    fn deprecated_kwargs_name_live_tools_and_absent_properties() {
+        let registry = register_all();
+        let tools = build_tools(&registry);
+        let routes = tool_routes(&registry);
+        for (tool, keys) in DEPRECATED_KWARGS {
+            assert_ne!(
+                *tool, "load_template",
+                "load_template refuses both keys outright; it must not be shimmed"
+            );
+            let route = routes
+                .get(*tool)
+                .unwrap_or_else(|| panic!("{tool} is not a synthesised tool"));
+            // `dispatch_tool` looks the table up by `route.command`, so a tool
+            // whose name differs from its command would never be shimmed.
+            assert_eq!(route.command, *tool, "{tool} routes to {}", route.command);
+            assert!(
+                route.argv_prefix.is_empty(),
+                "{tool}: {:?}",
+                route.argv_prefix
+            );
+            let props = prop_names(&tools, tool);
+            for key in *keys {
+                assert!(
+                    !props.contains(&(*key).to_owned()),
+                    "{tool}.{key} is back in the schema; drop the shim row"
+                );
+            }
+            assert!(!keys.is_empty(), "{tool}: an empty row shims nothing");
+        }
+    }
+
+    /// The removal release, made enforceable: the version bump to 26.5 fails
+    /// until the shim is gone (#597).
+    #[test]
+    fn deprecated_kwargs_expire_with_26_5() {
+        let mut parts = env!("CARGO_PKG_VERSION").split('.');
+        let major: u32 = parts.next().and_then(|p| p.parse().ok()).expect("major");
+        let minor: u32 = parts.next().and_then(|p| p.parse().ok()).expect("minor");
+        assert!(
+            (major, minor) < (26, 5) || DEPRECATED_KWARGS.is_empty(),
+            "26.5 is here, so delete the one-release shim (#597). In \
+             crates/mtui-mcp/src/tools.rs: the `DEPRECATED_KWARGS` table, the \
+             `deprecated_kwargs` helper, and in `dispatch_tool` the `deprecated`/`sent` \
+             block plus the `.chain(deprecated.iter().copied())` on `allowed`. Then \
+             these tests: `deprecated_template_kwargs_are_ignored_on_session_level_tools`, \
+             `regenerate_all_templates_kwarg_is_ignored`, \
+             `typo_keys_are_still_refused_on_a_shimmed_tool`, \
+             `deprecated_kwargs_name_live_tools_and_absent_properties` and this one. \
+             Finally the CHANGELOG `### Deprecated` entry and the two-release sentence \
+             in AGENTS.md's MCP contracts bullet."
+        );
     }
 
     #[test]

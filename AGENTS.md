@@ -279,7 +279,13 @@ next actionable task before working on a subsystem.
   do not clobber one another, and read back by `list_history`. The append-only
   primitive exists *for* this contract — do not collapse it into `sftp_write`.
 - **MCP tool names/schemas** — downstream LLM configs depend on them; snapshot the
-  synthesised + slimmed schemas.
+  synthesised + slimmed schemas. Dropping a property takes two releases: the
+  schema loses it at once, the call keeps accepting (and ignoring) it for one
+  release through `crates/mtui-mcp/src/tools.rs::DEPRECATED_KWARGS`, whose doc
+  names the release that refuses them and whose test fails that version bump —
+  and only then is it refused. The one exception is a key that already failed
+  the call (#597: `load_template`'s `template`/`all_templates`); remove it
+  outright and say so in the CHANGELOG.
 
 The `tests/` fixtures are the authority for these formats; treat them as golden.
 

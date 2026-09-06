@@ -125,9 +125,12 @@ A session can hold several loaded templates at once (call `load_template` more
 than once; loading an already-loaded RRID reloads it). `list_templates` lists the
 set, and each template keeps its own test report and SSH host group.
 
-Because every command's parser carries the shared `-T/--template` and
-`--all-templates` flags, every synthesised command tool exposes two optional
-parameters in its schema:
+Every command that acts on a loaded template carries the shared `-T/--template`
+and `--all-templates` flags, so its synthesised tool exposes two optional
+parameters. The session-level tools — `load_template`, `unload`,
+`list_templates`, `list_refhosts`, `updates`, `config_show`/`config_set`,
+`whoami`, `set_log_level` — expose neither, and `regenerate` exposes only
+`template`:
 
 - **`template="<RRID>"`** — scope this one call to a single loaded template (the
   analogue of the REPL `-T` flag). An unknown RRID returns a clean error.
@@ -135,9 +138,15 @@ parameters in its schema:
 - **`all_templates=false`** — suppress fan-out on a tool whose command fans out
   by default, narrowing it to one template instead.
 
+A client still sending `template`/`all_templates` to `unload`, `list_templates`,
+`list_refhosts`, `updates`, `whoami` or `set_log_level`, or `all_templates` to
+`regenerate`, has them ignored with a server-log warning until 26.5.
+`load_template` refuses them now; `config_show`/`config_set` never took them.
+
 Omitting both parameters resolves per command: a read/annotate tool
-(`list_*`/`show_*`/`openqa_*`/`checkers`/`checkout`/`export`/`set_workflow`/
-`comment`) fans out across every loaded template, prefixing each template's
+(`list_*` other than the session-level ones above, `show_*`, `openqa_*`,
+`checkers`, `checkout`, `export`, `set_workflow`, `comment`) fans out across
+every loaded template, prefixing each template's
 output with an `=== <RRID> ===` banner. A host-mutating or remote-write tool
 (`update`, `prepare`, `downgrade`, `install`, `uninstall`, `set_repo`, `run`,
 `reboot`, `lock`, `unlock`, `add_host`, `remove_host`, `approve`, `reject`,

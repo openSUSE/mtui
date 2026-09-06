@@ -6,7 +6,8 @@
 //! provided [`run`](Command::run) drives it across the templates the invocation
 //! resolves to:
 //!
-//! * `-T/--template RRID` — exactly that loaded template.
+//! * `-T/--template RRID` — exactly that loaded template (declared only by
+//!   commands that address one, see [`addresses_template`]).
 //! * `--all-templates` or [`Scope::Fanout`] — every loaded template.
 //! * [`Scope::Single`] — exactly once, never auto-fanned-out (self-targeting
 //!   commands like `unload <rrid>`).
@@ -48,8 +49,17 @@ pub enum Scope {
     Explicit,
     /// Run exactly once regardless of how many templates are loaded — for
     /// commands that name their own target template (`load_template`, `unload
-    /// <rrid>`) and must never auto-fan-out.
+    /// <rrid>`) and must never auto-fan-out. Never declares `--all-templates`;
+    /// [`addresses_template`] decides `-T`.
     Single,
+}
+
+/// Whether `command` acts on the template `run` resolves for it, and so
+/// declares the shared `-T/--template` flag. Derived, never overridden: it is
+/// also `run`'s claim exemption, so parser and driver cannot disagree.
+#[must_use]
+pub fn addresses_template<C: Command + ?Sized>(command: &C) -> bool {
+    !(command.scope() == Scope::Single && !command.reads_resolved_report())
 }
 
 /// An executable mtui command.
@@ -83,11 +93,10 @@ pub trait Command: Send + Sync {
     /// Whether the body reads the report [`run`](Self::run) resolved for it.
     ///
     /// `true` by default: a body that reads it must be refused when the entry
-    /// cannot be claimed, never answered off the null sentinel (#524). Only a
-    /// [`Scope::Single`] command invoked without `-T` is exempt from that
-    /// refusal, and only when this is `false` — it addressed no template
-    /// (`resolve_templates` handed it whatever was active) *and* ignores what
-    /// it was handed.
+    /// cannot be claimed, never answered off the null sentinel (#524). `false`
+    /// on a [`Scope::Single`] command exempts it from that refusal and drops
+    /// `-T/--template` from its parser ([`addresses_template`]): it addressed
+    /// no template and ignores the one it was handed.
     ///
     /// Reading *a* report is not the test: `load_template` prints the host
     /// count of the template it just loaded, never the one it was handed.
@@ -183,10 +192,9 @@ pub trait Command: Send + Sync {
     /// ([`CommandError::TemplateBusy`]) rather than dispatched against the null
     /// sentinel; under fan-out that refusal is that template's failure alone,
     /// and a contended entry is never mistaken for a host-less one and skipped.
-    /// The exception is a [`Scope::Single`] command invoked without `-T` that
-    /// declares [`reads_resolved_report`](Self::reads_resolved_report) `false`:
-    /// it addressed no template and ignores the one it was handed, so its claim
-    /// stays best-effort.
+    /// The exception is a command that addresses no template
+    /// ([`addresses_template`]): it ignores the one it was handed, so its
+    /// claim stays best-effort.
     ///
     /// Cancellation (MCP `job_cancel`): the driver is the seam's chokepoint. It
     /// bails with [`CommandError::Cancelled`] before dispatching, and re-checks
@@ -216,20 +224,16 @@ pub trait Command: Send + Sync {
             // registry-mutating command (`load_template`) can re-point/re-lock
             // the active entry from inside `call` without self-deadlocking.
             let target_rrid = resolved.first().map_or("", String::as_str);
-            // A `Scope::Single` command with no explicit `-T` addressed no
-            // template at all: `resolve_templates` handed back whatever is
-            // active. Refusing it because some *other* dispatch holds that
-            // entry fails a command over a template the operator never named.
-            // The exemption is per-command, not per-scope — `regenerate` is
-            // also `Scope::Single` but does read what it was handed, and
-            // reading that off the null sentinel is #524 itself.
+            // A command that addresses no template got whatever was active
+            // from `resolve_templates`; refusing it because some *other*
+            // dispatch holds that entry fails a command over a template the
+            // operator never named. Per-command, not per-scope: `regenerate`
+            // is also `Scope::Single` but reads what it was handed (#524).
             //
             // `claim` runs either way — it is what points the session at the
             // template. Only the *refusal* is conditional, so the order here
             // matters and must not be flipped.
-            let exempt = self.scope() == Scope::Single
-                && !self.reads_resolved_report()
-                && arg_str(args, "template").is_none();
+            let exempt = !addresses_template(self);
             if let Err(exc) = claim(self.name(), session, target_rrid)
                 && !exempt
             {
@@ -601,7 +605,8 @@ mod tests {
     }
 
     /// A [`Scope::Single`] probe that resolves to whatever is active and
-    /// ignores it, like `unload <rrid>` / `config` / `help`.
+    /// ignores it, like `unload <rrid>` / `config` / `help`. Its parser
+    /// declares neither template flag.
     struct NoopSingleScope;
 
     #[async_trait]
@@ -881,21 +886,21 @@ mod tests {
         );
     }
 
-    /// The counterpart: the same scope *does* refuse once the caller names the
-    /// contended template with `-T`, so the carve-out above is scoped to the
-    /// fallback and is not a blanket exemption.
+    /// The counterpart: a `Scope::Single` command that reads the report keeps
+    /// `-T`, and naming the contended template with it still refuses, so the
+    /// carve-out above is not a blanket exemption.
     #[tokio::test]
-    async fn single_scope_with_an_explicit_template_still_refuses() {
+    async fn single_scope_reading_the_report_with_an_explicit_template_still_refuses() {
         let (mut session, _buf) = session_with_hosts(RRID, &["h1"], "ok");
         session.release_active_guard();
         let entry = session.templates.handle(RRID).expect("RRID is loaded");
         let _held = entry.try_lock_owned().expect("uncontended");
 
-        let cmd = NoopSingleScope;
+        let cmd = ReportReadingSingleScope(Arc::new(Mutex::new(Vec::new())));
         let parser = crate::engine::command_parser(&cmd);
         let args = parser
             .try_get_matches_from(["-T", RRID])
-            .expect("argv should parse");
+            .expect("a report-reading Single command keeps -T");
 
         let err = cmd
             .run(&mut session, &args)

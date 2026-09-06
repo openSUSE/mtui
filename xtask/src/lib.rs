@@ -92,10 +92,14 @@ pub fn render_cli_reference() -> String {
         "Every command below is available in the `mtui` REPL (see \
          [Invocation](invocation.md) for how to start it and load an update). \
          Commands not on the [MCP deny-list](mcp.md) are also exposed as `mtui-mcp` \
-         tools. Each command additionally accepts the shared template flags \
-         `-T/--template <RRID>` and `--all-templates`; the cross-command behaviour \
-         behind them (fan-out, host-pool selection, locking) is described in \
-         [Workflow concepts](concepts.md).\n\n",
+         tools. Commands that act on a loaded template additionally accept the \
+         shared template flags `-T/--template <RRID>` and `--all-templates` \
+         (session-level commands — `load_template`, `unload`, `switch`, \
+         `list_templates`, `list_refhosts`, `updates`, `config`, `whoami`, \
+         `set_log_level`, `help`, `quit` (`exit`/`EOF`) — take neither, \
+         `regenerate` only `-T`); \
+         the cross-command behaviour behind them (fan-out, host-pool selection, \
+         locking) is described in [Workflow concepts](concepts.md).\n\n",
     );
 
     for name in registry.names() {

@@ -343,7 +343,8 @@ mod tests {
     /// later cannot silently start writing a fork. The fallthrough is pinned
     /// *here* and not on the lock shape: `resolve_command_rrids` also gives up on
     /// an argv it cannot parse, so `command_lock` would answer `Exclusive` for
-    /// these rows whichever way the predicate went.
+    /// these rows whichever way the predicate went. `config` addresses no
+    /// template, so `-T … show` no longer parses and falls through too.
     #[test]
     fn requires_canonical_session_per_invocation() {
         let r = register_all();
@@ -354,7 +355,7 @@ mod tests {
             ("regenerate", &[][..], true),
             ("config", &["set", "session_user", "x"][..], true),
             ("config", &["show"][..], false),
-            ("config", &["-T", "SUSE:Maintenance:1:1", "show"][..], false),
+            ("config", &["-T", "SUSE:Maintenance:1:1", "show"][..], true),
             ("config", &[][..], true),
             ("config", &["frobnicate"][..], true),
             ("list_hosts", &[][..], false),
@@ -423,11 +424,24 @@ mod tests {
                 "list_templates",
                 "load_template",
                 "quit",
+                "set_log_level",
                 "switch",
                 "unload",
                 "updates",
+                "whoami",
             ]
         );
+        // The same set seen from the parser: exactly these declare no `-T`.
+        let mut flagless: Vec<&str> = r
+            .names()
+            .filter(|n| {
+                !crate::engine::command_parser(r.get(n).expect("registered").as_ref())
+                    .get_arguments()
+                    .any(|a| a.get_id().as_str() == "template")
+            })
+            .collect();
+        flagless.sort_unstable();
+        assert_eq!(flagless, exempt);
     }
 
     #[test]

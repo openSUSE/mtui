@@ -414,7 +414,9 @@ mod tests {
         // `SetTrue`: it must render as a plain `{"type":"boolean"}` with no
         // `default` — a tri-state absent/true/false has none to state.
         let registry: Registry = register_all();
-        let cmd = registry.get("whoami").expect("whoami is registered");
+        let cmd = registry
+            .get("list_products")
+            .expect("list_products is registered");
         let parser = mtui_core::command_parser(cmd.as_ref());
         let schema = command_input_schema(&parser);
         let all_templates = &props(&schema)["all_templates"];
