@@ -2,11 +2,13 @@
 //!
 //! Each function performs the OBS calls for one operation and returns `Err` on
 //! any failure or refused precondition; the never-raise `OSC` facade folds that
-//! into the `false` its callers expect. Semantics mirror the `osc qam` plugin
-//! exactly, including the awkward parts: single-group auto-inference, the
-//! ">=1 own assignment" unassign guard, the refused group-approve, `by_user`
-//! reject with the `MAINT:RejectReason` read-modify-write, and the
-//! `qam.suse.de` preconditions (skipped for PI/SLFO). The `[oscqam] ` prefix
+//! into the `false` its callers expect. The workflow is deliberately
+//! conservative: single-group auto-inference, the ">=1 own assignment"
+//! unassign guard, the refused group-approve, `by_user` reject with the
+//! `MAINT:RejectReason` read-modify-write, the `qam.suse.de` preconditions
+//! (skipped for PI/SLFO), and `assign`'s refusal of a group review that is
+//! already approved or held, by someone else or by the caller (#599) — OBS's
+//! `assignreview` checks only that the request is open. The `[oscqam] ` prefix
 //! goes on approve/reject comments only.
 //!
 //! Like [`ObsClient`] itself, these functions take explicit URL values rather
