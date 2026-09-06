@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mtui_datasources::VerifyPolicy;
 use mtui_datasources::obs::{AgentKeys, ObsClient, ObsError, ObsSignatureAuth};
+use mtui_datasources::{HttpClient, VerifyPolicy};
 use ssh_key::{HashAlg, PrivateKey, PublicKey, Signature};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -140,13 +140,12 @@ async fn signs_and_retries_once_on_401() {
         .await;
 
     let auth = ObsSignatureAuth::new("qamuser".to_owned(), Some(fixture("id_ed25519")), None);
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).unwrap(),
         &server.uri(),
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(auth),
-    )
-    .unwrap();
+    );
 
     let body = client
         .get("request/1", &[])
@@ -184,13 +183,12 @@ async fn no_signature_scheme_does_not_retry() {
         .await;
 
     let auth = ObsSignatureAuth::new("qamuser".to_owned(), Some(fixture("id_ed25519")), None);
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).unwrap(),
         &server.uri(),
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(auth),
-    )
-    .unwrap();
+    );
 
     let err = client
         .get("request/1", &[])
@@ -217,13 +215,12 @@ async fn non_401_passes_through() {
         .await;
 
     let auth = ObsSignatureAuth::new("qamuser".to_owned(), Some(fixture("id_ed25519")), None);
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).unwrap(),
         &server.uri(),
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(auth),
-    )
-    .unwrap();
+    );
 
     assert_eq!(client.get("request/1", &[]).await.unwrap(), "<ok/>");
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
@@ -413,17 +410,16 @@ async fn authorization_and_signature_are_never_logged() {
     let header = auth.authorization(REALM).await.unwrap();
     let signature = header.split("signature=\"").nth(1).unwrap();
 
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).unwrap(),
         &server.uri(),
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(ObsSignatureAuth::new(
             "qamuser".to_owned(),
             Some(fixture("id_ed25519")),
             None,
         )),
-    )
-    .unwrap();
+    );
     client.get("request/1", &[]).await.unwrap();
 
     let logs = String::from_utf8(buf.lock().unwrap().clone()).unwrap();

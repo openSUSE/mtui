@@ -15,6 +15,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   instead of being refused with `-32022` (#591). HTTP still declines it, since
   rmcp serves that revision statelessly and would tear down mtui's per-client
   session on every request.
+- Transport failures from every datasource on the shared HTTP client (OBS/IBS,
+  Gitea, Slack, TeReGen, QEM Dashboard, oqa-search, refhosts) now name their
+  cause —
+  `error sending request: Connection reset by peer (os error 104)`,
+  `… operation timed out (read timeout)` — instead of the bare
+  `error sending request` that hid whether a failed `assign`/`approve` died
+  on DNS, connect, reset, TLS or the 5 s/30 s timeouts (#594). The native OBS
+  review path (`assign`, `unassign`, `approve`, `reject`, `comment`) also
+  reuses the session's shared HTTP client, so concurrent `mtui-mcp` calls
+  share one connection pool instead of each operation building one or two
+  clients of its own; a CA-bundle failure there now reads `could not build
+  OBS client: …`, as it already does for Gitea.
 
 ## [26.3.1] - 2026-09-02
 

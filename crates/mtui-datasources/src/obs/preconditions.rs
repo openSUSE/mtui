@@ -10,13 +10,12 @@
 
 use std::sync::LazyLock;
 
-use mtui_config::SslVerify;
 use regex::Regex;
 
 use mtui_types::RequestReviewID;
 
 use crate::error::HttpError;
-use crate::http::{HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, sanitize_url};
+use crate::http::{HttpClient, MAX_API_BODY, read_body_capped, sanitize_url};
 
 /// Captures the whole trimmed `SUMMARY:` value, not just the first token, so a
 /// trailing qualifier ("PASSED with notes") reads as UNKNOWN rather than
@@ -44,21 +43,14 @@ fn log_url(reports_url: &str, rrid: &RequestReviewID) -> String {
 /// [`HttpClient::get_bytes`](crate::http::HttpClient::get_bytes), which raises
 /// on non-2xx and so cannot tell a 404 from a 200.
 pub(crate) async fn fetch_testreport_log(
+    http: &HttpClient,
     reports_url: &str,
-    ssl_verify: &SslVerify,
     rrid: &RequestReviewID,
 ) -> Option<String> {
     let url = log_url(reports_url, rrid);
     // The reports URL may carry credentials; never log them verbatim.
     let safe_url = sanitize_url(&url);
-    let client = match HttpClient::new(VerifyPolicy::from_config(ssl_verify)) {
-        Ok(client) => client,
-        Err(e) => {
-            tracing::error!("could not build testreport HTTP client for {safe_url}: {e}");
-            return None;
-        }
-    };
-    let response = match client.inner().get(&url).send().await {
+    let response = match http.inner().get(&url).send().await {
         Ok(response) => response,
         Err(e) => {
             // Convert first: a raw `reqwest::Error` would append the unsafe
@@ -111,6 +103,11 @@ pub(crate) fn comment(log: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::VerifyPolicy;
+
+    fn http() -> HttpClient {
+        HttpClient::new(VerifyPolicy::Default(true)).unwrap()
+    }
 
     #[test]
     fn summary_captures_whole_value_not_first_token() {
@@ -148,7 +145,7 @@ mod tests {
             .await;
         let rrid = RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap();
         assert!(
-            fetch_testreport_log(&server.uri(), &SslVerify::Enabled, &rrid)
+            fetch_testreport_log(&http(), &server.uri(), &rrid)
                 .await
                 .is_none()
         );
@@ -160,7 +157,7 @@ mod tests {
         // fold to None rather than propagate.
         let rrid = RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap();
         assert!(
-            fetch_testreport_log("http://127.0.0.1:1/nope", &SslVerify::Enabled, &rrid)
+            fetch_testreport_log(&http(), "http://127.0.0.1:1/nope", &rrid)
                 .await
                 .is_none()
         );

@@ -23,8 +23,8 @@ use reqwest::{Method, RequestBuilder};
 
 use crate::error::HttpError;
 use crate::http::{
-    HttpClient, MAX_API_BODY, VerifyPolicy, is_ssl_verification_error, read_body_capped,
-    sanitize_url, ssl_error_detail, ssl_verification_hint,
+    HttpClient, MAX_API_BODY, is_ssl_verification_error, read_body_capped, sanitize_url,
+    ssl_error_detail, ssl_verification_hint,
 };
 use crate::obs::errors::ObsError;
 
@@ -108,9 +108,10 @@ fn error_summary(body: &str) -> String {
 
 /// A thin OBS API client over one shared, authenticated HTTP transport.
 ///
-/// Built once per operation: the constructor fixes the API base URL, the TLS
-/// posture, the auth signer and the coarse time budget, and each
-/// [`get`](ObsClient::get) / [`post`](ObsClient::post) is one bounded hop.
+/// One thin wrapper per operation over a shared transport: the constructor
+/// fixes the API base URL, the auth signer and the coarse time budget, and
+/// each [`get`](ObsClient::get) / [`post`](ObsClient::post) is one bounded
+/// hop.
 #[derive(Clone)]
 pub struct ObsClient {
     http: HttpClient,
@@ -120,30 +121,31 @@ pub struct ObsClient {
 }
 
 impl ObsClient {
-    /// Build a client for `api_url` with the given time budget, TLS posture and
+    /// Build a client for `api_url` over `http`, with the given time budget and
     /// auth signer.
     ///
-    /// Explicit parameters rather than a `Config`/oscrc coupling keep the
-    /// transport self-contained. A trailing `/` is stripped from `api_url` and
-    /// the coarse deadline is `now + request_timeout`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ObsError::Http`] if the shared HTTP client cannot be built
-    /// (e.g. a configured CA bundle cannot be read).
-    pub fn new(
+    /// `http` is the caller's shared client, so concurrent operations share one
+    /// connection pool. A trailing `/` is stripped from `api_url` and the coarse
+    /// deadline is `now + request_timeout`.
+    #[must_use]
+    pub fn with_http(
+        http: HttpClient,
         api_url: &str,
         request_timeout: Duration,
-        verify: VerifyPolicy,
         auth: Arc<dyn ObsAuth>,
-    ) -> Result<Self, ObsError> {
-        let http = HttpClient::new(verify)?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             http,
             api_url: api_url.trim_end_matches('/').to_owned(),
             auth,
             deadline: Instant::now() + request_timeout,
-        })
+        }
+    }
+
+    /// The transport this client rides, for the unauthenticated side calls
+    /// an operation makes (the `qam.suse.de` testreport precondition).
+    pub(crate) fn http(&self) -> &HttpClient {
+        &self.http
     }
 
     /// Join `path` (with any query params) onto the API base.
