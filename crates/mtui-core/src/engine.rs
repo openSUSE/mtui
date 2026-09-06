@@ -260,18 +260,16 @@ fn base_subcommand(command: &dyn Command) -> clap::Command {
     let all_templates_help = match command.scope() {
         Scope::Single => return cmd,
         Scope::Fanout => {
-            "Act on every loaded template (the default for this command); \
-             --all-templates=false narrows to one instead"
+            "Act on every loaded template (the default for this command); =false narrows to the \
+             active or sole one"
         }
         Scope::Explicit => {
-            "Act on every loaded template (bare); this command otherwise never \
-             implicitly fans out — it acts on the active template (or the sole \
-             one loaded), refusing headlessly with several loaded and none named"
+            "Act on every loaded template; omitted, this command never implicitly fans out; \
+             refused headlessly with several"
         }
         Scope::Active => {
-            "Act on every loaded template (bare); this command otherwise acts on \
-             the active template, fanning out only headlessly with several \
-             loaded and none named"
+            "Act on every loaded template; omitted, acts on the active one, or on all headlessly \
+             with several loaded"
         }
     };
 
@@ -612,12 +610,24 @@ mod tests {
     #[test]
     fn all_templates_help_text_differs_by_scope() {
         // The LLM-facing half of #575: the tool schema description a client
-        // actually reads must tell the truth about each command's default.
+        // actually reads must tell the truth about each command's default —
+        // in one clause, since it rides on every tool of every `tools/list`
+        // (#597).
         let fanout_help = all_templates_help(&FanoutLikeCmd);
         let explicit_help = all_templates_help(&ExplicitLikeCmd);
+        let active_help = all_templates_help(&RunLikeCmd);
         assert_ne!(fanout_help, explicit_help);
+        assert_ne!(fanout_help, active_help);
+        assert_ne!(explicit_help, active_help);
         assert!(fanout_help.contains("the default for this command"));
+        // `=false`, not a bare `false`: the REPL flag is `require_equals`, so
+        // the narrowing form has to be spelled the way it is typed.
+        assert!(fanout_help.contains("=false"), "{fanout_help:?}");
         assert!(explicit_help.contains("never implicitly fans out"));
+        assert!(active_help.contains("the active one"));
+        for help in [&fanout_help, &explicit_help, &active_help] {
+            assert!(help.chars().count() <= 110, "{help:?}");
+        }
     }
 
     /// A documented stub command (returns `Some` from `about`).

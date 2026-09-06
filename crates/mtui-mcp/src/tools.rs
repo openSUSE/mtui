@@ -740,6 +740,33 @@ mod tests {
         );
     }
 
+    fn prop_description<'a>(tools: &'a [ToolDescriptor], name: &str, prop: &str) -> &'a str {
+        descriptor(tools, name)
+            .input_schema
+            .get("properties")
+            .and_then(|p| p.get(prop))
+            .and_then(|p| p.get("description"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{name}.{prop} carries no description"))
+    }
+
+    /// The `all_templates` description states each scope's default in one
+    /// clause: it rides on every fan-out-capable tool of every `tools/list`
+    /// (#597).
+    #[test]
+    fn all_templates_help_is_one_clause_per_scope() {
+        let tools = build_tools(&register_all());
+        for (name, expected) in [
+            ("list_hosts", "the default for this command"),
+            ("update", "never implicitly fans out"),
+            ("list_products", "the active one"),
+        ] {
+            let help = prop_description(&tools, name, "all_templates");
+            assert!(help.contains(expected), "{name}: {help:?}");
+            assert!(help.chars().count() <= 110, "{name}: {help:?}");
+        }
+    }
+
     /// `template=` on `load_template` is an unknown key, refused before argv
     /// reconstruction — not a `TemplateNotLoaded` from the resolver (#597).
     /// Both keys, because `load_template` is the one command whose `-T` failed
