@@ -356,8 +356,8 @@ Shows or sets runtime configuration values.
 Usage: config <COMMAND>
 
 Commands:
-  show  
-  set   
+  show  Shows runtime configuration values (all when none named).
+  set   Sets one runtime configuration value for the running session.
   help  Print this message or the help of the given subcommand(s)
 
 Options:
