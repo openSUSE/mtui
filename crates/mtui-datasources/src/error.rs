@@ -21,15 +21,21 @@ pub enum HttpError {
     /// A transport failure, a non-2xx HTTP status, or a client-build failure
     /// surfaced by `reqwest`.
     ///
+    /// Renders as reqwest's kind plus the deepest cause (`error sending
+    /// request: Connection refused (os error 111)`): reqwest's own `Display`
+    /// stops at the kind, which made a reset, a DNS failure, a TLS failure and
+    /// both timeouts read identically (#594).
+    ///
     /// **Invariant: the wrapped error carries no URL**, stripped by
-    /// [`From<reqwest::Error>`](HttpError#impl-From<Error>-for-HttpError), so no
-    /// `#[error(transparent)]` chain over it can render one. `#[non_exhaustive]`
-    /// makes that the only way to build the variant from outside this crate
-    /// (`E0639`); inside it is convention, so construct via `?`/`.into()` and
-    /// never bare. Matching is unaffected.
-    #[error(transparent)]
+    /// [`From<reqwest::Error>`](HttpError#impl-From<Error>-for-HttpError), and
+    /// the cause comes through `root_cause`, i.e. through `sanitize_url`, so
+    /// neither half can render one.
+    /// `#[non_exhaustive]` makes the conversion the only way to build the
+    /// variant from outside this crate (`E0639`); inside it is convention, so
+    /// construct via `?`/`.into()` and never bare. Matching is unaffected.
+    #[error("{}", request_display(.0))]
     #[non_exhaustive]
-    Request(reqwest::Error),
+    Request(#[source] reqwest::Error),
 
     /// A user-configured CA bundle could not be read or parsed into
     /// certificates when building the HTTP client.
@@ -60,14 +66,33 @@ pub enum HttpError {
 impl From<reqwest::Error> for HttpError {
     fn from(e: reqwest::Error) -> Self {
         // #431: reqwest's `Display` appends the request URL verbatim
-        // (" for url (…)"), and `HttpError::Request` plus every `…Error::Http`
-        // over it are `#[error(transparent)]`, so it surfaces wherever an error
-        // is rendered — and it is not reliably credential-free:
-        // `Response::error_for_status` reports the *redirect-updated* URL, so a
-        // `Location` header can put `user:pass@host` straight back. Supplying
-        // sanitized request context is the call site's job, via
-        // `crate::http::sanitize_url`.
+        // (" for url (…)"), and `HttpError::Request` renders it, as does every
+        // `…Error::Http` over it, so it surfaces wherever an error is rendered
+        // — and it is not reliably credential-free: `Response::error_for_status`
+        // reports the *redirect-updated* URL, so a `Location` header can put
+        // `user:pass@host` straight back. Supplying sanitized request context
+        // is the call site's job, via `crate::http::sanitize_url`.
         Self::Request(e.without_url())
+    }
+}
+
+/// `"{kind}: {deepest cause}"`, or the kind alone when reqwest attached no
+/// source.
+fn request_display(e: &reqwest::Error) -> String {
+    let phase = timeout_phase(e.is_timeout(), e.is_connect());
+    match crate::http::root_cause(e) {
+        Some(cause) => format!("{e}: {cause}{phase}"),
+        None => format!("{e}{phase}"),
+    }
+}
+
+/// reqwest renders the 5 s connect and 30 s read timeouts identically
+/// ("operation timed out"); the phase says which budget was hit.
+fn timeout_phase(is_timeout: bool, is_connect: bool) -> &'static str {
+    match (is_timeout, is_connect) {
+        (false, _) => "",
+        (true, true) => " (connect timeout)",
+        (true, false) => " (read timeout)",
     }
 }
 
@@ -414,5 +439,104 @@ mod tests {
             msg.contains("error sending request"),
             "kind was lost with the URL: {msg}"
         );
+    }
+
+    /// #594: reqwest's `Display` stops at the kind, so without the cause a
+    /// refused connection, a reset, a DNS failure and a timeout all read
+    /// `error sending request`. The variant must render the deepest cause
+    /// after the kind, and still without the URL.
+    #[tokio::test]
+    async fn request_display_carries_the_transport_cause() {
+        let e = reqwest::Client::new()
+            .get("http://127.0.0.1:9/x")
+            .send()
+            .await
+            .expect_err("nothing listens on the discard port");
+        assert!(
+            std::error::Error::source(&e).is_some(),
+            "premise gone: reqwest attached no source to a refused connect"
+        );
+
+        let msg = HttpError::from(e).to_string();
+        assert!(
+            msg.starts_with("error sending request: "),
+            "cause is not appended to the kind: {msg}"
+        );
+        assert!(
+            msg.to_lowercase().contains("connection refused"),
+            "cause was lost: {msg}"
+        );
+        assert!(!msg.contains(" for url ("), "URL leaked: {msg}");
+    }
+
+    /// The custom `Display` must not cost the `source()` chain: the TLS hint
+    /// (`is_ssl_verification_error`) and `ssl_error_detail` walk it.
+    #[tokio::test]
+    async fn request_source_chain_is_intact_under_the_custom_display() {
+        let he: HttpError = reqwest::Client::new()
+            .get("http://127.0.0.1:9/x")
+            .send()
+            .await
+            .expect_err("nothing listens on the discard port")
+            .into();
+        assert!(
+            std::error::Error::source(&he).is_some(),
+            "source() chain broken by the Display change"
+        );
+        let cause = crate::http::root_cause(&he).expect("chain reaches a cause");
+        assert!(
+            cause.to_lowercase().contains("connection refused"),
+            "walk stopped short of the transport cause: {cause}"
+        );
+    }
+
+    /// Both reqwest timeouts render as `operation timed out`; a read timeout
+    /// (the server accepted the connection and stalled) must say so.
+    #[tokio::test]
+    async fn read_timeout_is_named_as_such() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(500)),
+            )
+            .mount(&server)
+            .await;
+        // A test-local client: the property under test is the Display, and
+        // `HttpClient`'s 30 s read timeout cannot be driven offline.
+        let e = reqwest::Client::builder()
+            .read_timeout(std::time::Duration::from_millis(20))
+            .build()
+            .expect("client builds")
+            .get(format!("{}/slow", server.uri()))
+            .send()
+            .await
+            .expect_err("the body stalls past the read timeout");
+        assert!(
+            e.is_timeout() && !e.is_connect(),
+            "premise gone: not a read timeout: {e:?}"
+        );
+
+        let msg = HttpError::from(e).to_string();
+        assert!(
+            msg.contains("operation timed out"),
+            "timeout cause was lost: {msg}"
+        );
+        assert!(
+            msg.ends_with(" (read timeout)"),
+            "read-timeout phase missing: {msg}"
+        );
+    }
+
+    /// The connect arm cannot be driven offline deterministically (a
+    /// black-holed connect is network-dependent), so the table is pinned on
+    /// the pure core.
+    #[test]
+    fn timeout_phase_truth_table() {
+        assert_eq!(timeout_phase(false, false), "");
+        assert_eq!(timeout_phase(false, true), "");
+        assert_eq!(timeout_phase(true, true), " (connect timeout)");
+        assert_eq!(timeout_phase(true, false), " (read timeout)");
     }
 }
