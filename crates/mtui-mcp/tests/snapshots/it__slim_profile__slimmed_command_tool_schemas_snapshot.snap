@@ -228,9 +228,11 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "attribute": {
+          "description": "Attribute to set, one of the names `config show` lists (some are read-only)",
           "type": "string"
         },
         "value": {
+          "description": "New value; booleans accept true/false, yes/no, on/off, 1/0",
           "type": "string"
         }
       },

@@ -31,6 +31,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fan-out-capable tool — states each scope's default in one clause instead of
   restating the whole fan-out contract (#597): about 2.7 KB less on every
   `tools/list`. Wording only; the resolver is unchanged.
+- `config show` and `config set` gained help text; the `config_show`/`config_set`
+  MCP tool descriptions are no longer the bare tool name, and `set`'s
+  `attribute`/`value` are described (#597).
 
 ### Deprecated
 

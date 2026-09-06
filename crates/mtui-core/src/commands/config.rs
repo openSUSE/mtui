@@ -242,17 +242,30 @@ impl Command for ConfigCmd {
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.subcommand_required(true)
             .subcommand(
-                ClapCommand::new("show").arg(
-                    Arg::new("attributes")
-                        .num_args(0..)
-                        .value_name("ATTR")
-                        .help("Attribute(s) to show; all when omitted"),
-                ),
+                ClapCommand::new("show")
+                    .about("Shows runtime configuration values (all when none named).")
+                    .arg(
+                        Arg::new("attributes")
+                            .num_args(0..)
+                            .value_name("ATTR")
+                            .help("Attribute(s) to show; all when omitted"),
+                    ),
             )
             .subcommand(
                 ClapCommand::new("set")
-                    .arg(Arg::new("attribute").required(true).value_name("ATTR"))
-                    .arg(Arg::new("value").required(true).value_name("VALUE")),
+                    .about("Sets one runtime configuration value for the running session.")
+                    .arg(
+                        Arg::new("attribute")
+                            .required(true)
+                            .value_name("ATTR")
+                            .help("Attribute to set, one of the names `config show` lists (some are read-only)"),
+                    )
+                    .arg(
+                        Arg::new("value")
+                            .required(true)
+                            .value_name("VALUE")
+                            .help("New value; booleans accept true/false, yes/no, on/off, 1/0"),
+                    ),
             )
     }
 
