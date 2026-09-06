@@ -225,6 +225,442 @@ async fn comment_empty_refused() {
 // --------------------------------------------------------------------------- //
 // assign                                                                       //
 // --------------------------------------------------------------------------- //
+
+const T_ASSIGNED: &str = "2026-09-01T00:33:57";
+const T_APPROVED: &str = "2026-09-02T07:25:47";
+const T_REASSIGNED: &str = "2026-09-06T11:24:48";
+
+/// A `<review by_user>` as `withfullhistory=1` renders it: `when`/`who`, its
+/// `<comment>`, and its nested `<history>` — the same document both halves of
+/// the assign/unassign advice read. [`user_review`] omits the comment.
+fn commented_user_review(
+    user: &str,
+    state: &str,
+    when: &str,
+    comment: &str,
+    events: &[(&str, &str, &str)],
+) -> String {
+    format!(
+        "<review state='{state}' when='{when}' who='{user}' by_user='{user}'>\
+         <comment>{comment}</comment>{}</review>",
+        history(events)
+    )
+}
+
+fn reassigned_to(group: &str, user: &str) -> String {
+    format!("reassigned review for group {group} to user {user}")
+}
+
+fn approving(user: &str) -> String {
+    format!(
+        "[oscqam] Approving SUSE:Maintenance:1:56789 for {user}. Testreport: \
+         https://qam.suse.de/reports/SUSE:Maintenance:1:56789/log"
+    )
+}
+
+/// `approver` assigned then approved `group`: the group review accepted
+/// (event at T_ASSIGNED), their user review accepted at T_APPROVED.
+fn approved_reviews(group: &str, approver: &str) -> String {
+    group_review(group, "accepted", &[(approver, T_ASSIGNED, ACCEPT)])
+        + &commented_user_review(
+            approver,
+            "accepted",
+            T_APPROVED,
+            &approving(approver),
+            &[
+                (approver, T_ASSIGNED, ASSIGN),
+                (approver, T_APPROVED, ACCEPT),
+            ],
+        )
+}
+
+/// The #599 request: `approver` approved qam-sle, then `assignee` ran
+/// `assign -g qam-sle` (a reason-change event plus an open user review).
+fn reassigned_after_approval(approver: &str, assignee: &str) -> String {
+    group_review(
+        "qam-sle",
+        "accepted",
+        &[
+            (approver, T_ASSIGNED, ACCEPT),
+            (assignee, T_REASSIGNED, REOPEN),
+        ],
+    ) + &commented_user_review(
+        approver,
+        "accepted",
+        T_APPROVED,
+        &approving(approver),
+        &[
+            (approver, T_ASSIGNED, ASSIGN),
+            (approver, T_APPROVED, ACCEPT),
+        ],
+    ) + &commented_user_review(
+        assignee,
+        "new",
+        T_REASSIGNED,
+        &reassigned_to("qam-sle", assignee),
+        &[(assignee, T_REASSIGNED, ASSIGN)],
+    )
+}
+
+/// Log + collection mocks, so a refusal is provably the hold check, plus an
+/// assignreview POST mock that must never be hit.
+async fn mount_refused_assign(api: &MockServer, reports: &MockServer) {
+    mount_log(reports, "SUMMARY: PASSED\n").await;
+    mount_collection(api, "<collection/>").await;
+    Mock::given(method("POST"))
+        .and(path("/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<ok/>"))
+        .expect(0)
+        .mount(api)
+        .await;
+}
+
+async fn assign_groups(
+    api: &MockServer,
+    reports: &MockServer,
+    groups: &[&str],
+    force: bool,
+) -> Result<(), mtui_datasources::obs::ObsError> {
+    let groups: Vec<String> = groups.iter().map(|g| (*g).to_owned()).collect();
+    qam::assign(
+        &client_for(api),
+        &reports.uri(),
+        &rrid(),
+        USER,
+        &groups,
+        force,
+    )
+    .await
+}
+
+async fn post_count(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .count()
+}
+
+/// #599: an approved group review is never re-opened by a second assign.
+#[tokio::test]
+async fn assign_refused_when_group_already_approved() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &approved_reviews("qam-sle", "alice")),
+    )
+    .await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle"], false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "qam-sle review on request 56789 was already accepted by alice on \
+         2026-09-01T00:33:57; refusing to assign (it would open a new review for qamuser). \
+         If the group must test it again, re-request its review first — mtui has no command \
+         for that; `osc review add -G qam-sle 56789` does it"
+    );
+}
+
+/// `--force` lifts "held by someone else", never "approved" (Gitea's ceiling).
+#[tokio::test]
+async fn assign_refused_when_approved_even_with_force() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &approved_reviews("qam-sle", "alice")),
+    )
+    .await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle"], true)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .starts_with("qam-sle review on request 56789 was already accepted by alice"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn assign_refused_when_held_by_other() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &reassigned_after_approval("alice", "bob")),
+    )
+    .await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle"], false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "qam-sle review on request 56789 is accepted and bob has an open review on the \
+         request; refusing to assign (pass --force to override)"
+    );
+    assert!(
+        reports.received_requests().await.unwrap().is_empty(),
+        "refused before the qam.suse.de round-trip"
+    );
+}
+
+/// Green before the fix too — the control for `assign_refused_when_held_by_other`.
+#[tokio::test]
+async fn assign_force_overrides_held_by_other() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &reassigned_after_approval("alice", "bob")),
+    )
+    .await;
+    mount_log(&reports, "SUMMARY: PASSED\n").await;
+    mount_collection(&api, "<collection/>").await;
+    mount_post_request(&api, "56789").await;
+
+    assign_groups(&api, &reports, &["qam-sle"], true)
+        .await
+        .unwrap();
+
+    let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
+    assert_eq!(query_val(&q, "by_group"), Some("qam-sle"));
+    assert_eq!(post_count(&api).await, 1);
+}
+
+/// One tester, two groups: OBS rewrote alice's single user review to name
+/// qam-manager, so qam-sle carries no comment evidence and falls back to its
+/// own last actor. A hold alice can still be forced off — not an approval she
+/// never made, whose remedy would open a second qam-sle review under her.
+#[tokio::test]
+async fn assign_refused_when_the_holders_comment_names_their_other_group() {
+    let reviews = group_review("qam-sle", "accepted", &[("alice", T_ASSIGNED, ACCEPT)])
+        + &group_review(
+            "qam-manager",
+            "accepted",
+            &[("alice", T_REASSIGNED, ACCEPT)],
+        )
+        + &commented_user_review(
+            "alice",
+            "new",
+            T_REASSIGNED,
+            &reassigned_to("qam-manager", "alice"),
+            &[("alice", T_REASSIGNED, ASSIGN)],
+        );
+
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(&api, request_xml("review", &reviews)).await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle"], false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "qam-sle review on request 56789 is accepted and alice has an open review on the \
+         request; refusing to assign (pass --force to override)"
+    );
+    assert_eq!(post_count(&api).await, 0);
+
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(&api, request_xml("review", &reviews)).await;
+    mount_log(&reports, "SUMMARY: PASSED\n").await;
+    mount_collection(&api, "<collection/>").await;
+    mount_post_request(&api, "56789").await;
+
+    assign_groups(&api, &reports, &["qam-sle"], true)
+        .await
+        .expect("--force takes the group over");
+    assert_eq!(post_count(&api).await, 1);
+    let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
+    assert_eq!(query_val(&q, "by_group"), Some("qam-sle"));
+}
+
+/// A re-POST would print `assigned` for a no-op and log another reopen.
+#[tokio::test]
+async fn assign_refused_when_caller_already_holds_it() {
+    for force in [false, true] {
+        let api = MockServer::start().await;
+        let reports = MockServer::start().await;
+        mount_get_request(
+            &api,
+            request_xml("review", &reassigned_after_approval("alice", USER)),
+        )
+        .await;
+        mount_refused_assign(&api, &reports).await;
+
+        let err = assign_groups(&api, &reports, &["qam-sle"], force)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "qamuser already holds the qam-sle review on request 56789; nothing to do — \
+             `unassign` to hand it back, unless someone else assigned qamuser: OBS records \
+             that against them, so `unassign` refuses too (--force does not re-assign your \
+             own review)",
+            "force={force}"
+        );
+    }
+}
+
+/// Neither unforceable refusal dead-ends the caller.
+#[tokio::test]
+async fn assign_refusals_name_a_next_step() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &approved_reviews("qam-sle", "alice")),
+    )
+    .await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle"], false)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .ends_with("mtui has no command for that; `osc review add -G qam-sle 56789` does it"),
+        "{err}"
+    );
+    assert_eq!(post_count(&api).await, 0);
+
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &reassigned_after_approval("alice", USER)),
+    )
+    .await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle"], false)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("`unassign` to hand it back"),
+        "{err}"
+    );
+    assert_eq!(post_count(&api).await, 0);
+
+    // The advice, not its wording: `unassign` has to work on the very document
+    // that advised it.
+    let api = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &reassigned_after_approval("alice", USER)),
+    )
+    .await;
+    mount_post_request(&api, "56789").await;
+
+    qam::unassign(&client_for(&api), &rrid(), USER, &[])
+        .await
+        .expect("the advised `unassign` must succeed on this document");
+    assert_eq!(post_count(&api).await, 1);
+    let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
+    assert_eq!(query_val(&q, "revert"), Some("1"));
+    assert_eq!(query_val(&q, "by_group"), Some("qam-sle"));
+}
+
+/// `osc review accept -G` leaves no user review; the history actor names the approver.
+#[tokio::test]
+async fn assign_refused_when_group_accepted_directly() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    let reviews = group_review("qam-sle", "accepted", &[("bob", T_APPROVED, ACCEPT)]);
+    mount_get_request(&api, request_xml("review", &reviews)).await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle"], false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "qam-sle review on request 56789 was already accepted by bob on \
+         2026-09-02T07:25:47; refusing to assign (it would open a new review for qamuser). \
+         If the group must test it again, re-request its review first — mtui has no command \
+         for that; `osc review add -G qam-sle 56789` does it"
+    );
+}
+
+/// No history (an OBS answer without `withfullhistory`): approved by nobody the
+/// document names, still refused.
+#[tokio::test]
+async fn assign_refused_when_group_accepted_without_history() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    let reviews = "<review state='accepted' by_group='qam-sle'/>";
+    mount_get_request(&api, request_xml("review", reviews)).await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle"], false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "qam-sle review on request 56789 was already accepted; refusing to assign (it would \
+         open a new review for qamuser). If the group must test it again, re-request its \
+         review first — mtui has no command for that; `osc review add -G qam-sle 56789` \
+         does it"
+    );
+}
+
+/// A group review re-requested after an acceptance is open again: assignable.
+/// Green before the fix too — the control for the hold check.
+#[tokio::test]
+async fn assign_proceeds_when_group_review_was_re_requested() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    let reviews = group_review("qam-sle", "accepted", &[("alice", T_ASSIGNED, ACCEPT)])
+        + "<review state='new' by_group='qam-sle'/>";
+    mount_get_request(&api, request_xml("review", &reviews)).await;
+    mount_log(&reports, "SUMMARY: PASSED\n").await;
+    mount_collection(&api, "<collection/>").await;
+    mount_post_request(&api, "56789").await;
+
+    assign_groups(&api, &reports, &["qam-sle"], false)
+        .await
+        .unwrap();
+    assert_eq!(post_count(&api).await, 1);
+}
+
+/// Every resolved group is checked before any POST, so a refusal never leaves
+/// the request half-assigned.
+#[tokio::test]
+async fn assign_multi_group_refuses_before_any_post() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    let reviews = "<review state='new' by_group='qam-sle'/>".to_owned()
+        + &approved_reviews("qam-cloud", "alice");
+    mount_get_request(&api, request_xml("review", &reviews)).await;
+    mount_refused_assign(&api, &reports).await;
+
+    let err = assign_groups(&api, &reports, &["qam-sle", "qam-cloud"], false)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .starts_with("qam-cloud review on request 56789 was already accepted"),
+        "{err}"
+    );
+    assert_eq!(
+        post_count(&api).await,
+        0,
+        "qam-sle must not be posted first"
+    );
+}
+
 #[tokio::test]
 async fn assign_explicit_group() {
     let api = MockServer::start().await;
@@ -240,6 +676,7 @@ async fn assign_explicit_group() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap();
@@ -262,7 +699,7 @@ async fn assign_auto_infers_single_group() {
     mount_collection(&api, "<collection/>").await;
     mount_post_request(&api, "56789").await;
 
-    qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[])
+    qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[], false)
         .await
         .unwrap();
 
@@ -283,7 +720,7 @@ async fn assign_auto_infer_ambiguous_refused() {
     )
     .await;
 
-    let err = qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[])
+    let err = qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[], false)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("auto-infer a single"), "{err}");
@@ -300,6 +737,7 @@ async fn assign_refused_when_not_open() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap_err();
@@ -321,6 +759,7 @@ async fn assign_accepts_state_new() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap();
@@ -341,6 +780,7 @@ async fn assign_refused_when_no_testreport() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap_err();
@@ -364,6 +804,7 @@ async fn assign_previous_reject_refused() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap_err();
@@ -390,6 +831,7 @@ async fn assign_previous_reject_proceeds_when_user_was_prior_reviewer() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap();
@@ -412,6 +854,7 @@ async fn assign_previous_reject_proceeds_when_none_declined() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap();
@@ -428,7 +871,7 @@ async fn assign_pins_get_queries() {
     mount_collection(&api, "<collection/>").await;
     mount_post_request(&api, "56789").await;
 
-    qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[])
+    qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[], false)
         .await
         .unwrap();
 
@@ -455,6 +898,7 @@ async fn assign_previous_reject_ignores_non_qam_declined() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap();
@@ -481,6 +925,7 @@ async fn assert_assign_skips_preconditions(rrid: &RequestReviewID) {
         rrid,
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap();
@@ -1008,6 +1453,7 @@ async fn precondition_get_rides_the_injected_clients_pooled_connection() {
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
+        false,
     )
     .await
     .unwrap();

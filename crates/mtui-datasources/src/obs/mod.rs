@@ -10,6 +10,7 @@ pub mod auth;
 pub mod client;
 pub mod errors;
 pub mod facade;
+pub(crate) mod hold;
 pub mod inference;
 pub mod models;
 pub mod oscrc;

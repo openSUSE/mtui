@@ -234,7 +234,7 @@ impl Command for Assign {
         } else {
             tracing::info!("Assign request {}", rrid.review_id);
             let osc = osc_client(session, &rrid)?;
-            osc.assign(&groups(args))
+            osc.assign(&groups(args), args.get_flag("force"))
                 .await
                 .map_err(|e| CommandError::Other(format!("osc assign failed: {e}")))?;
         }
@@ -897,5 +897,97 @@ mod tests {
             matches!(&err, CommandError::Other(m) if m.starts_with("could not build OBS client: ")),
             "got {err:?}"
         );
+    }
+
+    /// #599: the classic path refuses a group another tester holds, and
+    /// `--force` takes it over — the same `--force` the Gitea path honours.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes the
+    // mutation of the process-global `$OSC_CONFIG` exclusive.
+    #[allow(unsafe_code)]
+    async fn osc_dispatch_assign_refuses_a_held_group_unless_forced() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let reviews = "<review state='accepted' by_group='qam-sle'>\
+             <history who='bob' when='2026-09-06T11:24:48'>\
+             <description>Review got accepted</description></history></review>\
+             <review state='new' when='2026-09-06T11:24:48' who='bob' by_user='bob'>\
+             <comment>reassigned review for group qam-sle to user bob</comment></review>";
+        Mock::given(method("GET"))
+            .and(path("/request/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "<request id='1'><state name='review'/>{reviews}</request>"
+            )))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/SUSE:Maintenance:1:1/log"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("SUMMARY: PASSED\n"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/request/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<ok/>"))
+            .mount(&server)
+            .await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let key = dir.path().join("id_unused");
+        std::fs::write(&key, "never read: no 401 is served\n").unwrap();
+        let oscrc = dir.path().join("oscrc");
+        std::fs::write(
+            &oscrc,
+            format!(
+                "[{}]\nuser = qamuser\nsshkey = {}\n",
+                server.uri(),
+                key.display()
+            ),
+        )
+        .unwrap();
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.config.obs_api_url = server.uri();
+        session.config.reports_url = server.uri();
+        // Unmatched on the mock: the priority lookup degrades to nothing, offline.
+        session.config.teregen_api = server.uri();
+
+        // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
+        unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
+        let refused = Assign
+            .call(&mut session, &matches(&Assign, &["-g", "qam-sle"]))
+            .await;
+        let forced = Assign
+            .call(
+                &mut session,
+                &matches(&Assign, &["-g", "qam-sle", "--force"]),
+            )
+            .await;
+        // SAFETY: still inside that critical section.
+        unsafe { std::env::remove_var("OSC_CONFIG") };
+
+        let err = refused.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.starts_with(
+                "osc assign failed: qam-sle review on request 1 is accepted and bob has an \
+                 open review"
+            )),
+            "got {err:?}"
+        );
+        forced.expect("--force takes over a held group");
+        assert!(
+            buf.contents().contains("assigned SUSE:Maintenance:1:1"),
+            "{:?}",
+            buf.contents()
+        );
+        let posts = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == wiremock::http::Method::POST)
+            .count();
+        assert_eq!(posts, 1, "the forced call alone posts assignreview");
     }
 }

@@ -73,6 +73,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   already approved before being assigned to another group on the same
   request; `approve` and `unassign` now see such a tester as assigned to the
   new group alone.
+- `assign -g <group>` on a classic (OBS/IBS) request now refuses when the
+  group's review is already approved (`<group> review on request <id> was
+  already accepted by <who> on <when>`), is held by another tester (unless
+  `--force`), or is already held by the caller. OBS's `assignreview` accepts
+  unconditionally, so a mistaken re-assign used to open a fresh review on an
+  approved request and block its release until that review was accepted too
+  (#599). Every refusal names its way out: re-request the group's review
+  (`osc review add -G <group> <id>`) after an approval, `unassign` for a hold
+  of your own. `--force`, silently ignored on OBS until now, takes over a
+  review another tester holds there — never an approved one and, unlike
+  Gitea, never your own: that re-assign changes no OBS state and only logs a
+  reopen, which `approve` and `unassign` read as an un-assignment when OBS
+  served no placeable assign event for your own review. On Gitea `--force`
+  keeps its wider meaning (your own hold too, and without an open group).
 
 ## [26.3.1] - 2026-09-02
 
