@@ -217,7 +217,11 @@ impl Command for Assign {
                 .short('f')
                 .long("force")
                 .action(ArgAction::SetTrue)
-                .help("Force assign the review in Gitea even without an open group"),
+                .help(
+                    "Assign even if another user holds the review. OBS: never one you \
+                     already hold (unassign first); Gitea: also your own, and without an \
+                     open group",
+                ),
         )
     }
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {

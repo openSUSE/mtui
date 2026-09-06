@@ -100,7 +100,7 @@ expression: pretty
         },
         "force": {
           "default": false,
-          "description": "Force assign the review in Gitea even without an open group",
+          "description": "Assign even if another user holds the review. OBS: never one you already hold (unassign first); Gitea: also your own, and without an open group",
           "type": "boolean"
         },
         "group": {
