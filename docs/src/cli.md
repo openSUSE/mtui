@@ -870,7 +870,7 @@ Options:
           [default: ""]
 
   -f, --force
-          Force assign the review in Gitea even without an open group
+          Assign even if another user holds the review. OBS: never one you already hold (unassign first); Gitea: also your own, and without an open group
 
   -h, --help
           Print help

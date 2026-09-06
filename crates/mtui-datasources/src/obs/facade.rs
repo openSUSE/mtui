@@ -137,8 +137,9 @@ impl Osc {
 
     /// Assign the review to the acting user for the resolved group(s).
     ///
-    /// `force` takes over a group another user holds; an approved group is
-    /// refused regardless.
+    /// `force` takes over a group another user holds. An approved group, and one
+    /// the caller already holds, are refused regardless — Gitea's `force` re-posts
+    /// the caller's own assignment, this one will not (see [`qam`]).
     ///
     /// # Errors
     ///

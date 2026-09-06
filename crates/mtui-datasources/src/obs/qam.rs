@@ -169,6 +169,10 @@ async fn resolve_assign_groups(
 /// another user (unless `force`) or by `user` themselves: OBS's `assignreview`
 /// checks none of that and would open a fresh review on an approved request
 /// (#599).
+///
+/// `force` does not lift the caller's own hold, as Gitea's does: the re-assign
+/// changes no OBS state and only appends a reopen, which `inference` replays as
+/// a revert when the caller's user review carries no placeable assign event.
 fn refuse_held(
     request: &models::Request,
     group: &str,
