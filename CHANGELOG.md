@@ -27,6 +27,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   tools, and `all_templates` from `regenerate`. `load_template` refuses a call
   still passing one with `unknown argument(s): …`; the others accept and ignore
   it for one release (see Deprecated).
+- The `--all-templates` help — the MCP `all_templates` description on every
+  fan-out-capable tool — states each scope's default in one clause instead of
+  restating the whole fan-out contract (#597): about 2.7 KB less on every
+  `tools/list`. Wording only; the resolver is unchanged.
 
 ### Deprecated
 
