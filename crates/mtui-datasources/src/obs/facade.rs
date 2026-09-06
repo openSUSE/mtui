@@ -137,16 +137,19 @@ impl Osc {
 
     /// Assign the review to the acting user for the resolved group(s).
     ///
+    /// `force` takes over a group another user holds; an approved group is
+    /// refused regardless.
+    ///
     /// # Errors
     ///
     /// Returns [`ObsError`] on any credential, transport, parse, or
     /// workflow-precondition failure (the failure is also logged).
-    pub async fn assign(&self, groups: &[String]) -> Result<(), ObsError> {
+    pub async fn assign(&self, groups: &[String], force: bool) -> Result<(), ObsError> {
         let cfg = self.config.clone();
         let rrid = self.rrid.clone();
         let groups = groups.to_vec();
         self.run(move |client, user| async move {
-            qam::assign(&client, &cfg.reports_url, &rrid, &user, &groups).await
+            qam::assign(&client, &cfg.reports_url, &rrid, &user, &groups, force).await
         })
         .await
     }

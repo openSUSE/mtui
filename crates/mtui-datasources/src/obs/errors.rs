@@ -61,8 +61,8 @@ pub enum ObsError {
 
     /// A QAM operation refused a workflow precondition: an empty comment, an
     /// ambiguous auto-inferred group, a request not open for review, a
-    /// missing/wrong-`SUMMARY` testreport, the previous-decline guard, or the
-    /// group-approve refusal.
+    /// missing/wrong-`SUMMARY` testreport, the previous-decline guard, the
+    /// group-approve refusal, or an assign onto an approved or held group.
     ///
     /// Distinct from [`Parse`](ObsError::Parse) (malformed XML) so the `OSC`
     /// facade can tell a workflow refusal apart from a transport/parse fault
