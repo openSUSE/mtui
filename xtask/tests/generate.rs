@@ -122,6 +122,39 @@ fn cli_reference_lists_known_commands_with_aliases() {
     assert!(doc.contains("`-T/--template <RRID>`") && doc.contains("`--all-templates`"));
 }
 
+/// The preamble's session-level list is hand-written, so pin it to the
+/// registry: every command that addresses no template, and each of that
+/// command's aliases, has to be named there. The per-command `*Aliases:*` line
+/// `cli_reference_lists_known_commands_with_aliases` matches sits below the
+/// preamble and cannot catch a gap here.
+#[test]
+fn cli_reference_preamble_names_every_session_level_command_and_alias() {
+    let doc = render_cli_reference();
+    let preamble = doc
+        .split("\n## `")
+        .next()
+        .expect("the preamble precedes the first command heading");
+    let registry = mtui_core::register_all();
+    for name in registry.names() {
+        let command = registry
+            .get(name)
+            .expect("registry.names() yields registered keys");
+        if mtui_core::addresses_template(command.as_ref()) {
+            continue;
+        }
+        assert!(
+            preamble.contains(&format!("`{name}`")),
+            "preamble omits the session-level command `{name}`"
+        );
+        for alias in command.aliases() {
+            assert!(
+                preamble.contains(&format!("`{alias}`")),
+                "preamble omits `{name}`'s alias `{alias}`"
+            );
+        }
+    }
+}
+
 #[test]
 fn generate_docs_into_is_idempotent() {
     let dir = tempfile::tempdir().expect("tempdir");

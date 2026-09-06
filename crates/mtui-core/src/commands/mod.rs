@@ -1441,6 +1441,57 @@ mod explicit_and_fanout_scope_guard {
     }
 }
 
+/// Registry-wide guard that every parser declares exactly the template flags
+/// its scope earns (#597) — a `Scope::Single` command can never regain the
+/// inert `--all-templates` — and that opting out of the resolved report
+/// (`reads_resolved_report` false, pinned by name in `registry::tests`) comes
+/// with `Scope::Single`, the only scope where that opt-out means anything.
+#[cfg(test)]
+mod session_level_scope_guard {
+    use crate::command::Scope;
+    use crate::engine::command_parser;
+    use crate::{Command, addresses_template, register_all};
+
+    fn has_arg(command: &dyn Command, id: &str) -> bool {
+        command_parser(command)
+            .get_arguments()
+            .any(|a| a.get_id().as_str() == id)
+    }
+
+    #[test]
+    fn report_independent_commands_are_single_scope() {
+        let registry = register_all();
+        for name in registry.names() {
+            let command = registry.get(name).expect("registered");
+            if !command.reads_resolved_report() {
+                assert_eq!(
+                    command.scope(),
+                    Scope::Single,
+                    "{name:?} ignores the resolved report but is not Scope::Single",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_parser_declares_the_flags_its_scope_earns() {
+        let registry = register_all();
+        for name in registry.names() {
+            let command = registry.get(name).expect("registered");
+            assert_eq!(
+                has_arg(command.as_ref(), "template"),
+                addresses_template(command.as_ref()),
+                "{name:?}: -T/--template must follow addresses_template()",
+            );
+            assert_eq!(
+                has_arg(command.as_ref(), "all_templates"),
+                command.scope() != Scope::Single,
+                "{name:?}: --all-templates is inert on Scope::Single",
+            );
+        }
+    }
+}
+
 /// Registry-wide guard that every command's full parser — base template flags
 /// plus its own [`Command::configure`](crate::Command::configure) surface —
 /// builds without a clap arg-id/short/long collision. `testkit::matches`

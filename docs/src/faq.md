@@ -20,10 +20,11 @@ Yes. Set `template_dir` under `[mtui]` in your config file, or export
 
 Yes. Load more than one testreport and each is a *template* in the session:
 `list_templates` shows the loaded set and `switch` changes the active one. A
-command runs against the active template by default; scope it to one with
-`-T <RRID>`/`--template <RRID>`, or fan out across all loaded templates with
-`--all-templates`. Under fan-out each template gets its own `=== <RRID> ===`
-banner.
+command that acts on a template runs against the active one by default
+(session-level commands such as `list_templates`, `updates` or `config` take no
+template flag); scope it with `-T <RRID>`/`--template <RRID>`, or fan out with
+`--all-templates` where the command allows it. Under fan-out each template gets
+its own `=== <RRID> ===` banner.
 
 ## Can I run mtui without loading a testreport?
 

@@ -44,6 +44,7 @@ nstaller = "nstaller"
 # wrong spelling is the point (see tools.rs).
 attribut = "attribut"
 mesage = "mesage"
+temlate = "temlate"
 # A partial-read test slice: b"ome\n" is the tail of "welcome\n" read through a
 # 4-byte buffer in the SSH integration suite.
 ome = "ome"

@@ -18,7 +18,7 @@
 
 use clap::ArgMatches;
 
-use crate::command::{Command, Scope};
+use crate::command::{Command, Scope, addresses_template};
 use crate::error::CommandError;
 use crate::registry::Registry;
 use crate::session::Session;
@@ -154,7 +154,9 @@ fn render_help(
         message: format!("No help available: '{topic}' is not a known command"),
         help_or_version: false,
     })?;
-    let mut base = base_subcommand(command.name(), command.scope());
+    // Same base and `configure` as dispatch, so the flags shown are the flags
+    // accepted; `configure` may override the trait's `about`.
+    let mut base = base_subcommand(command.as_ref());
     if let Some(about) = command.about() {
         base = base.about(about);
     }
@@ -213,7 +215,7 @@ fn print_help_columns(session: &mut Session, names: &[&str]) {
 /// reconstructs argv from it, locking schema/argv fidelity to real dispatch.
 #[must_use]
 pub fn command_parser(command: &dyn Command) -> clap::Command {
-    command.configure(base_subcommand(command.name(), command.scope()))
+    command.configure(base_subcommand(command))
 }
 
 /// Builds `command`'s clap parser and parses `argv` into [`ArgMatches`] without
@@ -234,15 +236,29 @@ fn parse_command(command: &dyn Command, argv: &[String]) -> Result<ArgMatches, E
 
 /// The base clap parser shared by every command: `no_binary_name(true)` (argv is
 /// the command's own arguments, with no leading binary to strip) plus the
-/// template-selection flags every command honours through [`Command::run`]'s
-/// fan-out resolver, so [`configure`](Command::configure) need only add the
-/// command's own arguments.
+/// template-selection flags [`Command::run`]'s fan-out resolver honours, so
+/// [`configure`](Command::configure) need only add the command's own arguments.
+/// A command that addresses no template ([`addresses_template`]) gets neither
+/// flag, and a [`Scope::Single`] one never gets `--all-templates`: the resolver
+/// returns before reading it, so declaring it would promise a fan-out that
+/// cannot happen (#597).
 ///
-/// `scope` picks the `--all-templates` help text truthfully per command
+/// The scope picks the `--all-templates` help text truthfully per command
 /// (#575): the LLM-facing half of the fan-out fix, since the tool schema
 /// description is what an MCP client actually reads.
-fn base_subcommand(name: &'static str, scope: Scope) -> clap::Command {
-    let all_templates_help = match scope {
+fn base_subcommand(command: &dyn Command) -> clap::Command {
+    let mut cmd = clap::Command::new(command.name()).no_binary_name(true);
+    if addresses_template(command) {
+        cmd = cmd.arg(
+            clap::Arg::new("template")
+                .short('T')
+                .long("template")
+                .value_name("RRID")
+                .help("RRID of a single loaded template to act on"),
+        );
+    }
+    let all_templates_help = match command.scope() {
+        Scope::Single => return cmd,
         Scope::Fanout => {
             "Act on every loaded template (the default for this command); \
              --all-templates=false narrows to one instead"
@@ -252,35 +268,26 @@ fn base_subcommand(name: &'static str, scope: Scope) -> clap::Command {
              implicitly fans out — it acts on the active template (or the sole \
              one loaded), refusing headlessly with several loaded and none named"
         }
-        Scope::Active | Scope::Single => {
+        Scope::Active => {
             "Act on every loaded template (bare); this command otherwise acts on \
              the active template, fanning out only headlessly with several \
              loaded and none named"
         }
     };
 
-    clap::Command::new(name)
-        .no_binary_name(true)
-        .arg(
-            clap::Arg::new("template")
-                .short('T')
-                .long("template")
-                .value_name("RRID")
-                .help("RRID of a single loaded template to act on"),
-        )
-        .arg(
-            clap::Arg::new("all_templates")
-                .long("all-templates")
-                .action(clap::ArgAction::Set)
-                .value_parser(clap::value_parser!(bool))
-                .num_args(0..=1)
-                // Mandatory, not style: without it `--all-templates uname -a`
-                // parses `uname` as the flag's own value.
-                .require_equals(true)
-                .default_missing_value("true")
-                .conflicts_with("template")
-                .help(all_templates_help),
-        )
+    cmd.arg(
+        clap::Arg::new("all_templates")
+            .long("all-templates")
+            .action(clap::ArgAction::Set)
+            .value_parser(clap::value_parser!(bool))
+            .num_args(0..=1)
+            // Mandatory, not style: without it `--all-templates uname -a`
+            // parses `uname` as the flag's own value.
+            .require_equals(true)
+            .default_missing_value("true")
+            .conflicts_with("template")
+            .help(all_templates_help),
+    )
 }
 
 #[cfg(test)]
@@ -535,6 +542,64 @@ mod tests {
         }
     }
 
+    /// A session-level command: `Scope::Single` and ignores the resolved
+    /// report, like `whoami` / `list_templates`.
+    struct SessionLevelCmd;
+
+    #[async_trait]
+    impl Command for SessionLevelCmd {
+        fn name(&self) -> &'static str {
+            "sessionlevel"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Single
+        }
+        fn reads_resolved_report(&self) -> bool {
+            false
+        }
+        async fn call(&self, _s: &mut Session, _a: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    /// The other `Scope::Single` kind, reading what it was handed, like
+    /// `regenerate`.
+    struct SingleReadingCmd;
+
+    #[async_trait]
+    impl Command for SingleReadingCmd {
+        fn name(&self) -> &'static str {
+            "singlereading"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Single
+        }
+        async fn call(&self, _s: &mut Session, _a: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    fn has_arg(command: &dyn Command, id: &str) -> bool {
+        command_parser(command)
+            .get_arguments()
+            .any(|a| a.get_id().as_str() == id)
+    }
+
+    #[test]
+    fn single_non_reading_command_declares_no_template_flags() {
+        assert!(!has_arg(&SessionLevelCmd, "template"));
+        assert!(!has_arg(&SessionLevelCmd, "all_templates"));
+        // Anti-vacuity: the default-scope parser still carries both.
+        assert!(has_arg(&RunLikeCmd, "template"));
+        assert!(has_arg(&RunLikeCmd, "all_templates"));
+    }
+
+    #[test]
+    fn single_report_reading_command_keeps_template_but_not_all_templates() {
+        assert!(has_arg(&SingleReadingCmd, "template"));
+        assert!(!has_arg(&SingleReadingCmd, "all_templates"));
+    }
+
     fn all_templates_help(command: &dyn Command) -> String {
         command_parser(command)
             .get_arguments()
@@ -578,6 +643,7 @@ mod tests {
         r.register(Arc::new(crate::commands::Help));
         r.register(Arc::new(DocCmd));
         r.register(Arc::new(EchoCmd::default()));
+        r.register(Arc::new(SessionLevelCmd));
         let (s, buf) = crate::commands::testkit::empty_session();
         (r, s, buf)
     }
@@ -619,6 +685,108 @@ mod tests {
         assert!(out.contains("doc"));
         assert!(out.contains("--all-templates"));
         assert!(out.contains("a documented command"));
+    }
+
+    /// A command whose `configure` sets its own `about`, like `config`'s
+    /// subcommands do.
+    struct ConfiguredAboutCmd;
+
+    #[async_trait]
+    impl Command for ConfiguredAboutCmd {
+        fn name(&self) -> &'static str {
+            "configuredabout"
+        }
+        fn about(&self) -> Option<&'static str> {
+            Some("trait about")
+        }
+        fn configure(&self, cmd: clap::Command) -> clap::Command {
+            cmd.about("configured about")
+        }
+        async fn call(&self, _s: &mut Session, _a: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    /// `configure` runs after the trait's `about`, so a command that sets its
+    /// own wins — the same precedence `command_parser` gives dispatch.
+    #[tokio::test]
+    async fn help_topic_prefers_the_about_configure_sets() {
+        let mut r = Registry::new();
+        r.register(Arc::new(crate::commands::Help));
+        r.register(Arc::new(ConfiguredAboutCmd));
+        let (mut s, buf) = crate::commands::testkit::empty_session();
+        dispatch_line(&r, &mut s, "help configuredabout")
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(out.contains("configured about"), "{out}");
+        assert!(!out.contains("trait about"), "{out}");
+    }
+
+    /// `help <topic>` renders the dispatch parser, so a session-level command
+    /// shows no `-T`/`--all-templates` it would then reject.
+    #[tokio::test]
+    async fn help_topic_omits_template_flags_for_a_session_level_command() {
+        let (r, mut s, buf) = help_registry_and_session();
+        dispatch_line(&r, &mut s, "help sessionlevel")
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Usage:"), "{out}");
+        assert!(!out.contains("--template"), "{out}");
+        assert!(!out.contains("--all-templates"), "{out}");
+    }
+
+    /// The parser really rejects `-T` for a session-level command — not just
+    /// the schema omitting it.
+    #[tokio::test]
+    async fn session_level_command_rejects_template_flag_at_dispatch() {
+        let mut r = Registry::new();
+        r.register(Arc::new(SessionLevelCmd));
+        let mut s = session();
+        let err = dispatch_line(&r, &mut s, "sessionlevel -T SUSE:Maintenance:1:1")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EngineError::Parse { help_or_version: false, ref message }
+                if message.contains("'-T'")),
+            "{err:?}"
+        );
+    }
+
+    /// The real registry, end to end: `help <topic>` shows exactly the flags
+    /// dispatch accepts, and `regenerate --all-templates` is a parse error
+    /// rather than a silently inert flag.
+    #[tokio::test]
+    async fn real_registry_help_and_parse_follow_the_template_predicate() {
+        let r = crate::register_all();
+        for (topic, template, all_templates) in [
+            ("unload", false, false),
+            ("regenerate", true, false),
+            ("list_hosts", true, true),
+        ] {
+            let (mut s, buf) = crate::commands::testkit::empty_session();
+            dispatch_line(&r, &mut s, &format!("help {topic}"))
+                .await
+                .unwrap();
+            let out = buf.contents();
+            assert!(out.contains("Usage:"), "{topic}: {out}");
+            assert_eq!(out.contains("--template"), template, "{topic}: {out}");
+            assert_eq!(
+                out.contains("--all-templates"),
+                all_templates,
+                "{topic}: {out}"
+            );
+        }
+        let mut s = session();
+        let err = dispatch_line(&r, &mut s, "regenerate --all-templates")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EngineError::Parse { help_or_version: false, ref message }
+                if message.contains("--all-templates")),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

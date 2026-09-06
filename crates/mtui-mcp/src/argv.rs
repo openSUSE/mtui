@@ -419,9 +419,12 @@ mod tests {
 
     #[test]
     fn base_template_flag_round_trips() {
-        let out = argv("whoami", json!({ "template": "SUSE:Maintenance:1:1" }));
+        let out = argv(
+            "list_products",
+            json!({ "template": "SUSE:Maintenance:1:1" }),
+        );
         assert_eq!(out, vec!["--template", "SUSE:Maintenance:1:1"]);
-        assert_reparses("whoami", &out);
+        assert_reparses("list_products", &out);
     }
 
     #[test]
@@ -429,9 +432,9 @@ mod tests {
         // `--all-templates` is a tri-state `require_equals` flag, not
         // `SetTrue`: it must emit `--flag=value` in one token, never a bare
         // flag nor a space-separated value (which `require_equals` rejects).
-        let out = argv("whoami", json!({ "all_templates": true }));
+        let out = argv("list_products", json!({ "all_templates": true }));
         assert_eq!(out, vec!["--all-templates=true"]);
-        assert_reparses("whoami", &out);
+        assert_reparses("list_products", &out);
     }
 
     #[test]

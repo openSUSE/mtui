@@ -8,6 +8,35 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Commands that address no template — `load_template`, `unload`, `list_templates`,
+  `list_refhosts`, `updates`, `config`, `whoami`, `set_log_level`, and the REPL-only
+  `quit` (`exit`/`EOF`) and `switch` — no longer accept `-T/--template` or
+  `--all-templates`, which were inert there; on `load_template`, `-T` even failed
+  the call before it ran (#597). `regenerate` keeps `-T` but drops the equally
+  inert `--all-templates`. `whoami` and `set_log_level` now run exactly once
+  headlessly with several templates loaded instead of fanning out N identical
+  copies, and join the commands the #524 busy refusal
+  leaves alone: with the active template's entry held by another dispatch they
+  answer instead of failing with `template busy: <rrid>`, since neither reads
+  it. A backgrounded `load_template` is no longer pinned to whichever template
+  was active when it was queued. **MCP schema note:** the `template` and
+  `all_templates` properties are gone from the `load_template`, `unload`,
+  `list_templates`, `list_refhosts`, `updates`, `whoami` and `set_log_level`
+  tools, and `all_templates` from `regenerate`. `load_template` refuses a call
+  still passing one with `unknown argument(s): …`; the others accept and ignore
+  it for one release (see Deprecated).
+
+### Deprecated
+
+- MCP: the `template` and `all_templates` keys on the `unload`, `list_templates`,
+  `list_refhosts`, `updates`, `whoami` and `set_log_level` tools, and
+  `all_templates` on `regenerate`. Gone from the schemas (see Changed), they are
+  still accepted — ignored, with a warning in the server log — so a client
+  pinned to the old schemas keeps working; 26.5 refuses them as
+  `unknown argument(s): …` (`crates/mtui-mcp/src/tools.rs::DEPRECATED_KWARGS`).
+
 ### Fixed
 
 - `mtui-mcp` over stdio now advertises the `2026-07-28` protocol revision, so

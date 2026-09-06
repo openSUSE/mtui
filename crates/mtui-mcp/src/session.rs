@@ -257,8 +257,9 @@ struct Job {
     /// the RRID only as a `:`-mangled string.
     ///
     /// **Empty** means the scope is unknown (the synchronous
-    /// [`start_job`](McpSession::start_job) cannot resolve, and an argv resolving
-    /// to nothing real has no scope). The cancel path then falls back to every
+    /// [`start_job`](McpSession::start_job) cannot resolve, an argv resolving
+    /// to nothing real has no scope, and a command that addresses no template
+    /// has none). The cancel path then falls back to every
     /// loaded template — the conservative answer for a dispatch that may have
     /// held the registry gate exclusively and locked hosts across all of them.
     rrids: Vec<String>,
@@ -647,6 +648,9 @@ impl McpSession {
             // registry snapshot are discarded, so the mutation would be lost
             // unless it runs against the canonical session.
             Some(command) if command.requires_canonical_session(argv) => None,
+            // Unlike `resolve_job_rrids`, not gated on `addresses_template`: a
+            // session-level command still takes the active template's per-RRID
+            // lock here (#603).
             Some(command) => {
                 let session = self.session.lock().await;
                 resolve_command_rrids(command.as_ref(), &session, argv)
@@ -1037,8 +1041,9 @@ impl McpSession {
     /// Resolve the target RRIDs for a backgrounded fan-out, exactly as the
     /// foreground dispatch does (via [`resolve_command_rrids`], applying the
     /// command's own [`Scope`](mtui_core::Scope) against the loaded set), so the
-    /// two match. `None` means resolution is not meaningful (unparseable argv, or
-    /// only the Null report resolves) and the caller keeps the single-job path.
+    /// two match. `None` means resolution is not meaningful (unparseable argv,
+    /// only the Null report resolves, or the command addresses no template) and
+    /// the caller keeps the single-job path.
     async fn resolve_job_rrids(
         &self,
         registry: &Registry,
@@ -1046,6 +1051,12 @@ impl McpSession {
         argv: &[String],
     ) -> Option<Vec<String>> {
         let command = registry.get(name)?;
+        // Nothing to pin: the parser has no `-T`, and the empty scope makes the
+        // cancel path fall back to every loaded template — where a
+        // `load_template` job's hosts are.
+        if !mtui_core::addresses_template(command.as_ref()) {
+            return None;
+        }
         let session = self.session.lock().await;
         resolve_command_rrids(command.as_ref(), &session, argv)
     }
@@ -1245,7 +1256,8 @@ impl McpSession {
     /// mint and dispatch later: a `load_template` in between would otherwise
     /// widen an unscoped dispatch beyond what the job record names, and a cancel
     /// would strand the unrecorded template's locks behind a success-shaped
-    /// reply.
+    /// reply. A command that addresses no template
+    /// ([`mtui_core::addresses_template`]) gets neither the `-T` nor a scope.
     ///
     /// # Errors
     ///
@@ -2085,8 +2097,8 @@ mod tests {
     async fn command_lock_unscoped_is_exclusive() {
         let sess = session(Config::default());
         let registry = register_all();
-        // `whoami` is `Scope::Active`; with nothing loaded it resolves to the
-        // empty null RRID, which `resolve_command_rrids` drops → exclusive.
+        // `whoami` addresses no template; with nothing loaded it resolves to
+        // the empty null RRID, which `resolve_command_rrids` drops → exclusive.
         let lock = sess.command_lock(&registry, "whoami", &[]).await;
         assert!(matches!(lock, CommandLock::Exclusive(_)));
     }
@@ -2688,6 +2700,64 @@ mod tests {
         );
     }
 
+    /// A probe that addresses no template and records whether a `-T` reached it.
+    struct RecordNoTemplate(Arc<StdMutex<Vec<Option<String>>>>);
+
+    #[async_trait::async_trait]
+    impl mtui_core::Command for RecordNoTemplate {
+        fn name(&self) -> &'static str {
+            "record_no_template_probe"
+        }
+        fn scope(&self) -> mtui_core::Scope {
+            mtui_core::Scope::Single
+        }
+        fn reads_resolved_report(&self) -> bool {
+            false
+        }
+        async fn call(
+            &self,
+            _session: &mut Session,
+            args: &clap::ArgMatches,
+        ) -> mtui_core::CommandResult {
+            self.0.lock().unwrap().push(
+                args.try_get_one::<String>("template")
+                    .ok()
+                    .flatten()
+                    .cloned(),
+            );
+            Ok(())
+        }
+    }
+
+    /// A backgrounded session-level command (`load_template` is one) is not
+    /// pinned to whichever template was active at mint: its parser declares no
+    /// `-T`, so the pin would be a parse error at dispatch, and it records no
+    /// scope (#597).
+    #[tokio::test]
+    async fn start_jobs_does_not_pin_a_session_level_command() {
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[]).await;
+        let mut registry = register_all();
+        registry.register(Arc::new(RecordNoTemplate(Arc::clone(&seen))));
+
+        let ids = sess
+            .start_jobs(Arc::new(registry), "record_no_template_probe", Vec::new())
+            .await
+            .expect("start_jobs succeeds");
+        assert_eq!(ids.len(), 1);
+        for _ in 0..2000 {
+            if sess.job_status(&ids[0]).expect("job exists").state != JobState::Running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(sess.job_status(&ids[0]).unwrap().state, JobState::Done);
+        assert_eq!(*seen.lock().unwrap(), vec![None]);
+        let jobs = sess.jobs.lock().unwrap();
+        assert!(jobs[&ids[0]].lock().unwrap().rrids.is_empty());
+    }
+
     /// #405 headline: a job force-aborted mid host-operation has its lock
     /// released on every host of the template it was scoped to, and the reply
     /// names them. Driven through the real `run`, where the abort genuinely
@@ -2772,6 +2842,42 @@ mod tests {
             out.contains("host-alpha"),
             "a lingering active guard sent the dispatch to the null report: {out:?}"
         );
+    }
+
+    /// `whoami` reads no report, so #524's busy refusal leaves it alone: it
+    /// still answers with the active template's entry held by another dispatch
+    /// (#597). The hold is on the **entry** alone — the guard an aborted
+    /// exclusive dispatch leaves behind — because `command_lock` still takes a
+    /// session-level command's active per-RRID lock (#603), which would
+    /// serialise this instead of exercising the exemption.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn whoami_answers_while_the_active_entry_is_held() {
+        let sess = session(Config::default());
+        load_with_hosts(&sess, LOCK_RRID_A, &[]).await;
+        let registry = Arc::new(register_all());
+        let entry = sess
+            .session()
+            .lock()
+            .await
+            .templates
+            .handle(LOCK_RRID_A)
+            .expect("A is loaded");
+
+        let held = entry.lock_owned().await;
+        let contended = sess
+            .run_command(&registry, "whoami", &[])
+            .await
+            .expect("whoami answers with the active entry held");
+        drop(held);
+        assert!(contended.contains("User: "), "{contended}");
+
+        // Anti-vacuity: uncontended must give the same answer, so the assert
+        // above is about the hold and not about `whoami` at large.
+        let free = sess
+            .run_command(&registry, "whoami", &[])
+            .await
+            .expect("uncontended whoami answers");
+        assert_eq!(contended, free);
     }
 
     /// #524, generalising the `list_hosts` symptom above to a *path*-taking

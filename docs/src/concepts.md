@@ -15,8 +15,10 @@ becomes active. Each template owns its own reference hosts and its own report.
 marked `*`), [`switch`](cli.md#switch) changes the active one, and
 [`unload`](cli.md#unload) drops one (closing only *its* host connections).
 
-Navigation and single-target commands (`load_template`, `edit`, `switch`,
-`unload`, `quit`) always act on the active template.
+Session-level commands (`load_template`, `unload`, `switch`, `list_templates`,
+`list_refhosts`, `updates`, `config`, `whoami`, `set_log_level`, `help`, `quit`)
+take no template flag: each runs exactly once, never fans out, and accepts
+neither `-T` nor `--all-templates`.
 
 ## Fan-out across templates
 
@@ -58,9 +60,8 @@ nowhere and fails with "No refhosts defined". Naming a disconnected host with
 `-t <host>` is still a per-template failure, and a `-T`-scoped call keeps
 single-template error behaviour.
 
-The queue-browsing [`updates`](cli.md#updates) command is not template-scoped and
-does not fan out. [`regenerate`](cli.md#regenerate) acts on the active template by
-default.
+[`regenerate`](cli.md#regenerate) also runs exactly once, on the active template
+by default; `-T` names another loaded one.
 
 Over MCP the same model applies through per-call `template=` / `all_templates=`
 parameters — see [MCP server](mcp.md#multiple-templates-scoping-and-fan-out).

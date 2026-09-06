@@ -35,6 +35,15 @@ impl Command for SetLogLevel {
         Some("Changes the current mtui log level.")
     }
 
+    fn scope(&self) -> Scope {
+        Scope::Single
+    }
+
+    fn reads_resolved_report(&self) -> bool {
+        // Session log sink; no report involved.
+        false
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("level")
@@ -259,7 +268,7 @@ async fn refresh_auto(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{empty_session, fake_report, matches, session_with_hosts};
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -309,6 +318,44 @@ mod tests {
         let args = matches(&SetLogLevel, &["debug"]);
         // No sink installed (headless): still Ok, just logs.
         SetLogLevel.call(&mut session, &args).await.unwrap();
+    }
+
+    /// Headless with several templates loaded the level is set once, not once
+    /// per template under a banner (#597).
+    #[tokio::test]
+    async fn set_log_level_runs_once_headless_with_several_templates_loaded() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+        assert!(!session.is_repl && session.templates.len() == 2);
+        let args = matches(&SetLogLevel, &["warning"]);
+        SetLogLevel.run(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert_eq!(out.matches("Log level set to warning").count(), 1, "{out}");
+        assert!(!out.contains("=== "), "{out}");
+    }
+
+    /// `set_log_level` reads no report either, so #524's busy refusal leaves it
+    /// alone: it runs with the active template's entry held by another dispatch
+    /// instead of failing `template busy` (#597).
+    #[tokio::test]
+    async fn set_log_level_runs_against_a_held_active_entry() {
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.release_active_guard();
+        let entry = session
+            .templates
+            .handle("SUSE:Maintenance:1:1")
+            .expect("seeded");
+        let _held = entry.try_lock_owned().expect("uncontended");
+
+        let args = matches(&SetLogLevel, &["warning"]);
+        SetLogLevel
+            .run(&mut session, &args)
+            .await
+            .expect("a report-free Single-scope command answers a held entry");
+        let out = buf.contents();
+        assert_eq!(out.matches("Log level set to warning").count(), 1, "{out}");
     }
 
     // --- SetWorkflow ---
