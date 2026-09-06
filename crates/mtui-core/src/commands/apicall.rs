@@ -544,9 +544,11 @@ mod tests {
         let res = Assign.call(&mut session, &args).await;
         // SAFETY: still inside that critical section.
         unsafe { std::env::remove_var("OSC_CONFIG") };
-        if let Err(e) = res {
-            assert!(matches!(e, CommandError::Other(m) if m.contains("osc assign failed")));
-        }
+        let err = res.unwrap_err();
+        assert!(
+            matches!(err, CommandError::Other(ref m) if m.contains("osc assign failed")),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
