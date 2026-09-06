@@ -58,6 +58,11 @@ pub struct Review {
     pub(crate) by_group: Option<String>,
     /// The reviewing user (`by_user`), when the review targets a user.
     pub(crate) by_user: Option<String>,
+    /// The review's own `when` attribute; empty when absent, as it is on the
+    /// group reviews OBS serves.
+    pub(crate) when: String,
+    /// The review's own `<comment>` (OBS's reason), trimmed; empty when absent.
+    pub(crate) comment: String,
     /// The nested `<history>` events (`withfullhistory=1`).
     pub(crate) history: Vec<HistoryEvent>,
 }
@@ -131,9 +136,14 @@ fn parse_review(
         state: attr(start, "state").unwrap_or_default(),
         by_group: attr(start, "by_group"),
         by_user: attr(start, "by_user"),
+        when: attr(start, "when").unwrap_or_default(),
+        comment: String::new(),
         history: Vec::new(),
     };
 
+    // A `<history>`'s own `<comment>` is consumed by `parse_history`, so only
+    // the review's direct child lands here.
+    let mut in_comment = false;
     loop {
         buf.clear();
         match reader
@@ -143,6 +153,15 @@ fn parse_review(
             Event::Start(e) if e.local_name().as_ref() == "history" => {
                 let ev = parse_history(reader, &mut Vec::new(), &e)?;
                 review.history.push(ev);
+            }
+            Event::Start(e) if e.local_name().as_ref() == "comment" => {
+                in_comment = true;
+            }
+            Event::Text(e) if in_comment => {
+                review.comment.push_str(&e);
+            }
+            Event::End(e) if e.local_name().as_ref() == "comment" => {
+                in_comment = false;
             }
             Event::Empty(e) if e.local_name().as_ref() == "history" => {
                 review.history.push(HistoryEvent {
@@ -156,6 +175,7 @@ fn parse_review(
             _ => {}
         }
     }
+    review.comment = review.comment.trim().to_owned();
     Ok(review)
 }
 
@@ -240,6 +260,8 @@ fn parse_request_element(
                     state: attr(&e, "state").unwrap_or_default(),
                     by_group: attr(&e, "by_group"),
                     by_user: attr(&e, "by_user"),
+                    when: attr(&e, "when").unwrap_or_default(),
+                    comment: String::new(),
                     history: Vec::new(),
                 });
             }
@@ -462,6 +484,53 @@ mod tests {
             .find(|r| r.by_user.as_deref() == Some("anon"))
             .unwrap();
         assert_eq!(user_review.by_group, None);
+    }
+
+    const REASSIGNED_XML: &str = r#"
+<request id="43">
+  <review state="new" when="2026-09-06T11:24:48" who="alice" by_user="alice">
+    <comment>reassigned review for group qam-sle to user alice</comment>
+    <history who="alice" when="2026-09-06T11:24:48">
+      <description>Review got assigned</description>
+      <comment>nested</comment>
+    </history>
+  </review>
+  <state name="review"/>
+</request>
+"#;
+
+    #[test]
+    fn parse_request_review_when_on_both_review_forms() {
+        let anon = parse_request(REQUEST_XML).unwrap();
+        let anon = anon
+            .reviews
+            .iter()
+            .find(|r| r.by_user.as_deref() == Some("anon"))
+            .unwrap();
+        assert_eq!(anon.when, "2014-11-14T11:12:53");
+        let alice = parse_request(REASSIGNED_XML).unwrap();
+        assert_eq!(alice.reviews[0].when, "2026-09-06T11:24:48");
+    }
+
+    #[test]
+    fn parse_request_review_comment_is_the_direct_child_only() {
+        let alice = parse_request(REASSIGNED_XML).unwrap();
+        assert_eq!(
+            alice.reviews[0].comment,
+            "reassigned review for group qam-sle to user alice"
+        );
+        assert_eq!(
+            alice.reviews[0].history[0].description,
+            "Review got assigned"
+        );
+        // REQUEST_XML's only `<comment>` sits inside `<history>`.
+        let req = parse_request(REQUEST_XML).unwrap();
+        let sle = req
+            .reviews
+            .iter()
+            .find(|r| r.by_group.as_deref() == Some("qam-sle"))
+            .unwrap();
+        assert_eq!(sle.comment, "");
     }
 
     #[test]
