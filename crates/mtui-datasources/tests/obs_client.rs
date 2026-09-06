@@ -13,20 +13,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::log_capture::capture_logs;
-use mtui_datasources::VerifyPolicy;
 use mtui_datasources::obs::{NoAuth, ObsClient, ObsError};
+use mtui_datasources::{HttpClient, VerifyPolicy};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Build a client whose API base is `server`, with a generous budget + NoAuth.
 fn client_for(server: &MockServer) -> ObsClient {
-    ObsClient::new(
+    ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
         &server.uri(),
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(NoAuth),
     )
-    .expect("client builds")
 }
 
 #[tokio::test]
@@ -128,13 +127,12 @@ async fn between_calls_budget_aborts_next_call() {
     // A zero budget means the deadline is already in the past by the time the
     // first call checks it.
     let server = MockServer::start().await;
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
         &server.uri(),
         Duration::from_secs(0),
-        VerifyPolicy::Default(true),
         Arc::new(NoAuth),
-    )
-    .expect("client builds");
+    );
 
     let err = client
         .get("request/1", &[])
@@ -148,13 +146,12 @@ async fn transport_error_maps_to_http_variant() {
     // Loopback discard port (RFC 863): nothing listens, so the request fails at
     // the transport layer. A dropped MockServer's port could be reused by
     // another test, hence the fixed address.
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
         "http://127.0.0.1:9",
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(NoAuth),
-    )
-    .expect("client builds");
+    );
 
     let err = client
         .get("request/1", &[])
@@ -177,13 +174,12 @@ async fn logs_and_api_error_redact_url_credentials() {
 
     // Embed credentials in the API base authority.
     let base = server.uri().replace("http://", "http://user:s3cret@");
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
         &base,
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(NoAuth),
-    )
-    .expect("client builds");
+    );
 
     let mut err = String::new();
     let logs = capture_logs(|| async {
@@ -214,13 +210,12 @@ async fn logs_and_api_error_redact_url_credentials() {
 #[tokio::test]
 async fn transport_error_logs_and_error_carry_no_reqwest_url() {
     // Loopback discard port (RFC 863): nothing listens, so `send` fails.
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
         "http://alice:s3cret@127.0.0.1:9",
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(NoAuth),
-    )
-    .expect("client builds");
+    );
 
     let mut err = String::new();
     let mut dbg = String::new();
@@ -275,13 +270,12 @@ async fn transport_error_logs_and_error_carry_no_reqwest_url() {
 /// the one site where the credential (not merely the URL) was reachable.
 #[tokio::test]
 async fn budget_timeout_message_redacts_url_credentials() {
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).expect("client builds"),
         "http://alice:s3cret@127.0.0.1:9",
         Duration::from_secs(0),
-        VerifyPolicy::Default(true),
         Arc::new(NoAuth),
-    )
-    .expect("client builds");
+    );
 
     let err = client
         .get("request/1", &[])
