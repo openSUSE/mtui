@@ -52,17 +52,62 @@ fn request_xml(state: &str, reviews: &str) -> String {
     )
 }
 
-fn group_review(group: &str, state: &str, events: &[(&str, &str, &str)]) -> String {
-    let hist: String = events
+fn history(events: &[(&str, &str, &str)]) -> String {
+    events
         .iter()
         .map(|(w, t, d)| {
             format!("<history who='{w}' when='{t}'><description>{d}</description></history>")
         })
-        .collect();
-    format!("<review state='{state}' by_group='{group}'>{hist}</review>")
+        .collect()
+}
+
+fn group_review(group: &str, state: &str, events: &[(&str, &str, &str)]) -> String {
+    format!(
+        "<review state='{state}' by_group='{group}'>{}</review>",
+        history(events)
+    )
+}
+
+fn user_review(user: &str, state: &str, events: &[(&str, &str, &str)]) -> String {
+    format!(
+        "<review state='{state}' by_user='{user}'>{}</review>",
+        history(events)
+    )
 }
 
 const ACCEPT: &str = "Review got accepted";
+const ASSIGN: &str = "Review got assigned";
+const REOPEN: &str = "Review got reopened";
+
+// Timestamps of the request in #596 (users anonymised).
+const T_PRIOR_ASSIGN: &str = "2026-09-01T00:33:57";
+const T_PRIOR_APPROVE: &str = "2026-09-01T07:01:36";
+const T_REASSIGN: &str = "2026-09-06T08:58:47";
+
+/// The #596 shape: `prior` was assigned and approved; `USER` was then
+/// assigned on the already-accepted group review, which OBS records as a
+/// reopen by `USER`, plus `USER`'s open user review, whose `Review got
+/// assigned` carries the reopen's instant.
+fn reassigned_reviews(prior: &str) -> String {
+    format!(
+        "{}{}{}",
+        group_review(
+            "qam-sle",
+            "accepted",
+            &[(prior, T_PRIOR_ASSIGN, ACCEPT), (USER, T_REASSIGN, REOPEN)],
+        ),
+        user_review(
+            prior,
+            "accepted",
+            &[
+                (prior, T_PRIOR_ASSIGN, ASSIGN),
+                (prior, T_PRIOR_APPROVE, ACCEPT),
+            ],
+        ),
+        user_review(USER, "new", &[(USER, T_REASSIGN, ASSIGN)]),
+    )
+}
+
 // The testreport log path is `{reports_url}/{rrid}/log` where `{rrid}` is the
 // full RRID string.
 const LOG_PATH: &str = "/SUSE:Maintenance:1:56789/log";
@@ -479,6 +524,64 @@ async fn unassign_reverts_inferred_group() {
 }
 
 #[tokio::test]
+async fn unassign_reassigned_reviewer_reverts_inferred_group() {
+    let api = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &reassigned_reviews("prior-tester")),
+    )
+    .await;
+    mount_post_request(&api, "56789").await;
+
+    qam::unassign(&client_for(&api), &rrid(), USER, &[])
+        .await
+        .unwrap();
+    // One GET + exactly one POST: `query_of` returns the *first* POST and the
+    // fan-out is sorted, so a phantom revert would hide behind this assertion.
+    assert_eq!(api.received_requests().await.unwrap().len(), 2);
+    let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
+    assert_eq!(query_val(&q, "cmd"), Some("assignreview"));
+    assert_eq!(query_val(&q, "revert"), Some("1"));
+    assert_eq!(query_val(&q, "reviewer"), Some(USER));
+    assert_eq!(query_val(&q, "by_group"), Some("qam-sle"));
+}
+
+/// A group the reviewer took and gave back is no longer theirs: without
+/// `-g`, `unassign` reverts only the group they still hold.
+#[tokio::test]
+async fn unassign_skips_a_group_the_reviewer_self_reverted() {
+    let api = MockServer::start().await;
+    let reviews = format!(
+        "{}{}{}",
+        group_review(
+            "qam-sle",
+            "new",
+            &[
+                (USER, "2026-09-01T00:00:00", ACCEPT),
+                (USER, "2026-09-02T00:00:00", REOPEN),
+            ],
+        ),
+        group_review(
+            "qam-manager",
+            "new",
+            &[(USER, "2026-09-03T00:00:00", ACCEPT)],
+        ),
+        user_review(USER, "new", &[(USER, "2026-09-03T00:00:00", ASSIGN)]),
+    );
+    mount_get_request(&api, request_xml("review", &reviews)).await;
+    mount_post_request(&api, "56789").await;
+
+    qam::unassign(&client_for(&api), &rrid(), USER, &[])
+        .await
+        .unwrap();
+    assert_eq!(api.received_requests().await.unwrap().len(), 2);
+    let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
+    assert_eq!(query_val(&q, "cmd"), Some("assignreview"));
+    assert_eq!(query_val(&q, "revert"), Some("1"));
+    assert_eq!(query_val(&q, "by_group"), Some("qam-manager"));
+}
+
+#[tokio::test]
 async fn unassign_reverts_explicit_group_over_inferred() {
     let api = MockServer::start().await;
     let reviews = group_review(
@@ -542,6 +645,37 @@ async fn approve_user_path_prefixed() {
     assert_eq!(query_val(&q, "by_user"), Some(USER));
     let body = last_post_body(&api, "/request/56789").await;
     assert!(body.starts_with("[oscqam] "), "{body}");
+}
+
+/// A reviewer assigned after a prior tester approved must be able to approve:
+/// the group review's "reopened" is their assignment record.
+#[tokio::test]
+async fn approve_reassigned_reviewer_after_prior_approval() {
+    let api = MockServer::start().await;
+    let reports = MockServer::start().await;
+    mount_get_request(
+        &api,
+        request_xml("review", &reassigned_reviews("prior-tester")),
+    )
+    .await;
+    mount_log(&reports, "SUMMARY: PASSED\n").await;
+    mount_post_request(&api, "56789").await;
+
+    qam::approve(
+        &client_for(&api),
+        &reports.uri(),
+        "https://qam.suse.de/reports",
+        &rrid(),
+        USER,
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
+    assert_eq!(query_val(&q, "cmd"), Some("changereviewstate"));
+    assert_eq!(query_val(&q, "newstate"), Some("accepted"));
+    assert_eq!(query_val(&q, "by_user"), Some(USER));
 }
 
 #[tokio::test]

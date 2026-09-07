@@ -27,6 +27,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   share one connection pool instead of each operation building one or two
   clients of its own; a CA-bundle failure there now reads `could not build
   OBS client: …`, as it already does for Gitea.
+- `approve` and `unassign` now recognise a tester who was assigned with
+  `assign -g <group>` after a previous tester had already been assigned to
+  the same request (and, typically, had approved it). OBS records that
+  re-assignment as a reopen of the group review, which was read as an
+  un-assignment, so `approve` refused with `<user> is not assigned to
+  request …` and `unassign` with `holds no review assignment` (#596).
 
 ## [26.3.1] - 2026-09-02
 
