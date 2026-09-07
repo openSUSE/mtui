@@ -581,6 +581,38 @@ async fn unassign_skips_a_group_the_reviewer_self_reverted() {
     assert_eq!(query_val(&q, "by_group"), Some("qam-manager"));
 }
 
+/// The reused-review shape: `USER` approved qam-sle, then was assigned
+/// qam-manager on that same `by_user` review. Without `-g`, `unassign` must
+/// not revert the group they already approved.
+#[tokio::test]
+async fn unassign_leaves_an_approved_group_alone() {
+    let api = MockServer::start().await;
+    let reviews = format!(
+        "{}{}{}",
+        group_review("qam-sle", "accepted", &[(USER, T_PRIOR_ASSIGN, ACCEPT)]),
+        group_review("qam-manager", "new", &[(USER, T_REASSIGN, ACCEPT)]),
+        user_review(
+            USER,
+            "new",
+            &[
+                (USER, T_PRIOR_ASSIGN, ASSIGN),
+                (USER, T_PRIOR_APPROVE, ACCEPT),
+                (USER, T_REASSIGN, REOPEN),
+            ],
+        ),
+    );
+    mount_get_request(&api, request_xml("review", &reviews)).await;
+    mount_post_request(&api, "56789").await;
+
+    qam::unassign(&client_for(&api), &rrid(), USER, &[])
+        .await
+        .unwrap();
+    assert_eq!(api.received_requests().await.unwrap().len(), 2);
+    let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
+    assert_eq!(query_val(&q, "revert"), Some("1"));
+    assert_eq!(query_val(&q, "by_group"), Some("qam-manager"));
+}
+
 #[tokio::test]
 async fn unassign_reverts_explicit_group_over_inferred() {
     let api = MockServer::start().await;

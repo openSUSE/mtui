@@ -25,8 +25,10 @@
 //! The machine replays each qam group review's NESTED history in `when` order:
 //! "accepted" adds (who, group); "reopened" adds (who, group) when `who` holds
 //! an open user review whose "Review got assigned" is not later than the
-//! reopen, and removes it otherwise; "assigned" is ignored. Then every user
-//! with an accepted user review is finished and dropped.
+//! reopen, and removes it otherwise; "assigned" is ignored. An assignment is
+//! then finished — dropped — when its user approved (a "Review got accepted"
+//! on any of their user reviews) at or after the event that produced it; an
+//! accepted user review without such an event finishes all of them.
 
 use std::collections::{HashMap, HashSet};
 
@@ -84,28 +86,51 @@ fn when_key(when: &str) -> (u8, Option<NaiveDateTime>) {
 struct UserReviews<'a> {
     /// Per user, the latest placeable "Review got assigned" on an open review.
     assigned_at: HashMap<&'a str, NaiveDateTime>,
+    /// Per user, one entry per approval; `None` where it cannot be placed.
+    approvals: HashMap<&'a str, Vec<Option<NaiveDateTime>>>,
 }
 
 impl<'a> UserReviews<'a> {
     fn collect(request: &'a Request) -> Self {
         let mut assigned_at: HashMap<&'a str, NaiveDateTime> = HashMap::new();
-        for review in request.reviews.iter().filter(|r| r.state == "new") {
+        let mut approvals: HashMap<&'a str, Vec<Option<NaiveDateTime>>> = HashMap::new();
+        for review in &request.reviews {
             let Some(user) = review.by_user.as_deref() else {
                 continue;
             };
-            for at in review
+            if review.state == "new" {
+                for at in review
+                    .history
+                    .iter()
+                    .filter(|e| e.description == ASSIGNED)
+                    .filter_map(|e| instant(&e.when))
+                {
+                    assigned_at
+                        .entry(user)
+                        .and_modify(|latest| *latest = (*latest).max(at))
+                        .or_insert(at);
+                }
+            }
+            // Any state: `assignreview` reuses a user review, flipping it back
+            // to `new` while its history keeps the earlier approval.
+            let mut accepted = review
                 .history
                 .iter()
-                .filter(|e| e.description == ASSIGNED)
-                .filter_map(|e| instant(&e.when))
-            {
-                assigned_at
-                    .entry(user)
-                    .and_modify(|latest| *latest = (*latest).max(at))
-                    .or_insert(at);
+                .filter(|e| e.description == ACCEPTED)
+                .map(|e| instant(&e.when))
+                .peekable();
+            if accepted.peek().is_some() {
+                approvals.entry(user).or_default().extend(accepted);
+            } else if review.state == "accepted" {
+                // An accepted review OBS served no accept event for is still
+                // an approval, just one with no instant.
+                approvals.entry(user).or_default().push(None);
             }
         }
-        Self { assigned_at }
+        Self {
+            assigned_at,
+            approvals,
+        }
     }
 
     /// Whether `user`'s open user review carries a "Review got assigned" no
@@ -121,9 +146,24 @@ impl<'a> UserReviews<'a> {
             _ => false,
         }
     }
+
+    /// Whether `user` approved at or after an assignment produced at `at`.
+    ///
+    /// A user with no approval finishes nothing. Otherwise an approval or an
+    /// assignment that cannot be placed in time finishes it, for the reason
+    /// [`Self::assigned_before`] refuses.
+    fn finished(&self, user: &str, at: Option<NaiveDateTime>) -> bool {
+        self.approvals.get(user).is_some_and(|approvals| {
+            approvals.iter().any(|approval| match (approval, at) {
+                (Some(approval), Some(at)) => *approval >= at,
+                _ => true,
+            })
+        })
+    }
 }
 
-/// Replay one group review's relevant history into the assignments it implies.
+/// Replay one group review's relevant history into the assignments it implies,
+/// each with the instant of the event that produced it (`None`: unparseable).
 ///
 /// A "reopened" is an assignment only when its actor's open user review has a
 /// "Review got assigned" not later than it. A reassignment onto an
@@ -136,7 +176,11 @@ impl<'a> UserReviews<'a> {
 ///
 /// A stable sort by [`when_key`] preserves document order for equal instants and
 /// for the unparseable bucket.
-fn infer_group(review: &Review, group: &str, users: &UserReviews<'_>) -> HashSet<Assignment> {
+fn infer_group(
+    review: &Review,
+    group: &str,
+    users: &UserReviews<'_>,
+) -> HashMap<Assignment, Option<NaiveDateTime>> {
     let mut events: Vec<&crate::obs::models::HistoryEvent> = review
         .history
         .iter()
@@ -144,14 +188,15 @@ fn infer_group(review: &Review, group: &str, users: &UserReviews<'_>) -> HashSet
         .collect();
     events.sort_by_key(|e| when_key(&e.when));
 
-    let mut assignments: HashSet<Assignment> = HashSet::new();
+    let mut assignments: HashMap<Assignment, Option<NaiveDateTime>> = HashMap::new();
     for event in events {
+        let at = instant(&event.when);
         match event.description.as_str() {
             ACCEPTED => {
-                assignments.insert(Assignment::new(&event.who, group));
+                assignments.insert(Assignment::new(&event.who, group), at);
             }
-            REOPENED if users.assigned_before(&event.who, instant(&event.when)) => {
-                assignments.insert(Assignment::new(&event.who, group));
+            REOPENED if users.assigned_before(&event.who, at) => {
+                assignments.insert(Assignment::new(&event.who, group), at);
             }
             REOPENED => {
                 assignments.remove(&Assignment::new(&event.who, group));
@@ -164,12 +209,14 @@ fn infer_group(review: &Review, group: &str, users: &UserReviews<'_>) -> HashSet
     assignments
 }
 
-/// Resolve the full set of active user->group assignments for a request.
+/// Resolve the active user->group assignments for a request: every qam group
+/// review replayed, minus the ones their user approved at or after the
+/// producing event.
 #[must_use]
 fn infer(request: &Request) -> HashSet<Assignment> {
     let users = UserReviews::collect(request);
 
-    let mut assignments: HashSet<Assignment> = HashSet::new();
+    let mut assignments: HashMap<Assignment, Option<NaiveDateTime>> = HashMap::new();
     for review in &request.reviews {
         if let Some(group) = review.by_group.as_deref()
             && is_qam_group(group)
@@ -179,16 +226,10 @@ fn infer(request: &Request) -> HashSet<Assignment> {
         }
     }
 
-    let finished_users: HashSet<&str> = request
-        .reviews
-        .iter()
-        .filter(|r| r.state == "accepted")
-        .filter_map(|r| r.by_user.as_deref())
-        .collect();
-
     assignments
         .into_iter()
-        .filter(|a| !finished_users.contains(a.user.as_str()))
+        .filter(|(assignment, at)| !users.finished(&assignment.user, *at))
+        .map(|(assignment, _)| assignment)
         .collect()
 }
 
@@ -315,6 +356,39 @@ mod tests {
                 &[("alice", "2017-01-01T00:00:00", ACCEPT)],
             ),
             "<review state='accepted' by_user='alice'/>".to_owned(),
+        ]))
+        .unwrap();
+        assert_eq!(infer(&req), HashSet::new());
+    }
+
+    /// An approval that cannot be placed in time finishes every assignment its
+    /// user holds: refusing one is a harmless "not assigned", a phantom is a
+    /// live revert against a group they do not hold. The review is `new`, so
+    /// only the approval event can finish her.
+    #[test]
+    fn approval_with_unparseable_when_finishes_every_assignment() {
+        let req = parse_request(&request(&[
+            group_review("qam-sle", "accepted", &[("alice", T_PRIOR_ASSIGN, ACCEPT)]),
+            user_review(
+                "alice",
+                "new",
+                &[
+                    ("alice", T_PRIOR_ASSIGN, ASSIGN),
+                    ("alice", "not-a-date", ACCEPT),
+                ],
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(infer(&req), HashSet::new());
+    }
+
+    /// An assignment whose own event cannot be placed in time is finished by
+    /// any approval its user made.
+    #[test]
+    fn assignment_with_unparseable_when_is_finished_by_any_approval() {
+        let req = parse_request(&request(&[
+            group_review("qam-sle", "accepted", &[("alice", "not-a-date", ACCEPT)]),
+            user_review("alice", "accepted", &[("alice", T_PRIOR_APPROVE, ACCEPT)]),
         ]))
         .unwrap();
         assert_eq!(infer(&req), HashSet::new());
@@ -548,6 +622,78 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(infer(&req), HashSet::new());
+    }
+
+    /// Maintainer probe: alice approved qam-sle, then was assigned qam-manager
+    /// (a second `by_user` review). Her approval finishes only the assignment
+    /// it followed. It landed within the second that produced that assignment
+    /// — OBS timestamps have second resolution — so the comparison is `>=`.
+    #[test]
+    fn probe_finished_group_a_plus_fresh_group_b() {
+        let req = parse_request(&request(&[
+            group_review(
+                "qam-sle",
+                "accepted",
+                &[("alice", "2026-09-01T00:00:00", ACCEPT)],
+            ),
+            group_review(
+                "qam-manager",
+                "new",
+                &[("alice", "2026-09-03T00:00:00", ACCEPT)],
+            ),
+            user_review(
+                "alice",
+                "accepted",
+                &[("alice", "2026-09-01T00:00:00", ACCEPT)],
+            ),
+            user_review("alice", "new", &[("alice", "2026-09-03T00:00:00", ASSIGN)]),
+        ]))
+        .unwrap();
+        assert_eq!(
+            infer(&req),
+            HashSet::from([assignment("alice", "qam-manager")])
+        );
+    }
+
+    /// The shape `assignreview` actually writes: it reuses alice's `by_user`
+    /// review, flipping it back to `new` while its history keeps the earlier
+    /// "Review got accepted". Her approval finishes qam-sle alone; bob's
+    /// finishes the group he handed over.
+    #[test]
+    fn approved_then_reassigned_on_a_reused_user_review() {
+        let req = parse_request(&request(&[
+            group_review("qam-sle", "accepted", &[("alice", T_PRIOR_ASSIGN, ACCEPT)]),
+            group_review(
+                "qam-manager",
+                "accepted",
+                &[
+                    ("bob", "2026-08-31T09:00:00", ACCEPT),
+                    ("alice", T_REASSIGN, REOPEN),
+                ],
+            ),
+            user_review(
+                "bob",
+                "accepted",
+                &[
+                    ("bob", "2026-08-31T09:00:00", ASSIGN),
+                    ("bob", "2026-08-31T15:00:00", ACCEPT),
+                ],
+            ),
+            user_review(
+                "alice",
+                "new",
+                &[
+                    ("alice", T_PRIOR_ASSIGN, ASSIGN),
+                    ("alice", T_PRIOR_APPROVE, ACCEPT),
+                    ("alice", T_REASSIGN, REOPEN),
+                ],
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(
+            infer(&req),
+            HashSet::from([assignment("alice", "qam-manager")])
+        );
     }
 
     /// Re-assigned, then self-unassigned: the revert destroyed the user
