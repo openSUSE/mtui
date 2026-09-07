@@ -33,6 +33,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   re-assignment as a reopen of the group review, which was read as an
   un-assignment, so `approve` refused with `<user> is not assigned to
   request …` and `unassign` with `holds no review assignment` (#596).
+- `unassign` without `-g` no longer reverts a group review its caller had
+  already approved before being assigned to another group on the same
+  request; `approve` and `unassign` now see such a tester as assigned to the
+  new group alone.
 
 ## [26.3.1] - 2026-09-02
 
