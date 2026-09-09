@@ -90,7 +90,7 @@ fn svn_checkout_failed(config: &Config, rrid: &RequestReviewID) -> CheckoutError
 ///
 /// # Errors
 ///
-/// Returns [`CheckoutError::SvnCheckoutFailed`] if a required `svn` call fails,
+/// Returns [`CheckoutError::SvnCommitFailed`] if a required `svn` call fails,
 /// so callers can decide whether to abort.
 pub async fn svn_commit_testreport(
     runner: &dyn SvnRunner,
@@ -143,7 +143,7 @@ pub async fn svn_commit_testreport(
 }
 
 /// Runs a `svn` subcommand, turning a spawn failure or non-zero exit into a
-/// [`CheckoutError`].
+/// [`CheckoutError::SvnCommitFailed`] naming the subcommand and `svn`'s stderr.
 async fn run_checked(
     runner: &dyn SvnRunner,
     args: &[String],
@@ -151,23 +151,26 @@ async fn run_checked(
 ) -> Result<(), CheckoutError> {
     let outcome = runner.run(args, cwd).await.map_err(|e| {
         debug!("svn {} could not run: {e}", args.join(" "));
-        commit_failed()
+        commit_failed(args, e.to_string())
     })?;
     if !outcome.success {
-        if !outcome.stderr.is_empty() {
-            debug!("svn {} failed: {}", args.join(" "), outcome.stderr.trim());
-        }
-        return Err(commit_failed());
+        let detail = {
+            let trimmed = outcome.stderr.trim();
+            if trimmed.is_empty() {
+                "exited with non-zero status".to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        };
+        debug!("svn {} failed: {detail}", args.join(" "));
+        return Err(commit_failed(args, detail));
     }
     Ok(())
 }
 
-/// A generic commit failure. The commit path has no RRID/log-URL context, so it
-/// reuses [`CheckoutError::SvnCheckoutFailed`] with empty context; the caller
-/// logs the actionable detail.
-fn commit_failed() -> CheckoutError {
-    CheckoutError::SvnCheckoutFailed {
-        rrid: String::new(),
-        report_url: String::new(),
+fn commit_failed(args: &[String], detail: String) -> CheckoutError {
+    CheckoutError::SvnCommitFailed {
+        command: args.join(" "),
+        detail,
     }
 }

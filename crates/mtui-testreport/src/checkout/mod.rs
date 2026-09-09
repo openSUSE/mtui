@@ -60,6 +60,19 @@ pub enum CheckoutError {
         /// The `fancy_reports_url`-derived log URL to check.
         report_url: String,
     },
+
+    /// An `svn` subcommand on the commit path failed.
+    ///
+    /// Unlike [`CheckoutError::SvnCheckoutFailed`], which hides `svn`'s
+    /// cryptic code for a missing report, a commit failure surfaces what ran
+    /// and what `svn` said so the working copy can be fixed.
+    #[error("svn {command} failed: {detail}")]
+    SvnCommitFailed {
+        /// The failed `svn` argv joined as one string (e.g. `"ci -m done"`).
+        command: String,
+        /// `svn`'s stderr (trimmed), or the spawn error when `svn` never ran.
+        detail: String,
+    },
 }
 
 /// A recoverable I/O error reading a template, carrying its `errno`.

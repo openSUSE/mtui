@@ -45,6 +45,12 @@ impl StubSvnRunner {
         stub
     }
 
+    fn with_outcomes(outcomes: Vec<SvnOutcome>) -> Self {
+        let stub = Self::new();
+        *stub.script.lock().unwrap() = outcomes.into_iter().map(Some).collect();
+        stub
+    }
+
     /// A stub whose first invocation returns a spawn error (e.g. `svn` missing).
     fn spawn_error() -> Self {
         let stub = Self::new();
@@ -214,7 +220,16 @@ async fn svn_commit_aborts_on_failed_call() {
     let err = svn_commit_testreport(&runner, checkout, &install_logs, &[])
         .await
         .unwrap_err();
-    assert!(matches!(err, CheckoutError::SvnCheckoutFailed { .. }));
+    assert!(
+        matches!(err, CheckoutError::SvnCommitFailed { .. }),
+        "commit failure is its own variant, not a missing report: {err}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("svn add"),
+        "message names the subcommand: {msg}"
+    );
+    assert!(msg.contains("E200009"), "message carries svn stderr: {msg}");
     // The sequence stopped after the failing add.
     assert_eq!(runner.call_count(), 1);
 }
@@ -230,7 +245,89 @@ async fn svn_commit_aborts_on_spawn_error() {
     let err = svn_commit_testreport(&runner, checkout, &install_logs, &[])
         .await
         .unwrap_err();
-    assert!(matches!(err, CheckoutError::SvnCheckoutFailed { .. }));
+    assert!(
+        matches!(err, CheckoutError::SvnCommitFailed { .. }),
+        "spawn failure is a commit failure, not a missing report: {err}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("svn add"),
+        "message names the subcommand: {msg}"
+    );
+    assert!(
+        msg.contains("svn not found"),
+        "message carries the spawn error: {msg}"
+    );
+}
+
+/// A conflicting `svn ci` must name the subcommand and carry svn's stderr,
+/// not the empty checkout-missing text (#607).
+#[tokio::test]
+async fn svn_commit_conflict_names_subcommand_and_stderr() {
+    let tmp = tempfile::tempdir().unwrap();
+    let checkout = tmp.path();
+    let install_logs = checkout.join("install_logs");
+    let runner = StubSvnRunner::with_outcomes(vec![
+        SvnOutcome {
+            success: true,
+            stderr: String::new(),
+        },
+        SvnOutcome {
+            success: true,
+            stderr: String::new(),
+        },
+        SvnOutcome {
+            success: false,
+            stderr: "svn: E155015: Aborting commit: '/tmp/wc/log' remains in conflict\n".to_owned(),
+        },
+    ]);
+
+    let err = svn_commit_testreport(&runner, checkout, &install_logs, &[])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CheckoutError::SvnCommitFailed { .. }),
+        "commit failure is its own variant, not a missing report: {err}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("svn ci"),
+        "message names the subcommand: {msg}"
+    );
+    assert!(msg.contains("E155015"), "message carries svn stderr: {msg}");
+    assert!(
+        !msg.contains("does not exist"),
+        "must not misreport as missing: {msg}"
+    );
+}
+
+/// A silent non-zero `svn` exit still names the subcommand (#607).
+#[tokio::test]
+async fn svn_commit_silent_failure_still_names_subcommand() {
+    let tmp = tempfile::tempdir().unwrap();
+    let checkout = tmp.path();
+    let install_logs = checkout.join("install_logs");
+    let runner = StubSvnRunner::with_outcome(SvnOutcome {
+        success: false,
+        stderr: String::new(),
+    });
+
+    let err = svn_commit_testreport(&runner, checkout, &install_logs, &[])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, CheckoutError::SvnCommitFailed { .. }),
+        "commit failure is its own variant, not a missing report: {err}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("svn add"),
+        "message names the subcommand: {msg}"
+    );
+    assert!(
+        !msg.contains("does not exist"),
+        "must not misreport as missing: {msg}"
+    );
 }
 
 /// `svn_commit_testreport` issues the exact argv sequence, skipping the
