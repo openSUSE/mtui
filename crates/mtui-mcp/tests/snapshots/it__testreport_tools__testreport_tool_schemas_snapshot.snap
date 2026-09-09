@@ -116,7 +116,7 @@ expression: pretty
           "type": "integer"
         },
         "relpath": {
-          "description": "Checkout-relative file to read; defaults to the `log` file.",
+          "description": "Checkout-relative file to read; defaults to the `log` file, e.g. build_checks/<pkg>.<arch>.log, source.diff, patchinfo.xml.",
           "type": "string"
         },
         "template": {
