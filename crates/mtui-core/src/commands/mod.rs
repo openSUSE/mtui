@@ -137,6 +137,7 @@ pub use showlog::ShowLog;
 #[cfg(test)]
 pub(crate) mod testkit {
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
@@ -533,6 +534,55 @@ pub(crate) mod testkit {
         session_with_targets(rrid, targets)
     }
 
+    /// Which [`FakeReport`] toggles a [`session_with_fake`] session enables.
+    #[derive(Default)]
+    struct FakeFlags {
+        fail_update: bool,
+        cancel_update: bool,
+        update_diagnostics: bool,
+        update_degradations: bool,
+        fail_perform: bool,
+        set_repo_enabled: bool,
+    }
+
+    /// The one builder behind every `session_with_*` below: buffer, display,
+    /// session and active [`FakeReport`] from already-built `targets`.
+    #[must_use]
+    fn session_with_fake(
+        rrid: &str,
+        targets: Vec<Target>,
+        flags: FakeFlags,
+        report_path: Option<PathBuf>,
+    ) -> (Session, Buffer) {
+        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut session = Session::with_display(Config::default(), false, display);
+
+        let mut base = TestReportBase::new(Config::default());
+        base.targets = HostsGroup::new(targets, false);
+        base.rrid = rrid.parse().ok();
+        if let Some(path) = report_path {
+            base.path = Some(path);
+        }
+        session.templates.add(Box::new(FakeReport {
+            base,
+            rrid: rrid.to_owned(),
+            fail_update: flags.fail_update,
+            cancel_update: flags.cancel_update,
+            update_diagnostics: flags.update_diagnostics,
+            update_degradations: flags.update_degradations,
+            fail_perform: flags.fail_perform,
+            set_repo_enabled: flags.set_repo_enabled,
+        }));
+        // Install the active handle so direct `command.call()` tests (which
+        // bypass the fan-out driver) read the report through `metadata()`.
+        assert!(
+            session.activate(rrid).is_active(),
+            "seeded template must activate"
+        );
+        (session, buf)
+    }
+
     /// One host per `(name, ok)` pair for `get`: `ok == false` wires a
     /// [`MockConnection::failing_sftp_get`], exercising the download
     /// aggregation's failure path. The report carries a real checkout path so
@@ -554,30 +604,13 @@ pub(crate) mod testkit {
                 Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
-
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(targets, false);
-        base.rrid = rrid.parse().ok();
         // `report_wd` is the parent dir of the loaded report path.
-        base.path = Some(report_wd.join("report.txt"));
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: false,
-            cancel_update: false,
-            update_diagnostics: false,
-            update_degradations: false,
-            fail_perform: false,
-            set_repo_enabled: false,
-        }));
-        assert!(
-            session.activate(rrid).is_active(),
-            "seeded template must activate"
-        );
-        (session, buf)
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags::default(),
+            Some(report_wd.join("report.txt")),
+        )
     }
 
     /// A session whose active report has the given already-built `targets` —
@@ -585,59 +618,23 @@ pub(crate) mod testkit {
     /// a target beyond the uniform stdout-echo mock.
     #[must_use]
     pub(crate) fn session_with_targets(rrid: &str, targets: Vec<Target>) -> (Session, Buffer) {
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
-
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(targets, false);
-        base.rrid = rrid.parse().ok();
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: false,
-            cancel_update: false,
-            update_diagnostics: false,
-            update_degradations: false,
-            fail_perform: false,
-            set_repo_enabled: false,
-        }));
-        // Install the active handle so direct `command.call()` tests (which
-        // bypass the fan-out driver) read the report through `metadata()`.
-        assert!(
-            session.activate(rrid).is_active(),
-            "seeded template must activate"
-        );
-        (session, buf)
+        session_with_fake(rrid, targets, FakeFlags::default(), None)
     }
 
     /// A session whose active report's `perform_update` returns `Err`,
     /// exercising the `update` command's failure path end-to-end.
     #[must_use]
     pub(crate) fn session_with_failing_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
-
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(targets, false);
-        base.rrid = rrid.parse().ok();
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: true,
-            cancel_update: false,
-            update_diagnostics: false,
-            update_degradations: false,
-            fail_perform: false,
-            set_repo_enabled: false,
-        }));
-        assert!(
-            session.activate(rrid).is_active(),
-            "seeded template must activate"
-        );
-        (session, buf)
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                fail_update: true,
+                ..Default::default()
+            },
+            None,
+        )
     }
 
     /// A session whose active report's `perform_update` stops at a cancellation
@@ -645,29 +642,16 @@ pub(crate) mod testkit {
     /// [`session_with_failing_update`]'s, which is a plain failure.
     #[must_use]
     pub(crate) fn session_with_cancelled_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
-
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(targets, false);
-        base.rrid = rrid.parse().ok();
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: false,
-            cancel_update: true,
-            update_diagnostics: false,
-            update_degradations: false,
-            fail_perform: false,
-            set_repo_enabled: false,
-        }));
-        assert!(
-            session.activate(rrid).is_active(),
-            "seeded template must activate"
-        );
-        (session, buf)
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                cancel_update: true,
+                ..Default::default()
+            },
+            None,
+        )
     }
 
     /// A session whose active report's `perform_update` emits both diagnostic
@@ -682,29 +666,17 @@ pub(crate) mod testkit {
         hosts: &[&str],
         fail: bool,
     ) -> (Session, Buffer) {
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
-
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(targets, false);
-        base.rrid = rrid.parse().ok();
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: fail,
-            cancel_update: false,
-            update_diagnostics: true,
-            update_degradations: false,
-            fail_perform: false,
-            set_repo_enabled: false,
-        }));
-        assert!(
-            session.activate(rrid).is_active(),
-            "seeded template must activate"
-        );
-        (session, buf)
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                fail_update: fail,
+                update_diagnostics: true,
+                ..Default::default()
+            },
+            None,
+        )
     }
 
     /// A session whose active report's `perform_update` succeeds but records
@@ -712,29 +684,16 @@ pub(crate) mod testkit {
     /// `--newpackage` prepare and repo cleanup around it did not.
     #[must_use]
     pub(crate) fn session_with_degraded_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
-
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(targets, false);
-        base.rrid = rrid.parse().ok();
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: false,
-            cancel_update: false,
-            update_diagnostics: false,
-            update_degradations: true,
-            fail_perform: false,
-            set_repo_enabled: false,
-        }));
-        assert!(
-            session.activate(rrid).is_active(),
-            "seeded template must activate"
-        );
-        (session, buf)
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                update_degradations: true,
+                ..Default::default()
+            },
+            None,
+        )
     }
 
     /// One host per `(name, ok)` pair for `lock`/`unlock`: `ok == false` scripts
@@ -779,57 +738,31 @@ pub(crate) mod testkit {
                 Target::with_connection(name, TargetState::Enabled, Box::new(conn))
             })
             .collect();
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
-
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(targets, false);
-        base.rrid = rrid.parse().ok();
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: false,
-            cancel_update: false,
-            update_diagnostics: false,
-            update_degradations: false,
-            fail_perform: false,
-            set_repo_enabled: true,
-        }));
-        assert!(
-            session.activate(rrid).is_active(),
-            "seeded template must activate"
-        );
-        (session, buf)
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                set_repo_enabled: true,
+                ..Default::default()
+            },
+            None,
+        )
     }
 
     /// A session whose active report's `perform_install`-family flows return
     /// `Err` (naming host `h1`), exercising `perform::drive`'s failure path.
     #[must_use]
     pub(crate) fn session_with_failing_perform(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
-        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
-        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
-        let mut session = Session::with_display(Config::default(), false, display);
-
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
-        let mut base = TestReportBase::new(Config::default());
-        base.targets = HostsGroup::new(targets, false);
-        base.rrid = rrid.parse().ok();
-        session.templates.add(Box::new(FakeReport {
-            base,
-            rrid: rrid.to_owned(),
-            fail_update: false,
-            cancel_update: false,
-            update_diagnostics: false,
-            update_degradations: false,
-            fail_perform: true,
-            set_repo_enabled: false,
-        }));
-        assert!(
-            session.activate(rrid).is_active(),
-            "seeded template must activate"
-        );
-        (session, buf)
+        session_with_fake(
+            rrid,
+            targets,
+            FakeFlags {
+                fail_perform: true,
+                ..Default::default()
+            },
+            None,
+        )
     }
 
     /// A standalone loaded report with the named hosts (each mock echoing
