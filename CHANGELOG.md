@@ -94,6 +94,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   huge rows; `openqa_overview` per-section caps sum to ~600 rows total.
   **MCP schema note:** additive only — `updates` gains `offset`, `list_refhosts`
   gains `limit`/`offset`; no renames/removals.
+- `testreport_read` collapses an exact re-read (same template, file,
+  offset/limit with unchanged content) to `[unchanged since …, N lines; use
+  offset/limit to move]` instead of resending the window. Per-session cache of
+  the last 16 windows; any edit resends in full. Output-only, no schema change.
 
 ### Deprecated
 

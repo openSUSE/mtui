@@ -45,7 +45,8 @@ use mtui_testreport::atomic_write_file;
 use serde_json::{Map, Value, json};
 
 use crate::session::{
-    DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, run_with_heartbeat,
+    DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, RereadKey,
+    run_with_heartbeat,
 };
 use crate::slim::{cap_output, truncation_notice};
 use crate::tools::ToolDescriptor;
@@ -404,12 +405,17 @@ async fn testreport_read(
 
     // Only the `PathBuf` needs the session lock, so it is released before the
     // file I/O: a slow read must not stall concurrent same-lock work.
-    let path = {
+    let (path, rrid_key) = {
         // The gate scope is held for the whole call, the inner mutex only for the
         // path resolution.
         let _scope = session.scoped_lock(template).await;
         let guard = session.session().lock().await;
-        resolve_target_path(&guard, relpath, template, true)?
+        let path = resolve_target_path(&guard, relpath, template, true)?;
+        let rrid = template
+            .map(str::to_owned)
+            .or_else(|| guard.templates.active_rrid().map(str::to_owned))
+            .unwrap_or_default();
+        (path, rrid)
     };
 
     let windowed = offset != 1 || limit.is_some();
@@ -428,6 +434,32 @@ async fn testreport_read(
     // into `stream_read`'s own truncation notice, which is acceptable.
     let cap = session.max_output_bytes();
     let content = cap_output(result.content, cap);
+
+    // Exact re-read dedup: same key + same payload hash + same total collapses
+    // to a notice (output-only, no schema change). Any edit misses and resends.
+    let key = RereadKey {
+        rrid: rrid_key,
+        relpath: relpath.unwrap_or("log").to_owned(),
+        offset,
+        limit,
+    };
+    let hash = McpSession::hash_content(&content);
+    if let Some(notice) = session.dedup_reread(key, hash, result.line_count) {
+        if let Some(returned) = result.returned_lines {
+            return Ok(json!({
+                "path": path.to_string_lossy(),
+                "line_count": result.line_count,
+                "offset": offset,
+                "returned_lines": returned,
+                "content": notice,
+            }));
+        }
+        return Ok(json!({
+            "path": path.to_string_lossy(),
+            "line_count": result.line_count,
+            "content": notice,
+        }));
+    }
 
     if let Some(returned) = result.returned_lines {
         Ok(json!({
@@ -1856,5 +1888,145 @@ mod tests {
             .await
             .expect_err("symlink escape refused");
         assert!(err.stderr.contains("escapes"), "{err:?}");
+    }
+
+    // ---- re-read dedup ---------------------------------------------------- //
+
+    #[tokio::test]
+    async fn reread_identical_dedups_to_notice() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let first = testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        let second = testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        let content = second["content"].as_str().unwrap();
+        assert!(content.contains("unchanged since"), "{content:?}");
+        assert!(content.contains("use offset/limit to move"), "{content:?}");
+    }
+
+    #[tokio::test]
+    async fn reread_changed_file_returns_full() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        std::fs::write(&path, "l1\nCHANGED\n").unwrap();
+        let res = testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        assert_eq!(res["content"], "l1\nCHANGED\n");
+    }
+
+    #[tokio::test]
+    async fn reread_different_window_returns_full() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\nl3\n").await;
+
+        let first = testreport_read(&session, None, 1, Some(2), None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        let other = testreport_read(&session, None, 2, Some(2), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            other["content"], "l2\nl3\n",
+            "other window is full: {other}"
+        );
+        let same = testreport_read(&session, None, 1, Some(2), None)
+            .await
+            .unwrap();
+        assert!(
+            same["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "repeat of first window dedups: {same}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reread_bound_evicts_oldest() {
+        use crate::session::{MAX_REREAD_WINDOWS, RereadKey};
+
+        let (session, _tmp) = session_with_tmp();
+        for i in 0..MAX_REREAD_WINDOWS {
+            let key = RereadKey {
+                rrid: RRID.to_owned(),
+                relpath: format!("f{i}.log"),
+                offset: 1,
+                limit: None,
+            };
+            assert!(session.dedup_reread(key, i as u64, 1).is_none());
+        }
+        // One more evicts the oldest (`f0.log`).
+        let overflow = RereadKey {
+            rrid: RRID.to_owned(),
+            relpath: "overflow.log".to_owned(),
+            offset: 1,
+            limit: None,
+        };
+        assert!(session.dedup_reread(overflow, 999, 1).is_none());
+        let first = RereadKey {
+            rrid: RRID.to_owned(),
+            relpath: "f0.log".to_owned(),
+            offset: 1,
+            limit: None,
+        };
+        assert!(
+            session.dedup_reread(first, 0, 1).is_none(),
+            "evicted key misses"
+        );
+        // Survivor still hits (re-adding `f0` evicted `f1`, so probe `f15`).
+        let survivor = RereadKey {
+            rrid: RRID.to_owned(),
+            relpath: "f15.log".to_owned(),
+            offset: 1,
+            limit: None,
+        };
+        let notice = session
+            .dedup_reread(survivor, 15, 1)
+            .expect("survivor dedups");
+        assert!(notice.contains("unchanged since"), "{notice:?}");
+    }
+
+    #[tokio::test]
+    async fn reread_multi_rrid_keys_dont_collide() {
+        let (session, tmp) = session_with_tmp();
+        let p1 = tmp.path().join("c1").join("log");
+        let p2 = tmp.path().join("c2").join("log");
+        load_report(&session, "SUSE:Maintenance:1:1", &p1, "same\n").await;
+        load_report(&session, "SUSE:Maintenance:2:2", &p2, "same\n").await;
+
+        let r1 = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:1:1"))
+            .await
+            .unwrap();
+        assert_eq!(r1["content"], "same\n");
+        // Same bytes, other template: full, not a notice.
+        let r2 = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:2:2"))
+            .await
+            .unwrap();
+        assert_eq!(r2["content"], "same\n", "other RRID is full: {r2}");
+        // Repeat of the first still dedups.
+        let r1_again = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:1:1"))
+            .await
+            .unwrap();
+        assert!(
+            r1_again["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "{r1_again}"
+        );
     }
 }
