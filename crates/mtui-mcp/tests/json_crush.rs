@@ -1,9 +1,10 @@
-//! Row-budget crush reaches the MCP client intact (STEP 1).
+//! Row-budget crush reaches the MCP client intact.
 //!
 //! Drives the real `updates` / `list_refhosts` commands through
 //! [`McpSession::run_command`] with unbounded mocked backends: the JSON output
 //! still parses (after stripping the trailing notice) and the notice names the
-//! narrowing flags. Also pins that this step changed no tool schemas.
+//! narrowing flags. Also pins the additive paging flags and that row-cap is not
+//! byte-cap.
 
 #![cfg(feature = "mcp")]
 
@@ -54,11 +55,16 @@ async fn updates_json_crush_parses_and_names_flags() {
         .run_command(&registry, "updates", &argv)
         .await
         .expect("updates succeeds");
-    assert!(out.contains("[truncated"), "{out}");
-    assert!(out.contains("--limit/--field/-G"), "{out}");
+    assert!(
+        out.lines()
+            .last()
+            .is_some_and(|l| l.starts_with("…[truncated")),
+        "{out}"
+    );
+    assert!(out.contains("--limit/--offset/--field/-G"), "{out}");
     let json_part: String = out
         .lines()
-        .filter(|l| !l.contains("[truncated"))
+        .filter(|l| !l.starts_with("…[truncated"))
         .collect::<Vec<_>>()
         .join("\n");
     let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
@@ -91,9 +97,14 @@ async fn list_refhosts_crush_notifies_with_narrowing_flags() {
         .run_command(&registry, "list_refhosts", &[])
         .await
         .expect("list_refhosts succeeds");
-    assert!(out.contains("[truncated"), "{out}");
     assert!(
-        out.contains("--name/--arch/--product/--version/--addon"),
+        out.lines()
+            .last()
+            .is_some_and(|l| l.starts_with("…[truncated")),
+        "{out}"
+    );
+    assert!(
+        out.contains("--limit/--offset/--name/--arch/--product/--version/--addon"),
         "{out}"
     );
     assert!(
@@ -103,7 +114,87 @@ async fn list_refhosts_crush_notifies_with_narrowing_flags() {
     assert!(!out.contains("host-060"), "middle row dropped: {out}");
 }
 
-/// This step is output-only: the three crushed tools keep their schemas.
+/// Paging recovers a dropped middle row through MCP.
+#[tokio::test]
+async fn updates_offset_recovers_middle_row() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/updates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(queue_fixture()))
+        .mount(&server)
+        .await;
+
+    let mut config = Config::default();
+    config.teregen_api = server.uri();
+    let sess = McpSession::new(config);
+    let registry = register_all();
+
+    let argv = [
+        "--status", "all", "--json", "--offset", "50", "--limit", "50",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect::<Vec<_>>();
+    let out = sess
+        .run_command(&registry, "updates", &argv)
+        .await
+        .expect("updates succeeds");
+    let json_part: String = out
+        .lines()
+        .filter(|l| !l.starts_with("…[truncated"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+    let rows = parsed.as_array().unwrap();
+    assert!(rows.iter().any(|r| r["id"] == "row-060"), "{out}");
+}
+
+/// Row-cap is not byte-cap: fat rows still hit max_output_bytes after crush.
+#[tokio::test]
+async fn fat_rows_hit_byte_cap_after_crush() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let filler = "x".repeat(1024);
+    let rows: Vec<serde_json::Value> = (0..150)
+        .map(|i| {
+            serde_json::json!({
+                "priority": 1, "status": "testing", "kind": "Maintenance",
+                "id": format!("row-{i:03}"), "title": filler,
+            })
+        })
+        .collect();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/updates"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": rows})),
+        )
+        .mount(&server)
+        .await;
+
+    let mut config = Config::default();
+    config.teregen_api = server.uri();
+    config.mcp_max_output_bytes = 2000;
+    let sess = McpSession::new(config);
+    let registry = register_all();
+
+    let argv = ["--status", "all", "--json"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect::<Vec<_>>();
+    let out = sess
+        .run_command(&registry, "updates", &argv)
+        .await
+        .expect("updates succeeds");
+    assert!(out.contains("max_output_bytes=2000"), "{out}");
+    assert!(out.contains("bytes"), "{out}");
+}
+
+/// Additive paging flags only: no tool renames/removals.
 #[test]
 fn crushed_tool_schemas_unchanged() {
     use std::collections::HashMap;
@@ -125,9 +216,11 @@ fn crushed_tool_schemas_unchanged() {
     for name in ["updates", "list_refhosts", "openqa_overview"] {
         assert!(tools.contains_key(name), "tool {name} renamed?");
     }
-    // No budget flags were added: `updates` keeps its `--limit`, the other two
-    // gain none.
+    // Paging is additive: `updates` gains `--offset`, `list_refhosts` gains
+    // `--limit`/`--offset`, `openqa_overview` gains none.
     assert!(tools["updates"].contains(&"limit".to_owned()));
-    assert!(!tools["list_refhosts"].contains(&"limit".to_owned()));
+    assert!(tools["updates"].contains(&"offset".to_owned()));
+    assert!(tools["list_refhosts"].contains(&"limit".to_owned()));
+    assert!(tools["list_refhosts"].contains(&"offset".to_owned()));
     assert!(!tools["openqa_overview"].contains(&"limit".to_owned()));
 }

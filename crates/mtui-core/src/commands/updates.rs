@@ -16,13 +16,11 @@ use crate::session::Session;
 use super::row_budget::{crush, row_notice};
 
 /// Narrowing flags named in the row-budget notice.
-const UPDATES_HINT: &str = "--limit/--field/-G";
+const UPDATES_HINT: &str = "--limit/--offset/--field/-G";
 
-/// Non-`testing` rows survive the crush: the actionable signal under `--status all`.
+/// Non-`testing` rows survive the crush; unknown/missing/null status keeps too (safe direction).
 fn is_anomaly_row(v: &Value) -> bool {
-    v.get("status")
-        .and_then(Value::as_str)
-        .is_some_and(|s| s != "testing")
+    v.get("status").and_then(Value::as_str) != Some("testing")
 }
 
 /// The `--status` value that widens the queue to every status.
@@ -91,10 +89,11 @@ impl Command for Updates {
                 .action(ArgAction::SetTrue)
                 .conflicts_with("field")
                 .help(
-                    "print the raw TeReGen rows as a pretty-printed JSON array \
-                     (--limit-capped, each row emitted whole, unlike -F; not \
-                     combinable with -F); an empty queue prints []; narrow large \
-                     queues with --limit",
+                    "print the raw TeReGen rows as a JSON array (each row \
+                     emitted whole, unlike -F; honours --limit/--offset; not combinable \
+                     with -F); an empty queue prints []; over-cap output is a valid JSON array \
+                     of kept rows plus a trailing `…[truncated …` notice line — strip lines \
+                     starting with that prefix before parsing",
                 ),
         )
         .arg(
@@ -110,7 +109,15 @@ impl Command for Updates {
                 .value_name("N")
                 .value_parser(clap::value_parser!(usize))
                 .default_value("0")
-                .help("cap the number of rows (0 = all)"),
+                .help("cap the number of rows after --offset (0 = all)"),
+        )
+        .arg(
+            Arg::new("offset")
+                .long("offset")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .default_value("0")
+                .help("skip the first N rows (0 = from the start); with --limit, page any middle slice"),
         )
         .arg(
             Arg::new("assignee")
@@ -169,6 +176,7 @@ impl Command for Updates {
             &[
                 &["--status"],
                 &["--limit"],
+                &["--offset"],
                 &["--assignee"],
                 &["--mine"],
                 &["--all-assignees"],
@@ -202,6 +210,7 @@ impl Command for Updates {
             .cloned()
             .unwrap_or_else(|| "testing".to_owned());
         let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
+        let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
         let mine = args.get_flag("mine");
         let all_assignees = args.get_flag("all_assignees");
 
@@ -332,15 +341,21 @@ impl Command for Updates {
             return Ok(());
         }
 
-        let limited: Vec<Value> = if limit > 0 && limit < rows.len() {
-            rows.into_iter().take(limit).collect()
-        } else {
-            rows
+        // Paging via --offset (pre-crush) makes any middle slice recoverable; chosen over an
+        // explicit-window notice as it fits the existing --limit plumbing.
+        let windowed: Vec<Value> = {
+            let skipped = offset.min(rows.len());
+            let mut v: Vec<Value> = rows.into_iter().skip(skipped).collect();
+            if limit > 0 && limit < v.len() {
+                v.truncate(limit);
+            }
+            v
         };
         // Row budget backstops `--limit 0=all`: head+tail+anomalies, exact-deduped.
+        // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
         let crushed = crush(
-            limited,
-            |v| serde_json::to_string(v).unwrap_or_default(),
+            windowed,
+            |v| serde_json::to_string(v).expect("serialising a serde_json::Value is infallible"),
             is_anomaly_row,
         );
         let shown = &crushed.kept;
@@ -741,6 +756,7 @@ mod tests {
             "-G",
             "--status",
             "--limit",
+            "--offset",
             "--assignee",
             "--mine",
             "--all-assignees",
@@ -1672,8 +1688,13 @@ mod tests {
         assert!(out.contains("row-anomaly"), "anomaly must survive: {out}");
         assert!(!out.contains("row-060"), "middle normal row dropped: {out}");
         assert!(out.contains("row-000") && out.contains("row-149"), "{out}");
-        assert!(out.contains("[truncated"), "{out}");
-        assert!(out.contains("--limit/--field/-G"), "{out}");
+        assert!(
+            out.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated")),
+            "{out}"
+        );
+        assert!(out.contains("--limit/--offset/--field/-G"), "{out}");
         assert!(
             out.contains(" of 150"),
             "deduped total in notice/header: {out}"
@@ -1695,11 +1716,16 @@ mod tests {
         let args = matches(&Updates, &["--status", "all", "--json"]);
         Updates.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        assert!(out.contains("[truncated"), "{out}");
-        assert!(out.contains("--limit/--field/-G"), "{out}");
+        assert!(
+            out.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated")),
+            "{out}"
+        );
+        assert!(out.contains("--limit/--offset/--field/-G"), "{out}");
         let json_part: String = out
             .lines()
-            .filter(|l| !l.contains("[truncated"))
+            .filter(|l| !l.starts_with("…[truncated"))
             .collect::<Vec<_>>()
             .join("\n");
         let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
@@ -1710,5 +1736,163 @@ mod tests {
             rows.len()
         );
         assert!(rows.iter().any(|r| r["id"] == "row-anomaly"), "{out}");
+    }
+
+    #[test]
+    fn json_help_mentions_truncation() {
+        let base = clap::Command::new("updates").no_binary_name(true);
+        let mut cmd = Updates.configure(base);
+        let help = cmd.render_help().to_string();
+        assert!(help.contains("…[truncated"), "{help}");
+        assert!(help.contains("strip lines starting with"), "{help}");
+    }
+
+    #[test]
+    fn unknown_status_is_anomaly_keep() {
+        for row in [
+            serde_json::json!({"id": "a"}),
+            serde_json::json!({"id": "b", "status": null}),
+            serde_json::json!({"id": "c", "status": "weird"}),
+            serde_json::json!({"id": "d", "status": 5}),
+        ] {
+            assert!(is_anomaly_row(&row), "{row}");
+        }
+        assert!(!is_anomaly_row(&serde_json::json!({"status": "testing"})));
+        assert!(is_anomaly_row(&serde_json::json!({"status": "failed"})));
+    }
+
+    #[tokio::test]
+    async fn unknown_status_rows_survive_crush() {
+        let mut rows: Vec<serde_json::Value> = (0..150)
+            .map(|i| {
+                serde_json::json!({
+                    "priority": 1, "status": "testing", "kind": "Maintenance",
+                    "id": format!("row-{i:03}"),
+                })
+            })
+            .collect();
+        rows[100] = serde_json::json!({"priority": 1, "kind": "Maintenance", "id": "row-nostatus"});
+        rows[101] = serde_json::json!({"priority": 1, "status": null, "kind": "Maintenance", "id": "row-null"});
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": rows})),
+            )
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["--status", "all", "--json"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let json_part: String = out
+            .lines()
+            .filter(|l| !l.starts_with("…[truncated"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+        let kept: Vec<_> = parsed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap_or("?"))
+            .collect();
+        assert!(kept.contains(&"row-nostatus"), "{out}");
+        assert!(kept.contains(&"row-null"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn middle_row_recoverable_via_offset() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": crush_fixture()})),
+            )
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(
+            &Updates,
+            &["--status", "all", "--offset", "50", "--limit", "50"],
+        );
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("row-060"),
+            "paged middle row must appear: {out}"
+        );
+        assert!(
+            !out.contains("…[truncated"),
+            "50-row window fits budget: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn boundary_100_no_notice_101_truncated() {
+        for (n, expect_notice) in [(100, false), (101, true)] {
+            let rows: Vec<serde_json::Value> = (0..n)
+                .map(|i| {
+                    serde_json::json!({
+                        "priority": 1, "status": "testing", "kind": "Maintenance",
+                        "id": format!("row-{i:03}"),
+                    })
+                })
+                .collect();
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/updates"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": rows})),
+                )
+                .mount(&server)
+                .await;
+            let (mut session, buf) = teregen_session(&server);
+            let args = matches(&Updates, &["--status", "all", "--json"]);
+            Updates.call(&mut session, &args).await.unwrap();
+            let out = buf.contents();
+            let has_notice = out
+                .lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated"));
+            assert_eq!(has_notice, expect_notice, "n={n}: {out}");
+            let json_part: String = out
+                .lines()
+                .filter(|l| !l.starts_with("…[truncated"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+            assert!(parsed.is_array(), "n={n}: {out}");
+        }
+    }
+
+    #[tokio::test]
+    async fn json_filter_keeps_data_line_containing_truncated() {
+        // A data line containing "[truncated" must not be mistaken for the notice:
+        // only lines starting with the `…[truncated` prefix are stripped.
+        let rows = vec![serde_json::json!({
+            "priority": 1, "status": "testing", "kind": "Maintenance",
+            "id": "row-[truncated]-fake",
+        })];
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": rows})),
+            )
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["--status", "all", "--json"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let json_part: String = out
+            .lines()
+            .filter(|l| !l.starts_with("…[truncated"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+        assert_eq!(parsed[0]["id"], "row-[truncated]-fake", "{out}");
     }
 }

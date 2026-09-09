@@ -13,6 +13,9 @@ use crate::session::Session;
 use super::row_budget::{crush, row_notice};
 
 /// Narrowing flags named in the row-budget notices.
+// Per-section caps sum to ~600 rows total (single 100 + up to 4 aggregated groups +
+// build checks 100); row-cap is not byte-cap: MCP max_output_bytes can still cut
+// mid-display on huge rows, while --export always writes the full overview.
 const OPENQA_HINT: &str = "--no-aggregated/--aggregated-groups/--days/--test-pattern";
 
 /// Non-`passed` rows survive the crush: the actionable openQA signal.
@@ -823,9 +826,54 @@ mod tests {
     fn row_budget_notice_names_narrowing_flags() {
         use super::super::row_budget::row_notice;
         let n = row_notice(90, 150, OPENQA_HINT);
+        assert!(n.starts_with("…[truncated"), "{n}");
         assert!(
             n.contains("--no-aggregated/--aggregated-groups/--days"),
             "{n}"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_bypasses_crush_keeps_dropped_middle() {
+        // 150 passed rows: crush would drop the middle, but --export writes the full overview.
+        let versions: Vec<oqa::VersionResult> = (0..150)
+            .map(|i| oqa::VersionResult {
+                version: format!("15-SP{i:03}"),
+                url: format!("http://oqa/{i}"),
+                status: "passed".to_owned(),
+                ..Default::default()
+            })
+            .collect();
+        let crushed = super::super::row_budget::crush(
+            versions.clone(),
+            |r| {
+                (
+                    r.version.clone(),
+                    r.url.clone(),
+                    r.status.clone(),
+                    r.failed_count,
+                    r.running_count,
+                    r.note.clone(),
+                )
+            },
+            is_anomaly_version,
+        );
+        assert!(!crushed.kept.iter().any(|r| r.version == "15-SP060"));
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("log");
+        std::fs::write(
+            &log,
+            "comment: hi\n\nregression tests:\n-----------------\n\n",
+        )
+        .unwrap();
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().path = Some(log.clone());
+        export_to_testreport(&mut session, &versions, &[], &[], true).unwrap();
+        let written = std::fs::read_to_string(&log).unwrap();
+        assert!(written.contains("15-SP060"), "{written}");
+        assert!(
+            written.contains("15-SP000") && written.contains("15-SP149"),
+            "{written}"
         );
     }
 }

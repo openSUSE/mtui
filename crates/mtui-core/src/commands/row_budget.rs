@@ -1,6 +1,7 @@
 //! Row-budget crush for unbounded listing outputs (SmartCrusher-lite).
 //!
 //! Row budget: keep first-40 + last-10 + all anomaly rows, exact-dedup identical rows, hard cap 100.
+//! Row-cap is not byte-cap: MCP `max_output_bytes` can still cut mid-array on huge rows.
 
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -106,12 +107,26 @@ mod tests {
 
     #[test]
     fn anomaly_overflow_truncates_middle_first_deterministically() {
-        // Every middle row anomalous: only the first fitting anomalies survive.
+        // Every middle row anomalous: only the first fitting anomalies survive, in index order.
         let items: Vec<usize> = (0..300).collect();
         let out = crush(items, |v| *v, |v| *v >= ROW_HEAD);
         assert_eq!(out.kept.len(), ROW_CAP);
-        assert!(out.kept.contains(&0));
-        assert!(out.kept.contains(&299));
+        let expected: Vec<usize> = (0..ROW_HEAD)
+            .chain(ROW_HEAD..ROW_HEAD + (ROW_CAP - ROW_HEAD - ROW_TAIL))
+            .chain(300 - ROW_TAIL..300)
+            .collect();
+        assert_eq!(out.kept, expected);
+    }
+
+    #[test]
+    fn boundary_100_passes_101_crushes() {
+        let out100 = crush((0..100).collect::<Vec<_>>(), |v| *v, |_| false);
+        assert_eq!(out100.truncated, 0);
+        assert_eq!(out100.kept.len(), 100);
+        let out101 = crush((0..101).collect::<Vec<_>>(), |v| *v, |_| false);
+        assert_eq!(out101.total, 101);
+        assert_eq!(out101.kept.len(), ROW_HEAD + ROW_TAIL);
+        assert_eq!(out101.truncated, 101 - (ROW_HEAD + ROW_TAIL));
     }
 
     #[test]
@@ -125,6 +140,7 @@ mod tests {
     #[test]
     fn notice_names_narrowing_flags() {
         let n = row_notice(90, 150, "--limit/--field/-G");
+        assert!(n.starts_with("…[truncated"), "{n}");
         assert!(n.contains("[truncated 90 of 150"), "{n}");
         assert!(n.contains("--limit/--field/-G"), "{n}");
     }

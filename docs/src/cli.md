@@ -710,7 +710,7 @@ Options:
           select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit
 
       --json
-          print the raw TeReGen rows as a pretty-printed JSON array (--limit-capped, each row emitted whole, unlike -F; not combinable with -F); an empty queue prints []; narrow large queues with --limit
+          print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap output is a valid JSON array of kept rows plus a trailing `…[truncated …` notice line — strip lines starting with that prefix before parsing
 
       --status <STATUS>
           filter by status (default: testing); use 'all' for every status
@@ -718,7 +718,12 @@ Options:
           [default: testing]
 
       --limit <N>
-          cap the number of rows (0 = all)
+          cap the number of rows after --offset (0 = all)
+          
+          [default: 0]
+
+      --offset <N>
+          skip the first N rows (0 = from the start); with --limit, page any middle slice
           
           [default: 0]
 
@@ -1069,7 +1074,17 @@ Options:
           group by test-target slot (product+version+arch+addons)
 
       --json
-          emit JSON
+          emit JSON array of kept rows; over-cap output adds a trailing `…[truncated …` notice line — strip lines starting with that prefix before parsing
+
+      --limit <N>
+          cap the number of rows after --offset (0 = all)
+          
+          [default: 0]
+
+      --offset <N>
+          skip the first N rows (0 = from the start); with --limit, page any middle slice
+          
+          [default: 0]
 
       --free
           also probe live operation-lock and pool-claim state (connects to each matched host)
