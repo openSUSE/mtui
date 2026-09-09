@@ -87,6 +87,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   reopen, which `approve` and `unassign` read as an un-assignment when OBS
   served no placeable assign event for your own review. On Gitea `--force`
   keeps its wider meaning (your own hold too, and without an open group).
+- Synthesised MCP array properties (`command`, `hosts`, `package`, …) now
+  mirror their help text onto the array object as well as `items`, so clients
+  rendering per-property descriptions show one. **MCP schema note:** each
+  array property gains a `description` equal to its `items.description`;
+  `items` keeps its copy (#545).
 
 ## [26.3.1] - 2026-09-02
 

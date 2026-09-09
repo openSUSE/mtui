@@ -22,6 +22,7 @@ expression: pretty
           "type": "boolean"
         },
         "target": {
+          "description": "Address of the target host (FQDN). Can be repeated",
           "items": {
             "description": "Address of the target host (FQDN). Can be repeated",
             "type": "string"
@@ -65,6 +66,7 @@ expression: pretty
           "type": "boolean"
         },
         "group": {
+          "description": "Group to approve (not valid for the Gitea workflow)",
           "items": {
             "description": "Group to approve (not valid for the Gitea workflow)",
             "type": "string"
@@ -104,6 +106,7 @@ expression: pretty
           "type": "boolean"
         },
         "group": {
+          "description": "Group to act on (not valid for the Gitea workflow)",
           "items": {
             "description": "Group to act on (not valid for the Gitea workflow)",
             "type": "string"
@@ -175,6 +178,7 @@ expression: pretty
           "type": "boolean"
         },
         "message": {
+          "description": "The comment body (required)",
           "items": {
             "description": "The comment body (required)",
             "type": "string"
@@ -206,6 +210,7 @@ expression: pretty
           "type": "boolean"
         },
         "msg": {
+          "description": "commit message",
           "items": {
             "description": "commit message",
             "type": "string"
@@ -250,6 +255,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "attributes": {
+          "description": "Attribute(s) to show; all when omitted",
           "items": {
             "description": "Attribute(s) to show; all when omitted",
             "type": "string"
@@ -276,6 +282,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -320,6 +327,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -350,6 +358,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -357,6 +366,7 @@ expression: pretty
           "type": "array"
         },
         "package": {
+          "description": "package to install",
           "items": {
             "description": "package to install",
             "type": "string"
@@ -404,6 +414,7 @@ expression: pretty
           "type": "boolean"
         },
         "event": {
+          "description": "event type to list (repeatable)",
           "items": {
             "description": "event type to list (repeatable)",
             "enum": [
@@ -419,6 +430,7 @@ expression: pretty
           "type": "array"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -462,6 +474,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -510,6 +523,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -517,6 +531,7 @@ expression: pretty
           "type": "array"
         },
         "package": {
+          "description": "package name to list (repeatable)",
           "items": {
             "description": "package name to list (repeatable)",
             "type": "string"
@@ -547,6 +562,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -568,6 +584,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "addon": {
+          "description": "addon-name substring (repeatable)",
           "items": {
             "description": "addon-name substring (repeatable)",
             "type": "string"
@@ -575,6 +592,7 @@ expression: pretty
           "type": "array"
         },
         "arch": {
+          "description": "arch filter (repeatable): x86_64 / aarch64 / ppc64le / s390x",
           "items": {
             "description": "arch filter (repeatable): x86_64 / aarch64 / ppc64le / s390x",
             "type": "string"
@@ -628,6 +646,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -698,6 +717,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -705,6 +725,7 @@ expression: pretty
           "type": "array"
         },
         "package": {
+          "description": "package name to show versions for (repeatable)",
           "items": {
             "description": "package name to show versions for (repeatable)",
             "type": "string"
@@ -758,6 +779,7 @@ expression: pretty
           "type": "boolean"
         },
         "comment": {
+          "description": "Lock comment (keeps the lock effective across sessions)",
           "items": {
             "description": "Lock comment (keeps the lock effective across sessions)",
             "type": "string"
@@ -766,6 +788,7 @@ expression: pretty
           "type": "array"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -827,6 +850,7 @@ expression: pretty
       "additionalProperties": false,
       "properties": {
         "aggregated_groups": {
+          "description": "Job groups to search in Aggregated Updates (default: core)",
           "items": {
             "description": "Job groups to search in Aggregated Updates (default: core)",
             "enum": [
@@ -908,6 +932,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -948,6 +973,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1016,6 +1042,7 @@ expression: pretty
           "type": "boolean"
         },
         "group": {
+          "description": "Group to act on (not valid for the Gitea workflow)",
           "items": {
             "description": "Group to act on (not valid for the Gitea workflow)",
             "type": "string"
@@ -1023,6 +1050,7 @@ expression: pretty
           "type": "array"
         },
         "message": {
+          "description": "Rejection message (takes the remainder of the command)",
           "items": {
             "description": "Rejection message (takes the remainder of the command)",
             "type": "string"
@@ -1087,6 +1115,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1112,6 +1141,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1178,6 +1208,7 @@ expression: pretty
           "type": "boolean"
         },
         "command": {
+          "description": "Command as argv tokens (no shell); pipelines need three tokens: sh, -c, <line>",
           "items": {
             "description": "Command as argv tokens (no shell); pipelines need three tokens: sh, -c, <line>",
             "type": "string"
@@ -1185,6 +1216,7 @@ expression: pretty
           "type": "array"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1210,6 +1242,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1279,6 +1312,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1309,6 +1343,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1389,6 +1424,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1441,6 +1477,7 @@ expression: pretty
           "type": "boolean"
         },
         "group": {
+          "description": "Group to act on (not valid for the Gitea workflow)",
           "items": {
             "description": "Group to act on (not valid for the Gitea workflow)",
             "type": "string"
@@ -1476,6 +1513,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1483,6 +1521,7 @@ expression: pretty
           "type": "array"
         },
         "package": {
+          "description": "package to remove",
           "items": {
             "description": "package to remove",
             "type": "string"
@@ -1534,6 +1573,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1569,6 +1609,7 @@ expression: pretty
           "type": "boolean"
         },
         "hosts": {
+          "description": "Host to act on (repeatable; default: all hosts)",
           "items": {
             "description": "Host to act on (repeatable; default: all hosts)",
             "type": "string"
@@ -1609,6 +1650,7 @@ expression: pretty
           "type": "string"
         },
         "field": {
+          "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names are case-insensitive and treat spaces, hyphens and underscores as equivalent",
           "items": {
             "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names are case-insensitive and treat spaces, hyphens and underscores as equivalent",
             "type": "string"
@@ -1631,6 +1673,7 @@ expression: pretty
           "type": "boolean"
         },
         "review_group": {
+          "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)",
           "items": {
             "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)",
             "type": "string"
