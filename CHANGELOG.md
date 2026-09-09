@@ -14,10 +14,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   lines collapse to `…[N identical lines folded]` and identical per-host blocks
   share one `h1, h2:-> …` body with `…[output identical on N hosts folded]`;
   `reboot` prints `rebooted & reconnected on h1, h2` and identical `FanOut`
-  failures list as `a, b: boom`. Verdicts, per-host banners and
-  error/warning/trace lines never fold and stay at the head so
-  `max_output_bytes` truncation preserves them. Output text only; MCP schemas
-  unchanged.
+  failures list as `a, b: boom`. Only clean-success folds: a failed host's
+  lines stay verbatim even without signal keywords, `Diagnostic::degradation`
+  never folds, and empty blocks never share a banner. Verdicts, per-host
+  banners and error/warning/`warn:`/trace/panic/fatal/exception/timeout/
+  cancel lines never fold and stay at the head so `max_output_bytes`
+  truncation preserves them. Identical-block sharing and identical-error
+  grouping both keep first-seen order, so hosts can regroup as `h1, h3` before
+  `h2` and the detail can read `a, c: boom; b: other` while headers keep
+  fan-out order. Output text only; MCP schemas unchanged.
 - Commands that address no template — `load_template`, `unload`, `list_templates`,
   `list_refhosts`, `updates`, `config`, `whoami`, `set_log_level`, and the REPL-only
   `quit` (`exit`/`EOF`) and `switch` — no longer accept `-T/--template` or
