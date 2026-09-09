@@ -30,6 +30,16 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
+use super::row_budget::{crush, row_notice};
+
+/// Narrowing flags named in the row-budget notice.
+const REFHOSTS_HINT: &str = "--name/--arch/--product/--version/--addon";
+
+/// Non-`free` or pool-claimed rows survive the crush: the actionable lock signal.
+fn is_anomaly_record(r: &Record) -> bool {
+    !matches!(r.lock.as_deref(), None | Some("free")) || r.pool.is_some()
+}
+
 /// One matched refhost, rendered as a table row or a JSON object.
 #[derive(Debug, Clone)]
 pub struct Record {
@@ -381,17 +391,43 @@ impl Command for ListRefhosts {
             probe_locks(&ProbeConfig::new(&config), &mut records).await;
         }
 
+        // Row budget backstops the whole-inventory dump: head+tail+anomalies, exact-deduped.
+        let crushed = crush(
+            records,
+            |r| {
+                (
+                    r.name.clone(),
+                    r.arch.clone(),
+                    r.product.clone(),
+                    r.version.clone(),
+                    r.addons.clone(),
+                    r.slot.clone(),
+                    r.lock.clone(),
+                    r.pool.clone(),
+                )
+            },
+            is_anomaly_record,
+        );
+        // --json emits the truncated array (valid JSON) plus an optional trailing notice line; strip the notice before parsing.
+        let notice = (crushed.truncated > 0)
+            .then(|| row_notice(crushed.truncated, crushed.total, REFHOSTS_HINT));
         if as_json {
-            session.display.println(&render_json(&records));
+            session.display.println(&render_json(&crushed.kept));
+            if let Some(notice) = notice {
+                session.display.println(&notice);
+            }
             return Ok(());
         }
-        if records.is_empty() {
+        if crushed.kept.is_empty() {
             session.display.println("no refhosts match");
             return Ok(());
         }
         session
             .display
-            .println(&render_table(&records, pool, free, verbose));
+            .println(&render_table(&crushed.kept, pool, free, verbose));
+        if let Some(notice) = notice {
+            session.display.println(&notice);
+        }
         Ok(())
     }
 }
@@ -967,5 +1003,115 @@ default:
         let args = matches(&ListRefhosts, &["-n", "nope-*"]);
         ListRefhosts.call(&mut session, &args).await.unwrap();
         assert!(buf.contents().contains("no refhosts match"));
+    }
+
+    // ------------------------------------------------------------ row budget
+
+    /// 150-record inventory with one mid-list `locked` anomaly and exact duplicates.
+    fn crush_records() -> Vec<Record> {
+        let mut recs: Vec<Record> = (0..150)
+            .map(|i| Record {
+                name: format!("host-{i:03}"),
+                arch: "x86_64".to_owned(),
+                product: "sles".to_owned(),
+                version: "15-6".to_owned(),
+                addons: vec![],
+                slot: None,
+                lock: Some("free".to_owned()),
+                pool: None,
+            })
+            .collect();
+        recs[100].name = "host-anomaly".to_owned();
+        recs[100].lock = Some("locked".to_owned());
+        recs.push(recs[0].clone());
+        recs.push(recs[1].clone());
+        recs
+    }
+
+    #[test]
+    fn row_budget_crushes_inventory_and_keeps_locked_anomaly() {
+        use super::super::row_budget::{ROW_CAP, crush};
+        let out = crush(
+            crush_records(),
+            |r| {
+                (
+                    r.name.clone(),
+                    r.arch.clone(),
+                    r.product.clone(),
+                    r.version.clone(),
+                    r.addons.clone(),
+                    r.slot.clone(),
+                    r.lock.clone(),
+                    r.pool.clone(),
+                )
+            },
+            is_anomaly_record,
+        );
+        assert_eq!(out.total, 150, "deduped total");
+        assert!(out.kept.len() <= ROW_CAP, "{}", out.kept.len());
+        assert!(out.kept.iter().any(|r| r.name == "host-anomaly"));
+        assert!(!out.kept.iter().any(|r| r.name == "host-060"));
+        assert!(out.truncated > 0);
+    }
+
+    #[test]
+    fn row_budget_json_stays_parseable_with_trailing_notice() {
+        use super::super::row_budget::{crush, row_notice};
+        let out = crush(
+            crush_records(),
+            |r| {
+                (
+                    r.name.clone(),
+                    r.arch.clone(),
+                    r.product.clone(),
+                    r.version.clone(),
+                    r.addons.clone(),
+                    r.slot.clone(),
+                    r.lock.clone(),
+                    r.pool.clone(),
+                )
+            },
+            is_anomaly_record,
+        );
+        let mut text = render_json(&out.kept);
+        text.push('\n');
+        text.push_str(&row_notice(out.truncated, out.total, REFHOSTS_HINT));
+        assert!(
+            text.contains("--name/--arch/--product/--version/--addon"),
+            "{text}"
+        );
+        let json_part: String = text
+            .lines()
+            .filter(|l| !l.contains("[truncated"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert!(arr.iter().any(|r| r["name"] == "host-anomaly"));
+    }
+
+    #[tokio::test]
+    async fn call_crushes_large_inventory_with_notice() {
+        use crate::commands::testkit::matches;
+        let mut yaml = String::from("default:\n");
+        for i in 0..150 {
+            yaml.push_str(&format!(
+                "  - name: host-{i:03}\n    arch: x86_64\n    product:\n      name: sles\n      version:\n        major: 15\n        minor: 6\n"
+            ));
+        }
+        let (mut session, buf, _dir) = session_with_refhosts_file(&yaml);
+        let args = matches(&ListRefhosts, &[]);
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("[truncated"), "{out}");
+        assert!(
+            out.contains("--name/--arch/--product/--version/--addon"),
+            "{out}"
+        );
+        assert!(
+            out.contains("host-000") && out.contains("host-149"),
+            "{out}"
+        );
+        assert!(!out.contains("host-060"), "middle row dropped: {out}");
     }
 }

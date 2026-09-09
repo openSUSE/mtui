@@ -46,6 +46,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   path) are refused, and endpoint URLs print userinfo-stripped. The REPL prints
   everything verbatim as before. No tool schema changed. `config set` of an
   endpoint URL acknowledges with the userinfo-stripped value.
+- Unbounded listings now crush to a row budget — first-40 + last-10 + all
+  anomaly rows, exact-deduped, hard cap 100 — instead of dumping thousands of
+  rows into the client's context: `updates` (anomaly: non-`testing` status;
+  narrow with `--limit/--field/-G`), `list_refhosts` (anomaly: non-`free` lock
+  or pool claim; narrow with `--name/--arch/--product/--version/--addon`), and
+  `openqa_overview` (anomaly: non-`passed` version rows, build checks with
+  matches; display only, `--export` still writes the full overview; narrow with
+  `--no-aggregated/--aggregated-groups/--days/--test-pattern`). `--json` still
+  prints a valid JSON array (truncated) with the
+  `…[truncated N of M rows; …]` notice on a trailing line — strip it before
+  parsing. MCP tool names/schemas unchanged.
 
 ### Deprecated
 
