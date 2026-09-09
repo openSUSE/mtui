@@ -12,8 +12,8 @@ use thiserror::Error;
 pub type CommandResult = Result<(), CommandError>;
 
 /// An error raised while resolving or running a command.
-/// Groups identical per-template errors so a fan-out failing the same way on
-/// many templates lists each RRID once (`a, b: boom`) instead of repeating it.
+/// Groups identical per-template errors in first-seen order, so the detail can
+/// reorder RRIDs (`a, c: boom; b: other`) while the header keeps fan-out order.
 fn fanout_detail(failures: &[(String, CommandError)]) -> String {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for (rrid, err) in failures {
@@ -254,6 +254,22 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "fan-out failed on a, b, c (a, b: boom; c: different)"
+        );
+    }
+
+    #[test]
+    fn fanout_grouping_keeps_first_seen_order() {
+        let e = CommandError::FanOut {
+            failures: vec![
+                ("a".into(), CommandError::Other("boom".into())),
+                ("b".into(), CommandError::Other("other".into())),
+                ("c".into(), CommandError::Other("boom".into())),
+            ],
+            stop: None,
+        };
+        assert_eq!(
+            e.to_string(),
+            "fan-out failed on a, b, c (a, c: boom; b: other)"
         );
     }
 }

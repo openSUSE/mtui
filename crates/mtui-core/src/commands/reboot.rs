@@ -86,8 +86,8 @@ impl Command for Reboot {
             }
         }
         // Identical successes share one verdict; failures stay per-host.
+        // `outcomes` is a BTreeMap so `ok` is already sorted.
         if ok.len() > 1 {
-            ok.sort();
             session
                 .display
                 .println(&format!("rebooted & reconnected on {}", ok.join(", ")));
@@ -203,6 +203,19 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("rebooted & reconnected on h1, h2"), "{out}");
         assert!(out.contains("h3: FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn all_fail_prints_only_failures() {
+        let (mut session, buf) =
+            session_with_reboot_outcomes("SUSE:Maintenance:1:1", &[("h1", false), ("h2", false)]);
+        let args = matches(&Reboot, &[]);
+        let err = Reboot.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("h1") && m.contains("h2")));
+        let out = buf.contents();
+        assert!(!out.contains("rebooted & reconnected"), "{out}");
+        assert!(out.contains("h1: FAILED"), "{out}");
+        assert!(out.contains("h2: FAILED"), "{out}");
     }
 
     #[tokio::test]
