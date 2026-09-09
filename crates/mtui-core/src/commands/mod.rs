@@ -43,6 +43,7 @@ mod openqa_overview;
 mod regenerate;
 mod reload_openqa;
 mod request_review;
+pub(crate) mod row_budget;
 mod simpleset;
 mod updates;
 

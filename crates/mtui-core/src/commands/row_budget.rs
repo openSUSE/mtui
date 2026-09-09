@@ -1,0 +1,131 @@
+//! Row-budget crush for unbounded listing outputs (SmartCrusher-lite).
+//!
+//! Row budget: keep first-40 + last-10 + all anomaly rows, exact-dedup identical rows, hard cap 100.
+
+use std::collections::HashSet;
+use std::hash::Hash;
+
+/// Head rows always kept.
+pub(crate) const ROW_HEAD: usize = 40;
+/// Tail rows always kept.
+pub(crate) const ROW_TAIL: usize = 10;
+/// Hard cap on kept rows, anomalies included.
+pub(crate) const ROW_CAP: usize = 100;
+
+/// Outcome of [`crush`]: the kept items plus truncation counts for the notice.
+pub(crate) struct CrushOutcome<T> {
+    /// Kept items in original order.
+    pub kept: Vec<T>,
+    /// Post-dedup total the kept subset was drawn from.
+    pub total: usize,
+    /// `total - kept.len()`; zero means nothing was dropped.
+    pub truncated: usize,
+}
+
+/// Crush `items` to budget, preserving order.
+///
+/// Exact-dedups on `key`, then keeps head + tail + all middle anomalies up to [`ROW_CAP`].
+pub(crate) fn crush<T, K: Eq + Hash>(
+    items: Vec<T>,
+    mut key_of: impl FnMut(&T) -> K,
+    mut is_anomaly: impl FnMut(&T) -> bool,
+) -> CrushOutcome<T> {
+    // Dedup first so identical rows never consume budget twice.
+    let mut seen = HashSet::new();
+    let mut items: Vec<T> = items
+        .into_iter()
+        .filter(|it| seen.insert(key_of(it)))
+        .collect();
+    let total = items.len();
+    if total <= ROW_CAP {
+        return CrushOutcome {
+            kept: items,
+            total,
+            truncated: 0,
+        };
+    }
+    let tail_start = total - ROW_TAIL;
+    let mut anomaly_idx: Vec<usize> = (ROW_HEAD..tail_start)
+        .filter(|&i| is_anomaly(&items[i]))
+        .collect();
+    // Cap anomalies to what fits between head and tail.
+    anomaly_idx.truncate(ROW_CAP - ROW_HEAD - ROW_TAIL);
+    let keep: HashSet<usize> = (0..ROW_HEAD)
+        .chain(anomaly_idx)
+        .chain(tail_start..total)
+        .collect();
+    let mut kept = Vec::with_capacity(keep.len());
+    for (i, it) in items.drain(..).enumerate() {
+        if keep.contains(&i) {
+            kept.push(it);
+        }
+    }
+    let truncated = total - kept.len();
+    CrushOutcome {
+        kept,
+        total,
+        truncated,
+    }
+}
+
+/// Human/JSON trailing notice naming the narrowing flags.
+#[must_use]
+pub(crate) fn row_notice(truncated: usize, total: usize, hint: &str) -> String {
+    format!("…[truncated {truncated} of {total} rows; narrow with {hint}]")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn under_cap_passes_through_with_no_truncation() {
+        let out = crush(vec![1, 2, 3], |v| *v, |_| false);
+        assert_eq!(out.kept, vec![1, 2, 3]);
+        assert_eq!(out.truncated, 0);
+    }
+
+    #[test]
+    fn over_cap_keeps_head_tail_and_all_middle_anomalies() {
+        // 0..150, anomalies at 50 and 140 (tail) plus 100.
+        let items: Vec<usize> = (0..150).collect();
+        let out = crush(items, |v| *v, |v| *v == 50 || *v == 100 || *v == 140);
+        assert_eq!(out.total, 150);
+        // Head 0..40, anomalies 50+100, tail 140..150 (140 already in tail).
+        assert!(out.kept.contains(&0) && out.kept.contains(&39));
+        assert!(out.kept.contains(&50) && out.kept.contains(&100));
+        assert!(out.kept.contains(&140) && out.kept.contains(&149));
+        assert!(!out.kept.contains(&60), "non-anomaly middle row dropped");
+        assert_eq!(out.kept.len(), ROW_HEAD + ROW_TAIL + 2);
+        assert_eq!(out.truncated, 150 - out.kept.len());
+        // Order preserved.
+        let mut sorted = out.kept.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, out.kept);
+    }
+
+    #[test]
+    fn anomaly_overflow_truncates_middle_first_deterministically() {
+        // Every middle row anomalous: only the first fitting anomalies survive.
+        let items: Vec<usize> = (0..300).collect();
+        let out = crush(items, |v| *v, |v| *v >= ROW_HEAD);
+        assert_eq!(out.kept.len(), ROW_CAP);
+        assert!(out.kept.contains(&0));
+        assert!(out.kept.contains(&299));
+    }
+
+    #[test]
+    fn exact_duplicates_consume_no_budget() {
+        let items = vec![7, 7, 7, 8, 8, 9];
+        let out = crush(items, |v| *v, |_| false);
+        assert_eq!(out.kept, vec![7, 8, 9]);
+        assert_eq!(out.truncated, 0);
+    }
+
+    #[test]
+    fn notice_names_narrowing_flags() {
+        let n = row_notice(90, 150, "--limit/--field/-G");
+        assert!(n.contains("[truncated 90 of 150"), "{n}");
+        assert!(n.contains("--limit/--field/-G"), "{n}");
+    }
+}
