@@ -40,6 +40,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   workflows that never use them; the `updates -F`/`--json` helps point at
   `--limit`, and the `testreport_read`/`patch`/`write` and `get`/`put` tool
   descriptions are terser wordings of the same contracts.
+- `testreport_read` collapses an exact re-read (same template, file,
+  offset/limit with unchanged content) to `[unchanged since …, N lines; use
+  offset/limit to move]` instead of resending the window. Per-session cache of
+  the last 16 windows; any edit resends in full. Output-only, no schema change.
 
 ### Deprecated
 

@@ -45,8 +45,9 @@
 //! idempotent, bounded by [`HOST_CLOSE_TIMEOUT`] so a wedged close cannot block
 //! the idle-sweep. Groups keep their now-dead targets, dropped with the report.
 //!
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -516,6 +517,35 @@ pub struct McpSession {
     /// `config.mcp_max_completed_jobs`: terminal records beyond it are evicted
     /// oldest-finished-first. `0` disables the cap.
     max_completed_jobs: usize,
+    /// Last [`MAX_REREAD_WINDOWS`] `testreport_read` windows (FIFO, most-recent
+    /// last). Per-session, so no cross-client leakage; the key carries the RRID
+    /// so templates never collide. Guard held only for the integer compare.
+    reread: StdMutex<VecDeque<(RereadKey, RereadEntry)>>,
+}
+
+/// Bound on cached `testreport_read` windows per session (see `reread`).
+///
+/// Mirrors the `max_active_jobs = 16` default: small enough to stay O(1).
+pub(crate) const MAX_REREAD_WINDOWS: usize = 16;
+
+/// Cache key for one `testreport_read` window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RereadKey {
+    /// Resolved template (`template` arg or the active RRID); isolates templates.
+    pub rrid: String,
+    /// `relpath` or `"log"` for the default file.
+    pub relpath: String,
+    /// 1-based first line.
+    pub offset: usize,
+    /// Max lines (`None` = to end).
+    pub limit: Option<usize>,
+}
+
+/// Cached outcome of one window: hash of the returned (capped) text + total.
+#[derive(Debug, Clone, Copy)]
+struct RereadEntry {
+    hash: u64,
+    line_count: usize,
 }
 
 /// An acquired hold on the concurrency gate for one command/tool invocation.
@@ -576,6 +606,7 @@ impl McpSession {
             job_counter: AtomicU64::new(0),
             max_active_jobs,
             max_completed_jobs,
+            reread: StdMutex::new(VecDeque::new()),
         })
     }
 
@@ -616,6 +647,51 @@ impl McpSession {
     #[must_use]
     pub(crate) fn max_input_bytes(&self) -> usize {
         self.max_input_bytes
+    }
+
+    /// Hash of a returned window, for the re-read cache.
+    #[must_use]
+    pub(crate) fn hash_content(text: &str) -> u64 {
+        let mut h = DefaultHasher::new();
+        text.hash(&mut h);
+        h.finish()
+    }
+
+    /// Short notice replacing an exact re-read's payload.
+    #[must_use]
+    pub(crate) fn reread_notice(hash: u64, line_count: usize) -> String {
+        format!(
+            "[unchanged since {:08x}, {line_count} lines; use offset/limit to move]",
+            hash as u32
+        )
+    }
+
+    /// Exact re-read dedup: `Some(notice)` on identical window+content, else
+    /// records the window and returns `None` (caller sends the full text).
+    ///
+    /// LRU to [`MAX_REREAD_WINDOWS`]; a changed file (other hash or total)
+    /// always misses, so it is never suppressed.
+    pub(crate) fn dedup_reread(
+        &self,
+        key: RereadKey,
+        hash: u64,
+        line_count: usize,
+    ) -> Option<String> {
+        let mut cache = self.reread.lock().expect("reread cache poisoned");
+        if let Some(pos) = cache.iter().position(|(k, _)| *k == key) {
+            let entry = cache[pos].1;
+            if entry.hash == hash && entry.line_count == line_count {
+                let record = cache.remove(pos).expect("position checked");
+                cache.push_back(record);
+                return Some(Self::reread_notice(hash, line_count));
+            }
+            cache.remove(pos);
+        }
+        cache.push_back((key, RereadEntry { hash, line_count }));
+        while cache.len() > MAX_REREAD_WINDOWS {
+            cache.pop_front();
+        }
+        None
     }
 
     /// The configured tool-surface profile (`full` / `core`), consumed by

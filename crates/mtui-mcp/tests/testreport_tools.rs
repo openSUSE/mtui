@@ -181,3 +181,33 @@ async fn dispatch_read_traversal_is_refused() {
         .expect_err("traversal refused");
     assert!(err.stderr.contains("escapes"), "{err:?}");
 }
+
+/// Identical re-reads collapse to a notice; an edit resends the full text.
+#[tokio::test]
+async fn dispatch_reread_dedups_identical_and_resends_after_edit() {
+    let (session, _tmp, log) = loaded("a\nb\n").await;
+
+    let first = call(&session, "testreport_read", json!({})).await;
+    assert_eq!(first["content"], "a\nb\n");
+
+    let second = call(&session, "testreport_read", json!({})).await;
+    let notice = second["content"].as_str().unwrap();
+    assert!(notice.contains("unchanged since"), "{notice:?}");
+    assert!(notice.contains("use offset/limit to move"), "{notice:?}");
+    assert_eq!(second["line_count"], 2);
+
+    std::fs::write(&log, "a\nCHANGED\n").unwrap();
+    let third = call(&session, "testreport_read", json!({})).await;
+    assert_eq!(third["content"], "a\nCHANGED\n");
+
+    let window = call(
+        &session,
+        "testreport_read",
+        json!({ "offset": 2, "limit": 1 }),
+    )
+    .await;
+    assert_eq!(
+        window["content"], "CHANGED\n",
+        "new window is full: {window}"
+    );
+}
