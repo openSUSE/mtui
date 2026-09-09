@@ -34,21 +34,26 @@ async fn run_uname_across_two_hosts_aggregates_colored_output_shape() {
 
     let out = buf.contents();
 
-    // Each host gets a banner line `<host>:-> uname -a [0]` followed by stdout.
-    for host in ["ref-host-1", "ref-host-2"] {
-        assert!(
-            out.contains(&format!("{host}:-> uname -a [0]")),
-            "missing per-host banner for {host}:\n{out}"
-        );
-    }
-    // Both hosts' stdout is aggregated.
+    // Identical clean blocks share one combined banner and body.
+    assert!(
+        out.contains("ref-host-1, ref-host-2:-> uname -a [0]"),
+        "missing combined banner:\n{out}"
+    );
+    assert!(
+        out.contains("…[output identical on 2 hosts folded]"),
+        "missing fold marker:\n{out}"
+    );
     assert_eq!(
         out.matches("Linux ref 6.4.0 x86_64").count(),
-        2,
-        "expected each host's stdout once:\n{out}"
+        1,
+        "shared body once:\n{out}"
     );
     // No stderr block when stderr is empty.
     assert!(!out.contains("stderr:"), "unexpected stderr block:\n{out}");
+    // Verdict stays at the head so truncation preserves it.
+    let verdict = out.find("run completed on").expect("missing verdict");
+    let body = out.find("ref-host-1, ref-host-2:->").expect("missing body");
+    assert!(verdict < body, "verdict must precede the body:\n{out}");
 }
 
 #[tokio::test]
