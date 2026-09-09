@@ -47,7 +47,6 @@
 //!
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -517,7 +516,7 @@ pub struct McpSession {
     /// `config.mcp_max_completed_jobs`: terminal records beyond it are evicted
     /// oldest-finished-first. `0` disables the cap.
     max_completed_jobs: usize,
-    /// Last [`MAX_REREAD_WINDOWS`] `testreport_read` windows (FIFO, most-recent
+    /// Last [`MAX_REREAD_WINDOWS`] `testreport_read` windows (LRU, most-recent
     /// last). Per-session, so no cross-client leakage; the key carries the RRID
     /// so templates never collide. Guard held only for the integer compare.
     reread: StdMutex<VecDeque<(RereadKey, RereadEntry)>>,
@@ -652,9 +651,13 @@ impl McpSession {
     /// Hash of a returned window, for the re-read cache.
     #[must_use]
     pub(crate) fn hash_content(text: &str) -> u64 {
-        let mut h = DefaultHasher::new();
-        text.hash(&mut h);
-        h.finish()
+        // FNV-1a64: specified and std-independent (DefaultHasher is not stable).
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in text.as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h
     }
 
     /// Short notice replacing an exact re-read's payload.
