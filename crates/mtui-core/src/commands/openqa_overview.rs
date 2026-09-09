@@ -10,6 +10,21 @@ use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
+use super::row_budget::{crush, row_notice};
+
+/// Narrowing flags named in the row-budget notices.
+const OPENQA_HINT: &str = "--no-aggregated/--aggregated-groups/--days/--test-pattern";
+
+/// Non-`passed` rows survive the crush: the actionable openQA signal.
+fn is_anomaly_version(row: &oqa::VersionResult) -> bool {
+    row.status != "passed"
+}
+
+/// Build checks with extracted matches survive the crush.
+fn is_anomaly_build(entry: &oqa::BuildCheckResult) -> bool {
+    !entry.matches.is_empty()
+}
+
 /// The aggregated-update job groups offered for tab completion.
 const AGGREGATED_GROUP_CHOICES: &[&str] = &["core", "containers", "yast", "security"];
 
@@ -239,8 +254,28 @@ impl Command for OpenQAOverview {
             session
                 .display
                 .println(&session.display.blue("Single incidents - Core"));
-            for row in &single_incidents {
+            // Row budget backstops many-version incidents: head+tail+anomalies.
+            let single = crush(
+                single_incidents.clone(),
+                |r| {
+                    (
+                        r.version.clone(),
+                        r.url.clone(),
+                        r.status.clone(),
+                        r.failed_count,
+                        r.running_count,
+                        r.note.clone(),
+                    )
+                },
+                is_anomaly_version,
+            );
+            for row in &single.kept {
                 print_version_row(session, row);
+            }
+            if single.truncated > 0 {
+                session
+                    .display
+                    .println(&row_notice(single.truncated, single.total, OPENQA_HINT));
             }
 
             if !no_aggregated {
@@ -250,8 +285,29 @@ impl Command for OpenQAOverview {
                         "\nAggregated updates - {}",
                         title_case(&group.group)
                     )));
-                    for row in &group.versions {
+                    let versions = crush(
+                        group.versions.clone(),
+                        |r| {
+                            (
+                                r.version.clone(),
+                                r.url.clone(),
+                                r.status.clone(),
+                                r.failed_count,
+                                r.running_count,
+                                r.note.clone(),
+                            )
+                        },
+                        is_anomaly_version,
+                    );
+                    for row in &versions.kept {
                         print_version_row(session, row);
+                    }
+                    if versions.truncated > 0 {
+                        session.display.println(&row_notice(
+                            versions.truncated,
+                            versions.total,
+                            OPENQA_HINT,
+                        ));
                     }
                 }
                 if aggregated.is_empty() {
@@ -279,8 +335,18 @@ impl Command for OpenQAOverview {
         if build_checks.is_empty() {
             session.display.println("No build checks for this incident");
         } else {
-            for entry in &build_checks {
+            let checks = crush(
+                build_checks.clone(),
+                |e| (e.url.clone(), e.matches.clone(), e.summary.clone()),
+                is_anomaly_build,
+            );
+            for entry in &checks.kept {
                 print_build_check(session, entry);
+            }
+            if checks.truncated > 0 {
+                session
+                    .display
+                    .println(&row_notice(checks.truncated, checks.total, OPENQA_HINT));
             }
         }
 
@@ -689,6 +755,77 @@ mod tests {
             buf.contents().contains("NOT exported"),
             "{}",
             buf.contents()
+        );
+    }
+
+    // ------------------------------------------------------------ row budget
+
+    /// 150 version rows with one mid-list `failed` anomaly and exact duplicates.
+    fn crush_versions() -> Vec<oqa::VersionResult> {
+        let mut rows: Vec<oqa::VersionResult> = (0..150)
+            .map(|i| oqa::VersionResult {
+                version: format!("15-SP{i:03}"),
+                url: format!("http://oqa/{i}"),
+                status: "passed".to_owned(),
+                ..Default::default()
+            })
+            .collect();
+        rows[100].status = "failed".to_owned();
+        rows[100].failed_count = 3;
+        rows.push(rows[0].clone());
+        rows
+    }
+
+    #[test]
+    fn row_budget_crushes_versions_and_keeps_failed_anomaly() {
+        use super::super::row_budget::{ROW_CAP, crush};
+        let out = crush(
+            crush_versions(),
+            |r| {
+                (
+                    r.version.clone(),
+                    r.url.clone(),
+                    r.status.clone(),
+                    r.failed_count,
+                    r.running_count,
+                    r.note.clone(),
+                )
+            },
+            is_anomaly_version,
+        );
+        assert_eq!(out.total, 150, "deduped total");
+        assert!(out.kept.len() <= ROW_CAP, "{}", out.kept.len());
+        assert!(out.kept.iter().any(|r| r.status == "failed"));
+        assert!(!out.kept.iter().any(|r| r.version == "15-SP060"));
+        assert!(out.truncated > 0);
+    }
+
+    #[test]
+    fn row_budget_crushes_build_checks_and_keeps_matches() {
+        use super::super::row_budget::crush;
+        let mut entries: Vec<oqa::BuildCheckResult> = (0..150)
+            .map(|i| oqa::BuildCheckResult {
+                url: format!("http://qam/{i}.log"),
+                ..Default::default()
+            })
+            .collect();
+        entries[100].matches = vec!["FAIL line".to_owned()];
+        let out = crush(
+            entries,
+            |e| (e.url.clone(), e.matches.clone(), e.summary.clone()),
+            is_anomaly_build,
+        );
+        assert!(out.kept.iter().any(|e| e.url == "http://qam/100.log"));
+        assert!(!out.kept.iter().any(|e| e.url == "http://qam/60.log"));
+    }
+
+    #[test]
+    fn row_budget_notice_names_narrowing_flags() {
+        use super::super::row_budget::row_notice;
+        let n = row_notice(90, 150, OPENQA_HINT);
+        assert!(
+            n.contains("--no-aggregated/--aggregated-groups/--days"),
+            "{n}"
         );
     }
 }

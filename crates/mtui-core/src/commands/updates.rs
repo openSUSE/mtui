@@ -13,6 +13,18 @@ use crate::commands::apicall::teregen_client;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
+use super::row_budget::{crush, row_notice};
+
+/// Narrowing flags named in the row-budget notice.
+const UPDATES_HINT: &str = "--limit/--field/-G";
+
+/// Non-`testing` rows survive the crush: the actionable signal under `--status all`.
+fn is_anomaly_row(v: &Value) -> bool {
+    v.get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s != "testing")
+}
+
 /// The `--status` value that widens the queue to every status.
 const STATUS_ALL: &str = "all";
 
@@ -320,26 +332,45 @@ impl Command for Updates {
             return Ok(());
         }
 
-        let shown: &[Value] = if limit > 0 && limit < rows.len() {
-            &rows[..limit]
+        let limited: Vec<Value> = if limit > 0 && limit < rows.len() {
+            rows.into_iter().take(limit).collect()
         } else {
-            &rows
+            rows
         };
+        // Row budget backstops `--limit 0=all`: head+tail+anomalies, exact-deduped.
+        let crushed = crush(
+            limited,
+            |v| serde_json::to_string(v).unwrap_or_default(),
+            is_anomaly_row,
+        );
+        let shown = &crushed.kept;
+        // --json emits the truncated array (valid JSON) plus an optional trailing notice line; strip the notice before parsing.
+        let notice = (crushed.truncated > 0)
+            .then(|| row_notice(crushed.truncated, crushed.total, UPDATES_HINT));
 
         if as_json {
-            // The raw rows, nothing discarded, and no count header: stdout is
-            // the JSON document.
             let doc = Value::Array(shown.to_vec());
             session.display.println(
                 &serde_json::to_string_pretty(&doc)
                     .expect("serialising a serde_json::Value is infallible"),
             );
+            if let Some(notice) = notice {
+                session.display.println(&notice);
+            }
             return Ok(());
         }
 
-        session
-            .display
-            .println(&format!("Update queue ({}):", shown.len()));
+        if crushed.truncated > 0 {
+            session.display.println(&format!(
+                "Update queue ({} of {}):",
+                shown.len(),
+                crushed.total
+            ));
+        } else {
+            session
+                .display
+                .println(&format!("Update queue ({}):", shown.len()));
+        }
         if specs.is_empty() {
             for u in shown {
                 session.display.println(&render_row(u, want_assignment));
@@ -351,6 +382,9 @@ impl Command for Updates {
                 }
                 session.display.println(&render_fields(u, &specs));
             }
+        }
+        if let Some(notice) = notice {
+            session.display.println(&notice);
         }
         Ok(())
     }
@@ -1597,5 +1631,84 @@ mod tests {
                 .is_err()
         );
         assert!(cmd.try_get_matches_from(["--json"]).is_ok());
+    }
+
+    // ------------------------------------------------------------ row budget
+
+    /// 150-row queue with one mid-queue non-`testing` anomaly and exact duplicates.
+    fn crush_fixture() -> Vec<serde_json::Value> {
+        let mut rows: Vec<serde_json::Value> = (0..150)
+            .map(|i| {
+                serde_json::json!({
+                    "priority": 1, "status": "testing", "kind": "Maintenance",
+                    "id": format!("row-{i:03}"),
+                })
+            })
+            .collect();
+        rows[100] = serde_json::json!({
+            "priority": 1, "status": "failed", "kind": "Maintenance",
+            "id": "row-anomaly",
+        });
+        rows.push(rows[0].clone());
+        rows.push(rows[1].clone());
+        rows
+    }
+
+    #[tokio::test]
+    async fn row_budget_crushes_human_queue_and_keeps_anomaly() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": crush_fixture()})),
+            )
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["--status", "all"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("row-anomaly"), "anomaly must survive: {out}");
+        assert!(!out.contains("row-060"), "middle normal row dropped: {out}");
+        assert!(out.contains("row-000") && out.contains("row-149"), "{out}");
+        assert!(out.contains("[truncated"), "{out}");
+        assert!(out.contains("--limit/--field/-G"), "{out}");
+        assert!(
+            out.contains(" of 150"),
+            "deduped total in notice/header: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn row_budget_json_stays_parseable_with_trailing_notice() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"updates": crush_fixture()})),
+            )
+            .mount(&server)
+            .await;
+        let (mut session, buf) = teregen_session(&server);
+        let args = matches(&Updates, &["--status", "all", "--json"]);
+        Updates.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("[truncated"), "{out}");
+        assert!(out.contains("--limit/--field/-G"), "{out}");
+        let json_part: String = out
+            .lines()
+            .filter(|l| !l.contains("[truncated"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+        let rows = parsed.as_array().unwrap();
+        assert!(
+            rows.len() <= super::super::row_budget::ROW_CAP,
+            "{}",
+            rows.len()
+        );
+        assert!(rows.iter().any(|r| r["id"] == "row-anomaly"), "{out}");
     }
 }

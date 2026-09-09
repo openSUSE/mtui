@@ -12,6 +12,8 @@ mod ambiguous_template;
 mod http_body_limit;
 #[path = "http_isolation.rs"]
 mod http_isolation;
+#[path = "json_crush.rs"]
+mod json_crush;
 #[path = "mcp_jobs.rs"]
 mod mcp_jobs;
 #[path = "nonempty_success.rs"]

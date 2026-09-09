@@ -90,6 +90,7 @@ mtui-types.workspace = true
 tokio-util = { workspace = true }
 futures.workspace = true
 tempfile = "3"
+wiremock.workspace = true
 # Serialises the `$RUST_LOG` mutations in the `startup_filter` tests: the whole
 # crate's tests share one process, so the env var is a process-global.
 serial_test.workspace = true
