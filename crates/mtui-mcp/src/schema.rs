@@ -112,6 +112,10 @@ fn arg_to_property(arg: &Arg) -> (Value, bool) {
     if is_list {
         let mut array = Map::new();
         array.insert("type".to_owned(), Value::String("array".to_owned()));
+        // Mirror, not move (#545): clients may render either level.
+        if let Some(desc) = description(arg) {
+            array.insert("description".to_owned(), Value::String(desc));
+        }
         array.insert("items".to_owned(), Value::Object(inner));
         apply_list_bounds(&mut array, arg.get_num_args());
         // Required only when clap says so *and* there is no default; otherwise
@@ -486,6 +490,17 @@ mod tests {
         let items = groups["items"].as_object().unwrap();
         assert_eq!(items["type"], "string");
         assert!(items.get("enum").is_some());
+    }
+
+    #[test]
+    fn list_description_mirrored_on_array_and_items() {
+        // #545: `run command` help lives on both levels for per-property clients.
+        let schema = schema_for("run");
+        let command = &props(&schema)["command"];
+        assert_eq!(command["type"], "array");
+        let desc = "Command as argv tokens (no shell); pipelines need three tokens: sh, -c, <line>";
+        assert_eq!(command["description"], desc);
+        assert_eq!(command["items"]["description"], desc);
     }
 
     #[test]
