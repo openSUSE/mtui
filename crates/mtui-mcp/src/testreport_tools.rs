@@ -57,7 +57,7 @@ const READ_FIRST_WARNING: &str = "Always call `testreport_read` immediately befo
 /// Glued onto every description: with several templates loaded a tool must be
 /// told which one to act on (there is no client-addressable active pointer).
 const TEMPLATE_NOTE: &str = "Pass `template=<rrid>` to target a specific loaded template; required when more \
-     than one template is loaded.";
+     than one is loaded.";
 
 /// Valid single-value codes for the per-bug `STATUS:` field.
 const STATUS_CODES: &[&str] = &[
@@ -749,13 +749,11 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
     let read = ToolDescriptor {
         name: "testreport_read".to_owned(),
         description: format!(
-            "Read a file from the loaded testreport's checkout. Returns the path, total \
-             line count, and content (utf-8, errors replaced). By default (no `relpath`) \
-             reads the report's `log` file; pass `relpath` to read another checkout file \
-             instead, e.g. 'build_checks/<pkg>.<arch>.log', 'install_logs/<host>.log', \
-             'source.diff' or 'patchinfo.xml' — the path may not escape the checkout \
-             directory. Pass `offset` (1-based first line) and/or `limit` (max lines) to \
-             read a line window instead of the whole file. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+            "Read a file from the loaded testreport checkout: path, total \
+             line count, content (utf-8, errors replaced). Without `relpath` reads \
+             the `log` file; `relpath` names another checkout file, which must stay \
+             inside it. `offset`/`limit` page a 1-based line window — page large \
+             files instead of reading them whole. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -794,11 +792,9 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
         name: "testreport_patch".to_owned(),
         description: format!(
             "Splice an inclusive 1-indexed line range in a testreport checkout file, \
-             atomically. By default (no `relpath`) targets the report's `log` file; pass \
-             `relpath` to patch another checkout file instead, e.g. \
-             'install_logs/<host>.log' — the path may not escape the checkout directory \
-             and must already exist. `end_line == start_line - 1` inserts before \
-             `start_line` without replacing anything. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+             atomically (default: the `log` file; `relpath` names another, which must \
+             already exist and stay inside the checkout). `end_line == start_line - 1` \
+             inserts before `start_line`. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -828,13 +824,10 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
     let write = ToolDescriptor {
         name: "testreport_write".to_owned(),
         description: format!(
-            "Overwrite a testreport checkout file with the given content, atomically. By \
-             default (no `relpath`) targets the report's `log` file; pass `relpath` to \
-             write another checkout file instead, e.g. 'install_logs/<host>.log' — the \
-             path may not escape the checkout directory. `relpath` may name a \
-             not-yet-existing file, but its parent directory must already exist. Use this \
-             as the fallback when patching would require tracking line-number drift \
-             across many edits. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+            "Atomically overwrite a testreport checkout file with the given content \
+             (default: the `log` file; `relpath` names another, which may be new if its \
+             parent exists, and must stay inside the checkout). Fallback when line drift \
+             makes patching unreliable. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -1060,6 +1053,20 @@ mod tests {
 
     fn log_path(tmp: &tempfile::TempDir) -> std::path::PathBuf {
         tmp.path().join("checkout").join("log")
+    }
+
+    #[test]
+    fn read_description_points_at_paging() {
+        // Token nudge: the heavy reader must name its narrowing knob.
+        let read = testreport_tool_descriptors()
+            .into_iter()
+            .find(|d| d.name == "testreport_read")
+            .expect("testreport_read descriptor exists");
+        assert!(
+            read.description.contains("page large files"),
+            "read description lost the paging hint: {}",
+            read.description
+        );
     }
 
     // ---- refusal without a loaded report ---------------------------------- //

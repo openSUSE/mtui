@@ -34,6 +34,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `config show` and `config set` gained help text; the `config_show`/`config_set`
   MCP tool descriptions are no longer the bare tool name, and `set`'s
   `attribute`/`value` are described (#597).
+- MCP token nudges, no behaviour change: the docs and example config recommend
+  `profile = "core"` for agent clients (36 tools on every request vs 65 in
+  `full`), with a `tools_deny = ["updates", "openqa_overview"]` recipe for
+  workflows that never use them; the `updates -F`/`--json` helps point at
+  `--limit`, and the `testreport_read`/`patch`/`write` and `get`/`put` tool
+  descriptions are terser wordings of the same contracts.
 
 ### Deprecated
 

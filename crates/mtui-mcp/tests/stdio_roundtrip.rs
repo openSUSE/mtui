@@ -174,17 +174,13 @@ async fn transfer_tools_are_served_and_dispatched() {
                 .iter()
                 .find(|t| t.name.as_ref() == name)
                 .unwrap_or_else(|| panic!("`{name}` missing from tools/list"));
-            // The in-band replacements, not the synthesized path-based forms.
+            // The in-band replacements, not the synthesized path-based forms:
+            // both carry the content in the call (`content_b64`).
             assert!(
                 tool.description
                     .as_deref()
                     .unwrap_or("")
-                    .contains("in-band")
-                    || tool
-                        .description
-                        .as_deref()
-                        .unwrap_or("")
-                        .contains("payload carried in the call"),
+                    .contains("content_b64"),
                 "`{name}` must be the in-band tool: {:?}",
                 tool.description
             );

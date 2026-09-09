@@ -76,13 +76,11 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
     let get = ToolDescriptor {
         name: "get".to_owned(),
         description: format!(
-            "Download a file from every enabled reference host and return its content \
-             in-band, per host: UTF-8 content as `content`, binary as `content_b64`, \
-             always with the full remote `size` and a `truncated` flag (per-host reads \
-             are capped at [mcp] max_input_bytes and each host gets an equal share of \
-             [mcp] max_output_bytes on the wire). Pass `hosts` to retry or page a \
-             subset. Folder paths (trailing `/`) are not supported in-band. Any host \
-             failure fails the call and names the host. {TEMPLATE_NOTE}"
+            "Download a file from every enabled host, content in-band per host \
+             (`content` utf-8, `content_b64` binary, always with remote `size` and \
+             `truncated`). Capped per host at [mcp] max_input_bytes plus an equal share \
+             of [mcp] max_output_bytes; pass `hosts` to retry or page a subset. No \
+             folders in-band. Any host failure fails the call, naming the host. {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -108,12 +106,10 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
     let put = ToolDescriptor {
         name: "put".to_owned(),
         description: format!(
-            "Upload a payload carried in the call to every enabled reference host, at \
-             `<target tempdir>/<filename>` — the same place the REPL `put` command \
-             uploads to. Pass the payload as `content` (UTF-8) or `content_b64` \
-             (base64), exactly one of the two; payloads above [mcp] max_input_bytes \
-             are refused rather than truncated. Any host failure fails the call and \
-             names the host. {TEMPLATE_NOTE}"
+            "Upload `content` (utf-8) or `content_b64` (exactly one) to \
+             `<target tempdir>/<filename>` on every enabled host. Payloads above [mcp] \
+             max_input_bytes are refused, not truncated. Any host failure fails the \
+             call, naming the host. {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![

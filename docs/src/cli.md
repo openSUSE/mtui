@@ -707,10 +707,10 @@ Options:
           filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)
 
   -F, --field <FIELD>
-          select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names are case-insensitive and treat spaces, hyphens and underscores as equivalent
+          select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit
 
       --json
-          print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit; not combinable with -F); an empty queue prints []
+          print the raw TeReGen rows as a JSON array (whole rows, unlike -F; honours --limit; not combinable with -F); an empty queue prints []
 
       --status <STATUS>
           filter by status (default: testing); use 'all' for every status

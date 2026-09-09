@@ -56,6 +56,18 @@ Fine-tune with `[mcp] tools_allow` (add specific tools on top of the profile) an
 in [Configuration](configuration.md) for these and the resource caps
 (`max_output_bytes`, `max_active_jobs`, session budget, …).
 
+Agent clients should prefer **`core`**: the full surface (65 tools) is sent on
+every request, while `core` (36 tools) covers the everyday flow — load →
+inspect → run/install → fill the report → approve/reject — without the host
+bookkeeping and server-tuning tail. If a workflow never lists the queue or
+polls openQA, deny those on top:
+
+```toml
+[mcp]
+profile = "core"
+tools_deny = ["updates", "openqa_overview"]
+```
+
 ## Security boundary
 
 **Profiles are not authentication or authorization.** They reduce the advertised
