@@ -28,6 +28,7 @@ pub mod display;
 pub mod engine;
 pub mod entrypoint;
 pub mod error;
+pub(crate) mod fold;
 pub mod log_filter;
 pub mod registry;
 pub mod session;
