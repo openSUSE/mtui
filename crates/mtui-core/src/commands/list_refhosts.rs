@@ -33,7 +33,7 @@ use crate::session::Session;
 use super::row_budget::{crush, row_notice};
 
 /// Narrowing flags named in the row-budget notice.
-const REFHOSTS_HINT: &str = "--name/--arch/--product/--version/--addon";
+const REFHOSTS_HINT: &str = "--limit/--offset/--name/--arch/--product/--version/--addon";
 
 /// Non-`free` or pool-claimed rows survive the crush: the actionable lock signal.
 fn is_anomaly_record(r: &Record) -> bool {
@@ -303,7 +303,26 @@ impl Command for ListRefhosts {
             Arg::new("json")
                 .long("json")
                 .action(ArgAction::SetTrue)
-                .help("emit JSON"),
+                .help(
+                    "emit JSON array of kept rows; over-cap output adds a trailing `…[truncated …` \
+                     notice line — strip lines starting with that prefix before parsing",
+                ),
+        )
+        .arg(
+            Arg::new("limit")
+                .long("limit")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .default_value("0")
+                .help("cap the number of rows after --offset (0 = all)"),
+        )
+        .arg(
+            Arg::new("offset")
+                .long("offset")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .default_value("0")
+                .help("skip the first N rows (0 = from the start); with --limit, page any middle slice"),
         )
         .arg(
             Arg::new("free")
@@ -334,6 +353,8 @@ impl Command for ListRefhosts {
                 &["--addon"],
                 &["--pool"],
                 &["--json"],
+                &["--limit"],
+                &["--offset"],
                 &["--free"],
                 &["-v", "--verbose"],
             ],
@@ -374,6 +395,8 @@ impl Command for ListRefhosts {
         let free = args.get_flag("free");
         let verbose = args.get_flag("verbose");
         let as_json = args.get_flag("json");
+        let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
+        let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
 
         let filters = Filters {
             testplatform: args.get_one::<String>("testplatform").map(String::as_str),
@@ -391,9 +414,20 @@ impl Command for ListRefhosts {
             probe_locks(&ProbeConfig::new(&config), &mut records).await;
         }
 
+        // Paging via --offset (pre-crush) makes any middle slice recoverable; chosen over an
+        // explicit-window notice as it fits the existing --limit plumbing.
+        let windowed: Vec<Record> = {
+            let skipped = offset.min(records.len());
+            let mut v: Vec<Record> = records.into_iter().skip(skipped).collect();
+            if limit > 0 && limit < v.len() {
+                v.truncate(limit);
+            }
+            v
+        };
         // Row budget backstops the whole-inventory dump: head+tail+anomalies, exact-deduped.
+        // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
         let crushed = crush(
-            records,
+            windowed,
             |r| {
                 (
                     r.name.clone(),
@@ -875,6 +909,8 @@ mod tests {
             "--addon",
             "--pool",
             "--json",
+            "--limit",
+            "--offset",
             "--free",
             "-v",
             "--verbose",
@@ -909,6 +945,10 @@ mod tests {
                 "sdk",
                 "--pool",
                 "--json",
+                "--limit",
+                "10",
+                "--offset",
+                "5",
                 "--free",
                 "-v",
             ],
@@ -931,6 +971,8 @@ mod tests {
         assert!(args.get_flag("json"));
         assert!(args.get_flag("free"));
         assert!(args.get_flag("verbose"));
+        assert_eq!(args.get_one::<usize>("limit").copied(), Some(10));
+        assert_eq!(args.get_one::<usize>("offset").copied(), Some(5));
     }
 
     /// A session resolving refhosts from a local `path` file, plus the temp dir
@@ -1077,12 +1119,18 @@ default:
         text.push('\n');
         text.push_str(&row_notice(out.truncated, out.total, REFHOSTS_HINT));
         assert!(
-            text.contains("--name/--arch/--product/--version/--addon"),
+            text.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated")),
+            "{text}"
+        );
+        assert!(
+            text.contains("--limit/--offset/--name/--arch/--product/--version/--addon"),
             "{text}"
         );
         let json_part: String = text
             .lines()
-            .filter(|l| !l.contains("[truncated"))
+            .filter(|l| !l.starts_with("…[truncated"))
             .collect::<Vec<_>>()
             .join("\n");
         let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
@@ -1103,9 +1151,14 @@ default:
         let args = matches(&ListRefhosts, &[]);
         ListRefhosts.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        assert!(out.contains("[truncated"), "{out}");
         assert!(
-            out.contains("--name/--arch/--product/--version/--addon"),
+            out.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated")),
+            "{out}"
+        );
+        assert!(
+            out.contains("--limit/--offset/--name/--arch/--product/--version/--addon"),
             "{out}"
         );
         assert!(
@@ -1113,5 +1166,37 @@ default:
             "{out}"
         );
         assert!(!out.contains("host-060"), "middle row dropped: {out}");
+    }
+
+    #[test]
+    fn json_help_mentions_truncation() {
+        let base = clap::Command::new("list_refhosts").no_binary_name(true);
+        let mut cmd = ListRefhosts.configure(base);
+        let help = cmd.render_help().to_string();
+        assert!(help.contains("…[truncated"), "{help}");
+        assert!(help.contains("strip lines starting with"), "{help}");
+    }
+
+    #[tokio::test]
+    async fn middle_row_recoverable_via_offset_limit() {
+        use crate::commands::testkit::matches;
+        let mut yaml = String::from("default:\n");
+        for i in 0..150 {
+            yaml.push_str(&format!(
+                "  - name: host-{i:03}\n    arch: x86_64\n    product:\n      name: sles\n      version:\n        major: 15\n        minor: 6\n"
+            ));
+        }
+        let (mut session, buf, _dir) = session_with_refhosts_file(&yaml);
+        let args = matches(&ListRefhosts, &["--offset", "50", "--limit", "50"]);
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("host-060"),
+            "paged middle row must appear: {out}"
+        );
+        assert!(
+            !out.contains("…[truncated"),
+            "50-row window fits budget: {out}"
+        );
     }
 }
