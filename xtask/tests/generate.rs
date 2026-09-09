@@ -3,9 +3,11 @@
 //! Generates completions + man pages into an isolated temp dir (never the
 //! checked-in `dist/`) and asserts every expected file exists, is non-empty, and
 //! references its binary name. Structure — not exact bytes — is asserted, since
-//! clap's generated output legitimately churns across clap minor versions.
+//! clap's generated output legitimately churns across clap minor versions. The
+//! `checked_in_dist_is_up_to_date` drift guard below is the byte-exact
+//! counterpart: `Cargo.lock` pins clap, so churn there is an explicit regen.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use xtask::{
     BINARIES, CLI_REFERENCE_FILE, INVOCATION_REFERENCE_FILE, PackageArgs, PackageInputs,
@@ -220,6 +222,76 @@ fn checked_in_generated_docs_are_up_to_date() {
             "{} is stale; run `cargo xtask gen-docs` and commit the result",
             path.display()
         );
+    }
+}
+
+/// The checked-in `dist/` tree, resolved relative to this crate's manifest.
+fn checked_in_dist_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask manifest dir has a parent (workspace root)")
+        .join("dist")
+}
+
+/// Read every file under `root` into `(relative path, bytes)`, sorted.
+fn read_tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
+        {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if entry.file_type().expect("file type").is_dir() {
+                stack.push(path);
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .expect("entry under root")
+                    .to_path_buf();
+                let bytes = std::fs::read(&path)
+                    .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+                out.insert(rel, bytes);
+            }
+        }
+    }
+    out
+}
+
+/// Drift guard: the committed `dist/completions` + `dist/man` must match what
+/// `cargo xtask gen` produces. If this fails, the flag surface changed — run
+/// `cargo xtask gen` and commit the result.
+#[test]
+fn checked_in_dist_is_up_to_date() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    generate_into(dir.path()).expect("generation succeeds");
+
+    for sub in ["completions", "man"] {
+        let fresh = read_tree(&dir.path().join(sub));
+        let checked_in = checked_in_dist_dir().join(sub);
+        let on_disk = read_tree(&checked_in);
+        for (rel, bytes) in &fresh {
+            match on_disk.get(rel) {
+                None => panic!(
+                    "{} is generated but not checked in; run `cargo xtask gen` and commit the result",
+                    checked_in.join(rel).display()
+                ),
+                Some(stale) => assert_eq!(
+                    stale,
+                    bytes,
+                    "{} is stale; run `cargo xtask gen` and commit the result",
+                    checked_in.join(rel).display()
+                ),
+            }
+        }
+        for rel in on_disk.keys() {
+            assert!(
+                fresh.contains_key(rel),
+                "{} is checked in but no longer generated; run `cargo xtask gen` and commit the result",
+                checked_in.join(rel).display()
+            );
+        }
     }
 }
 

@@ -24,7 +24,7 @@ checklist below. See CONTRIBUTING.md for the full workflow.
 - [ ] The compile-only feature matrix builds: `cargo build --workspace --no-default-features` and `--all-features`.
 - [ ] New/changed code is covered (>= 80% patch coverage).
 - [ ] User-visible changes are recorded in `CHANGELOG.md`.
-- [ ] Documentation under `docs/src/` updated where relevant; generated pages re-run with `cargo xtask gen-docs`.
+- [ ] Documentation under `docs/src/` updated where relevant; generated pages re-run with `cargo xtask gen-docs`, `dist/` artifacts with `cargo xtask gen`.
 
 ## Related issues
 
