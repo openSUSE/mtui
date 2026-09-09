@@ -80,7 +80,7 @@ pub fn transfer_tool_descriptors() -> Vec<ToolDescriptor> {
              (`content` utf-8, `content_b64` binary, always with remote `size` and \
              `truncated`). Capped per host at [mcp] max_input_bytes plus an equal share \
              of [mcp] max_output_bytes; pass `hosts` to retry or page a subset. No \
-             folders in-band. Any host failure fails the call, naming the host. {TEMPLATE_NOTE}"
+             folders in-band (trailing / unsupported). Any host failure fails the call, naming the host. {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![

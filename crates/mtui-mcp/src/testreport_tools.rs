@@ -759,7 +759,7 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
             vec![
                 (
                     "relpath",
-                    json!({ "type": "string", "description": "Checkout-relative file to read; defaults to the `log` file." }),
+                    json!({ "type": "string", "description": "Checkout-relative file to read; defaults to the `log` file, e.g. build_checks/<pkg>.<arch>.log, source.diff, patchinfo.xml." }),
                 ),
                 (
                     "offset",
