@@ -44,6 +44,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   offset/limit with unchanged content) to `[unchanged since …, N lines; use
   offset/limit to move]` instead of resending the window. Per-session cache of
   the last 16 windows; any edit resends in full. Output-only, no schema change.
+  The tool description now states the collapse; the window hash is FNV-1a
+  (specified, no new deps) and `relpath` spellings of one file share a key.
 
 ### Deprecated
 

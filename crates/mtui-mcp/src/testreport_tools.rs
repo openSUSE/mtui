@@ -439,7 +439,9 @@ async fn testreport_read(
     // to a notice (output-only, no schema change). Any edit misses and resends.
     let key = RereadKey {
         rrid: rrid_key,
-        relpath: relpath.unwrap_or("log").to_owned(),
+        relpath: relpath
+            .map(|r| normalize(Path::new(r)).to_string_lossy().into_owned())
+            .unwrap_or_else(|| "log".to_owned()),
         offset,
         limit,
     };
@@ -785,7 +787,8 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
              line count, content (utf-8, errors replaced). Without `relpath` reads \
              the `log` file; `relpath` names another checkout file, which must stay \
              inside it. `offset`/`limit` page a 1-based line window — page large \
-             files instead of reading them whole. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+             files instead of reading them whole. Exact re-reads collapse to an \
+             [unchanged since …] notice; use offset/limit to page. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -1065,6 +1068,18 @@ mod tests {
         let mut config = Config::default();
         config.template_dir = tmp.path().to_path_buf();
         config.mcp_max_input_bytes = max_input;
+        (McpSession::new(config), tmp)
+    }
+
+    /// Like [`session_with_tmp`] but with an explicit output cap
+    /// (`mcp_max_output_bytes`).
+    fn session_with_output_cap(
+        max_output: usize,
+    ) -> (std::sync::Arc<McpSession>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.template_dir = tmp.path().to_path_buf();
+        config.mcp_max_output_bytes = max_output;
         (McpSession::new(config), tmp)
     }
 
@@ -1927,6 +1942,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reread_capped_head_with_different_total_resends_full() {
+        // Pins the `line_count` conjunct: both files are 8 bytes with the same
+        // 4-byte head, so the capped content (head + identical truncation
+        // notice) hashes equal — only the total differs. Deleting the
+        // `line_count` compare must collapse the second read (red).
+        let (session, tmp) = session_with_output_cap(4);
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "ab\nc\nde\n").await; // 8 bytes, 3 lines
+
+        let first = testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        let first_content = first["content"].as_str().unwrap().to_owned();
+        assert!(
+            first_content.contains("truncated"),
+            "cap hit: {first_content:?}"
+        );
+        assert_eq!(first["line_count"], 3);
+
+        std::fs::write(&path, "ab\ncdef\n").unwrap(); // 8 bytes, 2 lines
+        let second = testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        assert_eq!(second["line_count"], 2);
+        let second_content = second["content"].as_str().unwrap();
+        assert_eq!(
+            second_content, first_content,
+            "capped heads identical, so the hash alone cannot distinguish"
+        );
+        assert!(
+            !second_content.contains("unchanged since"),
+            "different total must resend, not collapse: {second_content:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn reread_different_window_returns_full() {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
@@ -2027,6 +2078,29 @@ mod tests {
                 .unwrap()
                 .contains("unchanged since"),
             "{r1_again}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reread_relpath_spellings_share_one_key() {
+        // `./log` normalises to `log` at key-build, so it hits the same entry.
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let first = testreport_read(&session, None, 1, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        let second = testreport_read(&session, Some("./log"), 1, None, None)
+            .await
+            .unwrap();
+        assert!(
+            second["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "same file, other spelling dedups: {second}"
         );
     }
 }
