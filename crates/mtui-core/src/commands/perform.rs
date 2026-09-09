@@ -24,6 +24,7 @@ use crate::session::Session;
 /// Renders update-check [`Diagnostic`] sections: "Additional rpm output" with
 /// the word `warning` recolored yellow, "not supported by its vendor" plain.
 fn render_diagnostics(session: &mut Session, diagnostics: &[Diagnostic]) {
+    let mut lines: Vec<String> = Vec::new();
     for diag in diagnostics {
         let line = if diag.highlight_warning {
             // `yellow` is a no-op under `ColorMode::Never`.
@@ -32,6 +33,9 @@ fn render_diagnostics(session: &mut Session, diagnostics: &[Diagnostic]) {
         } else {
             diag.text.clone()
         };
+        lines.extend(line.split('\n').map(str::to_owned));
+    }
+    for line in crate::fold::fold_output(&lines) {
         session.display.println(&line);
     }
 }
@@ -283,6 +287,23 @@ mod tests {
         let (mut session, buf) = session_with_color(ColorMode::Always);
         render_diagnostics(&mut session, &[]);
         assert!(buf.contents().is_empty());
+    }
+
+    #[test]
+    fn repetitive_diagnostics_fold_but_warnings_survive() {
+        let (mut session, buf) = session_with_color(ColorMode::Never);
+        let spam = vec![Diagnostic::plain("ok"); 5];
+        render_diagnostics(&mut session, &spam);
+        let out = buf.contents();
+        assert!(out.contains("…[4 identical lines folded]"), "{out:?}");
+        assert_eq!(out.lines().count(), 2, "{out:?}");
+
+        let (mut session, buf) = session_with_color(ColorMode::Never);
+        let warns = vec![Diagnostic::highlighted("warning: x"); 5];
+        render_diagnostics(&mut session, &warns);
+        let out = buf.contents();
+        assert!(!out.contains("identical"), "{out:?}");
+        assert_eq!(out.lines().count(), 5, "{out:?}");
     }
 
     // --- success confirmation ----------------------------------------------

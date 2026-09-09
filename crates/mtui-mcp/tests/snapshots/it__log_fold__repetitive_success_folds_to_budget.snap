@@ -1,0 +1,12 @@
+---
+source: crates/mtui-mcp/tests/log_fold.rs
+assertion_line: 62
+expression: snap
+---
+folded run:
+run completed on h1 (exit 0), h2 (exit 0)
+h1, h2:->  [0]
+spam
+…[49 identical lines folded]
+
+…[output identical on 2 hosts folded]
