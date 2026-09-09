@@ -69,8 +69,8 @@ impl Command for Updates {
                 .help(
                     "select output fields by osc-qam name (e.g. -F Rating \
                      -F 'Assigned Roles'); repeatable, rendered as one block per \
-                     update; names are case-insensitive and treat spaces, \
-                     hyphens and underscores as equivalent",
+                     update; names match case-insensitively, ignoring \
+                     spaces/hyphens/underscores; narrow large queues with --limit",
                 ),
         )
         .arg(
@@ -79,8 +79,8 @@ impl Command for Updates {
                 .action(ArgAction::SetTrue)
                 .conflicts_with("field")
                 .help(
-                    "print the raw TeReGen rows as a JSON array (each row \
-                     emitted whole, unlike -F; honours --limit; not combinable \
+                    "print the raw TeReGen rows as a JSON array (whole rows, \
+                     unlike -F; honours --limit; not combinable \
                      with -F); an empty queue prints []",
                 ),
         )
@@ -769,6 +769,25 @@ mod tests {
                 .is_err()
         );
         assert!(cmd.try_get_matches_from(["--mine"]).is_ok());
+    }
+
+    #[test]
+    fn heavy_output_helps_point_at_limit() {
+        // Token nudge: the unbounded-output flags must name the narrowing knob.
+        let base = clap::Command::new("updates").no_binary_name(true);
+        let cmd = Updates.configure(base);
+        for id in ["field", "json"] {
+            let help = cmd
+                .get_arguments()
+                .find(|a| a.get_id() == id)
+                .and_then(|a| a.get_help())
+                .map(|h| h.to_string())
+                .unwrap_or_default();
+            assert!(
+                help.contains("--limit"),
+                "{id} help lacks the narrowing hint: {help}"
+            );
+        }
     }
 
     #[test]

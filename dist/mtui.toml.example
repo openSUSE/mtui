@@ -148,10 +148,12 @@
 # Max stale sessions the idle sweeper tears down concurrently per cycle.
 # sweep_parallel = 4
 # Tool-surface profile: "full" (every synthesised tool) or "core" (curated everyday subset).
+# Agent clients should prefer "core": the whole surface is sent on every request.
 # profile = "full"
 # Extra tool names to keep on top of the profile.
 # tools_allow = []
 # Tool names to remove regardless of profile/allow (deny wins last).
+# E.g. tools_deny = ["updates", "openqa_overview"] when the workflow never uses them.
 # tools_deny = []
 
 [obs]
