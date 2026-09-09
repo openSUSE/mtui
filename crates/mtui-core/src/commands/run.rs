@@ -157,7 +157,8 @@ impl Command for Run {
                 failed.push((name.clone(), code));
             }
         }
-        // Group identical clean-success blocks; errors never share a body.
+        // Group identical clean-success blocks in first-seen order (h1,h3 can
+        // precede h2); errors never share a body.
         let mut groups: Vec<(HostOut, Vec<String>)> = Vec::new();
         for snap in snaps {
             let mut placed = false;
@@ -178,6 +179,8 @@ impl Command for Run {
                 groups.push((snap, vec![name]));
             }
         }
+        // Fold only clean-success bodies; a failed host's lines stay verbatim
+        // so keyword-less repeats on a failure never fold away.
         for (rep, names) in &groups {
             if names.len() > 1 {
                 output.push(format!(
@@ -186,7 +189,8 @@ impl Command for Run {
                     rep.lastin,
                     fmt_exit(rep.lastexit)
                 ));
-                output.extend(rep.lastout.split('\n').map(str::to_owned));
+                let body: Vec<String> = rep.lastout.split('\n').map(str::to_owned).collect();
+                output.extend(crate::fold::fold_output(&body));
                 output.push(crate::fold::hosts_marker(names.len()));
             } else {
                 output.push(format!(
@@ -195,14 +199,18 @@ impl Command for Run {
                     rep.lastin,
                     fmt_exit(rep.lastexit)
                 ));
-                output.extend(rep.lastout.split('\n').map(str::to_owned));
+                if crate::fold::can_fold_block(&rep.lastout, &rep.lasterr, rep.lastexit) {
+                    let body: Vec<String> = rep.lastout.split('\n').map(str::to_owned).collect();
+                    output.extend(crate::fold::fold_output(&body));
+                } else {
+                    output.extend(rep.lastout.split('\n').map(str::to_owned));
+                }
                 if !rep.lasterr.is_empty() {
                     output.push("stderr:".to_owned());
                     output.extend(rep.lasterr.split('\n').map(str::to_owned));
                 }
             }
         }
-        let output = crate::fold::fold_output(&output);
         failed.sort();
         let summary = (!failed.is_empty()).then(|| {
             failed
@@ -768,6 +776,113 @@ mod tests {
         assert!(out.contains("stderr:"), "{out}");
         assert!(out.contains("boom"), "{out}");
         assert!(!out.contains("identical on 2 hosts"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn failed_host_repeats_never_fold() {
+        let spam = "boom\n".repeat(5).trim_end().to_owned();
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(
+                    MockConnection::new("h1").with_default(CommandLog::new("", &spam, "", 1, 0)),
+                ),
+            )],
+        );
+        let args = matches(&Run, &["false"]);
+        Run.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("FAILED on h1 (exit 1)"), "{out}");
+        assert_eq!(out.matches("boom").count(), 5, "all repeats survive: {out}");
+        assert!(
+            !out.contains("identical"),
+            "failure repeats must not fold: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_stderr_repeats_never_fold() {
+        let spam = "boom\n".repeat(5).trim_end().to_owned();
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(
+                    MockConnection::new("h1").with_default(CommandLog::new("", "ok", &spam, 1, 0)),
+                ),
+            )],
+        );
+        let args = matches(&Run, &["false"]);
+        Run.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("stderr:"), "{out}");
+        assert_eq!(
+            out.matches("boom").count(),
+            5,
+            "all stderr repeats survive: {out}"
+        );
+        assert!(!out.contains("identical lines folded"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn single_host_success_spam_folds() {
+        let spam = "spam\n".repeat(5).trim_end().to_owned();
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                Box::new(
+                    MockConnection::new("h1").with_default(CommandLog::new("", &spam, "", 0, 0)),
+                ),
+            )],
+        );
+        let args = matches(&Run, &["true"]);
+        Run.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("…[4 identical lines folded]"), "{out}");
+        assert_eq!(out.matches("spam").count(), 1, "{out}");
+    }
+
+    #[tokio::test]
+    async fn error_content_blocks_sharing_despite_equal_blocks() {
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![
+                Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    Box::new(MockConnection::new("h1").with_default(CommandLog::new(
+                        "",
+                        "error: boom",
+                        "",
+                        0,
+                        0,
+                    ))),
+                ),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    Box::new(MockConnection::new("h2").with_default(CommandLog::new(
+                        "",
+                        "error: boom",
+                        "",
+                        0,
+                        0,
+                    ))),
+                ),
+            ],
+        );
+        let args = matches(&Run, &["true"]);
+        Run.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("h1:->"), "{out}");
+        assert!(out.contains("h2:->"), "{out}");
+        assert!(!out.contains("identical on 2 hosts"), "{out}");
+        assert_eq!(out.matches("error: boom").count(), 2, "{out}");
     }
 
     #[tokio::test]

@@ -24,8 +24,22 @@ use crate::session::Session;
 /// Renders update-check [`Diagnostic`] sections: "Additional rpm output" with
 /// the word `warning` recolored yellow, "not supported by its vendor" plain.
 fn render_diagnostics(session: &mut Session, diagnostics: &[Diagnostic]) {
-    let mut lines: Vec<String> = Vec::new();
+    // Degradations never fold; only clean sections share a folded run.
+    let mut clean: Vec<String> = Vec::new();
+    let flush = |session: &mut Session, clean: &mut Vec<String>| {
+        for line in crate::fold::fold_output(clean) {
+            session.display.println(&line);
+        }
+        clean.clear();
+    };
     for diag in diagnostics {
+        if diag.degradation {
+            flush(session, &mut clean);
+            for line in diag.text.split('\n') {
+                session.display.println(line);
+            }
+            continue;
+        }
         let line = if diag.highlight_warning {
             // `yellow` is a no-op under `ColorMode::Never`.
             let yellow_warning = session.display.yellow("warning");
@@ -33,11 +47,9 @@ fn render_diagnostics(session: &mut Session, diagnostics: &[Diagnostic]) {
         } else {
             diag.text.clone()
         };
-        lines.extend(line.split('\n').map(str::to_owned));
+        clean.extend(line.split('\n').map(str::to_owned));
     }
-    for line in crate::fold::fold_output(&lines) {
-        session.display.println(&line);
-    }
+    flush(session, &mut clean);
 }
 
 /// One of the report's `perform_*` workflow flows plus its parsed parameters.
@@ -304,6 +316,43 @@ mod tests {
         let out = buf.contents();
         assert!(!out.contains("identical"), "{out:?}");
         assert_eq!(out.lines().count(), 5, "{out:?}");
+    }
+
+    #[test]
+    fn degradation_repeats_never_fold() {
+        let (mut session, buf) = session_with_color(ColorMode::Never);
+        let degs = vec![Diagnostic::degradation("boom"); 5];
+        render_diagnostics(&mut session, &degs);
+        let out = buf.contents();
+        assert_eq!(
+            out.matches("boom").count(),
+            5,
+            "all repeats survive: {out:?}"
+        );
+        assert!(!out.contains("identical"), "{out:?}");
+        assert_eq!(out.lines().count(), 5, "{out:?}");
+    }
+
+    #[test]
+    fn clean_spam_folds_around_degradation() {
+        let (mut session, buf) = session_with_color(ColorMode::Never);
+        let diags = vec![
+            Diagnostic::plain("ok"),
+            Diagnostic::plain("ok"),
+            Diagnostic::plain("ok"),
+            Diagnostic::degradation("boom"),
+            Diagnostic::plain("ok"),
+            Diagnostic::plain("ok"),
+            Diagnostic::plain("ok"),
+        ];
+        render_diagnostics(&mut session, &diags);
+        let out = buf.contents();
+        assert_eq!(
+            out.matches("…[2 identical lines folded]").count(),
+            2,
+            "{out:?}"
+        );
+        assert!(out.contains("boom"), "{out:?}");
     }
 
     // --- success confirmation ----------------------------------------------

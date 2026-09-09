@@ -46,9 +46,15 @@ fn is_foldable(line: &str) -> bool {
         "failed",
         "error",
         "warning",
+        "warn:",
         "trace",
+        "panic",
+        "fatal",
+        "exception",
+        "timeout",
         "degradation",
         "cancelled",
+        "canceled",
         "stopped after",
         "skipped",
         "no refhosts",
@@ -63,16 +69,24 @@ fn is_foldable(line: &str) -> bool {
 
 /// Whether a per-host block may be shared across hosts.
 ///
-/// Only clean success: exit 0, empty stderr, and no significant line in stdout.
+/// Only clean success: exit 0, empty stderr, non-empty foldable stdout.
 #[must_use]
 pub(crate) fn can_fold_block(stdout: &str, stderr: &str, exit: Option<i16>) -> bool {
     if exit != Some(0) || !stderr.trim().is_empty() {
         return false;
     }
-    stdout
-        .split('\n')
-        .filter(|l| !l.trim().is_empty())
-        .all(is_foldable)
+    // `all` is true on empty, so require at least one content line.
+    let mut nonempty = false;
+    for line in stdout.split('\n') {
+        if line.trim().is_empty() {
+            continue;
+        }
+        nonempty = true;
+        if !is_foldable(line) {
+            return false;
+        }
+    }
+    nonempty
 }
 
 /// Folds runs of identical consecutive lines.
@@ -157,11 +171,53 @@ mod tests {
     }
 
     #[test]
+    fn signal_keywords_never_fold() {
+        for line in [
+            "warn: disk low",
+            "WARN: disk low",
+            "panic: boom",
+            "fatal: boom",
+            "exception in thread",
+            "timeout after 30s",
+            "canceled by user",
+            "cancelled by user",
+            "degradation reported",
+            "skipped, held by alice",
+            "No refhosts defined",
+            "Host 'h1' is not connected",
+            "stopped after 1 of 4 templates",
+            "failed to start",
+        ] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
+        }
+    }
+
+    #[test]
     fn block_needs_clean_success() {
         assert!(can_fold_block("ok\nok", "", Some(0)));
         assert!(!can_fold_block("ok", "boom", Some(0)));
         assert!(!can_fold_block("ok", "", Some(1)));
         assert!(!can_fold_block("error: boom", "", Some(0)));
         assert!(!can_fold_block("warning: x", "", Some(0)));
+        assert!(!can_fold_block("warn: x", "", Some(0)));
+        assert!(!can_fold_block("panic: x", "", Some(0)));
+        assert!(!can_fold_block("fatal: x", "", Some(0)));
+        assert!(!can_fold_block("exception: x", "", Some(0)));
+        assert!(!can_fold_block("timeout: x", "", Some(0)));
+        assert!(!can_fold_block("canceled: x", "", Some(0)));
+        assert!(!can_fold_block("cancelled: x", "", Some(0)));
+        assert!(!can_fold_block("degradation: x", "", Some(0)));
+        assert!(!can_fold_block("skipped: x", "", Some(0)));
+        assert!(!can_fold_block("No refhosts defined", "", Some(0)));
+        assert!(!can_fold_block("Host 'h1' is not connected", "", Some(0)));
+        assert!(!can_fold_block("stopped after 1 of 4", "", Some(0)));
+    }
+
+    #[test]
+    fn empty_block_never_shares_banner() {
+        assert!(!can_fold_block("", "", Some(0)));
+        assert!(!can_fold_block("  \n ", "", Some(0)));
+        assert!(!can_fold_block("", "", None));
     }
 }
