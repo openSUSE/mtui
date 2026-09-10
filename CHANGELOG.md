@@ -16,10 +16,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `reboot` prints `rebooted & reconnected on h1, h2` and identical `FanOut`
   failures list as `a, b: boom`. Only clean-success folds: a failed host's
   lines stay verbatim even without signal keywords, `Diagnostic::degradation`
-  never folds, and empty blocks never share a banner. Verdicts, per-host
-  banners and error/warning/`warn:`/trace/panic/fatal/exception/timeout/
+  never folds, and clean empty output shares one banner. Verdicts, per-host
+  banners and error/warning/`warn`/trace/panic/fatal/exception/timeout/
   cancel lines never fold and stay at the head so `max_output_bytes`
-  truncation preserves them. Identical-block sharing and identical-error
+  truncation preserves them. Signal words match on word boundaries, so
+  `liberror` still folds. Identical-block sharing and identical-error
   grouping both keep first-seen order, so hosts can regroup as `h1, h3` before
   `h2` and the detail can read `a, c: boom; b: other` while headers keep
   fan-out order. Output text only; MCP schemas unchanged.
