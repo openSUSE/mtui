@@ -70,7 +70,7 @@ pub enum CheckoutError {
     SvnCommitFailed {
         /// The failed `svn` argv joined as one string (e.g. `"ci -m done"`).
         command: String,
-        /// `svn`'s stderr (trimmed), or the spawn error when `svn` never ran.
+        /// `svn`'s stderr (trimmed, capped at 1 KB), or the spawn error when `svn` never ran.
         detail: String,
     },
 }
