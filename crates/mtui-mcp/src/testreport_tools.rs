@@ -387,7 +387,8 @@ fn stream_read(
 /// Defaults to the report's `log` file; `relpath` reads any other file under the
 /// checkout directory (traversal-guarded). `offset` (1-based, ≥1) / `limit` (≥0)
 /// request a 1-indexed inclusive line window. `line_count` is always the file's
-/// total; a windowed read also carries `offset`/`returned_lines`.
+/// total; a windowed read also carries `offset`/`returned_lines`. An exact
+/// re-read collapses to an `[unchanged since …]` notice unless `force` resends it.
 ///
 /// # Errors
 /// Refuses on bad `offset`/`limit`, no loaded report, ambiguous/unknown
@@ -398,6 +399,7 @@ async fn testreport_read(
     offset: usize,
     limit: Option<usize>,
     template: Option<&str>,
+    force: Option<bool>,
 ) -> Result<Value, McpCommandError> {
     if offset < 1 {
         return Err(refuse(format!("offset must be >= 1 (got {offset})")));
@@ -405,17 +407,12 @@ async fn testreport_read(
 
     // Only the `PathBuf` needs the session lock, so it is released before the
     // file I/O: a slow read must not stall concurrent same-lock work.
-    let (path, rrid_key) = {
+    let path = {
         // The gate scope is held for the whole call, the inner mutex only for the
         // path resolution.
         let _scope = session.scoped_lock(template).await;
         let guard = session.session().lock().await;
-        let path = resolve_target_path(&guard, relpath, template, true)?;
-        let rrid = template
-            .map(str::to_owned)
-            .or_else(|| guard.templates.active_rrid().map(str::to_owned))
-            .unwrap_or_default();
-        (path, rrid)
+        resolve_target_path(&guard, relpath, template, true)?
     };
 
     let windowed = offset != 1 || limit.is_some();
@@ -435,18 +432,17 @@ async fn testreport_read(
     let cap = session.max_output_bytes();
     let content = cap_output(result.content, cap);
 
-    // Exact re-read dedup: same key + same payload hash + same total collapses
-    // to a notice (output-only, no schema change). Any edit misses and resends.
+    // Exact re-read dedup: same resolved path + window with unchanged content
+    // collapses to a notice; `force` resends while still refreshing the entry.
     let key = RereadKey {
-        rrid: rrid_key,
-        relpath: relpath
-            .map(|r| normalize(Path::new(r)).to_string_lossy().into_owned())
-            .unwrap_or_else(|| "log".to_owned()),
+        path: path.clone(),
         offset,
         limit,
     };
     let hash = McpSession::hash_content(&content);
-    if let Some(notice) = session.dedup_reread(key, hash, result.line_count) {
+    if force == Some(true) {
+        let _ = session.dedup_reread(key, hash, result.line_count);
+    } else if let Some(notice) = session.dedup_reread(key, hash, result.line_count) {
         if let Some(returned) = result.returned_lines {
             return Ok(json!({
                 "path": path.to_string_lossy(),
@@ -788,7 +784,7 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
              the `log` file; `relpath` names another checkout file, which must stay \
              inside it. `offset`/`limit` page a 1-based line window — page large \
              files instead of reading them whole. Exact re-reads collapse to an \
-             [unchanged since …] notice; use offset/limit to page. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+             [unchanged since …] notice; pass `force=true` to resend, or use offset/limit to page. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -803,6 +799,10 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
                 (
                     "limit",
                     json!({ "type": "integer", "minimum": 0, "description": "Max lines to return (default: to end of file)." }),
+                ),
+                (
+                    "force",
+                    json!({ "type": "boolean", "description": "Resend the content even when unchanged (bypass the [unchanged since …] notice)." }),
                 ),
                 ("template", template_prop()),
             ],
@@ -947,6 +947,15 @@ fn int_field(kwargs: &Map<String, Value>, key: &str, default: i64) -> Result<i64
     }
 }
 
+/// Decode an optional boolean field, refusing a non-boolean.
+fn bool_field(kwargs: &Map<String, Value>, key: &str) -> Result<Option<bool>, McpCommandError> {
+    match kwargs.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(other) => Err(refuse(format!("{key} must be a boolean, got {other}"))),
+    }
+}
+
 /// Dispatch a testreport tool call by name, decoding `kwargs` to typed args.
 ///
 /// # Errors
@@ -1010,7 +1019,8 @@ async fn dispatch_testreport_tool_inner(
                     return Err(refuse(format!("limit must be an integer, got {other}")));
                 }
             };
-            testreport_read(session, relpath, offset as usize, limit, template).await
+            let force = bool_field(kwargs, "force")?;
+            testreport_read(session, relpath, offset as usize, limit, template, force).await
         }
         "testreport_logs" => testreport_logs(session, template).await,
         "testreport_patch" => {
@@ -1121,7 +1131,7 @@ mod tests {
     #[tokio::test]
     async fn read_refuses_without_loaded_report() {
         let (session, _tmp) = session_with_tmp();
-        let err = testreport_read(&session, None, 1, None, None)
+        let err = testreport_read(&session, None, 1, None, None, None)
             .await
             .expect_err("null report refuses");
         assert_eq!(err.exit_code, 1);
@@ -1154,7 +1164,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await;
 
-        let res = testreport_read(&session, None, 1, None, None)
+        let res = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         assert_eq!(res["line_count"], 5);
@@ -1168,7 +1178,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await;
 
-        let res = testreport_read(&session, None, 2, Some(2), None)
+        let res = testreport_read(&session, None, 2, Some(2), None, None)
             .await
             .unwrap();
         assert_eq!(res["line_count"], 5, "total, not window size");
@@ -1183,7 +1193,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await;
 
-        let res = testreport_read(&session, None, 4, None, None)
+        let res = testreport_read(&session, None, 4, None, None, None)
             .await
             .unwrap();
         assert_eq!(res["returned_lines"], 2);
@@ -1197,7 +1207,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\n").await;
 
-        let res = testreport_read(&session, None, 99, None, None)
+        let res = testreport_read(&session, None, 99, None, None, None)
             .await
             .unwrap();
         assert_eq!(res["returned_lines"], 0);
@@ -1210,7 +1220,7 @@ mod tests {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\n").await;
-        let err = testreport_read(&session, None, 0, None, None)
+        let err = testreport_read(&session, None, 0, None, None, None)
             .await
             .expect_err("offset 0 refused");
         assert!(err.stderr.contains("offset must be >= 1"), "{err:?}");
@@ -1222,7 +1232,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\n").await;
 
-        let missing = testreport_read(&session, Some("build_checks/nope.log"), 1, None, None)
+        let missing = testreport_read(&session, Some("build_checks/nope.log"), 1, None, None, None)
             .await
             .expect_err("missing file");
         assert!(
@@ -1232,7 +1242,7 @@ mod tests {
             "{missing:?}"
         );
 
-        let escape = testreport_read(&session, Some("../../etc/passwd"), 1, None, None)
+        let escape = testreport_read(&session, Some("../../etc/passwd"), 1, None, None, None)
             .await
             .expect_err("traversal refused");
         assert!(escape.stderr.contains("escapes"), "{escape:?}");
@@ -1246,7 +1256,7 @@ mod tests {
         // Invalid UTF-8 byte 0xFF between valid text; decoded lossily (U+FFFD).
         std::fs::write(&path, b"ab\xffcd\n").unwrap();
 
-        let res = testreport_read(&session, None, 1, None, None)
+        let res = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         let content = res["content"].as_str().unwrap();
@@ -1265,7 +1275,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await; // 15 bytes
 
-        let res = testreport_read(&session, None, 1, None, None)
+        let res = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         let content = res["content"].as_str().unwrap();
@@ -1290,7 +1300,7 @@ mod tests {
         let big: String = (0..1000).map(|i| format!("line{i}\n")).collect();
         load_report(&session, RRID, &path, &big).await;
 
-        let res = testreport_read(&session, None, 500, Some(2), None)
+        let res = testreport_read(&session, None, 500, Some(2), None, None)
             .await
             .unwrap();
         assert_eq!(res["line_count"], 1000, "true total: {res}");
@@ -1312,8 +1322,8 @@ mod tests {
         let s1 = session.clone();
         let s2 = session.clone();
         let (r1, r2) = tokio::join!(
-            async move { testreport_read(&s1, None, 1, None, Some("SUSE:Maintenance:1:1")).await },
-            async move { testreport_read(&s2, None, 1, None, Some("SUSE:Maintenance:2:2")).await },
+            async move { testreport_read(&s1, None, 1, None, Some("SUSE:Maintenance:1:1"), None).await },
+            async move { testreport_read(&s2, None, 1, None, Some("SUSE:Maintenance:2:2"), None).await },
         );
         assert_eq!(r1.unwrap()["content"], "one\n");
         assert_eq!(r2.unwrap()["content"], "two\n");
@@ -1337,9 +1347,16 @@ mod tests {
         assert_eq!(bc[0]["size"], 4);
         assert!(listed["install_logs"].as_array().unwrap().is_empty());
 
-        let out = testreport_read(&session, Some("build_checks/pkg.x86_64.log"), 1, None, None)
-            .await
-            .unwrap();
+        let out = testreport_read(
+            &session,
+            Some("build_checks/pkg.x86_64.log"),
+            1,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(out["line_count"], 2);
         assert_eq!(out["content"], "a\nb\n");
     }
@@ -1685,7 +1702,7 @@ mod tests {
         load_report(&session, "SUSE:Maintenance:1:1", &p1, "one\n").await;
         load_report(&session, "SUSE:Maintenance:2:2", &p2, "two\n").await;
 
-        let err = testreport_read(&session, None, 1, None, None)
+        let err = testreport_read(&session, None, 1, None, None, None)
             .await
             .expect_err("ambiguous");
         assert!(
@@ -1702,7 +1719,7 @@ mod tests {
         load_report(&session, "SUSE:Maintenance:1:1", &p1, "one\n").await;
         load_report(&session, "SUSE:Maintenance:2:2", &p2, "two\n").await;
 
-        let res = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:2:2"))
+        let res = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:2:2"), None)
             .await
             .unwrap();
         assert_eq!(res["content"], "two\n");
@@ -1713,7 +1730,7 @@ mod tests {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "x\n").await;
-        let err = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:9:9"))
+        let err = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:9:9"), None)
             .await
             .expect_err("unknown template");
         assert!(err.stderr.contains("template not loaded"), "{err:?}");
@@ -1899,7 +1916,7 @@ mod tests {
         std::fs::write(outside.join("secret"), "top secret\n").unwrap();
         symlink(&outside, checkout.join("escape")).unwrap();
 
-        let err = testreport_read(&session, Some("escape/secret"), 1, None, None)
+        let err = testreport_read(&session, Some("escape/secret"), 1, None, None, None)
             .await
             .expect_err("symlink escape refused");
         assert!(err.stderr.contains("escapes"), "{err:?}");
@@ -1913,16 +1930,105 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\n").await;
 
-        let first = testreport_read(&session, None, 1, None, None)
+        let first = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         assert_eq!(first["content"], "l1\nl2\n");
-        let second = testreport_read(&session, None, 1, None, None)
+        let second = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         let content = second["content"].as_str().unwrap();
         assert!(content.contains("unchanged since"), "{content:?}");
+        assert!(content.contains("force=true"), "{content:?}");
         assert!(content.contains("use offset/limit to move"), "{content:?}");
+    }
+
+    #[tokio::test]
+    async fn reread_force_resends_full_and_refreshes() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        // Second identical read collapses.
+        let notice = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            notice["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since")
+        );
+        // `force` resends the text instead of the notice.
+        let forced = testreport_read(&session, None, 1, None, None, Some(true))
+            .await
+            .unwrap();
+        assert_eq!(forced["content"], "l1\nl2\n");
+        // Entry refreshed, so the next plain read collapses again.
+        let again = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            again["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since")
+        );
+        // Explicit `false` behaves like an omitted `force`.
+        let explicit_false = testreport_read(&session, None, 1, None, None, Some(false))
+            .await
+            .unwrap();
+        assert!(
+            explicit_false["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "{explicit_false}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_force_bypass_and_type_check() {
+        use serde_json::Map;
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let kwargs = Map::new();
+        dispatch_testreport_tool(&session, "testreport_read", &kwargs, None)
+            .await
+            .unwrap();
+        let collapsed = dispatch_testreport_tool(&session, "testreport_read", &kwargs, None)
+            .await
+            .unwrap();
+        assert!(
+            collapsed["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since")
+        );
+        // `force=true` through the dispatch seam resends.
+        let force_kwargs: Map<String, Value> = serde_json::json!({ "force": true })
+            .as_object()
+            .unwrap()
+            .clone();
+        let forced = dispatch_testreport_tool(&session, "testreport_read", &force_kwargs, None)
+            .await
+            .unwrap();
+        assert_eq!(forced["content"], "l1\nl2\n");
+        // Non-boolean `force` is refused.
+        let bad_kwargs: Map<String, Value> = serde_json::json!({ "force": "yes" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let err = dispatch_testreport_tool(&session, "testreport_read", &bad_kwargs, None)
+            .await
+            .expect_err("non-boolean force refused");
+        assert!(err.stderr.contains("force must be a boolean"), "{err:?}");
     }
 
     #[tokio::test]
@@ -1931,11 +2037,11 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\n").await;
 
-        testreport_read(&session, None, 1, None, None)
+        testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         std::fs::write(&path, "l1\nCHANGED\n").unwrap();
-        let res = testreport_read(&session, None, 1, None, None)
+        let res = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         assert_eq!(res["content"], "l1\nCHANGED\n");
@@ -1951,7 +2057,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "ab\nc\nde\n").await; // 8 bytes, 3 lines
 
-        let first = testreport_read(&session, None, 1, None, None)
+        let first = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         let first_content = first["content"].as_str().unwrap().to_owned();
@@ -1962,7 +2068,7 @@ mod tests {
         assert_eq!(first["line_count"], 3);
 
         std::fs::write(&path, "ab\ncdef\n").unwrap(); // 8 bytes, 2 lines
-        let second = testreport_read(&session, None, 1, None, None)
+        let second = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         assert_eq!(second["line_count"], 2);
@@ -1983,18 +2089,18 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\n").await;
 
-        let first = testreport_read(&session, None, 1, Some(2), None)
+        let first = testreport_read(&session, None, 1, Some(2), None, None)
             .await
             .unwrap();
         assert_eq!(first["content"], "l1\nl2\n");
-        let other = testreport_read(&session, None, 2, Some(2), None)
+        let other = testreport_read(&session, None, 2, Some(2), None, None)
             .await
             .unwrap();
         assert_eq!(
             other["content"], "l2\nl3\n",
             "other window is full: {other}"
         );
-        let same = testreport_read(&session, None, 1, Some(2), None)
+        let same = testreport_read(&session, None, 1, Some(2), None, None)
             .await
             .unwrap();
         assert!(
@@ -2013,8 +2119,7 @@ mod tests {
         let (session, _tmp) = session_with_tmp();
         for i in 0..MAX_REREAD_WINDOWS {
             let key = RereadKey {
-                rrid: RRID.to_owned(),
-                relpath: format!("f{i}.log"),
+                path: PathBuf::from(format!("f{i}.log")),
                 offset: 1,
                 limit: None,
             };
@@ -2022,15 +2127,13 @@ mod tests {
         }
         // One more evicts the oldest (`f0.log`).
         let overflow = RereadKey {
-            rrid: RRID.to_owned(),
-            relpath: "overflow.log".to_owned(),
+            path: PathBuf::from("overflow.log"),
             offset: 1,
             limit: None,
         };
         assert!(session.dedup_reread(overflow, 999, 1).is_none());
         let first = RereadKey {
-            rrid: RRID.to_owned(),
-            relpath: "f0.log".to_owned(),
+            path: PathBuf::from("f0.log"),
             offset: 1,
             limit: None,
         };
@@ -2040,8 +2143,7 @@ mod tests {
         );
         // Survivor still hits (re-adding `f0` evicted `f1`, so probe `f15`).
         let survivor = RereadKey {
-            rrid: RRID.to_owned(),
-            relpath: "f15.log".to_owned(),
+            path: PathBuf::from("f15.log"),
             offset: 1,
             limit: None,
         };
@@ -2059,17 +2161,17 @@ mod tests {
         load_report(&session, "SUSE:Maintenance:1:1", &p1, "same\n").await;
         load_report(&session, "SUSE:Maintenance:2:2", &p2, "same\n").await;
 
-        let r1 = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:1:1"))
+        let r1 = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:1:1"), None)
             .await
             .unwrap();
         assert_eq!(r1["content"], "same\n");
         // Same bytes, other template: full, not a notice.
-        let r2 = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:2:2"))
+        let r2 = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:2:2"), None)
             .await
             .unwrap();
         assert_eq!(r2["content"], "same\n", "other RRID is full: {r2}");
         // Repeat of the first still dedups.
-        let r1_again = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:1:1"))
+        let r1_again = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:1:1"), None)
             .await
             .unwrap();
         assert!(
@@ -2083,16 +2185,16 @@ mod tests {
 
     #[tokio::test]
     async fn reread_relpath_spellings_share_one_key() {
-        // `./log` normalises to `log` at key-build, so it hits the same entry.
+        // Same checkout file under another spelling resolves identically.
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\n").await;
 
-        let first = testreport_read(&session, None, 1, None, None)
+        let first = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         assert_eq!(first["content"], "l1\nl2\n");
-        let second = testreport_read(&session, Some("./log"), 1, None, None)
+        let second = testreport_read(&session, Some("./log"), 1, None, None, None)
             .await
             .unwrap();
         assert!(
@@ -2101,6 +2203,34 @@ mod tests {
                 .unwrap()
                 .contains("unchanged since"),
             "same file, other spelling dedups: {second}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reread_defaulted_and_explicit_template_share_one_key() {
+        // One loaded template with the active pointer cleared: the defaulted
+        // read resolves the path while active_rrid() is None, the explicit one
+        // names the RRID. One file, so the second read must collapse.
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+        {
+            let mut guard = session.session().lock().await;
+            let _ = guard.activate("");
+        }
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        let second = testreport_read(&session, None, 1, None, Some(RRID), None)
+            .await
+            .unwrap();
+        assert!(
+            second["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "same file, other template spelling dedups: {second}"
         );
     }
 }

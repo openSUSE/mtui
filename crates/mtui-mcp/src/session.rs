@@ -47,6 +47,7 @@
 //!
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -517,8 +518,8 @@ pub struct McpSession {
     /// oldest-finished-first. `0` disables the cap.
     max_completed_jobs: usize,
     /// Last [`MAX_REREAD_WINDOWS`] `testreport_read` windows (LRU, most-recent
-    /// last). Per-session, so no cross-client leakage; the key carries the RRID
-    /// so templates never collide. Guard held only for the integer compare.
+    /// last). Per-session, so no cross-client leakage; the key carries the
+    /// resolved path so templates never collide. Guard held only for the integer compare.
     reread: StdMutex<VecDeque<(RereadKey, RereadEntry)>>,
 }
 
@@ -530,10 +531,8 @@ pub(crate) const MAX_REREAD_WINDOWS: usize = 16;
 /// Cache key for one `testreport_read` window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RereadKey {
-    /// Resolved template (`template` arg or the active RRID); isolates templates.
-    pub rrid: String,
-    /// `relpath` or `"log"` for the default file.
-    pub relpath: String,
+    /// Canonical resolved file; isolates templates and relpath spellings.
+    pub path: PathBuf,
     /// 1-based first line.
     pub offset: usize,
     /// Max lines (`None` = to end).
@@ -664,7 +663,7 @@ impl McpSession {
     #[must_use]
     pub(crate) fn reread_notice(hash: u64, line_count: usize) -> String {
         format!(
-            "[unchanged since {:08x}, {line_count} lines; use offset/limit to move]",
+            "[unchanged since {:08x}, {line_count} lines; pass force=true to resend, or use offset/limit to move]",
             hash as u32
         )
     }
