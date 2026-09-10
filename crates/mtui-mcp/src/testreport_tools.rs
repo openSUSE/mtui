@@ -434,8 +434,11 @@ async fn testreport_read(
 
     // Exact re-read dedup: same resolved path + window with unchanged content
     // collapses to a notice; `force` resends while still refreshing the entry.
+    // The key path is canonicalized: the stored `log` path may spell a symlinked
+    // prefix verbatim (e.g. `/var` for `/private/var` on macOS) while the
+    // relpath arm resolves it, and both must key one file.
     let key = RereadKey {
-        path: path.clone(),
+        path: path.canonicalize().unwrap_or_else(|_| path.clone()),
         offset,
         limit,
     };
@@ -2220,6 +2223,34 @@ mod tests {
                 .unwrap()
                 .contains("unchanged since"),
             "same file, other spelling dedups: {second}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reread_symlinked_checkout_spellings_share_one_key() {
+        // macOS pins this: TMPDIR lives under /var (a symlink to /private/var),
+        // so the stored `log` path spells the prefix verbatim while the relpath
+        // arm resolves it. Same file must still dedup on any platform.
+        let (session, tmp) = session_with_tmp();
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, tmp.path().join("alias")).unwrap();
+        let path = tmp.path().join("alias").join("checkout").join("log");
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        let second = testreport_read(&session, Some("log"), 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            second["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "same file via symlinked checkout dedups: {second}"
         );
     }
 
