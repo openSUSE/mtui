@@ -259,6 +259,74 @@ fn read_tree(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     out
 }
 
+/// Renders a drift-guard mismatch as a line diff instead of a byte dump.
+/// Artifacts are UTF-8 text; non-UTF-8 input falls back to byte counts.
+fn text_diff(old_name: &str, new_name: &str, stale: &[u8], fresh: &[u8]) -> String {
+    let (Ok(old_text), Ok(new_text)) = (str::from_utf8(stale), str::from_utf8(fresh)) else {
+        return format!(
+            "non-UTF-8 artifacts differ ({} vs {} bytes)",
+            stale.len(),
+            fresh.len()
+        );
+    };
+    let old: Vec<&str> = old_text.lines().collect();
+    let new: Vec<&str> = new_text.lines().collect();
+    let mut head = 0;
+    while head < old.len().min(new.len()) && old[head] == new[head] {
+        head += 1;
+    }
+    let mut tail = 0;
+    while tail < (old.len() - head).min(new.len() - head)
+        && old[old.len() - 1 - tail] == new[new.len() - 1 - tail]
+    {
+        tail += 1;
+    }
+    let removed = &old[head..old.len() - tail];
+    let added = &new[head..new.len() - tail];
+    if removed.is_empty() && added.is_empty() {
+        return "line content matches; files differ outside lines (e.g. trailing newline)"
+            .to_owned();
+    }
+    // One head/tail-trimmed hunk with context, each side capped.
+    const CONTEXT: usize = 3;
+    const MAX_SIDE: usize = 60;
+    let cx0 = head.saturating_sub(CONTEXT);
+    let old_end = (old.len() - tail + CONTEXT).min(old.len());
+    let new_end = (new.len() - tail + CONTEXT).min(new.len());
+    let mut out = format!(
+        "--- {old_name}\n+++ {new_name}\n@@ -{},{} +{},{} @@\n",
+        cx0 + 1,
+        old_end - cx0,
+        cx0 + 1,
+        new_end - cx0,
+    );
+    for line in &old[cx0..head] {
+        out.push_str(&format!(" {line}\n"));
+    }
+    for line in removed.iter().take(MAX_SIDE) {
+        out.push_str(&format!("-{line}\n"));
+    }
+    if removed.len() > MAX_SIDE {
+        out.push_str(&format!(
+            "… ({} more removed lines)\n",
+            removed.len() - MAX_SIDE
+        ));
+    }
+    for line in added.iter().take(MAX_SIDE) {
+        out.push_str(&format!("+{line}\n"));
+    }
+    if added.len() > MAX_SIDE {
+        out.push_str(&format!(
+            "… ({} more added lines)\n",
+            added.len() - MAX_SIDE
+        ));
+    }
+    for line in &new[new.len() - tail..new_end] {
+        out.push_str(&format!(" {line}\n"));
+    }
+    out
+}
+
 /// Drift guard: the committed `dist/completions` + `dist/man` must match what
 /// `cargo xtask gen` produces. If this fails, the flag surface changed — run
 /// `cargo xtask gen` and commit the result.
@@ -277,12 +345,15 @@ fn checked_in_dist_is_up_to_date() {
                     "{} is generated but not checked in; run `cargo xtask gen` and commit the result",
                     checked_in.join(rel).display()
                 ),
-                Some(stale) => assert_eq!(
-                    stale,
-                    bytes,
-                    "{} is stale; run `cargo xtask gen` and commit the result",
-                    checked_in.join(rel).display()
-                ),
+                Some(stale) => {
+                    if stale != bytes {
+                        panic!(
+                            "{} is stale; run `cargo xtask gen` and commit the result\n{}",
+                            checked_in.join(rel).display(),
+                            text_diff("checked-in", "generated", stale, bytes)
+                        );
+                    }
+                }
             }
         }
         for rel in on_disk.keys() {
@@ -293,6 +364,32 @@ fn checked_in_dist_is_up_to_date() {
             );
         }
     }
+}
+
+/// The drift-guard diff lists the changed lines, not byte decimals.
+#[test]
+fn text_diff_lists_differing_lines() {
+    let diff = text_diff("old", "new", b"a\nb\nc\n", b"a\nB\nc\n");
+    assert!(diff.contains("-b"), "removed line missing:\n{diff}");
+    assert!(diff.contains("+B"), "added line missing:\n{diff}");
+    assert!(!diff.contains("98"), "byte dump leaked:\n{diff}");
+}
+
+/// Non-UTF-8 artifacts fall back to byte counts instead of a string diff.
+#[test]
+fn text_diff_non_utf8_falls_back_to_byte_counts() {
+    let diff = text_diff("old", "new", &[0xff, 0xfe], &[0x00]);
+    assert!(
+        diff.contains("2 vs 1"),
+        "byte-count fallback missing:\n{diff}"
+    );
+}
+
+/// A trailing-newline-only drift still explains itself.
+#[test]
+fn text_diff_trailing_newline_only_is_explained() {
+    let diff = text_diff("old", "new", b"a\n", b"a");
+    assert!(diff.contains("trailing newline"), "unexplained:\n{diff}");
 }
 
 // --- Release packaging --------------------------------------------------------
