@@ -1989,6 +1989,23 @@ mod tests {
                 .contains("unchanged since"),
             "{explicit_false}"
         );
+        // Stale entry: overwrite to v2; `force` must resend v2 FULL and
+        // refresh the entry, so the next plain read collapses.
+        std::fs::write(&path, "l1\nv2\n").unwrap();
+        let forced_stale = testreport_read(&session, None, 1, None, None, Some(true))
+            .await
+            .unwrap();
+        assert_eq!(forced_stale["content"], "l1\nv2\n", "{forced_stale}");
+        let collapsed = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            collapsed["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "{collapsed}"
+        );
     }
 
     #[tokio::test]
