@@ -189,8 +189,10 @@ impl Command for Run {
                     rep.lastin,
                     fmt_exit(rep.lastexit)
                 ));
-                let body: Vec<String> = rep.lastout.split('\n').map(str::to_owned).collect();
-                output.extend(crate::fold::fold_output(&body));
+                if !rep.lastout.trim().is_empty() {
+                    let body: Vec<String> = rep.lastout.split('\n').map(str::to_owned).collect();
+                    output.extend(crate::fold::fold_output(&body));
+                }
                 output.push(crate::fold::hosts_marker(names.len()));
             } else {
                 output.push(format!(
@@ -199,10 +201,12 @@ impl Command for Run {
                     rep.lastin,
                     fmt_exit(rep.lastexit)
                 ));
-                if crate::fold::can_fold_block(&rep.lastout, &rep.lasterr, rep.lastexit) {
+                if !rep.lastout.trim().is_empty()
+                    && crate::fold::can_fold_block(&rep.lastout, &rep.lasterr, rep.lastexit)
+                {
                     let body: Vec<String> = rep.lastout.split('\n').map(str::to_owned).collect();
                     output.extend(crate::fold::fold_output(&body));
-                } else {
+                } else if !rep.lastout.trim().is_empty() {
                     output.extend(rep.lastout.split('\n').map(str::to_owned));
                 }
                 if !rep.lasterr.is_empty() {
@@ -883,6 +887,74 @@ mod tests {
         assert!(out.contains("h2:->"), "{out}");
         assert!(!out.contains("identical on 2 hosts"), "{out}");
         assert_eq!(out.matches("error: boom").count(), 2, "{out}");
+    }
+
+    #[tokio::test]
+    async fn empty_success_shares_one_banner() {
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![
+                Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    Box::new(
+                        MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0)),
+                    ),
+                ),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    Box::new(
+                        MockConnection::new("h2").with_default(CommandLog::new("", "", "", 0, 0)),
+                    ),
+                ),
+            ],
+        );
+        let args = matches(&Run, &["true"]);
+        Run.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("h1, h2:->"), "{out}");
+        assert!(
+            out.contains("…[output identical on 2 hosts folded]"),
+            "{out}"
+        );
+        assert_eq!(out.matches(":->").count(), 1, "one shared banner: {out}");
+    }
+
+    #[tokio::test]
+    async fn benign_substring_shares_banner() {
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![
+                Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    Box::new(MockConnection::new("h1").with_default(CommandLog::new(
+                        "",
+                        "liberror0 installed",
+                        "",
+                        0,
+                        0,
+                    ))),
+                ),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    Box::new(MockConnection::new("h2").with_default(CommandLog::new(
+                        "",
+                        "liberror0 installed",
+                        "",
+                        0,
+                        0,
+                    ))),
+                ),
+            ],
+        );
+        let args = matches(&Run, &["true"]);
+        Run.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("h1, h2:->"), "{out}");
+        assert!(out.contains("identical on 2 hosts"), "{out}");
     }
 
     #[tokio::test]

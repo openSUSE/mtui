@@ -21,6 +21,30 @@ pub(crate) fn hosts_marker(n: usize) -> String {
 ///
 /// Verdicts, banners, errors, warnings and traces always survive: folding must
 /// never hide the signal `cap_output`'s head-keeping is meant to preserve.
+fn is_word_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+}
+
+/// Substring `kw` bounded by non-word chars, so `liberror` never matches `error`.
+fn contains_bounded(lower: &str, kw: &str) -> bool {
+    let hay = lower.as_bytes();
+    let nd = kw.as_bytes();
+    if nd.is_empty() || nd.len() > hay.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i + nd.len() <= hay.len() {
+        if &hay[i..i + nd.len()] == nd
+            && (i == 0 || !is_word_char(hay[i - 1]))
+            && (i + nd.len() == hay.len() || !is_word_char(hay[i + nd.len()]))
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 fn is_foldable(line: &str) -> bool {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -46,7 +70,7 @@ fn is_foldable(line: &str) -> bool {
         "failed",
         "error",
         "warning",
-        "warn:",
+        "warn",
         "trace",
         "panic",
         "fatal",
@@ -60,7 +84,7 @@ fn is_foldable(line: &str) -> bool {
         "no refhosts",
         "not connected",
     ] {
-        if lower.contains(kw) {
+        if contains_bounded(&lower, kw) {
             return false;
         }
     }
@@ -69,24 +93,21 @@ fn is_foldable(line: &str) -> bool {
 
 /// Whether a per-host block may be shared across hosts.
 ///
-/// Only clean success: exit 0, empty stderr, non-empty foldable stdout.
+/// Only clean success: exit 0, empty stderr; empty stdout folds (quiet `true`).
 #[must_use]
 pub(crate) fn can_fold_block(stdout: &str, stderr: &str, exit: Option<i16>) -> bool {
     if exit != Some(0) || !stderr.trim().is_empty() {
         return false;
     }
-    // `all` is true on empty, so require at least one content line.
-    let mut nonempty = false;
     for line in stdout.split('\n') {
         if line.trim().is_empty() {
             continue;
         }
-        nonempty = true;
         if !is_foldable(line) {
             return false;
         }
     }
-    nonempty
+    true
 }
 
 /// Folds runs of identical consecutive lines.
@@ -215,9 +236,34 @@ mod tests {
     }
 
     #[test]
-    fn empty_block_never_shares_banner() {
-        assert!(!can_fold_block("", "", Some(0)));
-        assert!(!can_fold_block("  \n ", "", Some(0)));
+    fn substrings_inside_words_still_fold() {
+        for line in [
+            "liberror",
+            "liberror0 installed",
+            "perl-Error installed",
+            "strace: attached",
+            "my timeouts are fine",
+            "warningsummary: 3 packages",
+        ] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(
+                fold_output(&lines),
+                vec![line.to_owned(), "…[4 identical lines folded]".to_owned()],
+                "must fold {line:?}"
+            );
+            assert!(
+                can_fold_block(line, "", Some(0)),
+                "clean block must share {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_block_shares_banner_when_clean() {
+        assert!(can_fold_block("", "", Some(0)));
+        assert!(can_fold_block("  \n ", "", Some(0)));
         assert!(!can_fold_block("", "", None));
+        assert!(!can_fold_block("", "boom", Some(0)));
+        assert!(!can_fold_block("", "", Some(1)));
     }
 }
