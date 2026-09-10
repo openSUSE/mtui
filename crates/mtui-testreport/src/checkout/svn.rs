@@ -168,9 +168,25 @@ async fn run_checked(
     Ok(())
 }
 
+/// Bound for `SvnCommitFailed::detail`: a full `svn` trace must not embed.
+const MAX_DETAIL_BYTES: usize = 1024;
+
 fn commit_failed(args: &[String], detail: String) -> CheckoutError {
     CheckoutError::SvnCommitFailed {
         command: args.join(" "),
-        detail,
+        // Capped so a verbose `svn` trace cannot bloat logs and displays.
+        detail: truncate_detail(&detail),
+    }
+}
+
+/// Caps `detail` at 1 KB, marking the cut so the truncation stays visible.
+fn truncate_detail(detail: &str) -> String {
+    if detail.len() <= MAX_DETAIL_BYTES {
+        detail.to_owned()
+    } else {
+        format!(
+            "{}…[truncated]",
+            &detail[..detail.floor_char_boundary(MAX_DETAIL_BYTES)]
+        )
     }
 }

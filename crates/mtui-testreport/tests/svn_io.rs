@@ -230,6 +230,10 @@ async fn svn_commit_aborts_on_failed_call() {
         "message names the subcommand: {msg}"
     );
     assert!(msg.contains("E200009"), "message carries svn stderr: {msg}");
+    assert!(
+        !msg.contains("[truncated]"),
+        "short stderr must not be marked: {msg}"
+    );
     // The sequence stopped after the failing add.
     assert_eq!(runner.call_count(), 1);
 }
@@ -327,6 +331,36 @@ async fn svn_commit_silent_failure_still_names_subcommand() {
     assert!(
         !msg.contains("does not exist"),
         "must not misreport as missing: {msg}"
+    );
+}
+
+/// A huge `svn` stderr is capped at 1 KB with a visible cut marker (#612).
+#[tokio::test]
+async fn svn_commit_huge_stderr_is_capped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let checkout = tmp.path();
+    let install_logs = checkout.join("install_logs");
+    let big = format!("{}\n", "x".repeat(2048));
+    let runner = StubSvnRunner::with_outcome(SvnOutcome {
+        success: false,
+        stderr: big.clone(),
+    });
+
+    let err = svn_commit_testreport(&runner, checkout, &install_logs, &[])
+        .await
+        .unwrap_err();
+    let CheckoutError::SvnCommitFailed { detail, .. } = err else {
+        panic!("expected SvnCommitFailed");
+    };
+    assert!(
+        detail.ends_with("…[truncated]"),
+        "capped detail must show the cut"
+    );
+    assert_eq!(&detail[..1024], &big.trim()[..1024]);
+    assert!(
+        detail.len() <= 1024 + "…[truncated]".len(),
+        "detail exceeds the 1 KB cap: {} bytes",
+        detail.len()
     );
 }
 

@@ -94,7 +94,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `items` keeps its copy (#545).
 - `commit` (and the `approve`/`request_review` paths that commit the
   testreport) now reports what failed and why — `svn <subcommand> failed:
-  <svn stderr>` — instead of the empty `Test report for  does not exist`
+  <svn stderr>` (stderr capped at 1 KB, cut marked `…[truncated]`) —
+  instead of the empty `Test report for  does not exist`
   that hid every `svn` failure behind the checkout-missing text (#607).
 
 ## [26.3.1] - 2026-09-02
