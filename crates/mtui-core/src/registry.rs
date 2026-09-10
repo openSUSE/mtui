@@ -358,6 +358,8 @@ mod tests {
             ("config", &["-T", "SUSE:Maintenance:1:1", "show"][..], true),
             ("config", &[][..], true),
             ("config", &["frobnicate"][..], true),
+            // Mutates the session log sink, which a fork drops (#613).
+            ("set_log_level", &["debug"][..], true),
             ("list_hosts", &[][..], false),
         ] {
             let argv: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();

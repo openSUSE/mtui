@@ -18,10 +18,12 @@
 //! *exclusive* for fan-out and for commands that must land on the canonical
 //! session
 //! ([`Command::requires_canonical_session`](mtui_core::Command::requires_canonical_session)).
-//! The scoped path dispatches a *spawned*
+//! The shared-gated paths (scoped and session-level alike) dispatch a *spawned*
 //! [`dispatch_command`] on a [`Session::fork_for_call`] — sharing the reports'
 //! per-entry locks, carrying its own display, holding no session-wide mutex — so
-//! different-RRID calls get real concurrency and per-call output isolation.
+//! different-RRID calls get real concurrency, slow session-level I/O (e.g.
+//! `updates`) never head-of-line-blocks a scoped resolve behind the session
+//! mutex (#613), and per-call output isolation.
 //!
 //! **Background jobs.** [`start_jobs`](McpSession::start_jobs) backgrounds a slow
 //! `run`/`update`/`downgrade` as one `-T`-scoped job per resolved template,
@@ -481,9 +483,9 @@ pub struct McpSession {
     /// `config.mcp_tools_deny`: tools removed regardless of profile/allow.
     tools_deny: Vec<String>,
     /// The registry shared/exclusive gate: *shared* for a single-template
-    /// command (so it cannot overlap a registry mutation), *exclusive* for
-    /// canonical-session commands and unscoped fan-out, draining in-flight
-    /// per-RRID work.
+    /// command (so it cannot overlap a registry mutation) and for a command
+    /// addressing no template, *exclusive* for canonical-session commands and
+    /// unscoped fan-out, draining in-flight per-RRID work.
     /// See [`command_lock`](Self::command_lock).
     gate: RwGate,
     /// Lazily-created per-RRID locks: same-RRID calls share one and serialise,
@@ -525,8 +527,10 @@ pub enum CommandLock {
     },
     /// A session-level hold: the registry gate shared, no per-RRID lock, for
     /// a command addressing no template
-    /// ([`mtui_core::addresses_template`]). Dispatches on the canonical
-    /// session exactly like [`CommandLock::Exclusive`].
+    /// ([`mtui_core::addresses_template`]). Dispatches on a
+    /// [`Session::fork_for_call`](mtui_core::Session::fork_for_call) like
+    /// [`CommandLock::Scoped`], never holding the canonical session mutex
+    /// across slow network I/O (#613).
     Shared(#[allow(dead_code)] SharedGuard),
     /// A registry-wide exclusive hold (canonical-session commands / unscoped
     /// fan-out).
@@ -794,8 +798,9 @@ impl McpSession {
     /// Runs a registered command and returns its captured, output-capped stdout.
     ///
     /// The central MCP dispatch primitive: `name`/`argv` go through the **same**
-    /// engine the REPL uses, under this call's `command_lock`, on the scoped or
-    /// the exclusive path (see the body). A `--help`/`--version` request is a
+    /// engine the REPL uses, under this call's `command_lock`, on a per-call
+    /// fork (scoped and session-level holds) or the canonical session
+    /// (exclusive hold) — see the body. A `--help`/`--version` request is a
     /// *success*, matching argparse's exit-0 semantics.
     ///
     /// # Errors
@@ -819,8 +824,8 @@ impl McpSession {
     /// The background-job worker passes its job's token so
     /// [`job_cancel`](Self::job_cancel) can cancel exactly that dispatch;
     /// foreground tool calls pass `None` and get a fresh, never-cancelled one.
-    /// The token is set on the per-call fork on the scoped path, and on the
-    /// canonical session (restored after) on the exclusive one.
+    /// The token is set on the per-call fork on the scoped/shared paths, and on
+    /// the canonical session (restored after) on the exclusive one.
     async fn run_command_cancellable(
         &self,
         registry: &Registry,
@@ -841,22 +846,26 @@ impl McpSession {
 
         let result = match &lock {
             // Concurrent path. The fork *shares* the reports' per-entry locks, so
-            // this call locks only its own template's entry, and the canonical
+            // a scoped call locks only its own template's entry, and the canonical
             // mutex is not held across the dispatch — that is what lets a
-            // different-RRID call run in parallel. Content mutations stay visible
-            // to the canonical session (same `Arc<Mutex<..>>`); the fork's own
-            // config/registry structure is discarded, sound because anything
-            // mutating those declares `requires_canonical_session` and was
-            // routed to the exclusive path below.
-            CommandLock::Scoped { .. } => {
+            // different-RRID call run in parallel, and what keeps a slow
+            // session-level call (e.g. `updates` network I/O) from
+            // head-of-line-blocking a scoped resolve behind the mutex (#613).
+            // Content mutations stay visible to the canonical session (same
+            // `Arc<Mutex<..>>`); the fork's own config/registry structure is
+            // discarded, sound because anything mutating those declares
+            // `requires_canonical_session` and was routed to the exclusive path
+            // below.
+            CommandLock::Scoped { .. } | CommandLock::Shared(_) => {
                 // *Spawned*, because the caller drives us via `join!` on one
                 // task and only a separate task yields real parallelism — hence
                 // the owned `Arc<dyn Command>` and cloned argv, making the future
-                // `Send + 'static`. The scoped lock already proved the command
-                // resolves to exactly one loaded template.
+                // `Send + 'static`. The lock already proved the command
+                // resolves: the scoped lock to exactly one loaded template, the
+                // shared one to a session-level command.
                 let command = registry
                     .get(name)
-                    .expect("scoped lock implies a resolvable command")
+                    .expect("shared/scoped lock implies a resolvable command")
                     .clone();
                 let mut call_session = {
                     let session = self.session.lock().await;
@@ -887,11 +896,7 @@ impl McpSession {
             // `Command::run` re-installs one on the active entry as it returns,
             // and a lingering guard would fail a later concurrent forked call's
             // `try_lock_owned` in `activate`. Each call re-establishes its own.
-            // The session-level shared hold dispatches identically: it touches
-            // no template, so there is nothing a fork would isolate, and the
-            // canonical path keeps the `help` intercept, the `quit` teardown
-            // and the guard release where they are.
-            CommandLock::Exclusive(_) | CommandLock::Shared(_) => {
+            CommandLock::Exclusive(_) => {
                 let mut session = self.session.lock().await;
                 let prev_display = std::mem::replace(&mut session.display, call_display);
                 // Installed unconditionally rather than swapped-and-restored, for
@@ -2140,11 +2145,11 @@ mod tests {
 
     /// Session-level argv for every tool-reachable command addressing no
     /// template: `config` via its read-only `show` subcommand (a bare `set`
-    /// needs the canonical session and stays exclusive).
+    /// needs the canonical session and stays exclusive, as does `set_log_level`
+    /// — its sink write dies on a fork, #613).
     fn session_level_cases() -> Vec<(&'static str, Vec<String>)> {
         vec![
             ("whoami", vec![]),
-            ("set_log_level", vec!["debug".to_owned()]),
             ("list_templates", vec![]),
             ("list_refhosts", vec![]),
             ("updates", vec![]),
@@ -2303,6 +2308,136 @@ mod tests {
             matches!(lock, CommandLock::Shared(_)),
             "a read-only config call must take neither the exclusive gate nor a per-RRID lock"
         );
+    }
+
+    /// `set_log_level` addresses no template but mutates the session's log
+    /// sink, which a fork drops: it must take the exclusive gate so the write
+    /// lands on the canonical session (#613).
+    #[tokio::test]
+    async fn command_lock_set_log_level_is_exclusive() {
+        let sess = session(Config::default());
+        seed_one_template(&sess, "SUSE:Maintenance:1:1").await;
+        let registry = register_all();
+
+        let lock = sess
+            .command_lock(&registry, "set_log_level", &["debug".to_owned()])
+            .await;
+        assert!(
+            matches!(lock, CommandLock::Exclusive(_)),
+            "set_log_level must not be dispatched on a per-call fork"
+        );
+    }
+
+    /// The effect, asserted on the **canonical** session rather than the reply:
+    /// a forked dispatch would print the same success line while dropping the
+    /// sink write, so only the sink firing pins the exclusive path (#613).
+    #[tokio::test]
+    async fn set_log_level_mutates_the_canonical_session() {
+        use mtui_core::LogLevel;
+
+        let sess = session(Config::default());
+        seed_one_template(&sess, "SUSE:Maintenance:1:1").await;
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let sink_seen = Arc::clone(&seen);
+        sess.session()
+            .lock()
+            .await
+            .set_log_level_sink(Box::new(move |lvl| {
+                sink_seen.lock().unwrap().push(lvl);
+            }));
+        let registry = register_all();
+
+        sess.run_command(&registry, "set_log_level", &["warning".to_owned()])
+            .await
+            .expect("set_log_level succeeds");
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![LogLevel::Warning],
+            "the sink write must survive the call"
+        );
+    }
+
+    /// A slow session-level dispatch must not hold the canonical session mutex:
+    /// while the probe is parked mid-dispatch, a scoped resolve (which locks
+    /// the session to read argv scope) still acquires promptly instead of
+    /// serialising behind e.g. `updates` network I/O (#613).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shared_dispatch_releases_the_session_mutex() {
+        use mtui_core::{Command, CommandResult, Scope};
+
+        /// A session-level command that parks mid-dispatch until released.
+        struct SharedPark {
+            entered: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
+            release: StdMutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        }
+        #[async_trait::async_trait]
+        impl Command for SharedPark {
+            fn name(&self) -> &'static str {
+                "shared_park_probe"
+            }
+            fn scope(&self) -> Scope {
+                Scope::Single
+            }
+            fn reads_resolved_report(&self) -> bool {
+                false
+            }
+            async fn call(&self, session: &mut Session, _args: &clap::ArgMatches) -> CommandResult {
+                if let Some(tx) = self.entered.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                let release = self
+                    .release
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("single dispatch");
+                release
+                    .await
+                    .map_err(|_| CommandError::Other("release channel dropped".to_owned()))?;
+                session.display.println("parked");
+                Ok(())
+            }
+        }
+
+        let sess = session(Config::default());
+        seed_one_template(&sess, "SUSE:Maintenance:1:1").await;
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut registry = register_all();
+        registry.register(Arc::new(SharedPark {
+            entered: StdMutex::new(Some(entered_tx)),
+            release: StdMutex::new(Some(release_rx)),
+        }));
+        let registry = Arc::new(registry);
+
+        let call = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            let registry = Arc::clone(&registry);
+            async move { sess.run_command(&registry, "shared_park_probe", &[]).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), entered_rx)
+            .await
+            .expect("probe must reach its body")
+            .expect("probe must signal entry");
+
+        // The mutex the old canonical dispatch held across the whole body.
+        assert!(
+            sess.session().try_lock().is_ok(),
+            "a parked session-level dispatch must not hold the session mutex"
+        );
+        // The resolve a concurrent template-addressing command blocks on.
+        let _resolve = tokio::time::timeout(
+            Duration::from_secs(5),
+            sess.command_lock(&registry, "list_hosts", &[]),
+        )
+        .await
+        .expect("a scoped resolve must not wait on a parked session-level call");
+
+        let _ = release_tx.send(());
+        call.await
+            .expect("spawned task did not panic")
+            .expect("probe succeeds after release");
     }
 
     /// The effect, asserted on the **canonical** session rather than the reply:
@@ -2956,9 +3091,9 @@ mod tests {
     /// `whoami` reads no report, so #524's busy refusal leaves it alone: it
     /// still answers with the active template's entry held by another dispatch
     /// (#597). The hold is on the **entry** alone — the guard an aborted
-    /// exclusive dispatch leaves behind — because `command_lock` still takes a
-    /// session-level command's active per-RRID lock (#603), which would
-    /// serialise this instead of exercising the exemption.
+    /// exclusive dispatch leaves behind — and the session-level shared hold
+    /// takes no per-RRID lock (#603), so the dispatch exercises the exemption
+    /// instead of serialising on it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn whoami_answers_while_the_active_entry_is_held() {
         let sess = session(Config::default());
