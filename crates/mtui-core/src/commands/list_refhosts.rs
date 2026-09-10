@@ -304,8 +304,8 @@ impl Command for ListRefhosts {
                 .long("json")
                 .action(ArgAction::SetTrue)
                 .help(
-                    "emit JSON array of kept rows; over-cap output adds a trailing `…[truncated …` \
-                     notice line — strip lines starting with that prefix before parsing",
+                    "emit a JSON array of kept rows; over-cap stdout is still a \
+                     valid JSON array, the `…[truncated …` notice goes to stderr",
                 ),
         )
         .arg(
@@ -442,13 +442,14 @@ impl Command for ListRefhosts {
             },
             is_anomaly_record,
         );
-        // --json emits the truncated array (valid JSON) plus an optional trailing notice line; strip the notice before parsing.
+        // Human output keeps the notice inline; --json routes it to stderr.
         let notice = (crushed.truncated > 0)
             .then(|| row_notice(crushed.truncated, crushed.total, REFHOSTS_HINT));
         if as_json {
             session.display.println(&render_json(&crushed.kept));
+            // Stdout stays strictly valid JSON; the notice goes to stderr.
             if let Some(notice) = notice {
-                session.display.println(&notice);
+                eprintln!("{notice}");
             }
             return Ok(());
         }
@@ -1096,46 +1097,31 @@ default:
         assert!(out.truncated > 0);
     }
 
-    #[test]
-    fn row_budget_json_stays_parseable_with_trailing_notice() {
-        use super::super::row_budget::{crush, row_notice};
-        let out = crush(
-            crush_records(),
-            |r| {
-                (
-                    r.name.clone(),
-                    r.arch.clone(),
-                    r.product.clone(),
-                    r.version.clone(),
-                    r.addons.clone(),
-                    r.slot.clone(),
-                    r.lock.clone(),
-                    r.pool.clone(),
-                )
-            },
-            is_anomaly_record,
-        );
-        let mut text = render_json(&out.kept);
-        text.push('\n');
-        text.push_str(&row_notice(out.truncated, out.total, REFHOSTS_HINT));
-        assert!(
-            text.lines()
-                .last()
-                .is_some_and(|l| l.starts_with("…[truncated")),
-            "{text}"
-        );
-        assert!(
-            text.contains("--limit/--offset/--name/--arch/--product/--version/--addon"),
-            "{text}"
-        );
-        let json_part: String = text
-            .lines()
-            .filter(|l| !l.starts_with("…[truncated"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+    #[tokio::test]
+    async fn json_over_cap_stdout_stays_valid_with_notice_on_stderr() {
+        use crate::commands::testkit::matches;
+        let mut yaml = String::from("default:\n");
+        for i in 0..150 {
+            yaml.push_str(&format!(
+                "  - name: host-{i:03}\n    arch: x86_64\n    product:\n      name: sles\n      version:\n        major: 15\n        minor: 6\n"
+            ));
+        }
+        let (mut session, buf, _dir) = session_with_refhosts_file(&yaml);
+        let args = matches(&ListRefhosts, &["--json"]);
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        // The notice went to stderr: stdout parses as-is, middle dropped.
+        assert!(!out.contains("…[truncated"), "{out}");
+        let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
         let arr = parsed.as_array().unwrap();
-        assert!(arr.iter().any(|r| r["name"] == "host-anomaly"));
+        assert!(
+            arr.len() <= super::super::row_budget::ROW_CAP,
+            "{}",
+            arr.len()
+        );
+        assert!(arr.iter().any(|r| r["name"] == "host-000"), "{out}");
+        assert!(arr.iter().any(|r| r["name"] == "host-149"), "{out}");
+        assert!(!arr.iter().any(|r| r["name"] == "host-060"), "{out}");
     }
 
     #[tokio::test]
@@ -1169,12 +1155,13 @@ default:
     }
 
     #[test]
-    fn json_help_mentions_truncation() {
+    fn json_help_routes_notice_to_stderr() {
         let base = clap::Command::new("list_refhosts").no_binary_name(true);
         let mut cmd = ListRefhosts.configure(base);
         let help = cmd.render_help().to_string();
         assert!(help.contains("…[truncated"), "{help}");
-        assert!(help.contains("strip lines starting with"), "{help}");
+        assert!(help.contains("valid JSON array"), "{help}");
+        assert!(help.contains("stderr"), "{help}");
     }
 
     #[tokio::test]

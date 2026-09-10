@@ -33,7 +33,7 @@ pub(crate) fn crush<T, K: Eq + Hash>(
 ) -> CrushOutcome<T> {
     // Dedup first so identical rows never consume budget twice.
     let mut seen = HashSet::new();
-    let mut items: Vec<T> = items
+    let items: Vec<T> = items
         .into_iter()
         .filter(|it| seen.insert(key_of(it)))
         .collect();
@@ -46,9 +46,50 @@ pub(crate) fn crush<T, K: Eq + Hash>(
         };
     }
     let tail_start = total - ROW_TAIL;
-    let mut anomaly_idx: Vec<usize> = (ROW_HEAD..tail_start)
+    let anomaly_idx: Vec<usize> = (ROW_HEAD..tail_start)
         .filter(|&i| is_anomaly(&items[i]))
         .collect();
+    keep_head_anomaly_tail(items, anomaly_idx, tail_start, total)
+}
+
+/// Crush `items` to budget, preserving order.
+///
+/// Exact-dedups on `key`, then keeps head + tail + all middle anomalies up to [`ROW_CAP`].
+/// Borrowed twin for already-owned data (openQA overview): same keep, no bulk clone.
+pub(crate) fn crush_slice<'a, T, K: Eq + Hash>(
+    items: &'a [T],
+    mut key_of: impl FnMut(&'a T) -> K,
+    mut is_anomaly: impl FnMut(&'a T) -> bool,
+) -> CrushOutcome<&'a T> {
+    let mut seen = HashSet::new();
+    let mut uniq: Vec<&'a T> = Vec::new();
+    for it in items {
+        if seen.insert(key_of(it)) {
+            uniq.push(it);
+        }
+    }
+    let total = uniq.len();
+    if total <= ROW_CAP {
+        return CrushOutcome {
+            kept: uniq,
+            total,
+            truncated: 0,
+        };
+    }
+    let tail_start = total - ROW_TAIL;
+    let anomaly_idx: Vec<usize> = (ROW_HEAD..tail_start)
+        .filter(|&i| is_anomaly(uniq[i]))
+        .collect();
+    keep_head_anomaly_tail(uniq, anomaly_idx, tail_start, total)
+}
+
+/// Shared head + capped-anomaly + tail keep, order-preserving.
+fn keep_head_anomaly_tail<T>(
+    mut items: Vec<T>,
+    mut anomaly_idx: Vec<usize>,
+    tail_start: usize,
+    total: usize,
+) -> CrushOutcome<T> {
     // Cap anomalies to what fits between head and tail.
     anomaly_idx.truncate(ROW_CAP - ROW_HEAD - ROW_TAIL);
     let keep: HashSet<usize> = (0..ROW_HEAD)
@@ -143,5 +184,29 @@ mod tests {
         assert!(n.starts_with("…[truncated"), "{n}");
         assert!(n.contains("[truncated 90 of 150"), "{n}");
         assert!(n.contains("--limit/--field/-G"), "{n}");
+    }
+
+    #[test]
+    fn slice_matches_owned_keep_without_cloning() {
+        // Borrowed keys prove the no-clone path compiles and keeps identically.
+        let items: Vec<usize> = (0..150).collect();
+        let owned = crush(items.clone(), |v| *v, |v| *v == 100);
+        let borrowed = crush_slice(&items, |v| *v, |v| *v == 100);
+        assert_eq!(borrowed.total, owned.total);
+        assert_eq!(borrowed.truncated, owned.truncated);
+        assert_eq!(borrowed.kept, owned.kept.iter().collect::<Vec<_>>());
+        assert!(borrowed.kept.contains(&&100));
+        assert!(!borrowed.kept.contains(&&60));
+    }
+
+    #[test]
+    fn slice_borrows_string_keys_and_dedups() {
+        let rows: Vec<(String, String)> = (0..150)
+            .map(|i| (format!("v-{i:03}"), "passed".to_owned()))
+            .collect();
+        let out = crush_slice(&rows, |(v, s)| (v.as_str(), s.as_str()), |_| false);
+        assert_eq!(out.total, 150);
+        assert_eq!(out.kept.len(), ROW_HEAD + ROW_TAIL);
+        assert_eq!(out.kept[0].0, "v-000");
     }
 }
