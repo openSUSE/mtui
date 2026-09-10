@@ -10,7 +10,7 @@ use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-use super::row_budget::{crush, row_notice};
+use super::row_budget::{crush_slice, row_notice};
 
 /// Narrowing flags named in the row-budget notices.
 // Per-section caps sum to ~600 rows total (single 100 + up to 4 aggregated groups +
@@ -258,16 +258,16 @@ impl Command for OpenQAOverview {
                 .display
                 .println(&session.display.blue("Single incidents - Core"));
             // Row budget backstops many-version incidents: head+tail+anomalies.
-            let single = crush(
-                single_incidents.clone(),
-                |r| {
+            let single = crush_slice(
+                &single_incidents,
+                |r: &oqa::VersionResult| {
                     (
-                        r.version.clone(),
-                        r.url.clone(),
-                        r.status.clone(),
+                        r.version.as_str(),
+                        r.url.as_str(),
+                        r.status.as_str(),
                         r.failed_count,
                         r.running_count,
-                        r.note.clone(),
+                        r.note.as_str(),
                     )
                 },
                 is_anomaly_version,
@@ -288,16 +288,16 @@ impl Command for OpenQAOverview {
                         "\nAggregated updates - {}",
                         title_case(&group.group)
                     )));
-                    let versions = crush(
-                        group.versions.clone(),
-                        |r| {
+                    let versions = crush_slice(
+                        &group.versions,
+                        |r: &oqa::VersionResult| {
                             (
-                                r.version.clone(),
-                                r.url.clone(),
-                                r.status.clone(),
+                                r.version.as_str(),
+                                r.url.as_str(),
+                                r.status.as_str(),
                                 r.failed_count,
                                 r.running_count,
-                                r.note.clone(),
+                                r.note.as_str(),
                             )
                         },
                         is_anomaly_version,
@@ -338,9 +338,11 @@ impl Command for OpenQAOverview {
         if build_checks.is_empty() {
             session.display.println("No build checks for this incident");
         } else {
-            let checks = crush(
-                build_checks.clone(),
-                |e| (e.url.clone(), e.matches.clone(), e.summary.clone()),
+            let checks = crush_slice(
+                &build_checks,
+                |e: &oqa::BuildCheckResult| {
+                    (e.url.as_str(), e.matches.as_slice(), e.summary.as_str())
+                },
                 is_anomaly_build,
             );
             for entry in &checks.kept {
@@ -781,17 +783,18 @@ mod tests {
 
     #[test]
     fn row_budget_crushes_versions_and_keeps_failed_anomaly() {
-        use super::super::row_budget::{ROW_CAP, crush};
-        let out = crush(
-            crush_versions(),
-            |r| {
+        use super::super::row_budget::{ROW_CAP, crush_slice};
+        let rows = crush_versions();
+        let out = crush_slice(
+            &rows,
+            |r: &oqa::VersionResult| {
                 (
-                    r.version.clone(),
-                    r.url.clone(),
-                    r.status.clone(),
+                    r.version.as_str(),
+                    r.url.as_str(),
+                    r.status.as_str(),
                     r.failed_count,
                     r.running_count,
-                    r.note.clone(),
+                    r.note.as_str(),
                 )
             },
             is_anomaly_version,
@@ -805,7 +808,7 @@ mod tests {
 
     #[test]
     fn row_budget_crushes_build_checks_and_keeps_matches() {
-        use super::super::row_budget::crush;
+        use super::super::row_budget::crush_slice;
         let mut entries: Vec<oqa::BuildCheckResult> = (0..150)
             .map(|i| oqa::BuildCheckResult {
                 url: format!("http://qam/{i}.log"),
@@ -813,9 +816,9 @@ mod tests {
             })
             .collect();
         entries[100].matches = vec!["FAIL line".to_owned()];
-        let out = crush(
-            entries,
-            |e| (e.url.clone(), e.matches.clone(), e.summary.clone()),
+        let out = crush_slice(
+            &entries,
+            |e: &oqa::BuildCheckResult| (e.url.as_str(), e.matches.as_slice(), e.summary.as_str()),
             is_anomaly_build,
         );
         assert!(out.kept.iter().any(|e| e.url == "http://qam/100.log"));
@@ -844,16 +847,16 @@ mod tests {
                 ..Default::default()
             })
             .collect();
-        let crushed = super::super::row_budget::crush(
-            versions.clone(),
-            |r| {
+        let crushed = super::super::row_budget::crush_slice(
+            &versions,
+            |r: &oqa::VersionResult| {
                 (
-                    r.version.clone(),
-                    r.url.clone(),
-                    r.status.clone(),
+                    r.version.as_str(),
+                    r.url.as_str(),
+                    r.status.as_str(),
                     r.failed_count,
                     r.running_count,
-                    r.note.clone(),
+                    r.note.as_str(),
                 )
             },
             is_anomaly_version,

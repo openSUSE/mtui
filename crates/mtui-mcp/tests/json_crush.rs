@@ -1,10 +1,10 @@
 //! Row-budget crush reaches the MCP client intact.
 //!
 //! Drives the real `updates` / `list_refhosts` commands through
-//! [`McpSession::run_command`] with unbounded mocked backends: the JSON output
-//! still parses (after stripping the trailing notice) and the notice names the
-//! narrowing flags. Also pins the additive paging flags and that row-cap is not
-//! byte-cap.
+//! [`McpSession::run_command`] with unbounded mocked backends: `--json` tool
+//! output parses as-is (the truncation notice goes to stderr, keeping stdout
+//! valid JSON) while human output keeps the notice naming the narrowing flags.
+//! Also pins the additive paging flags and that row-cap is not byte-cap.
 
 #![cfg(feature = "mcp")]
 
@@ -29,9 +29,9 @@ fn queue_fixture() -> serde_json::Value {
     serde_json::json!({"updates": rows})
 }
 
-/// `updates --json` over an unbounded queue: valid JSON, anomaly kept, notice names flags.
+/// `updates --json` over an unbounded queue: stdout stays valid JSON, anomaly kept.
 #[tokio::test]
-async fn updates_json_crush_parses_and_names_flags() {
+async fn updates_json_crush_stays_valid() {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -55,19 +55,9 @@ async fn updates_json_crush_parses_and_names_flags() {
         .run_command(&registry, "updates", &argv)
         .await
         .expect("updates succeeds");
-    assert!(
-        out.lines()
-            .last()
-            .is_some_and(|l| l.starts_with("…[truncated")),
-        "{out}"
-    );
-    assert!(out.contains("--limit/--offset/--field/-G"), "{out}");
-    let json_part: String = out
-        .lines()
-        .filter(|l| !l.starts_with("…[truncated"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+    // Notice on stderr: tool output parses as-is with no trailing notice line.
+    assert!(!out.contains("…[truncated"), "{out}");
+    let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
     let rows = parsed.as_array().unwrap();
     assert!(rows.len() <= 100, "row budget holds: {}", rows.len());
     assert!(rows.iter().any(|r| r["id"] == "row-anomaly"), "{out}");
@@ -142,12 +132,7 @@ async fn updates_offset_recovers_middle_row() {
         .run_command(&registry, "updates", &argv)
         .await
         .expect("updates succeeds");
-    let json_part: String = out
-        .lines()
-        .filter(|l| !l.starts_with("…[truncated"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
     let rows = parsed.as_array().unwrap();
     assert!(rows.iter().any(|r| r["id"] == "row-060"), "{out}");
 }

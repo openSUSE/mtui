@@ -606,7 +606,7 @@ expression: pretty
         },
         "json": {
           "default": false,
-          "description": "emit JSON array of kept rows; over-cap output adds a trailing `…[truncated …` notice line — strip lines starting with that prefix before parsing",
+          "description": "emit a JSON array of kept rows; over-cap stdout is still a valid JSON array, the `…[truncated …` notice goes to stderr",
           "type": "boolean"
         },
         "limit": {
@@ -1669,7 +1669,7 @@ expression: pretty
         },
         "json": {
           "default": false,
-          "description": "print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap output is a valid JSON array of kept rows plus a trailing `…[truncated …` notice line — strip lines starting with that prefix before parsing",
+          "description": "print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap stdout is still a valid JSON array of kept rows, the `…[truncated …` notice goes to stderr",
           "type": "boolean"
         },
         "limit": {

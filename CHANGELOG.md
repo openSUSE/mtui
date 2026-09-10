@@ -46,12 +46,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   unknown/missing/null status kept; narrow with `--limit/--offset/--field/-G`),
   `list_refhosts` (anomaly: non-`free` lock or pool claim; narrow with
   `--limit/--offset/--name/--arch/--product/--version/--addon`), and
-  `openqa_overview` (anomaly: non-`passed` version rows, build checks with
-  matches; display only, `--export` still writes the full overview; narrow with
-  `--no-aggregated/--aggregated-groups/--days/--test-pattern`). `--json` still
-  prints a valid JSON array (truncated) with the
-  `…[truncated N of M rows; …]` notice on a trailing line — strip lines starting
-  with that prefix before parsing (also in `--json` help). Any middle slice is
+   `openqa_overview` (anomaly: non-`passed` version rows, build checks with
+   matches; display only, `--export` still writes the full overview; narrow with
+   `--no-aggregated/--aggregated-groups/--days/--test-pattern`). `--json`
+   over-cap stdout is still a valid JSON array of kept rows; the
+   `…[truncated N of M rows; …]` notice goes to stderr (human-readable output
+   keeps it inline; also in `--json` help). Any middle slice is
   recoverable via pre-crush `--offset`/`--limit` paging (chosen over an
   explicit-window notice as it fits the existing `--limit` plumbing).
   Row-cap is not byte-cap: MCP `max_output_bytes` can still cut mid-array on
