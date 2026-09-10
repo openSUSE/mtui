@@ -305,7 +305,9 @@ impl Command for ListRefhosts {
                 .action(ArgAction::SetTrue)
                 .help(
                     "emit a JSON array of kept rows; over-cap stdout is still a \
-                     valid JSON array, the `…[truncated …` notice goes to stderr",
+                     valid JSON array, the `…[truncated …` notice goes to stderr on \
+                     the CLI; MCP results carry no truncation signal, MUST page with \
+                     --limit/--offset to be sure of completeness",
                 ),
         )
         .arg(
@@ -1162,6 +1164,11 @@ default:
         assert!(help.contains("…[truncated"), "{help}");
         assert!(help.contains("valid JSON array"), "{help}");
         assert!(help.contains("stderr"), "{help}");
+        assert!(
+            help.contains("MCP results carry no truncation signal"),
+            "{help}"
+        );
+        assert!(help.contains("MUST page with --limit/--offset"), "{help}");
     }
 
     #[tokio::test]
