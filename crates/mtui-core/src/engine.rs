@@ -110,8 +110,8 @@ pub async fn dispatch_argv(
 /// Exposed so the headless MCP concurrent path can `tokio::spawn` a dispatch
 /// over an owned `Arc<dyn Command>` + forked [`Session`] — neither borrows the
 /// [`Registry`], so the spawned future is `'static`. `help` is *not* intercepted
-/// here; it resolves to the null report and so takes the MCP exclusive path,
-/// which still goes through [`dispatch_argv`].
+/// here; it is REPL-only (MCP deny-list), so reaching this path defers to the
+/// REPL via [`Help`](crate::commands::Help)'s body instead of rendering.
 ///
 /// # Errors
 ///

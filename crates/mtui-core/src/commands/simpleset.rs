@@ -39,6 +39,11 @@ impl Command for SetLogLevel {
         Scope::Single
     }
 
+    fn requires_canonical_session(&self, _argv: &[String]) -> bool {
+        // Mutates the session's log sink, which a fork drops (#613).
+        true
+    }
+
     fn reads_resolved_report(&self) -> bool {
         // Session log sink; no report involved.
         false

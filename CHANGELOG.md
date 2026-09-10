@@ -46,13 +46,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- Session-level MCP tools (`whoami`, `set_log_level`, `list_templates`,
+- Session-level MCP tools (`whoami`, `list_templates`,
   `list_refhosts`, `updates`, `config show`) no longer take the active
   template's per-RRID lock: they hold the registry gate shared with no
-  per-RRID lock, so they no longer serialise against the commands acting on
-  that template (#603). `command_lock` gates on `addresses_template` like the
-  background-job resolver, so the two cannot disagree about whether a command
-  addresses a template.
+  per-RRID lock and dispatch on a per-call fork, so a slow one (e.g. `updates`
+  network I/O) no longer serialises the commands acting on that template
+  behind the session mutex (#603, #613). `command_lock` gates on
+  `addresses_template` like the background-job resolver, so the two cannot
+  disagree about whether a command addresses a template. `set_log_level`
+  addresses no template either but mutates the session log sink, so it takes
+  the exclusive gate and runs on the canonical session (#613).
 - `mtui-mcp` over stdio now advertises the `2026-07-28` protocol revision, so
   an MCP client that opens with `server/discover` at that revision connects
   instead of being refused with `-32022` (#591). HTTP still declines it, since
