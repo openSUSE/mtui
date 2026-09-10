@@ -22,8 +22,7 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    # Fat LTO builds each leg uncached; the macOS leg already ran 10 min at thin.
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       # Build every platform even if one fails, so a single broken target
       # surfaces on its own. The release job needs all legs to succeed, so a
