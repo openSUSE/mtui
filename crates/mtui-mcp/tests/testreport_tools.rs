@@ -193,8 +193,12 @@ async fn dispatch_reread_dedups_identical_and_resends_after_edit() {
     let second = call(&session, "testreport_read", json!({})).await;
     let notice = second["content"].as_str().unwrap();
     assert!(notice.contains("unchanged since"), "{notice:?}");
+    assert!(notice.contains("force=true"), "{notice:?}");
     assert!(notice.contains("use offset/limit to move"), "{notice:?}");
     assert_eq!(second["line_count"], 2);
+
+    let forced = call(&session, "testreport_read", json!({ "force": true })).await;
+    assert_eq!(forced["content"], "a\nb\n");
 
     std::fs::write(&log, "a\nCHANGED\n").unwrap();
     let third = call(&session, "testreport_read", json!({})).await;
