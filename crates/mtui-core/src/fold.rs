@@ -28,15 +28,15 @@ fn is_word_char(b: u8) -> bool {
 /// Substring `kw` bounded by non-word chars, so `liberror` never matches `error`.
 fn contains_bounded(lower: &str, kw: &str) -> bool {
     let hay = lower.as_bytes();
-    let nd = kw.as_bytes();
-    if nd.is_empty() || nd.len() > hay.len() {
+    let needle = kw.as_bytes();
+    if needle.is_empty() || needle.len() > hay.len() {
         return false;
     }
     let mut i = 0;
-    while i + nd.len() <= hay.len() {
-        if &hay[i..i + nd.len()] == nd
+    while i + needle.len() <= hay.len() {
+        if &hay[i..i + needle.len()] == needle
             && (i == 0 || !is_word_char(hay[i - 1]))
-            && (i + nd.len() == hay.len() || !is_word_char(hay[i + nd.len()]))
+            && (i + needle.len() == hay.len() || !is_word_char(hay[i + needle.len()]))
         {
             return true;
         }
