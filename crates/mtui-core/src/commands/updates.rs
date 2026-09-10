@@ -79,9 +79,11 @@ impl Command for Updates {
                 .action(ArgAction::SetTrue)
                 .conflicts_with("field")
                 .help(
-                    "print the raw TeReGen rows as a JSON array (whole rows, \
-                     unlike -F; honours --limit; not combinable \
-                     with -F); an empty queue prints []",
+                    "print the raw TeReGen rows as a JSON array (each row \
+                     emitted whole, unlike -F; honours --limit; not combinable \
+                     with -F); an empty queue prints []; over-cap stdout is still a \
+                     valid JSON array of kept rows, the `…[truncated …` notice goes \
+                     to stderr",
                 ),
         )
         .arg(

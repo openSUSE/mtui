@@ -1650,7 +1650,7 @@ expression: pretty
           "type": "string"
         },
         "field": {
-          "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names are case-insensitive and treat spaces, hyphens and underscores as equivalent",
+          "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit",
           "items": {
             "description": "select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit",
             "type": "string"
@@ -1659,7 +1659,7 @@ expression: pretty
         },
         "json": {
           "default": false,
-          "description": "print the raw TeReGen rows as a JSON array (whole rows, unlike -F; honours --limit; not combinable with -F); an empty queue prints []",
+          "description": "print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit; not combinable with -F); an empty queue prints []; over-cap stdout is still a valid JSON array of kept rows, the `…[truncated …` notice goes to stderr",
           "type": "boolean"
         },
         "limit": {
