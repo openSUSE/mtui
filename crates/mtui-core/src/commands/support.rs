@@ -10,7 +10,7 @@ use mtui_datasources::openqa::kernel::KernelOpenQA;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_datasources::qem_dashboard::incident::QemIncident;
 use mtui_datasources::{HttpClient, OpenQAError, QemDashboardClient};
-use mtui_hosts::{HostsGroup, LockOwner};
+use mtui_hosts::HostsGroup;
 use mtui_types::{RequestReviewID, UpdateSource};
 
 use crate::error::CommandError;
@@ -34,44 +34,11 @@ pub(crate) fn host_op_budget() -> std::time::Duration {
     crate::commands::testkit::host_op_budget_override()
 }
 
-/// The caveat every contention line carries. `unlock --force` clears the lock
-/// on **every selected host** (the whole group with no `-t`, or exactly the
-/// named hosts under one), so a line reached from a `-t`-scoped command must
-/// not let it read as "force this one host" — complying would rip a
-/// colleague's in-flight lock off hosts that were never contended.
-const FORCE_CLEARS_SELECTION: &str = "(unlock --force clears every selected host)";
-
-/// Names the owner of a contended operation lock and the next safe step.
-///
-/// `TargetLock::is_mine` matches the client PID as well as the user (that is
-/// what serialises two `mtui`s of one tester against a host), so `session_user`
-/// showing up as the owner is *most likely* a second live mtui of theirs and
-/// only possibly a strand from a dead one — the two are indistinguishable
-/// remotely, so the line hedges and sends the reader to `list_locks` instead of
-/// at `--force` (#521). Phrasing tracks
-/// [`HostsGroup::update_lock`](mtui_hosts::HostsGroup::update_lock)'s
-/// `held by {by} since {time}`.
-pub(crate) fn contended_lock_reason(owner: &LockOwner, session_user: &str) -> String {
-    if owner.by.is_empty() {
-        return format!(
-            "held by an unknown owner, possibly a live mtui; check list_locks \
-             {FORCE_CLEARS_SELECTION}"
-        );
-    }
-    if owner.by == session_user {
-        format!(
-            "held by {} (you) since {}, possibly another mtui of yours; check list_locks \
-             and your other sessions {FORCE_CLEARS_SELECTION}",
-            owner.by, owner.since
-        )
-    } else {
-        format!(
-            "held by {} since {}, possibly a live mtui; check list_locks \
-             {FORCE_CLEARS_SELECTION}",
-            owner.by, owner.since
-        )
-    }
-}
+/// The REPL steer and scope for [`mtui_hosts::contended_lock_reason`]: plain
+/// `list_locks`, and `--force`'s `-t`-scoped whole-group caveat (with leading
+/// separator) so a `-t`-scoped line never reads as "force this one host" (#521).
+pub(crate) const CONTENDED_CHECK: &str = "check list_locks";
+pub(crate) const CONTENDED_SCOPE: &str = " (unlock --force clears every selected host)";
 
 /// Builds the report's [`QemIncident`], threaded into both
 /// `DashboardAutoOpenQA` and `KernelOpenQA` so they share one incident state.
@@ -531,52 +498,6 @@ mod tests {
 
     fn cmd() -> clap::Command {
         add_hosts_arg(clap::Command::new("t").no_binary_name(true))
-    }
-
-    /// The three contention lines are one family: each names the owner, hedges
-    /// the inference it draws from the name, and keeps `unlock --force`'s
-    /// whole-group scope visible instead of reading as "force this one host"
-    /// (#521). The own/foreign pair must also stay distinguishable in *both*
-    /// directions, so inverting the predicate cannot pass.
-    #[test]
-    fn contended_lock_reason_hedges_and_scopes_the_force_remedy() {
-        let alice = LockOwner {
-            by: "alice".to_owned(),
-            since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
-        };
-        let foreign = contended_lock_reason(&alice, "bob");
-        let mine = contended_lock_reason(&alice, "alice");
-        let unknown = contended_lock_reason(&LockOwner::default(), "bob");
-
-        for line in [&foreign, &mine, &unknown] {
-            assert!(line.contains("list_locks"), "{line}");
-            assert!(
-                line.contains("unlock --force clears every selected host"),
-                "{line}"
-            );
-            assert!(line.contains("possibly"), "hedge missing: {line}");
-        }
-        assert!(
-            foreign.contains("held by alice since Tuesday, 14.11.2023 22:13 UTC"),
-            "{foreign}"
-        );
-        assert!(
-            foreign.contains("possibly a live mtui")
-                && !foreign.contains("(you)")
-                && !foreign.contains("mtui of yours"),
-            "{foreign}"
-        );
-        assert!(
-            mine.contains("held by alice (you) since Tuesday, 14.11.2023 22:13 UTC")
-                && mine.contains("possibly another mtui of yours")
-                && mine.contains("check list_locks and your other sessions"),
-            "{mine}"
-        );
-        assert!(!mine.contains("possibly a live mtui"), "{mine}");
-        assert!(
-            unknown.contains("held by an unknown owner") && !unknown.contains("override"),
-            "{unknown}"
-        );
     }
 
     #[test]

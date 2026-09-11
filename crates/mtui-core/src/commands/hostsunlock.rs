@@ -4,9 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_hosts::{LockOutcome, LockOwner};
+use mtui_hosts::{LockOutcome, LockOwner, contended_lock_reason};
 
-use super::support::{add_hosts_arg, contended_lock_reason, host_op_budget, select_names};
+use super::support::{
+    CONTENDED_CHECK, CONTENDED_SCOPE, add_hosts_arg, host_op_budget, select_names,
+};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -183,7 +185,9 @@ impl UnlockKind {
     /// naming the owner the fan-out carried out of the refused release.
     fn contended_label(&self, owner: &LockOwner, session_user: &str) -> String {
         match self {
-            Self::Force => contended_lock_reason(owner, session_user),
+            Self::Force => {
+                contended_lock_reason(owner, session_user, CONTENDED_CHECK, CONTENDED_SCOPE)
+            }
             // Pool ownership is RRID-based, so the owning *user* matching says
             // nothing about which process holds the claim: no own/foreign split
             // to draw, only the same list_locks-first steer and the same scope
