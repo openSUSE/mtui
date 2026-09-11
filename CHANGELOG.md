@@ -116,6 +116,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `updates -F` now serves `Products`, `SRCRPMs`, `Bugs` and `Creator` from the
   TeReGen queue listing; only `Package-Streams`, `Issues` and `Comments` remain
   unavailable (#415).
+- `job_cancel`'s post-abort unlock verdict and the
+  `install`/`uninstall`/`update` unlock-failure warning no longer steer a
+  failed (transport) release at `unlock --force` — which only bypasses the
+  ownership check — pointing at `list_locks` and a plain `unlock` retry once
+  the host is reachable instead. The contended arm names the lock's owner,
+  marks the caller's own user, and states that `unlock --force` releases the
+  whole group of every loaded template (#544).
 
 ## [26.3.1] - 2026-09-02
 

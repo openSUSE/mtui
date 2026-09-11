@@ -57,7 +57,7 @@ use mtui_core::{
     ColorMode, CommandError, CommandPromptDisplay, EngineError, HOST_CLOSE_TIMEOUT, Registry,
     Session, addresses_template, dispatch_argv, dispatch_command, resolve_command_rrids,
 };
-use mtui_hosts::LockOutcome;
+use mtui_hosts::{LockOutcome, LockOwner};
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
@@ -310,8 +310,14 @@ pub(crate) struct AbortUnlock {
     /// ([`HostsGroup::unlock_held`](mtui_hosts::HostsGroup::unlock_held)), so a
     /// never-locked host is not in the map at all.
     unlocked: Vec<String>,
-    /// Hosts whose lock belongs to another owner — left untouched (benign).
-    contended: Vec<String>,
+    /// Hosts whose release found a foreign-owned lock — left untouched (benign),
+    /// with the owner the refused release already read off the wire so the
+    /// reply can name them without a further round-trip.
+    contended: Vec<(String, LockOwner)>,
+    /// The caller at cancel time, for the contended arm's own-vs-other branch:
+    /// wire ownership matches the client PID too, so the caller's own name is
+    /// most likely a second live mtui of theirs, not a strand.
+    session_user: String,
     /// Hosts whose release hit a real transport error (with the reason); the
     /// lock is still held there.
     failed: Vec<(String, String)>,
@@ -338,7 +344,7 @@ impl AbortUnlock {
         for (host, outcome) in outcomes {
             match outcome {
                 LockOutcome::Released => self.unlocked.push(host),
-                LockOutcome::Contended(_) => self.contended.push(host),
+                LockOutcome::Contended(owner) => self.contended.push((host, owner)),
                 LockOutcome::Failed(reason) => self.failed.push((host, reason)),
                 // Unreachable on `unlock_held`'s fan-out: its select predicate
                 // (`Target::holds_unmarked_operation_lock`) already excludes an
@@ -363,16 +369,16 @@ impl AbortUnlock {
         if !self.unlocked.is_empty() {
             parts.push(format!("unlocked: {}", self.unlocked.join(", ")));
         }
-        if !self.contended.is_empty() {
+        for (host, owner) in &self.contended {
             parts.push(format!(
-                "still locked by another owner: {} (use `unlock --force` if that owner \
-                 is a dead mtui)",
-                self.contended.join(", ")
+                "still locked: {host} ({})",
+                contended_reason(owner, &self.session_user)
             ));
         }
         for (host, reason) in &self.failed {
             parts.push(format!(
-                "unlock FAILED on {host} ({reason}); release it with `unlock --force`"
+                "unlock FAILED on {host} ({reason}); check with `list_locks` and retry \
+                 `unlock` once the host is reachable"
             ));
         }
         if !self.unknown.is_empty() {
@@ -404,6 +410,32 @@ impl AbortUnlock {
         } else {
             Some(parts.join("; "))
         }
+    }
+}
+
+/// Names the owner of a contended abort-path lock and the next safe step.
+///
+/// Mirrors `mtui_core::commands::support::contended_lock_reason`'s own/foreign
+/// split and hedge, with the abort path's wider scope: `unlock --force` runs
+/// once per loaded template over that template's whole group.
+fn contended_reason(owner: &LockOwner, session_user: &str) -> String {
+    if owner.by.is_empty() {
+        "held by an unknown owner, possibly a live mtui; check with `list_locks`; \
+         `unlock --force` releases the whole group of every loaded template"
+            .to_owned()
+    } else if owner.by == session_user {
+        format!(
+            "held by {} (you) since {}, possibly another mtui of yours; check with \
+             `list_locks` and your other sessions; `unlock --force` releases the whole \
+             group of every loaded template",
+            owner.by, owner.since
+        )
+    } else {
+        format!(
+            "held by {} since {}, possibly a live mtui; check with `list_locks`; \
+             `unlock --force` releases the whole group of every loaded template",
+            owner.by, owner.since
+        )
     }
 }
 
@@ -1558,6 +1590,7 @@ impl McpSession {
         let preamble = async {
             let mut session = self.session.lock().await;
             session.release_active_guard();
+            let session_user = session.config.session_user.clone();
             if rrids.is_empty() {
                 // The registry alone is not the set of connected hosts: a host
                 // attached with nothing loaded lives on the null sentinel, whose
@@ -1565,15 +1598,16 @@ impl McpSession {
                 // Include it when it actually holds hosts, alongside the
                 // registry's RRIDs.
                 let with_null = session.null_group_has_hosts();
-                (session.templates.rrids(), with_null)
+                (session.templates.rrids(), with_null, session_user)
             } else {
                 // An explicit RRID scope names templates in the registry; the
                 // null sentinel is not one of them, so it stays out (a scoped
                 // dispatch could not have locked a sentinel host).
-                (rrids.to_vec(), false)
+                (rrids.to_vec(), false, session_user)
             }
         };
-        let Ok((targets, with_null)) = tokio::time::timeout(budget, preamble).await else {
+        let Ok((targets, with_null, session_user)) = tokio::time::timeout(budget, preamble).await
+        else {
             // Nothing is stranded by giving up here: the mutex being held that
             // long means a *live* dispatch owns it, and a live dispatch releases
             // its own active guard on the way out. The lingering-guard case (an
@@ -1583,6 +1617,7 @@ impl McpSession {
             summary.stalled = true;
             return summary;
         };
+        summary.session_user = session_user;
 
         // The sentinel goes first, *capped* at one group's equal share of what
         // the preamble left; the templates then get everything unspent, the
@@ -3374,8 +3409,12 @@ mod tests {
             "only the released host may be listed as unlocked: {msg}"
         );
         assert!(
-            msg.contains("still locked by another owner: host-stolen"),
-            "got: {msg}"
+            msg.contains("still locked: host-stolen (held by someone-else"),
+            "the contended arm must name the owner: {msg}"
+        );
+        assert!(
+            msg.contains("releases the whole group of every loaded template"),
+            "any --force offer must state its whole-group scope: {msg}"
         );
         assert!(msg.contains("unlock FAILED on host-broken1"), "got: {msg}");
         assert!(
@@ -3383,8 +3422,8 @@ mod tests {
             "every failed host must be named, not just the first: {msg}"
         );
         assert!(
-            msg.contains("unlock --force"),
-            "the failure arm must name the remedy: {msg}"
+            msg.contains("retry `unlock` once the host is reachable"),
+            "the failure arm must steer at list_locks + retry, not --force: {msg}"
         );
         assert!(
             !msg.contains("host-foreign"),
@@ -3396,6 +3435,93 @@ mod tests {
         assert!(!saw_unlock(&foreign), "the foreign lock was acted on");
         assert!(still_locked(&broken1), "the failed removal claimed success");
         assert!(still_locked(&broken2), "the failed removal claimed success");
+    }
+
+    /// The `Failed` bucket is a transport error, not contention: `--force` only
+    /// bypasses the ownership check, so the arm must steer at `list_locks` and
+    /// a plain retry instead.
+    #[test]
+    fn abort_unlock_failed_arm_offers_no_force() {
+        let mut summary = AbortUnlock::default();
+        summary.absorb(BTreeMap::from([(
+            "h1".to_owned(),
+            LockOutcome::Failed("boom".to_owned()),
+        )]));
+        let clause = summary.clause().expect("a failed host must render");
+        assert!(
+            clause.contains("unlock FAILED on h1 (boom)"),
+            "got: {clause}"
+        );
+        assert!(
+            clause.contains("`list_locks`")
+                && clause.contains("retry `unlock` once the host is reachable"),
+            "got: {clause}"
+        );
+        assert!(
+            !clause.contains("unlock --force"),
+            "a transport failure is not an ownership problem: {clause}"
+        );
+    }
+
+    /// The contended arm names the foreign owner, hedges, and states `--force`'s
+    /// whole-group scope instead of reading as "force this one host".
+    #[test]
+    fn abort_unlock_contended_names_foreign_owner_and_scopes_force() {
+        let mut summary = AbortUnlock {
+            session_user: "bob".to_owned(),
+            ..Default::default()
+        };
+        summary.absorb(BTreeMap::from([(
+            "h1".to_owned(),
+            LockOutcome::Contended(LockOwner {
+                by: "alice".to_owned(),
+                since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+            }),
+        )]));
+        let clause = summary.clause().expect("a contended host must render");
+        assert!(
+            clause.contains("still locked: h1 (held by alice since Tuesday, 14.11.2023 22:13 UTC"),
+            "got: {clause}"
+        );
+        assert!(
+            clause.contains("possibly a live mtui") && !clause.contains("(you)"),
+            "got: {clause}"
+        );
+        assert!(clause.contains("`list_locks`"), "got: {clause}");
+        assert!(
+            clause.contains("`unlock --force` releases the whole group of every loaded template"),
+            "got: {clause}"
+        );
+    }
+
+    /// The caller's own name as owner is most likely a second live mtui of
+    /// theirs, not a strand: the arm must branch instead of presenting it as a
+    /// stranger's.
+    #[test]
+    fn abort_unlock_contended_own_lock_branches_on_you() {
+        let mut summary = AbortUnlock {
+            session_user: "alice".to_owned(),
+            ..Default::default()
+        };
+        summary.absorb(BTreeMap::from([(
+            "h1".to_owned(),
+            LockOutcome::Contended(LockOwner {
+                by: "alice".to_owned(),
+                since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+            }),
+        )]));
+        let clause = summary.clause().expect("a contended host must render");
+        assert!(
+            clause.contains("held by alice (you) since Tuesday, 14.11.2023 22:13 UTC")
+                && clause.contains("possibly another mtui of yours")
+                && clause.contains("your other sessions"),
+            "got: {clause}"
+        );
+        assert!(!clause.contains("possibly a live mtui"), "got: {clause}");
+        assert!(
+            clause.contains("`unlock --force` releases the whole group of every loaded template"),
+            "got: {clause}"
+        );
     }
 
     /// A host whose lock read outruns the budget is reported unknown, with the

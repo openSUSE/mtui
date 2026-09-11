@@ -432,8 +432,10 @@ Locks are owned per user + PID on the wire, so a broader sweep would remove a
 sibling template's — or another MCP session's — live hold on a shared refhost and
 report it as released.
 
-The reply distinguishes: which hosts are now unlocked; which are held by another
-owner; which release failed (with `unlock --force` as the remedy); and which
+The reply distinguishes: which hosts are now unlocked; which are still locked and
+by whom (check with `list_locks`; `unlock --force` releases the whole group of
+every loaded template); which release failed (check with `list_locks` and retry
+`unlock` once the host is reachable); and which
 **templates** could not be reached inside the release budget, whose lock state is
 therefore unknown. A cancel with no held lock to act on says nothing extra.
 
@@ -478,7 +480,7 @@ token — returns its **own** verdict, success or failure, not a synthetic
 cancellation error). Only if the grace elapses is the dispatch force-aborted;
 the abort then best-effort releases `/var/lock/mtui.lock` on every host the
 call's own group actually took (never a comment-marked reservation) and the
-error text names what it unlocked, what is still held by another owner, and
+error text names what it unlocked, what is still locked and by whom, and
 what could not be reached inside the release budget.
 
 **This only helps a client that sends the notification.** mtui-mcp's default
