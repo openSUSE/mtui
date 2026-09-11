@@ -451,19 +451,35 @@ static FIELDS: &[FieldSpec] = &[
         needs_assignment: false,
         extract: |o| scalar_field(o, "url"),
     },
+    FieldSpec {
+        canonical: "Products",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| string_list_field(o, "products"),
+    },
+    FieldSpec {
+        canonical: "SRCRPMs",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| string_list_field(o, "srcrpms"),
+    },
+    FieldSpec {
+        canonical: "Bugs",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| string_list_field(o, "bugs"),
+    },
+    FieldSpec {
+        canonical: "Creator",
+        aliases: &[],
+        needs_assignment: false,
+        extract: |o| scalar_field(o, "creator"),
+    },
 ];
 
 /// osc-qam fields the listing does not carry yet (#415), named so the error can
 /// say "known, but not available here" instead of "unknown".
-static UNAVAILABLE_FIELDS: &[&str] = &[
-    "Products",
-    "SRCRPMs",
-    "Bugs",
-    "Package-Streams",
-    "Creator",
-    "Issues",
-    "Comments",
-];
+static UNAVAILABLE_FIELDS: &[&str] = &["Package-Streams", "Issues", "Comments"];
 
 /// Normalizes a field name for matching: lowercase, separators dropped, so
 /// `Incident Priority`, `incident-priority` and `incident_priority` coincide.
@@ -514,6 +530,24 @@ fn scalar_field(obj: &serde_json::Map<String, Value>, key: &str) -> String {
     match obj.get(key) {
         None | Some(Value::Null) => "-".to_owned(),
         Some(v) => json_scalar(v),
+    }
+}
+
+/// A string-list row key as display text: missing/null/non-array/empty → `-`.
+/// Non-string and empty elements are skipped, matching `Unassigned Roles`.
+fn string_list_field(obj: &serde_json::Map<String, Value>, key: &str) -> String {
+    let Some(arr) = obj.get(key).and_then(Value::as_array) else {
+        return "-".to_owned();
+    };
+    let parts: Vec<&str> = arr
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        "-".to_owned()
+    } else {
+        parts.join(", ")
     }
 }
 
@@ -702,7 +736,7 @@ mod tests {
     #[test]
     fn complete_offers_field_names_after_field_flag() {
         let (session, _buf) = empty_session();
-        // Bare -F: all twelve canonical names, in registry order.
+        // Bare -F: every canonical name, in registry order.
         let names = Updates.complete(&session, "", "updates -F ");
         assert_eq!(names.len(), FIELDS.len(), "{names:?}");
         assert_eq!(names[0], "ReviewRequestID");
@@ -1315,14 +1349,78 @@ mod tests {
     async fn known_but_unserved_field_names_the_gap() {
         let server = MockServer::start().await;
         let (mut session, _buf) = teregen_session(&server);
-        let args = matches(&Updates, &["-F", "bugs"]);
+        let args = matches(&Updates, &["-F", "comments"]);
         let err = Updates.call(&mut session, &args).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("'Bugs' is not in TeReGen's queue listing"),
+            msg.contains("'Comments' is not in TeReGen's queue listing"),
             "{msg}"
         );
         assert!(msg.contains("#415"), "{msg}");
+    }
+
+    #[test]
+    fn queue_list_fields_render_comma_joined_and_creator_as_is() {
+        let row = serde_json::json!({
+            "products": ["SLE-Product-SLES_15-SP6-LTSS", "SLE-Product-HPC_15-SP5-LTSS"],
+            "srcrpms": ["dovecot23"],
+            "bugs": ["bnc#1276794", "CVE-2026-27859"],
+            "creator": "amattiazzo",
+        });
+        let o = row.as_object().unwrap();
+        assert_eq!(
+            string_list_field(o, "products"),
+            "SLE-Product-SLES_15-SP6-LTSS, SLE-Product-HPC_15-SP5-LTSS"
+        );
+        assert_eq!(string_list_field(o, "srcrpms"), "dovecot23");
+        assert_eq!(string_list_field(o, "bugs"), "bnc#1276794, CVE-2026-27859");
+        assert_eq!(scalar_field(o, "creator"), "amattiazzo");
+        // Requested spellings resolve; matching is case/separator-insensitive.
+        for name in [
+            "Products", "products", "SRCRPMs", "srcrpms", "SRC_RPMS", "Bugs", "BUGS", "Creator",
+            "creator",
+        ] {
+            resolve_field(name).unwrap();
+        }
+        let specs: Vec<&FieldSpec> = ["Products", "SRCRPMs", "Bugs", "Creator"]
+            .iter()
+            .map(|n| resolve_field(n).unwrap())
+            .collect();
+        let rendered = render_fields(&row, &specs);
+        for line in [
+            "Products: SLE-Product-SLES_15-SP6-LTSS, SLE-Product-HPC_15-SP5-LTSS",
+            "SRCRPMs: dovecot23",
+            "Bugs: bnc#1276794, CVE-2026-27859",
+            "Creator: amattiazzo",
+        ] {
+            assert!(rendered.contains(line), "missing '{line}' in:\n{rendered}");
+        }
+    }
+
+    #[test]
+    fn queue_list_fields_missing_keys_render_empty_without_panicking() {
+        let row = serde_json::json!({"id": "SUSE:Maintenance:77:707"});
+        let o = row.as_object().unwrap();
+        assert_eq!(string_list_field(o, "products"), "-");
+        assert_eq!(string_list_field(o, "srcrpms"), "-");
+        assert_eq!(string_list_field(o, "bugs"), "-");
+        assert_eq!(scalar_field(o, "creator"), "-");
+        // Null, wrong shape, empty and non-string elements degrade, never panic.
+        let row = serde_json::json!({
+            "products": null,
+            "srcrpms": "dovecot23",
+            "bugs": ["bnc#1", 42, null, "", "CVE-1"],
+            "creator": null,
+        });
+        let o = row.as_object().unwrap();
+        assert_eq!(string_list_field(o, "products"), "-");
+        assert_eq!(string_list_field(o, "srcrpms"), "-");
+        assert_eq!(string_list_field(o, "bugs"), "bnc#1, CVE-1");
+        assert_eq!(scalar_field(o, "creator"), "-");
+        let row = serde_json::json!({"products": [], "bugs": []});
+        let o = row.as_object().unwrap();
+        assert_eq!(string_list_field(o, "products"), "-");
+        assert_eq!(string_list_field(o, "bugs"), "-");
     }
 
     // ------------------------------------------------------------------ json

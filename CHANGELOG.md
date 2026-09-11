@@ -107,6 +107,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   <svn stderr>` (stderr capped at 1 KB, cut marked `…[truncated]`) —
   instead of the empty `Test report for  does not exist`
   that hid every `svn` failure behind the checkout-missing text (#607).
+- `updates -F` now serves `Products`, `SRCRPMs`, `Bugs` and `Creator` from the
+  TeReGen queue listing; only `Package-Streams`, `Issues` and `Comments` remain
+  unavailable (#415).
 
 ## [26.3.1] - 2026-09-02
 
