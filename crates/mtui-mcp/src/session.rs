@@ -57,7 +57,7 @@ use mtui_core::{
     ColorMode, CommandError, CommandPromptDisplay, EngineError, HOST_CLOSE_TIMEOUT, Registry,
     Session, addresses_template, dispatch_argv, dispatch_command, resolve_command_rrids,
 };
-use mtui_hosts::{LockOutcome, LockOwner};
+use mtui_hosts::{LockOutcome, LockOwner, contended_lock_reason};
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
@@ -372,7 +372,7 @@ impl AbortUnlock {
         for (host, owner) in &self.contended {
             parts.push(format!(
                 "still locked: {host} ({})",
-                contended_reason(owner, &self.session_user)
+                contended_lock_reason(owner, &self.session_user, ABORT_CHECK, ABORT_SCOPE)
             ));
         }
         for (host, reason) in &self.failed {
@@ -413,31 +413,11 @@ impl AbortUnlock {
     }
 }
 
-/// Names the owner of a contended abort-path lock and the next safe step.
-///
-/// Mirrors `mtui_core::commands::support::contended_lock_reason`'s own/foreign
-/// split and hedge, with the abort path's wider scope: `unlock --force` runs
-/// once per loaded template over that template's whole group.
-fn contended_reason(owner: &LockOwner, session_user: &str) -> String {
-    if owner.by.is_empty() {
-        "held by an unknown owner, possibly a live mtui; check with `list_locks`; \
-         `unlock --force` releases the whole group of every loaded template"
-            .to_owned()
-    } else if owner.by == session_user {
-        format!(
-            "held by {} (you) since {}, possibly another mtui of yours; check with \
-             `list_locks` and your other sessions; `unlock --force` releases the whole \
-             group of every loaded template",
-            owner.by, owner.since
-        )
-    } else {
-        format!(
-            "held by {} since {}, possibly a live mtui; check with `list_locks`; \
-             `unlock --force` releases the whole group of every loaded template",
-            owner.by, owner.since
-        )
-    }
-}
+/// The abort-path steer and scope for [`mtui_hosts::contended_lock_reason`]:
+/// markdown `list_locks`, and `--force`'s per-template whole-group fan-out over
+/// every loaded template (with leading separator).
+const ABORT_CHECK: &str = "check with `list_locks`";
+const ABORT_SCOPE: &str = "; `unlock --force` releases the whole group of every loaded template";
 
 /// The shared parenthetical for a forced abort: the grace period, the
 /// in-flight-host-operation caveat, and (if any) the unlock verdict.

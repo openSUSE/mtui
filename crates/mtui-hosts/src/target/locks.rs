@@ -168,6 +168,34 @@ pub struct LockOwner {
     pub since: String,
 }
 
+/// Names the owner of a contended operation lock and the next safe step.
+///
+/// Own/foreign/unknown split and hedges shared by the REPL (`lock`/`run`/`unlock`)
+/// and the MCP abort path; `check` is the `list_locks` steer (plain vs markdown)
+/// and `scope_note` states `--force`'s whole-group scope with its leading separator.
+/// Split because the fan-out truths differ (`-t`-scoped vs per-template whole-group).
+#[must_use]
+pub fn contended_lock_reason(
+    owner: &LockOwner,
+    session_user: &str,
+    check: &str,
+    scope_note: &str,
+) -> String {
+    if owner.by.is_empty() {
+        format!("held by an unknown owner, possibly a live mtui; {check}{scope_note}")
+    } else if owner.by == session_user {
+        format!(
+            "held by {} (you) since {}, possibly another mtui of yours; {check} and your other sessions{scope_note}",
+            owner.by, owner.since
+        )
+    } else {
+        format!(
+            "held by {} since {}, possibly a live mtui; {check}{scope_note}",
+            owner.by, owner.since
+        )
+    }
+}
+
 impl RemoteLock {
     /// Serializes to a lockfile line: `timestamp:user:pid[:comment]`.
     ///
@@ -1060,6 +1088,85 @@ mod tests {
     use crate::connection::MockConnection;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Own/foreign/unknown arms stay distinguishable both ways, hedge, and keep
+    /// `--force`'s whole-group scope visible instead of "force this one host".
+    #[test]
+    fn contended_lock_reason_hedges_and_scopes_the_force_remedy() {
+        let alice = LockOwner {
+            by: "alice".to_owned(),
+            since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+        };
+        let check = "check list_locks";
+        let scope = " (unlock --force clears every selected host)";
+        let foreign = contended_lock_reason(&alice, "bob", check, scope);
+        let mine = contended_lock_reason(&alice, "alice", check, scope);
+        let unknown = contended_lock_reason(&LockOwner::default(), "bob", check, scope);
+
+        for line in [&foreign, &mine, &unknown] {
+            assert!(line.contains("list_locks"), "{line}");
+            assert!(
+                line.contains("unlock --force clears every selected host"),
+                "{line}"
+            );
+            assert!(line.contains("possibly"), "hedge missing: {line}");
+        }
+        assert!(
+            foreign.contains("held by alice since Tuesday, 14.11.2023 22:13 UTC"),
+            "{foreign}"
+        );
+        assert!(
+            foreign.contains("possibly a live mtui")
+                && !foreign.contains("(you)")
+                && !foreign.contains("mtui of yours"),
+            "{foreign}"
+        );
+        assert!(
+            mine.contains("held by alice (you) since Tuesday, 14.11.2023 22:13 UTC")
+                && mine.contains("possibly another mtui of yours")
+                && mine.contains("check list_locks and your other sessions"),
+            "{mine}"
+        );
+        assert!(!mine.contains("possibly a live mtui"), "{mine}");
+        assert!(
+            unknown.contains("held by an unknown owner") && !unknown.contains("override"),
+            "{unknown}"
+        );
+    }
+
+    /// The MCP markdown steer renders through the same split, keeping its
+    /// per-template whole-group scope (#544).
+    #[test]
+    fn contended_lock_reason_renders_the_markdown_scope() {
+        let alice = LockOwner {
+            by: "alice".to_owned(),
+            since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+        };
+        let check = "check with `list_locks`";
+        let scope = "; `unlock --force` releases the whole group of every loaded template";
+        let foreign = contended_lock_reason(&alice, "bob", check, scope);
+        let mine = contended_lock_reason(&alice, "alice", check, scope);
+        let unknown = contended_lock_reason(&LockOwner::default(), "bob", check, scope);
+
+        for line in [&foreign, &mine, &unknown] {
+            assert!(line.contains("`list_locks`"), "{line}");
+            assert!(
+                line.contains("`unlock --force` releases the whole group of every loaded template"),
+                "{line}"
+            );
+        }
+        assert!(
+            foreign.contains("held by alice since Tuesday, 14.11.2023 22:13 UTC")
+                && !foreign.contains("(you)"),
+            "{foreign}"
+        );
+        assert!(
+            mine.contains("held by alice (you) since Tuesday, 14.11.2023 22:13 UTC")
+                && mine.contains("possibly another mtui of yours"),
+            "{mine}"
+        );
+        assert!(unknown.contains("held by an unknown owner"), "{unknown}");
+    }
 
     // --- RemoteLock ---------------------------------------------------------
 
