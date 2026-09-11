@@ -270,9 +270,9 @@ updates --json                # the raw TeReGen rows, for scripting
 `-F` accepts the field names `osc qam list -F` uses — case-insensitively, with
 spaces, hyphens and underscores treated as equivalent: `ReviewRequestID`,
 `Incident Priority`, `Rating`, `Category`, `Status`, `Kind`, `Deadline`,
-`Assignee`, `Assigned Roles`, `Unassigned Roles`, `Title`, `URL`. Fields the
-TeReGen queue listing does not carry (`Products`, `SRCRPMs`, `Bugs`,
-`Package-Streams`, `Creator`, `Issues`, `Comments`) are named in the error
+`Assignee`, `Assigned Roles`, `Unassigned Roles`, `Title`, `URL`, `Products`,
+`SRCRPMs`, `Bugs`, `Creator`. Fields the
+TeReGen queue listing does not carry (`Package-Streams`, `Issues`, `Comments`) are named in the error
 rather than silently absent. `Unassigned Roles` renders `n/a` when it cannot
 be answered honestly: on SLFO rows (TeReGen does not expose review groups on
 them) and on any row served without assignment data, where "every group open"

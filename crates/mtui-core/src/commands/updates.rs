@@ -479,6 +479,10 @@ static FIELDS: &[FieldSpec] = &[
 
 /// osc-qam fields the listing does not carry yet (#415), named so the error can
 /// say "known, but not available here" instead of "unknown".
+/// `Package-Streams` is not TeReGen's `codestreams` under another key:
+/// osc-qam derives it from the OBS request's `src_package` set (bare names
+/// like `glibc`), while `codestreams` carries project identifiers
+/// (`SUSE:SLE-15-SP2:Update`, `SUSE:SLFO:1.2`).
 static UNAVAILABLE_FIELDS: &[&str] = &["Package-Streams", "Issues", "Comments"];
 
 /// Normalizes a field name for matching: lowercase, separators dropped, so
@@ -534,7 +538,7 @@ fn scalar_field(obj: &serde_json::Map<String, Value>, key: &str) -> String {
 }
 
 /// A string-list row key as display text: missing/null/non-array/empty → `-`.
-/// Non-string and empty elements are skipped, matching `Unassigned Roles`.
+/// Non-string elements are skipped and empty strings dropped.
 fn string_list_field(obj: &serde_json::Map<String, Value>, key: &str) -> String {
     let Some(arr) = obj.get(key).and_then(Value::as_array) else {
         return "-".to_owned();
@@ -1357,6 +1361,46 @@ mod tests {
             "{msg}"
         );
         assert!(msg.contains("#415"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn package_streams_stays_unavailable_despite_codestreams_key() {
+        // Live rows carry `codestreams` (project identifiers), but osc-qam's
+        // `Package-Streams` is the OBS `src_package` set (bare names): the
+        // former must not alias to the latter. Kills serving `codestreams`
+        // as `Package-Streams`.
+        let row = serde_json::json!({
+            "id": "SUSE:Maintenance:1:1",
+            "codestreams": ["SUSE:SLE-15-SP2:Update"],
+        });
+        let o = row.as_object().unwrap();
+        assert_eq!(
+            string_list_field(o, "codestreams"),
+            "SUSE:SLE-15-SP2:Update"
+        );
+        let msg = resolve_field("Package-Streams").err().unwrap().to_string();
+        assert!(
+            msg.contains("'Package-Streams' is not in TeReGen's queue listing"),
+            "{msg}"
+        );
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/updates"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"updates": [row]})),
+            )
+            .expect(0)
+            .mount(&server)
+            .await;
+        let (mut session, _buf) = teregen_session(&server);
+        let args = matches(&Updates, &["-F", "Package-Streams"]);
+        let err = Updates.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'Package-Streams' is not in TeReGen's queue listing"),
+            "{}",
+            err.to_string()
+        );
     }
 
     #[test]
