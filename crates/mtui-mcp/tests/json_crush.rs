@@ -1,10 +1,11 @@
 //! Row-budget crush reaches the MCP client intact.
 //!
 //! Drives the real `updates` / `list_refhosts` commands through
-//! [`McpSession::run_command`] with unbounded mocked backends: `--json` tool
-//! output parses as-is (the truncation notice goes to stderr, keeping stdout
-//! valid JSON) while human output keeps the notice naming the narrowing flags.
-//! Also pins the additive paging flags and that row-cap is not byte-cap.
+//! [`McpSession::run_command`] with unbounded mocked backends: over-cap `--json`
+//! tool output carries the truncation notice in-band after the JSON array (like
+//! the byte-cap convention), so naive parse fails loudly and clients strip
+//! `…[truncated` lines; under-cap stays pure JSON. Also pins the additive
+//! paging flags and that row-cap is not byte-cap.
 
 #![cfg(feature = "mcp")]
 
@@ -29,9 +30,9 @@ fn queue_fixture() -> serde_json::Value {
     serde_json::json!({"updates": rows})
 }
 
-/// `updates --json` over an unbounded queue: stdout stays valid JSON, anomaly kept.
+/// `updates --json` over an unbounded queue: notice in-band, anomaly kept.
 #[tokio::test]
-async fn updates_json_crush_stays_valid() {
+async fn updates_json_crush_carries_notice_in_band() {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -55,9 +56,23 @@ async fn updates_json_crush_stays_valid() {
         .run_command(&registry, "updates", &argv)
         .await
         .expect("updates succeeds");
-    // Notice on stderr: tool output parses as-is with no trailing notice line.
-    assert!(!out.contains("…[truncated"), "{out}");
-    let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert!(
+        out.lines()
+            .last()
+            .is_some_and(|l| l.starts_with("…[truncated")),
+        "{out}"
+    );
+    assert!(out.contains("--limit/--offset/--field/-G"), "{out}");
+    assert!(
+        serde_json::from_str::<serde_json::Value>(out.trim()).is_err(),
+        "naive parse of full stdout must fail loudly: {out}"
+    );
+    let json_part: String = out
+        .lines()
+        .filter(|l| !l.starts_with("…[truncated"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
     let rows = parsed.as_array().unwrap();
     assert!(rows.len() <= 100, "row budget holds: {}", rows.len());
     assert!(rows.iter().any(|r| r["id"] == "row-anomaly"), "{out}");
@@ -132,6 +147,10 @@ async fn updates_offset_recovers_middle_row() {
         .run_command(&registry, "updates", &argv)
         .await
         .expect("updates succeeds");
+    assert!(
+        !out.contains("…[truncated"),
+        "50-row window fits budget: {out}"
+    );
     let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
     let rows = parsed.as_array().unwrap();
     assert!(rows.iter().any(|r| r["id"] == "row-060"), "{out}");
