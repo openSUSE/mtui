@@ -12,8 +12,10 @@ use thiserror::Error;
 pub type CommandResult = Result<(), CommandError>;
 
 /// An error raised while resolving or running a command.
-/// Groups identical per-template errors in first-seen order, so the detail can
-/// reorder RRIDs (`a, c: boom; b: other`) while the header keeps fan-out order.
+/// Groups identical per-template errors by rendered text (`to_string()`
+/// equality) in first-seen order, so unrelated variants with identical text
+/// merge into one group and the detail can reorder RRIDs (`a, c: boom;
+/// b: other`) while the header keeps fan-out order.
 fn fanout_detail(failures: &[(String, CommandError)]) -> String {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for (rrid, err) in failures {
@@ -270,6 +272,25 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "fan-out failed on a, b, c (a, c: boom; b: other)"
+        );
+    }
+
+    #[test]
+    fn fanout_grouping_key_is_rendered_text() {
+        // Unrelated variants with identical text merge into one group.
+        let e = CommandError::FanOut {
+            failures: vec![
+                (
+                    "a".into(),
+                    CommandError::Other("No refhosts defined".into()),
+                ),
+                ("b".into(), CommandError::NoRefhostsDefined),
+            ],
+            stop: None,
+        };
+        assert_eq!(
+            e.to_string(),
+            "fan-out failed on a, b (a, b: No refhosts defined)"
         );
     }
 }
