@@ -45,7 +45,8 @@ use mtui_testreport::atomic_write_file;
 use serde_json::{Map, Value, json};
 
 use crate::session::{
-    DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, run_with_heartbeat,
+    DEFAULT_PROGRESS_INTERVAL, McpCommandError, McpSession, ProgressSink, RereadKey,
+    run_with_heartbeat,
 };
 use crate::slim::{cap_output, truncation_notice};
 use crate::tools::ToolDescriptor;
@@ -244,6 +245,40 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Resolve a `relpath` target off the runtime worker.
+///
+/// Runs [`safe_template_file`] plus the `is_file` existence check in one
+/// `spawn_blocking` hop, so the traversal check and the stat stay atomic and
+/// never stall the session mutex or a Tokio worker. Errors byte-identical to
+/// the inline [`resolve_target_path`] `must_exist` path.
+async fn resolve_relpath_async(base: PathBuf, rel: String) -> Result<PathBuf, McpCommandError> {
+    tokio::task::spawn_blocking(move || {
+        let path = safe_template_file(&base, &rel)?;
+        if !path.is_file() {
+            return Err(refuse(format!(
+                "no such file in testreport checkout: {rel}"
+            )));
+        }
+        Ok(path)
+    })
+    .await
+    .map_err(|e| refuse(format!("read task failed: {e}")))?
+}
+
+/// Canonicalize a resolved path for the dedup key off the worker.
+///
+/// Mirrors `path.canonicalize().unwrap_or_else(|_| path.clone())`: a missing
+/// file falls back to the lexical path, never an error. Only a task-join
+/// failure refuses.
+async fn canonicalize_for_key_async(path: PathBuf) -> Result<PathBuf, McpCommandError> {
+    tokio::task::spawn_blocking(move || match path.canonicalize() {
+        Ok(canon) => canon,
+        Err(_) => path,
+    })
+    .await
+    .map_err(|e| refuse(format!("read task failed: {e}")))
+}
+
 /// Count lines with the `splitlines` convention: `"a\nb\n"`→2, `"a\nb"`→2,
 /// `""`→0. Shared across read/patch/write/fill so counts never drift.
 fn count_lines(text: &str) -> usize {
@@ -386,7 +421,10 @@ fn stream_read(
 /// Defaults to the report's `log` file; `relpath` reads any other file under the
 /// checkout directory (traversal-guarded). `offset` (1-based, ≥1) / `limit` (≥0)
 /// request a 1-indexed inclusive line window. `line_count` is always the file's
-/// total; a windowed read also carries `offset`/`returned_lines`.
+/// total; a windowed read also carries `offset`/`returned_lines`. An exact
+/// re-read collapses to an `[unchanged since …]` notice unless `force` resends it.
+/// `deduped` is true on the collapsed notice, false on full file text, so a
+/// non-LLM consumer need not string-match `content` to tell them apart.
 ///
 /// # Errors
 /// Refuses on bad `offset`/`limit`, no loaded report, ambiguous/unknown
@@ -397,19 +435,38 @@ async fn testreport_read(
     offset: usize,
     limit: Option<usize>,
     template: Option<&str>,
+    force: Option<bool>,
 ) -> Result<Value, McpCommandError> {
     if offset < 1 {
         return Err(refuse(format!("offset must be >= 1 (got {offset})")));
     }
 
-    // Only the `PathBuf` needs the session lock, so it is released before the
-    // file I/O: a slow read must not stall concurrent same-lock work.
-    let path = {
+    // Only owned paths leave the session lock, so no file I/O runs under it:
+    // a slow or network-mounted checkout must not stall concurrent same-lock
+    // work. The blocking syscalls (traversal check, stat, canonicalization)
+    // go through `spawn_blocking` below.
+    enum Target {
+        Log(PathBuf),
+        Rel { base: PathBuf, rel: String },
+    }
+    let target = {
         // The gate scope is held for the whole call, the inner mutex only for the
         // path resolution.
         let _scope = session.scoped_lock(template).await;
         let guard = session.session().lock().await;
-        resolve_target_path(&guard, relpath, template, true)?
+        if let Some(rel) = relpath {
+            let base = resolve_dir(&guard, template)?;
+            Target::Rel {
+                base,
+                rel: rel.to_owned(),
+            }
+        } else {
+            Target::Log(resolve_path(&guard, template)?)
+        }
+    };
+    let path = match target {
+        Target::Log(p) => p,
+        Target::Rel { base, rel } => resolve_relpath_async(base, rel).await?,
     };
 
     let windowed = offset != 1 || limit.is_some();
@@ -429,6 +486,39 @@ async fn testreport_read(
     let cap = session.max_output_bytes();
     let content = cap_output(result.content, cap);
 
+    // Exact re-read dedup: same resolved path + window with unchanged content
+    // collapses to a notice; `force` resends while still refreshing the entry.
+    // The key path is canonicalized: the stored `log` path may spell a symlinked
+    // prefix verbatim (e.g. `/var` for `/private/var` on macOS) while the
+    // relpath arm resolves it, and both must key one file. Off the worker: a
+    // network-mounted checkout must not block a Tokio thread on the stat.
+    let key = RereadKey {
+        path: canonicalize_for_key_async(path.clone()).await?,
+        offset,
+        limit,
+    };
+    let hash = McpSession::hash_content(&content);
+    if force == Some(true) {
+        let _ = session.dedup_reread(key, hash, result.line_count);
+    } else if let Some(notice) = session.dedup_reread(key, hash, result.line_count) {
+        if let Some(returned) = result.returned_lines {
+            return Ok(json!({
+                "path": path.to_string_lossy(),
+                "line_count": result.line_count,
+                "offset": offset,
+                "returned_lines": returned,
+                "content": notice,
+                "deduped": true,
+            }));
+        }
+        return Ok(json!({
+            "path": path.to_string_lossy(),
+            "line_count": result.line_count,
+            "content": notice,
+            "deduped": true,
+        }));
+    }
+
     if let Some(returned) = result.returned_lines {
         Ok(json!({
             "path": path.to_string_lossy(),
@@ -436,12 +526,14 @@ async fn testreport_read(
             "offset": offset,
             "returned_lines": returned,
             "content": content,
+            "deduped": false,
         }))
     } else {
         Ok(json!({
             "path": path.to_string_lossy(),
             "line_count": result.line_count,
             "content": content,
+            "deduped": false,
         }))
     }
 }
@@ -750,10 +842,12 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
         name: "testreport_read".to_owned(),
         description: format!(
             "Read a file from the loaded testreport checkout: path, total \
-             line count, content (utf-8, errors replaced). Without `relpath` reads \
+             line count, content (utf-8, errors replaced), and `deduped` (true when \
+             content is the [unchanged since …] notice, false for file text). Without `relpath` reads \
              the `log` file; `relpath` names another checkout file, which must stay \
              inside it. `offset`/`limit` page a 1-based line window — page large \
-             files instead of reading them whole. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+             files instead of reading them whole. Exact re-reads collapse to an \
+             [unchanged since …] notice with `deduped=true`; pass `force=true` to resend, or use offset/limit to page. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -768,6 +862,10 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
                 (
                     "limit",
                     json!({ "type": "integer", "minimum": 0, "description": "Max lines to return (default: to end of file)." }),
+                ),
+                (
+                    "force",
+                    json!({ "type": "boolean", "description": "Resend the content even when unchanged (bypass the [unchanged since …] notice)." }),
                 ),
                 ("template", template_prop()),
             ],
@@ -912,6 +1010,15 @@ fn int_field(kwargs: &Map<String, Value>, key: &str, default: i64) -> Result<i64
     }
 }
 
+/// Decode an optional boolean field, refusing a non-boolean.
+fn bool_field(kwargs: &Map<String, Value>, key: &str) -> Result<Option<bool>, McpCommandError> {
+    match kwargs.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(other) => Err(refuse(format!("{key} must be a boolean, got {other}"))),
+    }
+}
+
 /// Dispatch a testreport tool call by name, decoding `kwargs` to typed args.
 ///
 /// # Errors
@@ -975,7 +1082,8 @@ async fn dispatch_testreport_tool_inner(
                     return Err(refuse(format!("limit must be an integer, got {other}")));
                 }
             };
-            testreport_read(session, relpath, offset as usize, limit, template).await
+            let force = bool_field(kwargs, "force")?;
+            testreport_read(session, relpath, offset as usize, limit, template, force).await
         }
         "testreport_logs" => testreport_logs(session, template).await,
         "testreport_patch" => {
@@ -1036,11 +1144,33 @@ mod tests {
         (McpSession::new(config), tmp)
     }
 
+    /// Like [`session_with_tmp`] but with an explicit output cap
+    /// (`mcp_max_output_bytes`).
+    fn session_with_output_cap(
+        max_output: usize,
+    ) -> (std::sync::Arc<McpSession>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.template_dir = tmp.path().to_path_buf();
+        config.mcp_max_output_bytes = max_output;
+        (McpSession::new(config), tmp)
+    }
+
     /// Add a loaded `ObsReport` for `rrid` whose `log` file lives at `path`
     /// (with initial `content`), making it active. Creates the file on disk.
+    ///
+    /// File creation runs off the worker via `spawn_blocking`, like the
+    /// production path: the helper itself runs in async test context.
     async fn load_report(session: &McpSession, rrid: &str, path: &Path, content: &str) {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content).unwrap();
+        let dir = path.parent().unwrap().to_path_buf();
+        let file = path.to_path_buf();
+        let bytes = content.to_owned();
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(&file, bytes).unwrap();
+        })
+        .await
+        .unwrap();
         let mut guard = session.session().lock().await;
         let mut report = ObsReport::new(guard.config.clone());
         report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
@@ -1069,12 +1199,22 @@ mod tests {
         );
     }
 
+    /// Overwrite `path` with `data` off the worker, for tests simulating an
+    /// external file change between reads (stale-dedup scenarios).
+    async fn overwrite_for_test(path: &Path, data: &[u8]) {
+        let file = path.to_path_buf();
+        let bytes = data.to_vec();
+        tokio::task::spawn_blocking(move || std::fs::write(&file, bytes).unwrap())
+            .await
+            .unwrap();
+    }
+
     // ---- refusal without a loaded report ---------------------------------- //
 
     #[tokio::test]
     async fn read_refuses_without_loaded_report() {
         let (session, _tmp) = session_with_tmp();
-        let err = testreport_read(&session, None, 1, None, None)
+        let err = testreport_read(&session, None, 1, None, None, None)
             .await
             .expect_err("null report refuses");
         assert_eq!(err.exit_code, 1);
@@ -1107,11 +1247,12 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await;
 
-        let res = testreport_read(&session, None, 1, None, None)
+        let res = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         assert_eq!(res["line_count"], 5);
         assert_eq!(res["content"], "l1\nl2\nl3\nl4\nl5\n");
+        assert_eq!(res["deduped"], false, "full content: {res}");
         assert!(res.get("returned_lines").is_none(), "no window: {res}");
     }
 
@@ -1121,13 +1262,14 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await;
 
-        let res = testreport_read(&session, None, 2, Some(2), None)
+        let res = testreport_read(&session, None, 2, Some(2), None, None)
             .await
             .unwrap();
         assert_eq!(res["line_count"], 5, "total, not window size");
         assert_eq!(res["offset"], 2);
         assert_eq!(res["returned_lines"], 2);
         assert_eq!(res["content"], "l2\nl3\n");
+        assert_eq!(res["deduped"], false, "full window: {res}");
     }
 
     #[tokio::test]
@@ -1136,7 +1278,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await;
 
-        let res = testreport_read(&session, None, 4, None, None)
+        let res = testreport_read(&session, None, 4, None, None, None)
             .await
             .unwrap();
         assert_eq!(res["returned_lines"], 2);
@@ -1150,7 +1292,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\n").await;
 
-        let res = testreport_read(&session, None, 99, None, None)
+        let res = testreport_read(&session, None, 99, None, None, None)
             .await
             .unwrap();
         assert_eq!(res["returned_lines"], 0);
@@ -1163,7 +1305,7 @@ mod tests {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\n").await;
-        let err = testreport_read(&session, None, 0, None, None)
+        let err = testreport_read(&session, None, 0, None, None, None)
             .await
             .expect_err("offset 0 refused");
         assert!(err.stderr.contains("offset must be >= 1"), "{err:?}");
@@ -1175,7 +1317,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\n").await;
 
-        let missing = testreport_read(&session, Some("build_checks/nope.log"), 1, None, None)
+        let missing = testreport_read(&session, Some("build_checks/nope.log"), 1, None, None, None)
             .await
             .expect_err("missing file");
         assert!(
@@ -1185,7 +1327,7 @@ mod tests {
             "{missing:?}"
         );
 
-        let escape = testreport_read(&session, Some("../../etc/passwd"), 1, None, None)
+        let escape = testreport_read(&session, Some("../../etc/passwd"), 1, None, None, None)
             .await
             .expect_err("traversal refused");
         assert!(escape.stderr.contains("escapes"), "{escape:?}");
@@ -1197,9 +1339,9 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "placeholder\n").await;
         // Invalid UTF-8 byte 0xFF between valid text; decoded lossily (U+FFFD).
-        std::fs::write(&path, b"ab\xffcd\n").unwrap();
+        overwrite_for_test(&path, b"ab\xffcd\n").await;
 
-        let res = testreport_read(&session, None, 1, None, None)
+        let res = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         let content = res["content"].as_str().unwrap();
@@ -1218,7 +1360,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "l1\nl2\nl3\nl4\nl5\n").await; // 15 bytes
 
-        let res = testreport_read(&session, None, 1, None, None)
+        let res = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
         let content = res["content"].as_str().unwrap();
@@ -1243,7 +1385,7 @@ mod tests {
         let big: String = (0..1000).map(|i| format!("line{i}\n")).collect();
         load_report(&session, RRID, &path, &big).await;
 
-        let res = testreport_read(&session, None, 500, Some(2), None)
+        let res = testreport_read(&session, None, 500, Some(2), None, None)
             .await
             .unwrap();
         assert_eq!(res["line_count"], 1000, "true total: {res}");
@@ -1265,8 +1407,8 @@ mod tests {
         let s1 = session.clone();
         let s2 = session.clone();
         let (r1, r2) = tokio::join!(
-            async move { testreport_read(&s1, None, 1, None, Some("SUSE:Maintenance:1:1")).await },
-            async move { testreport_read(&s2, None, 1, None, Some("SUSE:Maintenance:2:2")).await },
+            async move { testreport_read(&s1, None, 1, None, Some("SUSE:Maintenance:1:1"), None).await },
+            async move { testreport_read(&s2, None, 1, None, Some("SUSE:Maintenance:2:2"), None).await },
         );
         assert_eq!(r1.unwrap()["content"], "one\n");
         assert_eq!(r2.unwrap()["content"], "two\n");
@@ -1290,9 +1432,16 @@ mod tests {
         assert_eq!(bc[0]["size"], 4);
         assert!(listed["install_logs"].as_array().unwrap().is_empty());
 
-        let out = testreport_read(&session, Some("build_checks/pkg.x86_64.log"), 1, None, None)
-            .await
-            .unwrap();
+        let out = testreport_read(
+            &session,
+            Some("build_checks/pkg.x86_64.log"),
+            1,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(out["line_count"], 2);
         assert_eq!(out["content"], "a\nb\n");
     }
@@ -1638,7 +1787,7 @@ mod tests {
         load_report(&session, "SUSE:Maintenance:1:1", &p1, "one\n").await;
         load_report(&session, "SUSE:Maintenance:2:2", &p2, "two\n").await;
 
-        let err = testreport_read(&session, None, 1, None, None)
+        let err = testreport_read(&session, None, 1, None, None, None)
             .await
             .expect_err("ambiguous");
         assert!(
@@ -1655,7 +1804,7 @@ mod tests {
         load_report(&session, "SUSE:Maintenance:1:1", &p1, "one\n").await;
         load_report(&session, "SUSE:Maintenance:2:2", &p2, "two\n").await;
 
-        let res = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:2:2"))
+        let res = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:2:2"), None)
             .await
             .unwrap();
         assert_eq!(res["content"], "two\n");
@@ -1666,7 +1815,7 @@ mod tests {
         let (session, tmp) = session_with_tmp();
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "x\n").await;
-        let err = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:9:9"))
+        let err = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:9:9"), None)
             .await
             .expect_err("unknown template");
         assert!(err.stderr.contains("template not loaded"), "{err:?}");
@@ -1852,9 +2001,431 @@ mod tests {
         std::fs::write(outside.join("secret"), "top secret\n").unwrap();
         symlink(&outside, checkout.join("escape")).unwrap();
 
-        let err = testreport_read(&session, Some("escape/secret"), 1, None, None)
+        let err = testreport_read(&session, Some("escape/secret"), 1, None, None, None)
             .await
             .expect_err("symlink escape refused");
         assert!(err.stderr.contains("escapes"), "{err:?}");
+    }
+
+    // ---- re-read dedup ---------------------------------------------------- //
+
+    #[tokio::test]
+    async fn reread_identical_dedups_to_notice() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        assert_eq!(first["deduped"], false, "full: {first}");
+        let second = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        let content = second["content"].as_str().unwrap();
+        assert!(content.contains("unchanged since"), "{content:?}");
+        assert!(content.contains("force=true"), "{content:?}");
+        assert!(content.contains("use offset/limit to move"), "{content:?}");
+        assert_eq!(second["deduped"], true, "collapsed: {second}");
+    }
+
+    #[tokio::test]
+    async fn reread_force_resends_full_and_refreshes() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        assert_eq!(first["deduped"], false, "full: {first}");
+        // Second identical read collapses.
+        let notice = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            notice["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since")
+        );
+        assert_eq!(notice["deduped"], true, "collapsed: {notice}");
+        // `force` resends the text instead of the notice.
+        let forced = testreport_read(&session, None, 1, None, None, Some(true))
+            .await
+            .unwrap();
+        assert_eq!(forced["content"], "l1\nl2\n");
+        assert_eq!(forced["deduped"], false, "force resends full: {forced}");
+        // Entry refreshed, so the next plain read collapses again.
+        let again = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            again["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since")
+        );
+        assert_eq!(again["deduped"], true, "collapsed: {again}");
+        // Explicit `false` behaves like an omitted `force`.
+        let explicit_false = testreport_read(&session, None, 1, None, None, Some(false))
+            .await
+            .unwrap();
+        assert!(
+            explicit_false["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "{explicit_false}"
+        );
+        assert_eq!(explicit_false["deduped"], true, "{explicit_false}");
+        // Stale entry: overwrite to v2; `force` must resend v2 FULL and
+        // refresh the entry, so the next plain read collapses.
+        overwrite_for_test(&path, b"l1\nv2\n").await;
+        let forced_stale = testreport_read(&session, None, 1, None, None, Some(true))
+            .await
+            .unwrap();
+        assert_eq!(forced_stale["content"], "l1\nv2\n", "{forced_stale}");
+        assert_eq!(forced_stale["deduped"], false, "{forced_stale}");
+        let collapsed = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            collapsed["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "{collapsed}"
+        );
+        assert_eq!(collapsed["deduped"], true, "{collapsed}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_force_bypass_and_type_check() {
+        use serde_json::Map;
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let kwargs = Map::new();
+        dispatch_testreport_tool(&session, "testreport_read", &kwargs, None)
+            .await
+            .unwrap();
+        let collapsed = dispatch_testreport_tool(&session, "testreport_read", &kwargs, None)
+            .await
+            .unwrap();
+        assert!(
+            collapsed["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since")
+        );
+        assert_eq!(collapsed["deduped"], true, "collapsed: {collapsed}");
+        // `force=true` through the dispatch seam resends.
+        let force_kwargs: Map<String, Value> = serde_json::json!({ "force": true })
+            .as_object()
+            .unwrap()
+            .clone();
+        let forced = dispatch_testreport_tool(&session, "testreport_read", &force_kwargs, None)
+            .await
+            .unwrap();
+        assert_eq!(forced["content"], "l1\nl2\n");
+        assert_eq!(forced["deduped"], false, "force resends full: {forced}");
+        // Non-boolean `force` is refused.
+        let bad_kwargs: Map<String, Value> = serde_json::json!({ "force": "yes" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let err = dispatch_testreport_tool(&session, "testreport_read", &bad_kwargs, None)
+            .await
+            .expect_err("non-boolean force refused");
+        assert!(err.stderr.contains("force must be a boolean"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn reread_changed_file_returns_full() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        overwrite_for_test(&path, b"l1\nCHANGED\n").await;
+        let res = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(res["content"], "l1\nCHANGED\n");
+        assert_eq!(res["deduped"], false, "changed file resends: {res}");
+    }
+
+    #[tokio::test]
+    async fn reread_capped_head_with_different_total_resends_full() {
+        // Pins the `line_count` conjunct: both files are 8 bytes with the same
+        // 4-byte head, so the capped content (head + identical truncation
+        // notice) hashes equal — only the total differs. Deleting the
+        // `line_count` compare must collapse the second read (red).
+        let (session, tmp) = session_with_output_cap(4);
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "ab\nc\nde\n").await; // 8 bytes, 3 lines
+
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        let first_content = first["content"].as_str().unwrap().to_owned();
+        assert!(
+            first_content.contains("truncated"),
+            "cap hit: {first_content:?}"
+        );
+        assert_eq!(first["line_count"], 3);
+
+        overwrite_for_test(&path, b"ab\ncdef\n").await; // 8 bytes, 2 lines
+        let second = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(second["line_count"], 2);
+        let second_content = second["content"].as_str().unwrap();
+        assert_eq!(
+            second_content, first_content,
+            "capped heads identical, so the hash alone cannot distinguish"
+        );
+        assert!(
+            !second_content.contains("unchanged since"),
+            "different total must resend, not collapse: {second_content:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reread_different_window_returns_full() {
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\nl3\n").await;
+
+        let first = testreport_read(&session, None, 1, Some(2), None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        assert_eq!(first["deduped"], false, "full: {first}");
+        let other = testreport_read(&session, None, 2, Some(2), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            other["content"], "l2\nl3\n",
+            "other window is full: {other}"
+        );
+        assert_eq!(other["deduped"], false, "other window full: {other}");
+        let same = testreport_read(&session, None, 1, Some(2), None, None)
+            .await
+            .unwrap();
+        assert!(
+            same["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "repeat of first window dedups: {same}"
+        );
+        assert_eq!(same["deduped"], true, "windowed collapse: {same}");
+    }
+
+    #[tokio::test]
+    async fn reread_bound_evicts_oldest() {
+        use crate::session::{MAX_REREAD_WINDOWS, RereadKey};
+
+        let (session, _tmp) = session_with_tmp();
+        for i in 0..MAX_REREAD_WINDOWS {
+            let key = RereadKey {
+                path: PathBuf::from(format!("f{i}.log")),
+                offset: 1,
+                limit: None,
+            };
+            assert!(session.dedup_reread(key, i as u64, 1).is_none());
+        }
+        // One more evicts the oldest (`f0.log`).
+        let overflow = RereadKey {
+            path: PathBuf::from("overflow.log"),
+            offset: 1,
+            limit: None,
+        };
+        assert!(session.dedup_reread(overflow, 999, 1).is_none());
+        let first = RereadKey {
+            path: PathBuf::from("f0.log"),
+            offset: 1,
+            limit: None,
+        };
+        assert!(
+            session.dedup_reread(first, 0, 1).is_none(),
+            "evicted key misses"
+        );
+        // Survivor still hits (re-adding `f0` evicted `f1`, so probe `f15`).
+        let survivor = RereadKey {
+            path: PathBuf::from("f15.log"),
+            offset: 1,
+            limit: None,
+        };
+        let notice = session
+            .dedup_reread(survivor, 15, 1)
+            .expect("survivor dedups");
+        assert!(notice.contains("unchanged since"), "{notice:?}");
+    }
+
+    #[tokio::test]
+    async fn reread_multi_rrid_keys_dont_collide() {
+        let (session, tmp) = session_with_tmp();
+        let p1 = tmp.path().join("c1").join("log");
+        let p2 = tmp.path().join("c2").join("log");
+        load_report(&session, "SUSE:Maintenance:1:1", &p1, "same\n").await;
+        load_report(&session, "SUSE:Maintenance:2:2", &p2, "same\n").await;
+
+        let r1 = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:1:1"), None)
+            .await
+            .unwrap();
+        assert_eq!(r1["content"], "same\n");
+        // Same bytes, other template: full, not a notice.
+        let r2 = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:2:2"), None)
+            .await
+            .unwrap();
+        assert_eq!(r2["content"], "same\n", "other RRID is full: {r2}");
+        // Repeat of the first still dedups.
+        let r1_again = testreport_read(&session, None, 1, None, Some("SUSE:Maintenance:1:1"), None)
+            .await
+            .unwrap();
+        assert!(
+            r1_again["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "{r1_again}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reread_relpath_spellings_share_one_key() {
+        // Same checkout file under another spelling resolves identically.
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        let second = testreport_read(&session, Some("./log"), 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            second["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "same file, other spelling dedups: {second}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reread_symlinked_checkout_spellings_share_one_key() {
+        // macOS pins this: TMPDIR lives under /var (a symlink to /private/var),
+        // so the stored `log` path spells the prefix verbatim while the relpath
+        // arm resolves it. Same file must still dedup on any platform.
+        let (session, tmp) = session_with_tmp();
+        let real = tmp.path().join("real");
+        let alias = tmp.path().join("alias");
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&real).unwrap();
+            std::os::unix::fs::symlink(&real, &alias).unwrap();
+        })
+        .await
+        .unwrap();
+        let path = tmp.path().join("alias").join("checkout").join("log");
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        let second = testreport_read(&session, Some("log"), 1, None, None, None)
+            .await
+            .unwrap();
+        assert!(
+            second["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "same file via symlinked checkout dedups: {second}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reread_defaulted_and_explicit_template_share_one_key() {
+        // One loaded template with the active pointer cleared: the defaulted
+        // read resolves the path while active_rrid() is None, the explicit one
+        // names the RRID. One file, so the second read must collapse.
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "l1\nl2\n").await;
+        {
+            let mut guard = session.session().lock().await;
+            let _ = guard.activate("");
+        }
+        let first = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(first["content"], "l1\nl2\n");
+        let second = testreport_read(&session, None, 1, None, Some(RRID), None)
+            .await
+            .unwrap();
+        assert!(
+            second["content"]
+                .as_str()
+                .unwrap()
+                .contains("unchanged since"),
+            "same file, other template spelling dedups: {second}"
+        );
+    }
+
+    /// The read stays off the worker: on a single-threaded runtime a large
+    /// `testreport_read` must let a concurrent heartbeat keep ticking. Inlining
+    /// the blocking file work on the worker freezes the sole thread and the
+    /// heartbeat starves (red).
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_large_file_keeps_worker_responsive() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
+        use std::time::Duration;
+
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        let big: String = (0..100_000)
+            .map(|i| {
+                format!("line{i:06} padding to stretch bytes................................\n")
+            })
+            .collect();
+        load_report(&session, RRID, &path, &big).await;
+
+        let beats = Arc::new(AtomicU64::new(0));
+        let hb = {
+            let beats = Arc::clone(&beats);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    beats.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+        let before = beats.load(Ordering::Relaxed);
+        let res = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        let after = beats.load(Ordering::Relaxed);
+        hb.abort();
+
+        assert_eq!(res["line_count"], 100_000);
+        assert!(
+            after > before,
+            "heartbeat must tick during large read (before={before} after={after})"
+        );
     }
 }

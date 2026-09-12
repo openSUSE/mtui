@@ -40,6 +40,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   workflows that never use them; the `updates -F`/`--json` helps point at
   `--limit`, and the `testreport_read`/`patch`/`write` and `get`/`put` tool
   descriptions are terser wordings of the same contracts.
+- `testreport_read` collapses an exact re-read (same file, offset/limit with
+  unchanged content) to `[unchanged since …, N lines; pass force=true to
+  resend, …]` instead of resending the window. Per-session cache of the last
+  16 windows keyed by the canonical resolved path (defaulted and explicit
+  `template` share one entry); any edit resends in full. Additive schema
+  change: optional `force` boolean bypasses the notice and resends. The
+  response carries additive `deduped` (true on the collapsed notice, false
+  on file text), so a non-LLM consumer need not string-match `content`.
+  The window hash is FNV-1a (specified, no new deps).
 
 ### Deprecated
 

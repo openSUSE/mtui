@@ -100,10 +100,14 @@ expression: pretty
     "read_only": false
   },
   {
-    "description": "Read a file from the loaded testreport checkout: path, total line count, content (utf-8, errors replaced). Without `relpath` reads the `log` file; `relpath` names another checkout file, which must stay inside it. `offset`/`limit` page a 1-based line window — page large files instead of reading them whole. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
+    "description": "Read a file from the loaded testreport checkout: path, total line count, content (utf-8, errors replaced), and `deduped` (true when content is the [unchanged since …] notice, false for file text). Without `relpath` reads the `log` file; `relpath` names another checkout file, which must stay inside it. `offset`/`limit` page a 1-based line window — page large files instead of reading them whole. Exact re-reads collapse to an [unchanged since …] notice with `deduped=true`; pass `force=true` to resend, or use offset/limit to page. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one is loaded.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "force": {
+          "description": "Resend the content even when unchanged (bypass the [unchanged since …] notice).",
+          "type": "boolean"
+        },
         "limit": {
           "description": "Max lines to return (default: to end of file).",
           "minimum": 0,
