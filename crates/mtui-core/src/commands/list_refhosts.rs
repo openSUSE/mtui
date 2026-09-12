@@ -304,10 +304,9 @@ impl Command for ListRefhosts {
                 .long("json")
                 .action(ArgAction::SetTrue)
                 .help(
-                    "emit a JSON array of kept rows; over-cap stdout is still a \
-                     valid JSON array, the `…[truncated …` notice goes to stderr on \
-                     the CLI; MCP results carry no truncation signal, MUST page with \
-                     --limit/--offset to be sure of completeness",
+                    "emit a JSON array of kept rows; over-cap stdout adds a trailing \
+                     `…[truncated …` notice line — naive parse of full stdout fails, \
+                     strip lines starting with that prefix before parsing",
                 ),
         )
         .arg(
@@ -444,14 +443,14 @@ impl Command for ListRefhosts {
             },
             is_anomaly_record,
         );
-        // Human output keeps the notice inline; --json routes it to stderr.
+        // Over-cap --json stays in-band like the byte-cap convention: JSON array
+        // plus a trailing notice line, so MCP captures the signal too.
         let notice = (crushed.truncated > 0)
             .then(|| row_notice(crushed.truncated, crushed.total, REFHOSTS_HINT));
         if as_json {
             session.display.println(&render_json(&crushed.kept));
-            // Stdout stays strictly valid JSON; the notice goes to stderr.
             if let Some(notice) = notice {
-                eprintln!("{notice}");
+                session.display.println(&notice);
             }
             return Ok(());
         }
@@ -1100,7 +1099,7 @@ default:
     }
 
     #[tokio::test]
-    async fn json_over_cap_stdout_stays_valid_with_notice_on_stderr() {
+    async fn row_budget_json_stays_parseable_with_trailing_notice() {
         use crate::commands::testkit::matches;
         let mut yaml = String::from("default:\n");
         for i in 0..150 {
@@ -1112,9 +1111,22 @@ default:
         let args = matches(&ListRefhosts, &["--json"]);
         ListRefhosts.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
-        // The notice went to stderr: stdout parses as-is, middle dropped.
-        assert!(!out.contains("…[truncated"), "{out}");
-        let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+        assert!(
+            out.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated")),
+            "{out}"
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(out.trim()).is_err(),
+            "naive parse of full stdout must fail loudly: {out}"
+        );
+        let json_part: String = out
+            .lines()
+            .filter(|l| !l.starts_with("…[truncated"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
         let arr = parsed.as_array().unwrap();
         assert!(
             arr.len() <= super::super::row_budget::ROW_CAP,
@@ -1157,18 +1169,12 @@ default:
     }
 
     #[test]
-    fn json_help_routes_notice_to_stderr() {
+    fn json_help_mentions_truncation() {
         let base = clap::Command::new("list_refhosts").no_binary_name(true);
         let mut cmd = ListRefhosts.configure(base);
         let help = cmd.render_help().to_string();
         assert!(help.contains("…[truncated"), "{help}");
-        assert!(help.contains("valid JSON array"), "{help}");
-        assert!(help.contains("stderr"), "{help}");
-        assert!(
-            help.contains("MCP results carry no truncation signal"),
-            "{help}"
-        );
-        assert!(help.contains("MUST page with --limit/--offset"), "{help}");
+        assert!(help.contains("strip lines starting with"), "{help}");
     }
 
     #[tokio::test]
