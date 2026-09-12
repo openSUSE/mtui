@@ -49,11 +49,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
    `openqa_overview` (anomaly: non-`passed` version rows, build checks with
    matches; display only, `--export` still writes the full overview; narrow with
    `--no-aggregated/--aggregated-groups/--days/--test-pattern`). `--json`
-   over-cap stdout is still a valid JSON array of kept rows; the
-   `…[truncated N of M rows; …]` notice goes to stderr on the CLI (human-readable output
-   keeps it inline; also in `--json` help) but MCP tool results capture stdout only
-   and carry no truncation signal — MUST page with `--limit`/`--offset` to be sure
-   of completeness. Any middle slice is
+   over-cap stdout is a JSON array of kept rows plus a trailing
+   `…[truncated N of M rows; …]` notice line in-band (CLI and MCP alike, like
+   the byte-cap convention; also in `--json` help) — naive parse of full
+   stdout fails loudly, strip lines starting with that prefix before parsing.
+   Any middle slice is
   recoverable via pre-crush `--offset`/`--limit` paging (chosen over an
   explicit-window notice as it fits the existing `--limit` plumbing).
   Row-cap is not byte-cap: MCP `max_output_bytes` can still cut mid-array on
