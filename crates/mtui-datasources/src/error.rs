@@ -63,6 +63,23 @@ pub enum HttpError {
     },
 }
 
+impl HttpError {
+    /// The HTTP status code that caused this failure, when the failure was a
+    /// non-2xx response rather than a transport-level failure (`Some` only for
+    /// `Request` where the wrapped `reqwest::Error` carries one — a
+    /// `CaBundle`/`BodyTooLarge` failure never reached the wire).
+    ///
+    /// Status codes are not credentials, so returning one is not a
+    /// URL-sanitization concern the way the wrapped error's `Display` is.
+    #[must_use]
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Request(e) => e.status().map(|s| s.as_u16()),
+            Self::CaBundle { .. } | Self::BodyTooLarge { .. } => None,
+        }
+    }
+}
+
 impl From<reqwest::Error> for HttpError {
     fn from(e: reqwest::Error) -> Self {
         // #431: reqwest's `Display` appends the request URL verbatim

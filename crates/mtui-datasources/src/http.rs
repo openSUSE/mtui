@@ -793,4 +793,50 @@ mod tests {
             "the transport must not follow the redirect itself"
         );
     }
+
+    /// `HttpError::status()` must surface the real non-2xx status from a
+    /// live response, not just from a hand-built error — this is the seam
+    /// `xtask corpus-survey` depends on to tell 404 apart from 503.
+    #[tokio::test]
+    async fn get_bytes_capped_error_status_matches_response() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/missing"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/generating"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
+
+        let not_found = client
+            .get_bytes_capped(&format!("{}/missing", server.uri()), MAX_API_BODY)
+            .await
+            .unwrap_err();
+        assert_eq!(not_found.status(), Some(404));
+
+        let generating = client
+            .get_bytes_capped(&format!("{}/generating", server.uri()), MAX_API_BODY)
+            .await
+            .unwrap_err();
+        assert_eq!(generating.status(), Some(503));
+    }
+
+    /// A body-size rejection never reached a real status line, so it must not
+    /// masquerade as one.
+    #[test]
+    fn body_too_large_has_no_status() {
+        let err = HttpError::BodyTooLarge {
+            limit: 1,
+            seen: Some(2),
+        };
+        assert_eq!(err.status(), None);
+    }
 }
