@@ -20,6 +20,7 @@ fn main() -> Result<()> {
         Some("gen") => run_gen(),
         Some("gen-docs") => run_gen_docs(),
         Some("package") => run_package(),
+        Some("corpus-survey") => run_corpus_survey(),
         Some(other) => {
             eprintln!("unknown task: {other}\n");
             print_usage();
@@ -37,14 +38,20 @@ fn print_usage() {
         "xtask - mtui repo automation\n\n\
          USAGE:\n    cargo xtask <TASK>\n\n\
          TASKS:\n    \
-         gen         Regenerate dist/ completions + man pages for both binaries\n    \
-         gen-docs    Regenerate docs/src/{{cli,invocation}}.md from the parsers\n    \
-         package     Build a release tarball for a target\n\n\
+         gen             Regenerate dist/ completions + man pages for both binaries\n    \
+         gen-docs        Regenerate docs/src/{{cli,invocation}}.md from the parsers\n    \
+         package         Build a release tarball for a target\n    \
+         corpus-survey   Probe the teregen v2 document status of every in-flight update\n\n\
          PACKAGE:\n    \
          cargo xtask package --version <VER> --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]\n    \
          Assembles <bin-dir>/{{mtui,mtui-mcp}} + dist/ + LICENSE/README into\n    \
          mtui-<VER>-<TRIPLE>.tar.gz (+ .sha256) under <out-dir> (default: dist/release).\n    \
-         --bin-dir defaults to target/<TRIPLE>/release."
+         --bin-dir defaults to target/<TRIPLE>/release.\n\n\
+         CORPUS-SURVEY:\n    \
+         cargo xtask corpus-survey [--v1-base <URL>] [--v2-base <URL>]\n    \
+         Read-only: GETs the testing update queue, then GETs each id's v2\n    \
+         document, and reports the 200/404/503/other split by RRID kind.\n    \
+         Defaults to https://qam.suse.de/api/{{v1,v2}}."
     );
 }
 
@@ -104,6 +111,31 @@ fn run_package() -> Result<()> {
     println!("wrote {}", tarball.display());
     println!("wrote {}.sha256", tarball.display());
     Ok(())
+}
+
+/// Run the Phase 0.3 corpus survey: `cargo xtask corpus-survey [--v1-base
+/// <URL>] [--v2-base <URL>]`. Read-only; see [`xtask::corpus_survey::run`].
+fn run_corpus_survey() -> Result<()> {
+    let mut v1_base = xtask::corpus_survey::DEFAULT_V1_BASE.to_owned();
+    let mut v2_base = xtask::corpus_survey::DEFAULT_V2_BASE.to_owned();
+    let mut args = std::env::args().skip(2);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--v1-base" => v1_base = args.next().context("--v1-base needs a value")?,
+            "--v2-base" => v2_base = args.next().context("--v2-base needs a value")?,
+            other => bail!("unknown corpus-survey flag: {other}"),
+        }
+    }
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building the tokio runtime")?
+        .block_on(xtask::corpus_survey::run(
+            &v1_base,
+            &v2_base,
+            mtui_datasources::VerifyPolicy::Default(true),
+        ))
 }
 
 /// The workspace root: the parent of this crate's manifest dir (`xtask/`).

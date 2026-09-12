@@ -33,6 +33,12 @@ clap = { workspace = true }
 clap_complete.workspace = true
 clap_mangen.workspace = true
 anyhow.workspace = true
+# `corpus-survey` (Phase 0.3, plans/phase0-gap-analysis.md): reuses mtui's own
+# HTTP client/TLS-verify policy and URL-sanitising error types instead of a
+# second HTTP stack — the cost is pulling tokio's runtime into this crate.
+mtui-types.workspace = true
+mtui-datasources.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 # Offline generation smoke test writes into an isolated temp dir (never `dist/`).

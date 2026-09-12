@@ -5467,8 +5467,11 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "mtui-core",
+ "mtui-datasources",
  "mtui-mcp",
+ "mtui-types",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

@@ -16,6 +16,8 @@ use anyhow::{Context, Result, bail};
 use clap::CommandFactory;
 use clap_complete::Shell;
 
+pub mod corpus_survey;
+
 /// The three shells the release artefacts cover.
 const SHELLS: [Shell; 3] = [Shell::Bash, Shell::Zsh, Shell::Fish];
 
