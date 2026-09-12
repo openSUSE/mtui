@@ -372,11 +372,16 @@ pub(crate) async fn dispatch_tool(
 
     // The template scope this call resolves to, for the audit record. Resolved
     // with the same resolver the lock and background paths use, so the three
-    // cannot disagree.
-    let rrids = session
-        .resolve_job_rrids(registry, route.command, &argv)
-        .await
-        .unwrap_or_default();
+    // cannot disagree. Audit-only: skipped when no sink is on, so unaudited
+    // dispatch never takes the session mutex a second time (#613).
+    let rrids = if session.auditing() {
+        session
+            .resolve_job_rrids(registry, route.command, &argv)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     if background {
         return match session

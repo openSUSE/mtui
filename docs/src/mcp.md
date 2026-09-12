@@ -478,15 +478,21 @@ When the sink cannot be written the call is **refused** instead of proceeding
 unrecorded. A failed terminal write can only warn — its dispatch already
 answered. `config_set` never records the value for any attribute, so a future
 secret attribute cannot leak by omission; the record marks whether the attribute
-is a known secret. All file I/O runs off the dispatch worker
-(`spawn_blocking`), so a down/slow disk never stalls a call.
+is a known secret. File-body payloads (`put` `content`/`content_b64`,
+`testreport_write` `content`, `testreport_patch` `replacement`) never land
+verbatim either: each records `{bytes, sha256}` over the original string, so a
+credentials file or SSH key uploaded via `put` stays correlatable without being
+persisted. Always fingerprinted, never inline, regardless of size — the same
+redaction feeds the file body, the OTLP body, and the size accounting, and no
+payload key is ever an indexed OTLP attribute. All file I/O runs off the
+dispatch worker (`spawn_blocking`), so a down/slow disk never stalls a call.
 
 ### OTLP log export
 
 The same record can also go to an OpenTelemetry collector as OTLP/HTTP LOGS
 (hand-rolled protobuf over the workspace `reqwest`/rustls stack — no
 `opentelemetry-*` crates): one log record per audit event, body = the verbatim
-JSONL line. Configuration is env-only (headers must never be CLI flags), so
+JSONL line (already redacted and fingerprinted as above). Configuration is env-only (headers must never be CLI flags), so
 there are no new TOML keys:
 
 - `OTEL_EXPORTER_OTLP_ENDPOINT` (base URL, gains `/v1/logs`) or

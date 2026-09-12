@@ -232,6 +232,9 @@ ruoqa = "0.3"
 # not used for openQA auth any more (ruoqa owns that).
 hmac = "0.13"
 sha1 = "0.11"
+# SHA-256, for the MCP audit record's file-body payload fingerprints (#411):
+# `put`/`testreport_write`/`testreport_patch` bodies never land verbatim.
+sha2 = "0.11"
 # percent-encoding of URL components (Slack/TeReGen/OBS API params, oqa-search
 # build-check log URLs).
 urlencoding = "2"

@@ -430,8 +430,12 @@ impl McpServer {
         // branch below dispatches through the engine, so neither can hold
         // `/var/lock/mtui.lock`: a plain drop on cancel strands nothing.
         else if self.testreport_tools.contains(name) {
-            let template = kwargs.get("template").and_then(Value::as_str);
-            rrids = self.session.audit_template_scope(template).await;
+            // Audit-only scope: skipped when no sink is on, so unaudited
+            // dispatch never takes the session mutex for the record (#613).
+            if seq.is_some() {
+                let template = kwargs.get("template").and_then(Value::as_str);
+                rrids = self.session.audit_template_scope(template).await;
+            }
             let dispatched = cancellable(
                 dispatch_testreport_tool(&self.session, name, kwargs, sink),
                 client_ct,
@@ -455,8 +459,10 @@ impl McpServer {
         }
         // A hand-written in-band transfer tool (get/put, #434).
         else if self.transfer_tools.contains(name) {
-            let template = kwargs.get("template").and_then(Value::as_str);
-            rrids = self.session.audit_template_scope(template).await;
+            if seq.is_some() {
+                let template = kwargs.get("template").and_then(Value::as_str);
+                rrids = self.session.audit_template_scope(template).await;
+            }
             let dispatched = cancellable(
                 crate::transfer_tools::dispatch_transfer_tool(&self.session, name, kwargs, sink),
                 client_ct,
@@ -1398,6 +1404,169 @@ mod tests {
         );
         assert!(!err.to_string().contains("127.0.0.1"), "no endpoint leaks");
         exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn otlp_config_set_body_redacted() {
+        // OTLP-only (no file): the exported protobuf body is the redacted
+        // JSONL line — the secret never reaches the collector.
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+
+        let secret = "otlp-secret-token-9f8e7d6c5b4a";
+        audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "gitea_token", "value": secret}),
+        )
+        .await
+        .expect("config_set succeeds");
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let body = bodies.lock().expect("body").clone();
+        assert!(!body.is_empty(), "OTLP-only must still export");
+        assert!(
+            !body.windows(secret.len()).any(|w| w == secret.as_bytes()),
+            "secret value absent from exported protobuf"
+        );
+        assert!(
+            body.windows(b"<redacted>".len())
+                .any(|w| w == b"<redacted>"),
+            "redaction marker present in exported protobuf"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn otlp_queue_full_refuses_before_dispatch() {
+        // Mirror of the unhealthy refusal: a filled queue refuses through the
+        // same closed-vocabulary path, never leaking the endpoint.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        // Unreachable endpoint, but the fill below finishes before the first
+        // 500ms flush tick, so the latch is still healthy and the refusal is
+        // `Full`, not `Unhealthy`.
+        let exporter = crate::otel::OtelExporter::with_client(
+            crate::otel::OtelConfig::for_tests("http://127.0.0.1:9/v1/logs", "mtui"),
+            client,
+        );
+        for seq in 0..crate::otel::OTEL_QUEUE_CAP {
+            exporter
+                .enqueue_audit(crate::otel::QueuedAudit {
+                    seq: seq as u64,
+                    jsonl: "{}".to_owned(),
+                    tool: "run".to_owned(),
+                    outcome: "ok".to_owned(),
+                    event: "call".to_owned(),
+                    transport: "stdio".to_owned(),
+                    session_id: 1,
+                    response_bytes: None,
+                    trace: None,
+                    time_nanos: crate::otel::now_nanos(),
+                    extra_attrs: Vec::new(),
+                })
+                .expect("queue accepts to capacity");
+        }
+        assert!(exporter.is_healthy(), "fill races the first flush tick");
+
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+        let err = audited_call(&server, "whoami", json!({}))
+            .await
+            .expect_err("full OTLP queue refuses");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("audit log unavailable"),
+            "same refuse path: {msg}"
+        );
+        assert!(msg.contains("otlp queue full"), "closed reason: {msg}");
+        assert!(!msg.contains("127.0.0.1"), "no endpoint leaks: {msg}");
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn audit_put_payload_is_fingerprinted_not_stored() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        let secret = "PUT-SECRET-SSH-KEY-MATERIAL-7f3a";
+        audited_call(
+            &server,
+            "put",
+            json!({"filename": "id_rsa", "content": secret}),
+        )
+        .await
+        .expect("put dispatches (record pins args either way)");
+        let raw = std::fs::read_to_string(&path).expect("sink readable");
+        assert!(!raw.contains(secret), "payload never verbatim: {raw}");
+        let record: Value = serde_json::from_str(raw.trim()).expect("one record");
+        assert_eq!(record["args"]["content"]["bytes"], json!(secret.len()));
+        assert_eq!(
+            record["args"]["content"]["sha256"]
+                .as_str()
+                .expect("hex")
+                .len(),
+            64
+        );
+        assert_eq!(record["args"]["filename"], json!("id_rsa"));
+    }
+
+    #[tokio::test]
+    async fn unaudited_dispatch_skips_audit_scope_resolution() {
+        // Gating pin for #613: the audit scope resolve is audit-only. The same
+        // template-scoped call resolves with a sink on and stays empty with
+        // auditing off, so unaudited dispatch never takes the session mutex
+        // for the record.
+        use crate::tools::tool_routes;
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("list_hosts").expect("list_hosts route");
+
+        let plain = McpSession::new(Config::default());
+        assert!(!plain.auditing(), "no sink means auditing off");
+        seed_audit_host(&plain, MockConnection::new(AUDIT_HOST)).await;
+        let dispatched = dispatch_tool(
+            &registry,
+            &plain,
+            route,
+            json!({}).as_object().expect("kwargs object"),
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            dispatched.rrids.is_empty(),
+            "unaudited dispatch records no scope: {:?}",
+            dispatched.rrids
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(dir.path().join("audit.jsonl"));
+        let audited = McpSession::new(config);
+        assert!(audited.auditing(), "sink on means auditing on");
+        seed_audit_host(&audited, MockConnection::new(AUDIT_HOST)).await;
+        let dispatched = dispatch_tool(
+            &registry,
+            &audited,
+            route,
+            json!({}).as_object().expect("kwargs object"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(dispatched.rrids, vec![AUDIT_RRID.to_owned()]);
     }
 
     #[tokio::test]
