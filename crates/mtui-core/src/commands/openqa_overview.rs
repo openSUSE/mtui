@@ -19,13 +19,18 @@ use super::row_budget::{crush_slice, row_notice};
 const OPENQA_HINT: &str = "--no-aggregated/--aggregated-groups/--days/--test-pattern";
 
 /// Non-`passed` rows survive the crush: the actionable openQA signal.
-fn is_anomaly_version(row: &oqa::VersionResult) -> bool {
-    row.status != "passed"
+/// Severity: `failed` (2) outranks other non-`passed` (1).
+fn anomaly_severity_version(row: &oqa::VersionResult) -> u8 {
+    match row.status.as_str() {
+        "passed" => 0,
+        "failed" => 2,
+        _ => 1,
+    }
 }
 
 /// Build checks with extracted matches survive the crush.
-fn is_anomaly_build(entry: &oqa::BuildCheckResult) -> bool {
-    !entry.matches.is_empty()
+fn anomaly_severity_build(entry: &oqa::BuildCheckResult) -> u8 {
+    u8::from(!entry.matches.is_empty())
 }
 
 /// The aggregated-update job groups offered for tab completion.
@@ -270,15 +275,19 @@ impl Command for OpenQAOverview {
                         r.note.as_str(),
                     )
                 },
-                is_anomaly_version,
+                anomaly_severity_version,
             );
             for row in &single.kept {
                 print_version_row(session, row);
             }
             if single.truncated > 0 {
-                session
-                    .display
-                    .println(&row_notice(single.truncated, single.total, OPENQA_HINT));
+                session.display.println(&row_notice(
+                    single.truncated,
+                    single.total,
+                    single.anomaly_kept,
+                    single.anomaly_total,
+                    OPENQA_HINT,
+                ));
             }
 
             if !no_aggregated {
@@ -300,7 +309,7 @@ impl Command for OpenQAOverview {
                                 r.note.as_str(),
                             )
                         },
-                        is_anomaly_version,
+                        anomaly_severity_version,
                     );
                     for row in &versions.kept {
                         print_version_row(session, row);
@@ -309,6 +318,8 @@ impl Command for OpenQAOverview {
                         session.display.println(&row_notice(
                             versions.truncated,
                             versions.total,
+                            versions.anomaly_kept,
+                            versions.anomaly_total,
                             OPENQA_HINT,
                         ));
                     }
@@ -343,15 +354,19 @@ impl Command for OpenQAOverview {
                 |e: &oqa::BuildCheckResult| {
                     (e.url.as_str(), e.matches.as_slice(), e.summary.as_str())
                 },
-                is_anomaly_build,
+                anomaly_severity_build,
             );
             for entry in &checks.kept {
                 print_build_check(session, entry);
             }
             if checks.truncated > 0 {
-                session
-                    .display
-                    .println(&row_notice(checks.truncated, checks.total, OPENQA_HINT));
+                session.display.println(&row_notice(
+                    checks.truncated,
+                    checks.total,
+                    checks.anomaly_kept,
+                    checks.anomaly_total,
+                    OPENQA_HINT,
+                ));
             }
         }
 
@@ -797,13 +812,58 @@ mod tests {
                     r.note.as_str(),
                 )
             },
-            is_anomaly_version,
+            anomaly_severity_version,
         );
         assert_eq!(out.total, 150, "deduped total");
         assert!(out.kept.len() <= ROW_CAP, "{}", out.kept.len());
         assert!(out.kept.iter().any(|r| r.status == "failed"));
         assert!(!out.kept.iter().any(|r| r.version == "15-SP060"));
         assert!(out.truncated > 0);
+        assert_eq!((out.anomaly_kept, out.anomaly_total), (1, 1));
+    }
+
+    #[test]
+    fn failed_version_outranks_running_when_overflowing() {
+        use super::super::row_budget::crush_slice;
+        // 300 rows: mild `running` everywhere middle except severe `failed`
+        // at 250 — only 50 middle anomalies fit.
+        let rows: Vec<oqa::VersionResult> = (0..300)
+            .map(|i| oqa::VersionResult {
+                version: format!("15-SP{i:03}"),
+                url: format!("http://oqa/{i}"),
+                status: if i == 250 {
+                    "failed".to_owned()
+                } else if (super::super::row_budget::ROW_HEAD
+                    ..300 - super::super::row_budget::ROW_TAIL)
+                    .contains(&i)
+                {
+                    "running".to_owned()
+                } else {
+                    "passed".to_owned()
+                },
+                ..Default::default()
+            })
+            .collect();
+        assert_eq!(anomaly_severity_version(&rows[250]), 2);
+        assert_eq!(anomaly_severity_version(&rows[41]), 1);
+        assert_eq!(anomaly_severity_version(&rows[0]), 0);
+        let out = crush_slice(
+            &rows,
+            |r: &oqa::VersionResult| {
+                (
+                    r.version.as_str(),
+                    r.url.as_str(),
+                    r.status.as_str(),
+                    r.failed_count,
+                    r.running_count,
+                    r.note.as_str(),
+                )
+            },
+            anomaly_severity_version,
+        );
+        assert!(out.kept.iter().any(|r| r.version == "15-SP250"));
+        assert!(!out.kept.iter().any(|r| r.version == "15-SP200"));
+        assert_eq!((out.anomaly_kept, out.anomaly_total), (50, 250));
     }
 
     #[test]
@@ -819,7 +879,7 @@ mod tests {
         let out = crush_slice(
             &entries,
             |e: &oqa::BuildCheckResult| (e.url.as_str(), e.matches.as_slice(), e.summary.as_str()),
-            is_anomaly_build,
+            anomaly_severity_build,
         );
         assert!(out.kept.iter().any(|e| e.url == "http://qam/100.log"));
         assert!(!out.kept.iter().any(|e| e.url == "http://qam/60.log"));
@@ -828,8 +888,9 @@ mod tests {
     #[test]
     fn row_budget_notice_names_narrowing_flags() {
         use super::super::row_budget::row_notice;
-        let n = row_notice(90, 150, OPENQA_HINT);
+        let n = row_notice(90, 150, 5, 60, OPENQA_HINT);
         assert!(n.starts_with("…[truncated"), "{n}");
+        assert!(n.contains("5/60 anomalies kept"), "{n}");
         assert!(
             n.contains("--no-aggregated/--aggregated-groups/--days"),
             "{n}"
@@ -859,7 +920,7 @@ mod tests {
                     r.note.as_str(),
                 )
             },
-            is_anomaly_version,
+            anomaly_severity_version,
         );
         assert!(!crushed.kept.iter().any(|r| r.version == "15-SP060"));
         let dir = tempfile::tempdir().unwrap();
