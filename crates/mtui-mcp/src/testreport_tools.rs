@@ -800,7 +800,7 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
             vec![
                 (
                     "relpath",
-                    json!({ "type": "string", "description": "Checkout-relative file to patch; defaults to the `log` file. Must already exist." }),
+                    json!({ "type": "string", "description": "Checkout-relative file to patch; defaults to the `log` file, e.g. install_logs/<host>.log. Must already exist." }),
                 ),
                 (
                     "start_line",
@@ -833,7 +833,7 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
             vec![
                 (
                     "relpath",
-                    json!({ "type": "string", "description": "Checkout-relative file to write; defaults to the `log` file. May name a new file whose parent directory exists." }),
+                    json!({ "type": "string", "description": "Checkout-relative file to write; defaults to the `log` file, e.g. install_logs/<host>.log. May name a new file whose parent directory exists." }),
                 ),
                 (
                     "content",
