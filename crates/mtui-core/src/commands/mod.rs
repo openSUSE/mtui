@@ -83,7 +83,7 @@ pub use update::Update;
 pub use zypper::{Install, Uninstall};
 
 pub use addhost::AddHost;
-pub use config::ConfigCmd;
+pub use config::{ConfigCmd, is_secret_attr};
 pub use hostslock::HostLock;
 pub use hoststate::HostState;
 pub use hostsunlock::HostsUnlock;

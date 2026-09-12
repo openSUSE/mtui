@@ -468,6 +468,7 @@ pub(crate) struct McpSection {
     pub profile: Option<String>,
     pub tools_allow: Option<Vec<String>>,
     pub tools_deny: Option<Vec<String>>,
+    pub audit_log: Option<PathBuf>,
 }
 
 /// `[obs]` table — the native OBS/IBS QAM review backend.
@@ -572,6 +573,7 @@ impl RawConfig {
         take!(mcp, profile);
         take!(mcp, tools_allow);
         take!(mcp, tools_deny);
+        take!(mcp, audit_log);
         take!(obs, api_url);
         take!(obs, request_timeout);
     }
@@ -763,6 +765,9 @@ pub struct Config {
     pub mcp_tools_allow: Vec<String>,
     /// Tool names to remove regardless of profile/allow (deny wins last).
     pub mcp_tools_deny: Vec<String>,
+    /// Durable audit sink for `mtui-mcp` tool calls (JSONL, one record per
+    /// call). Unset (the default) disables auditing entirely.
+    pub mcp_audit_log: Option<PathBuf>,
 
     // [obs]
     /// The OBS/IBS API URL the native QAM review backend acts against; must
@@ -829,6 +834,7 @@ impl Default for Config {
             mcp_profile: default_mcp_profile(),
             mcp_tools_allow: Vec::new(),
             mcp_tools_deny: Vec::new(),
+            mcp_audit_log: None,
             obs_api_url: default_obs_api_url(),
             obs_request_timeout: default_obs_request_timeout(),
         }
@@ -1023,6 +1029,17 @@ impl Config {
             mcp_profile: raw.mcp.profile.unwrap_or(d.mcp_profile),
             mcp_tools_allow: raw.mcp.tools_allow.unwrap_or(d.mcp_tools_allow),
             mcp_tools_deny: raw.mcp.tools_deny.unwrap_or(d.mcp_tools_deny),
+            mcp_audit_log: match raw.mcp.audit_log {
+                Some(p) if p.as_os_str().is_empty() => {
+                    tracing::error!(
+                        option = "audit_log",
+                        "expected a file path for the MCP audit sink; using default (auditing off)"
+                    );
+                    None
+                }
+                Some(p) => Some(expanduser(&p)),
+                None => None,
+            },
             obs_api_url: validated_url!(raw.obs.api_url, "obs_api_url", d.obs_api_url),
             obs_request_timeout: validated_positive!(
                 raw.obs.request_timeout,
@@ -1269,6 +1286,40 @@ mod tests {
         assert!(c.pool_reap_stale);
         assert_eq!(c.pool_stale_age, 86400);
         assert_eq!(c.lock_wait_poll, 15);
+    }
+
+    #[test]
+    fn mcp_audit_log_defaults_to_unset() {
+        assert_eq!(Config::default().mcp_audit_log, None);
+    }
+
+    #[test]
+    fn mcp_audit_log_parses_and_survives_the_file_merge() {
+        let raw: RawConfig =
+            toml::from_str("[mcp]\naudit_log = \"/etc/mtui-audit.jsonl\"\n").unwrap();
+        assert_eq!(
+            Config::from_raw(raw).mcp_audit_log,
+            Some(PathBuf::from("/etc/mtui-audit.jsonl"))
+        );
+        // A per-user file overrides /etc (the `take!` line in `merge`).
+        let mut base: RawConfig =
+            toml::from_str("[mcp]\naudit_log = \"/etc/mtui-audit.jsonl\"\n").unwrap();
+        let user: RawConfig =
+            toml::from_str("[mcp]\naudit_log = \"~/mtui-audit.jsonl\"\n").unwrap();
+        base.merge(user);
+        let c = Config::from_raw(base);
+        if let Some(dirs) = directories::BaseDirs::new() {
+            assert_eq!(
+                c.mcp_audit_log,
+                Some(dirs.home_dir().join("mtui-audit.jsonl"))
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_audit_log_empty_string_falls_back_to_unset() {
+        let raw: RawConfig = toml::from_str("[mcp]\naudit_log = \"\"\n").unwrap();
+        assert_eq!(Config::from_raw(raw).mcp_audit_log, None);
     }
 
     #[test]

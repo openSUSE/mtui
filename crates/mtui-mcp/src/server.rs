@@ -324,6 +324,14 @@ impl ServerHandler for McpServer {
         self.touch();
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
+        // W3C trace correlation (SEP-414): strict lowercase 55-byte
+        // traceparent via `_meta` when the client supplied one; absent (or
+        // invalid) otherwise. Documented as absent when unreachable.
+        let traceparent = request
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get_traceparent())
+            .map(str::to_owned);
 
         // Heartbeats keep a slow foreground call from timing the client out.
         // Only built when the client supplied a `progressToken`; job-control
@@ -338,65 +346,281 @@ impl ServerHandler for McpServer {
                 });
         let sink = sink.as_ref().map(|s| s as &dyn ProgressSink);
 
-        // A job-control tool: poll/control the session's background-job table.
-        if self.job_tools.contains(&name) {
-            return Ok(render(dispatch_job_tool(&self.session, &name, &kwargs).await).into());
-        }
+        self.dispatch_audited(&name, &kwargs, sink, &context.ct, traceparent.as_deref())
+            .await
+    }
+}
 
+impl McpServer {
+    /// The audited dispatch behind [`call_tool`](ServerHandler::call_tool):
+    /// the single chokepoint every tool call funnels through.
+    ///
+    /// With `[mcp] audit_log` set and/or the `OTEL_*` endpoint on, one record
+    /// per call is persisted before the response returns — for foreground and
+    /// backgrounded calls, for failures and unknown tools alike — and a call
+    /// the sinks cannot record is refused instead of proceeding unrecorded.
+    /// OTLP-only (endpoint set, `audit_log` unset) still builds the JSONL
+    /// line in memory and uses it verbatim as the OTLP body. With neither
+    /// sink this is dispatch verbatim: behaviour and output are byte-identical.
+    ///
+    /// Test seam: unit tests drive this directly with a fresh token and no
+    /// sink, since a real `RequestContext` needs a peer.
+    pub(crate) async fn dispatch_audited(
+        &self,
+        name: &str,
+        kwargs: &Map<String, Value>,
+        sink: Option<&dyn ProgressSink>,
+        client_ct: &CancellationToken,
+        traceparent: Option<&str>,
+    ) -> Result<CallToolResponse, McpError> {
+        use crate::audit::{
+            AUDIT_SCHEMA_VERSION, AuditEvent, AuditOutcome, refuse_error, sanitize_args,
+        };
+
+        let start = std::time::Instant::now();
+        let started_ms = crate::audit::now_millis();
+        // Strict lowercase 55-byte traceparent when the client supplied one;
+        // invalid values are ignored (no value is ever logged).
+        let trace = traceparent.and_then(crate::otel::parse_traceparent);
+        if traceparent.is_some() && trace.is_none() {
+            tracing::debug!("ignoring invalid traceparent");
+        }
+        let file_on = self.session.audit_log().is_some();
+        let otel_on = self.session.otel().is_some();
+        // Refuse before running when a sink is already unwritable/unhealthy: a
+        // mutation this consequential must not proceed unrecorded. (A refused
+        // call leaves no record — there is nowhere to put one.) The file
+        // pre-flight runs on the blocking pool: a down/slow disk must not
+        // stall the worker.
+        if let Some(audit) = self.session.audit_log()
+            && let Err(err) = audit.check_writable_async().await
+        {
+            return Err(refuse_error(&err));
+        }
+        if let Some(otel) = self.session.otel()
+            && !otel.is_healthy()
+        {
+            return Err(otel_refuse_error("otlp unhealthy"));
+        }
+        let seq = if file_on || otel_on {
+            Some(crate::audit::next_seq())
+        } else {
+            None
+        };
+
+        // Every arm below resolves to one audited outcome; the record is
+        // written once at the tail.
+        let mut event = AuditEvent::Call;
+        let mut rrids: Vec<String> = Vec::new();
+        let mut job_ids: Vec<String> = Vec::new();
+        let outcome: AuditOutcome;
+        let result: Result<CallToolResponse, McpError>;
+
+        // A job-control tool: poll/control the session's background-job table.
+        if self.job_tools.contains(name) {
+            let dispatched = dispatch_job_tool(&self.session, name, kwargs).await;
+            outcome = if dispatched.is_ok() {
+                AuditOutcome::Ok
+            } else {
+                AuditOutcome::Error
+            };
+            result = Ok(render(dispatched).into());
+        }
         // Acts directly on the loaded checkout. Neither this nor the transfer
         // branch below dispatches through the engine, so neither can hold
         // `/var/lock/mtui.lock`: a plain drop on cancel strands nothing.
-        if self.testreport_tools.contains(&name) {
-            let Some(result) = cancellable(
-                dispatch_testreport_tool(&self.session, &name, &kwargs, sink),
-                &context.ct,
+        else if self.testreport_tools.contains(name) {
+            // Audit-only scope: skipped when no sink is on, so unaudited
+            // dispatch never takes the session mutex for the record (#613).
+            if seq.is_some() {
+                let template = kwargs.get("template").and_then(Value::as_str);
+                rrids = self.session.audit_template_scope(template).await;
+            }
+            let dispatched = cancellable(
+                dispatch_testreport_tool(&self.session, name, kwargs, sink),
+                client_ct,
             )
-            .await
-            else {
-                return Err(cancelled_error(None));
-            };
-            // One text block, matching the command tools' wire shape.
-            return Ok(render(result.map(|v| v.to_string())).into());
+            .await;
+            match dispatched {
+                None => {
+                    outcome = AuditOutcome::Error;
+                    result = Err(cancelled_error(None));
+                }
+                Some(dispatched) => {
+                    outcome = if dispatched.is_ok() {
+                        AuditOutcome::Ok
+                    } else {
+                        AuditOutcome::Error
+                    };
+                    // One text block, matching the command tools' wire shape.
+                    result = Ok(render(dispatched.map(|v| v.to_string())).into());
+                }
+            }
         }
-
         // A hand-written in-band transfer tool (get/put, #434).
-        if self.transfer_tools.contains(&name) {
-            let Some(result) = cancellable(
-                crate::transfer_tools::dispatch_transfer_tool(&self.session, &name, &kwargs, sink),
-                &context.ct,
+        else if self.transfer_tools.contains(name) {
+            if seq.is_some() {
+                let template = kwargs.get("template").and_then(Value::as_str);
+                rrids = self.session.audit_template_scope(template).await;
+            }
+            let dispatched = cancellable(
+                crate::transfer_tools::dispatch_transfer_tool(&self.session, name, kwargs, sink),
+                client_ct,
             )
-            .await
-            else {
-                return Err(cancelled_error(None));
-            };
-            return Ok(render(result.map(|v| v.to_string())).into());
+            .await;
+            match dispatched {
+                None => {
+                    outcome = AuditOutcome::Error;
+                    result = Err(cancelled_error(None));
+                }
+                Some(dispatched) => {
+                    outcome = if dispatched.is_ok() {
+                        AuditOutcome::Ok
+                    } else {
+                        AuditOutcome::Error
+                    };
+                    result = Ok(render(dispatched.map(|v| v.to_string())).into());
+                }
+            }
         }
-
         // Dispatch through the shared engine. The one branch that can hold
         // `/var/lock/mtui.lock` on a real host, so a plain `cancellable` drop
         // would strand it: `dispatch_tool` gets the client's own token and runs
         // the two-stage cancel/abort/unlock sequence `job_cancel` uses.
-        if let Some(route) = self.routes.get(&name) {
-            return match dispatch_tool(
+        else if let Some(route) = self.routes.get(name) {
+            let dispatched = dispatch_tool(
                 &self.registry,
                 &self.session,
                 route,
-                &kwargs,
+                kwargs,
                 sink,
-                Some(&context.ct),
+                Some(client_ct),
             )
-            .await
-            {
-                ToolOutcome::Completed(result) => Ok(render(result).into()),
-                ToolOutcome::Aborted(unlock) => Err(cancelled_error(Some(&unlock))),
-            };
+            .await;
+            rrids = dispatched.rrids;
+            match dispatched.outcome {
+                ToolOutcome::Completed(inner) => {
+                    outcome = if inner.is_ok() {
+                        AuditOutcome::Ok
+                    } else {
+                        AuditOutcome::Error
+                    };
+                    if !dispatched.jobs.is_empty() {
+                        event = AuditEvent::Dispatch;
+                        job_ids = dispatched.jobs;
+                    }
+                    result = Ok(render(inner).into());
+                }
+                ToolOutcome::Aborted(unlock) => {
+                    outcome = AuditOutcome::Error;
+                    result = Err(cancelled_error(Some(&unlock)));
+                }
+            }
+        }
+        // Unknown / deny-listed name: no route was synthesised for it.
+        else {
+            outcome = AuditOutcome::UnknownTool;
+            result = Err(McpError::method_not_found::<
+                rmcp::model::CallToolRequestMethod,
+            >());
         }
 
-        // Unknown / deny-listed name: no route was synthesised for it.
-        Err(McpError::method_not_found::<
-            rmcp::model::CallToolRequestMethod,
-        >())
+        if let Some(seq) = seq {
+            let hosts = self.session.audit_hosts(&rrids).await;
+            let response_bytes = response_bytes_of(&result);
+            let mut record = serde_json::json!({
+                "v": AUDIT_SCHEMA_VERSION,
+                "ts": started_ms,
+                "seq": seq,
+                "session": self.session.id(),
+                "transport": self.session.transport(),
+                "event": event.as_str(),
+                "tool": crate::audit::cap_str(name),
+                "args": sanitize_args(name, kwargs),
+                "outcome": outcome.as_str(),
+                "duration_ms": start.elapsed().as_millis() as u64,
+                "rrids": rrids,
+                "hosts": hosts,
+            });
+            if event == AuditEvent::Dispatch {
+                let capped: Vec<String> =
+                    job_ids.iter().map(|id| crate::audit::cap_str(id)).collect();
+                record["job_ids"] = serde_json::json!(capped);
+            }
+            if let Some(traceparent) = traceparent
+                && trace.is_some()
+            {
+                record["trace"] = serde_json::json!(traceparent);
+            }
+            if let Some(bytes) = response_bytes {
+                record["response_bytes"] = serde_json::json!(bytes);
+            }
+            // File first, seq order. The sink was writable at pre-flight, so
+            // this fails only on a race: refuse in place of the result rather
+            // than answering unrecorded. Off the worker via `spawn_blocking`.
+            if let Some(audit) = self.session.audit_log()
+                && let Err(err) = audit.append_async(record.clone()).await
+            {
+                return Err(refuse_error(&err));
+            }
+            // OTLP second, same seq and verbatim line. A race here (full or
+            // newly unhealthy) refuses even though the file already holds the
+            // record — the file stays as the durable truth and the exporter
+            // reports an `audit_gap` on recovery.
+            if let Some(otel) = self.session.otel() {
+                let line = serde_json::to_string(&record).unwrap_or_default();
+                if line.is_empty() {
+                    return Err(otel_refuse_error(
+                        crate::otel::ExportReason::Encode.as_str(),
+                    ));
+                }
+                let queued = crate::otel::QueuedAudit {
+                    seq,
+                    jsonl: line,
+                    tool: crate::audit::cap_str(name),
+                    outcome: outcome.as_str().to_owned(),
+                    event: event.as_str().to_owned(),
+                    transport: self.session.transport().to_owned(),
+                    session_id: self.session.id(),
+                    response_bytes,
+                    trace,
+                    time_nanos: crate::otel::now_nanos(),
+                    extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
+                };
+                if let Err(reason) = otel.enqueue_audit(queued) {
+                    let closed = match reason {
+                        crate::otel::EnqueueError::Full => "otlp queue full",
+                        crate::otel::EnqueueError::Unhealthy => "otlp unhealthy",
+                    };
+                    return Err(otel_refuse_error(closed));
+                }
+            }
+        }
+        result
     }
+}
+
+/// Refuse via the existing audit path with a closed-vocabulary reason: never
+/// the endpoint, headers, or URL.
+fn otel_refuse_error(reason: &'static str) -> McpError {
+    crate::audit::refuse_error(&std::io::Error::other(reason))
+}
+
+/// Sized response length for the `mtui.response_bytes` attribute: the summed
+/// text-block bytes of a completed tool result, else nothing.
+fn response_bytes_of(result: &Result<CallToolResponse, McpError>) -> Option<usize> {
+    let Ok(CallToolResponse::Complete(completed)) = result else {
+        return None;
+    };
+    let mut bytes = 0usize;
+    let mut sized = false;
+    for block in &completed.content {
+        if let Some(text) = block.as_text() {
+            bytes = bytes.saturating_add(text.text.len());
+            sized = true;
+        }
+    }
+    sized.then_some(bytes)
 }
 
 /// Races `fut` against the client's `notifications/cancelled` signal,
@@ -464,6 +688,11 @@ mod tests {
     use crate::provider::SessionRegistry;
     use mtui_config::Config;
     use mtui_core::register_all;
+    use mtui_hosts::{HostsGroup, MockConnection, Target};
+    use mtui_testreport::{ObsReport, TestReport};
+    use mtui_types::RequestReviewID;
+    use mtui_types::enums::TargetState;
+    use serde_json::{Value, json};
 
     fn server_with(config: Config) -> McpServer {
         let registry = Arc::new(register_all());
@@ -680,5 +909,810 @@ mod tests {
         .expect("follow-up dispatch must not hang on a stranded lock")
         .expect("whoami succeeds");
         assert!(out.contains("testuser"), "got: {out}");
+    }
+
+    // ---------------------------------------------------------- audit log (#411)
+
+    const AUDIT_RRID: &str = "SUSE:Maintenance:1:1";
+    const AUDIT_HOST: &str = "audit-host";
+
+    /// A server with `[mcp] audit_log` pointed at a temp file, plus the
+    /// session and paths the assertions read back.
+    fn audited_server() -> (
+        McpServer,
+        Arc<McpSession>,
+        tempfile::TempDir,
+        std::path::PathBuf,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        let server = McpServer::new(registry, session.clone());
+        (server, session, dir, path)
+    }
+
+    /// Load one template with one mock host and make it active.
+    async fn seed_audit_host(session: &McpSession, mock: MockConnection) {
+        let target = Target::with_connection(AUDIT_HOST, TargetState::Enabled, Box::new(mock));
+        let mut guard = session.session().lock().await;
+        let mut report = ObsReport::new(guard.config.clone());
+        report.base_mut().rrid = Some(RequestReviewID::parse(AUDIT_RRID).expect("rrid"));
+        report.base_mut().targets = HostsGroup::new(vec![target], false);
+        guard.templates.add(Box::new(report));
+        guard.templates.set_active(AUDIT_RRID);
+    }
+
+    /// Drive the audited seam the way `call_tool` does (fresh token, no sink).
+    async fn audited_call(
+        server: &McpServer,
+        tool: &str,
+        kwargs: Value,
+    ) -> Result<CallToolResponse, McpError> {
+        server
+            .dispatch_audited(
+                tool,
+                kwargs.as_object().expect("kwargs object"),
+                None,
+                &CancellationToken::new(),
+                None,
+            )
+            .await
+    }
+
+    /// Read back every audit record.
+    fn audit_records(path: &std::path::Path) -> Vec<Value> {
+        let text = std::fs::read_to_string(path).expect("sink readable");
+        text.lines()
+            .map(|line| serde_json::from_str(line).expect("one object per line"))
+            .collect()
+    }
+
+    /// Unwrap the completed result: the audited seam never answers the
+    /// input-required/task variants.
+    fn complete_result(response: &CallToolResponse) -> &CallToolResult {
+        match response {
+            CallToolResponse::Complete(result) => result,
+            _ => panic!("audited seam answers Complete, got: {response:?}"),
+        }
+    }
+
+    /// The text payload of a completed tool response.
+    fn response_text(response: &CallToolResponse) -> String {
+        complete_result(response)
+            .content
+            .iter()
+            .filter_map(|block| block.as_text().map(|t| t.text.to_string()))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Poll the sink until `n` records land: a background job's terminal
+    /// record is written by a spawned worker after the dispatch answered.
+    async fn await_records(path: &std::path::Path, n: usize) -> Vec<Value> {
+        for _ in 0..2000 {
+            let records = audit_records(path);
+            if records.len() >= n {
+                return records;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("sink never reached {n} records");
+    }
+
+    #[tokio::test]
+    async fn audit_foreground_call_records_scope_and_outcome() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        let response = audited_call(&server, "list_hosts", json!({}))
+            .await
+            .expect("list_hosts succeeds");
+        let text = response_text(&response);
+        assert!(text.contains(AUDIT_HOST), "the call really ran: {text}");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "one call, one record");
+        let record = &records[0];
+        assert_eq!(record["v"], json!(1));
+        assert_eq!(record["event"], json!("call"));
+        assert_eq!(record["tool"], json!("list_hosts"));
+        assert_eq!(record["outcome"], json!("ok"));
+        assert_eq!(record["session"], json!(session.id()));
+        assert_eq!(record["rrids"], json!([AUDIT_RRID]));
+        assert_eq!(record["hosts"], json!([AUDIT_HOST]));
+        assert!(record["ts"].as_u64().unwrap_or(0) > 0);
+        assert!(record["duration_ms"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn audit_failing_call_records_error() {
+        let (server, _session, _dir, path) = audited_server();
+        // Unknown attribute: the engine fails the call, but MCP still answers
+        // Ok with an error payload — the failure lives in the record.
+        audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "no_such_attr", "value": "x"}),
+        )
+        .await
+        .expect("failing calls answer with an error payload, not a protocol error");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "a failing call produces a record");
+        assert_eq!(records[0]["tool"], json!("config_set"));
+        assert_eq!(records[0]["outcome"], json!("error"));
+    }
+
+    #[tokio::test]
+    async fn audit_unknown_tool_records_and_rejects() {
+        let (server, _session, _dir, path) = audited_server();
+        let err = audited_call(&server, "shell", json!({}))
+            .await
+            .expect_err("deny-listed tool is rejected");
+        assert!(
+            err.to_string().contains("-32601"),
+            "method-not-found keeps its code: {err}"
+        );
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "a refused call produces a record");
+        assert_eq!(records[0]["tool"], json!("shell"));
+        assert_eq!(records[0]["outcome"], json!("unknown-tool"));
+        assert_eq!(records[0]["rrids"], json!(Value::Array(vec![])));
+        assert_eq!(records[0]["hosts"], json!(Value::Array(vec![])));
+    }
+
+    #[tokio::test]
+    async fn audit_config_set_secret_leaves_no_trace() {
+        let (server, _session, _dir, path) = audited_server();
+        let secret = "audit-secret-token-6f5e4d3c";
+        audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "gitea_token", "value": secret}),
+        )
+        .await
+        .expect("config_set succeeds");
+
+        let raw = std::fs::read_to_string(&path).expect("sink readable");
+        assert!(
+            !raw.contains(secret),
+            "secret value must be unrepresentable in the record"
+        );
+        let record: Value = serde_json::from_str(raw.trim()).expect("one record");
+        assert_eq!(record["args"]["attribute"], json!("gitea_token"));
+        assert_eq!(record["args"]["value"], json!("<redacted>"));
+        assert_eq!(record["args"]["secret"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn audit_background_run_writes_joinable_dispatch_and_terminal_records() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("background start answers");
+        let jobs = session.job_list();
+        assert_eq!(jobs.len(), 1, "one background job started");
+        let job_id = jobs[0].id.clone();
+
+        let records = await_records(&path, 2).await;
+        assert_eq!(records.len(), 2, "dispatch + terminal, nothing else");
+        let dispatch = &records[0];
+        assert_eq!(dispatch["event"], json!("dispatch"));
+        assert_eq!(dispatch["tool"], json!("run"));
+        assert_eq!(dispatch["outcome"], json!("ok"));
+        assert_eq!(dispatch["job_ids"], json!([job_id]));
+        assert_eq!(dispatch["rrids"], json!([AUDIT_RRID]));
+        assert_eq!(dispatch["hosts"], json!([AUDIT_HOST]));
+        let terminal = &records[1];
+        assert_eq!(terminal["event"], json!("terminal"));
+        assert_eq!(terminal["tool"], json!("run"));
+        assert_eq!(terminal["job_id"], json!(job_id));
+        assert_eq!(terminal["job_state"], json!("done"));
+        assert_eq!(terminal["outcome"], json!("ok"));
+        assert_eq!(terminal["session"], dispatch["session"]);
+        assert_eq!(terminal["rrids"], json!([AUDIT_RRID]));
+        assert!(
+            terminal.get("args").is_none(),
+            "terminal carries no args: {terminal}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_background_failure_writes_a_failed_terminal_record() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        // `update` against a bare seeded report cannot proceed: the job fails,
+        // and the terminal record must still join to its dispatch.
+        audited_call(&server, "update", json!({"background": true}))
+            .await
+            .expect("background start answers");
+        let jobs = session.job_list();
+        assert_eq!(jobs.len(), 1, "one background job started");
+        let job_id = jobs[0].id.clone();
+
+        let records = await_records(&path, 2).await;
+        assert_eq!(records.len(), 2, "dispatch + terminal, nothing else");
+        assert_eq!(records[0]["event"], json!("dispatch"));
+        assert_eq!(records[0]["job_ids"], json!([job_id]));
+        let terminal = &records[1];
+        assert_eq!(terminal["event"], json!("terminal"));
+        assert_eq!(terminal["job_id"], json!(job_id));
+        assert_eq!(terminal["job_state"], json!("failed"));
+        assert_eq!(terminal["outcome"], json!("error"));
+    }
+
+    #[tokio::test]
+    async fn audit_cancelled_job_writes_a_cancelled_terminal_record() {
+        let (server, session, _dir, path) = audited_server();
+        let mock =
+            MockConnection::new(AUDIT_HOST).with_run_delay(std::time::Duration::from_secs(3));
+        let probe = mock.clone();
+        seed_audit_host(&session, mock).await;
+
+        audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("background start answers");
+        let jobs = session.job_list();
+        assert_eq!(jobs.len(), 1, "one background job started");
+        let job_id = jobs[0].id.clone();
+
+        // Gate the cancel on the worker reaching the delayed command: the
+        // claim then provably lands mid-flight, never on an already-done job.
+        let mut saw_command = false;
+        for _ in 0..2000 {
+            if !probe.commands().is_empty() {
+                saw_command = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(saw_command, "worker reached the host command");
+
+        audited_call(&server, "job_cancel", json!({"job_id": job_id}))
+            .await
+            .expect("cancel answers");
+        // Three records: the run dispatch, the run's terminal — written by the
+        // cancel path, which owns it once claimed, so it precedes the cancel
+        // call's own record in the file — and the job_cancel call. `ts` still
+        // orders them causally.
+        let records = await_records(&path, 3).await;
+        assert_eq!(records.len(), 3, "no duplicate terminal record");
+        assert_eq!(records[0]["event"], json!("dispatch"));
+        assert_eq!(records[2]["tool"], json!("job_cancel"));
+        assert_eq!(records[2]["outcome"], json!("ok"));
+        let terminal = &records[1];
+        assert_eq!(terminal["event"], json!("terminal"));
+        assert_eq!(terminal["job_id"], json!(job_id));
+        assert_eq!(terminal["job_state"], json!("cancelled"));
+        assert_eq!(terminal["outcome"], json!("error"));
+        assert!(terminal["ts"].as_u64() >= records[0]["ts"].as_u64());
+    }
+
+    #[tokio::test]
+    async fn audit_unwritable_sink_refuses_before_dispatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        // A directory as the sink path: every open fails, so the pre-flight
+        // refuses without running the call.
+        config.mcp_audit_log = Some(dir.path().to_path_buf());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        let server = McpServer::new(registry, session.clone());
+
+        let err = audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect_err("unwritable sink refuses the call");
+        assert!(
+            err.to_string().contains("audit log unavailable"),
+            "refusal names the sink: {err}"
+        );
+        assert!(
+            session.job_list().is_empty(),
+            "refused before dispatch: no job was started"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_unset_sink_is_byte_identical() {
+        async fn whoami(audit: Option<std::path::PathBuf>) -> CallToolResult {
+            let mut config = Config::default();
+            config.session_user = "testuser".to_owned();
+            config.mcp_audit_log = audit;
+            let registry = Arc::new(register_all());
+            let session = McpSession::new(config);
+            let server = McpServer::new(registry, session);
+            let response = audited_call(&server, "whoami", json!({}))
+                .await
+                .expect("whoami succeeds");
+            complete_result(&response).clone()
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let plain = whoami(None).await;
+        let logged = whoami(Some(dir.path().join("audit.jsonl"))).await;
+        assert_eq!(
+            plain, logged,
+            "enabling the sink must not change the wire response"
+        );
+    }
+
+    // ------------------------------------------------- OTLP export (#411 ext)
+
+    /// Mock OTLP collector capturing every POST body.
+    async fn otlp_mock() -> (wiremock::MockServer, Arc<std::sync::Mutex<Vec<u8>>>) {
+        let server = wiremock::MockServer::start().await;
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let seen = Arc::clone(&bodies);
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/logs"))
+            .respond_with(move |req: &wiremock::Request| {
+                seen.lock()
+                    .expect("body slot")
+                    .extend_from_slice(req.body.as_slice());
+                wiremock::ResponseTemplate::new(200)
+            })
+            .mount(&server)
+            .await;
+        (server, bodies)
+    }
+
+    fn otlp_exporter(endpoint: &str) -> Arc<crate::otel::OtelExporter> {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        crate::otel::OtelExporter::with_client(
+            crate::otel::OtelConfig::for_tests(endpoint, "mtui"),
+            client,
+        )
+    }
+
+    /// Dispatch through the audited seam with an explicit traceparent.
+    async fn audited_call_traced(
+        server: &McpServer,
+        tool: &str,
+        kwargs: Value,
+        traceparent: Option<&str>,
+    ) -> Result<CallToolResponse, McpError> {
+        server
+            .dispatch_audited(
+                tool,
+                kwargs.as_object().expect("kwargs object"),
+                None,
+                &CancellationToken::new(),
+                traceparent,
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn otlp_only_builds_jsonl_body_without_a_file() {
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        // No `audit_log`: OTLP-only mode still builds the JSONL line.
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+
+        audited_call(&server, "whoami", json!({}))
+            .await
+            .expect("whoami succeeds");
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let body = bodies.lock().expect("body").clone();
+        assert!(!body.is_empty(), "OTLP-only must still export");
+        assert!(
+            body.windows(b"whoami".len()).any(|w| w == b"whoami"),
+            "protobuf carries the verbatim JSONL tool"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn both_sinks_share_one_seq_file_first() {
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+
+        audited_call(&server, "whoami", json!({}))
+            .await
+            .expect("whoami succeeds");
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1);
+        let seq = records[0]["seq"].as_u64().expect("seq in file");
+        assert_eq!(records[0]["transport"], json!("stdio"));
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let body = bodies.lock().expect("body").clone();
+        let marker = format!("\"seq\":{seq}");
+        assert!(
+            body.windows(marker.len()).any(|w| w == marker.as_bytes()),
+            "OTLP body carries the same seq {seq} as the file"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unhealthy_otlp_refuses_before_dispatch() {
+        let failing = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&failing)
+            .await;
+        let exporter = otlp_exporter(&format!("{}/v1/logs", failing.uri()));
+        // Latch unhealthy with one failed batch.
+        exporter
+            .enqueue_audit(crate::otel::QueuedAudit {
+                seq: crate::audit::next_seq(),
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: crate::otel::now_nanos(),
+                extra_attrs: Vec::new(),
+            })
+            .expect("enqueue while healthy");
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        assert!(!exporter.is_healthy(), "failed batch latches");
+
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session.clone());
+        let err = audited_call(&server, "whoami", json!({}))
+            .await
+            .expect_err("unhealthy OTLP refuses");
+        assert!(
+            err.to_string().contains("audit log unavailable"),
+            "refusal reuses the file-sink path: {err}"
+        );
+        assert!(!err.to_string().contains("127.0.0.1"), "no endpoint leaks");
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn otlp_config_set_body_redacted() {
+        // OTLP-only (no file): the exported protobuf body is the redacted
+        // JSONL line — the secret never reaches the collector.
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+
+        let secret = "otlp-secret-token-9f8e7d6c5b4a";
+        audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "gitea_token", "value": secret}),
+        )
+        .await
+        .expect("config_set succeeds");
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let body = bodies.lock().expect("body").clone();
+        assert!(!body.is_empty(), "OTLP-only must still export");
+        assert!(
+            !body.windows(secret.len()).any(|w| w == secret.as_bytes()),
+            "secret value absent from exported protobuf"
+        );
+        assert!(
+            body.windows(b"<redacted>".len())
+                .any(|w| w == b"<redacted>"),
+            "redaction marker present in exported protobuf"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn otlp_queue_full_refuses_before_dispatch() {
+        // Mirror of the unhealthy refusal: a filled queue refuses through the
+        // same closed-vocabulary path, never leaking the endpoint.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        // Unreachable endpoint, but the fill below finishes before the first
+        // 500ms flush tick, so the latch is still healthy and the refusal is
+        // `Full`, not `Unhealthy`.
+        let exporter = crate::otel::OtelExporter::with_client(
+            crate::otel::OtelConfig::for_tests("http://127.0.0.1:9/v1/logs", "mtui"),
+            client,
+        );
+        for seq in 0..crate::otel::OTEL_QUEUE_CAP {
+            exporter
+                .enqueue_audit(crate::otel::QueuedAudit {
+                    seq: seq as u64,
+                    jsonl: "{}".to_owned(),
+                    tool: "run".to_owned(),
+                    outcome: "ok".to_owned(),
+                    event: "call".to_owned(),
+                    transport: "stdio".to_owned(),
+                    session_id: 1,
+                    response_bytes: None,
+                    trace: None,
+                    time_nanos: crate::otel::now_nanos(),
+                    extra_attrs: Vec::new(),
+                })
+                .expect("queue accepts to capacity");
+        }
+        assert!(exporter.is_healthy(), "fill races the first flush tick");
+
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+        let err = audited_call(&server, "whoami", json!({}))
+            .await
+            .expect_err("full OTLP queue refuses");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("audit log unavailable"),
+            "same refuse path: {msg}"
+        );
+        assert!(msg.contains("otlp queue full"), "closed reason: {msg}");
+        assert!(!msg.contains("127.0.0.1"), "no endpoint leaks: {msg}");
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn audit_put_payload_is_fingerprinted_not_stored() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        let secret = "PUT-SECRET-SSH-KEY-MATERIAL-7f3a";
+        audited_call(
+            &server,
+            "put",
+            json!({"filename": "id_rsa", "content": secret}),
+        )
+        .await
+        .expect("put dispatches (record pins args either way)");
+        let raw = std::fs::read_to_string(&path).expect("sink readable");
+        assert!(!raw.contains(secret), "payload never verbatim: {raw}");
+        let record: Value = serde_json::from_str(raw.trim()).expect("one record");
+        assert_eq!(record["args"]["content"]["bytes"], json!(secret.len()));
+        assert_eq!(
+            record["args"]["content"]["sha256"]
+                .as_str()
+                .expect("hex")
+                .len(),
+            64
+        );
+        assert_eq!(record["args"]["filename"], json!("id_rsa"));
+    }
+
+    #[tokio::test]
+    async fn unaudited_dispatch_skips_audit_scope_resolution() {
+        // Gating pin for #613: the audit scope resolve is audit-only. The same
+        // template-scoped call resolves with a sink on and stays empty with
+        // auditing off, so unaudited dispatch never takes the session mutex
+        // for the record.
+        use crate::tools::tool_routes;
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("list_hosts").expect("list_hosts route");
+
+        let plain = McpSession::new(Config::default());
+        assert!(!plain.auditing(), "no sink means auditing off");
+        seed_audit_host(&plain, MockConnection::new(AUDIT_HOST)).await;
+        let dispatched = dispatch_tool(
+            &registry,
+            &plain,
+            route,
+            json!({}).as_object().expect("kwargs object"),
+            None,
+            None,
+        )
+        .await;
+        assert!(
+            dispatched.rrids.is_empty(),
+            "unaudited dispatch records no scope: {:?}",
+            dispatched.rrids
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(dir.path().join("audit.jsonl"));
+        let audited = McpSession::new(config);
+        assert!(audited.auditing(), "sink on means auditing on");
+        seed_audit_host(&audited, MockConnection::new(AUDIT_HOST)).await;
+        let dispatched = dispatch_tool(
+            &registry,
+            &audited,
+            route,
+            json!({}).as_object().expect("kwargs object"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(dispatched.rrids, vec![AUDIT_RRID.to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn traceparent_flows_to_record_and_otlp() {
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+        let traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01";
+
+        audited_call_traced(&server, "whoami", json!({}), Some(traceparent))
+            .await
+            .expect("traced call succeeds");
+        let records = audit_records(&path);
+        assert_eq!(records[0]["trace"], json!(traceparent));
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let body = bodies.lock().expect("body").clone();
+        // Raw trace bytes ride the OTLP record alongside the JSONL body.
+        let trace_bytes = [0x0a, 0xf7, 0x65, 0x19, 0x16, 0xcd, 0x43, 0xdd];
+        assert!(
+            body.windows(trace_bytes.len()).any(|w| w == trace_bytes),
+            "trace_id bytes present in OTLP"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn response_bytes_sized_for_ok_absent_for_unknown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        let server = McpServer::new(registry, session);
+
+        audited_call(&server, "whoami", json!({}))
+            .await
+            .expect("whoami succeeds");
+        let records = audit_records(&path);
+        assert!(
+            records[0]["response_bytes"].as_u64().unwrap_or(0) > 0,
+            "ok response is sized"
+        );
+
+        audited_call(&server, "shell", json!({}))
+            .await
+            .expect_err("unknown tool rejected");
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2);
+        assert!(
+            records[1].get("response_bytes").is_none(),
+            "protocol errors are unsized"
+        );
+    }
+
+    #[tokio::test]
+    async fn transport_labels_follow_the_session() {
+        async fn transport_of(transport: &'static str) -> Value {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("audit.jsonl");
+            let mut config = Config::default();
+            config.session_user = "testuser".to_owned();
+            config.mcp_audit_log = Some(path.clone());
+            let registry = Arc::new(register_all());
+            let session = McpSession::new_with_transport(config, transport);
+            let server = McpServer::new(registry, session);
+            audited_call(&server, "whoami", json!({}))
+                .await
+                .expect("whoami succeeds");
+            audit_records(&path).pop().expect("one record")
+        }
+
+        assert_eq!(transport_of("stdio").await["transport"], json!("stdio"));
+        assert_eq!(transport_of("http").await["transport"], json!("http"));
+    }
+
+    /// A down/slow disk must not stall the dispatch worker: every blocking
+    /// audit syscall rides `spawn_blocking`.
+    ///
+    /// The `AUDIT_TEST_DELAY_MS` hook sleeps inside the blocking `open_sink`,
+    /// so inline dispatch would park the only worker thread while offloaded
+    /// dispatch leaves it free for a concurrent ticker. Single-threaded
+    /// runtime on purpose: on a multi-thread pool a parked worker is masked
+    /// by its siblings and the test could not fail. The sink filename carries
+    /// the `slow-sink` fragment the hook gates on, so concurrent tests on
+    /// other temp paths never observe the delay.
+    #[tokio::test(flavor = "current_thread")]
+    async fn audit_slow_sink_never_stalls_the_worker() {
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                crate::audit::AUDIT_TEST_DELAY_MS.store(0, Ordering::Relaxed);
+            }
+        }
+        let _reset = Reset;
+        crate::audit::AUDIT_TEST_DELAY_MS.store(300, Ordering::Relaxed);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("slow-sink-audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        let server = McpServer::new(registry, session);
+
+        let ticks = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let ticker = tokio::spawn({
+            let ticks = Arc::clone(&ticks);
+            async move {
+                for _ in 0..100 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    ticks.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+
+        let start = Instant::now();
+        audited_call(&server, "whoami", json!({}))
+            .await
+            .expect("slow sink still answers");
+        let ticks_during = ticks.load(Ordering::Relaxed);
+        ticker.await.expect("ticker joins");
+        let elapsed = start.elapsed();
+
+        // Anti-vacuity: the hook really slept (pre-flight + append).
+        assert!(
+            elapsed >= Duration::from_millis(500),
+            "hook must fire, took only {elapsed:?}"
+        );
+        assert!(
+            ticks_during >= 10,
+            "worker stalled on slow sink: only {ticks_during} ticks during {elapsed:?}"
+        );
+        assert_eq!(audit_records(&path).len(), 1, "record still landed");
     }
 }

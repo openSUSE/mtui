@@ -13,11 +13,15 @@ pub mod args;
 #[cfg(feature = "mcp")]
 pub(crate) mod argv;
 #[cfg(feature = "mcp")]
+pub(crate) mod audit;
+#[cfg(feature = "mcp")]
 pub mod capture;
 #[cfg(feature = "mcp")]
 pub mod concurrency;
 #[cfg(feature = "mcp")]
 pub mod deny;
+#[cfg(feature = "mcp")]
+pub(crate) mod otel;
 #[cfg(feature = "mcp")]
 pub mod profiles;
 #[cfg(feature = "mcp")]

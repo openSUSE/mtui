@@ -457,6 +457,74 @@ client never sees another's jobs). The per-session job budget
 (`max_output_bytes`) bound resource use so one client cannot exhaust the server or
 dwarf the client's context.
 
+## Audit log
+
+`mtui-mcp` executes consequential actions with nobody watching, so a configured
+server keeps a durable record of what ran. Set **`[mcp] audit_log`** to a file
+path; unset (the default) disables auditing and leaves behaviour byte-identical.
+
+The sink is versioned JSONL, one object per line, opened `O_APPEND` with mode
+`0600` and fsynced before the response returns — entries survive a server
+restart and are never truncated. Each record carries the schema version, the
+arrival timestamp, the session id, the tool name, the (redacted, see below)
+arguments, the outcome (`ok` / `error` / `unknown-tool`), the duration, and the
+RRIDs and host names the call resolved to.
+
+A backgrounded call writes two records: a `dispatch` record naming the started
+`job_ids`, and a `terminal` record when the job reaches `done` / `failed` /
+`cancelled`, joinable by job id. The terminal record carries no arguments.
+
+When the sink cannot be written the call is **refused** instead of proceeding
+unrecorded. A failed terminal write can only warn — its dispatch already
+answered. `config_set` never records the value for any attribute, so a future
+secret attribute cannot leak by omission; the record marks whether the attribute
+is a known secret. File-body payloads (`put` `content`/`content_b64`,
+`testreport_write` `content`, `testreport_patch` `replacement`) never land
+verbatim either: each records `{bytes, sha256}` over the original string, so a
+credentials file or SSH key uploaded via `put` stays correlatable without being
+persisted. Always fingerprinted, never inline, regardless of size — the same
+redaction feeds the file body, the OTLP body, and the size accounting, and no
+payload key is ever an indexed OTLP attribute. All file I/O runs off the
+dispatch worker (`spawn_blocking`), so a down/slow disk never stalls a call.
+
+### OTLP log export
+
+The same record can also go to an OpenTelemetry collector as OTLP/HTTP LOGS
+(hand-rolled protobuf over the workspace `reqwest`/rustls stack — no
+`opentelemetry-*` crates): one log record per audit event, body = the verbatim
+JSONL line (already redacted and fingerprinted as above). Configuration is env-only (headers must never be CLI flags), so
+there are no new TOML keys:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (base URL, gains `/v1/logs`) or
+  `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (full URL, wins verbatim). Unset-or-empty
+  disables export, as does an invalid endpoint or a non-`http/protobuf`
+  protocol (validated only when an endpoint exists).
+- `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_LOGS_HEADERS`
+  (`key=value,...`, values percent-decoded; logs-specific wins).
+- `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`: only
+  `http/protobuf` or unset.
+- `OTEL_SERVICE_NAME` (default `mtui`): resource `service.name`, the
+  multi-deployment join key.
+
+Sink matrix: file-only (`audit_log` set, no endpoint), OTLP-only (endpoint set,
+`audit_log` unset — the JSONL line is still built in memory and used verbatim),
+both (file first in `seq` order, then OTLP), neither (auditing off, dispatch
+byte-identical).
+
+Each record carries closed `mtui.*` attributes (`tool`, `outcome`, `event`,
+`seq`, `transport`, `session.id`, `response_bytes` when sized, plus allowlisted
+kwarg keys) and the W3C trace ids when the client supplied a strict lowercase
+55-byte `traceparent` via `_meta` (also echoed as the record's `trace` field;
+`session.id` stays server-minted). A startup probe posts one real diagnostics
+record (~5x500 ms) before serving and its health latch feeds the same refuse
+path; failed batches merge into a pending `audit_gap` sent on recovery. Batching:
+2048/stream cap, 512/batch, 500 ms interval, 10 s request timeout, 5 s shutdown
+flush, redirects off, `[mtui] ssl_verify` TLS posture. A full queue refuses
+foreground calls — never drops — while terminal records and tracing diagnostics
+(a separate best-effort queue, drop + counter; exporter/HTTP-stack targets
+excluded) only warn. The endpoint value never appears in logs, records, or
+errors.
+
 ## Cancelling a foreground call
 
 A client that sends an explicit `notifications/cancelled` for an in-flight

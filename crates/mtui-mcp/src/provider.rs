@@ -223,10 +223,11 @@ impl SessionRegistry {
     /// Mint a fresh [`McpSession`], cloning the base [`Config`] so its mutable
     /// scalar state is independent (own `metadata` / `targets` / capture sink).
     /// The isolation boundary: [`try_make_server`](Self::try_make_server) wraps
-    /// it for the transport, and tests use it directly.
+    /// it for the transport, and tests use it directly. Sessions minted here
+    /// serve HTTP, so their audit `transport` agrees with the server's.
     #[must_use]
     pub fn make_session(&self) -> Arc<McpSession> {
-        McpSession::new(self.config.clone())
+        McpSession::new_with_transport(self.config.clone(), "http")
     }
 
     /// Mint a fresh, isolated, cap-checked [`McpServer`] for one MCP session.

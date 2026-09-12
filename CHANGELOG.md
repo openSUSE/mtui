@@ -8,6 +8,35 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- New `[mcp] audit_log` key: a file path enabling a durable audit record of
+  `mtui-mcp` tool calls (versioned JSONL, one record per call, created `0600`
+  and fsynced before the response returns). Each record carries the schema
+  version, arrival timestamp, session id, tool name, arguments, outcome
+  (`ok`/`error`/`unknown-tool`), duration, and the RRIDs and host names the
+  call resolved to; a backgrounded call adds a terminal-state record joinable
+  by job id. Unset (the default) disables auditing with byte-identical
+  behaviour. A call the sink cannot record is refused rather than proceeding
+  unrecorded. `config_set` never records the value, so secrets cannot leak
+  into the log; file-body payloads (`put` `content`/`content_b64`,
+  `testreport_write` `content`, `testreport_patch` `replacement`) record
+  `{bytes, sha256}` instead of the bytes, always fingerprinted regardless of
+  size (#411). The seam is `mtui-mcp`'s `call_tool` dispatch only —
+  `mtui-core` has no session-key/transport notion, so the REPL is not covered.
+
+- OTLP/HTTP LOGS export of the same audit record (hand-rolled protobuf over the
+  workspace `reqwest`/rustls stack, no new shipped crates): one log record per
+  audit event, body = the verbatim JSONL line (already redacted and
+  fingerprinted as above), with closed `mtui.*` attributes
+  and resource `service.name`. Env-only configuration (`OTEL_EXPORTER_OTLP_ENDPOINT`
+  / `..._LOGS_ENDPOINT`, `..._HEADERS` / `..._LOGS_HEADERS`,
+  `..._PROTOCOL` / `..._LOGS_PROTOCOL` as `http/protobuf` only, `OTEL_SERVICE_NAME`
+  defaulting to `mtui`); unset-or-empty disables. OTLP-only (endpoint set,
+  `audit_log` unset) still builds the JSONL line in memory. A startup probe gates
+  serving via the existing refuse path; failed batches report an `audit_gap` on
+  recovery and a full queue refuses instead of dropping. No new TOML keys (#411).
+
 ### Changed
 
 - Commands that address no template — `load_template`, `unload`, `list_templates`,
