@@ -57,7 +57,7 @@ use mtui_core::{
     ColorMode, CommandError, CommandPromptDisplay, EngineError, HOST_CLOSE_TIMEOUT, Registry,
     Session, addresses_template, dispatch_argv, dispatch_command, resolve_command_rrids,
 };
-use mtui_hosts::{LockOutcome, LockOwner, contended_lock_reason};
+use mtui_hosts::{ContendedSurface, LockOutcome, LockOwner, contended_lock_reason};
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
@@ -372,7 +372,7 @@ impl AbortUnlock {
         for (host, owner) in &self.contended {
             parts.push(format!(
                 "still locked: {host} ({})",
-                contended_lock_reason(owner, &self.session_user, ABORT_CHECK, ABORT_SCOPE)
+                contended_lock_reason(owner, &self.session_user, ContendedSurface::Mcp)
             ));
         }
         for (host, reason) in &self.failed {
@@ -413,11 +413,9 @@ impl AbortUnlock {
     }
 }
 
-/// The abort-path steer and scope for [`mtui_hosts::contended_lock_reason`]:
-/// markdown `list_locks`, and `--force`'s per-template whole-group fan-out over
-/// every loaded template (with leading separator).
-const ABORT_CHECK: &str = "check with `list_locks`";
-const ABORT_SCOPE: &str = "; `unlock --force` releases the whole group of every loaded template";
+// The abort-path steer/scope pair lives with the shared renderer
+// (`mtui_hosts::ContendedSurface::Mcp`): markdown `list_locks`, and `--force`'s
+// per-template whole-group fan-out over every loaded template.
 
 /// The shared parenthetical for a forced abort: the grace period, the
 /// in-flight-host-operation caveat, and (if any) the unlock verdict.
@@ -3472,6 +3470,50 @@ mod tests {
             clause.contains("`unlock --force` releases the whole group of every loaded template"),
             "got: {clause}"
         );
+    }
+
+    /// Two contended hosts with distinct foreign owners render one `still
+    /// locked` segment each, naming the right owner with the whole-group scope.
+    #[test]
+    fn abort_unlock_contended_names_two_distinct_foreign_owners() {
+        let mut summary = AbortUnlock {
+            session_user: "bob".to_owned(),
+            ..Default::default()
+        };
+        summary.absorb(BTreeMap::from([
+            (
+                "h1".to_owned(),
+                LockOutcome::Contended(LockOwner {
+                    by: "alice".to_owned(),
+                    since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+                }),
+            ),
+            (
+                "h2".to_owned(),
+                LockOutcome::Contended(LockOwner {
+                    by: "carol".to_owned(),
+                    since: "Wednesday, 15.11.2023 22:13 UTC".to_owned(),
+                }),
+            ),
+        ]));
+        let clause = summary.clause().expect("contended hosts must render");
+        assert!(
+            clause.contains("still locked: h1 (held by alice since Tuesday, 14.11.2023 22:13 UTC"),
+            "got: {clause}"
+        );
+        assert!(
+            clause
+                .contains("still locked: h2 (held by carol since Wednesday, 15.11.2023 22:13 UTC"),
+            "got: {clause}"
+        );
+        assert!(
+            clause
+                .matches("`unlock --force` releases the whole group of every loaded template")
+                .count()
+                == 2,
+            "each contended segment carries the whole-group scope: {clause}"
+        );
+        assert!(!clause.contains("(you)"), "got: {clause}");
     }
 
     /// The caller's own name as owner is most likely a second live mtui of

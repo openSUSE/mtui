@@ -168,19 +168,50 @@ pub struct LockOwner {
     pub since: String,
 }
 
+/// Which driving surface a contended line renders for.
+///
+/// Owns the paired `list_locks` steer and `--force` whole-group scope so a
+/// call site cannot transpose them: the REPL's plain steer with its `-t`-scoped
+/// caveat and the MCP abort path's markdown steer with its per-template fan-out
+/// travel as one value. The fan-out truths differ (`-t`-scoped vs per-template
+/// whole-group), hence two variants rather than one shared string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContendedSurface {
+    /// REPL (`lock`/`run`/`unlock`): plain `list_locks`, `-t`-scoped caveat.
+    Repl,
+    /// MCP abort path: markdown `list_locks`, per-template whole-group scope.
+    Mcp,
+}
+
+impl ContendedSurface {
+    fn check(self) -> &'static str {
+        match self {
+            Self::Repl => "check list_locks",
+            Self::Mcp => "check with `list_locks`",
+        }
+    }
+
+    fn scope_note(self) -> &'static str {
+        match self {
+            Self::Repl => " (unlock --force clears every selected host)",
+            Self::Mcp => "; `unlock --force` releases the whole group of every loaded template",
+        }
+    }
+}
+
 /// Names the owner of a contended operation lock and the next safe step.
 ///
 /// Own/foreign/unknown split and hedges shared by the REPL (`lock`/`run`/`unlock`)
-/// and the MCP abort path; `check` is the `list_locks` steer (plain vs markdown)
-/// and `scope_note` states `--force`'s whole-group scope with its leading separator.
-/// Split because the fan-out truths differ (`-t`-scoped vs per-template whole-group).
+/// and the MCP abort path; `surface` selects the paired steer/scope (see
+/// [`ContendedSurface`]).
 #[must_use]
 pub fn contended_lock_reason(
     owner: &LockOwner,
     session_user: &str,
-    check: &str,
-    scope_note: &str,
+    surface: ContendedSurface,
 ) -> String {
+    let check = surface.check();
+    let scope_note = surface.scope_note();
     if owner.by.is_empty() {
         format!("held by an unknown owner, possibly a live mtui; {check}{scope_note}")
     } else if owner.by == session_user {
@@ -1097,11 +1128,9 @@ mod tests {
             by: "alice".to_owned(),
             since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
         };
-        let check = "check list_locks";
-        let scope = " (unlock --force clears every selected host)";
-        let foreign = contended_lock_reason(&alice, "bob", check, scope);
-        let mine = contended_lock_reason(&alice, "alice", check, scope);
-        let unknown = contended_lock_reason(&LockOwner::default(), "bob", check, scope);
+        let foreign = contended_lock_reason(&alice, "bob", ContendedSurface::Repl);
+        let mine = contended_lock_reason(&alice, "alice", ContendedSurface::Repl);
+        let unknown = contended_lock_reason(&LockOwner::default(), "bob", ContendedSurface::Repl);
 
         for line in [&foreign, &mine, &unknown] {
             assert!(line.contains("list_locks"), "{line}");
@@ -1110,6 +1139,10 @@ mod tests {
                 "{line}"
             );
             assert!(line.contains("possibly"), "hedge missing: {line}");
+            assert!(
+                !line.contains('`') && !line.contains("every loaded template"),
+                "REPL line carries the MCP steer/scope: {line}"
+            );
         }
         assert!(
             foreign.contains("held by alice since Tuesday, 14.11.2023 22:13 UTC"),
@@ -1142,17 +1175,19 @@ mod tests {
             by: "alice".to_owned(),
             since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
         };
-        let check = "check with `list_locks`";
-        let scope = "; `unlock --force` releases the whole group of every loaded template";
-        let foreign = contended_lock_reason(&alice, "bob", check, scope);
-        let mine = contended_lock_reason(&alice, "alice", check, scope);
-        let unknown = contended_lock_reason(&LockOwner::default(), "bob", check, scope);
+        let foreign = contended_lock_reason(&alice, "bob", ContendedSurface::Mcp);
+        let mine = contended_lock_reason(&alice, "alice", ContendedSurface::Mcp);
+        let unknown = contended_lock_reason(&LockOwner::default(), "bob", ContendedSurface::Mcp);
 
         for line in [&foreign, &mine, &unknown] {
             assert!(line.contains("`list_locks`"), "{line}");
             assert!(
                 line.contains("`unlock --force` releases the whole group of every loaded template"),
                 "{line}"
+            );
+            assert!(
+                !line.contains("clears every selected host"),
+                "MCP line carries the REPL scope: {line}"
             );
         }
         assert!(
@@ -1166,6 +1201,35 @@ mod tests {
             "{mine}"
         );
         assert!(unknown.contains("held by an unknown owner"), "{unknown}");
+    }
+
+    /// The steer/scope pair travels with the surface variant, so REPL vs MCP
+    /// cannot be transposed at a call site: the same owner renders each
+    /// surface's own steer and scope, never the other's.
+    #[test]
+    fn contended_surfaces_keep_their_own_steer_and_scope() {
+        let alice = LockOwner {
+            by: "alice".to_owned(),
+            since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+        };
+        let repl = contended_lock_reason(&alice, "bob", ContendedSurface::Repl);
+        let mcp = contended_lock_reason(&alice, "bob", ContendedSurface::Mcp);
+
+        assert!(repl.contains("check list_locks"), "{repl}");
+        assert!(
+            repl.contains("(unlock --force clears every selected host)"),
+            "{repl}"
+        );
+        assert!(
+            !repl.contains('`') && !repl.contains("every loaded template"),
+            "{repl}"
+        );
+        assert!(mcp.contains("check with `list_locks`"), "{mcp}");
+        assert!(
+            mcp.contains("`unlock --force` releases the whole group of every loaded template"),
+            "{mcp}"
+        );
+        assert!(!mcp.contains("clears every selected host"), "{mcp}");
     }
 
     // --- RemoteLock ---------------------------------------------------------

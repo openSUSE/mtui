@@ -34,11 +34,10 @@ pub(crate) fn host_op_budget() -> std::time::Duration {
     crate::commands::testkit::host_op_budget_override()
 }
 
-/// The REPL steer and scope for [`mtui_hosts::contended_lock_reason`]: plain
-/// `list_locks`, and `--force`'s `-t`-scoped whole-group caveat (with leading
-/// separator) so a `-t`-scoped line never reads as "force this one host" (#521).
-pub(crate) const CONTENDED_CHECK: &str = "check list_locks";
-pub(crate) const CONTENDED_SCOPE: &str = " (unlock --force clears every selected host)";
+// The REPL steer/scope pair for contended lines lives with the shared renderer
+// (`mtui_hosts::ContendedSurface::Repl`): plain `list_locks`, and `--force`'s
+// `-t`-scoped whole-group caveat so a `-t`-scoped line never reads as "force
+// this one host" (#521).
 
 /// Builds the report's [`QemIncident`], threaded into both
 /// `DashboardAutoOpenQA` and `KernelOpenQA` so they share one incident state.

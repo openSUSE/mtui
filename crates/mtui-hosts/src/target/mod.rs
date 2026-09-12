@@ -50,8 +50,8 @@ pub use actions::Command;
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::{HostsGroup, LockOutcome};
 pub use locks::{
-    Clock, LockOwner, LockRow, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
-    TargetLock, contended_lock_reason,
+    Clock, ContendedSurface, LockOwner, LockRow, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock,
+    TARGET_LOCK_PATH, TargetLock, contended_lock_reason,
 };
 pub use operation::{
     Check, CheckArgs, CheckFailure, Doer, HostOutput, HostPlan, InstallOperation, Operation,
