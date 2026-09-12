@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches, Command as ClapCommand};
 use mtui_config::{Config, SslVerify};
+use mtui_datasources::sanitize_url;
 
 use crate::command::{Command, Scope};
 use crate::engine::command_parser;
@@ -93,7 +94,88 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
     }
 }
 
+/// MCP surface criterion (#410): a headless client (`!is_repl`) gets only what
+/// it needs to operate the session — endpoint URLs (userinfo-stripped) and
+/// operational tunables. Operator-local values stay on the REPL, whose operator
+/// owns the machine and can read mtui.toml directly. Secrets stay `<set>` on
+/// both surfaces.
+///
+/// Single-change unit with `attr_value`, `MCP_URL_ATTRS` and `ATTRS`: adding an
+/// attribute updates all applicable lists, or the subset assertions fail.
+const MCP_HIDDEN_ATTRS: &[&str] = &["template_dir", "session_user", "refhosts_path"];
+
+/// Endpoint-valued attributes, shown userinfo-stripped on the MCP surface (a
+/// no-op when no userinfo is present, so clean defaults render identically).
+/// Part of the `attr_value`/`MCP_HIDDEN_ATTRS`/`ATTRS` single-change unit.
+const MCP_URL_ATTRS: &[&str] = &[
+    "refhosts_https_uri",
+    "bugzilla_url",
+    "reports_url",
+    "fancy_reports_url",
+    "svn_path",
+    "qem_dashboard_api",
+    "teregen_api",
+    "openqa_instance",
+    "openqa_instance_baremetal",
+    "gitea_url",
+    "slack_api_url",
+];
+
+/// Whether `show` refuses `attr` headlessly: the operator-local paths/login,
+/// plus an `ssl_verify` CA-bundle path (`true`/`false` is session posture the
+/// client acts on, so it stays).
+fn is_mcp_hidden(attr: &str, config: &Config) -> bool {
+    if MCP_HIDDEN_ATTRS.contains(&attr) {
+        return true;
+    }
+    attr == "ssl_verify" && matches!(config.ssl_verify, SslVerify::CaBundle(_))
+}
+
+/// The MCP-visible rendering of a shown value: userinfo-stripped for endpoint
+/// attributes, verbatim otherwise.
+fn mcp_shown_value(attr: &str, value: &str) -> String {
+    if MCP_URL_ATTRS.contains(&attr) {
+        sanitize_url(value)
+    } else {
+        value.to_owned()
+    }
+}
+
+/// The headless (`!is_repl`) half of `show`: the no-argument bulk dump is
+/// refused (name attributes explicitly), operator-local values are refused,
+/// endpoints print userinfo-stripped. Unknown names fail as they do on REPL.
+fn show_headless(session: &mut Session, requested: &[String]) -> CommandResult {
+    if requested.is_empty() {
+        return Err(CommandError::Other(
+            "config show with no attribute is refused on this surface; \
+             name the attribute(s) explicitly"
+                .to_owned(),
+        ));
+    }
+    let width = requested.iter().map(String::len).max().unwrap_or(0);
+    let mut rows: Vec<String> = Vec::new();
+    for attr in requested {
+        let Some(value) = attr_value(&session.config, attr) else {
+            return Err(CommandError::Other(format!("unknown attribute: {attr}")));
+        };
+        if is_mcp_hidden(attr, &session.config) {
+            return Err(CommandError::Other(format!(
+                "config show: '{attr}' is not exposed on this surface"
+            )));
+        }
+        rows.push(format!(
+            "{attr:<width$} = {:?}",
+            mcp_shown_value(attr, &value)
+        ));
+    }
+    for row in rows {
+        session.display.println(&row);
+    }
+    Ok(())
+}
+
 /// The attribute names `show` lists when given none, in a stable order.
+/// Part of the `attr_value`/`MCP_HIDDEN_ATTRS`/`MCP_URL_ATTRS` single-change unit.
 const ATTRS: [&str; 39] = [
     "template_dir",
     "session_user",
@@ -135,6 +217,52 @@ const ATTRS: [&str; 39] = [
     "lock_wait",
     "lock_wait_poll",
 ];
+
+const fn str_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const fn attrs_contains<const N: usize>(haystack: &[&str; N], needle: &str) -> bool {
+    let mut i = 0;
+    while i < N {
+        if str_eq(haystack[i], needle) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+const _: () = {
+    let mut i = 0;
+    while i < MCP_URL_ATTRS.len() {
+        assert!(
+            attrs_contains(&ATTRS, MCP_URL_ATTRS[i]),
+            "MCP_URL_ATTRS must stay a subset of ATTRS"
+        );
+        i += 1;
+    }
+    let mut j = 0;
+    while j < MCP_HIDDEN_ATTRS.len() {
+        assert!(
+            attrs_contains(&ATTRS, MCP_HIDDEN_ATTRS[j]),
+            "MCP_HIDDEN_ATTRS must stay a subset of ATTRS"
+        );
+        j += 1;
+    }
+};
 
 /// Parses `raw` for `attr` and stores it. An invalid value leaves the
 /// attribute unchanged.
@@ -276,6 +404,11 @@ impl Command for ConfigCmd {
                     .get_many::<String>("attributes")
                     .map(|it| it.cloned().collect())
                     .unwrap_or_default();
+                // The MCP surface filters (bulk refused, operator-local hidden);
+                // the REPL below prints everything verbatim, as before.
+                if !session.is_repl {
+                    return show_headless(session, &requested);
+                }
                 let attrs: Vec<String> = if requested.is_empty() {
                     ATTRS.iter().map(|s| (*s).to_owned()).collect()
                 } else {
@@ -332,6 +465,7 @@ mod tests {
     #[tokio::test]
     async fn show_one_attribute() {
         let (mut session, buf) = empty_session();
+        session.is_repl = true;
         session.config.session_user = "alice".to_owned();
         let args = matches(&ConfigCmd, &["show", "session_user"]);
         ConfigCmd.call(&mut session, &args).await.unwrap();
@@ -342,6 +476,7 @@ mod tests {
     #[tokio::test]
     async fn show_all_lists_every_attr() {
         let (mut session, buf) = empty_session();
+        session.is_repl = true;
         let args = matches(&ConfigCmd, &["show"]);
         ConfigCmd.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
@@ -360,6 +495,7 @@ mod tests {
     #[tokio::test]
     async fn show_ssl_verify_renders_enum_forms() {
         let (mut session, buf) = empty_session();
+        session.is_repl = true;
         session.config.ssl_verify = SslVerify::Enabled;
         ConfigCmd
             .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
@@ -369,6 +505,7 @@ mod tests {
         assert!(buf.contents().contains("\"true\""));
 
         let (mut session, buf) = empty_session();
+        session.is_repl = true;
         session.config.ssl_verify = SslVerify::Disabled;
         ConfigCmd
             .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
@@ -377,6 +514,7 @@ mod tests {
         assert!(buf.contents().contains("\"false\""));
 
         let (mut session, buf) = empty_session();
+        session.is_repl = true;
         session.config.ssl_verify = SslVerify::CaBundle(std::path::PathBuf::from("/etc/ca.pem"));
         ConfigCmd
             .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
@@ -462,6 +600,157 @@ mod tests {
         assert!(out.contains("gitea_token"));
         assert!(!out.contains("secret123"));
         assert!(out.contains("<set>"));
+    }
+
+    #[tokio::test]
+    async fn headless_bulk_show_is_refused() {
+        // `empty_session` is headless (`is_repl = false`), the MCP posture.
+        let (mut session, _buf) = empty_session();
+        let err = ConfigCmd
+            .call(&mut session, &matches(&ConfigCmd, &["show"]))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.contains("name the attribute(s) explicitly")),
+            "bulk dump refused headlessly, got {err:?}"
+        );
+    }
+
+    /// Each operator-local value is refused headlessly but shown on the REPL;
+    /// the refusal never echoes the value it hides.
+    #[tokio::test]
+    async fn headless_hidden_attrs_refused_repl_shown() {
+        for (attr, planted) in [
+            ("session_user", "alice"),
+            ("template_dir", "/home/alice/templates"),
+            ("refhosts_path", "/home/alice/refhosts.yml"),
+        ] {
+            let (mut session, _buf) = empty_session();
+            match attr {
+                "session_user" => session.config.session_user = planted.to_owned(),
+                "template_dir" => {
+                    session.config.template_dir = std::path::PathBuf::from(planted);
+                }
+                "refhosts_path" => {
+                    session.config.refhosts_path = std::path::PathBuf::from(planted);
+                }
+                _ => unreachable!(),
+            }
+            let err = ConfigCmd
+                .call(&mut session, &matches(&ConfigCmd, &["show", attr]))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, CommandError::Other(m)
+                    if m.contains("not exposed on this surface") && !m.contains(planted)),
+                "{attr}: refused without echoing the value, got {err:?}"
+            );
+
+            let (mut session, buf) = empty_session();
+            session.is_repl = true;
+            match attr {
+                "session_user" => session.config.session_user = planted.to_owned(),
+                "template_dir" => {
+                    session.config.template_dir = std::path::PathBuf::from(planted);
+                }
+                "refhosts_path" => {
+                    session.config.refhosts_path = std::path::PathBuf::from(planted);
+                }
+                _ => unreachable!(),
+            }
+            ConfigCmd
+                .call(&mut session, &matches(&ConfigCmd, &["show", attr]))
+                .await
+                .unwrap();
+            assert!(
+                buf.contents().contains(planted),
+                "{attr}: REPL still shows the value: {:?}",
+                buf.contents()
+            );
+        }
+    }
+
+    /// A CA-bundle path is operator-local layout; the boolean posture stays.
+    #[tokio::test]
+    async fn headless_ssl_verify_hides_bundle_path_keeps_bool() {
+        let (mut session, _buf) = empty_session();
+        session.config.ssl_verify = SslVerify::CaBundle(std::path::PathBuf::from("/etc/ca.pem"));
+        let err = ConfigCmd
+            .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m)
+                if m.contains("not exposed on this surface") && !m.contains("/etc/ca.pem")),
+            "bundle path refused without echo, got {err:?}"
+        );
+
+        let (mut session, buf) = empty_session();
+        session.config.ssl_verify = SslVerify::Enabled;
+        ConfigCmd
+            .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
+            .await
+            .unwrap();
+        assert!(buf.contents().contains("\"true\""), "{:?}", buf.contents());
+    }
+
+    /// Endpoints print userinfo-stripped headlessly; clean values render exactly
+    /// as on the REPL, and tunables/secrets behave as before.
+    #[tokio::test]
+    async fn headless_kept_attrs_shown_and_sanitized() {
+        let (mut session, buf) = empty_session();
+        session.config.openqa_instance = "https://user:pass@openqa.local/x".to_owned();
+        session.config.max_parallel = 7;
+        session.config.gitea_token = "secret123".to_owned();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(
+                    &ConfigCmd,
+                    &["show", "openqa_instance", "max_parallel", "gitea_token"],
+                ),
+            )
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(out.contains("https://***@openqa.local/x"), "{out:?}");
+        assert!(!out.contains("user:pass"), "{out:?}");
+        assert!(out.contains("\"7\""), "{out:?}");
+        assert!(
+            out.contains("<set>") && !out.contains("secret123"),
+            "{out:?}"
+        );
+
+        // No userinfo: byte-identical to the REPL rendering.
+        for is_repl in [false, true] {
+            let (mut session, buf) = empty_session();
+            session.is_repl = is_repl;
+            ConfigCmd
+                .call(
+                    &mut session,
+                    &matches(&ConfigCmd, &["show", "openqa_instance"]),
+                )
+                .await
+                .unwrap();
+            assert!(
+                buf.contents().contains(&format!(
+                    "openqa_instance = {:?}",
+                    session.config.openqa_instance
+                )),
+                "is_repl={is_repl}: {:?}",
+                buf.contents()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn headless_unknown_attr_still_unknown() {
+        let (mut session, _buf) = empty_session();
+        let err = ConfigCmd
+            .call(&mut session, &matches(&ConfigCmd, &["show", "nope"]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("unknown attribute")));
     }
 
     #[tokio::test]
@@ -670,5 +959,89 @@ mod tests {
                 if m.contains("invalid integer") && !m.contains("positive integer")),
             "expected an invalid-integer error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn attrs_all_resolve_and_mcp_lists_are_subsets() {
+        let config = Config::default();
+        for attr in ATTRS {
+            assert!(
+                attr_value(&config, attr).is_some(),
+                "{attr}: ATTRS entry must resolve via attr_value"
+            );
+        }
+        for attr in MCP_URL_ATTRS {
+            assert!(
+                attrs_contains(&ATTRS, attr),
+                "{attr}: MCP_URL_ATTRS must stay a subset of ATTRS"
+            );
+        }
+        for attr in MCP_HIDDEN_ATTRS {
+            assert!(
+                attrs_contains(&ATTRS, attr),
+                "{attr}: MCP_HIDDEN_ATTRS must stay a subset of ATTRS"
+            );
+        }
+    }
+
+    #[test]
+    fn url_defaults_require_mcp_coverage() {
+        let config = Config::default();
+        for attr in ATTRS {
+            let Some(value) = attr_value(&config, attr) else {
+                continue;
+            };
+            if value.contains("://") {
+                assert!(
+                    MCP_URL_ATTRS.contains(&attr),
+                    "{attr}: URL-valued default must be covered by MCP_URL_ATTRS"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn headless_sanitize_edge_cases_parity() {
+        let (mut session, buf) = empty_session();
+        session.config.openqa_instance = "https://token@host.example:443/path".to_owned();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["show", "openqa_instance"]),
+            )
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(out.contains("https://***@host.example:443/path"), "{out:?}");
+        assert!(!out.contains("token"), "{out:?}");
+
+        let (mut session, buf) = empty_session();
+        session.config.openqa_instance = "https://host.example/users/me@example.com".to_owned();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["show", "openqa_instance"]),
+            )
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("https://host.example/users/me@example.com"),
+            "{out:?}"
+        );
+        assert!(!out.contains("***"), "{out:?}");
+
+        let (mut session, buf) = empty_session();
+        session.config.openqa_instance = "alice:s3cret@host.example/x".to_owned();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["show", "openqa_instance"]),
+            )
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(out.contains("***@host.example/x"), "{out:?}");
+        assert!(!out.contains("s3cret"), "{out:?}");
     }
 }

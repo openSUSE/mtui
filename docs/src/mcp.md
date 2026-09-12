@@ -101,6 +101,19 @@ The deny-list is intersected with the live registry and consistency-tested; a
 renamed or removed command that leaves a stale deny-list entry is warned about at
 boot, so the boundary cannot drift silently.
 
+### `config_show` filtering
+
+`config_show` prints less over MCP than at the REPL (#410). The REPL operator
+owns the machine and can read `mtui.toml` directly, so it prints every resolved
+value verbatim (secrets as `<set>`). A headless client gets only what it needs
+to operate the session: endpoint URLs with embedded userinfo stripped and the
+operational tunables/flags. The no-argument bulk dump is refused headlessly —
+name the attribute(s) explicitly — as are the operator-local values
+(`session_user`, `template_dir`, `refhosts_path`, and a `ssl_verify` CA-bundle
+path; its `true`/`false` form is shown). Values `config show` never lists
+(the oscrc location, the OBS API URL, lock/history paths) reach neither surface
+through this tool.
+
 ## Session state and isolation
 
 Session state is isolated per client. Under **stdio** one process serves one

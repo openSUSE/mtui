@@ -21,7 +21,7 @@ pub use error::{
     SlackError, TeReGenError,
 };
 pub use gitea::{Gitea, assign_marker};
-pub use http::{HttpClient, MAX_API_BODY, VerifyPolicy, resolve_verify};
+pub use http::{HttpClient, MAX_API_BODY, VerifyPolicy, resolve_verify, sanitize_url};
 pub use obs::{NoAuth, ObsAuth, ObsClient, ObsError, Osc};
 pub use openqa::{IncidentName, Job, KernelOpenQA, OpenQABase, build_openqa_client_with_transport};
 pub use oqa_search::{
