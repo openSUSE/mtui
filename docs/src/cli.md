@@ -1087,7 +1087,7 @@ Options:
           [default: 0]
 
       --free
-          also probe live operation-lock and pool-claim state (connects to each matched host)
+          also probe live operation-lock and pool-claim state (connects to each shown host; --offset/--limit window first)
 
   -v, --verbose
           include addons in the output

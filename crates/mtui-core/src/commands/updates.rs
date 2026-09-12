@@ -19,8 +19,13 @@ use super::row_budget::{crush, row_notice};
 const UPDATES_HINT: &str = "--limit/--offset/--field/-G";
 
 /// Non-`testing` rows survive the crush; unknown/missing/null status keeps too (safe direction).
-fn is_anomaly_row(v: &Value) -> bool {
-    v.get("status").and_then(Value::as_str) != Some("testing")
+/// Severity: `failed`/`blocked` (2) outrank other non-`testing` (1).
+fn anomaly_severity(v: &Value) -> u8 {
+    match v.get("status").and_then(Value::as_str) {
+        Some("testing") => 0,
+        Some("failed" | "blocked") => 2,
+        _ => 1,
+    }
 }
 
 /// Lightweight dedup key: id/status/priority only, not the whole serialised row.
@@ -370,12 +375,19 @@ impl Command for Updates {
         };
         // Row budget backstops `--limit 0=all`: head+tail+anomalies, exact-deduped.
         // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
-        let crushed = crush(windowed, update_key, is_anomaly_row);
+        let crushed = crush(windowed, update_key, anomaly_severity);
         let shown = &crushed.kept;
         // Over-cap --json stays in-band like the byte-cap convention: JSON array
         // plus a trailing notice line, so MCP captures the signal too.
-        let notice = (crushed.truncated > 0)
-            .then(|| row_notice(crushed.truncated, crushed.total, UPDATES_HINT));
+        let notice = (crushed.truncated > 0).then(|| {
+            row_notice(
+                crushed.truncated,
+                crushed.total,
+                crushed.anomaly_kept,
+                crushed.anomaly_total,
+                UPDATES_HINT,
+            )
+        });
 
         if as_json {
             let doc = Value::Array(shown.to_vec());
@@ -1790,10 +1802,59 @@ mod tests {
             serde_json::json!({"id": "c", "status": "weird"}),
             serde_json::json!({"id": "d", "status": 5}),
         ] {
-            assert!(is_anomaly_row(&row), "{row}");
+            assert_eq!(anomaly_severity(&row), 1, "{row}");
         }
-        assert!(!is_anomaly_row(&serde_json::json!({"status": "testing"})));
-        assert!(is_anomaly_row(&serde_json::json!({"status": "failed"})));
+        assert_eq!(
+            anomaly_severity(&serde_json::json!({"status": "testing"})),
+            0
+        );
+        assert_eq!(
+            anomaly_severity(&serde_json::json!({"status": "failed"})),
+            2
+        );
+        assert_eq!(
+            anomaly_severity(&serde_json::json!({"status": "blocked"})),
+            2
+        );
+    }
+
+    #[test]
+    fn severe_update_outranks_mild_when_overflowing() {
+        // 300 testing rows except a mild ("weird") early-middle and a severe
+        // ("failed") late-middle: only 50 middle anomalies fit, so the severe
+        // survives and the mild drops.
+        let mut rows: Vec<serde_json::Value> = (0..300)
+            .map(|i| {
+                serde_json::json!({
+                    "priority": 1, "status": "testing", "kind": "Maintenance",
+                    "id": format!("row-{i:03}"),
+                })
+            })
+            .collect();
+        rows[280] = serde_json::json!({
+            "priority": 1, "status": "weird", "kind": "Maintenance", "id": "row-mild",
+        });
+        rows[250] = serde_json::json!({
+            "priority": 1, "status": "failed", "kind": "Maintenance", "id": "row-severe",
+        });
+        for (i, row) in rows.iter_mut().enumerate().take(292).skip(41) {
+            if i == 250 || i == 280 {
+                continue;
+            }
+            *row = serde_json::json!({
+                "priority": 1, "status": "weird", "kind": "Maintenance",
+                "id": format!("row-{i:03}"),
+            });
+        }
+        let out = crush(rows, update_key, anomaly_severity);
+        let ids: Vec<_> = out
+            .kept
+            .iter()
+            .filter_map(|r| r.get("id").and_then(Value::as_str))
+            .collect();
+        assert!(ids.contains(&"row-severe"), "severe survives: {ids:?}");
+        assert!(!ids.contains(&"row-mild"), "mild drops: {ids:?}");
+        assert_eq!((out.anomaly_kept, out.anomaly_total), (50, 249));
     }
 
     #[tokio::test]
