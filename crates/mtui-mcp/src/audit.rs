@@ -36,6 +36,7 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
@@ -45,6 +46,38 @@ pub(crate) const AUDIT_SCHEMA_VERSION: u32 = 1;
 
 /// Marker serialised in place of a `config_set` value.
 pub(crate) const REDACTED: &str = "<redacted>";
+
+/// In-record-only string cap (chars): tool/id/arg strings longer than this
+/// are truncated for the record; dispatch uses the original.
+pub(crate) const MAX_AUDIT_STRING_LEN: usize = 1024;
+/// Size-only reduction thresholds: longer arrays/objects become `{"_len": n}`.
+pub(crate) const MAX_AUDIT_ARRAY_LEN: usize = 100;
+pub(crate) const MAX_AUDIT_OBJECT_KEYS: usize = 100;
+
+/// Process-global audit sequence: file-first, OTLP second, same `seq` on
+/// both so the two streams join. Only consumed when auditing is on.
+static NEXT_AUDIT_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Test-only blocking delay (millis) injected at the top of [`AuditLog::open_sink`].
+///
+/// Lets the slow-sink test prove the async dispatch never blocks on a down/slow
+/// disk: the sleep runs wherever `open_sink` runs, so inline dispatch stalls the
+/// worker while `*_async` sleeps on the blocking pool. Gated on a `slow-sink`
+/// path fragment so concurrent tests on other temp paths never observe it.
+#[cfg(test)]
+pub(crate) static AUDIT_TEST_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn next_seq() -> u64 {
+    NEXT_AUDIT_SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Truncate to [`MAX_AUDIT_STRING_LEN`] chars on a char boundary.
+pub(crate) fn cap_str(raw: &str) -> String {
+    if raw.chars().count() <= MAX_AUDIT_STRING_LEN {
+        return raw.to_owned();
+    }
+    raw.chars().take(MAX_AUDIT_STRING_LEN).collect()
+}
 
 /// The `outcome` token of a `call`/`dispatch` record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,7 +133,21 @@ impl AuditLog {
     }
 
     /// Open the sink for append, creating it with restrictive permissions.
+    ///
+    /// Blocking (open/chmod): async callers must go through
+    /// [`check_writable_async`](Self::check_writable_async) /
+    /// [`append_async`](Self::append_async), never call this inline.
     fn open_sink(&self) -> io::Result<std::fs::File> {
+        #[cfg(test)]
+        {
+            if AUDIT_TEST_DELAY_MS.load(Ordering::Relaxed) > 0
+                && self.path.to_string_lossy().contains("slow-sink")
+            {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    AUDIT_TEST_DELAY_MS.load(Ordering::Relaxed),
+                ));
+            }
+        }
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -116,6 +163,8 @@ impl AuditLog {
     /// Pre-flight check: fail when the sink cannot be opened for append, so
     /// the caller can refuse before dispatching.
     ///
+    /// Blocking; async dispatch uses [`check_writable_async`](Self::check_writable_async).
+    ///
     /// # Errors
     ///
     /// The underlying I/O error (missing parent, a directory as path,
@@ -124,8 +173,19 @@ impl AuditLog {
         self.open_sink().map(|_| ())
     }
 
+    /// [`check_writable`](Self::check_writable) on the blocking pool, so a
+    /// down/slow disk never stalls the dispatch worker.
+    pub(crate) async fn check_writable_async(&self) -> io::Result<()> {
+        let owned = self.clone();
+        tokio::task::spawn_blocking(move || owned.check_writable())
+            .await
+            .map_err(io::Error::other)?
+    }
+
     /// Append one record as a single JSON line, fsynced before returning so
     /// the response the caller sends next cannot race the record.
+    ///
+    /// Blocking; async dispatch uses [`append_async`](Self::append_async).
     ///
     /// # Errors
     ///
@@ -138,6 +198,15 @@ impl AuditLog {
         file.write_all(&line)?;
         file.sync_all()?;
         Ok(())
+    }
+
+    /// [`append`](Self::append) on the blocking pool: per-record
+    /// open/chmod/write/fsync never runs inline in async dispatch.
+    pub(crate) async fn append_async(&self, record: Value) -> io::Result<()> {
+        let owned = self.clone();
+        tokio::task::spawn_blocking(move || owned.append(&record))
+            .await
+            .map_err(io::Error::other)?
     }
 }
 
@@ -158,9 +227,47 @@ pub(crate) fn refuse_error(source: &io::Error) -> McpError {
     )
 }
 
+/// Recursively bound an argument value for the record: strings cap at
+/// [`MAX_AUDIT_STRING_LEN`] chars, arrays/objects beyond their thresholds
+/// reduce to `{"_len": n}`, and object keys longer than the string cap are
+/// relocated to `_overlong_keys` (truncated names, values dropped to bound
+/// size). Small values pass through unchanged.
+pub(crate) fn sanitize_value(value: Value) -> Value {
+    match value {
+        Value::String(s) => Value::String(cap_str(&s)),
+        Value::Array(items) => {
+            if items.len() > MAX_AUDIT_ARRAY_LEN {
+                return serde_json::json!({"_len": items.len()});
+            }
+            Value::Array(items.into_iter().map(sanitize_value).collect())
+        }
+        Value::Object(map) => {
+            let total = map.len();
+            if total > MAX_AUDIT_OBJECT_KEYS {
+                return serde_json::json!({"_len": total});
+            }
+            let mut out = Map::with_capacity(map.len() + 1);
+            let mut overlong = Vec::new();
+            for (key, val) in map {
+                if key.chars().count() > MAX_AUDIT_STRING_LEN {
+                    overlong.push(Value::String(cap_str(&key)));
+                } else {
+                    out.insert(key, sanitize_value(val));
+                }
+            }
+            if !overlong.is_empty() {
+                out.insert("_overlong_keys".to_owned(), Value::Array(overlong));
+            }
+            Value::Object(out)
+        }
+        other => other,
+    }
+}
+
 /// Redact `kwargs` for the audit record.
 ///
-/// Every tool's arguments are recorded verbatim, except `config_set` — the
+/// Every tool's arguments are recorded through [`sanitize_value`] (caps,
+/// size-only reduction, overlong-key relocation), except `config_set` — the
 /// one tool that can carry a credential. Its `value` is never recorded, for
 /// any attribute: the record type has no room for it, so adding a future
 /// secret attribute cannot leak it by forgetting to extend the classifier.
@@ -169,7 +276,7 @@ pub(crate) fn refuse_error(source: &io::Error) -> McpError {
 /// display-name change.
 pub(crate) fn sanitize_args(tool: &str, kwargs: &Map<String, Value>) -> Value {
     if tool != "config_set" {
-        return Value::Object(kwargs.clone());
+        return sanitize_value(Value::Object(kwargs.clone()));
     }
     let attribute = kwargs
         .get("attribute")
@@ -306,5 +413,98 @@ mod tests {
         let kwargs: Map<String, Value> =
             serde_json::from_value(json!({"command": ["true"]})).expect("object");
         assert_eq!(sanitize_args("run", &kwargs), Value::Object(kwargs.clone()));
+    }
+
+    #[test]
+    fn cap_str_truncates_on_char_boundary() {
+        assert_eq!(cap_str("abc"), "abc");
+        let long = "é".repeat(MAX_AUDIT_STRING_LEN + 10);
+        let capped = cap_str(&long);
+        assert_eq!(capped.chars().count(), MAX_AUDIT_STRING_LEN);
+        // Anti-vacuity: the fixture really exceeds the cap.
+        assert!(long.chars().count() > MAX_AUDIT_STRING_LEN);
+    }
+
+    #[test]
+    fn sanitize_long_strings_cap_in_record_only() {
+        let long = "x".repeat(MAX_AUDIT_STRING_LEN + 5);
+        let kwargs: Map<String, Value> =
+            serde_json::from_value(json!({"note": long})).expect("object");
+        let args = sanitize_args("run", &kwargs);
+        assert_eq!(
+            args["note"].as_str().expect("string").chars().count(),
+            MAX_AUDIT_STRING_LEN
+        );
+    }
+
+    #[test]
+    fn sanitize_oversize_array_reduces_to_len() {
+        let big: Vec<Value> = (0..MAX_AUDIT_ARRAY_LEN + 1).map(|i| json!(i)).collect();
+        let reduced = sanitize_value(Value::Array(big));
+        assert_eq!(reduced, json!({"_len": MAX_AUDIT_ARRAY_LEN + 1}));
+    }
+
+    #[test]
+    fn sanitize_oversize_object_reduces_to_len() {
+        let mut map = Map::new();
+        for i in 0..MAX_AUDIT_OBJECT_KEYS + 1 {
+            map.insert(format!("k{i}"), json!(i));
+        }
+        assert_eq!(
+            sanitize_value(Value::Object(map)),
+            json!({"_len": MAX_AUDIT_OBJECT_KEYS + 1})
+        );
+    }
+
+    #[test]
+    fn sanitize_overlong_keys_relocate() {
+        let overlong = "k".repeat(MAX_AUDIT_STRING_LEN + 1);
+        let mut map = Map::new();
+        map.insert(overlong.clone(), json!("v"));
+        map.insert("ok".to_owned(), json!(1));
+        let out = sanitize_value(Value::Object(map));
+        assert_eq!(out["ok"], json!(1));
+        assert!(out.get(&overlong).is_none(), "overlong key removed");
+        let relocated = out["_overlong_keys"].as_array().expect("relocated");
+        assert_eq!(relocated.len(), 1);
+        assert_eq!(
+            relocated[0].as_str().expect("name").chars().count(),
+            MAX_AUDIT_STRING_LEN
+        );
+    }
+
+    #[test]
+    fn next_seq_is_monotonic() {
+        let a = next_seq();
+        let b = next_seq();
+        assert!(b > a, "seq must increase: {a} -> {b}");
+    }
+
+    #[tokio::test]
+    async fn async_wrappers_write_and_read_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = AuditLog::new(path.clone());
+        sink.check_writable_async().await.expect("writable");
+        sink.append_async(json!({"v": 1, "tool": "whoami"}))
+            .await
+            .expect("append");
+        let lines = read_lines(&path);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["tool"], json!("whoami"));
+    }
+
+    #[tokio::test]
+    async fn async_wrappers_surface_sink_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sink = AuditLog::new(dir.path().to_path_buf());
+        assert!(
+            sink.check_writable_async().await.is_err(),
+            "pre-flight must fail on a directory"
+        );
+        assert!(
+            sink.append_async(json!({"v": 1})).await.is_err(),
+            "append must fail on a directory"
+        );
     }
 }

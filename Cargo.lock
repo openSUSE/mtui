@@ -2586,6 +2586,7 @@ dependencies = [
  "mtui-hosts",
  "mtui-testreport",
  "mtui-types",
+ "reqwest",
  "rmcp",
  "serde_json",
  "serial_test",
