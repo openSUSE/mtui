@@ -710,7 +710,7 @@ Options:
           select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit
 
       --json
-          print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit; not combinable with -F); an empty queue prints []; over-cap output is a valid JSON array of kept rows plus a trailing `…[truncated …` notice line — strip lines starting with that prefix before parsing
+          print the raw TeReGen rows as a pretty-printed JSON array (--limit-capped, each row emitted whole, unlike -F; not combinable with -F); an empty queue prints []; narrow large queues with --limit
 
       --status <STATUS>
           filter by status (default: testing); use 'all' for every status
