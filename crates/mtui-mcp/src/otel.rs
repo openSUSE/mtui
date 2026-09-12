@@ -1492,6 +1492,39 @@ mod tests {
     }
 
     #[test]
+    fn kwarg_allowlist_excludes_file_body_payloads() {
+        // File-body payloads ride the JSONL body only as `{bytes, sha256}`;
+        // they must never become indexed attributes either.
+        use serde_json::json;
+        for (tool, kwargs) in [
+            (
+                "put",
+                json!({"filename": "id_rsa", "content": "SECRET", "template": "t"}),
+            ),
+            (
+                "testreport_write",
+                json!({"content": "SECRET", "relpath": "log"}),
+            ),
+            (
+                "testreport_patch",
+                json!({"replacement": "SECRET", "start_line": 1}),
+            ),
+        ] {
+            let kwargs: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_value(kwargs).expect("object");
+            let blob: Vec<u8> = kwarg_otlp_attrs(tool, &kwargs).concat();
+            assert!(
+                !blob.windows(b"SECRET".len()).any(|w| w == b"SECRET"),
+                "{tool}: payload never indexed"
+            );
+            assert!(
+                !blob.windows(b"content".len()).any(|w| w == b"content"),
+                "{tool}: payload key never indexed"
+            );
+        }
+    }
+
+    #[test]
     fn diag_targets_exclude_exporter_and_http_stack() {
         for excluded in [
             "mtui_mcp::otel",
@@ -1522,15 +1555,55 @@ mod tests {
 
     #[test]
     fn secret_holders_have_no_debug_leak() {
-        // SecretBox deliberately has no Debug: this only compiles when the
-        // property holds (a derived Debug on the holder would leak).
-        fn assert_no_debug<T>() {}
-        // OtelConfig's manual Debug redacts both endpoint and headers.
-        let config = OtelConfig::for_tests("https://secret-collector/x", "mtui");
+        // `SecretBox` has no `Debug` by design: any `{:?}` use fails to build,
+        // so the compiler — not a runtime assertion — enforces the property.
+        // What this test pins is the other half: every container's manual
+        // `Debug` redacts the values it holds.
+        let secret_endpoint = "https://secret-collector/x";
+        let config = OtelConfig {
+            endpoint: SecretBox::new(secret_endpoint.to_owned()),
+            headers: vec![(
+                "authorization".to_owned(),
+                SecretBox::new("Bearer secret-header-value".to_owned()),
+            )],
+            service_name: "mtui".to_owned(),
+        };
         let debug = format!("{config:?}");
-        assert!(!debug.contains("secret-collector"));
-        assert!(debug.contains("<redacted>"));
-        assert_no_debug::<SecretBox>();
+        assert!(
+            !debug.contains("secret-collector"),
+            "endpoint redacted: {debug}"
+        );
+        assert!(
+            !debug.contains("secret-header-value"),
+            "header value redacted: {debug}"
+        );
+        assert!(
+            debug.contains("<redacted>"),
+            "redaction marker present: {debug}"
+        );
+        assert!(debug.contains("mtui"), "non-secret still visible: {debug}");
+    }
+
+    #[tokio::test]
+    async fn exporter_debug_redacts_endpoint() {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("test client");
+        let exporter = OtelExporter::with_client(
+            OtelConfig::for_tests("https://secret-collector/y", "mtui"),
+            client,
+        );
+        let debug = format!("{exporter:?}");
+        assert!(
+            !debug.contains("secret-collector"),
+            "endpoint redacted: {debug}"
+        );
+        assert!(
+            debug.contains("<redacted>"),
+            "redaction marker present: {debug}"
+        );
+        exporter.shutdown().await;
     }
 
     #[test]

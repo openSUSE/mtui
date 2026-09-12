@@ -18,7 +18,11 @@
 //!   dispatch already answered, so a failed terminal write only warns.
 //! * Secrets are **unrepresentable**, not filtered: [`sanitize_args`] never
 //!   records a `config_set` value at all, so a future secret attribute cannot
-//!   leak by forgetting to extend the classifier.
+//!   leak by forgetting to extend the classifier. File-body payloads (`put`
+//!   `content`/`content_b64`, `testreport_write` `content`, `testreport_patch`
+//!   `replacement`) never land verbatim either: each records `{bytes, sha256}`
+//!   over the original string, so a credentials file or SSH key uploaded via
+//!   `put` is correlatable without being persisted.
 //!
 //! Record schema (versioned by [`AUDIT_SCHEMA_VERSION`], one object per line;
 //! `ts` is epoch millis taken when the call arrives, so timestamps order
@@ -148,14 +152,30 @@ impl AuditLog {
                 ));
             }
         }
+        // Atomically restrictive create: mode 0600 applies at creation, so a
+        // new sink is never visible with umask-derived group/other bits in
+        // the window before the hardening below. Mode is masked by the umask,
+        // which can only remove bits from 0600, never add.
+        #[cfg(unix)]
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .open(&self.path)?
+        };
+        #[cfg(not(unix))]
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
+        // Harden a pre-existing sink (created by an older release or by hand)
+        // via the open fd, not the path, so a swapped symlink cannot divert it.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600))?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         }
         Ok(file)
     }
@@ -267,29 +287,79 @@ pub(crate) fn sanitize_value(value: Value) -> Value {
 /// Redact `kwargs` for the audit record.
 ///
 /// Every tool's arguments are recorded through [`sanitize_value`] (caps,
-/// size-only reduction, overlong-key relocation), except `config_set` — the
-/// one tool that can carry a credential. Its `value` is never recorded, for
-/// any attribute: the record type has no room for it, so adding a future
-/// secret attribute cannot leak it by forgetting to extend the classifier.
-/// [`is_secret_attr`](mtui_core::commands::is_secret_attr) still marks whether
-/// the attribute *is* a secret, so a reader can tell a token rotation from a
-/// display-name change.
+/// size-only reduction, overlong-key relocation), except the two shapes that
+/// can carry secrets in bulk:
+///
+/// * `config_set` — the one tool that can carry a credential. Its `value` is
+///   never recorded, for any attribute: the record type has no room for it,
+///   so adding a future secret attribute cannot leak it by forgetting to
+///   extend the classifier. [`is_secret_attr`](mtui_core::commands::is_secret_attr)
+///   still marks whether the attribute *is* a secret, so a reader can tell a
+///   token rotation from a display-name change.
+/// * File-body payloads — `put` `content`/`content_b64`, `testreport_write`
+///   `content`, `testreport_patch` `replacement`. Each records
+///   `{bytes, sha256}` over the original string: correlatable across the file
+///   and OTLP bodies without persisting a credentials file or SSH key.
+///   Always fingerprinted, never verbatim regardless of size, so small secrets
+///   cannot leak by staying under a threshold.
 pub(crate) fn sanitize_args(tool: &str, kwargs: &Map<String, Value>) -> Value {
-    if tool != "config_set" {
-        return sanitize_value(Value::Object(kwargs.clone()));
+    if tool == "config_set" {
+        let attribute = kwargs
+            .get("attribute")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut redacted = Map::with_capacity(3);
+        redacted.insert("attribute".to_owned(), Value::String(attribute.to_owned()));
+        redacted.insert("value".to_owned(), Value::String(REDACTED.to_owned()));
+        redacted.insert(
+            "secret".to_owned(),
+            Value::Bool(mtui_core::commands::is_secret_attr(attribute)),
+        );
+        return Value::Object(redacted);
     }
-    let attribute = kwargs
-        .get("attribute")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let mut redacted = Map::with_capacity(3);
-    redacted.insert("attribute".to_owned(), Value::String(attribute.to_owned()));
-    redacted.insert("value".to_owned(), Value::String(REDACTED.to_owned()));
-    redacted.insert(
-        "secret".to_owned(),
-        Value::Bool(mtui_core::commands::is_secret_attr(attribute)),
-    );
-    Value::Object(redacted)
+    if let Some(payload_keys) = payload_keys_for(tool) {
+        let mut out = Map::with_capacity(kwargs.len());
+        for (key, val) in kwargs {
+            if payload_keys.contains(&key.as_str()) {
+                out.insert(key.clone(), fingerprint_value(val));
+            } else {
+                out.insert(key.clone(), sanitize_value(val.clone()));
+            }
+        }
+        return Value::Object(out);
+    }
+    sanitize_value(Value::Object(kwargs.clone()))
+}
+
+/// File-body payload keys fingerprinted per tool, never recorded verbatim.
+fn payload_keys_for(tool: &str) -> Option<&'static [&'static str]> {
+    match tool {
+        "put" => Some(&["content", "content_b64"]),
+        "testreport_write" => Some(&["content"]),
+        "testreport_patch" => Some(&["replacement"]),
+        _ => None,
+    }
+}
+
+/// Fingerprint one payload value as `{bytes, sha256}`.
+///
+/// Strings hash as their raw bytes (`bytes` is the byte length); any other
+/// JSON shape hashes as its canonical encoding, so a mistyped payload still
+/// cannot leak verbatim.
+fn fingerprint_value(value: &Value) -> Value {
+    use sha2::{Digest as _, Sha256};
+    let raw: Vec<u8> = match value {
+        Value::String(s) => s.as_bytes().to_vec(),
+        other => serde_json::to_vec(other).unwrap_or_default(),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&raw);
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    serde_json::json!({"bytes": raw.len(), "sha256": hex})
 }
 
 #[cfg(test)]
@@ -353,6 +423,32 @@ mod tests {
     }
 
     #[test]
+    fn sink_tightens_a_pre_existing_loose_sink_to_0600() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        std::fs::write(&path, "{\"v\":1}\n").expect("seed");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+                .expect("loosen seed");
+        }
+        AuditLog::new(path.clone())
+            .append(&json!({"v": 1, "tool": "new"}))
+            .expect("append");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "pre-existing sink hardened");
+        }
+    }
+
+    #[test]
     fn sink_on_a_directory_is_an_error() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sink = AuditLog::new(dir.path().to_path_buf());
@@ -413,6 +509,75 @@ mod tests {
         let kwargs: Map<String, Value> =
             serde_json::from_value(json!({"command": ["true"]})).expect("object");
         assert_eq!(sanitize_args("run", &kwargs), Value::Object(kwargs.clone()));
+    }
+
+    #[test]
+    fn fingerprint_is_a_known_sha256_vector() {
+        // Known-answer pin, not a rehash of the impl: sha256("abc").
+        let out = fingerprint_value(&json!("abc"));
+        assert_eq!(out["bytes"], json!(3));
+        assert_eq!(
+            out["sha256"],
+            json!("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        );
+    }
+
+    #[test]
+    fn sanitize_put_never_records_payload_verbatim() {
+        let secret = "-----BEGIN OPENSSH PRIVATE KEY----\nSECRET-KEY-MATERIAL\n-----END OPENSSH PRIVATE KEY-----";
+        for kwargs in [
+            json!({"filename": "id_rsa", "content": secret}),
+            json!({"filename": "id_rsa", "content_b64": secret}),
+        ] {
+            let kwargs: Map<String, Value> = serde_json::from_value(kwargs).expect("object");
+            let args = sanitize_args("put", &kwargs);
+            let raw = serde_json::to_string(&args).expect("serialisable");
+            assert!(
+                !raw.contains("SECRET-KEY-MATERIAL"),
+                "payload fingerprinted: {raw}"
+            );
+            let key = if kwargs.contains_key("content") {
+                "content"
+            } else {
+                "content_b64"
+            };
+            assert_eq!(args[key]["bytes"], json!(secret.len()));
+            assert_eq!(args[key]["sha256"].as_str().expect("hex").len(), 64);
+            assert_eq!(args["filename"], json!("id_rsa"));
+        }
+    }
+
+    #[test]
+    fn sanitize_testreport_bodies_are_fingerprinted_not_stored() {
+        let body = "SECRET-CREDENTIALS-FILE-BODY";
+        let kwargs: Map<String, Value> =
+            serde_json::from_value(json!({"content": body, "relpath": "log"})).expect("object");
+        let args = sanitize_args("testreport_write", &kwargs);
+        let raw = serde_json::to_string(&args).expect("serialisable");
+        assert!(!raw.contains(body), "write body fingerprinted: {raw}");
+        assert_eq!(args["content"]["bytes"], json!(body.len()));
+        assert_eq!(args["relpath"], json!("log"));
+
+        let kwargs: Map<String, Value> =
+            serde_json::from_value(json!({"replacement": body, "start_line": 1})).expect("object");
+        let args = sanitize_args("testreport_patch", &kwargs);
+        let raw = serde_json::to_string(&args).expect("serialisable");
+        assert!(!raw.contains(body), "patch body fingerprinted: {raw}");
+        assert_eq!(args["replacement"]["bytes"], json!(body.len()));
+        assert_eq!(args["start_line"], json!(1));
+    }
+
+    #[test]
+    fn sanitize_small_payloads_are_fingerprinted_too() {
+        // No reconstructability threshold: even a two-byte payload that could
+        // be inlined safely records only its fingerprint, so a small secret
+        // cannot leak by staying under a cap.
+        let kwargs: Map<String, Value> =
+            serde_json::from_value(json!({"filename": "f", "content": "hi"})).expect("object");
+        let args = sanitize_args("put", &kwargs);
+        let raw = serde_json::to_string(&args).expect("serialisable");
+        assert!(!raw.contains("\"hi\""), "no verbatim even when tiny: {raw}");
+        assert_eq!(args["content"]["bytes"], json!(2));
     }
 
     #[test]
