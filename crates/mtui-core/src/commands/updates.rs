@@ -81,9 +81,9 @@ impl Command for Updates {
                 .help(
                     "print the raw TeReGen rows as a JSON array (each row \
                      emitted whole, unlike -F; honours --limit; not combinable \
-                     with -F); an empty queue prints []; over-cap stdout is still a \
-                     valid JSON array of kept rows, the `…[truncated …` notice goes \
-                     to stderr",
+                     with -F); an empty queue prints []; over-cap output is a \
+                     valid JSON array of kept rows plus a trailing `…[truncated …` \
+                     notice line — strip lines starting with that prefix before parsing",
                 ),
         )
         .arg(

@@ -73,7 +73,7 @@ expression: pretty
           "type": "integer"
         },
         "relpath": {
-          "description": "Checkout-relative file to patch; defaults to the `log` file. Must already exist.",
+          "description": "Checkout-relative file to patch; defaults to the `log` file, e.g. install_logs/<host>.log. Must already exist.",
           "type": "string"
         },
         "replacement": {
@@ -139,7 +139,7 @@ expression: pretty
           "type": "string"
         },
         "relpath": {
-          "description": "Checkout-relative file to write; defaults to the `log` file. May name a new file whose parent directory exists.",
+          "description": "Checkout-relative file to write; defaults to the `log` file, e.g. install_logs/<host>.log. May name a new file whose parent directory exists.",
           "type": "string"
         },
         "template": {
