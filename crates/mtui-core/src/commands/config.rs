@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches, Command as ClapCommand};
 use mtui_config::{Config, SslVerify};
+use mtui_datasources::sanitize_url;
 
 use crate::command::{Command, Scope};
 use crate::engine::command_parser;
@@ -98,10 +99,14 @@ fn ssl_verify_to_string(v: &SslVerify) -> String {
 /// operational tunables. Operator-local values stay on the REPL, whose operator
 /// owns the machine and can read mtui.toml directly. Secrets stay `<set>` on
 /// both surfaces.
+///
+/// Single-change unit with `attr_value`, `MCP_URL_ATTRS` and `ATTRS`: adding an
+/// attribute updates all applicable lists, or the subset assertions fail.
 const MCP_HIDDEN_ATTRS: &[&str] = &["template_dir", "session_user", "refhosts_path"];
 
 /// Endpoint-valued attributes, shown userinfo-stripped on the MCP surface (a
 /// no-op when no userinfo is present, so clean defaults render identically).
+/// Part of the `attr_value`/`MCP_HIDDEN_ATTRS`/`ATTRS` single-change unit.
 const MCP_URL_ATTRS: &[&str] = &[
     "refhosts_https_uri",
     "bugzilla_url",
@@ -130,27 +135,9 @@ fn is_mcp_hidden(attr: &str, config: &Config) -> bool {
 /// attributes, verbatim otherwise.
 fn mcp_shown_value(attr: &str, value: &str) -> String {
     if MCP_URL_ATTRS.contains(&attr) {
-        strip_userinfo(value)
+        sanitize_url(value)
     } else {
         value.to_owned()
-    }
-}
-
-/// Strips `user[:pass]@` from one URL, keeping scheme/host/port/path for
-/// diagnosis. Mirrors `mtui_datasources::http::sanitize_url`, which is
-/// crate-internal there and unreachable here.
-fn strip_userinfo(url: &str) -> String {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return match url.rsplit_once('@') {
-            Some((_, after)) => format!("***@{after}"),
-            None => url.to_owned(),
-        };
-    };
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, tail) = rest.split_at(end);
-    match authority.rsplit_once('@') {
-        Some((_, hostport)) => format!("{scheme}://***@{hostport}{tail}"),
-        None => url.to_owned(),
     }
 }
 
@@ -188,6 +175,7 @@ fn show_headless(session: &mut Session, requested: &[String]) -> CommandResult {
 }
 
 /// The attribute names `show` lists when given none, in a stable order.
+/// Part of the `attr_value`/`MCP_HIDDEN_ATTRS`/`MCP_URL_ATTRS` single-change unit.
 const ATTRS: [&str; 39] = [
     "template_dir",
     "session_user",
@@ -229,6 +217,52 @@ const ATTRS: [&str; 39] = [
     "lock_wait",
     "lock_wait_poll",
 ];
+
+const fn str_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const fn attrs_contains<const N: usize>(haystack: &[&str; N], needle: &str) -> bool {
+    let mut i = 0;
+    while i < N {
+        if str_eq(haystack[i], needle) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+const _: () = {
+    let mut i = 0;
+    while i < MCP_URL_ATTRS.len() {
+        assert!(
+            attrs_contains(&ATTRS, MCP_URL_ATTRS[i]),
+            "MCP_URL_ATTRS must stay a subset of ATTRS"
+        );
+        i += 1;
+    }
+    let mut j = 0;
+    while j < MCP_HIDDEN_ATTRS.len() {
+        assert!(
+            attrs_contains(&ATTRS, MCP_HIDDEN_ATTRS[j]),
+            "MCP_HIDDEN_ATTRS must stay a subset of ATTRS"
+        );
+        j += 1;
+    }
+};
 
 /// Parses `raw` for `attr` and stores it. An invalid value leaves the
 /// attribute unchanged.
@@ -925,5 +959,89 @@ mod tests {
                 if m.contains("invalid integer") && !m.contains("positive integer")),
             "expected an invalid-integer error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn attrs_all_resolve_and_mcp_lists_are_subsets() {
+        let config = Config::default();
+        for attr in ATTRS {
+            assert!(
+                attr_value(&config, attr).is_some(),
+                "{attr}: ATTRS entry must resolve via attr_value"
+            );
+        }
+        for attr in MCP_URL_ATTRS {
+            assert!(
+                attrs_contains(&ATTRS, attr),
+                "{attr}: MCP_URL_ATTRS must stay a subset of ATTRS"
+            );
+        }
+        for attr in MCP_HIDDEN_ATTRS {
+            assert!(
+                attrs_contains(&ATTRS, attr),
+                "{attr}: MCP_HIDDEN_ATTRS must stay a subset of ATTRS"
+            );
+        }
+    }
+
+    #[test]
+    fn url_defaults_require_mcp_coverage() {
+        let config = Config::default();
+        for attr in ATTRS {
+            let Some(value) = attr_value(&config, attr) else {
+                continue;
+            };
+            if value.contains("://") {
+                assert!(
+                    MCP_URL_ATTRS.contains(&attr),
+                    "{attr}: URL-valued default must be covered by MCP_URL_ATTRS"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn headless_sanitize_edge_cases_parity() {
+        let (mut session, buf) = empty_session();
+        session.config.openqa_instance = "https://token@host.example:443/path".to_owned();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["show", "openqa_instance"]),
+            )
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(out.contains("https://***@host.example:443/path"), "{out:?}");
+        assert!(!out.contains("token"), "{out:?}");
+
+        let (mut session, buf) = empty_session();
+        session.config.openqa_instance = "https://host.example/users/me@example.com".to_owned();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["show", "openqa_instance"]),
+            )
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("https://host.example/users/me@example.com"),
+            "{out:?}"
+        );
+        assert!(!out.contains("***"), "{out:?}");
+
+        let (mut session, buf) = empty_session();
+        session.config.openqa_instance = "alice:s3cret@host.example/x".to_owned();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["show", "openqa_instance"]),
+            )
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(out.contains("***@host.example/x"), "{out:?}");
+        assert!(!out.contains("s3cret"), "{out:?}");
     }
 }
