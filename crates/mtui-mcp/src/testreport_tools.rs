@@ -245,6 +245,40 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Resolve a `relpath` target off the runtime worker.
+///
+/// Runs [`safe_template_file`] plus the `is_file` existence check in one
+/// `spawn_blocking` hop, so the traversal check and the stat stay atomic and
+/// never stall the session mutex or a Tokio worker. Errors byte-identical to
+/// the inline [`resolve_target_path`] `must_exist` path.
+async fn resolve_relpath_async(base: PathBuf, rel: String) -> Result<PathBuf, McpCommandError> {
+    tokio::task::spawn_blocking(move || {
+        let path = safe_template_file(&base, &rel)?;
+        if !path.is_file() {
+            return Err(refuse(format!(
+                "no such file in testreport checkout: {rel}"
+            )));
+        }
+        Ok(path)
+    })
+    .await
+    .map_err(|e| refuse(format!("read task failed: {e}")))?
+}
+
+/// Canonicalize a resolved path for the dedup key off the worker.
+///
+/// Mirrors `path.canonicalize().unwrap_or_else(|_| path.clone())`: a missing
+/// file falls back to the lexical path, never an error. Only a task-join
+/// failure refuses.
+async fn canonicalize_for_key_async(path: PathBuf) -> Result<PathBuf, McpCommandError> {
+    tokio::task::spawn_blocking(move || match path.canonicalize() {
+        Ok(canon) => canon,
+        Err(_) => path,
+    })
+    .await
+    .map_err(|e| refuse(format!("read task failed: {e}")))
+}
+
 /// Count lines with the `splitlines` convention: `"a\nb\n"`→2, `"a\nb"`→2,
 /// `""`→0. Shared across read/patch/write/fill so counts never drift.
 fn count_lines(text: &str) -> usize {
@@ -405,14 +439,32 @@ async fn testreport_read(
         return Err(refuse(format!("offset must be >= 1 (got {offset})")));
     }
 
-    // Only the `PathBuf` needs the session lock, so it is released before the
-    // file I/O: a slow read must not stall concurrent same-lock work.
-    let path = {
+    // Only owned paths leave the session lock, so no file I/O runs under it:
+    // a slow or network-mounted checkout must not stall concurrent same-lock
+    // work. The blocking syscalls (traversal check, stat, canonicalization)
+    // go through `spawn_blocking` below.
+    enum Target {
+        Log(PathBuf),
+        Rel { base: PathBuf, rel: String },
+    }
+    let target = {
         // The gate scope is held for the whole call, the inner mutex only for the
         // path resolution.
         let _scope = session.scoped_lock(template).await;
         let guard = session.session().lock().await;
-        resolve_target_path(&guard, relpath, template, true)?
+        if let Some(rel) = relpath {
+            let base = resolve_dir(&guard, template)?;
+            Target::Rel {
+                base,
+                rel: rel.to_owned(),
+            }
+        } else {
+            Target::Log(resolve_path(&guard, template)?)
+        }
+    };
+    let path = match target {
+        Target::Log(p) => p,
+        Target::Rel { base, rel } => resolve_relpath_async(base, rel).await?,
     };
 
     let windowed = offset != 1 || limit.is_some();
@@ -436,9 +488,10 @@ async fn testreport_read(
     // collapses to a notice; `force` resends while still refreshing the entry.
     // The key path is canonicalized: the stored `log` path may spell a symlinked
     // prefix verbatim (e.g. `/var` for `/private/var` on macOS) while the
-    // relpath arm resolves it, and both must key one file.
+    // relpath arm resolves it, and both must key one file. Off the worker: a
+    // network-mounted checkout must not block a Tokio thread on the stat.
     let key = RereadKey {
-        path: path.canonicalize().unwrap_or_else(|_| path.clone()),
+        path: canonicalize_for_key_async(path.clone()).await?,
         offset,
         limit,
     };
@@ -1098,9 +1151,19 @@ mod tests {
 
     /// Add a loaded `ObsReport` for `rrid` whose `log` file lives at `path`
     /// (with initial `content`), making it active. Creates the file on disk.
+    ///
+    /// File creation runs off the worker via `spawn_blocking`, like the
+    /// production path: the helper itself runs in async test context.
     async fn load_report(session: &McpSession, rrid: &str, path: &Path, content: &str) {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content).unwrap();
+        let dir = path.parent().unwrap().to_path_buf();
+        let file = path.to_path_buf();
+        let bytes = content.to_owned();
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(&file, bytes).unwrap();
+        })
+        .await
+        .unwrap();
         let mut guard = session.session().lock().await;
         let mut report = ObsReport::new(guard.config.clone());
         report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
@@ -1127,6 +1190,16 @@ mod tests {
             "read description lost the paging hint: {}",
             read.description
         );
+    }
+
+    /// Overwrite `path` with `data` off the worker, for tests simulating an
+    /// external file change between reads (stale-dedup scenarios).
+    async fn overwrite_for_test(path: &Path, data: &[u8]) {
+        let file = path.to_path_buf();
+        let bytes = data.to_vec();
+        tokio::task::spawn_blocking(move || std::fs::write(&file, bytes).unwrap())
+            .await
+            .unwrap();
     }
 
     // ---- refusal without a loaded report ---------------------------------- //
@@ -1257,7 +1330,7 @@ mod tests {
         let path = log_path(&tmp);
         load_report(&session, RRID, &path, "placeholder\n").await;
         // Invalid UTF-8 byte 0xFF between valid text; decoded lossily (U+FFFD).
-        std::fs::write(&path, b"ab\xffcd\n").unwrap();
+        overwrite_for_test(&path, b"ab\xffcd\n").await;
 
         let res = testreport_read(&session, None, 1, None, None, None)
             .await
@@ -1994,7 +2067,7 @@ mod tests {
         );
         // Stale entry: overwrite to v2; `force` must resend v2 FULL and
         // refresh the entry, so the next plain read collapses.
-        std::fs::write(&path, "l1\nv2\n").unwrap();
+        overwrite_for_test(&path, b"l1\nv2\n").await;
         let forced_stale = testreport_read(&session, None, 1, None, None, Some(true))
             .await
             .unwrap();
@@ -2060,7 +2133,7 @@ mod tests {
         testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
-        std::fs::write(&path, "l1\nCHANGED\n").unwrap();
+        overwrite_for_test(&path, b"l1\nCHANGED\n").await;
         let res = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
@@ -2087,7 +2160,7 @@ mod tests {
         );
         assert_eq!(first["line_count"], 3);
 
-        std::fs::write(&path, "ab\ncdef\n").unwrap(); // 8 bytes, 2 lines
+        overwrite_for_test(&path, b"ab\ncdef\n").await; // 8 bytes, 2 lines
         let second = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
@@ -2233,8 +2306,13 @@ mod tests {
         // arm resolves it. Same file must still dedup on any platform.
         let (session, tmp) = session_with_tmp();
         let real = tmp.path().join("real");
-        std::fs::create_dir_all(&real).unwrap();
-        std::os::unix::fs::symlink(&real, tmp.path().join("alias")).unwrap();
+        let alias = tmp.path().join("alias");
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&real).unwrap();
+            std::os::unix::fs::symlink(&real, &alias).unwrap();
+        })
+        .await
+        .unwrap();
         let path = tmp.path().join("alias").join("checkout").join("log");
         load_report(&session, RRID, &path, "l1\nl2\n").await;
 
@@ -2279,6 +2357,51 @@ mod tests {
                 .unwrap()
                 .contains("unchanged since"),
             "same file, other template spelling dedups: {second}"
+        );
+    }
+
+    /// The read stays off the worker: on a single-threaded runtime a large
+    /// `testreport_read` must let a concurrent heartbeat keep ticking. Inlining
+    /// the blocking file work on the worker freezes the sole thread and the
+    /// heartbeat starves (red).
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_large_file_keeps_worker_responsive() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        };
+        use std::time::Duration;
+
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        let big: String = (0..100_000)
+            .map(|i| {
+                format!("line{i:06} padding to stretch bytes................................\n")
+            })
+            .collect();
+        load_report(&session, RRID, &path, &big).await;
+
+        let beats = Arc::new(AtomicU64::new(0));
+        let hb = {
+            let beats = Arc::clone(&beats);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    beats.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+        let before = beats.load(Ordering::Relaxed);
+        let res = testreport_read(&session, None, 1, None, None, None)
+            .await
+            .unwrap();
+        let after = beats.load(Ordering::Relaxed);
+        hb.abort();
+
+        assert_eq!(res["line_count"], 100_000);
+        assert!(
+            after > before,
+            "heartbeat must tick during large read (before={before} after={after})"
         );
     }
 }
