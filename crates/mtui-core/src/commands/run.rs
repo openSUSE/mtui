@@ -4,12 +4,9 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
-use mtui_hosts::{LockOutcome, contended_lock_reason};
+use mtui_hosts::{ContendedSurface, LockOutcome, contended_lock_reason};
 
-use super::support::{
-    CONTENDED_CHECK, CONTENDED_SCOPE, add_hosts_arg, complete_fanout, page_output, per_host,
-    select_names,
-};
+use super::support::{add_hosts_arg, complete_fanout, page_output, per_host, select_names};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -91,12 +88,7 @@ impl Command for Run {
                 LockOutcome::Contended(owner) => {
                     report.push(format!(
                         "{host}: skipped, {}",
-                        contended_lock_reason(
-                            owner,
-                            &session_user,
-                            CONTENDED_CHECK,
-                            CONTENDED_SCOPE
-                        )
+                        contended_lock_reason(owner, &session_user, ContendedSurface::Repl)
                     ));
                     blocked.push(host.clone());
                 }
