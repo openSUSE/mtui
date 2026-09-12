@@ -423,6 +423,8 @@ fn stream_read(
 /// request a 1-indexed inclusive line window. `line_count` is always the file's
 /// total; a windowed read also carries `offset`/`returned_lines`. An exact
 /// re-read collapses to an `[unchanged since …]` notice unless `force` resends it.
+/// `deduped` is true on the collapsed notice, false on full file text, so a
+/// non-LLM consumer need not string-match `content` to tell them apart.
 ///
 /// # Errors
 /// Refuses on bad `offset`/`limit`, no loaded report, ambiguous/unknown
@@ -506,12 +508,14 @@ async fn testreport_read(
                 "offset": offset,
                 "returned_lines": returned,
                 "content": notice,
+                "deduped": true,
             }));
         }
         return Ok(json!({
             "path": path.to_string_lossy(),
             "line_count": result.line_count,
             "content": notice,
+            "deduped": true,
         }));
     }
 
@@ -522,12 +526,14 @@ async fn testreport_read(
             "offset": offset,
             "returned_lines": returned,
             "content": content,
+            "deduped": false,
         }))
     } else {
         Ok(json!({
             "path": path.to_string_lossy(),
             "line_count": result.line_count,
             "content": content,
+            "deduped": false,
         }))
     }
 }
@@ -836,11 +842,12 @@ pub fn testreport_tool_descriptors() -> Vec<ToolDescriptor> {
         name: "testreport_read".to_owned(),
         description: format!(
             "Read a file from the loaded testreport checkout: path, total \
-             line count, content (utf-8, errors replaced). Without `relpath` reads \
+             line count, content (utf-8, errors replaced), and `deduped` (true when \
+             content is the [unchanged since …] notice, false for file text). Without `relpath` reads \
              the `log` file; `relpath` names another checkout file, which must stay \
              inside it. `offset`/`limit` page a 1-based line window — page large \
              files instead of reading them whole. Exact re-reads collapse to an \
-             [unchanged since …] notice; pass `force=true` to resend, or use offset/limit to page. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
+             [unchanged since …] notice with `deduped=true`; pass `force=true` to resend, or use offset/limit to page. {READ_FIRST_WARNING} {TEMPLATE_NOTE}"
         ),
         input_schema: schema(
             vec![
@@ -1245,6 +1252,7 @@ mod tests {
             .unwrap();
         assert_eq!(res["line_count"], 5);
         assert_eq!(res["content"], "l1\nl2\nl3\nl4\nl5\n");
+        assert_eq!(res["deduped"], false, "full content: {res}");
         assert!(res.get("returned_lines").is_none(), "no window: {res}");
     }
 
@@ -1261,6 +1269,7 @@ mod tests {
         assert_eq!(res["offset"], 2);
         assert_eq!(res["returned_lines"], 2);
         assert_eq!(res["content"], "l2\nl3\n");
+        assert_eq!(res["deduped"], false, "full window: {res}");
     }
 
     #[tokio::test]
@@ -2010,6 +2019,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first["content"], "l1\nl2\n");
+        assert_eq!(first["deduped"], false, "full: {first}");
         let second = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
@@ -2017,6 +2027,7 @@ mod tests {
         assert!(content.contains("unchanged since"), "{content:?}");
         assert!(content.contains("force=true"), "{content:?}");
         assert!(content.contains("use offset/limit to move"), "{content:?}");
+        assert_eq!(second["deduped"], true, "collapsed: {second}");
     }
 
     #[tokio::test]
@@ -2029,6 +2040,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first["content"], "l1\nl2\n");
+        assert_eq!(first["deduped"], false, "full: {first}");
         // Second identical read collapses.
         let notice = testreport_read(&session, None, 1, None, None, None)
             .await
@@ -2039,11 +2051,13 @@ mod tests {
                 .unwrap()
                 .contains("unchanged since")
         );
+        assert_eq!(notice["deduped"], true, "collapsed: {notice}");
         // `force` resends the text instead of the notice.
         let forced = testreport_read(&session, None, 1, None, None, Some(true))
             .await
             .unwrap();
         assert_eq!(forced["content"], "l1\nl2\n");
+        assert_eq!(forced["deduped"], false, "force resends full: {forced}");
         // Entry refreshed, so the next plain read collapses again.
         let again = testreport_read(&session, None, 1, None, None, None)
             .await
@@ -2054,6 +2068,7 @@ mod tests {
                 .unwrap()
                 .contains("unchanged since")
         );
+        assert_eq!(again["deduped"], true, "collapsed: {again}");
         // Explicit `false` behaves like an omitted `force`.
         let explicit_false = testreport_read(&session, None, 1, None, None, Some(false))
             .await
@@ -2065,6 +2080,7 @@ mod tests {
                 .contains("unchanged since"),
             "{explicit_false}"
         );
+        assert_eq!(explicit_false["deduped"], true, "{explicit_false}");
         // Stale entry: overwrite to v2; `force` must resend v2 FULL and
         // refresh the entry, so the next plain read collapses.
         overwrite_for_test(&path, b"l1\nv2\n").await;
@@ -2072,6 +2088,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(forced_stale["content"], "l1\nv2\n", "{forced_stale}");
+        assert_eq!(forced_stale["deduped"], false, "{forced_stale}");
         let collapsed = testreport_read(&session, None, 1, None, None, None)
             .await
             .unwrap();
@@ -2082,6 +2099,7 @@ mod tests {
                 .contains("unchanged since"),
             "{collapsed}"
         );
+        assert_eq!(collapsed["deduped"], true, "{collapsed}");
     }
 
     #[tokio::test]
@@ -2104,6 +2122,7 @@ mod tests {
                 .unwrap()
                 .contains("unchanged since")
         );
+        assert_eq!(collapsed["deduped"], true, "collapsed: {collapsed}");
         // `force=true` through the dispatch seam resends.
         let force_kwargs: Map<String, Value> = serde_json::json!({ "force": true })
             .as_object()
@@ -2113,6 +2132,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(forced["content"], "l1\nl2\n");
+        assert_eq!(forced["deduped"], false, "force resends full: {forced}");
         // Non-boolean `force` is refused.
         let bad_kwargs: Map<String, Value> = serde_json::json!({ "force": "yes" })
             .as_object()
@@ -2138,6 +2158,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res["content"], "l1\nCHANGED\n");
+        assert_eq!(res["deduped"], false, "changed file resends: {res}");
     }
 
     #[tokio::test]
@@ -2186,6 +2207,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first["content"], "l1\nl2\n");
+        assert_eq!(first["deduped"], false, "full: {first}");
         let other = testreport_read(&session, None, 2, Some(2), None, None)
             .await
             .unwrap();
@@ -2193,6 +2215,7 @@ mod tests {
             other["content"], "l2\nl3\n",
             "other window is full: {other}"
         );
+        assert_eq!(other["deduped"], false, "other window full: {other}");
         let same = testreport_read(&session, None, 1, Some(2), None, None)
             .await
             .unwrap();
@@ -2203,6 +2226,7 @@ mod tests {
                 .contains("unchanged since"),
             "repeat of first window dedups: {same}"
         );
+        assert_eq!(same["deduped"], true, "windowed collapse: {same}");
     }
 
     #[tokio::test]

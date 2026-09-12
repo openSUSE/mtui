@@ -46,7 +46,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   16 windows keyed by the canonical resolved path (defaulted and explicit
   `template` share one entry); any edit resends in full. Additive schema
   change: optional `force` boolean bypasses the notice and resends. The
-  window hash is FNV-1a (specified, no new deps).
+  response carries additive `deduped` (true on the collapsed notice, false
+  on file text), so a non-LLM consumer need not string-match `content`.
+  The window hash is FNV-1a (specified, no new deps).
 
 ### Deprecated
 
