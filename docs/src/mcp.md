@@ -478,7 +478,46 @@ When the sink cannot be written the call is **refused** instead of proceeding
 unrecorded. A failed terminal write can only warn — its dispatch already
 answered. `config_set` never records the value for any attribute, so a future
 secret attribute cannot leak by omission; the record marks whether the attribute
-is a known secret.
+is a known secret. All file I/O runs off the dispatch worker
+(`spawn_blocking`), so a down/slow disk never stalls a call.
+
+### OTLP log export
+
+The same record can also go to an OpenTelemetry collector as OTLP/HTTP LOGS
+(hand-rolled protobuf over the workspace `reqwest`/rustls stack — no
+`opentelemetry-*` crates): one log record per audit event, body = the verbatim
+JSONL line. Configuration is env-only (headers must never be CLI flags), so
+there are no new TOML keys:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (base URL, gains `/v1/logs`) or
+  `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (full URL, wins verbatim). Unset-or-empty
+  disables export, as does an invalid endpoint or a non-`http/protobuf`
+  protocol (validated only when an endpoint exists).
+- `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_LOGS_HEADERS`
+  (`key=value,...`, values percent-decoded; logs-specific wins).
+- `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`: only
+  `http/protobuf` or unset.
+- `OTEL_SERVICE_NAME` (default `mtui`): resource `service.name`, the
+  multi-deployment join key.
+
+Sink matrix: file-only (`audit_log` set, no endpoint), OTLP-only (endpoint set,
+`audit_log` unset — the JSONL line is still built in memory and used verbatim),
+both (file first in `seq` order, then OTLP), neither (auditing off, dispatch
+byte-identical).
+
+Each record carries closed `mtui.*` attributes (`tool`, `outcome`, `event`,
+`seq`, `transport`, `session.id`, `response_bytes` when sized, plus allowlisted
+kwarg keys) and the W3C trace ids when the client supplied a strict lowercase
+55-byte `traceparent` via `_meta` (also echoed as the record's `trace` field;
+`session.id` stays server-minted). A startup probe posts one real diagnostics
+record (~5x500 ms) before serving and its health latch feeds the same refuse
+path; failed batches merge into a pending `audit_gap` sent on recovery. Batching:
+2048/stream cap, 512/batch, 500 ms interval, 10 s request timeout, 5 s shutdown
+flush, redirects off, `[mtui] ssl_verify` TLS posture. A full queue refuses
+foreground calls — never drops — while terminal records and tracing diagnostics
+(a separate best-effort queue, drop + counter; exporter/HTTP-stack targets
+excluded) only warn. The endpoint value never appears in logs, records, or
+errors.
 
 ## Cancelling a foreground call
 

@@ -21,6 +21,8 @@ pub mod concurrency;
 #[cfg(feature = "mcp")]
 pub mod deny;
 #[cfg(feature = "mcp")]
+pub(crate) mod otel;
+#[cfg(feature = "mcp")]
 pub mod profiles;
 #[cfg(feature = "mcp")]
 pub mod provider;

@@ -324,6 +324,14 @@ impl ServerHandler for McpServer {
         self.touch();
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
+        // W3C trace correlation (SEP-414): strict lowercase 55-byte
+        // traceparent via `_meta` when the client supplied one; absent (or
+        // invalid) otherwise. Documented as absent when unreachable.
+        let traceparent = request
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get_traceparent())
+            .map(str::to_owned);
 
         // Heartbeats keep a slow foreground call from timing the client out.
         // Only built when the client supplied a `progressToken`; job-control
@@ -338,7 +346,7 @@ impl ServerHandler for McpServer {
                 });
         let sink = sink.as_ref().map(|s| s as &dyn ProgressSink);
 
-        self.dispatch_audited(&name, &kwargs, sink, &context.ct)
+        self.dispatch_audited(&name, &kwargs, sink, &context.ct, traceparent.as_deref())
             .await
     }
 }
@@ -347,11 +355,13 @@ impl McpServer {
     /// The audited dispatch behind [`call_tool`](ServerHandler::call_tool):
     /// the single chokepoint every tool call funnels through.
     ///
-    /// With `[mcp] audit_log` set, one record per call is persisted before
-    /// the response returns — for foreground and backgrounded calls, for
-    /// failures and unknown tools alike — and a call the sink cannot record
-    /// is refused instead of proceeding unrecorded. With the sink unset this
-    /// is dispatch verbatim: behaviour and output are byte-identical.
+    /// With `[mcp] audit_log` set and/or the `OTEL_*` endpoint on, one record
+    /// per call is persisted before the response returns — for foreground and
+    /// backgrounded calls, for failures and unknown tools alike — and a call
+    /// the sinks cannot record is refused instead of proceeding unrecorded.
+    /// OTLP-only (endpoint set, `audit_log` unset) still builds the JSONL
+    /// line in memory and uses it verbatim as the OTLP body. With neither
+    /// sink this is dispatch verbatim: behaviour and output are byte-identical.
     ///
     /// Test seam: unit tests drive this directly with a fresh token and no
     /// sink, since a real `RequestContext` needs a peer.
@@ -361,6 +371,7 @@ impl McpServer {
         kwargs: &Map<String, Value>,
         sink: Option<&dyn ProgressSink>,
         client_ct: &CancellationToken,
+        traceparent: Option<&str>,
     ) -> Result<CallToolResponse, McpError> {
         use crate::audit::{
             AUDIT_SCHEMA_VERSION, AuditEvent, AuditOutcome, refuse_error, sanitize_args,
@@ -368,14 +379,34 @@ impl McpServer {
 
         let start = std::time::Instant::now();
         let started_ms = crate::audit::now_millis();
-        // Refuse before running when the sink is already unwritable: a
+        // Strict lowercase 55-byte traceparent when the client supplied one;
+        // invalid values are ignored (no value is ever logged).
+        let trace = traceparent.and_then(crate::otel::parse_traceparent);
+        if traceparent.is_some() && trace.is_none() {
+            tracing::debug!("ignoring invalid traceparent");
+        }
+        let file_on = self.session.audit_log().is_some();
+        let otel_on = self.session.otel().is_some();
+        // Refuse before running when a sink is already unwritable/unhealthy: a
         // mutation this consequential must not proceed unrecorded. (A refused
-        // call leaves no record — there is nowhere to put one.)
+        // call leaves no record — there is nowhere to put one.) The file
+        // pre-flight runs on the blocking pool: a down/slow disk must not
+        // stall the worker.
         if let Some(audit) = self.session.audit_log()
-            && let Err(err) = audit.check_writable()
+            && let Err(err) = audit.check_writable_async().await
         {
             return Err(refuse_error(&err));
         }
+        if let Some(otel) = self.session.otel()
+            && !otel.is_healthy()
+        {
+            return Err(otel_refuse_error("otlp unhealthy"));
+        }
+        let seq = if file_on || otel_on {
+            Some(crate::audit::next_seq())
+        } else {
+            None
+        };
 
         // Every arm below resolves to one audited outcome; the record is
         // written once at the tail.
@@ -488,14 +519,17 @@ impl McpServer {
             >());
         }
 
-        if self.session.audit_log().is_some() {
+        if let Some(seq) = seq {
             let hosts = self.session.audit_hosts(&rrids).await;
+            let response_bytes = response_bytes_of(&result);
             let mut record = serde_json::json!({
                 "v": AUDIT_SCHEMA_VERSION,
                 "ts": started_ms,
+                "seq": seq,
                 "session": self.session.id(),
+                "transport": self.session.transport(),
                 "event": event.as_str(),
-                "tool": name,
+                "tool": crate::audit::cap_str(name),
                 "args": sanitize_args(name, kwargs),
                 "outcome": outcome.as_str(),
                 "duration_ms": start.elapsed().as_millis() as u64,
@@ -503,22 +537,84 @@ impl McpServer {
                 "hosts": hosts,
             });
             if event == AuditEvent::Dispatch {
-                record["job_ids"] = serde_json::json!(job_ids);
+                let capped: Vec<String> =
+                    job_ids.iter().map(|id| crate::audit::cap_str(id)).collect();
+                record["job_ids"] = serde_json::json!(capped);
             }
-            // The sink was writable at pre-flight, so this fails only on a
-            // race (permissions, disk full, a vanished path): refuse in place
-            // of the result rather than answering unrecorded.
-            if let Err(err) = self
-                .session
-                .audit_log()
-                .expect("checked above")
-                .append(&record)
+            if let Some(traceparent) = traceparent
+                && trace.is_some()
+            {
+                record["trace"] = serde_json::json!(traceparent);
+            }
+            if let Some(bytes) = response_bytes {
+                record["response_bytes"] = serde_json::json!(bytes);
+            }
+            // File first, seq order. The sink was writable at pre-flight, so
+            // this fails only on a race: refuse in place of the result rather
+            // than answering unrecorded. Off the worker via `spawn_blocking`.
+            if let Some(audit) = self.session.audit_log()
+                && let Err(err) = audit.append_async(record.clone()).await
             {
                 return Err(refuse_error(&err));
+            }
+            // OTLP second, same seq and verbatim line. A race here (full or
+            // newly unhealthy) refuses even though the file already holds the
+            // record — the file stays as the durable truth and the exporter
+            // reports an `audit_gap` on recovery.
+            if let Some(otel) = self.session.otel() {
+                let line = serde_json::to_string(&record).unwrap_or_default();
+                if line.is_empty() {
+                    return Err(otel_refuse_error(
+                        crate::otel::ExportReason::Encode.as_str(),
+                    ));
+                }
+                let queued = crate::otel::QueuedAudit {
+                    seq,
+                    jsonl: line,
+                    tool: crate::audit::cap_str(name),
+                    outcome: outcome.as_str().to_owned(),
+                    event: event.as_str().to_owned(),
+                    transport: self.session.transport().to_owned(),
+                    session_id: self.session.id(),
+                    response_bytes,
+                    trace,
+                    time_nanos: crate::otel::now_nanos(),
+                    extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
+                };
+                if let Err(reason) = otel.enqueue_audit(queued) {
+                    let closed = match reason {
+                        crate::otel::EnqueueError::Full => "otlp queue full",
+                        crate::otel::EnqueueError::Unhealthy => "otlp unhealthy",
+                    };
+                    return Err(otel_refuse_error(closed));
+                }
             }
         }
         result
     }
+}
+
+/// Refuse via the existing audit path with a closed-vocabulary reason: never
+/// the endpoint, headers, or URL.
+fn otel_refuse_error(reason: &'static str) -> McpError {
+    crate::audit::refuse_error(&std::io::Error::other(reason))
+}
+
+/// Sized response length for the `mtui.response_bytes` attribute: the summed
+/// text-block bytes of a completed tool result, else nothing.
+fn response_bytes_of(result: &Result<CallToolResponse, McpError>) -> Option<usize> {
+    let Ok(CallToolResponse::Complete(completed)) = result else {
+        return None;
+    };
+    let mut bytes = 0usize;
+    let mut sized = false;
+    for block in &completed.content {
+        if let Some(text) = block.as_text() {
+            bytes = bytes.saturating_add(text.text.len());
+            sized = true;
+        }
+    }
+    sized.then_some(bytes)
 }
 
 /// Races `fut` against the client's `notifications/cancelled` signal,
@@ -856,6 +952,7 @@ mod tests {
                 kwargs.as_object().expect("kwargs object"),
                 None,
                 &CancellationToken::new(),
+                None,
             )
             .await
     }
@@ -1152,5 +1249,301 @@ mod tests {
             plain, logged,
             "enabling the sink must not change the wire response"
         );
+    }
+
+    // ------------------------------------------------- OTLP export (#411 ext)
+
+    /// Mock OTLP collector capturing every POST body.
+    async fn otlp_mock() -> (wiremock::MockServer, Arc<std::sync::Mutex<Vec<u8>>>) {
+        let server = wiremock::MockServer::start().await;
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let seen = Arc::clone(&bodies);
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/logs"))
+            .respond_with(move |req: &wiremock::Request| {
+                seen.lock()
+                    .expect("body slot")
+                    .extend_from_slice(req.body.as_slice());
+                wiremock::ResponseTemplate::new(200)
+            })
+            .mount(&server)
+            .await;
+        (server, bodies)
+    }
+
+    fn otlp_exporter(endpoint: &str) -> Arc<crate::otel::OtelExporter> {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        crate::otel::OtelExporter::with_client(
+            crate::otel::OtelConfig::for_tests(endpoint, "mtui"),
+            client,
+        )
+    }
+
+    /// Dispatch through the audited seam with an explicit traceparent.
+    async fn audited_call_traced(
+        server: &McpServer,
+        tool: &str,
+        kwargs: Value,
+        traceparent: Option<&str>,
+    ) -> Result<CallToolResponse, McpError> {
+        server
+            .dispatch_audited(
+                tool,
+                kwargs.as_object().expect("kwargs object"),
+                None,
+                &CancellationToken::new(),
+                traceparent,
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn otlp_only_builds_jsonl_body_without_a_file() {
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        // No `audit_log`: OTLP-only mode still builds the JSONL line.
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+
+        audited_call(&server, "whoami", json!({}))
+            .await
+            .expect("whoami succeeds");
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let body = bodies.lock().expect("body").clone();
+        assert!(!body.is_empty(), "OTLP-only must still export");
+        assert!(
+            body.windows(b"whoami".len()).any(|w| w == b"whoami"),
+            "protobuf carries the verbatim JSONL tool"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn both_sinks_share_one_seq_file_first() {
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+
+        audited_call(&server, "whoami", json!({}))
+            .await
+            .expect("whoami succeeds");
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1);
+        let seq = records[0]["seq"].as_u64().expect("seq in file");
+        assert_eq!(records[0]["transport"], json!("stdio"));
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let body = bodies.lock().expect("body").clone();
+        let marker = format!("\"seq\":{seq}");
+        assert!(
+            body.windows(marker.len()).any(|w| w == marker.as_bytes()),
+            "OTLP body carries the same seq {seq} as the file"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unhealthy_otlp_refuses_before_dispatch() {
+        let failing = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&failing)
+            .await;
+        let exporter = otlp_exporter(&format!("{}/v1/logs", failing.uri()));
+        // Latch unhealthy with one failed batch.
+        exporter
+            .enqueue_audit(crate::otel::QueuedAudit {
+                seq: crate::audit::next_seq(),
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: crate::otel::now_nanos(),
+                extra_attrs: Vec::new(),
+            })
+            .expect("enqueue while healthy");
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        assert!(!exporter.is_healthy(), "failed batch latches");
+
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session.clone());
+        let err = audited_call(&server, "whoami", json!({}))
+            .await
+            .expect_err("unhealthy OTLP refuses");
+        assert!(
+            err.to_string().contains("audit log unavailable"),
+            "refusal reuses the file-sink path: {err}"
+        );
+        assert!(!err.to_string().contains("127.0.0.1"), "no endpoint leaks");
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn traceparent_flows_to_record_and_otlp() {
+        let (mock, bodies) = otlp_mock().await;
+        let endpoint = format!("{}/v1/logs", mock.uri());
+        let exporter = otlp_exporter(&endpoint);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+        let traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01";
+
+        audited_call_traced(&server, "whoami", json!({}), Some(traceparent))
+            .await
+            .expect("traced call succeeds");
+        let records = audit_records(&path);
+        assert_eq!(records[0]["trace"], json!(traceparent));
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let body = bodies.lock().expect("body").clone();
+        // Raw trace bytes ride the OTLP record alongside the JSONL body.
+        let trace_bytes = [0x0a, 0xf7, 0x65, 0x19, 0x16, 0xcd, 0x43, 0xdd];
+        assert!(
+            body.windows(trace_bytes.len()).any(|w| w == trace_bytes),
+            "trace_id bytes present in OTLP"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn response_bytes_sized_for_ok_absent_for_unknown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        let server = McpServer::new(registry, session);
+
+        audited_call(&server, "whoami", json!({}))
+            .await
+            .expect("whoami succeeds");
+        let records = audit_records(&path);
+        assert!(
+            records[0]["response_bytes"].as_u64().unwrap_or(0) > 0,
+            "ok response is sized"
+        );
+
+        audited_call(&server, "shell", json!({}))
+            .await
+            .expect_err("unknown tool rejected");
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2);
+        assert!(
+            records[1].get("response_bytes").is_none(),
+            "protocol errors are unsized"
+        );
+    }
+
+    #[tokio::test]
+    async fn transport_labels_follow_the_session() {
+        async fn transport_of(transport: &'static str) -> Value {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join("audit.jsonl");
+            let mut config = Config::default();
+            config.session_user = "testuser".to_owned();
+            config.mcp_audit_log = Some(path.clone());
+            let registry = Arc::new(register_all());
+            let session = McpSession::new_with_transport(config, transport);
+            let server = McpServer::new(registry, session);
+            audited_call(&server, "whoami", json!({}))
+                .await
+                .expect("whoami succeeds");
+            audit_records(&path).pop().expect("one record")
+        }
+
+        assert_eq!(transport_of("stdio").await["transport"], json!("stdio"));
+        assert_eq!(transport_of("http").await["transport"], json!("http"));
+    }
+
+    /// A down/slow disk must not stall the dispatch worker: every blocking
+    /// audit syscall rides `spawn_blocking`.
+    ///
+    /// The `AUDIT_TEST_DELAY_MS` hook sleeps inside the blocking `open_sink`,
+    /// so inline dispatch would park the only worker thread while offloaded
+    /// dispatch leaves it free for a concurrent ticker. Single-threaded
+    /// runtime on purpose: on a multi-thread pool a parked worker is masked
+    /// by its siblings and the test could not fail. The sink filename carries
+    /// the `slow-sink` fragment the hook gates on, so concurrent tests on
+    /// other temp paths never observe the delay.
+    #[tokio::test(flavor = "current_thread")]
+    async fn audit_slow_sink_never_stalls_the_worker() {
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                crate::audit::AUDIT_TEST_DELAY_MS.store(0, Ordering::Relaxed);
+            }
+        }
+        let _reset = Reset;
+        crate::audit::AUDIT_TEST_DELAY_MS.store(300, Ordering::Relaxed);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("slow-sink-audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        let server = McpServer::new(registry, session);
+
+        let ticks = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let ticker = tokio::spawn({
+            let ticks = Arc::clone(&ticks);
+            async move {
+                for _ in 0..100 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    ticks.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+
+        let start = Instant::now();
+        audited_call(&server, "whoami", json!({}))
+            .await
+            .expect("slow sink still answers");
+        let ticks_during = ticks.load(Ordering::Relaxed);
+        ticker.await.expect("ticker joins");
+        let elapsed = start.elapsed();
+
+        // Anti-vacuity: the hook really slept (pre-flight + append).
+        assert!(
+            elapsed >= Duration::from_millis(500),
+            "hook must fire, took only {elapsed:?}"
+        );
+        assert!(
+            ticks_during >= 10,
+            "worker stalled on slow sink: only {ticks_during} ticks during {elapsed:?}"
+        );
+        assert_eq!(audit_records(&path).len(), 1, "record still landed");
     }
 }

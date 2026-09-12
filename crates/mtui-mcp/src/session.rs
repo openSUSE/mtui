@@ -66,6 +66,7 @@ use tokio_util::sync::CancellationToken;
 use crate::audit::AuditLog;
 use crate::capture::{self, SharedBuf};
 use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
+use crate::otel::OtelExporter;
 use crate::slim::{cap_output, truncation_notice};
 
 /// Default interval between `notifications/progress` heartbeat frames.
@@ -520,6 +521,13 @@ pub struct McpSession {
     /// The durable audit sink (`config.mcp_audit_log`); `None` disables
     /// auditing and leaves dispatch behaviour byte-identical.
     audit: Option<AuditLog>,
+    /// Transport this session serves (`stdio`/`http`): the `mtui.transport`
+    /// OTLP attribute and the JSONL `transport` field. Set at mint time so a
+    /// terminal record agrees with its dispatch.
+    transport: &'static str,
+    /// OTLP exporter handle, if the process enabled one via the `OTEL_*`
+    /// environment. Cloned from the global at mint; tests inject a mock.
+    otel: Option<Arc<OtelExporter>>,
 }
 
 /// An acquired hold on the concurrency gate for one command/tool invocation.
@@ -557,6 +565,23 @@ impl McpSession {
     /// `capture::session`.
     #[must_use]
     pub fn new(config: Config) -> Arc<Self> {
+        Self::new_with_transport(config, "stdio")
+    }
+
+    /// [`new`](Self::new) with an explicit transport label.
+    #[must_use]
+    pub fn new_with_transport(config: Config, transport: &'static str) -> Arc<Self> {
+        let otel = OtelExporter::global();
+        Self::new_with_otel(config, transport, otel)
+    }
+
+    /// Test seam: explicit OTLP handle (mock endpoint) instead of the global.
+    #[must_use]
+    pub(crate) fn new_with_otel(
+        config: Config,
+        transport: &'static str,
+        otel: Option<Arc<OtelExporter>>,
+    ) -> Arc<Self> {
         let max_output_bytes = config.mcp_max_output_bytes;
         let max_input_bytes = config.mcp_max_input_bytes;
         let profile = config.mcp_profile.clone();
@@ -582,6 +607,8 @@ impl McpSession {
             max_active_jobs,
             max_completed_jobs,
             audit,
+            transport,
+            otel,
         })
     }
 
@@ -648,6 +675,21 @@ impl McpSession {
         self.audit.as_ref()
     }
 
+    /// Transport label for the `mtui.transport` attribute (`stdio`/`http`).
+    pub(crate) fn transport(&self) -> &'static str {
+        self.transport
+    }
+
+    /// OTLP exporter handle, if the process enabled one via `OTEL_*`.
+    pub(crate) fn otel(&self) -> Option<&Arc<OtelExporter>> {
+        self.otel.as_ref()
+    }
+
+    /// Whether any audit sink is on (file or OTLP).
+    pub(crate) fn auditing(&self) -> bool {
+        self.audit.is_some() || self.otel.is_some()
+    }
+
     /// Best-effort host-name snapshot for `rrids`: the union of each loaded
     /// template's target names, sorted. An entry busy with a concurrent
     /// dispatch is skipped rather than awaited, so auditing never blocks on
@@ -685,7 +727,9 @@ impl McpSession {
 
     /// Best-effort terminal-state audit record for a background job. No-op
     /// without a sink; a failed write only warns — the dispatch already
-    /// answered, so there is nothing left to refuse.
+    /// answered, so there is nothing left to refuse. OTLP enqueue is equally
+    /// best-effort here (foreground calls refuse on a full queue; a terminal
+    /// has nothing left to refuse with).
     async fn audit_terminal(
         &self,
         tool: &str,
@@ -695,30 +739,61 @@ impl McpSession {
         started: Instant,
         finished: Instant,
     ) {
-        let Some(audit) = self.audit_log() else {
+        if !self.auditing() {
             return;
-        };
+        }
         let hosts = self.audit_hosts(rrids).await;
         let outcome = if state == JobState::Done {
             crate::audit::AuditOutcome::Ok
         } else {
             crate::audit::AuditOutcome::Error
         };
+        let seq = crate::audit::next_seq();
         let record = serde_json::json!({
             "v": crate::audit::AUDIT_SCHEMA_VERSION,
             "ts": crate::audit::now_millis(),
+            "seq": seq,
             "session": self.id,
+            "transport": self.transport,
             "event": crate::audit::AuditEvent::Terminal.as_str(),
-            "tool": tool,
-            "job_id": job_id,
+            "tool": crate::audit::cap_str(tool),
+            "job_id": crate::audit::cap_str(job_id),
             "job_state": state.to_string(),
             "outcome": outcome.as_str(),
             "duration_ms": finished.saturating_duration_since(started).as_millis() as u64,
             "rrids": rrids,
             "hosts": hosts,
         });
-        if let Err(err) = audit.append(&record) {
+        // File first, seq order; warn-only on failure (already answered).
+        // Off the worker via `spawn_blocking`: a wedged disk must not stall
+        // the job table.
+        if let Some(audit) = self.audit_log()
+            && let Err(err) = audit.append_async(record.clone()).await
+        {
             tracing::warn!(job_id, error = %err, "audit log: terminal record lost");
+        }
+        if let Some(otel) = self.otel() {
+            let line = serde_json::to_string(&record).unwrap_or_default();
+            if !line.is_empty() {
+                // Best-effort audit enqueue: warn when full or unhealthy (the
+                // exporter's gap accounting covers the hole on recovery).
+                let queued = crate::otel::QueuedAudit {
+                    seq,
+                    jsonl: line,
+                    tool: crate::audit::cap_str(tool),
+                    outcome: outcome.as_str().to_owned(),
+                    event: crate::audit::AuditEvent::Terminal.as_str().to_owned(),
+                    transport: self.transport.to_owned(),
+                    session_id: self.id,
+                    response_bytes: None,
+                    trace: None,
+                    time_nanos: crate::otel::now_nanos(),
+                    extra_attrs: Vec::new(),
+                };
+                if otel.enqueue_audit(queued).is_err() {
+                    tracing::warn!(job_id, "audit otlp: terminal record lost");
+                }
+            }
         }
     }
 

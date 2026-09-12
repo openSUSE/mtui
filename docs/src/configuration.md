@@ -228,6 +228,12 @@ Remote-lock behaviour on target hosts, so concurrent testers can share a fleet.
 | `tools_deny` | array of strings | *(empty)* | Tool names to remove regardless of profile/allow (deny wins last). E.g. `["updates", "openqa_overview"]` for a workflow that never lists the queue or polls openQA. |
 | `audit_log` | path | *(unset)* | Durable audit sink for tool calls (versioned JSONL, one record per call, `0600`). Unset disables auditing. A call the sink cannot record is refused. See [MCP server](mcp.md#audit-log). |
 
+> OTLP export of the same record needs no TOML key by design: it is env-only
+> (`OTEL_EXPORTER_OTLP_ENDPOINT` / `..._LOGS_ENDPOINT`, `..._HEADERS` /
+> `..._LOGS_HEADERS`, `..._PROTOCOL` / `..._LOGS_PROTOCOL`, `OTEL_SERVICE_NAME`).
+> Endpoint set with `audit_log` unset is OTLP-only; neither is auditing off.
+> See [MCP server](mcp.md#otlp-log-export).
+
 > The profile key is `profile`, not `tool_profile` — it already sits under the
 > tool-scoped `[mcp]` table. `tools_allow`/`tools_deny` are native TOML arrays,
 > not comma-separated strings. (Both matter if you are carrying over a config

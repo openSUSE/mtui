@@ -2519,6 +2519,7 @@ dependencies = [
  "mtui-hosts",
  "mtui-testreport",
  "mtui-types",
+ "reqwest",
  "rmcp",
  "serde_json",
  "serial_test",
@@ -2527,6 +2528,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]

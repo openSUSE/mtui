@@ -52,6 +52,8 @@ pub async fn run() -> anyhow::Result<()> {
 ///
 /// stdout is the JSON-RPC transport — logging goes to stderr only.
 async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
+    let config = args.resolve_config();
+    let otel = init_otel_exporter(&config).await;
     let (server, session) = build_stdio_server(args).await;
 
     tracing::info!("mtui-mcp: serving on stdio");
@@ -71,7 +73,26 @@ async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
     }
     tracing::info!("mtui-mcp: shutting down; releasing pool claims and disconnecting hosts");
     session.close().await;
+    // 5s shutdown flush for any terminal records the close enqueued.
+    if let Some(otel) = otel {
+        otel.shutdown().await;
+    }
     Ok(())
+}
+
+/// Build the global OTLP exporter from env plus the resolved TLS posture,
+/// install it for sessions to clone, and probe before serving.
+///
+/// The CA bundle read rides `spawn_blocking` inside the async constructor; the probe is
+/// async `reqwest`. Both run here at startup, never inline in dispatch.
+async fn init_otel_exporter(
+    config: &mtui_config::Config,
+) -> Option<Arc<crate::otel::OtelExporter>> {
+    let otel_config = crate::otel::OtelConfig::from_env()?;
+    let exporter = crate::otel::OtelExporter::new(otel_config, &config.ssl_verify).await?;
+    crate::otel::OtelExporter::install_global(Arc::clone(&exporter));
+    let _ = exporter.probe().await;
+    Some(exporter)
 }
 
 /// Resolves when the process receives a termination signal (Ctrl-C or, on unix,
@@ -117,6 +138,8 @@ async fn shutdown_signal() {
 /// server loop fails for a reason other than Ctrl-C.
 async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     let config = args.resolve_config();
+    // OTLP probe before serving; sessions minted below clone the global.
+    let otel = init_otel_exporter(&config).await;
     let keep_alive = session_keep_alive(config.mcp_session_idle_timeout);
     // Captured before `config` moves into the registry (usize is Copy).
     let body_limit = resolve_body_limit(config.mcp_max_request_bytes);
@@ -192,6 +215,9 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     // cannot run the async pool-claim release), so tear them down explicitly.
     tracing::info!("mtui-mcp: shutting down; releasing pool claims and disconnecting hosts");
     sessions.close_all().await;
+    if let Some(otel) = otel {
+        otel.shutdown().await;
+    }
     Ok(())
 }
 
@@ -232,11 +258,19 @@ fn rmcp_body_limit(max_request_bytes: usize) -> usize {
 /// **stderr** because stdout carries the MCP JSON-RPC stream; `-d/--debug` and
 /// `RUST_LOG` select the level, ANSI follows the resolved [`ColorMode`].
 fn init_tracing(debug: bool, color: ColorMode) {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
     let (filter, notice) = startup_filter(debug);
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
-        .with_ansi(color.resolve())
+        .with_ansi(color.resolve());
+    // The diagnostics layer no-ops when OTLP is off and drops (with a
+    // counter, never refusing) when full; exporter/HTTP-stack targets are
+    // excluded inside the layer to break the feedback loop.
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt)
+        .with(crate::otel::OtelDiagLayer)
         .try_init();
     if let Some(notice) = notice {
         // Straight to stderr, not `tracing::warn!`: the opt-in that triggers
