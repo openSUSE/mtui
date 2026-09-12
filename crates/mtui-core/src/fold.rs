@@ -47,8 +47,9 @@ fn contains_bounded(lower: &str, kw: &str) -> bool {
 
 fn is_foldable(line: &str) -> bool {
     let trimmed = line.trim();
+    // Blank runs fold (len >= 3 below); singles pass through, empty output keeps its shared banner.
     if trimmed.is_empty() {
-        return false;
+        return true;
     }
     if trimmed.starts_with("…[") {
         return false;
@@ -66,12 +67,17 @@ fn is_foldable(line: &str) -> bool {
         return false;
     }
     let lower = line.to_ascii_lowercase();
+    // Compounds containing a signal word bounded matching would miss; only listed ones block, so liberror/strace still fold.
     for kw in [
         "failed",
         "error",
+        "keyerror",
+        "assertionerror",
         "warning",
         "warn",
         "trace",
+        "traceback",
+        "stacktrace",
         "panic",
         "fatal",
         "exception",
@@ -167,11 +173,47 @@ mod tests {
             "trace: entering",
             "=== SUSE:Maintenance:1:1 ===",
             "h1: rebooted & reconnected",
-            "",
         ] {
             let lines = vec![line.to_owned(); 5];
             assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
         }
+    }
+
+    #[test]
+    fn traceback_compounds_never_fold() {
+        // Word-boundary matching misses error/trace inside these compounds,
+        // so they are listed explicitly; a Python traceback with exit 0 and
+        // empty stderr must still trip the fold-safety net.
+        for line in [
+            "Traceback (most recent call last):",
+            "traceback (most recent call last):",
+            "KeyError: 'foo'",
+            "AssertionError",
+            "assertionerror: boom",
+            "StackTrace: boom",
+            "stacktrace: boom",
+        ] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
+            assert!(
+                !can_fold_block(line, "", Some(0)),
+                "traceback signal must block sharing {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn blank_runs_fold_but_separators_survive() {
+        let blanks = vec!["".to_owned(); 5];
+        assert_eq!(
+            fold_output(&blanks),
+            vec!["".to_owned(), "…[4 identical lines folded]".to_owned()]
+        );
+        let single = vec!["a".to_owned(), "".to_owned(), "b".to_owned()];
+        assert_eq!(fold_output(&single), single);
+        let pair = vec!["a".to_owned(), "".to_owned(), "".to_owned(), "b".to_owned()];
+        assert_eq!(fold_output(&pair), pair);
+        assert!(can_fold_block("ok\n\n\n\nok", "", Some(0)));
     }
 
     #[test]
