@@ -40,6 +40,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   workflows that never use them; the `updates -F`/`--json` helps point at
   `--limit`, and the `testreport_read`/`patch`/`write` and `get`/`put` tool
   descriptions are terser wordings of the same contracts.
+- `config show` over MCP prints less than at the REPL (#410): the no-argument
+  bulk dump is refused (name attributes explicitly), the operator-local values
+  (`session_user`, `template_dir`, `refhosts_path`, a `ssl_verify` CA-bundle
+  path) are refused, and endpoint URLs print userinfo-stripped. The REPL prints
+  everything verbatim as before. No tool schema changed.
 
 ### Deprecated
 

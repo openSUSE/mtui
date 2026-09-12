@@ -1063,7 +1063,8 @@ mod tests {
     #[tokio::test]
     async fn dispatch_config_show_routes_through_engine() {
         let mut config = Config::default();
-        config.session_user = "alice".to_owned();
+        // `session_user` is refused on this surface (#410); drive a kept tunable.
+        config.max_parallel = 7;
         let session = McpSession::new(config);
         let registry = register_all();
         let routes = tool_routes(&registry);
@@ -1072,7 +1073,7 @@ mod tests {
         assert_eq!(route.argv_prefix, vec!["show".to_owned()]);
 
         let registry = Arc::new(registry);
-        let kwargs = json!({ "attributes": ["session_user"] });
+        let kwargs = json!({ "attributes": ["max_parallel"] });
         let out = completed(
             dispatch_tool(
                 &registry,
@@ -1085,16 +1086,56 @@ mod tests {
             .await,
         )
         .expect("config show succeeds");
-        assert!(out.contains("session_user"), "got: {out:?}");
-        assert!(out.contains("alice"), "got: {out:?}");
+        assert!(out.contains("max_parallel"), "got: {out:?}");
+        assert!(out.contains('7'), "got: {out:?}");
         // The filter has to survive argv reconstruction. Both assertions above
-        // also hold of the unfiltered 41-attribute dump, so only the *absence*
-        // of the other 40 proves `attributes` reached clap.
-        assert!(!out.contains("template_dir"), "got: {out:?}");
+        // also hold of the unfiltered 39-attribute dump, so only the *absence*
+        // of the other 38 proves `attributes` reached clap.
+        assert!(!out.contains("connection_timeout"), "got: {out:?}");
         assert_eq!(
             out.lines().filter(|l| !l.trim().is_empty()).count(),
             1,
             "only the requested attribute: {out:?}"
+        );
+    }
+
+    /// The #410 surface holds through real dispatch: the bulk dump and an
+    /// operator-local value are refused, while the REPL prints both.
+    #[tokio::test]
+    async fn dispatch_config_show_refuses_bulk_and_local_values() {
+        let mut config = Config::default();
+        config.session_user = "alice".to_owned();
+        let session = McpSession::new(config);
+        let registry = Arc::new(register_all());
+        let routes = tool_routes(&registry);
+        let route = routes.get("config_show").expect("config_show route");
+
+        // No `attributes`: the bulk dump is refused, not leaked by default.
+        let err =
+            completed(dispatch_tool(&registry, &session, route, &Map::new(), None, None).await)
+                .expect_err("bulk dump refused");
+        assert!(
+            err.stderr.contains("name the attribute(s) explicitly"),
+            "got: {err:?}"
+        );
+
+        // An explicitly named operator-local value is refused too.
+        let kwargs = json!({ "attributes": ["session_user"] });
+        let err = completed(
+            dispatch_tool(
+                &registry,
+                &session,
+                route,
+                kwargs.as_object().unwrap(),
+                None,
+                None,
+            )
+            .await,
+        )
+        .expect_err("local value refused");
+        assert!(
+            err.stderr.contains("not exposed on this surface") && !err.stderr.contains("alice"),
+            "got: {err:?}"
         );
     }
 

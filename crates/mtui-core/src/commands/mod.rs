@@ -1055,7 +1055,9 @@ mod mcp_nonempty_success_guard {
             }
             "config" => {
                 let (s, b) = empty_session();
-                (s, b, argv(&["show", "session_user"]))
+                // Headless (`is_repl = false`): the bulk dump and operator-local
+                // values are refused (#410), so drive a kept tunable instead.
+                (s, b, argv(&["show", "max_parallel"]))
             }
             "unload" => {
                 let (s, b) = hosts();
