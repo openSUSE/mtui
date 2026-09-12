@@ -12,6 +12,8 @@ mod ambiguous_template;
 mod http_body_limit;
 #[path = "http_isolation.rs"]
 mod http_isolation;
+#[path = "log_fold.rs"]
+mod log_fold;
 #[path = "mcp_jobs.rs"]
 mod mcp_jobs;
 #[path = "nonempty_success.rs"]

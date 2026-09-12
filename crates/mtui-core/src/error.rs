@@ -12,6 +12,26 @@ use thiserror::Error;
 pub type CommandResult = Result<(), CommandError>;
 
 /// An error raised while resolving or running a command.
+/// Groups identical per-template errors by rendered text (`to_string()`
+/// equality) in first-seen order, so unrelated variants with identical text
+/// merge into one group and the detail can reorder RRIDs (`a, c: boom;
+/// b: other`) while the header keeps fan-out order.
+fn fanout_detail(failures: &[(String, CommandError)]) -> String {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for (rrid, err) in failures {
+        let msg = err.to_string();
+        match groups.iter_mut().find(|(m, _)| *m == msg) {
+            Some((_, rrids)) => rrids.push(rrid.clone()),
+            None => groups.push((msg, vec![rrid.clone()])),
+        }
+    }
+    groups
+        .iter()
+        .map(|(msg, rrids)| format!("{}: {msg}", rrids.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[derive(Debug, Error)]
 pub enum CommandError {
     /// A `-T/--template RRID` named a template that is not loaded.
@@ -82,7 +102,7 @@ pub enum CommandError {
     #[error(
         "fan-out failed on {} ({}){}",
         .failures.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join(", "),
-        .failures.iter().map(|(r, e)| format!("{r}: {e}")).collect::<Vec<_>>().join("; "),
+        crate::error::fanout_detail(.failures),
         .stop.as_ref().map(|s| format!("; {s}")).unwrap_or_default()
     )]
     FanOut {
@@ -220,6 +240,57 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "fan-out failed on h1 (h1: boom); stopped after 1 of 4 templates"
+        );
+    }
+
+    #[test]
+    fn fanout_identical_errors_share_one_body() {
+        let e = CommandError::FanOut {
+            failures: vec![
+                ("a".into(), CommandError::Other("boom".into())),
+                ("b".into(), CommandError::Other("boom".into())),
+                ("c".into(), CommandError::Other("different".into())),
+            ],
+            stop: None,
+        };
+        assert_eq!(
+            e.to_string(),
+            "fan-out failed on a, b, c (a, b: boom; c: different)"
+        );
+    }
+
+    #[test]
+    fn fanout_grouping_keeps_first_seen_order() {
+        let e = CommandError::FanOut {
+            failures: vec![
+                ("a".into(), CommandError::Other("boom".into())),
+                ("b".into(), CommandError::Other("other".into())),
+                ("c".into(), CommandError::Other("boom".into())),
+            ],
+            stop: None,
+        };
+        assert_eq!(
+            e.to_string(),
+            "fan-out failed on a, b, c (a, c: boom; b: other)"
+        );
+    }
+
+    #[test]
+    fn fanout_grouping_key_is_rendered_text() {
+        // Unrelated variants with identical text merge into one group.
+        let e = CommandError::FanOut {
+            failures: vec![
+                (
+                    "a".into(),
+                    CommandError::Other("No refhosts defined".into()),
+                ),
+                ("b".into(), CommandError::NoRefhostsDefined),
+            ],
+            stop: None,
+        };
+        assert_eq!(
+            e.to_string(),
+            "fan-out failed on a, b (a, b: No refhosts defined)"
         );
     }
 }

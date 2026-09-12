@@ -74,18 +74,30 @@ impl Command for Reboot {
         // rebooted); either must fail the command, so an MCP caller never sees a
         // silent success on a host that did not reboot.
         let mut failed: Vec<String> = Vec::new();
+        let mut ok: Vec<String> = Vec::new();
+        let mut failed_lines: Vec<String> = Vec::new();
         for (host, outcome) in &outcomes {
             match outcome {
-                Ok(()) => session
-                    .display
-                    .println(&format!("{host}: rebooted & reconnected")),
+                Ok(()) => ok.push(host.clone()),
                 Err(reason) => {
-                    session
-                        .display
-                        .println(&format!("{host}: FAILED ({reason})"));
+                    failed_lines.push(format!("{host}: FAILED ({reason})"));
                     failed.push(host.clone());
                 }
             }
+        }
+        // Identical successes share one verdict; failures stay per-host.
+        // `outcomes` is a BTreeMap so `ok` is already sorted.
+        if ok.len() > 1 {
+            session
+                .display
+                .println(&format!("rebooted & reconnected on {}", ok.join(", ")));
+        } else if let Some(host) = ok.first() {
+            session
+                .display
+                .println(&format!("{host}: rebooted & reconnected"));
+        }
+        for line in &failed_lines {
+            session.display.println(line);
         }
 
         if failed.is_empty() {
@@ -131,8 +143,7 @@ mod tests {
         // Reboot mutates in place and drops no host.
         assert_eq!(session.targets().names(), vec!["h1", "h2"]);
         let out = buf.contents();
-        assert!(out.contains("h1: rebooted & reconnected"), "{out}");
-        assert!(out.contains("h2: rebooted & reconnected"), "{out}");
+        assert!(out.contains("rebooted & reconnected on h1, h2"), "{out}");
         assert!(!out.contains("FAILED"), "{out}");
     }
 
@@ -178,6 +189,33 @@ mod tests {
         let args = matches(&Reboot, &[]);
         let err = Reboot.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::NoRefhostsDefined));
+    }
+
+    #[tokio::test]
+    async fn two_successes_and_a_failure_combine_successes() {
+        let (mut session, buf) = session_with_reboot_outcomes(
+            "SUSE:Maintenance:1:1",
+            &[("h1", true), ("h2", true), ("h3", false)],
+        );
+        let args = matches(&Reboot, &[]);
+        let err = Reboot.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("h3")));
+        let out = buf.contents();
+        assert!(out.contains("rebooted & reconnected on h1, h2"), "{out}");
+        assert!(out.contains("h3: FAILED"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn all_fail_prints_only_failures() {
+        let (mut session, buf) =
+            session_with_reboot_outcomes("SUSE:Maintenance:1:1", &[("h1", false), ("h2", false)]);
+        let args = matches(&Reboot, &[]);
+        let err = Reboot.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("h1") && m.contains("h2")));
+        let out = buf.contents();
+        assert!(!out.contains("rebooted & reconnected"), "{out}");
+        assert!(out.contains("h1: FAILED"), "{out}");
+        assert!(out.contains("h2: FAILED"), "{out}");
     }
 
     #[tokio::test]
