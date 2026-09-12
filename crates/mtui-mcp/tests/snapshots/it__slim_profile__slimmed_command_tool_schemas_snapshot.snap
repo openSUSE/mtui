@@ -1,5 +1,6 @@
 ---
 source: crates/mtui-mcp/tests/slim_profile.rs
+assertion_line: 40
 expression: pretty
 ---
 [
@@ -601,17 +602,27 @@ expression: pretty
         },
         "free": {
           "default": false,
-          "description": "also probe live operation-lock and pool-claim state (connects to each matched host)",
+          "description": "also probe live operation-lock and pool-claim state (connects to each shown host; --offset/--limit window first)",
           "type": "boolean"
         },
         "json": {
           "default": false,
-          "description": "emit JSON",
+          "description": "emit a JSON array of kept rows; over-cap stdout adds a trailing `…[truncated …` notice line — naive parse of full stdout fails, strip lines starting with that prefix before parsing",
           "type": "boolean"
+        },
+        "limit": {
+          "default": 0,
+          "description": "cap the number of rows after --offset (0 = all)",
+          "type": "integer"
         },
         "name": {
           "description": "hostname glob, e.g. 'whale-*' or '*.qam.suse.cz'",
           "type": "string"
+        },
+        "offset": {
+          "default": 0,
+          "description": "skip the first N rows (0 = from the start); with --limit, page any middle slice",
+          "type": "integer"
         },
         "pool": {
           "default": false,
@@ -1659,18 +1670,23 @@ expression: pretty
         },
         "json": {
           "default": false,
-          "description": "print the raw TeReGen rows as a pretty-printed JSON array (--limit-capped, each row emitted whole, unlike -F; not combinable with -F); an empty queue prints []; narrow large queues with --limit",
+          "description": "print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap stdout is a JSON array of kept rows plus a trailing `…[truncated …` notice line — naive parse of full stdout fails, strip lines starting with that prefix before parsing",
           "type": "boolean"
         },
         "limit": {
           "default": 0,
-          "description": "cap the number of rows (0 = all)",
+          "description": "cap the number of rows after --offset (0 = all)",
           "type": "integer"
         },
         "mine": {
           "default": false,
           "description": "filter to updates assigned to the current session user",
           "type": "boolean"
+        },
+        "offset": {
+          "default": 0,
+          "description": "skip the first N rows (0 = from the start); with --limit, page any middle slice",
+          "type": "integer"
         },
         "review_group": {
           "description": "filter by review group as the bare group name, e.g. qam-sle (not the '<group>-review' login form, which classic rows lack); repeatable — groups are OR-ed (one server query per group)",

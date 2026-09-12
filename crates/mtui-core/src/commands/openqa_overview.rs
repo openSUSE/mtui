@@ -10,6 +10,29 @@ use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
+use super::row_budget::{crush_slice, row_notice};
+
+/// Narrowing flags named in the row-budget notices.
+// Per-section caps sum to ~600 rows total (single 100 + up to 4 aggregated groups +
+// build checks 100); row-cap is not byte-cap: MCP max_output_bytes can still cut
+// mid-display on huge rows, while --export always writes the full overview.
+const OPENQA_HINT: &str = "--no-aggregated/--aggregated-groups/--days/--test-pattern";
+
+/// Non-`passed` rows survive the crush: the actionable openQA signal.
+/// Severity: `failed` (2) outranks other non-`passed` (1).
+fn anomaly_severity_version(row: &oqa::VersionResult) -> u8 {
+    match row.status.as_str() {
+        "passed" => 0,
+        "failed" => 2,
+        _ => 1,
+    }
+}
+
+/// Build checks with extracted matches survive the crush.
+fn anomaly_severity_build(entry: &oqa::BuildCheckResult) -> u8 {
+    u8::from(!entry.matches.is_empty())
+}
+
 /// The aggregated-update job groups offered for tab completion.
 const AGGREGATED_GROUP_CHOICES: &[&str] = &["core", "containers", "yast", "security"];
 
@@ -239,8 +262,32 @@ impl Command for OpenQAOverview {
             session
                 .display
                 .println(&session.display.blue("Single incidents - Core"));
-            for row in &single_incidents {
+            // Row budget backstops many-version incidents: head+tail+anomalies.
+            let single = crush_slice(
+                &single_incidents,
+                |r: &oqa::VersionResult| {
+                    (
+                        r.version.as_str(),
+                        r.url.as_str(),
+                        r.status.as_str(),
+                        r.failed_count,
+                        r.running_count,
+                        r.note.as_str(),
+                    )
+                },
+                anomaly_severity_version,
+            );
+            for row in &single.kept {
                 print_version_row(session, row);
+            }
+            if single.truncated > 0 {
+                session.display.println(&row_notice(
+                    single.truncated,
+                    single.total,
+                    single.anomaly_kept,
+                    single.anomaly_total,
+                    OPENQA_HINT,
+                ));
             }
 
             if !no_aggregated {
@@ -250,8 +297,31 @@ impl Command for OpenQAOverview {
                         "\nAggregated updates - {}",
                         title_case(&group.group)
                     )));
-                    for row in &group.versions {
+                    let versions = crush_slice(
+                        &group.versions,
+                        |r: &oqa::VersionResult| {
+                            (
+                                r.version.as_str(),
+                                r.url.as_str(),
+                                r.status.as_str(),
+                                r.failed_count,
+                                r.running_count,
+                                r.note.as_str(),
+                            )
+                        },
+                        anomaly_severity_version,
+                    );
+                    for row in &versions.kept {
                         print_version_row(session, row);
+                    }
+                    if versions.truncated > 0 {
+                        session.display.println(&row_notice(
+                            versions.truncated,
+                            versions.total,
+                            versions.anomaly_kept,
+                            versions.anomaly_total,
+                            OPENQA_HINT,
+                        ));
                     }
                 }
                 if aggregated.is_empty() {
@@ -279,8 +349,24 @@ impl Command for OpenQAOverview {
         if build_checks.is_empty() {
             session.display.println("No build checks for this incident");
         } else {
-            for entry in &build_checks {
+            let checks = crush_slice(
+                &build_checks,
+                |e: &oqa::BuildCheckResult| {
+                    (e.url.as_str(), e.matches.as_slice(), e.summary.as_str())
+                },
+                anomaly_severity_build,
+            );
+            for entry in &checks.kept {
                 print_build_check(session, entry);
+            }
+            if checks.truncated > 0 {
+                session.display.println(&row_notice(
+                    checks.truncated,
+                    checks.total,
+                    checks.anomaly_kept,
+                    checks.anomaly_total,
+                    OPENQA_HINT,
+                ));
             }
         }
 
@@ -689,6 +775,169 @@ mod tests {
             buf.contents().contains("NOT exported"),
             "{}",
             buf.contents()
+        );
+    }
+
+    // ------------------------------------------------------------ row budget
+
+    /// 150 version rows with one mid-list `failed` anomaly and exact duplicates.
+    fn crush_versions() -> Vec<oqa::VersionResult> {
+        let mut rows: Vec<oqa::VersionResult> = (0..150)
+            .map(|i| oqa::VersionResult {
+                version: format!("15-SP{i:03}"),
+                url: format!("http://oqa/{i}"),
+                status: "passed".to_owned(),
+                ..Default::default()
+            })
+            .collect();
+        rows[100].status = "failed".to_owned();
+        rows[100].failed_count = 3;
+        rows.push(rows[0].clone());
+        rows
+    }
+
+    #[test]
+    fn row_budget_crushes_versions_and_keeps_failed_anomaly() {
+        use super::super::row_budget::{ROW_CAP, crush_slice};
+        let rows = crush_versions();
+        let out = crush_slice(
+            &rows,
+            |r: &oqa::VersionResult| {
+                (
+                    r.version.as_str(),
+                    r.url.as_str(),
+                    r.status.as_str(),
+                    r.failed_count,
+                    r.running_count,
+                    r.note.as_str(),
+                )
+            },
+            anomaly_severity_version,
+        );
+        assert_eq!(out.total, 150, "deduped total");
+        assert!(out.kept.len() <= ROW_CAP, "{}", out.kept.len());
+        assert!(out.kept.iter().any(|r| r.status == "failed"));
+        assert!(!out.kept.iter().any(|r| r.version == "15-SP060"));
+        assert!(out.truncated > 0);
+        assert_eq!((out.anomaly_kept, out.anomaly_total), (1, 1));
+    }
+
+    #[test]
+    fn failed_version_outranks_running_when_overflowing() {
+        use super::super::row_budget::crush_slice;
+        // 300 rows: mild `running` everywhere middle except severe `failed`
+        // at 250 — only 50 middle anomalies fit.
+        let rows: Vec<oqa::VersionResult> = (0..300)
+            .map(|i| oqa::VersionResult {
+                version: format!("15-SP{i:03}"),
+                url: format!("http://oqa/{i}"),
+                status: if i == 250 {
+                    "failed".to_owned()
+                } else if (super::super::row_budget::ROW_HEAD
+                    ..300 - super::super::row_budget::ROW_TAIL)
+                    .contains(&i)
+                {
+                    "running".to_owned()
+                } else {
+                    "passed".to_owned()
+                },
+                ..Default::default()
+            })
+            .collect();
+        assert_eq!(anomaly_severity_version(&rows[250]), 2);
+        assert_eq!(anomaly_severity_version(&rows[41]), 1);
+        assert_eq!(anomaly_severity_version(&rows[0]), 0);
+        let out = crush_slice(
+            &rows,
+            |r: &oqa::VersionResult| {
+                (
+                    r.version.as_str(),
+                    r.url.as_str(),
+                    r.status.as_str(),
+                    r.failed_count,
+                    r.running_count,
+                    r.note.as_str(),
+                )
+            },
+            anomaly_severity_version,
+        );
+        assert!(out.kept.iter().any(|r| r.version == "15-SP250"));
+        assert!(!out.kept.iter().any(|r| r.version == "15-SP200"));
+        assert_eq!((out.anomaly_kept, out.anomaly_total), (50, 250));
+    }
+
+    #[test]
+    fn row_budget_crushes_build_checks_and_keeps_matches() {
+        use super::super::row_budget::crush_slice;
+        let mut entries: Vec<oqa::BuildCheckResult> = (0..150)
+            .map(|i| oqa::BuildCheckResult {
+                url: format!("http://qam/{i}.log"),
+                ..Default::default()
+            })
+            .collect();
+        entries[100].matches = vec!["FAIL line".to_owned()];
+        let out = crush_slice(
+            &entries,
+            |e: &oqa::BuildCheckResult| (e.url.as_str(), e.matches.as_slice(), e.summary.as_str()),
+            anomaly_severity_build,
+        );
+        assert!(out.kept.iter().any(|e| e.url == "http://qam/100.log"));
+        assert!(!out.kept.iter().any(|e| e.url == "http://qam/60.log"));
+    }
+
+    #[test]
+    fn row_budget_notice_names_narrowing_flags() {
+        use super::super::row_budget::row_notice;
+        let n = row_notice(90, 150, 5, 60, OPENQA_HINT);
+        assert!(n.starts_with("…[truncated"), "{n}");
+        assert!(n.contains("5/60 anomalies kept"), "{n}");
+        assert!(
+            n.contains("--no-aggregated/--aggregated-groups/--days"),
+            "{n}"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_bypasses_crush_keeps_dropped_middle() {
+        // 150 passed rows: crush would drop the middle, but --export writes the full overview.
+        let versions: Vec<oqa::VersionResult> = (0..150)
+            .map(|i| oqa::VersionResult {
+                version: format!("15-SP{i:03}"),
+                url: format!("http://oqa/{i}"),
+                status: "passed".to_owned(),
+                ..Default::default()
+            })
+            .collect();
+        let crushed = super::super::row_budget::crush_slice(
+            &versions,
+            |r: &oqa::VersionResult| {
+                (
+                    r.version.as_str(),
+                    r.url.as_str(),
+                    r.status.as_str(),
+                    r.failed_count,
+                    r.running_count,
+                    r.note.as_str(),
+                )
+            },
+            anomaly_severity_version,
+        );
+        assert!(!crushed.kept.iter().any(|r| r.version == "15-SP060"));
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("log");
+        std::fs::write(
+            &log,
+            "comment: hi\n\nregression tests:\n-----------------\n\n",
+        )
+        .unwrap();
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.metadata_mut().base_mut().path = Some(log.clone());
+        export_to_testreport(&mut session, &versions, &[], &[], true).unwrap();
+        let written = std::fs::read_to_string(&log).unwrap();
+        assert!(written.contains("15-SP060"), "{written}");
+        assert!(
+            written.contains("15-SP000") && written.contains("15-SP149"),
+            "{written}"
         );
     }
 }

@@ -30,6 +30,23 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
+use super::row_budget::{crush, row_notice};
+
+/// Narrowing flags named in the row-budget notice.
+const REFHOSTS_HINT: &str = "--limit/--offset/--name/--arch/--product/--version/--addon";
+
+/// Non-`free` or pool-claimed rows survive the crush: the actionable lock signal.
+/// Severity: `locked` or pool-claimed (2) outrank other states (1).
+fn anomaly_severity(r: &Record) -> u8 {
+    if matches!(r.lock.as_deref(), Some("locked")) || r.pool.is_some() {
+        2
+    } else if !matches!(r.lock.as_deref(), None | Some("free")) {
+        1
+    } else {
+        0
+    }
+}
+
 /// One matched refhost, rendered as a table row or a JSON object.
 #[derive(Debug, Clone)]
 pub struct Record {
@@ -161,9 +178,16 @@ fn lock_label(lock: Option<&str>, pool: Option<&str>) -> String {
 }
 
 /// Render `records` as one aligned multi-line table, grouped by slot when
-/// `pool`.
+/// `pool`. `total` is the pre-window matched count; the footer shows
+/// `kept of total` when windowing/crush dropped rows.
 #[must_use]
-pub fn render_table(records: &[Record], pool: bool, free: bool, verbose: bool) -> String {
+pub fn render_table(
+    records: &[Record],
+    pool: bool,
+    free: bool,
+    verbose: bool,
+    total: usize,
+) -> String {
     let fmt = |r: &Record| -> String {
         let prod = format!("{} {}", r.product, r.version);
         let prod = prod.trim();
@@ -207,7 +231,11 @@ pub fn render_table(records: &[Record], pool: bool, free: bool, verbose: bool) -
             out.push('\n');
         }
     }
-    out.push_str(&format!("\n{} refhost(s)", records.len()));
+    if records.len() == total {
+        out.push_str(&format!("\n{} refhost(s)", records.len()));
+    } else {
+        out.push_str(&format!("\n{} of {total} refhost(s)", records.len()));
+    }
     out
 }
 
@@ -293,16 +321,36 @@ impl Command for ListRefhosts {
             Arg::new("json")
                 .long("json")
                 .action(ArgAction::SetTrue)
-                .help("emit JSON"),
+                .help(
+                    "emit a JSON array of kept rows; over-cap stdout adds a trailing \
+                     `…[truncated …` notice line — naive parse of full stdout fails, \
+                     strip lines starting with that prefix before parsing",
+                ),
         )
         .arg(
-            Arg::new("free")
-                .long("free")
-                .action(ArgAction::SetTrue)
-                .help(
-                    "also probe live operation-lock and pool-claim state \
-                     (connects to each matched host)",
-                ),
+            Arg::new("limit")
+                .long("limit")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .default_value("0")
+                .help("cap the number of rows after --offset (0 = all)"),
+        )
+        .arg(
+            Arg::new("offset")
+                .long("offset")
+                .value_name("N")
+                .value_parser(clap::value_parser!(usize))
+                .default_value("0")
+                .help("skip the first N rows (0 = from the start); with --limit, page any middle slice"),
+        )
+        .arg(
+          Arg::new("free")
+              .long("free")
+              .action(ArgAction::SetTrue)
+              .help(
+                  "also probe live operation-lock and pool-claim state \
+                   (connects to each shown host; --offset/--limit window first)",
+              ),
         )
         .arg(
             Arg::new("verbose")
@@ -324,6 +372,8 @@ impl Command for ListRefhosts {
                 &["--addon"],
                 &["--pool"],
                 &["--json"],
+                &["--limit"],
+                &["--offset"],
                 &["--free"],
                 &["-v", "--verbose"],
             ],
@@ -364,6 +414,8 @@ impl Command for ListRefhosts {
         let free = args.get_flag("free");
         let verbose = args.get_flag("verbose");
         let as_json = args.get_flag("json");
+        let limit = args.get_one::<usize>("limit").copied().unwrap_or(0);
+        let offset = args.get_one::<usize>("offset").copied().unwrap_or(0);
 
         let filters = Filters {
             testplatform: args.get_one::<String>("testplatform").map(String::as_str),
@@ -375,23 +427,79 @@ impl Command for ListRefhosts {
             pool,
         };
 
-        let mut records = gather(&store, &filters);
+        let records = gather(&store, &filters);
+        let matched_total = records.len();
 
-        if free && !records.is_empty() {
-            probe_locks(&ProbeConfig::new(&config), &mut records).await;
+        // Windowing BEFORE the --free probes so paging reduces SSH cost: only
+        // the windowed subset is probed. Order is the deterministic matched
+        // inventory order (refhosts.yml file order after filters); the
+        // notice/footer below still report pre-window totals.
+        let mut windowed: Vec<Record> = {
+            let skipped = offset.min(records.len());
+            let mut v: Vec<Record> = records.into_iter().skip(skipped).collect();
+            if limit > 0 && limit < v.len() {
+                v.truncate(limit);
+            }
+            v
+        };
+        let window_dropped = matched_total.saturating_sub(windowed.len());
+
+        if free && !windowed.is_empty() {
+            probe_locks(&ProbeConfig::new(&config), &mut windowed).await;
         }
 
+        // Row budget backstops the whole-inventory dump: head+tail+anomalies, exact-deduped.
+        // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
+        let crushed = crush(
+            windowed,
+            |r| {
+                (
+                    r.name.clone(),
+                    r.arch.clone(),
+                    r.product.clone(),
+                    r.version.clone(),
+                    r.addons.clone(),
+                    r.slot.clone(),
+                    r.lock.clone(),
+                    r.pool.clone(),
+                )
+            },
+            anomaly_severity,
+        );
+        // Totals stay pre-window so a probed window never masquerades as the
+        // whole inventory; --free windows always notice since unprobed hosts
+        // hide lock state, plain windows only when the crush itself dropped.
+        let overall_truncated = window_dropped.saturating_add(crushed.truncated);
+        let notice = (crushed.truncated > 0 || (free && window_dropped > 0)).then(|| {
+            row_notice(
+                overall_truncated,
+                matched_total,
+                crushed.anomaly_kept,
+                crushed.anomaly_total,
+                REFHOSTS_HINT,
+            )
+        });
         if as_json {
-            session.display.println(&render_json(&records));
+            session.display.println(&render_json(&crushed.kept));
+            if let Some(notice) = notice {
+                session.display.println(&notice);
+            }
             return Ok(());
         }
-        if records.is_empty() {
+        if crushed.kept.is_empty() {
             session.display.println("no refhosts match");
             return Ok(());
         }
-        session
-            .display
-            .println(&render_table(&records, pool, free, verbose));
+        session.display.println(&render_table(
+            &crushed.kept,
+            pool,
+            free,
+            verbose,
+            matched_total,
+        ));
+        if let Some(notice) = notice {
+            session.display.println(&notice);
+        }
         Ok(())
     }
 }
@@ -593,7 +701,8 @@ mod tests {
     #[test]
     fn render_table_plain_lists_and_counts() {
         let recs = gather(&store(), &Filters::default());
-        let out = render_table(&recs, false, false, false);
+        let total = recs.len();
+        let out = render_table(&recs, false, false, false, total);
         assert!(out.contains("whale-01"));
         assert!(out.contains("sles 15-6"));
         assert!(out.ends_with("3 refhost(s)"));
@@ -604,7 +713,8 @@ mod tests {
     #[test]
     fn render_table_verbose_shows_addons() {
         let recs = gather(&store(), &Filters::default());
-        let out = render_table(&recs, false, false, true);
+        let total = recs.len();
+        let out = render_table(&recs, false, false, true, total);
         assert!(out.contains("sdk"));
     }
 
@@ -612,7 +722,8 @@ mod tests {
     fn render_table_free_column_present() {
         let mut recs = gather(&store(), &Filters::default());
         recs[0].lock = Some("locked".to_owned());
-        let out = render_table(&recs, false, true, false);
+        let total = recs.len();
+        let out = render_table(&recs, false, true, false, total);
         assert!(out.contains("locked"));
     }
 
@@ -647,7 +758,8 @@ mod tests {
             ..Default::default()
         };
         let recs = gather(&store(), &f);
-        let out = render_table(&recs, true, false, false);
+        let total = recs.len();
+        let out = render_table(&recs, true, false, false, total);
         assert!(out.contains("== sles-15-5 x86_64 =="));
         assert!(out.contains("== sles-15-6 x86_64 =="));
         assert!(out.contains("  whale-01"));
@@ -839,6 +951,8 @@ mod tests {
             "--addon",
             "--pool",
             "--json",
+            "--limit",
+            "--offset",
             "--free",
             "-v",
             "--verbose",
@@ -873,6 +987,10 @@ mod tests {
                 "sdk",
                 "--pool",
                 "--json",
+                "--limit",
+                "10",
+                "--offset",
+                "5",
                 "--free",
                 "-v",
             ],
@@ -895,6 +1013,8 @@ mod tests {
         assert!(args.get_flag("json"));
         assert!(args.get_flag("free"));
         assert!(args.get_flag("verbose"));
+        assert_eq!(args.get_one::<usize>("limit").copied(), Some(10));
+        assert_eq!(args.get_one::<usize>("offset").copied(), Some(5));
     }
 
     /// A session resolving refhosts from a local `path` file, plus the temp dir
@@ -967,5 +1087,253 @@ default:
         let args = matches(&ListRefhosts, &["-n", "nope-*"]);
         ListRefhosts.call(&mut session, &args).await.unwrap();
         assert!(buf.contents().contains("no refhosts match"));
+    }
+
+    // ------------------------------------------------------------ row budget
+
+    /// 150-record inventory with one mid-list `locked` anomaly and exact duplicates.
+    fn crush_records() -> Vec<Record> {
+        let mut recs: Vec<Record> = (0..150)
+            .map(|i| Record {
+                name: format!("host-{i:03}"),
+                arch: "x86_64".to_owned(),
+                product: "sles".to_owned(),
+                version: "15-6".to_owned(),
+                addons: vec![],
+                slot: None,
+                lock: Some("free".to_owned()),
+                pool: None,
+            })
+            .collect();
+        recs[100].name = "host-anomaly".to_owned();
+        recs[100].lock = Some("locked".to_owned());
+        recs.push(recs[0].clone());
+        recs.push(recs[1].clone());
+        recs
+    }
+
+    #[test]
+    fn row_budget_crushes_inventory_and_keeps_locked_anomaly() {
+        use super::super::row_budget::{ROW_CAP, crush};
+        let out = crush(
+            crush_records(),
+            |r| {
+                (
+                    r.name.clone(),
+                    r.arch.clone(),
+                    r.product.clone(),
+                    r.version.clone(),
+                    r.addons.clone(),
+                    r.slot.clone(),
+                    r.lock.clone(),
+                    r.pool.clone(),
+                )
+            },
+            anomaly_severity,
+        );
+        assert_eq!(out.total, 150, "deduped total");
+        assert!(out.kept.len() <= ROW_CAP, "{}", out.kept.len());
+        assert!(out.kept.iter().any(|r| r.name == "host-anomaly"));
+        assert!(!out.kept.iter().any(|r| r.name == "host-060"));
+        assert!(out.truncated > 0);
+        assert_eq!((out.anomaly_kept, out.anomaly_total), (1, 1));
+    }
+
+    #[test]
+    fn locked_outranks_unreachable_when_overflowing() {
+        use super::super::row_budget::crush;
+        // 300 probed rows: mild `unreachable` everywhere middle except one
+        // severe `locked` at 250 — only 50 middle anomalies fit.
+        let recs: Vec<Record> = (0..300)
+            .map(|i| Record {
+                name: format!("host-{i:03}"),
+                arch: "x86_64".to_owned(),
+                product: "sles".to_owned(),
+                version: "15-6".to_owned(),
+                addons: vec![],
+                slot: None,
+                lock: Some(if i == 250 {
+                    "locked".to_owned()
+                } else if (super::super::row_budget::ROW_HEAD
+                    ..300 - super::super::row_budget::ROW_TAIL)
+                    .contains(&i)
+                {
+                    "unreachable".to_owned()
+                } else {
+                    "free".to_owned()
+                }),
+                pool: None,
+            })
+            .collect();
+        assert_eq!(anomaly_severity(&recs[250]), 2);
+        assert_eq!(anomaly_severity(&recs[41]), 1);
+        assert_eq!(anomaly_severity(&recs[0]), 0);
+        let out = crush(
+            recs,
+            |r| {
+                (
+                    r.name.clone(),
+                    r.arch.clone(),
+                    r.product.clone(),
+                    r.version.clone(),
+                    r.addons.clone(),
+                    r.slot.clone(),
+                    r.lock.clone(),
+                    r.pool.clone(),
+                )
+            },
+            anomaly_severity,
+        );
+        let names: Vec<_> = out.kept.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"host-250"), "severe locked survives");
+        assert!(!names.contains(&"host-200"), "mild unreachable drops");
+        assert_eq!((out.anomaly_kept, out.anomaly_total), (50, 250));
+    }
+
+    #[test]
+    fn footer_shows_pre_window_total_when_paged() {
+        let recs = crush_records();
+        let total = recs.len();
+        let windowed = recs[50..100].to_vec();
+        let out = render_table(&windowed, false, false, false, total);
+        assert!(out.ends_with("50 of 152 refhost(s)"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn row_budget_json_stays_parseable_with_trailing_notice() {
+        use crate::commands::testkit::matches;
+        let mut yaml = String::from("default:\n");
+        for i in 0..150 {
+            yaml.push_str(&format!(
+                "  - name: host-{i:03}\n    arch: x86_64\n    product:\n      name: sles\n      version:\n        major: 15\n        minor: 6\n"
+            ));
+        }
+        let (mut session, buf, _dir) = session_with_refhosts_file(&yaml);
+        let args = matches(&ListRefhosts, &["--json"]);
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated")),
+            "{out}"
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(out.trim()).is_err(),
+            "naive parse of full stdout must fail loudly: {out}"
+        );
+        let json_part: String = out
+            .lines()
+            .filter(|l| !l.starts_with("…[truncated"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert!(
+            arr.len() <= super::super::row_budget::ROW_CAP,
+            "{}",
+            arr.len()
+        );
+        assert!(arr.iter().any(|r| r["name"] == "host-000"), "{out}");
+        assert!(arr.iter().any(|r| r["name"] == "host-149"), "{out}");
+        assert!(!arr.iter().any(|r| r["name"] == "host-060"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn call_crushes_large_inventory_with_notice() {
+        use crate::commands::testkit::matches;
+        let mut yaml = String::from("default:\n");
+        for i in 0..150 {
+            yaml.push_str(&format!(
+                "  - name: host-{i:03}\n    arch: x86_64\n    product:\n      name: sles\n      version:\n        major: 15\n        minor: 6\n"
+            ));
+        }
+        let (mut session, buf, _dir) = session_with_refhosts_file(&yaml);
+        let args = matches(&ListRefhosts, &[]);
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated")),
+            "{out}"
+        );
+        assert!(
+            out.contains("--limit/--offset/--name/--arch/--product/--version/--addon"),
+            "{out}"
+        );
+        assert!(
+            out.contains("host-000") && out.contains("host-149"),
+            "{out}"
+        );
+        assert!(!out.contains("host-060"), "middle row dropped: {out}");
+    }
+
+    #[test]
+    fn json_help_mentions_truncation() {
+        let base = clap::Command::new("list_refhosts").no_binary_name(true);
+        let mut cmd = ListRefhosts.configure(base);
+        let help = cmd.render_help().to_string();
+        assert!(help.contains("…[truncated"), "{help}");
+        assert!(help.contains("strip lines starting with"), "{help}");
+    }
+
+    #[tokio::test]
+    async fn middle_row_recoverable_via_offset_limit() {
+        use crate::commands::testkit::matches;
+        let mut yaml = String::from("default:\n");
+        for i in 0..150 {
+            yaml.push_str(&format!(
+                "  - name: host-{i:03}\n    arch: x86_64\n    product:\n      name: sles\n      version:\n        major: 15\n        minor: 6\n"
+            ));
+        }
+        let (mut session, buf, _dir) = session_with_refhosts_file(&yaml);
+        let args = matches(&ListRefhosts, &["--offset", "50", "--limit", "50"]);
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("host-060"),
+            "paged middle row must appear: {out}"
+        );
+        assert!(
+            !out.contains("…[truncated"),
+            "50-row window fits budget: {out}"
+        );
+        assert!(out.contains("50 of 150 refhost(s)"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn free_window_reports_pre_window_totals() {
+        use crate::commands::testkit::matches;
+        // Tiny inventory so the --free probes fail fast (unresolvable names);
+        // windowing must happen before probing and the notice/footer must
+        // still name the pre-window matched total.
+        let mut yaml = String::from("default:\n");
+        for i in 0..5 {
+            yaml.push_str(&format!(
+                "  - name: host-{i:03}\n    arch: x86_64\n    product:\n      name: sles\n      version:\n        major: 15\n        minor: 6\n"
+            ));
+        }
+        let (mut session, buf, _dir) = session_with_refhosts_file(&yaml);
+        let args = matches(&ListRefhosts, &["--free", "--offset", "1", "--limit", "2"]);
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("host-001") && out.contains("host-002"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("host-000") && !out.contains("host-004"),
+            "{out}"
+        );
+        assert!(out.contains("2 of 5 refhost(s)"), "{out}");
+        assert!(
+            out.lines()
+                .last()
+                .is_some_and(|l| l.starts_with("…[truncated")),
+            "probed window still notices the unprobed remainder: {out}"
+        );
+        assert!(out.contains("3 of 5 rows"), "{out}");
+        assert!(out.contains("2/2 anomalies kept"), "{out}");
     }
 }
