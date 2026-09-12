@@ -338,64 +338,186 @@ impl ServerHandler for McpServer {
                 });
         let sink = sink.as_ref().map(|s| s as &dyn ProgressSink);
 
-        // A job-control tool: poll/control the session's background-job table.
-        if self.job_tools.contains(&name) {
-            return Ok(render(dispatch_job_tool(&self.session, &name, &kwargs).await).into());
+        self.dispatch_audited(&name, &kwargs, sink, &context.ct)
+            .await
+    }
+}
+
+impl McpServer {
+    /// The audited dispatch behind [`call_tool`](ServerHandler::call_tool):
+    /// the single chokepoint every tool call funnels through.
+    ///
+    /// With `[mcp] audit_log` set, one record per call is persisted before
+    /// the response returns — for foreground and backgrounded calls, for
+    /// failures and unknown tools alike — and a call the sink cannot record
+    /// is refused instead of proceeding unrecorded. With the sink unset this
+    /// is dispatch verbatim: behaviour and output are byte-identical.
+    ///
+    /// Test seam: unit tests drive this directly with a fresh token and no
+    /// sink, since a real `RequestContext` needs a peer.
+    pub(crate) async fn dispatch_audited(
+        &self,
+        name: &str,
+        kwargs: &Map<String, Value>,
+        sink: Option<&dyn ProgressSink>,
+        client_ct: &CancellationToken,
+    ) -> Result<CallToolResponse, McpError> {
+        use crate::audit::{
+            AUDIT_SCHEMA_VERSION, AuditEvent, AuditOutcome, refuse_error, sanitize_args,
+        };
+
+        let start = std::time::Instant::now();
+        let started_ms = crate::audit::now_millis();
+        // Refuse before running when the sink is already unwritable: a
+        // mutation this consequential must not proceed unrecorded. (A refused
+        // call leaves no record — there is nowhere to put one.)
+        if let Some(audit) = self.session.audit_log()
+            && let Err(err) = audit.check_writable()
+        {
+            return Err(refuse_error(&err));
         }
 
+        // Every arm below resolves to one audited outcome; the record is
+        // written once at the tail.
+        let mut event = AuditEvent::Call;
+        let mut rrids: Vec<String> = Vec::new();
+        let mut job_ids: Vec<String> = Vec::new();
+        let outcome: AuditOutcome;
+        let result: Result<CallToolResponse, McpError>;
+
+        // A job-control tool: poll/control the session's background-job table.
+        if self.job_tools.contains(name) {
+            let dispatched = dispatch_job_tool(&self.session, name, kwargs).await;
+            outcome = if dispatched.is_ok() {
+                AuditOutcome::Ok
+            } else {
+                AuditOutcome::Error
+            };
+            result = Ok(render(dispatched).into());
+        }
         // Acts directly on the loaded checkout. Neither this nor the transfer
         // branch below dispatches through the engine, so neither can hold
         // `/var/lock/mtui.lock`: a plain drop on cancel strands nothing.
-        if self.testreport_tools.contains(&name) {
-            let Some(result) = cancellable(
-                dispatch_testreport_tool(&self.session, &name, &kwargs, sink),
-                &context.ct,
+        else if self.testreport_tools.contains(name) {
+            let template = kwargs.get("template").and_then(Value::as_str);
+            rrids = self.session.audit_template_scope(template).await;
+            let dispatched = cancellable(
+                dispatch_testreport_tool(&self.session, name, kwargs, sink),
+                client_ct,
             )
-            .await
-            else {
-                return Err(cancelled_error(None));
-            };
-            // One text block, matching the command tools' wire shape.
-            return Ok(render(result.map(|v| v.to_string())).into());
+            .await;
+            match dispatched {
+                None => {
+                    outcome = AuditOutcome::Error;
+                    result = Err(cancelled_error(None));
+                }
+                Some(dispatched) => {
+                    outcome = if dispatched.is_ok() {
+                        AuditOutcome::Ok
+                    } else {
+                        AuditOutcome::Error
+                    };
+                    // One text block, matching the command tools' wire shape.
+                    result = Ok(render(dispatched.map(|v| v.to_string())).into());
+                }
+            }
         }
-
         // A hand-written in-band transfer tool (get/put, #434).
-        if self.transfer_tools.contains(&name) {
-            let Some(result) = cancellable(
-                crate::transfer_tools::dispatch_transfer_tool(&self.session, &name, &kwargs, sink),
-                &context.ct,
+        else if self.transfer_tools.contains(name) {
+            let template = kwargs.get("template").and_then(Value::as_str);
+            rrids = self.session.audit_template_scope(template).await;
+            let dispatched = cancellable(
+                crate::transfer_tools::dispatch_transfer_tool(&self.session, name, kwargs, sink),
+                client_ct,
             )
-            .await
-            else {
-                return Err(cancelled_error(None));
-            };
-            return Ok(render(result.map(|v| v.to_string())).into());
+            .await;
+            match dispatched {
+                None => {
+                    outcome = AuditOutcome::Error;
+                    result = Err(cancelled_error(None));
+                }
+                Some(dispatched) => {
+                    outcome = if dispatched.is_ok() {
+                        AuditOutcome::Ok
+                    } else {
+                        AuditOutcome::Error
+                    };
+                    result = Ok(render(dispatched.map(|v| v.to_string())).into());
+                }
+            }
         }
-
         // Dispatch through the shared engine. The one branch that can hold
         // `/var/lock/mtui.lock` on a real host, so a plain `cancellable` drop
         // would strand it: `dispatch_tool` gets the client's own token and runs
         // the two-stage cancel/abort/unlock sequence `job_cancel` uses.
-        if let Some(route) = self.routes.get(&name) {
-            return match dispatch_tool(
+        else if let Some(route) = self.routes.get(name) {
+            let dispatched = dispatch_tool(
                 &self.registry,
                 &self.session,
                 route,
-                &kwargs,
+                kwargs,
                 sink,
-                Some(&context.ct),
+                Some(client_ct),
             )
-            .await
-            {
-                ToolOutcome::Completed(result) => Ok(render(result).into()),
-                ToolOutcome::Aborted(unlock) => Err(cancelled_error(Some(&unlock))),
-            };
+            .await;
+            rrids = dispatched.rrids;
+            match dispatched.outcome {
+                ToolOutcome::Completed(inner) => {
+                    outcome = if inner.is_ok() {
+                        AuditOutcome::Ok
+                    } else {
+                        AuditOutcome::Error
+                    };
+                    if !dispatched.jobs.is_empty() {
+                        event = AuditEvent::Dispatch;
+                        job_ids = dispatched.jobs;
+                    }
+                    result = Ok(render(inner).into());
+                }
+                ToolOutcome::Aborted(unlock) => {
+                    outcome = AuditOutcome::Error;
+                    result = Err(cancelled_error(Some(&unlock)));
+                }
+            }
+        }
+        // Unknown / deny-listed name: no route was synthesised for it.
+        else {
+            outcome = AuditOutcome::UnknownTool;
+            result = Err(McpError::method_not_found::<
+                rmcp::model::CallToolRequestMethod,
+            >());
         }
 
-        // Unknown / deny-listed name: no route was synthesised for it.
-        Err(McpError::method_not_found::<
-            rmcp::model::CallToolRequestMethod,
-        >())
+        if self.session.audit_log().is_some() {
+            let hosts = self.session.audit_hosts(&rrids).await;
+            let mut record = serde_json::json!({
+                "v": AUDIT_SCHEMA_VERSION,
+                "ts": started_ms,
+                "session": self.session.id(),
+                "event": event.as_str(),
+                "tool": name,
+                "args": sanitize_args(name, kwargs),
+                "outcome": outcome.as_str(),
+                "duration_ms": start.elapsed().as_millis() as u64,
+                "rrids": rrids,
+                "hosts": hosts,
+            });
+            if event == AuditEvent::Dispatch {
+                record["job_ids"] = serde_json::json!(job_ids);
+            }
+            // The sink was writable at pre-flight, so this fails only on a
+            // race (permissions, disk full, a vanished path): refuse in place
+            // of the result rather than answering unrecorded.
+            if let Err(err) = self
+                .session
+                .audit_log()
+                .expect("checked above")
+                .append(&record)
+            {
+                return Err(refuse_error(&err));
+            }
+        }
+        result
     }
 }
 
@@ -464,6 +586,11 @@ mod tests {
     use crate::provider::SessionRegistry;
     use mtui_config::Config;
     use mtui_core::register_all;
+    use mtui_hosts::{HostsGroup, MockConnection, Target};
+    use mtui_testreport::{ObsReport, TestReport};
+    use mtui_types::RequestReviewID;
+    use mtui_types::enums::TargetState;
+    use serde_json::{Value, json};
 
     fn server_with(config: Config) -> McpServer {
         let registry = Arc::new(register_all());
@@ -680,5 +807,350 @@ mod tests {
         .expect("follow-up dispatch must not hang on a stranded lock")
         .expect("whoami succeeds");
         assert!(out.contains("testuser"), "got: {out}");
+    }
+
+    // ---------------------------------------------------------- audit log (#411)
+
+    const AUDIT_RRID: &str = "SUSE:Maintenance:1:1";
+    const AUDIT_HOST: &str = "audit-host";
+
+    /// A server with `[mcp] audit_log` pointed at a temp file, plus the
+    /// session and paths the assertions read back.
+    fn audited_server() -> (
+        McpServer,
+        Arc<McpSession>,
+        tempfile::TempDir,
+        std::path::PathBuf,
+    ) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        let server = McpServer::new(registry, session.clone());
+        (server, session, dir, path)
+    }
+
+    /// Load one template with one mock host and make it active.
+    async fn seed_audit_host(session: &McpSession, mock: MockConnection) {
+        let target = Target::with_connection(AUDIT_HOST, TargetState::Enabled, Box::new(mock));
+        let mut guard = session.session().lock().await;
+        let mut report = ObsReport::new(guard.config.clone());
+        report.base_mut().rrid = Some(RequestReviewID::parse(AUDIT_RRID).expect("rrid"));
+        report.base_mut().targets = HostsGroup::new(vec![target], false);
+        guard.templates.add(Box::new(report));
+        guard.templates.set_active(AUDIT_RRID);
+    }
+
+    /// Drive the audited seam the way `call_tool` does (fresh token, no sink).
+    async fn audited_call(
+        server: &McpServer,
+        tool: &str,
+        kwargs: Value,
+    ) -> Result<CallToolResponse, McpError> {
+        server
+            .dispatch_audited(
+                tool,
+                kwargs.as_object().expect("kwargs object"),
+                None,
+                &CancellationToken::new(),
+            )
+            .await
+    }
+
+    /// Read back every audit record.
+    fn audit_records(path: &std::path::Path) -> Vec<Value> {
+        let text = std::fs::read_to_string(path).expect("sink readable");
+        text.lines()
+            .map(|line| serde_json::from_str(line).expect("one object per line"))
+            .collect()
+    }
+
+    /// Unwrap the completed result: the audited seam never answers the
+    /// input-required/task variants.
+    fn complete_result(response: &CallToolResponse) -> &CallToolResult {
+        match response {
+            CallToolResponse::Complete(result) => result,
+            _ => panic!("audited seam answers Complete, got: {response:?}"),
+        }
+    }
+
+    /// The text payload of a completed tool response.
+    fn response_text(response: &CallToolResponse) -> String {
+        complete_result(response)
+            .content
+            .iter()
+            .filter_map(|block| block.as_text().map(|t| t.text.to_string()))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Poll the sink until `n` records land: a background job's terminal
+    /// record is written by a spawned worker after the dispatch answered.
+    async fn await_records(path: &std::path::Path, n: usize) -> Vec<Value> {
+        for _ in 0..2000 {
+            let records = audit_records(path);
+            if records.len() >= n {
+                return records;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("sink never reached {n} records");
+    }
+
+    #[tokio::test]
+    async fn audit_foreground_call_records_scope_and_outcome() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        let response = audited_call(&server, "list_hosts", json!({}))
+            .await
+            .expect("list_hosts succeeds");
+        let text = response_text(&response);
+        assert!(text.contains(AUDIT_HOST), "the call really ran: {text}");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "one call, one record");
+        let record = &records[0];
+        assert_eq!(record["v"], json!(1));
+        assert_eq!(record["event"], json!("call"));
+        assert_eq!(record["tool"], json!("list_hosts"));
+        assert_eq!(record["outcome"], json!("ok"));
+        assert_eq!(record["session"], json!(session.id()));
+        assert_eq!(record["rrids"], json!([AUDIT_RRID]));
+        assert_eq!(record["hosts"], json!([AUDIT_HOST]));
+        assert!(record["ts"].as_u64().unwrap_or(0) > 0);
+        assert!(record["duration_ms"].as_u64().is_some());
+    }
+
+    #[tokio::test]
+    async fn audit_failing_call_records_error() {
+        let (server, _session, _dir, path) = audited_server();
+        // Unknown attribute: the engine fails the call, but MCP still answers
+        // Ok with an error payload — the failure lives in the record.
+        audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "no_such_attr", "value": "x"}),
+        )
+        .await
+        .expect("failing calls answer with an error payload, not a protocol error");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "a failing call produces a record");
+        assert_eq!(records[0]["tool"], json!("config_set"));
+        assert_eq!(records[0]["outcome"], json!("error"));
+    }
+
+    #[tokio::test]
+    async fn audit_unknown_tool_records_and_rejects() {
+        let (server, _session, _dir, path) = audited_server();
+        let err = audited_call(&server, "shell", json!({}))
+            .await
+            .expect_err("deny-listed tool is rejected");
+        assert!(
+            err.to_string().contains("-32601"),
+            "method-not-found keeps its code: {err}"
+        );
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "a refused call produces a record");
+        assert_eq!(records[0]["tool"], json!("shell"));
+        assert_eq!(records[0]["outcome"], json!("unknown-tool"));
+        assert_eq!(records[0]["rrids"], json!(Value::Array(vec![])));
+        assert_eq!(records[0]["hosts"], json!(Value::Array(vec![])));
+    }
+
+    #[tokio::test]
+    async fn audit_config_set_secret_leaves_no_trace() {
+        let (server, _session, _dir, path) = audited_server();
+        let secret = "audit-secret-token-6f5e4d3c";
+        audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "gitea_token", "value": secret}),
+        )
+        .await
+        .expect("config_set succeeds");
+
+        let raw = std::fs::read_to_string(&path).expect("sink readable");
+        assert!(
+            !raw.contains(secret),
+            "secret value must be unrepresentable in the record"
+        );
+        let record: Value = serde_json::from_str(raw.trim()).expect("one record");
+        assert_eq!(record["args"]["attribute"], json!("gitea_token"));
+        assert_eq!(record["args"]["value"], json!("<redacted>"));
+        assert_eq!(record["args"]["secret"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn audit_background_run_writes_joinable_dispatch_and_terminal_records() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("background start answers");
+        let jobs = session.job_list();
+        assert_eq!(jobs.len(), 1, "one background job started");
+        let job_id = jobs[0].id.clone();
+
+        let records = await_records(&path, 2).await;
+        assert_eq!(records.len(), 2, "dispatch + terminal, nothing else");
+        let dispatch = &records[0];
+        assert_eq!(dispatch["event"], json!("dispatch"));
+        assert_eq!(dispatch["tool"], json!("run"));
+        assert_eq!(dispatch["outcome"], json!("ok"));
+        assert_eq!(dispatch["job_ids"], json!([job_id]));
+        assert_eq!(dispatch["rrids"], json!([AUDIT_RRID]));
+        assert_eq!(dispatch["hosts"], json!([AUDIT_HOST]));
+        let terminal = &records[1];
+        assert_eq!(terminal["event"], json!("terminal"));
+        assert_eq!(terminal["tool"], json!("run"));
+        assert_eq!(terminal["job_id"], json!(job_id));
+        assert_eq!(terminal["job_state"], json!("done"));
+        assert_eq!(terminal["outcome"], json!("ok"));
+        assert_eq!(terminal["session"], dispatch["session"]);
+        assert_eq!(terminal["rrids"], json!([AUDIT_RRID]));
+        assert!(
+            terminal.get("args").is_none(),
+            "terminal carries no args: {terminal}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_background_failure_writes_a_failed_terminal_record() {
+        let (server, session, _dir, path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+
+        // `update` against a bare seeded report cannot proceed: the job fails,
+        // and the terminal record must still join to its dispatch.
+        audited_call(&server, "update", json!({"background": true}))
+            .await
+            .expect("background start answers");
+        let jobs = session.job_list();
+        assert_eq!(jobs.len(), 1, "one background job started");
+        let job_id = jobs[0].id.clone();
+
+        let records = await_records(&path, 2).await;
+        assert_eq!(records.len(), 2, "dispatch + terminal, nothing else");
+        assert_eq!(records[0]["event"], json!("dispatch"));
+        assert_eq!(records[0]["job_ids"], json!([job_id]));
+        let terminal = &records[1];
+        assert_eq!(terminal["event"], json!("terminal"));
+        assert_eq!(terminal["job_id"], json!(job_id));
+        assert_eq!(terminal["job_state"], json!("failed"));
+        assert_eq!(terminal["outcome"], json!("error"));
+    }
+
+    #[tokio::test]
+    async fn audit_cancelled_job_writes_a_cancelled_terminal_record() {
+        let (server, session, _dir, path) = audited_server();
+        let mock =
+            MockConnection::new(AUDIT_HOST).with_run_delay(std::time::Duration::from_secs(3));
+        let probe = mock.clone();
+        seed_audit_host(&session, mock).await;
+
+        audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect("background start answers");
+        let jobs = session.job_list();
+        assert_eq!(jobs.len(), 1, "one background job started");
+        let job_id = jobs[0].id.clone();
+
+        // Gate the cancel on the worker reaching the delayed command: the
+        // claim then provably lands mid-flight, never on an already-done job.
+        let mut saw_command = false;
+        for _ in 0..2000 {
+            if !probe.commands().is_empty() {
+                saw_command = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(saw_command, "worker reached the host command");
+
+        audited_call(&server, "job_cancel", json!({"job_id": job_id}))
+            .await
+            .expect("cancel answers");
+        // Three records: the run dispatch, the run's terminal — written by the
+        // cancel path, which owns it once claimed, so it precedes the cancel
+        // call's own record in the file — and the job_cancel call. `ts` still
+        // orders them causally.
+        let records = await_records(&path, 3).await;
+        assert_eq!(records.len(), 3, "no duplicate terminal record");
+        assert_eq!(records[0]["event"], json!("dispatch"));
+        assert_eq!(records[2]["tool"], json!("job_cancel"));
+        assert_eq!(records[2]["outcome"], json!("ok"));
+        let terminal = &records[1];
+        assert_eq!(terminal["event"], json!("terminal"));
+        assert_eq!(terminal["job_id"], json!(job_id));
+        assert_eq!(terminal["job_state"], json!("cancelled"));
+        assert_eq!(terminal["outcome"], json!("error"));
+        assert!(terminal["ts"].as_u64() >= records[0]["ts"].as_u64());
+    }
+
+    #[tokio::test]
+    async fn audit_unwritable_sink_refuses_before_dispatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        // A directory as the sink path: every open fails, so the pre-flight
+        // refuses without running the call.
+        config.mcp_audit_log = Some(dir.path().to_path_buf());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        let server = McpServer::new(registry, session.clone());
+
+        let err = audited_call(
+            &server,
+            "run",
+            json!({"command": ["true"], "background": true}),
+        )
+        .await
+        .expect_err("unwritable sink refuses the call");
+        assert!(
+            err.to_string().contains("audit log unavailable"),
+            "refusal names the sink: {err}"
+        );
+        assert!(
+            session.job_list().is_empty(),
+            "refused before dispatch: no job was started"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_unset_sink_is_byte_identical() {
+        async fn whoami(audit: Option<std::path::PathBuf>) -> CallToolResult {
+            let mut config = Config::default();
+            config.session_user = "testuser".to_owned();
+            config.mcp_audit_log = audit;
+            let registry = Arc::new(register_all());
+            let session = McpSession::new(config);
+            let server = McpServer::new(registry, session);
+            let response = audited_call(&server, "whoami", json!({}))
+                .await
+                .expect("whoami succeeds");
+            complete_result(&response).clone()
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let plain = whoami(None).await;
+        let logged = whoami(Some(dir.path().join("audit.jsonl"))).await;
+        assert_eq!(
+            plain, logged,
+            "enabling the sink must not change the wire response"
+        );
     }
 }

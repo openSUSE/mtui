@@ -226,6 +226,7 @@ Remote-lock behaviour on target hosts, so concurrent testers can share a fleet.
 | `profile` | string | `full` | Tool-surface profile: `full` (every synthesised tool) or `core` (curated everyday subset). Unknown → `full` with a warning. Agent clients should prefer `core` (36 vs 65 tools on every request); see [MCP server](mcp.md). |
 | `tools_allow` | array of strings | *(empty)* | Extra tool names to keep on top of the profile. |
 | `tools_deny` | array of strings | *(empty)* | Tool names to remove regardless of profile/allow (deny wins last). E.g. `["updates", "openqa_overview"]` for a workflow that never lists the queue or polls openQA. |
+| `audit_log` | path | *(unset)* | Durable audit sink for tool calls (versioned JSONL, one record per call, `0600`). Unset disables auditing. A call the sink cannot record is refused. See [MCP server](mcp.md#audit-log). |
 
 > The profile key is `profile`, not `tool_profile` — it already sits under the
 > tool-scoped `[mcp]` table. `tools_allow`/`tools_deny` are native TOML arrays,

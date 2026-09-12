@@ -155,6 +155,10 @@
 # Tool names to remove regardless of profile/allow (deny wins last).
 # E.g. tools_deny = ["updates", "openqa_overview"] when the workflow never uses them.
 # tools_deny = []
+# Durable audit sink for mtui-mcp tool calls (versioned JSONL, one record per
+# call, created 0600, fsynced before the response returns). Unset disables
+# auditing; a call the sink cannot record is refused.
+# audit_log = "/var/log/mtui-audit.jsonl"
 
 [obs]
 # The OBS/IBS API URL the native QAM review backend acts against. Must equal

@@ -78,8 +78,9 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
 const SECRET_MASK: &str = "<set>";
 
 /// Whether `attr` names a secret whose value must never be echoed. The single
-/// source of truth for `show`'s mask and `set`'s redacted acknowledgement.
-fn is_secret_attr(attr: &str) -> bool {
+/// source of truth for `show`'s mask, `set`'s redacted acknowledgement, and the
+/// MCP audit record's argument redaction.
+pub fn is_secret_attr(attr: &str) -> bool {
     matches!(attr, "gitea_token" | "slack_token")
 }
 

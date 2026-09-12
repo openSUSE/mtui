@@ -457,6 +457,29 @@ client never sees another's jobs). The per-session job budget
 (`max_output_bytes`) bound resource use so one client cannot exhaust the server or
 dwarf the client's context.
 
+## Audit log
+
+`mtui-mcp` executes consequential actions with nobody watching, so a configured
+server keeps a durable record of what ran. Set **`[mcp] audit_log`** to a file
+path; unset (the default) disables auditing and leaves behaviour byte-identical.
+
+The sink is versioned JSONL, one object per line, opened `O_APPEND` with mode
+`0600` and fsynced before the response returns — entries survive a server
+restart and are never truncated. Each record carries the schema version, the
+arrival timestamp, the session id, the tool name, the (redacted, see below)
+arguments, the outcome (`ok` / `error` / `unknown-tool`), the duration, and the
+RRIDs and host names the call resolved to.
+
+A backgrounded call writes two records: a `dispatch` record naming the started
+`job_ids`, and a `terminal` record when the job reaches `done` / `failed` /
+`cancelled`, joinable by job id. The terminal record carries no arguments.
+
+When the sink cannot be written the call is **refused** instead of proceeding
+unrecorded. A failed terminal write can only warn — its dispatch already
+answered. `config_set` never records the value for any attribute, so a future
+secret attribute cannot leak by omission; the record marks whether the attribute
+is a known secret.
+
 ## Cancelling a foreground call
 
 A client that sends an explicit `notifications/cancelled` for an in-flight
