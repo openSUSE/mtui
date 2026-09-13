@@ -11,6 +11,7 @@ pub mod package_spec;
 pub mod product;
 pub mod refhost;
 pub mod repo_url;
+pub mod report_document;
 pub mod rpmver;
 pub mod rrid;
 pub mod shellquote;
