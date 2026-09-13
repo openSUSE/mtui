@@ -57,17 +57,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
    rest, build checks with matches; display only, `--export` still writes the
    full overview; narrow with
    `--no-aggregated/--aggregated-groups/--days/--test-pattern`). `--json`
-   over-cap stdout is a JSON array of kept rows plus a trailing
-   `…[truncated N of M rows (K/L anomalies kept); …]` notice line in-band (CLI
-   and MCP alike, like the byte-cap convention; also in `--json` help) — naive
-   parse of full stdout fails loudly, strip lines starting with that prefix
-   before parsing.
+   over-cap stdout is a JSON envelope `{"rows": [...], "truncation": {...}}`
+   so stdout stays valid JSON (CLI and MCP alike; also in `--json` help).
+   Anomaly counts cover the full dataset and the notice omits
+   `(K/L anomalies kept)` when none exist.
    Any middle slice is
   recoverable via pre-crush `--offset`/`--limit` paging (chosen over an
   explicit-window notice as it fits the existing `--limit` plumbing).
   `list_refhosts --free` windows before probing, so paging reduces the SSH
   probe cost; windowing order is the matched inventory order and the
-  notice/footer stay pre-window totals.
+  footer stays pre-window totals. A pure window emits only a probe note
+  (`…[probed X of Y hosts; …]` human, `"probe"` object in JSON), never a
+  truncation notice with anomaly counts over unprobed hosts.
   Row-cap is not byte-cap: MCP `max_output_bytes` can still cut mid-array on
   huge rows; `openqa_overview` per-section caps sum to ~600 rows total.
   **MCP schema note:** additive only — `updates` gains `offset`, `list_refhosts`

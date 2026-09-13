@@ -710,7 +710,7 @@ Options:
           select output fields by osc-qam name (e.g. -F Rating -F 'Assigned Roles'); repeatable, rendered as one block per update; names match case-insensitively, ignoring spaces/hyphens/underscores; narrow large queues with --limit
 
       --json
-          print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap stdout is a JSON array of kept rows plus a trailing `…[truncated …` notice line — naive parse of full stdout fails, strip lines starting with that prefix before parsing
+          print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap stdout is a JSON envelope {"rows": [...], "truncation": {...}} so stdout stays valid JSON
 
       --status <STATUS>
           filter by status (default: testing); use 'all' for every status
@@ -1074,7 +1074,7 @@ Options:
           group by test-target slot (product+version+arch+addons)
 
       --json
-          emit a JSON array of kept rows; over-cap stdout adds a trailing `…[truncated …` notice line — naive parse of full stdout fails, strip lines starting with that prefix before parsing
+          emit a JSON array of kept rows; over-cap stdout is a JSON envelope {"rows": [...], "truncation": {...}} so stdout stays valid JSON (--free windowing adds a "probe" object)
 
       --limit <N>
           cap the number of rows after --offset (0 = all)

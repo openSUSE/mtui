@@ -2,9 +2,8 @@
 //!
 //! Drives the real `updates` / `list_refhosts` commands through
 //! [`McpSession::run_command`] with unbounded mocked backends: over-cap `--json`
-//! tool output carries the truncation notice in-band after the JSON array (like
-//! the byte-cap convention), so naive parse fails loudly and clients strip
-//! `…[truncated` lines; under-cap stays pure JSON. Also pins the additive
+//! tool output is a structured envelope (`{"rows": [...], "truncation": {...}}`)
+//! so stdout stays valid JSON; under-cap stays a pure array. Also pins the additive
 //! paging flags and that row-cap is not byte-cap.
 
 #![cfg(feature = "mcp")]
@@ -30,7 +29,7 @@ fn queue_fixture() -> serde_json::Value {
     serde_json::json!({"updates": rows})
 }
 
-/// `updates --json` over an unbounded queue: notice in-band, anomaly kept.
+/// `updates --json` over an unbounded queue: envelope in-band, anomaly kept.
 #[tokio::test]
 async fn updates_json_crush_carries_notice_in_band() {
     use wiremock::matchers::{method, path};
@@ -56,24 +55,12 @@ async fn updates_json_crush_carries_notice_in_band() {
         .run_command(&registry, "updates", &argv)
         .await
         .expect("updates succeeds");
-    assert!(
-        out.lines()
-            .last()
-            .is_some_and(|l| l.starts_with("…[truncated")),
-        "{out}"
-    );
-    assert!(out.contains("--limit/--offset/--field/-G"), "{out}");
-    assert!(
-        serde_json::from_str::<serde_json::Value>(out.trim()).is_err(),
-        "naive parse of full stdout must fail loudly: {out}"
-    );
-    let json_part: String = out
-        .lines()
-        .filter(|l| !l.starts_with("…[truncated"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
-    let rows = parsed.as_array().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    let obj = parsed.as_object().unwrap();
+    assert!(obj.contains_key("rows"), "{out}");
+    assert!(obj.contains_key("truncation"), "{out}");
+    assert!(!out.contains("…[truncated"), "no trailing plaintext: {out}");
+    let rows = obj["rows"].as_array().unwrap();
     assert!(rows.len() <= 100, "row budget holds: {}", rows.len());
     assert!(rows.iter().any(|r| r["id"] == "row-anomaly"), "{out}");
     assert!(!rows.iter().any(|r| r["id"] == "row-060"), "{out}");

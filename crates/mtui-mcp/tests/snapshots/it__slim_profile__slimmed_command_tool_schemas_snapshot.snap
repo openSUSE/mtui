@@ -1,6 +1,5 @@
 ---
 source: crates/mtui-mcp/tests/slim_profile.rs
-assertion_line: 40
 expression: pretty
 ---
 [
@@ -607,7 +606,7 @@ expression: pretty
         },
         "json": {
           "default": false,
-          "description": "emit a JSON array of kept rows; over-cap stdout adds a trailing `…[truncated …` notice line — naive parse of full stdout fails, strip lines starting with that prefix before parsing",
+          "description": "emit a JSON array of kept rows; over-cap stdout is a JSON envelope {\"rows\": [...], \"truncation\": {...}} so stdout stays valid JSON (--free windowing adds a \"probe\" object)",
           "type": "boolean"
         },
         "limit": {
@@ -1670,7 +1669,7 @@ expression: pretty
         },
         "json": {
           "default": false,
-          "description": "print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap stdout is a JSON array of kept rows plus a trailing `…[truncated …` notice line — naive parse of full stdout fails, strip lines starting with that prefix before parsing",
+          "description": "print the raw TeReGen rows as a JSON array (each row emitted whole, unlike -F; honours --limit/--offset; not combinable with -F); an empty queue prints []; over-cap stdout is a JSON envelope {\"rows\": [...], \"truncation\": {...}} so stdout stays valid JSON",
           "type": "boolean"
         },
         "limit": {
