@@ -15,6 +15,9 @@ use crate::session::Session;
 /// [`Config`] is a typed struct with no reflection, so this mapping is spelled
 /// out — the one place `show`/`set` and completion agree on the surface.
 fn attr_value(config: &Config, attr: &str) -> Option<String> {
+    if !ATTRS.contains(&attr) {
+        return None;
+    }
     let v = match attr {
         "template_dir" => config.template_dir.display().to_string(),
         "session_user" => config.session_user.clone(),
@@ -155,6 +158,9 @@ fn show_headless(session: &mut Session, requested: &[String]) -> CommandResult {
     let width = requested.iter().map(String::len).max().unwrap_or(0);
     let mut rows: Vec<String> = Vec::new();
     for attr in requested {
+        if !ATTRS.contains(&attr.as_str()) {
+            return Err(CommandError::Other(format!("unknown attribute: {attr}")));
+        }
         let Some(value) = attr_value(&session.config, attr) else {
             return Err(CommandError::Other(format!("unknown attribute: {attr}")));
         };
@@ -435,9 +441,11 @@ impl Command for ConfigCmd {
                 set_attr(&mut session.config, attr, value).map_err(CommandError::Other)?;
                 // Never echo a secret back to the display buffer.
                 let shown = if is_secret_attr(attr) {
-                    SECRET_MASK
+                    SECRET_MASK.to_owned()
+                } else if MCP_URL_ATTRS.contains(&attr.as_str()) {
+                    sanitize_url(value)
                 } else {
-                    value
+                    value.clone()
                 };
                 session
                     .display
@@ -603,6 +611,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_url_attr_ack_is_sanitized() {
+        let (mut session, buf) = empty_session();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(
+                    &ConfigCmd,
+                    &["set", "openqa_instance", "https://user:pass@openqa.local/x"],
+                ),
+            )
+            .await
+            .unwrap();
+        // Stored verbatim, acknowledged stripped.
+        assert_eq!(
+            session.config.openqa_instance,
+            "https://user:pass@openqa.local/x"
+        );
+        let out = buf.contents();
+        assert!(out.contains("https://***@openqa.local/x"), "{out:?}");
+        assert!(!out.contains("user:pass"), "{out:?}");
+    }
+
+    #[tokio::test]
+    async fn set_non_url_attr_ack_is_verbatim() {
+        // An `@` in a non-URL value must survive: only `MCP_URL_ATTRS` members
+        // are stripped, so over-sanitizing (or masking) turns this red.
+        let (mut session, buf) = empty_session();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "session_user", "bob@example.com"]),
+            )
+            .await
+            .unwrap();
+        let out = buf.contents();
+        assert!(
+            out.contains("session_user set to value : bob@example.com"),
+            "{out:?}"
+        );
+        assert!(!out.contains("***"), "{out:?}");
+    }
+
+    #[tokio::test]
     async fn headless_bulk_show_is_refused() {
         // `empty_session` is headless (`is_repl = false`), the MCP posture.
         let (mut session, _buf) = empty_session();
@@ -751,6 +802,24 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, CommandError::Other(m) if m.contains("unknown attribute")));
+    }
+
+    /// Names outside the `ATTRS` registry fail as unknown, even plausible
+    /// near-misses of real attributes: without the registry check an arm added
+    /// to `attr_value` but omitted from `ATTRS` would bypass both MCP tables.
+    #[tokio::test]
+    async fn headless_non_registry_attrs_are_unknown() {
+        for attr in ["nope", "template_dir_bak", "OPENQA_INSTANCE", ""] {
+            let (mut session, _buf) = empty_session();
+            let err = ConfigCmd
+                .call(&mut session, &matches(&ConfigCmd, &["show", attr]))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, CommandError::Other(m) if m.contains("unknown attribute")),
+                "{attr:?}: expected unknown-attribute, got {err:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -984,6 +1053,40 @@ mod tests {
         }
     }
 
+    /// Every `attr_value` match arm stays inside the `ATTRS` registry: a new arm
+    /// added without `ATTRS` membership is dead by construction (the registry
+    /// gate above returns `None`), and this test fails the run that adds it.
+    #[test]
+    fn attr_value_arms_stay_within_attrs() {
+        const SRC: &str = include_str!("config.rs");
+        let start = SRC.find("fn attr_value").expect("attr_value present");
+        let body = &SRC[start..];
+        let end = body.find("\n}\n").expect("attr_value end");
+        let mut arms = 0;
+        for line in body[..end].lines() {
+            let line = line.trim();
+            let Some((lhs, _)) = line.split_once("=>") else {
+                continue;
+            };
+            let lhs = lhs.trim();
+            if !(lhs.starts_with('"') && lhs.ends_with('"')) {
+                continue;
+            }
+            let name = &lhs[1..lhs.len() - 1];
+            assert!(
+                ATTRS.contains(&name),
+                "{name}: attr_value arm outside the ATTRS registry"
+            );
+            arms += 1;
+        }
+        assert_eq!(
+            arms,
+            ATTRS.len(),
+            "attr_value arms ({arms}) drifted from ATTRS ({})",
+            ATTRS.len()
+        );
+    }
+
     #[test]
     fn url_defaults_require_mcp_coverage() {
         let config = Config::default();
@@ -991,13 +1094,32 @@ mod tests {
             let Some(value) = attr_value(&config, attr) else {
                 continue;
             };
-            if value.contains("://") {
+            if is_url_like_attr(attr, &value) {
                 assert!(
                     MCP_URL_ATTRS.contains(&attr),
                     "{attr}: URL-valued default must be covered by MCP_URL_ATTRS"
                 );
             }
         }
+    }
+
+    /// A default counts as URL-valued by content (`scheme://`) or by name: a
+    /// future endpoint added with an empty default must still land in
+    /// `MCP_URL_ATTRS`, or its userinfo prints verbatim on the MCP surface.
+    fn is_url_like_attr(attr: &str, value: &str) -> bool {
+        value.contains("://") || attr.ends_with("_url") || attr.ends_with("_uri")
+    }
+
+    #[test]
+    fn url_like_predicate_covers_empty_url_defaults() {
+        assert!(is_url_like_attr("some_webhook_url", ""));
+        assert!(is_url_like_attr("some_endpoint_uri", ""));
+        assert!(!is_url_like_attr("slack_channel", ""));
+        assert!(!is_url_like_attr("max_parallel", "8"));
+        assert!(is_url_like_attr(
+            "openqa_instance",
+            "https://openqa.suse.de"
+        ));
     }
 
     #[tokio::test]

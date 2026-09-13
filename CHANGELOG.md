@@ -44,7 +44,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bulk dump is refused (name attributes explicitly), the operator-local values
   (`session_user`, `template_dir`, `refhosts_path`, a `ssl_verify` CA-bundle
   path) are refused, and endpoint URLs print userinfo-stripped. The REPL prints
-  everything verbatim as before. No tool schema changed.
+  everything verbatim as before. No tool schema changed. `config set` of an
+  endpoint URL acknowledges with the userinfo-stripped value.
 
 ### Deprecated
 
