@@ -13,7 +13,7 @@ higher ones; `mtui-core` is the composition root that wires everything together.
 
 | Crate | Job |
 |-------|-----|
-| `mtui-types` | Domain types + the error hierarchy. Pure, sync, no I/O. |
+| `mtui-types` | Domain types + the error hierarchy. Pure, sync, no I/O. Includes the typed `report_document` model of the JSON-native TeReGen report (schema v1.0) — not yet wired into the report lifecycle. |
 | `mtui-config` | TOML config + XDG path resolution. |
 | `mtui-hosts` | SSH/SFTP (russh), the `Target`/`HostsGroup` model, locks, the pool arbiter. Async. |
 | `mtui-datasources` | Shared HTTP; refhosts resolve/search/verify; the openQA/QEM/Gitea/OBS/oqa-search clients. Async. |
