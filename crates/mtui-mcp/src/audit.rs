@@ -355,9 +355,11 @@ fn fingerprint_value(value: &Value) -> Value {
     let mut hasher = Sha256::new();
     hasher.update(&raw);
     let digest = hasher.finalize();
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
-        hex.push_str(&format!("{byte:02x}"));
+        hex.push(HEX[(byte >> 4) as usize] as char);
+        hex.push(HEX[(byte & 0x0f) as usize] as char);
     }
     serde_json::json!({"bytes": raw.len(), "sha256": hex})
 }
