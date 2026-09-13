@@ -5,9 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# All integration tests are consolidated into one `tests/it.rs` binary (see
+# the crate's own doc comment there and `crates/mtui-testreport`'s Cargo.toml
+# for the same convention), so the crate links once for the whole test run.
+autotests = false
 
 [lints]
 workspace = true
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
 
 [dependencies]
 sandogasa-rpmvercmp.workspace = true
