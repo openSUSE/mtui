@@ -712,6 +712,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_adjacent_identical_hosts_regroup_in_first_seen_order() {
+        // h1/h3 match around a differing h2: only first-seen grouping shares
+        // one `h1, h3` body with h2 separate; merging with just the preceding
+        // group would print three solo banners instead.
+        let target = |name: &str, out: &str| {
+            Target::with_connection(
+                name,
+                TargetState::Enabled,
+                Box::new(
+                    MockConnection::new(name).with_default(CommandLog::new("", out, "", 0, 0)),
+                ),
+            )
+        };
+        let (mut session, buf) = session_with_targets(
+            "SUSE:Maintenance:1:1",
+            vec![
+                target("h1", "same"),
+                target("h2", "other"),
+                target("h3", "same"),
+            ],
+        );
+        let args = matches(&Run, &["true"]);
+        Run.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let shared = out
+            .find("h1, h3:->")
+            .expect("missing regrouped banner: {out}");
+        let solo = out.find("h2:->").expect("missing h2 banner: {out}");
+        assert!(shared < solo, "first-seen order: {out:?}");
+        assert_eq!(out.matches("same").count(), 1, "shared body once: {out:?}");
+        assert!(
+            out.contains("…[output identical on 2 hosts folded]"),
+            "{out:?}"
+        );
+        assert_eq!(out.matches(":->").count(), 2, "two banners: {out:?}");
+    }
+
+    #[tokio::test]
     async fn differing_outputs_do_not_fold() {
         let (mut session, buf) = session_with_targets(
             "SUSE:Maintenance:1:1",
