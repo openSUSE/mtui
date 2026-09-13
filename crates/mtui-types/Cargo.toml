@@ -29,3 +29,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+# dev / test only — see the workspace Cargo.toml comment.
+# Never a dependency of mtui/mtui-mcp.
+boon.workspace = true

@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "id": "SUSE:PI:16.0:1",
+  "kind": "pi",
+  "workflow": "obs",
+  "generated_at": "2026-01-01T00:00:00Z",
+  "verdict": null,
+  "comment": null,
+  "people": { "testers": [], "reviewer": { "name": null } },
+  "update": {
+    "packager": "someone@suse.com",
+    "source_packages": ["examplepkg"],
+    "origin": { "project": "SUSE:Products:SLE-16.0:PI:1" },
+    "products": [
+      { "name": "SLE-Product-SLES", "version": "16.0", "archs": ["x86_64"] }
+    ],
+    "patches": [
+      { "id": "SUSE-2026-1", "title": "First rolled-up update" },
+      { "id": "SUSE-2026-2", "title": "Second rolled-up update" }
+    ]
+  },
+  "install": {
+    "repository": "http://download.suse.de/ibs/SUSE:/Products:/SLE-16.0:/PI:/1/",
+    "targets": [
+      {
+        "product": "SLE-Product-SLES",
+        "version": "16.0",
+        "arch": "x86_64",
+        "repository": "http://download.suse.de/ibs/SUSE:/Products:/SLE-16.0:/PI:/1/repo",
+        "binaries": { "examplepkg": "1.0-1.1.x86_64" }
+      }
+    ],
+    "test_platforms": []
+  },
+  "issues": {},
+  "testing": {}
+}

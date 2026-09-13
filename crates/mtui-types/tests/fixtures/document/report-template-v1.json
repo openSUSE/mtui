@@ -1,0 +1,562 @@
+{
+  "$schema": "https://json-schema.org/draft/2019-09/schema",
+  "$id": "https://qam.suse.de/schema/report-template-v1.json",
+  "title": "TeReGen report document, version 1",
+  "$comment": "2019-09 keywords only: JSON::Validator ignores 2020-12 ones such as prefixItems instead of rejecting them.",
+  "description": "JSON-native QAM test report, from which the plain-text log is rendered.",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "id", "kind", "workflow", "generated_at",
+    "verdict", "comment", "people",
+    "update", "install", "issues", "testing"
+  ],
+
+  "allOf": [
+    {
+      "$comment": "A PI has no patchinfo, so nothing reviews it.",
+      "if": {"required": ["kind"], "properties": {"kind": {"enum": ["maintenance", "slfo"]}}},
+      "then": {"required": ["review"]}
+    },
+    {
+      "$comment": "Only a PI rolls up updateinfo entries.",
+      "if": {"required": ["kind"], "properties": {"kind": {"const": "pi"}}},
+      "then": {"properties": {"update": {"required": ["patches"]}}}
+    }
+  ],
+
+  "properties": {
+    "schema_version": {
+      "description": "Schema version the document conforms to.",
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "description": "Normalized review request id.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:._-]+$"
+    },
+    "kind": {
+      "description": "Update format.",
+      "enum": ["maintenance", "slfo", "pi"]
+    },
+    "workflow": {
+      "description": "Pipeline that produced the update, selecting the shape of `update.origin`.",
+      "enum": ["obs", "gitea"]
+    },
+    "generated_at": {
+      "description": "Time the pipeline produced this document, RFC 3339.",
+      "type": "string",
+      "format": "date-time"
+    },
+
+    "verdict": {
+      "description": "Overall tester verdict from the log's `SUMMARY:` line, null until decided.",
+      "enum": ["PASSED", "FAILED", null]
+    },
+    "comment": {
+      "description": "Report-level free text, from the `comment:` under `SUMMARY:`.",
+      "type": ["string", "null"]
+    },
+    "people": { "$ref": "#/$defs/people" },
+
+    "update": { "$ref": "#/$defs/update" },
+    "install": { "$ref": "#/$defs/install" },
+    "issues": { "$ref": "#/$defs/issues" },
+    "testing": { "$ref": "#/$defs/testing" },
+    "review": { "$ref": "#/$defs/review" }
+  },
+
+  "$defs": {
+    "tristate": {
+      "description": "Yes, no, or null while the log still shows its `YES/NO` placeholder.",
+      "type": ["boolean", "null"]
+    },
+
+    "people": {
+      "description": "Everyone who put their name to this report, by role.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["testers", "reviewer"],
+      "properties": {
+        "testers": {
+          "description": "Who ran mtui, one entry per export, append-only.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/tester_entry" }
+        },
+        "reviewer": { "$ref": "#/$defs/reviewer" }
+      }
+    },
+
+    "reviewer": {
+      "description": "Who acked this report, and where.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "description": "Reviewer who acked the report, null until acked; superseded by `slack` when present.",
+          "type": ["string", "null"]
+        },
+        "slack": {
+          "description": "The Slack message the review was requested on, absent until one has been requested.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "ts"],
+          "properties": {
+            "channel": {
+              "description": "Canonical Slack channel ID, never a #name.",
+              "type": "string"
+            },
+            "ts": {
+              "description": "Slack message timestamp, which is also its ID within the channel.",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+
+    "update": {
+      "description": "What the update is, never written by a tester.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["packager", "source_packages", "origin", "products"],
+      "properties": {
+        "category": {
+          "description": "Patchinfo category verbatim, such as security or recommended.",
+          "type": "string",
+          "minLength": 1
+        },
+        "rating": {
+          "description": "Patchinfo rating verbatim, such as critical or moderate.",
+          "type": "string",
+          "minLength": 1
+        },
+        "patches": {
+          "description": "Updateinfo entries rolled into a Product Increment, in log order.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title"],
+            "properties": {
+              "id": {"type": "string"},
+              "title": {"type": "string"}
+            }
+          }
+        },
+        "packager": {
+          "description": "Packager, resolved to an email address where possible.",
+          "type": "string"
+        },
+        "source_packages": {
+          "description": "Source package names this update rebuilds.",
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "origin": {
+          "description": "Where the update came from, shaped by `workflow`.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "request": { "description": "OBS/IBS request number.", "type": "integer" },
+            "project": { "description": "OBS/IBS project.", "type": "string" },
+            "review_url": { "description": "Human-facing request page.", "type": "string", "format": "uri" },
+            "pull_request": { "description": "Gitea pull request, human-facing.", "type": "string", "format": "uri" },
+            "api": { "description": "Gitea pull request, API endpoint.", "type": "string", "format": "uri" },
+            "commit": { "description": "Head commit of the pull request.", "type": "string" }
+          }
+        },
+        "products": {
+          "description": "Products this update ships to.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/product" }
+        }
+      }
+    },
+
+    "product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "archs"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "archs": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+
+    "install": {
+      "description": "How to get the update onto a machine.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "targets", "test_platforms"],
+      "properties": {
+        "repository": {
+          "description": "Base repository for the whole update.",
+          "type": "string",
+          "format": "uri"
+        },
+        "targets": {
+          "description": "One self-contained row per product and architecture.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/target" }
+        },
+        "test_platforms": {
+          "description": "Reference-host platforms to validate on.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/test_platform" }
+        }
+      }
+    },
+
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "version", "arch", "repository", "binaries"],
+      "properties": {
+        "product": { "type": "string" },
+        "version": { "type": "string" },
+        "arch": { "type": "string" },
+        "repository": {
+          "description": "Absolute URL serving this target, under which an RPM is at `<arch>/<name>-<version-release>.<arch>.rpm`.",
+          "type": "string",
+          "format": "uri"
+        },
+        "binaries": {
+          "description": "Package name to `version-release.arch`, one entry per RPM this target carries.",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^-]+-[^-]+\\.[A-Za-z0-9_]+$"
+          }
+        }
+      }
+    },
+
+    "test_platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base", "archs"],
+      "properties": {
+        "base": { "$ref": "#/$defs/platform_ref" },
+        "addon": { "$ref": "#/$defs/platform_ref" },
+        "archs": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+
+    "platform_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "major", "minor"],
+      "properties": {
+        "class": { "type": "string" },
+        "major": { "type": "string" },
+        "minor": { "type": "string" }
+      }
+    },
+
+    "issues": {
+      "description": "Referenced bugs and Jira features keyed `<tracker>#<number>`, excluding CVEs.",
+      "type": "object",
+      "propertyNames": { "pattern": "^(bsc|bnc|boo|jsc)#[A-Za-z0-9-]+$" },
+      "additionalProperties": { "$ref": "#/$defs/issue" }
+    },
+
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "reproducer", "status", "comment"],
+      "properties": {
+        "title": {
+          "description": "Bug summary as the patchinfo states it.",
+          "type": "string"
+        },
+        "severity": {
+          "description": "Bug severity, absent when no source supplied one.",
+          "enum": ["critical", "major", "normal", "minor", "enhancement"]
+        },
+        "new": {
+          "description": "True only for a bug a tester filed during validation.",
+          "const": true
+        },
+        "reproducer": {
+          "description": "Whether a reproducer exists, null until answered.",
+          "type": ["boolean", "null"]
+        },
+        "status": {
+          "description": "Validation outcome, null until answered.",
+          "enum": [
+            "FIXED", "NOT_FIXED", "HYPOTHETICAL", "NOT_REPRODUCIBLE",
+            "NO_ENVIRONMENT", "TOO_COMPLEX", "SKIPPED", "OTHER", null
+          ]
+        },
+        "comment": {
+          "description": "Tester's free text about this issue.",
+          "type": ["string", "null"]
+        },
+        "l3": {
+          "description": "SolidGround record, present only for L3-tracked bugs.",
+          "$ref": "#/$defs/l3"
+        }
+      }
+    },
+
+    "l3": {
+      "description": "SolidGround data, omitting the fields upstream left empty.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["incident"],
+      "properties": {
+        "incident": { "type": "integer" },
+        "summary": { "type": "string" },
+        "product": { "type": "string" },
+        "component": { "type": "string" },
+        "affected_packages": { "type": "array", "items": { "type": "string" } },
+        "ptf_packages": { "type": "array", "items": { "type": "string" } },
+        "platform": { "type": "string" },
+        "probability": { "type": "string" },
+        "impact": { "description": "SolidGround calls this `outcome`.", "type": "string" },
+        "priority": { "type": "string" },
+        "severity": { "description": "SolidGround's own wording, such as Major.", "type": "string" },
+        "patch": { "type": "string" },
+        "scriptability": { "type": "string" },
+        "requires_thirdparty": { "type": "boolean" },
+        "resolution": { "type": "string" },
+        "reproducer": { "type": "string" }
+      }
+    },
+
+    "testing": {
+      "description": "Grouped by the source of a result.",
+      "$comment": "Open here and under `openqa` for unpinned shapes; known subsections stay closed.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "openqa": {
+          "description": "Everything openQA produced.",
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "install": { "$ref": "#/$defs/openqa_install" },
+            "incident": { "$ref": "#/$defs/openqa_incident" }
+          }
+        },
+        "install": {
+          "description": "Installation on real reference hosts.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verdict", "checks", "comment"],
+          "properties": {
+            "verdict": {
+              "description": "Tester's install verdict from INSTALL TESTS SUMMARY, null until decided.",
+              "enum": ["PASSED", "FAILED", null]
+            },
+            "checks": { "type": "array", "items": { "$ref": "#/$defs/install_check" } },
+            "comment": {
+              "description": "INSTALL TESTS SUMMARY prose, with per-refhost comments folded in prefixed by host.",
+              "type": ["string", "null"]
+            }
+          }
+        },
+        "regression": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verdict", "comment"],
+          "properties": {
+            "verdict": {
+              "description": "Tester's regression verdict from REGRESSION TEST SUMMARY, null until decided.",
+              "enum": ["PASSED", "FAILED", null]
+            },
+            "comment": {
+              "description": "The `regression tests:` body, plus any prose from REGRESSION TEST SUMMARY.",
+              "type": ["string", "null"]
+            }
+          }
+        }
+      }
+    },
+
+    "openqa_install": {
+      "description": "openQA installation jobs, the `Install tests:` block at the foot of the log.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "jobs"],
+      "properties": {
+        "verdict": {
+          "description": "Failed unless every job passed or softfailed, counting jobs that never ran.",
+          "enum": ["passed", "failed", null]
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scenario", "result"],
+            "properties": {
+              "scenario": { "type": "string" },
+              "result": {
+                "description": "openQA result in its own lowercase vocabulary, such as passed, softfailed or none.",
+                "type": "string"
+              },
+              "job": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+
+    "openqa_incident": {
+      "description": "Aggregate of all incident jobs, with the failures listed in full.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "failures"],
+      "properties": {
+        "summary": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version", "flavor", "archs", "total"],
+            "properties": {
+              "version": { "type": "string" },
+              "flavor": { "type": "string" },
+              "archs": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "passed": { "type": "integer" },
+              "failed": { "type": "integer" },
+              "other": { "type": "integer" },
+              "total": { "type": "integer" }
+            }
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "version": { "type": "string" },
+              "flavor": { "type": "string" },
+              "arch": { "type": "string" },
+              "name": { "type": "string" },
+              "job": { "type": "integer" },
+              "failed_modules": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+
+
+    "install_check": {
+      "description": "One mtui reference-host block from `Test results by product-arch:`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "refhost", "verdict", "before", "after"],
+      "properties": {
+        "target": {
+          "description": "Which `install.targets[]` row this check verifies, joined by exact product/version/arch match rather than a formatted string.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["product", "version", "arch"],
+          "properties": {
+            "product": { "type": "string" },
+            "version": { "type": "string" },
+            "arch": { "type": "string" }
+          }
+        },
+        "refhost": { "type": "string" },
+        "verdict": { "enum": ["PASSED", "FAILED", null] },
+        "before": {
+          "description": "Versions installed before, keyed by package name; a missing package was not installed.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "after": {
+          "description": "Versions installed after, same convention.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "build_log"],
+      "properties": {
+        "source": {
+          "description": "The three questions of `source code change review:`.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["new_version_or_package", "all_tracked_issues_documented", "untracked_changes", "comment"],
+          "properties": {
+            "new_version_or_package": { "$ref": "#/$defs/tristate" },
+            "all_tracked_issues_documented": { "$ref": "#/$defs/tristate" },
+            "untracked_changes": { "$ref": "#/$defs/tristate" },
+            "comment": { "type": ["string", "null"] }
+          }
+        },
+        "build_log": {
+          "description": "The three TEST_SUITE_* questions and the per-package verdicts.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["test_suite_present", "test_suite_sufficient", "test_suite_passed", "comment"],
+          "properties": {
+            "test_suite_present": { "$ref": "#/$defs/tristate" },
+            "test_suite_sufficient": { "$ref": "#/$defs/tristate" },
+            "test_suite_passed": { "$ref": "#/$defs/tristate" },
+            "results": {
+              "description": "Assessed build logs, per package and architecture.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["package", "arch", "result"],
+                "properties": {
+                  "package": { "type": "string" },
+                  "repository": {
+                    "description": "Build repository, when the pipeline's package key carries one.",
+                    "type": "string"
+                  },
+                  "arch": { "type": "string" },
+                  "result": { "enum": ["passed", "failed", "unknown", "no_tests"] }
+                }
+              }
+            },
+            "comment": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+
+    "tester_entry": {
+      "description": "One `## export MTUI:` footer line, decomposed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "mtui": { "type": "string" },
+        "os": {
+          "description": "OS release mtui ran on, such as `openSUSE Tumbleweed-20260822`.",
+          "type": "string"
+        },
+        "kernel": { "type": "string" },
+        "at": {
+          "description": "Server-stamped export time.",
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}
