@@ -1,0 +1,177 @@
+{
+  "schema_version": "1.0",
+  "id": "SUSE:Maintenance:99999:999999",
+  "kind": "maintenance",
+  "workflow": "obs",
+  "generated_at": "2026-01-01T12:00:00Z",
+  "verdict": "PASSED",
+  "comment": "Overall summary comment.",
+  "people": {
+    "testers": [
+      {
+        "name": "Alice Tester",
+        "mtui": "26.4.0",
+        "os": "openSUSE Tumbleweed-20260822",
+        "kernel": "6.10.0-1-default",
+        "at": "2026-01-01T10:00:00Z"
+      },
+      {
+        "name": "Bob Tester",
+        "mtui": "26.4.0",
+        "os": "openSUSE Leap-15.6",
+        "kernel": "6.4.0-150600-default",
+        "at": "2026-01-01T11:00:00Z"
+      }
+    ],
+    "reviewer": {
+      "name": "Carol Reviewer",
+      "slack": { "channel": "C0123456789", "ts": "1735732800.123456" }
+    }
+  },
+  "update": {
+    "packager": "someone@suse.com",
+    "source_packages": ["examplepkg"],
+    "category": "security",
+    "rating": "important",
+    "patches": [{ "id": "SUSE-2026-1", "title": "Security update for examplepkg" }],
+    "origin": {
+      "request": 999999,
+      "project": "SUSE:Maintenance:99999",
+      "review_url": "https://build.suse.de/request/show/999999",
+      "pull_request": "https://src.suse.de/products/SLFO/pulls/1",
+      "api": "https://src.suse.de/api/v1/repos/products/SLFO/pulls/1",
+      "commit": "deadbeefcafef00d"
+    },
+    "products": [
+      { "name": "SLE-Product-SLES", "version": "15-SP6", "archs": ["x86_64", "aarch64"] }
+    ]
+  },
+  "install": {
+    "repository": "http://download.suse.de/ibs/SUSE:/Maintenance:/99999/",
+    "targets": [
+      {
+        "product": "SLE-Product-SLES",
+        "version": "15-SP6",
+        "arch": "x86_64",
+        "repository": "http://download.suse.de/ibs/SUSE:/Maintenance:/99999/repo",
+        "binaries": {
+          "examplepkg": "1.2.3-1.1.x86_64",
+          "examplepkg-devel": "1.2.3-1.1.x86_64"
+        }
+      }
+    ],
+    "test_platforms": [
+      {
+        "base": { "class": "SLES", "major": "15", "minor": "SP6" },
+        "addon": { "class": "sle-module-example", "major": "15", "minor": "SP6" },
+        "archs": ["x86_64", "aarch64"]
+      }
+    ]
+  },
+  "issues": {
+    "bsc#1234567": {
+      "title": "Example bug title",
+      "severity": "major",
+      "new": true,
+      "reproducer": true,
+      "status": "FIXED",
+      "comment": "Verified the fix.",
+      "l3": {
+        "incident": 71234,
+        "summary": "L3 incident summary",
+        "product": "SUSE Linux Enterprise Server 15 SP6",
+        "component": "Base",
+        "affected_packages": ["examplepkg"],
+        "ptf_packages": ["examplepkg-ptf"],
+        "platform": "Other",
+        "probability": "high",
+        "impact": "data loss",
+        "priority": "P2",
+        "severity": "Major",
+        "patch": "SUSE-2026-1",
+        "scriptability": "possible",
+        "requires_thirdparty": false,
+        "resolution": "fixed upstream",
+        "reproducer": "steps to reproduce"
+      }
+    }
+  },
+  "testing": {
+    "an_unknown_testing_key": "survives round-trip",
+    "openqa": {
+      "install": {
+        "verdict": "passed",
+        "jobs": [{ "scenario": "sles_15-SP6_x86_64", "result": "passed", "job": 1234567 }]
+      },
+      "incident": {
+        "summary": [
+          {
+            "version": "15-SP6",
+            "flavor": "Server-DVD-Incidents",
+            "archs": ["x86_64"],
+            "passed": 10,
+            "failed": 1,
+            "other": 0,
+            "total": 11
+          }
+        ],
+        "failures": [
+          {
+            "version": "15-SP6",
+            "flavor": "Server-DVD-Incidents",
+            "arch": "x86_64",
+            "name": "some_test_module",
+            "job": 1234568,
+            "failed_modules": ["boot", "network"]
+          }
+        ]
+      }
+    },
+    "install": {
+      "verdict": "PASSED",
+      "checks": [
+        {
+          "target": { "product": "SLE-Product-SLES", "version": "15-SP6", "arch": "x86_64" },
+          "refhost": "host-x86-1.suse.de",
+          "verdict": "PASSED",
+          "before": { "examplepkg": "1.2.2-1.1.x86_64" },
+          "after": { "examplepkg": "1.2.3-1.1.x86_64" }
+        },
+        {
+          "target": { "product": "SLE-Product-SLES", "version": "15-SP6", "arch": "aarch64" },
+          "refhost": "host-aarch64-1.suse.de",
+          "verdict": "FAILED",
+          "before": { "examplepkg": "1.2.2-1.1.aarch64" },
+          "after": { "examplepkg": "1.2.2-1.1.aarch64" }
+        }
+      ],
+      "comment": "host-x86-1: ok; host-aarch64-1: package did not upgrade"
+    },
+    "regression": {
+      "verdict": "FAILED",
+      "comment": "Regression found in the network stack."
+    }
+  },
+  "review": {
+    "source": {
+      "new_version_or_package": true,
+      "all_tracked_issues_documented": true,
+      "untracked_changes": false,
+      "comment": "Reviewed the diff, looks fine."
+    },
+    "build_log": {
+      "test_suite_present": true,
+      "test_suite_sufficient": true,
+      "test_suite_passed": true,
+      "results": [
+        {
+          "package": "examplepkg",
+          "repository": "SUSE:Maintenance:99999",
+          "arch": "x86_64",
+          "result": "passed"
+        }
+      ],
+      "comment": "All build logs look good."
+    }
+  }
+}

@@ -298,6 +298,13 @@ rand = "0.10"
 # dev / test
 insta = "1"
 wiremock = "0.6"
+# JSON-Schema (draft 2019-09) conformance testing for the typed report
+# document (mtui-types, dev-only).
+# boon over jsonschema: +5 transitive crates vs +25, frozen API (6 releases
+# ever) vs 129 versions/56 breaking minors, both 100% draft-2019-09 conformant
+# on this schema. Reached through exactly one test helper so a swap to
+# `jsonschema` (pre-approved if an advisory lands) is a single-file change.
+boon = "0.6"
 # serialises tests that mutate process-global env vars ($OSC_CONFIG, $HOME,
 # $XDG_CONFIG_HOME) for the osc-parity oscrc discovery reader — cargo runs tests
 # in parallel threads, so env mutation must not race.
