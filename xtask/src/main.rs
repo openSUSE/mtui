@@ -21,6 +21,7 @@ fn main() -> Result<()> {
         Some("gen-docs") => run_gen_docs(),
         Some("package") => run_package(),
         Some("corpus-survey") => run_corpus_survey(),
+        Some("schema-check") => run_schema_check(),
         Some(other) => {
             eprintln!("unknown task: {other}\n");
             print_usage();
@@ -41,7 +42,8 @@ fn print_usage() {
          gen             Regenerate dist/ completions + man pages for both binaries\n    \
          gen-docs        Regenerate docs/src/{{cli,invocation}}.md from the parsers\n    \
          package         Build a release tarball for a target\n    \
-         corpus-survey   Probe the teregen v2 document status of every in-flight update\n\n\
+         corpus-survey   Probe the teregen v2 document status of every in-flight update\n    \
+         schema-check    Compare the live /api/v2/schema against the committed copy\n\n\
          PACKAGE:\n    \
          cargo xtask package --version <VER> --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]\n    \
          Assembles <bin-dir>/{{mtui,mtui-mcp}} + dist/ + LICENSE/README into\n    \
@@ -51,7 +53,13 @@ fn print_usage() {
          cargo xtask corpus-survey [--v1-base <URL>] [--v2-base <URL>]\n    \
          Read-only: GETs the testing update queue, then GETs each id's v2\n    \
          document, and reports the 200/404/503/other split by RRID kind.\n    \
-         Defaults to https://qam.suse.de/api/{{v1,v2}}."
+         Defaults to https://qam.suse.de/api/{{v1,v2}}.\n\n\
+         SCHEMA-CHECK:\n    \
+         cargo xtask schema-check [--url <URL>]\n    \
+         Read-only: GETs the live schema and compares it BY VALUE (not bytes)\n    \
+         against the committed crates/mtui-types/.../report-template-v1.json,\n    \
+         printing the differing pointers and exiting non-zero on drift.\n    \
+         Defaults to https://qam.suse.de/api/v2/schema."
     );
 }
 
@@ -134,6 +142,28 @@ fn run_corpus_survey() -> Result<()> {
         .block_on(xtask::corpus_survey::run(
             &v1_base,
             &v2_base,
+            mtui_datasources::VerifyPolicy::Default(true),
+        ))
+}
+
+/// Run the schema drift check: `cargo xtask schema-check [--url
+/// <URL>]`. Read-only; see [`xtask::schema_check::run`].
+fn run_schema_check() -> Result<()> {
+    let mut url = xtask::schema_check::DEFAULT_SCHEMA_URL.to_owned();
+    let mut args = std::env::args().skip(2);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--url" => url = args.next().context("--url needs a value")?,
+            other => bail!("unknown schema-check flag: {other}"),
+        }
+    }
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building the tokio runtime")?
+        .block_on(xtask::schema_check::run(
+            &url,
             mtui_datasources::VerifyPolicy::Default(true),
         ))
 }

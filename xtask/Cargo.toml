@@ -39,6 +39,9 @@ anyhow.workspace = true
 mtui-types.workspace = true
 mtui-datasources.workspace = true
 tokio.workspace = true
+# `schema-check`: compares the live /api/v2/schema against the committed copy
+# by value.
+serde_json.workspace = true
 
 [dev-dependencies]
 # Offline generation smoke test writes into an isolated temp dir (never `dist/`).
