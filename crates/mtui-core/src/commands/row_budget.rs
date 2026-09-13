@@ -410,6 +410,17 @@ mod tests {
     }
 
     #[test]
+    fn slice_anomaly_counts_cover_head_and_tail() {
+        // Mirror of `anomaly_counts_cover_head_and_tail` for the borrowed
+        // path: head (5) and tail (145) anomalies must count even though
+        // they are always kept; middle-only counting would report 0/0.
+        let items: Vec<usize> = (0..150).collect();
+        let out = crush_slice(&items, |v| *v, |v| u8::from(*v == 5 || *v == 145));
+        assert_eq!((out.anomaly_kept, out.anomaly_total), (2, 2));
+        assert!(out.kept.contains(&&5) && out.kept.contains(&&145));
+    }
+
+    #[test]
     fn snapshot_notice_and_probe_shapes() {
         let with = row_notice(90, 150, 5, 60, "--limit/--field/-G");
         let without = row_notice(51, 101, 0, 0, "--limit");
