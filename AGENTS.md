@@ -359,16 +359,16 @@ The `tests/` fixtures are the authority for these formats; treat them as golden.
   masked (`<set>`) by both `config show` and `config set` — never echo their
   value to the display buffer (it reaches terminal scrollback and MCP output).
   Configured datasource URLs may embed credentials (`scheme://user:pass@host`);
-  always run a URL through `sanitize_url` (crate-internal to `mtui-datasources`,
-  not a public export) before logging it or putting it in an error (it replaces
+  always run a URL through `sanitize_url` (`mtui_datasources::sanitize_url`,
+  shared with `mtui-core`) before logging it or putting it in an error (it replaces
   userinfo with `***` while keeping the host for diagnosis). Never render a
   `reqwest::Error` directly — its `Display` appends the request URL verbatim, and
   a redirect can put credentials back into it; `impl From<reqwest::Error> for
   HttpError` strips the URL where reqwest errors enter the crate's hierarchy, so
   convert first and add request context yourself. Outside `mtui-datasources`
-  `sanitize_url` is not reachable (it is crate-internal), so the rule there is:
-  never interpolate a datasource URL into a message at all — log the host alone,
-  or rely on the already-stripped error types. The Gitea token travels in an
+  reuse `sanitize_url` — never interpolate a raw datasource URL into a message;
+  where it cannot apply, log the host alone or rely on the already-stripped
+  error types. The Gitea token travels in an
   `Authorization` header and is never logged.
 - Never add SSH password auth — MTUI is **pubkey-only by design**; preserve that.
 - **Comments must not outweigh the code.** A one-line change gets at most a
