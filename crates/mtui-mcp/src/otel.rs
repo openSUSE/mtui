@@ -586,7 +586,8 @@ fn classify_reqwest(err: &reqwest::Error) -> ExportReason {
 }
 
 // Lost-audit-seq window reported as `audit_gap` on recovery:
-// (start seq, end seq, lost count).
+// (start seq, end seq, lost count). Bounds merge by min/max, so a
+// non-contiguous window is bounding and count stays authoritative.
 type GapRange = Option<(u64, u64, usize)>;
 
 // The background exporter. Clone shares the queues and the health latch.
@@ -2030,6 +2031,105 @@ mod tests {
             "recovery batch carries the rejected gap"
         );
         exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn flush_one_batch_merges_rejected_gap_once() {
+        // `absorb_rejected` runs inside `flush_one_batch`, not `export_batch`:
+        // pending plus rejected gaps plus queued audits send one `audit_gap`
+        // with the summed count, then stay silent.
+        let server = wiremock::MockServer::start().await;
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        let captured = Arc::clone(&bodies);
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/logs"))
+            .respond_with(move |req: &wiremock::Request| {
+                captured.lock().expect("bodies").push(req.body.clone());
+                wiremock::ResponseTemplate::new(200)
+            })
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        let config = TaskConfig {
+            endpoint: format!("{}/v1/logs", server.uri()),
+            headers: Vec::new(),
+            service: "mtui".to_owned(),
+        };
+        let healthy = AtomicBool::new(true);
+        let lost = AtomicU64::new(0);
+        let rejected_gap = Arc::new(std::sync::Mutex::new(Some((20u64, 21u64, 2usize))));
+        let mut pending_gap = Some((10u64, 12u64, 3usize));
+        let (audit_tx, mut audit_rx) = mpsc::channel(OTEL_QUEUE_CAP);
+        let (_diag_tx, mut diag_rx) = mpsc::channel(OTEL_QUEUE_CAP);
+        audit_tx
+            .send(QueuedAudit {
+                seq: 30,
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: now_nanos(),
+                extra_attrs: Vec::new(),
+            })
+            .await
+            .expect("queue audit");
+        flush_one_batch(
+            &mut audit_rx,
+            &mut diag_rx,
+            &client,
+            &config,
+            &healthy,
+            &lost,
+            &rejected_gap,
+            &mut pending_gap,
+        )
+        .await;
+        assert_eq!(*rejected_gap.lock().expect("rejected slot"), None);
+        assert_eq!(pending_gap, None, "gap clears after it is sent");
+        let sent = bodies.lock().expect("bodies").clone();
+        assert_eq!(sent.len(), 1, "one export for merged gap plus audits");
+        let body = &sent[0];
+        assert_eq!(
+            body.windows(b"\"lost_start\"".len())
+                .filter(|w| *w == b"\"lost_start\"")
+                .count(),
+            1,
+            "exactly one audit_gap record"
+        );
+        for needle in [
+            b"\"lost_start\":10".as_slice(),
+            b"\"lost_end\":21".as_slice(),
+            b"\"count\":5".as_slice(),
+        ] {
+            assert!(
+                body.windows(needle.len()).any(|w| w == needle),
+                "merged gap is bounding with summed count"
+            );
+        }
+        flush_one_batch(
+            &mut audit_rx,
+            &mut diag_rx,
+            &client,
+            &config,
+            &healthy,
+            &lost,
+            &rejected_gap,
+            &mut pending_gap,
+        )
+        .await;
+        assert_eq!(
+            bodies.lock().expect("bodies").len(),
+            1,
+            "second flush sends no repeat gap"
+        );
     }
 
     #[tokio::test]
