@@ -319,6 +319,20 @@ mod tests {
     }
 
     #[test]
+    fn highlighted_warnings_survive_folding_under_color() {
+        // Under `Never` `yellow` is a no-op, so the test above cannot catch
+        // color-before-scan folding; here the escapes are real and the SGR
+        // `m` must not defeat the fold-safety scan.
+        let (mut session, buf) = session_with_color(ColorMode::Always);
+        let warns = vec![Diagnostic::highlighted("warning: x"); 5];
+        render_diagnostics(&mut session, &warns);
+        let out = buf.contents();
+        assert!(out.contains("\u{1b}["), "color must be on: {out:?}");
+        assert!(!out.contains("identical"), "{out:?}");
+        assert_eq!(out.lines().count(), 5, "{out:?}");
+    }
+
+    #[test]
     fn degradation_repeats_never_fold() {
         let (mut session, buf) = session_with_color(ColorMode::Never);
         let degs = vec![Diagnostic::degradation("boom"); 5];

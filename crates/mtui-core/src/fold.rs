@@ -45,8 +45,37 @@ fn contains_bounded(lower: &str, kw: &str) -> bool {
     false
 }
 
+/// Drops ANSI escape sequences so colored signals still block folding.
+///
+/// Both the diagnostics' own highlighting (`\x1b[33mwarning\x1b[39m`) and
+/// colored remote output (`\x1b[31merror\x1b[0m`) end the opener in `m`, a
+/// word char that would otherwise defeat [`contains_bounded`]'s start-boundary
+/// check and let warnings fold away. Output keeps its escapes; only the scan
+/// sees the stripped form.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        // CSI (`\x1b[` … final byte `@`..=`~`) covers the SGR colors both the
+        // diagnostics' highlighting and remote output use; a bare ESC just
+        // drops without eating the text that follows it.
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        } else if c != '\x1b' {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn is_foldable(line: &str) -> bool {
-    let trimmed = line.trim();
+    let stripped = strip_ansi(line);
+    let trimmed = stripped.trim();
     // Blank runs fold (len >= 3 below); singles pass through, empty output keeps its shared banner.
     if trimmed.is_empty() {
         return true;
@@ -60,19 +89,22 @@ fn is_foldable(line: &str) -> bool {
     if line.contains(":->") {
         return false;
     }
-    if line.contains("completed on") || line.contains("rebooted") {
+    if stripped.contains("completed on") || stripped.contains("rebooted") {
         return false;
     }
-    if line.contains("FAILED") || line.contains("stderr:") {
+    if stripped.contains("FAILED") || stripped.contains("stderr:") {
         return false;
     }
-    let lower = line.to_ascii_lowercase();
+    let lower = stripped.to_ascii_lowercase();
     // Compounds containing a signal word bounded matching would miss; only listed ones block, so liberror/strace still fold.
     for kw in [
         "failed",
         "error",
         "keyerror",
         "assertionerror",
+        "valueerror",
+        "typeerror",
+        "runtimeerror",
         "warning",
         "warn",
         "trace",
@@ -198,6 +230,47 @@ mod tests {
             assert!(
                 !can_fold_block(line, "", Some(0)),
                 "traceback signal must block sharing {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ansi_wrapped_signals_never_fold() {
+        // SGR openers end in `m`, a word char: without the strip the bounded
+        // match misses and colored warnings fold away under Always/Auto.
+        for line in [
+            "\u{1b}[33mwarning\u{1b}[39m: extra rpm output",
+            "\u{1b}[31merror\u{1b}[0m: boom",
+            "\u{1b}[1;31merror\u{1b}[0m: boom",
+            "got \u{1b}[33mwarn\u{1b}[0m: disk low",
+            "\u{1b}warning: stray esc drops without eating text",
+        ] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
+            assert!(
+                !can_fold_block(line, "", Some(0)),
+                "colored signal must block sharing {line:?}"
+            );
+        }
+        // An escapes-only line is effectively blank, so it still folds.
+        assert!(can_fold_block("\u{1b}[0m", "", Some(0)));
+    }
+
+    #[test]
+    fn bare_python_exceptions_never_fold() {
+        // Single-line formatters print `ValueError: ...` with no traceback
+        // header; the inner `error` is preceded by a word char, so these
+        // compounds are listed explicitly.
+        for line in [
+            "ValueError: bad value",
+            "TypeError: bad type",
+            "RuntimeError: boom",
+        ] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
+            assert!(
+                !can_fold_block(line, "", Some(0)),
+                "exception must block sharing {line:?}"
             );
         }
     }
