@@ -30,7 +30,9 @@ use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
 
-use super::row_budget::{crush, row_notice};
+use super::row_budget::{
+    crush, json_envelope, probe_meta, probe_notice, row_notice, truncation_meta,
+};
 
 /// Narrowing flags named in the row-budget notice.
 const REFHOSTS_HINT: &str = "--limit/--offset/--name/--arch/--product/--version/--addon";
@@ -322,9 +324,9 @@ impl Command for ListRefhosts {
                 .long("json")
                 .action(ArgAction::SetTrue)
                 .help(
-                    "emit a JSON array of kept rows; over-cap stdout adds a trailing \
-                     `…[truncated …` notice line — naive parse of full stdout fails, \
-                     strip lines starting with that prefix before parsing",
+                    "emit a JSON array of kept rows; over-cap stdout is a JSON envelope \
+                     {\"rows\": [...], \"truncation\": {...}} so stdout stays valid JSON \
+                     (--free windowing adds a \"probe\" object)",
                 ),
         )
         .arg(
@@ -450,6 +452,7 @@ impl Command for ListRefhosts {
 
         // Row budget backstops the whole-inventory dump: head+tail+anomalies, exact-deduped.
         // Row-cap is not byte-cap: MCP max_output_bytes can still cut mid-array on huge rows.
+        let probed_len = windowed.len();
         let crushed = crush(
             windowed,
             |r| {
@@ -466,23 +469,37 @@ impl Command for ListRefhosts {
             },
             anomaly_severity,
         );
-        // Totals stay pre-window so a probed window never masquerades as the
-        // whole inventory; --free windows always notice since unprobed hosts
-        // hide lock state, plain windows only when the crush itself dropped.
-        let overall_truncated = window_dropped.saturating_add(crushed.truncated);
-        let notice = (crushed.truncated > 0 || (free && window_dropped > 0)).then(|| {
+        // Truncation notices only a real row-budget cut; --free windowing gets
+        // its own probe note so anomaly counts never cover unprobed hosts.
+        let trunc_notice = (crushed.truncated > 0).then(|| {
             row_notice(
-                overall_truncated,
-                matched_total,
+                crushed.truncated,
+                crushed.total,
                 crushed.anomaly_kept,
                 crushed.anomaly_total,
                 REFHOSTS_HINT,
             )
         });
+        let probe_needed = free && window_dropped > 0;
+        let probe_note = probe_needed.then(|| probe_notice(probed_len, matched_total));
         if as_json {
-            session.display.println(&render_json(&crushed.kept));
-            if let Some(notice) = notice {
-                session.display.println(&notice);
+            let trunc_meta = (crushed.truncated > 0).then(|| {
+                truncation_meta(
+                    crushed.truncated,
+                    crushed.total,
+                    crushed.anomaly_kept,
+                    crushed.anomaly_total,
+                    REFHOSTS_HINT,
+                )
+            });
+            let probe_meta_opt = probe_needed.then(|| probe_meta(probed_len, matched_total));
+            if trunc_meta.is_some() || probe_meta_opt.is_some() {
+                let rows: Vec<Value> = crushed.kept.iter().map(Record::to_json).collect();
+                session
+                    .display
+                    .println(&json_envelope(rows, trunc_meta, probe_meta_opt));
+            } else {
+                session.display.println(&render_json(&crushed.kept));
             }
             return Ok(());
         }
@@ -497,8 +514,11 @@ impl Command for ListRefhosts {
             verbose,
             matched_total,
         ));
-        if let Some(notice) = notice {
+        if let Some(notice) = trunc_notice {
             session.display.println(&notice);
+        }
+        if let Some(note) = probe_note {
+            session.display.println(&note);
         }
         Ok(())
     }
@@ -1200,7 +1220,7 @@ default:
     }
 
     #[tokio::test]
-    async fn row_budget_json_stays_parseable_with_trailing_notice() {
+    async fn row_budget_json_emits_envelope() {
         use crate::commands::testkit::matches;
         let mut yaml = String::from("default:\n");
         for i in 0..150 {
@@ -1212,31 +1232,20 @@ default:
         let args = matches(&ListRefhosts, &["--json"]);
         ListRefhosts.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
+        let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+        let obj = parsed.as_object().unwrap();
+        assert!(obj.contains_key("rows"), "{out}");
+        assert!(obj.contains_key("truncation"), "{out}");
+        let rows = obj["rows"].as_array().unwrap();
         assert!(
-            out.lines()
-                .last()
-                .is_some_and(|l| l.starts_with("…[truncated")),
-            "{out}"
-        );
-        assert!(
-            serde_json::from_str::<serde_json::Value>(out.trim()).is_err(),
-            "naive parse of full stdout must fail loudly: {out}"
-        );
-        let json_part: String = out
-            .lines()
-            .filter(|l| !l.starts_with("…[truncated"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let parsed: serde_json::Value = serde_json::from_str(&json_part).unwrap();
-        let arr = parsed.as_array().unwrap();
-        assert!(
-            arr.len() <= super::super::row_budget::ROW_CAP,
+            rows.len() <= super::super::row_budget::ROW_CAP,
             "{}",
-            arr.len()
+            rows.len()
         );
-        assert!(arr.iter().any(|r| r["name"] == "host-000"), "{out}");
-        assert!(arr.iter().any(|r| r["name"] == "host-149"), "{out}");
-        assert!(!arr.iter().any(|r| r["name"] == "host-060"), "{out}");
+        assert!(rows.iter().any(|r| r["name"] == "host-000"), "{out}");
+        assert!(rows.iter().any(|r| r["name"] == "host-149"), "{out}");
+        assert!(!rows.iter().any(|r| r["name"] == "host-060"), "{out}");
+        assert!(!out.contains("…[truncated"), "no trailing plaintext: {out}");
     }
 
     #[tokio::test]
@@ -1274,8 +1283,9 @@ default:
         let base = clap::Command::new("list_refhosts").no_binary_name(true);
         let mut cmd = ListRefhosts.configure(base);
         let help = cmd.render_help().to_string();
-        assert!(help.contains("…[truncated"), "{help}");
-        assert!(help.contains("strip lines starting with"), "{help}");
+        assert!(help.contains("truncation"), "{help}");
+        assert!(help.contains("envelope"), "{help}");
+        assert!(help.contains("valid JSON"), "{help}");
     }
 
     #[tokio::test]
@@ -1306,8 +1316,9 @@ default:
     async fn free_window_reports_pre_window_totals() {
         use crate::commands::testkit::matches;
         // Tiny inventory so the --free probes fail fast (unresolvable names);
-        // windowing must happen before probing and the notice/footer must
-        // still name the pre-window matched total.
+        // windowing must happen before probing and the footer must still name
+        // the pre-window matched total. A pure window emits only the probe
+        // note, never a truncation notice with fabricated anomaly counts.
         let mut yaml = String::from("default:\n");
         for i in 0..5 {
             yaml.push_str(&format!(
@@ -1330,10 +1341,45 @@ default:
         assert!(
             out.lines()
                 .last()
-                .is_some_and(|l| l.starts_with("…[truncated")),
-            "probed window still notices the unprobed remainder: {out}"
+                .is_some_and(|l| l.starts_with("…[probed")),
+            "probed window notices the unprobed remainder: {out}"
         );
-        assert!(out.contains("3 of 5 rows"), "{out}");
-        assert!(out.contains("2/2 anomalies kept"), "{out}");
+        assert!(out.contains("probed 2 of 5 hosts"), "{out}");
+        assert!(
+            !out.contains("…[truncated"),
+            "user windowing alone never truncates: {out}"
+        );
+        assert!(
+            !out.contains("anomalies kept"),
+            "probe note carries no fabricated anomaly counts: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn free_limit_json_emits_probe_envelope_without_truncation() {
+        use crate::commands::testkit::matches;
+        // `--free --limit 10 --json` over 150 hosts: windowed 10 fits the row
+        // budget, so no truncation envelope — only a probe object, and stdout
+        // stays one valid JSON document.
+        let mut yaml = String::from("default:\n");
+        for i in 0..150 {
+            yaml.push_str(&format!(
+                "  - name: host-{i:03}\n    arch: x86_64\n    product:\n      name: sles\n      version:\n        major: 15\n        minor: 6\n"
+            ));
+        }
+        let (mut session, buf, _dir) = session_with_refhosts_file(&yaml);
+        let args = matches(&ListRefhosts, &["--free", "--limit", "10", "--json"]);
+        ListRefhosts.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let parsed: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+        let obj = parsed.as_object().unwrap();
+        assert!(obj.contains_key("rows"), "{out}");
+        assert!(!obj.contains_key("truncation"), "{out}");
+        assert!(obj.contains_key("probe"), "{out}");
+        assert_eq!(obj["probe"]["probed"], 10, "{out}");
+        assert_eq!(obj["probe"]["total"], 150, "{out}");
+        assert_eq!(obj["rows"].as_array().unwrap().len(), 10, "{out}");
+        assert!(!out.contains("…[truncated"), "{out}");
+        assert!(!out.contains("…[probed"), "{out}");
     }
 }

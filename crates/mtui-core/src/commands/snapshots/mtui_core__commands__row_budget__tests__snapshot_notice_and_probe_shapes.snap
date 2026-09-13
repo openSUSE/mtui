@@ -1,0 +1,7 @@
+---
+source: crates/mtui-core/src/commands/row_budget.rs
+expression: "format!(\"{with}\\n{without}\\n{probe}\")"
+---
+…[truncated 90 of 150 rows (5/60 anomalies kept); narrow with --limit/--field/-G]
+…[truncated 51 of 101 rows; narrow with --limit]
+…[probed 2 of 5 hosts; unprobed hosts not surveyed for locks]

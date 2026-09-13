@@ -1,0 +1,25 @@
+---
+source: crates/mtui-core/src/commands/row_budget.rs
+expression: "json_envelope(rows, Some(trunc), Some(probe))"
+---
+{
+  "probe": {
+    "probed": 2,
+    "total": 5
+  },
+  "rows": [
+    {
+      "id": "row-000"
+    },
+    {
+      "id": "row-149"
+    }
+  ],
+  "truncation": {
+    "anomaly_kept": 1,
+    "anomaly_total": 1,
+    "hint": "--limit",
+    "total": 150,
+    "truncated": 98
+  }
+}
