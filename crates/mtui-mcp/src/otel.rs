@@ -585,6 +585,10 @@ fn classify_reqwest(err: &reqwest::Error) -> ExportReason {
     }
 }
 
+// Lost-audit-seq window reported as `audit_gap` on recovery:
+// (start seq, end seq, lost count).
+type GapRange = Option<(u64, u64, usize)>;
+
 // The background exporter. Clone shares the queues and the health latch.
 pub(crate) struct OtelExporter {
     config_service: String,
@@ -596,6 +600,12 @@ pub(crate) struct OtelExporter {
     healthy: Arc<AtomicBool>,
     diag_dropped: Arc<AtomicU64>,
     audit_lost: Arc<AtomicU64>,
+    // Foreground rejections (full queue or unhealthy) never reach the
+    // background task's receiver, so the minted seq would vanish without a
+    // trace. Rejected seqs merge here, and the flush drains them into the
+    // pending gap so they ride the same `audit_gap` accounting as failed
+    // batches.
+    rejected_gap: Arc<std::sync::Mutex<GapRange>>,
     shutdown: tokio_util::sync::CancellationToken,
     task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -679,6 +689,7 @@ impl OtelExporter {
     fn spawn(config: OtelConfig, client: reqwest::Client) -> Option<Arc<Self>> {
         let (audit_tx, audit_rx) = mpsc::channel(OTEL_QUEUE_CAP);
         let (diag_tx, diag_rx) = mpsc::channel(OTEL_QUEUE_CAP);
+        let rejected_gap = Arc::new(std::sync::Mutex::new(None));
         let exporter = Arc::new(Self {
             config_service: config.service_name.clone(),
             endpoint: config.endpoint,
@@ -689,6 +700,7 @@ impl OtelExporter {
             healthy: Arc::new(AtomicBool::new(true)),
             diag_dropped: Arc::new(AtomicU64::new(0)),
             audit_lost: Arc::new(AtomicU64::new(0)),
+            rejected_gap: Arc::clone(&rejected_gap),
             shutdown: tokio_util::sync::CancellationToken::new(),
             task: std::sync::Mutex::new(None),
         });
@@ -708,6 +720,7 @@ impl OtelExporter {
             },
             Arc::clone(&exporter.healthy),
             Arc::clone(&exporter.audit_lost),
+            Arc::clone(&rejected_gap),
             exporter.shutdown.clone(),
         ));
         *exporter.task.lock().expect("exporter task slot") = Some(task);
@@ -737,13 +750,40 @@ impl OtelExporter {
     }
 
     // Foreground path: refuse on unhealthy or full, never drop, never block.
+    // A refused record's minted seq merges into the rejected gap (plus the
+    // lost counter) so the background flush reports it as an `audit_gap`
+    // exactly like a failed batch.
     pub(crate) fn enqueue_audit(&self, record: QueuedAudit) -> Result<(), EnqueueError> {
         if !self.is_healthy() {
+            self.note_rejected(record.seq);
             return Err(EnqueueError::Unhealthy);
         }
-        self.audit_tx
-            .try_send(record)
-            .map_err(|_| EnqueueError::Full)
+        match self.audit_tx.try_send(record) {
+            Ok(()) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(record)) => {
+                self.note_rejected(record.seq);
+                Err(EnqueueError::Full)
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(record)) => {
+                self.note_rejected(record.seq);
+                Err(EnqueueError::Full)
+            }
+        }
+    }
+
+    fn note_rejected(&self, seq: u64) {
+        if let Ok(mut slot) = self.rejected_gap.lock() {
+            *slot = Some(match *slot {
+                Some((start, end, count)) => (start.min(seq), end.max(seq), count + 1),
+                None => (seq, seq, 1),
+            });
+        }
+        self.audit_lost.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rejected_gap(&self) -> Option<(u64, u64, usize)> {
+        self.rejected_gap.lock().ok().and_then(|slot| *slot)
     }
 
     // Diagnostics path: best-effort, drop plus counter, never refuse.
@@ -824,6 +864,7 @@ async fn run_loop(
     config: TaskConfig,
     healthy: Arc<AtomicBool>,
     audit_lost: Arc<AtomicU64>,
+    rejected_gap: Arc<std::sync::Mutex<GapRange>>,
     shutdown: tokio_util::sync::CancellationToken,
 ) {
     let mut pending_gap: Option<(u64, u64, usize)> = None;
@@ -840,6 +881,7 @@ async fn run_loop(
                     &config,
                     &healthy,
                     &audit_lost,
+                    &rejected_gap,
                     &mut pending_gap,
                 )
                 .await;
@@ -853,6 +895,7 @@ async fn run_loop(
                     &config,
                     &healthy,
                     &audit_lost,
+                    &rejected_gap,
                     &mut pending_gap,
                 )
                 .await;
@@ -861,6 +904,22 @@ async fn run_loop(
     }
 }
 
+// Foreground rejections never reach the receiver, so the flush folds them
+// into the pending gap before draining: the next export carries them first.
+fn absorb_rejected(
+    rejected_gap: &Arc<std::sync::Mutex<GapRange>>,
+    pending_gap: &mut Option<(u64, u64, usize)>,
+) {
+    let taken = rejected_gap.lock().ok().and_then(|mut slot| slot.take());
+    if let Some((start, end, count)) = taken {
+        *pending_gap = Some(match *pending_gap {
+            Some((ps, pe, pc)) => (ps.min(start), pe.max(end), pc + count),
+            None => (start, end, count),
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn flush_remaining(
     audit_rx: &mut mpsc::Receiver<QueuedAudit>,
     diag_rx: &mut mpsc::Receiver<QueuedDiag>,
@@ -868,10 +927,12 @@ async fn flush_remaining(
     config: &TaskConfig,
     healthy: &AtomicBool,
     audit_lost: &AtomicU64,
+    rejected_gap: &Arc<std::sync::Mutex<GapRange>>,
     pending_gap: &mut Option<(u64, u64, usize)>,
 ) {
     // Bounded by the shutdown budget: drain without waiting, then one final
     // export attempt inside the timeout.
+    absorb_rejected(rejected_gap, pending_gap);
     let drained = drain_batch(audit_rx, diag_rx, usize::MAX);
     if drained.0.is_empty() && drained.1.is_empty() && pending_gap.is_none() {
         return;
@@ -916,6 +977,7 @@ fn drain_batch(
     (audits, diags)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn flush_one_batch(
     audit_rx: &mut mpsc::Receiver<QueuedAudit>,
     diag_rx: &mut mpsc::Receiver<QueuedDiag>,
@@ -923,8 +985,10 @@ async fn flush_one_batch(
     config: &TaskConfig,
     healthy: &AtomicBool,
     audit_lost: &AtomicU64,
+    rejected_gap: &Arc<std::sync::Mutex<GapRange>>,
     pending_gap: &mut Option<(u64, u64, usize)>,
 ) {
+    absorb_rejected(rejected_gap, pending_gap);
     let (audits, diags) = drain_batch(audit_rx, diag_rx, OTEL_BATCH_MAX);
     if audits.is_empty() && diags.is_empty() && pending_gap.is_none() {
         return;
@@ -969,7 +1033,9 @@ async fn export_batch(
     }
     let payload = export_request(&config.service, &scopes);
     match post_logs(client, &config.endpoint, &config.headers, payload).await {
-        Ok(()) => {}
+        // A successful POST proves the collector reachable again: clear the
+        // fail-closed latch so foreground dispatch resumes.
+        Ok(()) => healthy.store(true, Ordering::Relaxed),
         Err(reason) => {
             // Sticky fail-closed latch for audit; diagnostics stay best-effort.
             healthy.store(false, Ordering::Relaxed);
@@ -1747,11 +1813,223 @@ mod tests {
         )
         .await;
         assert_eq!(gap, None, "gap clears after it is sent");
+        assert!(
+            healthy.load(Ordering::Relaxed),
+            "successful export clears the latch"
+        );
         let body = gap_seen.lock().expect("gap body").clone();
         assert!(
             body.windows(b"audit_gap".len()).any(|w| w == b"audit_gap"),
             "recovery batch carries the gap record"
         );
+    }
+
+    #[tokio::test]
+    async fn healthy_latch_resets_on_successful_export() {
+        // Fail-then-succeed-then-dispatch-accepted: a transient collector
+        // outage must not brick dispatch until restart.
+        let recovering = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/logs"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&recovering)
+            .await;
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        // Good endpoint throughout, so the background task can never
+        // re-latch mid-test; the latch is tripped by hand to model the
+        // transient outage.
+        let exporter = OtelExporter::with_client(
+            OtelConfig::for_tests(&format!("{}/v1/logs", recovering.uri()), "mtui"),
+            client.clone(),
+        );
+        exporter.healthy.store(false, Ordering::Relaxed);
+        assert_eq!(
+            exporter.enqueue_audit(QueuedAudit {
+                seq: 31,
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: now_nanos(),
+                extra_attrs: Vec::new(),
+            }),
+            Err(EnqueueError::Unhealthy),
+            "latched outage refuses"
+        );
+        // Recovery is one successful POST away: a diagnostics-only batch
+        // proves the collector reachable again.
+        let good_config = TaskConfig {
+            endpoint: format!("{}/v1/logs", recovering.uri()),
+            headers: Vec::new(),
+            service: "mtui".to_owned(),
+        };
+        let mut gap: Option<(u64, u64, usize)> = None;
+        export_batch(
+            &client,
+            &good_config,
+            &exporter.healthy,
+            &exporter.audit_lost,
+            &mut gap,
+            Vec::new(),
+            vec![QueuedDiag {
+                message: "probe".to_owned(),
+                level: "info".to_owned(),
+                target: "t".to_owned(),
+                time_nanos: now_nanos(),
+            }],
+        )
+        .await;
+        assert!(
+            exporter.is_healthy(),
+            "successful export must clear the latch"
+        );
+        exporter
+            .enqueue_audit(QueuedAudit {
+                seq: 32,
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: now_nanos(),
+                extra_attrs: Vec::new(),
+            })
+            .expect("dispatch accepted after recovery");
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn rejected_enqueue_feeds_gap_accounting() {
+        // A refused enqueue mints a seq that never reaches the receiver, so
+        // it merges into the rejected gap plus the lost counter and rides
+        // the same `audit_gap` recovery as a failed batch.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        // Unreachable endpoint: no flush can succeed during the fill, but the
+        // fill itself finishes before the first 500ms tick either way.
+        let exporter = OtelExporter::with_client(
+            OtelConfig::for_tests("http://127.0.0.1:9/v1/logs", "mtui"),
+            client.clone(),
+        );
+        for seq in 0..OTEL_QUEUE_CAP {
+            exporter
+                .enqueue_audit(QueuedAudit {
+                    seq: seq as u64,
+                    jsonl: "{}".to_owned(),
+                    tool: "run".to_owned(),
+                    outcome: "ok".to_owned(),
+                    event: "call".to_owned(),
+                    transport: "stdio".to_owned(),
+                    session_id: 1,
+                    response_bytes: None,
+                    trace: None,
+                    time_nanos: 0,
+                    extra_attrs: Vec::new(),
+                })
+                .expect("queue accepts to capacity");
+        }
+        let full_seq = OTEL_QUEUE_CAP as u64;
+        assert_eq!(
+            exporter.enqueue_audit(QueuedAudit {
+                seq: full_seq,
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: 0,
+                extra_attrs: Vec::new(),
+            }),
+            Err(EnqueueError::Full),
+            "queue full refuses"
+        );
+        assert_eq!(exporter.audit_lost(), 1, "refusal counts as lost");
+        assert_eq!(
+            exporter.rejected_gap(),
+            Some((full_seq, full_seq, 1)),
+            "refused seq enters the gap"
+        );
+        // An unhealthy exporter refuses the same way, extending the gap.
+        exporter.healthy.store(false, Ordering::Relaxed);
+        let next = full_seq + 1;
+        assert_eq!(
+            exporter.enqueue_audit(QueuedAudit {
+                seq: next,
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: 0,
+                extra_attrs: Vec::new(),
+            }),
+            Err(EnqueueError::Unhealthy),
+            "unhealthy refuses"
+        );
+        assert_eq!(exporter.audit_lost(), 2, "both refusals count");
+        assert_eq!(
+            exporter.rejected_gap(),
+            Some((full_seq, next, 2)),
+            "rejections merge into one gap"
+        );
+        // The rejected gap flushes as `audit_gap` on recovery.
+        let recovering = wiremock::MockServer::start().await;
+        let gap_seen = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let seen = Arc::clone(&gap_seen);
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/logs"))
+            .respond_with(move |req: &wiremock::Request| {
+                seen.lock()
+                    .expect("gap slot")
+                    .extend_from_slice(req.body.as_slice());
+                wiremock::ResponseTemplate::new(200)
+            })
+            .mount(&recovering)
+            .await;
+        let good_config = TaskConfig {
+            endpoint: format!("{}/v1/logs", recovering.uri()),
+            headers: Vec::new(),
+            service: "mtui".to_owned(),
+        };
+        let mut pending = exporter.rejected_gap();
+        export_batch(
+            &client,
+            &good_config,
+            &exporter.healthy,
+            &exporter.audit_lost,
+            &mut pending,
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(pending, None, "rejected gap clears after it is sent");
+        assert!(exporter.is_healthy(), "recovery export clears the latch");
+        let body = gap_seen.lock().expect("gap body").clone();
+        assert!(
+            body.windows(b"audit_gap".len()).any(|w| w == b"audit_gap"),
+            "recovery batch carries the rejected gap"
+        );
+        exporter.shutdown().await;
     }
 
     #[tokio::test]
