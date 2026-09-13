@@ -265,20 +265,6 @@ async fn resolve_relpath_async(base: PathBuf, rel: String) -> Result<PathBuf, Mc
     .map_err(|e| refuse(format!("read task failed: {e}")))?
 }
 
-/// Canonicalize a resolved path for the dedup key off the worker.
-///
-/// Mirrors `path.canonicalize().unwrap_or_else(|_| path.clone())`: a missing
-/// file falls back to the lexical path, never an error. Only a task-join
-/// failure refuses.
-async fn canonicalize_for_key_async(path: PathBuf) -> Result<PathBuf, McpCommandError> {
-    tokio::task::spawn_blocking(move || match path.canonicalize() {
-        Ok(canon) => canon,
-        Err(_) => path,
-    })
-    .await
-    .map_err(|e| refuse(format!("read task failed: {e}")))
-}
-
 /// Count lines with the `splitlines` convention: `"a\nb\n"`→2, `"a\nb"`→2,
 /// `""`→0. Shared across read/patch/write/fill so counts never drift.
 fn count_lines(text: &str) -> usize {
@@ -345,12 +331,14 @@ struct StreamRead {
 /// `line_count` while buffering only the requested content, so a huge file costs
 /// O(1) memory beyond the window. `window` is `None` for a whole-file read or
 /// `Some((offset_1based, limit))` for a windowed one. Decoding is UTF-8-lossy per
-/// line; splitting on the `\n` byte cannot split a codepoint.
+/// line; splitting on the `\n` byte cannot split a codepoint. Also returns the
+/// canonical path for the dedup key (lexical fallback, never an error), so the
+/// read and the key stat share one worker hop.
 fn stream_read(
     path: &Path,
     max_bytes: usize,
     window: Option<(usize, Option<usize>)>,
-) -> Result<StreamRead, McpCommandError> {
+) -> Result<(StreamRead, PathBuf), McpCommandError> {
     let file = std::fs::File::open(path)
         .map_err(|e| refuse(format!("failed to read {}: {e}", path.display())))?;
     let mut reader = BufReader::new(file);
@@ -405,11 +393,14 @@ fn stream_read(
         content.push_str(&truncation_notice(dropped, max_bytes));
     }
 
-    Ok(StreamRead {
-        line_count,
-        content,
-        returned_lines: window.map(|_| returned),
-    })
+    Ok((
+        StreamRead {
+            line_count,
+            content,
+            returned_lines: window.map(|_| returned),
+        },
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+    ))
 }
 
 // --------------------------------------------------------------------------- //
@@ -443,16 +434,15 @@ async fn testreport_read(
 
     // Only owned paths leave the session lock, so no file I/O runs under it:
     // a slow or network-mounted checkout must not stall concurrent same-lock
-    // work. The blocking syscalls (traversal check, stat, canonicalization)
-    // go through `spawn_blocking` below.
+    // work. The gate scope is held for the whole call, the inner mutex only
+    // for the path resolution. The blocking syscalls (traversal check + stat,
+    // then read + canonicalization) go through `spawn_blocking` below.
     enum Target {
         Log(PathBuf),
         Rel { base: PathBuf, rel: String },
     }
+    let _scope = session.scoped_lock(template).await;
     let target = {
-        // The gate scope is held for the whole call, the inner mutex only for the
-        // path resolution.
-        let _scope = session.scoped_lock(template).await;
         let guard = session.session().lock().await;
         if let Some(rel) = relpath {
             let base = resolve_dir(&guard, template)?;
@@ -474,11 +464,13 @@ async fn testreport_read(
     let max_input = session.max_input_bytes();
 
     // Off the runtime worker: a large or network-mounted file must not block a
-    // Tokio thread.
+    // Tokio thread. The read and the dedup-key canonicalization share this one
+    // hop.
     let read_path = path.clone();
-    let result = tokio::task::spawn_blocking(move || stream_read(&read_path, max_input, window))
-        .await
-        .map_err(|e| refuse(format!("read task failed: {e}")))??;
+    let (result, canon) =
+        tokio::task::spawn_blocking(move || stream_read(&read_path, max_input, window))
+            .await
+            .map_err(|e| refuse(format!("read task failed: {e}")))??;
 
     // The source cap is typically far larger than the output budget, so even a
     // source-truncated payload can exceed the wire budget. `cap_output` may trim
@@ -488,12 +480,12 @@ async fn testreport_read(
 
     // Exact re-read dedup: same resolved path + window with unchanged content
     // collapses to a notice; `force` resends while still refreshing the entry.
-    // The key path is canonicalized: the stored `log` path may spell a symlinked
-    // prefix verbatim (e.g. `/var` for `/private/var` on macOS) while the
-    // relpath arm resolves it, and both must key one file. Off the worker: a
-    // network-mounted checkout must not block a Tokio thread on the stat.
+    // The key path arrives canonicalized from the read hop: the stored `log`
+    // path may spell a symlinked prefix verbatim (e.g. `/var` for
+    // `/private/var` on macOS) while the relpath arm resolves it, and both
+    // must key one file.
     let key = RereadKey {
-        path: canonicalize_for_key_async(path.clone()).await?,
+        path: canon,
         offset,
         limit,
     };
