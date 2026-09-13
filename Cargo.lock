@@ -5571,6 +5571,7 @@ dependencies = [
  "mtui-datasources",
  "mtui-mcp",
  "mtui-types",
+ "serde_json",
  "tempfile",
  "tokio",
 ]
