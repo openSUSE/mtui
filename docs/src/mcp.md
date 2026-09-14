@@ -322,13 +322,21 @@ Reads a file from the checkout as UTF-8 (lossy).
 
 - Parameters: `relpath` (optional; defaults to the report's `log` file),
   `offset` (optional, 1-based first line, default 1), `limit` (optional, max
-  lines), `template` (optional).
+  lines), `force` (optional boolean: resend even when unchanged),
+  `template` (optional).
 - `relpath` is resolved **inside** the checkout and may not escape it — `..`
   traversal, absolute paths, and in-tree symlinks pointing outside are all
   rejected. Use it to read `build_checks/<pkg>.<arch>.log`,
   `install_logs/<host>.log`, `source.diff`, `patchinfo.xml`, etc.
-- Returns `{ "path", "line_count", "content" }`; when a window is requested
-  (`offset`/`limit`) it additionally returns `offset` and `returned_lines`.
+- Returns `{ "path", "line_count", "content", "deduped" }`; when a window is
+  requested (`offset`/`limit`) it additionally returns `offset` and
+  `returned_lines`.
+- An exact re-read (same file, same window, unchanged content) collapses to an
+  `[unchanged since …, N lines; pass force=true to resend, …]` notice with
+  `deduped: true` — including a repeated windowed read — instead of resending
+  the text. `force=true` resends the full content (`deduped: false`) and
+  refreshes the entry, so the next identical read collapses again. Full content
+  always carries `deduped: false`.
 
 ### `testreport_logs` (read-only)
 
