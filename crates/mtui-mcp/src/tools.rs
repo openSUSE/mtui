@@ -1297,9 +1297,12 @@ mod tests {
         let route = routes.get("config_show").expect("config_show route");
 
         // No `attributes`: the bulk dump is refused, not leaked by default.
-        let err =
-            completed(dispatch_tool(&registry, &session, route, &Map::new(), None, None).await)
-                .expect_err("bulk dump refused");
+        let err = completed(
+            dispatch_tool(&registry, &session, route, &Map::new(), None, None)
+                .await
+                .outcome,
+        )
+        .expect_err("bulk dump refused");
         assert!(
             err.stderr.contains("name the attribute(s) explicitly"),
             "got: {err:?}"
@@ -1316,7 +1319,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect_err("local value refused");
         assert!(
