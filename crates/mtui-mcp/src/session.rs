@@ -930,7 +930,11 @@ impl McpSession {
         }
         if let Some(otel) = self.otel() {
             let line = serde_json::to_string(&record).unwrap_or_default();
-            if !line.is_empty() {
+            if line.is_empty() {
+                // Inert (Value always serializes) but still accounts the seq.
+                otel.note_rejected(seq);
+                tracing::warn!(job_id, "audit otlp: terminal record lost");
+            } else {
                 // Best-effort audit enqueue: warn when full or unhealthy (the
                 // exporter's gap accounting covers the hole on recovery).
                 let queued = crate::otel::QueuedAudit {

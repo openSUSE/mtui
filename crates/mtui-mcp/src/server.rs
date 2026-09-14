@@ -596,6 +596,8 @@ impl McpServer {
             if let Some(otel) = self.session.otel() {
                 let line = serde_json::to_string(&record).unwrap_or_default();
                 if line.is_empty() {
+                    // Inert (Value always serializes) but still accounts the seq.
+                    otel.note_rejected(seq);
                     return Err(otel_refuse_error(
                         crate::otel::ExportReason::Encode.as_str(),
                     ));

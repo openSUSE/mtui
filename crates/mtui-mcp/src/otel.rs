@@ -772,7 +772,9 @@ impl OtelExporter {
         }
     }
 
-    fn note_rejected(&self, seq: u64) {
+    // Shared by refused enqueues and (inert) encode failures so every
+    // dropped seq surfaces as `audit_gap` on recovery.
+    pub(crate) fn note_rejected(&self, seq: u64) {
         if let Ok(mut slot) = self.rejected_gap.lock() {
             *slot = Some(match *slot {
                 Some((start, end, count)) => (start.min(seq), end.max(seq), count + 1),
@@ -2029,6 +2031,37 @@ mod tests {
         assert!(
             body.windows(b"audit_gap".len()).any(|w| w == b"audit_gap"),
             "recovery batch carries the rejected gap"
+        );
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn encode_failure_accounting_merges_gap() {
+        // `serde_json::Value` always serializes, so the encode-failure
+        // branches sharing `note_rejected` cannot be forced; pin it directly.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("test client");
+        let exporter = OtelExporter::with_client(
+            OtelConfig::for_tests("http://127.0.0.1:9/v1/logs", "mtui"),
+            client,
+        );
+        exporter.note_rejected(7);
+        assert_eq!(exporter.audit_lost(), 1, "encode failure counts as lost");
+        assert_eq!(
+            exporter.rejected_gap(),
+            Some((7, 7, 1)),
+            "encode failure enters the gap"
+        );
+        exporter.note_rejected(9);
+        exporter.note_rejected(8);
+        assert_eq!(exporter.audit_lost(), 3, "each failure counts");
+        assert_eq!(
+            exporter.rejected_gap(),
+            Some((7, 9, 3)),
+            "out-of-order failures merge into one gap"
         );
         exporter.shutdown().await;
     }
