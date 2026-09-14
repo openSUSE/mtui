@@ -1672,7 +1672,7 @@ mod tests {
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
         let server = McpServer::new(registry, session);
-        let traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01";
+        let traceparent = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
 
         audited_call_traced(&server, "whoami", json!({}), Some(traceparent))
             .await
