@@ -1,0 +1,73 @@
+---
+source: crates/mtui-mcp/tests/slim_profile.rs
+expression: pretty
+---
+[
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "job_list",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The background job id.",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "default": 0,
+          "description": "Block up to this many seconds for the job to finish (max 120; keep below the client's request timeout).",
+          "maximum": 120,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    },
+    "name": "job_status",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The background job id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    },
+    "name": "job_result",
+    "read_only": true
+  },
+  {
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The background job id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    },
+    "name": "job_cancel",
+    "read_only": false
+  }
+]

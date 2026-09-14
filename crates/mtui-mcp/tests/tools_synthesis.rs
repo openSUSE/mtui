@@ -10,7 +10,7 @@
 
 use mtui_core::register_all;
 use mtui_mcp::{build_tools, job_tool_descriptors, testreport_tool_descriptors};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Deny-listed commands never appear as tools.
 #[test]
@@ -57,6 +57,26 @@ fn tool_surface_snapshot() {
         jobs.join("\n"),
     );
     insta::assert_snapshot!(rendered);
+}
+
+/// Full-schema golden for the four job tools: names, descriptions, input schemas
+/// (the `wait_seconds` bounds included) and read-only hints. The dispatch derives
+/// its allow-list from these `properties`, so this pins that too.
+#[test]
+fn job_tool_schemas_snapshot() {
+    let rendered: Vec<Value> = job_tool_descriptors()
+        .iter()
+        .map(|d| {
+            json!({
+                "name": d.name,
+                "read_only": d.read_only,
+                "description": d.description,
+                "input_schema": Value::Object(d.input_schema.clone()),
+            })
+        })
+        .collect();
+    let pretty = serde_json::to_string_pretty(&Value::Array(rendered)).unwrap();
+    insta::assert_snapshot!(pretty);
 }
 
 /// Every advertised tool schema — synthesised, job and hand-written testreport

@@ -40,6 +40,28 @@ fn slimmed_command_tool_schemas_snapshot() {
     insta::assert_snapshot!(pretty);
 }
 
+/// Golden of the four job tools' **slimmed** schemas — the form `tools/list`
+/// actually serves. `tools_synthesis.rs` pins the raw descriptors; this pins what
+/// survives the pass, `wait_seconds`' `minimum`/`maximum`/`default` included, so
+/// a slimmer that started dropping numeric bounds would change the contract the
+/// dispatch validates against.
+#[test]
+fn slimmed_job_tool_schemas_snapshot() {
+    let rows: Vec<Value> = job_tool_descriptors()
+        .iter()
+        .map(|d| {
+            json!({
+                "name": d.name,
+                "read_only": d.read_only,
+                "input_schema": Value::Object(slim_input_schema(&d.input_schema)),
+            })
+        })
+        .collect();
+
+    let pretty = serde_json::to_string_pretty(&Value::Array(rows)).unwrap();
+    insta::assert_snapshot!(pretty);
+}
+
 /// The slimmed schemas carry no `"title"` keyword and no bare `{"type":"null"}`
 /// null-arm anywhere — the two structural wins of the pass. (A property *named*
 /// `title` would be fine; the registry has none today, so a blunt scan suffices.)

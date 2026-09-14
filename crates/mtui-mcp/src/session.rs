@@ -95,6 +95,17 @@ pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(1);
 /// reap are the backstop. Not a config key.
 pub(crate) const ABORT_UNLOCK_BUDGET: Duration = Duration::from_secs(5);
 
+/// Upper bound on the `wait_seconds` budget `job_status`/`job_result` will park
+/// on.
+///
+/// Collapses a poll loop into two or three turns even for the slowest observed
+/// job, while a parked call stays inside what clients and proxies tolerate: rmcp
+/// keeps the per-request SSE stream alive every 15s, and with a `progressToken`
+/// the heartbeat fires every [`DEFAULT_PROGRESS_INTERVAL`]. A larger value is
+/// refused rather than clamped, so a client is never told it waited longer than
+/// it did. Not a config key.
+pub(crate) const JOB_WAIT_CAP_SECS: u64 = 120;
+
 /// A [`JoinHandle`] wrapper that aborts its task when dropped.
 ///
 /// If the future awaiting a spawned dispatch is itself cancelled (an aborted job
