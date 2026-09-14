@@ -354,3 +354,88 @@ async fn discover_2026_07_28_succeeds_over_stdio_and_the_session_stays_usable() 
     drop(write_half);
     let _ = server_task.await;
 }
+
+/// A test-only command whose body blocks until its gate is released.
+struct GatedProbe(Arc<tokio::sync::Notify>);
+
+#[async_trait::async_trait]
+impl mtui_core::Command for GatedProbe {
+    fn name(&self) -> &'static str {
+        "gated_wait_probe"
+    }
+    fn scope(&self) -> mtui_core::Scope {
+        mtui_core::Scope::Fanout
+    }
+    async fn call(
+        &self,
+        _session: &mut mtui_core::Session,
+        _args: &clap::ArgMatches,
+    ) -> mtui_core::CommandResult {
+        self.0.notified().await;
+        Ok(())
+    }
+}
+
+/// #624 over the wire: `wait_seconds` survives `call_arguments` and the server's
+/// job branch, the held call really parks on the latch (the gate opens only
+/// after the request is in flight), and the reply is the job's own `done` status
+/// line. Routing the job branch unwrapped, or dropping `wait_seconds` from the
+/// accepted arguments, fails here.
+#[tokio::test]
+async fn job_status_wait_seconds_round_trips_over_the_wire() {
+    let mut config = Config::default();
+    config.session_user = "testuser".to_owned();
+    let provider = StdioProvider::new(config);
+    let session = provider.get_or_create("<default>").await;
+
+    // The job runs the gated probe; the served surface stays the real one.
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let mut probes = register_all();
+    probes.register(Arc::new(GatedProbe(Arc::clone(&gate))));
+    let job_id = session
+        .start_job(Arc::new(probes), "gated_wait_probe", Vec::new())
+        .expect("start_job succeeds");
+
+    let server = McpServer::new(Arc::new(register_all()), Arc::clone(&session));
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let server_task = tokio::spawn(async move {
+        let running = server.serve(server_io).await.expect("server serve");
+        running.waiting().await.expect("server run");
+    });
+    let client = ().serve(client_io).await.expect("client serve/initialize");
+
+    // Opens the gate while the call is held, so the reply can only be `done` if
+    // the server actually waited for the job.
+    let releaser = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        gate.notify_one();
+    });
+
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new("job_status").with_arguments(
+                serde_json::json!({ "job_id": job_id, "wait_seconds": 30 })
+                    .as_object()
+                    .cloned()
+                    .expect("object"),
+            ),
+        )
+        .await
+        .expect("the held call answers");
+    releaser.await.expect("releaser did not panic");
+
+    assert_eq!(result.is_error, Some(false), "got: {:?}", result.content);
+    let text = result
+        .content
+        .first()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.as_str())
+        .unwrap_or_default();
+    assert!(
+        text.starts_with(&format!("{job_id}: done (")),
+        "the wait returned the finished job: {text:?}"
+    );
+
+    drop(client);
+    let _ = server_task.await;
+}

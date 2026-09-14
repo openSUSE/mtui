@@ -45,8 +45,8 @@ use crate::provider::SessionGuard;
 use crate::session::{AbortUnlock, McpSession, ProgressSink, ToolOutcome, forced_abort_note};
 use crate::testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 use crate::tools::{
-    ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_tool_descriptors,
-    tool_routes,
+    ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_call_waits,
+    job_tool_descriptors, tool_routes,
 };
 
 /// The runtime-synthesised MCP server backing one [`McpSession`].
@@ -327,7 +327,7 @@ impl ServerHandler for McpServer {
 
         // Heartbeats keep a slow foreground call from timing the client out.
         // Only built when the client supplied a `progressToken`; job-control
-        // tools are fast and stay unwrapped.
+        // tools get one only while parked on `wait_seconds`.
         let sink: Option<PeerProgressSink> =
             context
                 .meta
@@ -340,7 +340,24 @@ impl ServerHandler for McpServer {
 
         // A job-control tool: poll/control the session's background-job table.
         if self.job_tools.contains(&name) {
-            return Ok(render(dispatch_job_tool(&self.session, &name, &kwargs).await).into());
+            // A `wait_seconds` park holds no lock, so a plain drop on cancel
+            // strands nothing; with a `progressToken` it also gets heartbeats.
+            // A plain poll, `job_list` and `job_cancel` stay fast and unwrapped —
+            // cancelling `job_cancel` makes no sense.
+            if !job_call_waits(&name, &kwargs) {
+                return Ok(
+                    render(dispatch_job_tool(&self.session, &name, &kwargs, None).await).into(),
+                );
+            }
+            let Some(result) = cancellable(
+                dispatch_job_tool(&self.session, &name, &kwargs, sink),
+                &context.ct,
+            )
+            .await
+            else {
+                return Err(cancelled_error(None));
+            };
+            return Ok(render(result).into());
         }
 
         // Acts directly on the loaded checkout. Neither this nor the transfer
@@ -406,8 +423,9 @@ impl ServerHandler for McpServer {
 /// This only ever fires for a client that explicitly cancels: on stdio there is
 /// no per-request connection to drop, and rmcp's client-disconnect cancellation
 /// exists only on the stateless HTTP paths mtui declines (`docs/src/mcp.md`).
-/// The job-control branch stays unwrapped — it is fast, and cancelling
-/// `job_cancel` makes no sense.
+/// The job-control branch is wrapped only for a `job_status` call parked on
+/// `wait_seconds`; a plain poll is fast, and cancelling `job_cancel` makes no
+/// sense.
 ///
 /// For the testreport and transfer branches only: neither dispatches through the
 /// engine, so dropping `fut` strands no `/var/lock/mtui.lock`. The
@@ -680,5 +698,66 @@ mod tests {
         .expect("follow-up dispatch must not hang on a stranded lock")
         .expect("whoami succeeds");
         assert!(out.contains("testuser"), "got: {out}");
+    }
+
+    /// `notifications/cancelled` interrupts a parked `job_status` wait: the wait
+    /// holds no lock, so the plain `cancellable` drop is the whole recovery.
+    #[tokio::test]
+    async fn client_cancel_interrupts_a_job_status_wait() {
+        use clap::ArgMatches;
+        use mtui_core::{Command, CommandResult, Scope};
+
+        /// Never finishes, so only the cancel can end the wait.
+        struct Endless;
+        #[async_trait::async_trait]
+        impl Command for Endless {
+            fn name(&self) -> &'static str {
+                "endless_probe"
+            }
+            fn scope(&self) -> Scope {
+                Scope::Fanout
+            }
+            async fn call(
+                &self,
+                _session: &mut mtui_core::Session,
+                _args: &ArgMatches,
+            ) -> CommandResult {
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+        }
+
+        let session = McpSession::new(Config::default());
+        let mut registry = register_all();
+        registry.register(Arc::new(Endless));
+        let job_id = session
+            .start_job(Arc::new(registry), "endless_probe", Vec::new())
+            .expect("start_job succeeds");
+
+        let ct = CancellationToken::new();
+        let kwargs = serde_json::json!({ "job_id": job_id, "wait_seconds": 60 })
+            .as_object()
+            .cloned()
+            .expect("object");
+        let call = tokio::spawn({
+            let session = Arc::clone(&session);
+            let ct = ct.clone();
+            async move {
+                cancellable(
+                    dispatch_job_tool(&session, "job_status", &kwargs, None),
+                    &ct,
+                )
+                .await
+            }
+        });
+        // The spawned call is the only runnable task, so this parks it on the wait.
+        tokio::task::yield_now().await;
+        ct.cancel();
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), call)
+            .await
+            .expect("a cancelled wait must return promptly, not run out its budget")
+            .expect("spawned task did not panic");
+        assert!(outcome.is_none(), "the cancel wins: {outcome:?}");
     }
 }

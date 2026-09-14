@@ -1,0 +1,77 @@
+---
+source: crates/mtui-mcp/tests/tools_synthesis.rs
+expression: pretty
+---
+[
+  {
+    "description": "List background jobs in this session and their state (running/done/failed/cancelled).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "name": "job_list",
+    "read_only": true
+  },
+  {
+    "description": "Report a background job's state and elapsed time. wait_seconds>0 blocks until it finishes or the budget lapses, then reports either way.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The background job id.",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "default": 0,
+          "description": "Block up to this many seconds for the job to finish (max 120; keep below the client's request timeout).",
+          "maximum": 120,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    },
+    "name": "job_status",
+    "read_only": true
+  },
+  {
+    "description": "Return a finished background job's output. Errors if the job is still running or surfaces the command's failure if it failed.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The background job id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    },
+    "name": "job_result",
+    "read_only": true
+  },
+  {
+    "description": "Cancel a running background job. A job already executing on a host may keep running there even after cancel; the operation lock the job's own host group took is released best-effort (bounded, and never a comment-marked reservation) and the reply reports the outcome.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "description": "The background job id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "type": "object"
+    },
+    "name": "job_cancel",
+    "read_only": false
+  }
+]

@@ -428,8 +428,9 @@ patience — backgrounding is the only way to keep such a call cancellable via
 Four job-control tools manage them:
 
 - **`job_list`** (read-only) — every job in the session and its state.
-- **`job_status(job_id)`** (read-only) — one job's state (`running` / `done` /
-  `failed` / `cancelled`) and elapsed time.
+- **`job_status(job_id, wait_seconds=0)`** (read-only) — one job's state
+  (`running` / `done` / `failed` / `cancelled`) and elapsed time; `wait_seconds`
+  blocks for a terminal state first.
 - **`job_result(job_id)`** (read-only) — a finished job's captured output; it
   errors while the job is still running (poll `job_status` first) and surfaces the
   command's failure envelope if it failed.
@@ -440,6 +441,15 @@ Four job-control tools manage them:
   stays posted) and `regenerate` stops waiting (the server keeps building). Both
   return success, so their job ends `done`, not `cancelled`, with the reply text
   saying what was and was not finished.
+
+`wait_seconds` (0-120, default 0) turns a poll loop into one held request:
+`job_status` parks until the job is terminal or the budget lapses, then replies
+exactly as a plain poll would. Keep it under the client's own request timeout; a
+value above 120 is refused, not clamped. While parked the call emits progress
+heartbeats if the client supplied a `progressToken`, and a
+`notifications/cancelled` interrupts it. Over HTTP rmcp additionally pings the
+per-request SSE stream every 15s; a client that silently disconnects instead
+leaves the wait to run out its budget server-side, holding nothing.
 
 A job blocked mid host-operation cannot stop at a checkpoint, so cancelling it
 force-aborts the dispatch — which skips the operation's own `unlock()`. A forced
@@ -486,10 +496,10 @@ holding — a follow-up call on the same RRID is not left queued behind it. What
 happens next depends on whether the call could be holding a **host** operation
 lock.
 
-A testreport tool or a transfer tool (`get`/`put`) never dispatches through the
-engine, so it cannot hold `/var/lock/mtui.lock`: the cancel drops the dispatch
-immediately and the tool call resolves to an error rather than a fabricated
-success.
+A testreport tool, a transfer tool (`get`/`put`) or a parked `job_status` wait
+never dispatches through the engine, so it cannot hold `/var/lock/mtui.lock`: the
+cancel drops the dispatch immediately and the tool call resolves to an error
+rather than a fabricated success.
 
 A synthesised command tool (`run`, `update`, `install`, …) can be mid
 host-operation when the cancel arrives, and dropping it outright would strand
@@ -523,8 +533,8 @@ command tools and the testreport tools — provided the client supplied a
 `progressToken` on the request. Spec-compliant clients (Claude Desktop, opencode,
 the MCP Inspector, Cursor, …) reset their read deadline on each frame, so a
 ten-minute command still returns cleanly. Clients that ignore progress
-notifications should raise their own per-server read timeout instead. The fast
-job-control tools do not emit heartbeats.
+notifications should raise their own per-server read timeout instead. The
+job-control tools emit them only while parked on `wait_seconds`.
 
 ## Connecting a client
 
