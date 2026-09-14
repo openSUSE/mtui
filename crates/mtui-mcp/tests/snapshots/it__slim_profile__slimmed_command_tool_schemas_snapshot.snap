@@ -13,7 +13,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "keep_mode": {
@@ -278,7 +278,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "hosts": {
@@ -354,7 +354,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "hosts": {
@@ -762,7 +762,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "force_continue": {
@@ -933,7 +933,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "force": {
@@ -979,7 +979,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "hosts": {
@@ -1006,7 +1006,7 @@ expression: pretty
       "properties": {
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "force": {
@@ -1178,7 +1178,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "channel": {
@@ -1214,7 +1214,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "command": {
@@ -1318,7 +1318,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "hosts": {
@@ -1519,7 +1519,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "hosts": {
@@ -1615,7 +1615,7 @@ expression: pretty
         },
         "background": {
           "default": false,
-          "description": "Return a job id immediately instead of blocking; poll job_status/job_result.",
+          "description": "Return a job id immediately instead of blocking; job_status/job_result with wait_seconds=N then block for it.",
           "type": "boolean"
         },
         "hosts": {

@@ -179,7 +179,7 @@ fn add_background_property(schema: &mut Map<String, Value>) {
                 "type": "boolean",
                 "default": false,
                 "description": "Return a job id immediately instead of blocking; \
-                    poll job_status/job_result.",
+                    job_status/job_result with wait_seconds=N then block for it.",
             }),
         );
     }
@@ -412,8 +412,9 @@ pub(crate) async fn dispatch_tool(
 fn started_jobs_reply(command: &str, job_ids: &[String]) -> String {
     if let [job_id] = job_ids {
         return format!(
-            "started job '{job_id}' (`{command}`); poll job_status('{job_id}'), \
-             then job_result('{job_id}')."
+            "started job '{job_id}' (`{command}`); \
+             job_result('{job_id}', wait_seconds=N) blocks up to N s for its \
+             output; job_status('{job_id}', wait_seconds=N) for state only."
         );
     }
     let joined = job_ids
@@ -423,7 +424,8 @@ fn started_jobs_reply(command: &str, job_ids: &[String]) -> String {
         .join(", ");
     format!(
         "started {} jobs (`{command}`, one per template): {joined}. \
-         Poll job_status/job_result per job.",
+         job_result(id, wait_seconds=N) blocks up to N s per job; \
+         job_status(id, wait_seconds=N) for state.",
         job_ids.len()
     )
 }
@@ -1382,15 +1384,27 @@ mod tests {
             .await,
         )
         .expect("background start returns a reply, not an error");
-        assert!(
-            reply.starts_with("started job 'run-1' (`run`);"),
-            "single-job reply names the id: {reply:?}"
+        assert_eq!(reply, SINGLE_JOB_REPLY);
+    }
+
+    /// The reply a model reads the instant a job starts — the highest-leverage
+    /// place to name the wait, so both forms lead with the blocking call rather
+    /// than trailing it after "poll". Pinned whole: a substring check here would
+    /// survive exactly the regression #624 is about.
+    #[test]
+    fn started_jobs_reply_pins_both_forms() {
+        assert_eq!(
+            started_jobs_reply("run", &["run-1".to_owned()]),
+            SINGLE_JOB_REPLY
         );
-        assert!(
-            reply.contains("job_status('run-1')") && reply.contains("job_result('run-1')"),
-            "reply points at the poll tools: {reply:?}"
+        assert_eq!(
+            started_jobs_reply("run", &["run-1".to_owned(), "run-2".to_owned()]),
+            "started 2 jobs (`run`, one per template): 'run-1', 'run-2'. job_result(id, wait_seconds=N) blocks up to N s per job; job_status(id, wait_seconds=N) for state."
         );
     }
+
+    /// The single-job form, shared by the dispatch-level and unit-level pins.
+    const SINGLE_JOB_REPLY: &str = "started job 'run-1' (`run`); job_result('run-1', wait_seconds=N) blocks up to N s for its output; job_status('run-1', wait_seconds=N) for state only.";
 
     #[test]
     fn job_tools_have_correct_read_only_hints() {
