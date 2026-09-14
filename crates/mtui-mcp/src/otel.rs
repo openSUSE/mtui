@@ -1394,20 +1394,20 @@ mod tests {
 
     #[test]
     fn traceparent_strict_lowercase_55_bytes() {
-        let valid = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01";
+        let valid = "00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01";
         let (trace, span, flags) = parse_traceparent(valid).expect("valid");
         assert_eq!(hex_of(&trace), "0af7651916cd43dd8448eb211c80319c");
-        assert_eq!(hex_of(&span), "00f067aa0ba902b7");
+        assert_eq!(hex_of(&span), "00f067aa0ca902b7");
         assert_eq!(flags, 1);
         // Uppercase rejected (strict lowercase).
         assert!(parse_traceparent(&valid.to_uppercase()).is_none());
         // Wrong length, bad version, all-zero ids rejected.
         assert!(parse_traceparent("00-short").is_none());
         assert!(
-            parse_traceparent("01-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01").is_none()
+            parse_traceparent("01-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01").is_none()
         );
         assert!(
-            parse_traceparent("00-00000000000000000000000000000000-00f067aa0ba902b7-01").is_none()
+            parse_traceparent("00-00000000000000000000000000000000-00f067aa0ca902b7-01").is_none()
         );
         assert!(
             parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01").is_none()
@@ -1497,7 +1497,7 @@ mod tests {
     #[test]
     fn export_request_emits_trace_ids_when_present() {
         let (trace, span, flags) =
-            parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-00f067aa0ba902b7-01")
+            parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-00f067aa0ca902b7-01")
                 .expect("valid");
         let audit = QueuedAudit {
             seq: 1,
