@@ -492,10 +492,11 @@ pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "job_result".to_owned(),
-            description: "Return a finished background job's output. Errors if the job \
-                is still running or surfaces the command's failure if it failed."
+            description: "Return a finished background job's output; wait_seconds>0 \
+                blocks for it first. Errors if still running after the wait, or \
+                surfaces the command's failure."
                 .to_owned(),
-            input_schema: job_schema(false),
+            input_schema: job_schema(true),
             read_only: true,
         },
         ToolDescriptor {
@@ -516,7 +517,7 @@ pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
 /// The server's wrap decision only — a malformed or over-cap value still reaches
 /// [`dispatch_job_tool`], which refuses it.
 pub(crate) fn job_call_waits(name: &str, kwargs: &Map<String, Value>) -> bool {
-    matches!(name, "job_status")
+    matches!(name, "job_status" | "job_result")
         && kwargs
             .get("wait_seconds")
             .and_then(Value::as_i64)
@@ -592,7 +593,9 @@ pub(crate) async fn dispatch_job_tool_with_interval(
         }
         "job_result" => {
             let job_id = job_id_arg(kwargs)?;
-            session.job_result(&job_id)
+            let budget = wait_seconds_arg(kwargs)?;
+            let output = session.job_result_wait(&job_id, budget);
+            heartbeat_while_parked(output, sink, name, interval).await
         }
         "job_cancel" => {
             let job_id = job_id_arg(kwargs)?;
@@ -1542,7 +1545,8 @@ mod tests {
             .expect("start_job succeeds")
     }
 
-    /// A test-only command whose body takes a fixed, short time to finish.
+    /// A test-only command whose body takes a fixed, short time to finish and
+    /// prints, so a waiting `job_result` has something to hand back.
     struct SlowProbe;
 
     #[async_trait]
@@ -1553,8 +1557,9 @@ mod tests {
         fn scope(&self) -> Scope {
             Scope::Fanout
         }
-        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+        async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
             tokio::time::sleep(Duration::from_millis(200)).await;
+            session.display.println("slow probe finished");
             Ok(())
         }
     }
@@ -1578,6 +1583,56 @@ mod tests {
                 .expect("wait_seconds is a known argument");
             assert!(out.starts_with(&format!("{job_id}: ")), "got: {out:?}");
         }
+    }
+
+    /// `job_result` takes the same budget and hands back the job's own output
+    /// once it settles inside it.
+    #[tokio::test]
+    async fn dispatch_job_result_wait_seconds_is_accepted() {
+        let session = McpSession::new(Config::default());
+        let mut registry = register_all();
+        registry.register(Arc::new(SlowProbe));
+        let job_id = session
+            .start_job(Arc::new(registry), "slow_wait_probe", Vec::new())
+            .expect("start_job succeeds");
+
+        let kwargs = json!({ "job_id": job_id, "wait_seconds": 5 });
+        let out = dispatch_job_tool(&session, "job_result", kwargs.as_object().unwrap(), None)
+            .await
+            .expect("the wait outlasts the job, so the output is ready");
+        assert_eq!(out.trim(), "slow probe finished");
+    }
+
+    /// A zero budget on `job_result` is the plain fetch the server routes
+    /// unwrapped: no park, and the unchanged still-running envelope at exit 1.
+    #[tokio::test]
+    async fn dispatch_job_result_wait_zero_keeps_the_still_running_error() {
+        let session = McpSession::new(Config::default());
+        let job_id = blocked_job(&session);
+
+        let kwargs = json!({ "job_id": job_id, "wait_seconds": 0 });
+        let err = tokio::time::timeout(
+            Duration::from_secs(1),
+            dispatch_job_tool(&session, "job_result", kwargs.as_object().unwrap(), None),
+        )
+        .await
+        .expect("a zero budget returns without parking")
+        .expect_err("the job is still running");
+
+        assert_eq!(err.exit_code, 1, "got: {err:?}");
+        let (head, tail) = err
+            .stderr
+            .split_once(" (")
+            .unwrap_or_else(|| panic!("no elapsed parenthetical: {err:?}"));
+        assert_eq!(head, format!("job {job_id} still running"));
+        let (elapsed, rest) = tail
+            .split_once("s); ")
+            .unwrap_or_else(|| panic!("no elapsed seconds: {err:?}"));
+        assert!(
+            elapsed.parse::<f64>().is_ok(),
+            "the elapsed is a float: {elapsed:?}"
+        );
+        assert_eq!(rest, "job_result(wait_seconds=N) waits for it");
     }
 
     /// A zero budget must not park: the server routes it unwrapped, so a dispatch
@@ -1732,10 +1787,12 @@ mod tests {
                 .cloned()
         };
 
-        let status = wait_prop("job_status").expect("job_status advertises wait_seconds");
-        assert_eq!(status["maximum"], json!(JOB_WAIT_CAP_SECS));
-        assert_eq!(status["minimum"], json!(0));
-        assert_eq!(status["default"], json!(0));
+        for tool in ["job_status", "job_result"] {
+            let prop = wait_prop(tool).unwrap_or_else(|| panic!("{tool} advertises wait_seconds"));
+            assert_eq!(prop["maximum"], json!(JOB_WAIT_CAP_SECS), "{tool}");
+            assert_eq!(prop["minimum"], json!(0), "{tool}");
+            assert_eq!(prop["default"], json!(0), "{tool}");
+        }
         assert!(
             wait_prop("job_cancel").is_none(),
             "job_cancel must not advertise a budget"
@@ -1789,8 +1846,9 @@ mod tests {
             (
                 "job_result",
                 json!({ "job_id": "a", "wait_seconds": 5 }),
-                false,
+                true,
             ),
+            ("job_result", json!({ "job_id": "a" }), false),
             (
                 "job_cancel",
                 json!({ "job_id": "a", "wait_seconds": 5 }),

@@ -10,14 +10,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- `job_status` accepts `wait_seconds` (0-120, default 0): the call blocks until
-  the job is terminal or the budget lapses, then replies exactly as before (the
-  `running` snapshot, or the finished state), so a short background job costs two
+- `job_status`/`job_result` accept `wait_seconds` (0-120, default 0): the call
+  blocks until the job is terminal or the budget lapses, then replies exactly as
+  before in shape (the `running` snapshot, the output, or a "still running"
+  error that now points at `wait_seconds`), so a short background job costs two
   turns instead of a poll loop (#624). Keep it under the client's request
   timeout; a value above 120 is refused, not clamped. Heartbeats fire while
   parked if the client sent a `progressToken`, and `notifications/cancelled`
   interrupts the wait. **MCP schema note:** additive only — an optional
-  `wait_seconds` on `job_status`.
+  `wait_seconds` on both.
 
 ### Changed
 

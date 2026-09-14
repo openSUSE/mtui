@@ -39,13 +39,20 @@ expression: pretty
     "read_only": true
   },
   {
-    "description": "Return a finished background job's output. Errors if the job is still running or surfaces the command's failure if it failed.",
+    "description": "Return a finished background job's output; wait_seconds>0 blocks for it first. Errors if still running after the wait, or surfaces the command's failure.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
         "job_id": {
           "description": "The background job id.",
           "type": "string"
+        },
+        "wait_seconds": {
+          "default": 0,
+          "description": "Block up to this many seconds for the job to finish (max 120; keep below the client's request timeout).",
+          "maximum": 120,
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
