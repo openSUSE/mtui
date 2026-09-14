@@ -283,6 +283,36 @@ struct Job {
     /// [`McpSession::job_cancel`] fires it *first* so a body observing the seam
     /// can stop cooperatively before the hard abort.
     cancel: CancellationToken,
+    /// Completion latch, fired under the record mutex by the two statements that
+    /// set `finished`; never reset.
+    ///
+    /// A token because the signal is level-triggered and multi-waiter: a waiter
+    /// arriving after the terminal write never sleeps. A `watch` channel would
+    /// add a Sender-dropped arm and `wait_for` ceremony for the same thing, and
+    /// `Notify` is edge-triggered — it would need `mtui-hosts`' arbiter
+    /// register-before-check loop re-derived here.
+    done: CancellationToken,
+}
+
+/// Park until `job` is terminal or `budget` lapses, holding no lock.
+///
+/// The terminal write and the latch fire are one critical section, so no wakeup
+/// can be lost: a write landing before the read here is seen as terminal and
+/// returns at once, and a write landing after fires a token this waiter already
+/// holds. On return the caller re-locks and re-reads — `state` never leaves a
+/// terminal value — and holding the record's `Arc` makes eviction irrelevant.
+async fn wait_terminal(job: &StdMutex<Job>, budget: Duration) {
+    if budget.is_zero() {
+        return;
+    }
+    let done = {
+        let j = job.lock().expect("job record poisoned");
+        if j.state != JobState::Running {
+            return;
+        }
+        j.done.clone()
+    };
+    let _ = tokio::time::timeout(budget, done.cancelled()).await;
 }
 
 /// A public, poll-facing snapshot of a `Job` (no task handle), which the job
@@ -1245,6 +1275,7 @@ impl McpSession {
             exit_code: None,
             handle: None,
             cancel: cancel.clone(),
+            done: CancellationToken::new(),
         }));
         jobs_guard.insert(job_id.clone(), Arc::clone(&job));
 
@@ -1273,6 +1304,7 @@ impl McpSession {
                         }
                     }
                     j.finished = Some(Instant::now());
+                    j.done.cancel();
                 } else if j.state == JobState::Cancelled && j.error.is_none() {
                     // The cancel claimed the record, but a cooperative stop still
                     // produced a verdict naming what the flow managed to do.
@@ -1467,6 +1499,27 @@ impl McpSession {
         Ok(Self::view(&job.lock().expect("job record poisoned")))
     }
 
+    /// [`job_status`](Self::job_status), first parking up to `budget` for the job
+    /// to become terminal.
+    ///
+    /// A zero `budget` is the plain poll, byte-identical. The record is looked up
+    /// **once** and its `Arc` held across the wait, so a concurrent eviction
+    /// cannot turn a job that settled during the wait into `"no such job"` under
+    /// the waiter.
+    ///
+    /// # Errors
+    ///
+    /// As [`job_status`](Self::job_status).
+    pub async fn job_status_wait(
+        &self,
+        job_id: &str,
+        budget: Duration,
+    ) -> Result<JobView, McpCommandError> {
+        let job = self.job(job_id)?;
+        wait_terminal(&job, budget).await;
+        Ok(Self::view(&job.lock().expect("job record poisoned")))
+    }
+
     /// Return a finished job's stdout, or the right failure envelope.
     ///
     /// # Errors
@@ -1569,6 +1622,7 @@ impl McpSession {
                     // `Running`) from overwriting it.
                     j.state = JobState::Cancelled;
                     j.finished = Some(Instant::now());
+                    j.done.cancel();
                     (j.handle.take(), j.cancel.clone(), j.rrids.clone())
                 }
                 state => {
@@ -2128,6 +2182,7 @@ mod tests {
                 exit_code: None,
                 handle: None,
                 cancel: CancellationToken::new(),
+                done: CancellationToken::new(),
             }))
         };
         {
@@ -2182,12 +2237,157 @@ mod tests {
                         exit_code: None,
                         handle: None,
                         cancel: CancellationToken::new(),
+                        done: CancellationToken::new(),
                     })),
                 );
             }
         }
         sess.evict_completed();
         assert_eq!(sess.job_list().len(), 5, "zero cap keeps everything");
+    }
+
+    /// A waiter holds the record's `Arc`, so eviction during the wait cannot turn
+    /// a job that settled underneath it into `"no such job"`: the wait still
+    /// returns and the held record still reads `done`, while the table has
+    /// dropped the id.
+    #[tokio::test]
+    async fn wait_terminal_reads_a_record_evicted_meanwhile() {
+        let mut config = Config::default();
+        config.mcp_max_completed_jobs = 1;
+        let sess = session(config);
+
+        let base = Instant::now();
+        let mk = |id: &str, finished: Instant| {
+            Arc::new(StdMutex::new(Job {
+                id: id.to_owned(),
+                command: "probe".to_owned(),
+                rrids: Vec::new(),
+                state: JobState::Done,
+                started: base,
+                finished: Some(finished),
+                result: None,
+                error: None,
+                exit_code: None,
+                handle: None,
+                cancel: CancellationToken::new(),
+                done: CancellationToken::new(),
+            }))
+        };
+        {
+            let mut jobs = sess.jobs.lock().unwrap();
+            jobs.insert("t-1".to_owned(), mk("t-1", base));
+            jobs.insert("t-2".to_owned(), mk("t-2", base + Duration::from_secs(1)));
+        }
+
+        let held = sess.job("t-1").expect("record is still in the table");
+        sess.evict_completed();
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_terminal(&held, Duration::from_secs(60)),
+        )
+        .await
+        .expect("a terminal record never parks");
+        assert_eq!(
+            McpSession::view(&held.lock().unwrap()).state,
+            JobState::Done
+        );
+
+        let err = sess.job_status("t-1").expect_err("the id was evicted");
+        assert!(err.stderr.contains("no such job"), "got: {err:?}");
+    }
+
+    /// The API-level half of the held-`Arc` promise: `job_status_wait` looks the
+    /// id up **once**, so a job that settles and is evicted while the waiter is
+    /// parked still answers from the record the waiter holds. Re-resolving the id
+    /// after the wait turns that into `"no such job"`.
+    #[tokio::test]
+    async fn job_status_wait_answers_from_the_record_it_holds() {
+        let sess = session(Config::default());
+        {
+            let mut jobs = sess.jobs.lock().unwrap();
+            jobs.insert(
+                "held-1".to_owned(),
+                Arc::new(StdMutex::new(Job {
+                    id: "held-1".to_owned(),
+                    command: "probe".to_owned(),
+                    rrids: Vec::new(),
+                    state: JobState::Running,
+                    started: Instant::now(),
+                    finished: None,
+                    result: None,
+                    error: None,
+                    exit_code: None,
+                    handle: None,
+                    cancel: CancellationToken::new(),
+                    done: CancellationToken::new(),
+                })),
+            );
+        }
+
+        let waiter = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            async move {
+                sess.job_status_wait("held-1", Duration::from_secs(60))
+                    .await
+            }
+        });
+        // Single-threaded runtime: the spawned wait is the only other runnable
+        // task, so handing it the executor parks it on the latch.
+        tokio::task::yield_now().await;
+
+        // Terminal write, latch fire and eviction, all before the waiter runs
+        // again — the worst ordering for a waiter that re-resolves the id.
+        {
+            let mut jobs = sess.jobs.lock().unwrap();
+            let record = jobs.remove("held-1").expect("still in the table");
+            let mut j = record.lock().unwrap();
+            j.state = JobState::Done;
+            j.finished = Some(Instant::now());
+            j.done.cancel();
+        }
+
+        let view = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("the latch wakes the waiter")
+            .expect("waiter task did not panic")
+            .expect("the held record answers even though the id is gone");
+        assert_eq!(view.state, JobState::Done);
+        let err = sess
+            .job_status("held-1")
+            .expect_err("the id really is gone");
+        assert!(err.stderr.contains("no such job"), "got: {err:?}");
+    }
+
+    /// A job that never settles parks for exactly the budget — no longer, and not
+    /// (as a lost wakeup would look) forever. The outer timeout makes a lost
+    /// wakeup (a `wait_terminal` that awaits the latch unbounded) fail the test
+    /// instead of hanging it.
+    #[tokio::test(start_paused = true)]
+    async fn wait_terminal_budget_is_exact() {
+        // Fabricated, with no worker: `start_paused` is safe only because nothing
+        // on the dispatch path (which has its own timers) runs here.
+        let job = Arc::new(StdMutex::new(Job {
+            id: "probe-1".to_owned(),
+            command: "probe".to_owned(),
+            rrids: Vec::new(),
+            state: JobState::Running,
+            started: Instant::now(),
+            finished: None,
+            result: None,
+            error: None,
+            exit_code: None,
+            handle: None,
+            cancel: CancellationToken::new(),
+            done: CancellationToken::new(),
+        }));
+
+        let budget = Duration::from_secs(30);
+        let start = tokio::time::Instant::now();
+        tokio::time::timeout(budget * 2, wait_terminal(&job, budget))
+            .await
+            .expect("an unbounded wait must fail here, not hang the suite");
+        assert_eq!(tokio::time::Instant::now() - start, budget);
     }
 
     /// One lock object per RRID, so same-RRID calls contend and others do not.
@@ -2748,6 +2948,7 @@ mod tests {
                 exit_code: None,
                 handle: None,
                 cancel: CancellationToken::new(),
+                done: CancellationToken::new(),
             }));
             sess.jobs.lock().unwrap().insert(id.to_owned(), job);
 
@@ -2772,6 +2973,7 @@ mod tests {
             exit_code: None,
             handle: None,
             cancel: CancellationToken::new(),
+            done: CancellationToken::new(),
         }));
         sess.jobs.lock().unwrap().insert("whoami-1".to_owned(), job);
 
@@ -4497,6 +4699,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_secs(600)).await;
             })),
             cancel: CancellationToken::new(),
+            done: CancellationToken::new(),
         }));
         sess.jobs.lock().unwrap().insert("probe-1".to_owned(), job);
 

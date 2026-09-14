@@ -464,6 +464,173 @@ async fn completed_jobs_are_fifo_evicted_to_the_cap() {
 // holds the single session mutex).
 
 // --------------------------------------------------------------------------- //
+// Waiting (#624)                                                              //
+// --------------------------------------------------------------------------- //
+
+/// Start a never-finishing `blocking_job_probe` and return its id plus the gate
+/// that releases it. The body is already executing on return.
+async fn blocked_job(sess: &Arc<McpSession>) -> (String, Arc<Notify>) {
+    let gate = Arc::new(Notify::new());
+    let blocker = Blocker {
+        release: Arc::clone(&gate),
+        started: Arc::new(Notify::new()),
+    };
+    let started = Arc::clone(&blocker.started);
+    let registry = registry_with_probe(Arc::new(blocker));
+    let job_id = sess
+        .start_job(registry, "blocking_job_probe", Vec::new())
+        .expect("start_job succeeds");
+    started.notified().await;
+    (job_id, gate)
+}
+
+/// Spawn a `job_status_wait` and let it reach its park point before returning,
+/// so a wakeup the latch fails to deliver shows up as a hung waiter.
+fn spawn_waiter(
+    sess: &Arc<McpSession>,
+    job_id: &str,
+    budget: Duration,
+) -> tokio::task::JoinHandle<Result<mtui_mcp::JobView, mtui_mcp::McpCommandError>> {
+    let sess = Arc::clone(sess);
+    let job_id = job_id.to_owned();
+    tokio::spawn(async move { sess.job_status_wait(&job_id, budget).await })
+}
+
+/// The latch wakes a parked waiter the moment the worker settles, instead of
+/// leaving it to run out a budget far longer than the job.
+#[tokio::test]
+async fn job_status_wait_returns_as_soon_as_the_job_finishes() {
+    let sess = session();
+    let (job_id, gate) = blocked_job(&sess).await;
+
+    let waiter = spawn_waiter(&sess, &job_id, Duration::from_secs(60));
+    // Single-threaded runtime (as every test here is): the waiter is the only
+    // runnable task until the gate opens, so yielding parks it on the latch.
+    tokio::task::yield_now().await;
+    gate.notify_one();
+
+    let view = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the latch must wake the waiter, not burn the 60s budget")
+        .expect("waiter task did not panic")
+        .expect("job exists");
+    assert_eq!(view.state, JobState::Done);
+}
+
+/// An expired budget is not an error: the wait returns the same `running`
+/// snapshot a plain poll would have.
+#[tokio::test]
+async fn job_status_wait_expires_with_a_running_snapshot() {
+    let sess = session();
+    let (job_id, gate) = blocked_job(&sess).await;
+
+    let view = tokio::time::timeout(
+        Duration::from_secs(5),
+        sess.job_status_wait(&job_id, Duration::from_millis(200)),
+    )
+    .await
+    .expect("the wait must be bounded by its budget")
+    .expect("job exists");
+    assert_eq!(view.state, JobState::Running);
+
+    gate.notify_one();
+    await_terminal(&sess, &job_id).await;
+}
+
+/// `wait_seconds = 0` is today's non-blocking poll: it never parks.
+#[tokio::test]
+async fn job_status_wait_zero_never_parks() {
+    let sess = session();
+    let (job_id, gate) = blocked_job(&sess).await;
+
+    let view = tokio::time::timeout(
+        Duration::from_secs(1),
+        sess.job_status_wait(&job_id, Duration::ZERO),
+    )
+    .await
+    .expect("a zero budget returns without parking")
+    .expect("job exists");
+    assert_eq!(view.state, JobState::Running);
+
+    gate.notify_one();
+    await_terminal(&sess, &job_id).await;
+}
+
+/// The cancel claim is the second terminal-transition site, and it must fire the
+/// latch too: a force-aborted worker never reaches its own terminal write, so a
+/// waiter that only watched that site would hang out its whole budget.
+#[tokio::test]
+async fn job_cancel_wakes_a_status_waiter() {
+    let sess = session();
+    let (job_id, gate) = blocked_job(&sess).await;
+
+    let waiter = spawn_waiter(&sess, &job_id, Duration::from_secs(60));
+    tokio::task::yield_now().await;
+
+    let msg = sess.job_cancel(&job_id).await.expect("cancel succeeds");
+    assert!(msg.contains("cancelled job"), "got: {msg:?}");
+
+    let view = tokio::time::timeout(Duration::from_secs(10), waiter)
+        .await
+        .expect("the cancel claim must wake the waiter")
+        .expect("waiter task did not panic")
+        .expect("job exists");
+    assert_eq!(view.state, JobState::Cancelled);
+    drop(gate);
+}
+
+/// A job already terminal when the wait arrives never parks. Two independent
+/// routes reach that — `wait_terminal`'s `state != Running` early return, and the
+/// latch the worker already fired — so this reddens only when *both* are gone
+/// (early return deleted **and** the worker's `done.cancel()` dropped), never on
+/// either alone.
+#[tokio::test]
+async fn job_status_wait_on_a_finished_job_returns_at_once() {
+    let sess = session();
+    let registry = Arc::new(register_all());
+    let job_id = sess
+        .start_job(registry, "whoami", Vec::new())
+        .expect("start_job succeeds");
+    assert_eq!(await_terminal(&sess, &job_id).await, JobState::Done);
+
+    let view = tokio::time::timeout(
+        Duration::from_secs(1),
+        sess.job_status_wait(&job_id, Duration::from_secs(60)),
+    )
+    .await
+    .expect("an already-terminal job never parks")
+    .expect("job exists");
+    assert_eq!(view.state, JobState::Done);
+}
+
+/// One terminal write wakes every waiter, not just the first.
+#[tokio::test]
+async fn two_waiters_on_one_job_both_wake() {
+    let sess = session();
+    let (job_id, gate) = blocked_job(&sess).await;
+
+    let waiters = tokio::spawn({
+        let sess = Arc::clone(&sess);
+        let job_id = job_id.clone();
+        async move {
+            tokio::join!(
+                sess.job_status_wait(&job_id, Duration::from_secs(60)),
+                sess.job_status_wait(&job_id, Duration::from_secs(60)),
+            )
+        }
+    });
+    tokio::task::yield_now().await;
+    gate.notify_one();
+
+    let (a, b) = tokio::time::timeout(Duration::from_secs(5), waiters)
+        .await
+        .expect("both waiters must wake on the one terminal write")
+        .expect("waiter task did not panic");
+    assert_eq!(a.expect("job exists").state, JobState::Done);
+    assert_eq!(b.expect("job exists").state, JobState::Done);
+}
+
+// --------------------------------------------------------------------------- //
 // Test-only blocking probes                                                   //
 // --------------------------------------------------------------------------- //
 
