@@ -431,9 +431,9 @@ Four job-control tools manage them:
 - **`job_status(job_id, wait_seconds=0)`** (read-only) — one job's state
   (`running` / `done` / `failed` / `cancelled`) and elapsed time; `wait_seconds`
   blocks for a terminal state first.
-- **`job_result(job_id)`** (read-only) — a finished job's captured output; it
-  errors while the job is still running (poll `job_status` first) and surfaces the
-  command's failure envelope if it failed.
+- **`job_result(job_id, wait_seconds=0)`** (read-only) — a finished job's captured
+  output; it errors while the job is still running (or wait for it with
+  `wait_seconds`) and surfaces the command's failure envelope if it failed.
 - **`job_cancel(job_id)`** — cancel a running job. (A command already executing on
   a host may run to completion there even after cancel returns — the same caveat as
   Ctrl-C on a foreground `run`.) Two commands treat a cancel as a normal ending
@@ -443,13 +443,15 @@ Four job-control tools manage them:
   saying what was and was not finished.
 
 `wait_seconds` (0-120, default 0) turns a poll loop into one held request:
-`job_status` parks until the job is terminal or the budget lapses, then replies
-exactly as a plain poll would. Keep it under the client's own request timeout; a
-value above 120 is refused, not clamped. While parked the call emits progress
-heartbeats if the client supplied a `progressToken`, and a
-`notifications/cancelled` interrupts it. Over HTTP rmcp additionally pings the
-per-request SSE stream every 15s; a client that silently disconnects instead
-leaves the wait to run out its budget server-side, holding nothing.
+`job_status` and `job_result` park until the job is terminal or the budget
+lapses, then reply exactly as a plain poll would — the `running` snapshot, the
+output, or a "still running" error that now points at `wait_seconds`. Keep it
+under the client's own request timeout; a value above 120 is refused, not
+clamped. While parked the call emits progress heartbeats if the client supplied
+a `progressToken`, and a `notifications/cancelled` interrupts it. Over HTTP rmcp
+additionally pings the per-request SSE stream every 15s; a client that silently
+disconnects instead leaves the wait to run out its budget server-side, holding
+nothing.
 
 A job blocked mid host-operation cannot stop at a checkpoint, so cancelling it
 force-aborts the dispatch — which skips the operation's own `unlock()`. A forced
@@ -496,10 +498,10 @@ holding — a follow-up call on the same RRID is not left queued behind it. What
 happens next depends on whether the call could be holding a **host** operation
 lock.
 
-A testreport tool, a transfer tool (`get`/`put`) or a parked `job_status` wait
-never dispatches through the engine, so it cannot hold `/var/lock/mtui.lock`: the
-cancel drops the dispatch immediately and the tool call resolves to an error
-rather than a fabricated success.
+A testreport tool, a transfer tool (`get`/`put`) or a parked
+`job_status`/`job_result` wait never dispatches through the engine, so it cannot
+hold `/var/lock/mtui.lock`: the cancel drops the dispatch immediately and the
+tool call resolves to an error rather than a fabricated success.
 
 A synthesised command tool (`run`, `update`, `install`, …) can be mid
 host-operation when the cancel arrives, and dropping it outright would strand

@@ -43,6 +43,13 @@ expression: pretty
         "job_id": {
           "description": "The background job id.",
           "type": "string"
+        },
+        "wait_seconds": {
+          "default": 0,
+          "description": "Block up to this many seconds for the job to finish (max 120; keep below the client's request timeout).",
+          "maximum": 120,
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [

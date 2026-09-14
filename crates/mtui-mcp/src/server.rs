@@ -423,9 +423,9 @@ impl ServerHandler for McpServer {
 /// This only ever fires for a client that explicitly cancels: on stdio there is
 /// no per-request connection to drop, and rmcp's client-disconnect cancellation
 /// exists only on the stateless HTTP paths mtui declines (`docs/src/mcp.md`).
-/// The job-control branch is wrapped only for a `job_status` call parked on
-/// `wait_seconds`; a plain poll is fast, and cancelling `job_cancel` makes no
-/// sense.
+/// The job-control branch is wrapped only for a `job_status`/`job_result` call
+/// parked on `wait_seconds`; a plain poll is fast, and cancelling `job_cancel`
+/// makes no sense.
 ///
 /// For the testreport and transfer branches only: neither dispatches through the
 /// engine, so dropping `fut` strands no `/var/lock/mtui.lock`. The

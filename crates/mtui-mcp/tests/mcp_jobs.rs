@@ -134,9 +134,31 @@ async fn job_result_failed_surfaces_error_envelope() {
     assert_eq!(err.exit_code, 2, "got: {err:?}");
 }
 
-/// `job_result` on a still-running job raises, pointing at `job_status`.
+/// Pin the "still running" envelope exactly, modulo the elapsed float it
+/// embeds: `job <id> still running (<elapsed>s); job_result(wait_seconds=N)
+/// waits for it`, exit 1.
+fn assert_still_running(err: &mtui_mcp::McpCommandError, job_id: &str) {
+    assert_eq!(err.exit_code, 1, "a running job is exit 1: {err:?}");
+    let (head, tail) = err
+        .stderr
+        .split_once(" (")
+        .unwrap_or_else(|| panic!("no elapsed parenthetical: {err:?}"));
+    assert_eq!(head, format!("job {job_id} still running"));
+    let (elapsed, rest) = tail
+        .split_once("s); ")
+        .unwrap_or_else(|| panic!("no elapsed seconds: {err:?}"));
+    assert!(
+        elapsed.parse::<f64>().is_ok(),
+        "the elapsed is a float: {elapsed:?}"
+    );
+    assert_eq!(rest, "job_result(wait_seconds=N) waits for it");
+}
+
+/// `job_result` on a still-running job raises, and the text it raises with is
+/// the one steering the model at its next turn — so pin it whole, not by
+/// substring.
 #[tokio::test]
-async fn job_result_running_tells_caller_to_poll() {
+async fn job_result_running_points_at_wait_seconds() {
     let sess = session();
     // A probe that blocks until released, so the job stays running.
     let gate = Arc::new(Notify::new());
@@ -156,8 +178,7 @@ async fn job_result_running_tells_caller_to_poll() {
     let err = sess
         .job_result(&job_id)
         .expect_err("running job raises on job_result");
-    assert!(err.stderr.contains("still running"), "got: {err:?}");
-    assert!(err.stderr.contains("poll job_status"), "got: {err:?}");
+    assert_still_running(&err, &job_id);
 
     // Release the body and let it settle so the worker does not outlive the test.
     gate.notify_one();
@@ -630,6 +651,48 @@ async fn two_waiters_on_one_job_both_wake() {
     assert_eq!(b.expect("job exists").state, JobState::Done);
 }
 
+/// `job_result` waits too, so start -> output is two turns for a short job.
+#[tokio::test]
+async fn job_result_wait_returns_output_once_done() {
+    let sess = session();
+    let (job_id, gate) = blocked_job(&sess).await;
+
+    let waiter = tokio::spawn({
+        let sess = Arc::clone(&sess);
+        let job_id = job_id.clone();
+        async move { sess.job_result_wait(&job_id, Duration::from_secs(60)).await }
+    });
+    tokio::task::yield_now().await;
+    gate.notify_one();
+
+    let out = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the latch must wake the waiter")
+        .expect("waiter task did not panic")
+        .expect("a finished job yields its output");
+    assert!(out.contains("released"), "got: {out:?}");
+}
+
+/// A budget that lapses leaves today's contract shape untouched: the same
+/// "still running" envelope, now naming the budget that would have waited longer.
+#[tokio::test]
+async fn job_result_wait_expiry_keeps_the_still_running_error() {
+    let sess = session();
+    let (job_id, gate) = blocked_job(&sess).await;
+
+    let err = tokio::time::timeout(
+        Duration::from_secs(5),
+        sess.job_result_wait(&job_id, Duration::from_millis(200)),
+    )
+    .await
+    .expect("the wait must be bounded by its budget")
+    .expect_err("the job is still running when the budget lapses");
+    assert_still_running(&err, &job_id);
+
+    gate.notify_one();
+    await_terminal(&sess, &job_id).await;
+}
+
 // --------------------------------------------------------------------------- //
 // Test-only blocking probes                                                   //
 // --------------------------------------------------------------------------- //
@@ -648,9 +711,11 @@ impl Command for Blocker {
     fn scope(&self) -> Scope {
         Scope::Fanout
     }
-    async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+    async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         self.started.notify_one();
         self.release.notified().await;
+        // Gives `job_result` something to hand back.
+        session.display.println("released");
         Ok(())
     }
 }

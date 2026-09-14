@@ -326,6 +326,43 @@ async fn wait_terminal(job: &StdMutex<Job>, budget: Duration) {
     let _ = tokio::time::timeout(budget, done.cancelled()).await;
 }
 
+/// `job`'s terminal verdict: its stdout, or the matching failure envelope.
+///
+/// Split out of [`McpSession::job_result`] so the waiting sibling renders the
+/// same four arms from the record it already holds locked.
+fn result_of(job_id: &str, job: &Job) -> Result<String, McpCommandError> {
+    match job.state {
+        JobState::Running => {
+            let elapsed =
+                (Instant::now().duration_since(job.started).as_secs_f64() * 10.0).round() / 10.0;
+            Err(McpCommandError {
+                stdout: String::new(),
+                stderr: format!(
+                    "job {job_id} still running ({elapsed}s); \
+                     job_result(wait_seconds=N) waits for it"
+                ),
+                exit_code: 1,
+            })
+        }
+        JobState::Failed => Err(McpCommandError {
+            stdout: job.result.clone().unwrap_or_default(),
+            stderr: job.error.clone().unwrap_or_else(|| "job failed".to_owned()),
+            exit_code: job.exit_code.unwrap_or(1),
+        }),
+        // Surface the cooperative stop's own verdict where the flow produced one;
+        // a forced abort has none and keeps the bare form.
+        JobState::Cancelled => Err(McpCommandError {
+            stdout: job.result.clone().unwrap_or_default(),
+            stderr: job.error.as_ref().map_or_else(
+                || format!("job {job_id} was cancelled"),
+                |detail| format!("job {job_id} was cancelled: {detail}"),
+            ),
+            exit_code: 1,
+        }),
+        JobState::Done => Ok(job.result.clone().unwrap_or_default()),
+    }
+}
+
 /// A public, poll-facing snapshot of a `Job` (no task handle), which the job
 /// tools render into the one-line status text.
 #[derive(Debug, Clone, PartialEq)]
@@ -1536,39 +1573,35 @@ impl McpSession {
     /// # Errors
     ///
     /// [`McpCommandError`] when the id is unknown, the job is still running
-    /// (pointing the caller at `job_status`), it failed (carrying its captured
+    /// (pointing the caller at `wait_seconds`), it failed (carrying its captured
     /// stdout / error / exit code), or it was cancelled.
     pub fn job_result(&self, job_id: &str) -> Result<String, McpCommandError> {
         let job = self.job(job_id)?;
         let job = job.lock().expect("job record poisoned");
-        match job.state {
-            JobState::Running => {
-                let elapsed = (Instant::now().duration_since(job.started).as_secs_f64() * 10.0)
-                    .round()
-                    / 10.0;
-                Err(McpCommandError {
-                    stdout: String::new(),
-                    stderr: format!("job {job_id} still running ({elapsed}s); poll job_status"),
-                    exit_code: 1,
-                })
-            }
-            JobState::Failed => Err(McpCommandError {
-                stdout: job.result.clone().unwrap_or_default(),
-                stderr: job.error.clone().unwrap_or_else(|| "job failed".to_owned()),
-                exit_code: job.exit_code.unwrap_or(1),
-            }),
-            // Surface the cooperative stop's own verdict where the flow produced
-            // one; a forced abort has none and keeps the bare form.
-            JobState::Cancelled => Err(McpCommandError {
-                stdout: job.result.clone().unwrap_or_default(),
-                stderr: job.error.as_ref().map_or_else(
-                    || format!("job {job_id} was cancelled"),
-                    |detail| format!("job {job_id} was cancelled: {detail}"),
-                ),
-                exit_code: 1,
-            }),
-            JobState::Done => Ok(job.result.clone().unwrap_or_default()),
-        }
+        result_of(job_id, &job)
+    }
+
+    /// [`job_result`](Self::job_result), first parking up to `budget` for the job
+    /// to become terminal.
+    ///
+    /// A zero `budget` is the plain fetch. The wait is not a guarantee: a job
+    /// still running when the budget lapses gets the "still running" error, and a
+    /// wait woken by a `job_cancel` claim near-deterministically returns the
+    /// *bare* `job <id> was cancelled` — both the cooperative verdict's `stderr`
+    /// detail and any partial stdout land only once the aborted worker resumes.
+    /// Exactly what a poll at that instant would have seen.
+    ///
+    /// # Errors
+    ///
+    /// As [`job_result`](Self::job_result).
+    pub async fn job_result_wait(
+        &self,
+        job_id: &str,
+        budget: Duration,
+    ) -> Result<String, McpCommandError> {
+        let job = self.job(job_id)?;
+        wait_terminal(&job, budget).await;
+        result_of(job_id, &job.lock().expect("job record poisoned"))
     }
 
     /// Cancel a running job; error if the id is unknown.
@@ -2368,6 +2401,60 @@ mod tests {
             .job_status("held-1")
             .expect_err("the id really is gone");
         assert!(err.stderr.contains("no such job"), "got: {err:?}");
+    }
+
+    /// The same promise for `job_result_wait`, which renders `result_of` from the
+    /// record it holds: an eviction landing with the terminal write still yields
+    /// the job's output, not `"no such job"`.
+    #[tokio::test]
+    async fn job_result_wait_answers_from_the_record_it_holds() {
+        let sess = session(Config::default());
+        {
+            let mut jobs = sess.jobs.lock().unwrap();
+            jobs.insert(
+                "held-2".to_owned(),
+                Arc::new(StdMutex::new(Job {
+                    id: "held-2".to_owned(),
+                    command: "probe".to_owned(),
+                    rrids: Vec::new(),
+                    state: JobState::Running,
+                    started: Instant::now(),
+                    finished: None,
+                    result: None,
+                    error: None,
+                    exit_code: None,
+                    handle: None,
+                    cancel: CancellationToken::new(),
+                    done: CancellationToken::new(),
+                })),
+            );
+        }
+
+        let waiter = tokio::spawn({
+            let sess = Arc::clone(&sess);
+            async move {
+                sess.job_result_wait("held-2", Duration::from_secs(60))
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+
+        {
+            let mut jobs = sess.jobs.lock().unwrap();
+            let record = jobs.remove("held-2").expect("still in the table");
+            let mut j = record.lock().unwrap();
+            j.state = JobState::Done;
+            j.finished = Some(Instant::now());
+            j.result = Some("held output".to_owned());
+            j.done.cancel();
+        }
+
+        let out = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("the latch wakes the waiter")
+            .expect("waiter task did not panic")
+            .expect("the held record answers even though the id is gone");
+        assert_eq!(out, "held output");
     }
 
     /// A job that never settles parks for exactly the budget — no longer, and not
