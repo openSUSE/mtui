@@ -26,19 +26,27 @@ fn is_word_char(b: u8) -> bool {
 }
 
 /// Substring `kw` bounded by non-word chars, so `liberror` never matches `error`.
-fn contains_bounded(lower: &str, kw: &str) -> bool {
+/// A CamelCase transition counts as a boundary, so `IndexError` matches `error`.
+fn contains_bounded(lower: &str, kw: &str, orig: &str) -> bool {
     let hay = lower.as_bytes();
     let needle = kw.as_bytes();
     if needle.is_empty() || needle.len() > hay.len() {
         return false;
     }
+    let orig = orig.as_bytes();
+    let cased = orig.len() == hay.len();
     let mut i = 0;
     while i + needle.len() <= hay.len() {
-        if &hay[i..i + needle.len()] == needle
-            && (i == 0 || !is_word_char(hay[i - 1]))
-            && (i + needle.len() == hay.len() || !is_word_char(hay[i + needle.len()]))
-        {
-            return true;
+        if &hay[i..i + needle.len()] == needle {
+            let start_ok = i == 0
+                || !is_word_char(hay[i - 1])
+                || (cased && orig[i].is_ascii_uppercase() && hay[i - 1].is_ascii_alphanumeric());
+            let end_ok = i + needle.len() == hay.len()
+                || !is_word_char(hay[i + needle.len()])
+                || (cased && orig[i + needle.len()].is_ascii_uppercase());
+            if start_ok && end_ok {
+                return true;
+            }
         }
         i += 1;
     }
@@ -64,6 +72,19 @@ fn strip_ansi(s: &str) -> String {
             for c in chars.by_ref() {
                 if ('@'..='~').contains(&c) {
                     break;
+                }
+            }
+        } else if c == '\x1b' && chars.peek() == Some(&']') {
+            // OSC (`\x1b]` … `BEL`/`ESC \`) carries metadata, never visible text.
+            chars.next();
+            loop {
+                match chars.next() {
+                    None | Some('\x07') => break,
+                    Some('\x1b') if chars.peek() == Some(&'\\') => {
+                        chars.next();
+                        break;
+                    }
+                    Some(_) => {}
                 }
             }
         } else if c != '\x1b' {
@@ -96,22 +117,27 @@ fn is_foldable(line: &str) -> bool {
         return false;
     }
     let lower = stripped.to_ascii_lowercase();
-    // Compounds containing a signal word bounded matching would miss; only listed ones block, so liberror/strace still fold.
+    // Lowercase compounds bounded matching misses stay listed; CamelCase ones trip the case-boundary rule, so liberror/strace still fold.
     for kw in [
         "failed",
         "error",
+        "errors",
         "keyerror",
         "assertionerror",
         "valueerror",
         "typeerror",
         "runtimeerror",
         "warning",
+        "warnings",
         "warn",
         "trace",
         "traceback",
         "stacktrace",
         "panic",
+        "panicked",
+        "panics",
         "fatal",
+        "critical",
         "exception",
         "timeout",
         "degradation",
@@ -122,7 +148,7 @@ fn is_foldable(line: &str) -> bool {
         "no refhosts",
         "not connected",
     ] {
-        if contains_bounded(&lower, kw) {
+        if contains_bounded(&lower, kw, &stripped) {
             return false;
         }
     }
@@ -327,6 +353,83 @@ mod tests {
             let lines = vec![line.to_owned(); 5];
             assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
         }
+    }
+
+    #[test]
+    fn inflected_signals_never_fold() {
+        for line in [
+            "3 errors found",
+            "warnings: 2 issues",
+            "thread 'main' panicked at 'boom', src/main.rs:1",
+            "panics: boom",
+        ] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
+            assert!(
+                !can_fold_block(line, "", Some(0)),
+                "inflected signal must block sharing {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn camelcase_error_compounds_never_fold() {
+        for line in [
+            "IndexError: list index out of range",
+            "AttributeError: no attribute 'foo'",
+            "ImportError: no module named 'foo'",
+            "FileNotFoundError: [Errno 2] No such file",
+            "PermissionError: [Errno 13] Permission denied",
+            "ConnectionError: failed to connect",
+            "NotImplementedError: not implemented",
+            "ZeroDivisionError: division by zero",
+            "NameError: name 'foo' is not defined",
+            "SyntaxError: invalid syntax",
+            "ModuleNotFoundError: No module named 'foo'",
+            "OSError: [Errno 5] Input/output error",
+            "LookupError: lookup failed",
+        ] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
+            assert!(
+                !can_fold_block(line, "", Some(0)),
+                "compound must block sharing {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn critical_never_folds() {
+        for line in ["critical: disk failing", "CRITICAL: disk failing"] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
+            assert!(
+                !can_fold_block(line, "", Some(0)),
+                "critical must block sharing {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn osc_sequences_stripped_before_scan() {
+        for line in [
+            "\u{1b}]8;;http://example.com\u{1b}\\warning: extra rpm output",
+            "got \u{1b}]8;;http://example.com\u{1b}\\error\u{1b}]8;;\u{1b}\\: boom",
+            "\u{1b}]0;title\u{07}error: boom",
+        ] {
+            let lines = vec![line.to_owned(); 5];
+            assert_eq!(fold_output(&lines), lines, "must not fold {line:?}");
+            assert!(
+                !can_fold_block(line, "", Some(0)),
+                "osc-wrapped signal must block sharing {line:?}"
+            );
+        }
+        assert!(can_fold_block(
+            "\u{1b}]8;;http://example.com\u{1b}\\",
+            "",
+            Some(0)
+        ));
+        assert!(can_fold_block("ok\u{1b}]0;error\u{07}", "", Some(0)));
     }
 
     #[test]
