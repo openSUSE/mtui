@@ -18,6 +18,7 @@ use clap_complete::Shell;
 
 pub mod corpus_survey;
 pub mod schema_check;
+pub mod teregen_login;
 
 /// The three shells the release artefacts cover.
 const SHELLS: [Shell; 3] = [Shell::Bash, Shell::Zsh, Shell::Fish];

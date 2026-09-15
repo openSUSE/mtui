@@ -22,6 +22,7 @@ fn main() -> Result<()> {
         Some("package") => run_package(),
         Some("corpus-survey") => run_corpus_survey(),
         Some("schema-check") => run_schema_check(),
+        Some("teregen-login") => run_teregen_login(),
         Some(other) => {
             eprintln!("unknown task: {other}\n");
             print_usage();
@@ -43,7 +44,8 @@ fn print_usage() {
          gen-docs        Regenerate docs/src/{{cli,invocation}}.md from the parsers\n    \
          package         Build a release tarball for a target\n    \
          corpus-survey   Probe the teregen v2 document status of every in-flight update\n    \
-         schema-check    Compare the live /api/v2/schema against the committed copy\n\n\
+         schema-check    Compare the live /api/v2/schema against the committed copy\n    \
+         teregen-login   Mint/reuse a teregen v2 bearer token from your oscrc SSH key\n\n\
          PACKAGE:\n    \
          cargo xtask package --version <VER> --target <TRIPLE> [--bin-dir <DIR>] [--out-dir <DIR>]\n    \
          Assembles <bin-dir>/{{mtui,mtui-mcp}} + dist/ + LICENSE/README into\n    \
@@ -59,7 +61,16 @@ fn print_usage() {
          Read-only: GETs the live schema and compares it BY VALUE (not bytes)\n    \
          against the committed crates/mtui-types/.../report-template-v1.json,\n    \
          printing the differing pointers and exiting non-zero on drift.\n    \
-         Defaults to https://qam.suse.de/api/v2/schema."
+         Defaults to https://qam.suse.de/api/v2/schema.\n\n\
+         TEREGEN-LOGIN:\n    \
+         cargo xtask teregen-login [--base <URL>] [--user <NAME>] [--namespace <NS>]\n    \
+         \x20   [--no-store] [--no-probe]\n    \
+         Signs teregen's SSH-signature challenge with your oscrc key\n    \
+         (fingerprint or file), mints (or reuses a cached) bearer token, and\n    \
+         probes it with an authenticated GET /schema. Never prints the token.\n    \
+         --base defaults to https://qam.suse.de/api/v2, --user to the oscrc\n    \
+         user, --namespace to teregen-auth. --no-store skips the on-disk\n    \
+         cache; --no-probe skips the GET /schema check after minting."
     );
 }
 
@@ -164,6 +175,23 @@ fn run_schema_check() -> Result<()> {
         .context("building the tokio runtime")?
         .block_on(xtask::schema_check::run(
             &url,
+            mtui_datasources::VerifyPolicy::Default(true),
+        ))
+}
+
+/// Run the teregen v2 login probe: `cargo xtask teregen-login [--base <URL>]
+/// [--user <NAME>] [--namespace <NS>] [--no-store] [--no-probe]`. Read-only
+/// apart from the mint itself (a real write to teregen's production
+/// `api_tokens` table); see [`xtask::teregen_login::run`].
+fn run_teregen_login() -> Result<()> {
+    let args = xtask::teregen_login::LoginArgs::parse(std::env::args().skip(2))?;
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building the tokio runtime")?
+        .block_on(xtask::teregen_login::run(
+            &args,
             mtui_datasources::VerifyPolicy::Default(true),
         ))
 }
