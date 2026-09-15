@@ -498,7 +498,16 @@ path; unset (the default) disables auditing and leaves behaviour byte-identical.
 
 The sink is versioned JSONL, one object per line, opened `O_APPEND` with mode
 `0600` and fsynced before the response returns — entries survive a server
-restart and are never truncated. Each record carries the schema version, the
+restart and are never truncated. The open is `O_NOFOLLOW` and the resulting
+descriptor is vetted: anything that is not a regular file owned by the serving
+user is refused, so a planted symlink or FIFO cannot divert the append (or the
+`0600` tightening) onto another file. `O_NOFOLLOW` covers the path's final
+component only — **the sink's directory must be writable by the serving user
+alone.** A same-user hardlink is allowed on purpose; it crosses no boundary.
+The record is durable and append-only but **not tamper-evident**: there is no
+hash chain and no HMAC, so anyone writing as the owner can rewrite history
+undetected. Tamper evidence means shipping each record off-host as it lands —
+see [OTLP log export](#otlp-log-export). Each record carries the schema version, the
 arrival timestamp, the session id, the tool name, the (redacted, see below)
 arguments, the outcome (`ok` / `error` / `unknown-tool`), the duration, and the
 RRIDs and host names the call resolved to.
