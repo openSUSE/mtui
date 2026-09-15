@@ -8,15 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
-## [26.3.2] - 2026-09-04
-
 ### Fixed
 
-- `mtui-mcp` over stdio now advertises the `2026-07-28` protocol revision, so
-  an MCP client that opens with `server/discover` at that revision connects
-  instead of being refused with `-32022` (#591). HTTP still declines it, since
-  rmcp serves that revision statelessly and would tear down mtui's per-client
-  session on every request.
 - Transport failures from every datasource on the shared HTTP client (OBS/IBS,
   Gitea, Slack, TeReGen, QEM Dashboard, oqa-search, refhosts) now name their
   cause —
@@ -73,6 +66,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the host is reachable instead. The contended arm names the lock's owner,
   marks the caller's own user, and states that `unlock --force` releases the
   whole group of every loaded template (#544).
+- `config show` over MCP prints less than at the REPL (#410): the no-argument
+  bulk dump is refused (name attributes explicitly), the operator-local values
+  (`session_user`, `template_dir`, `refhosts_path`, a `ssl_verify` CA-bundle
+  path) are refused, and endpoint URLs print userinfo-stripped. The REPL prints
+  everything verbatim as before. No tool schema changed. `config set` of an
+  endpoint URL acknowledges with the userinfo-stripped value.
+
+## [26.3.2] - 2026-09-04
+
+### Fixed
+
+- `mtui-mcp` over stdio now advertises the `2026-07-28` protocol revision, so
+  an MCP client that opens with `server/discover` at that revision connects
+  instead of being refused with `-32022` (#591). HTTP still declines it, since
+  rmcp serves that revision statelessly and would tear down mtui's per-client
+  session on every request.
 
 ## [26.3.1] - 2026-09-02
 

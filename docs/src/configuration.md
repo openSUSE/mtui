@@ -38,7 +38,9 @@ config set max_parallel 8
 ```
 
 Secret options are never echoed: `config show`/`config set` print `<set>` for a
-configured secret (currently `gitea_token`) instead of its value.
+configured secret (currently `gitea_token`) instead of its value. Over MCP,
+`config show` additionally refuses the bulk dump and operator-local values;
+see [MCP server](mcp.md#config_show-filtering).
 
 ## Options
 

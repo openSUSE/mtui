@@ -341,7 +341,7 @@ pub(crate) fn ssl_verification_hint(host: Option<&str>) -> String {
 /// keep a log line useful. On any unexpected shape it fails closed, stripping an
 /// entire `…@` authority prefix rather than risk echoing a credential.
 #[must_use]
-pub(crate) fn sanitize_url(url: &str) -> String {
+pub fn sanitize_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         // No scheme separator: fail closed on any `@`.
         return match rest_after_at(url) {
