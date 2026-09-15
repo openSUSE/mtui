@@ -38,3 +38,5 @@ mod qem_dashboard;
 mod refhost;
 #[path = "slack.rs"]
 mod slack;
+#[path = "teregen_sshsig_golden.rs"]
+mod teregen_sshsig_golden;
