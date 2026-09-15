@@ -726,7 +726,8 @@ fn unlock_failure_message(op: &str, unlock_failures: &[(String, String)]) -> Str
         .map(|(h, reason)| format!("{h}: {reason}"))
         .collect();
     format!(
-        "the {op} operation lock did not release on {} (release it with `unlock --force`)",
+        "the {op} operation lock did not release on {} (check with `list_locks` and retry \
+         `unlock` once the host is reachable)",
         detail.join("; ")
     )
 }
@@ -4770,8 +4771,13 @@ mod tests {
             "the WARN must name the stranded host: {unlock_line}"
         );
         assert!(
-            unlock_line.contains("unlock --force"),
-            "the WARN must name the manual remedy: {unlock_line}"
+            unlock_line.contains("`list_locks`")
+                && unlock_line.contains("retry `unlock` once the host is reachable"),
+            "the WARN must steer at list_locks + retry, not --force: {unlock_line}"
+        );
+        assert!(
+            !unlock_line.contains("unlock --force"),
+            "a transport failure is not an ownership problem: {unlock_line}"
         );
     }
 
@@ -7724,9 +7730,13 @@ mod tests {
         assert_eq!(
             msg,
             "the install operation lock did not release on h1: boom; h2: bang \
-             (release it with `unlock --force`)"
+             (check with `list_locks` and retry `unlock` once the host is reachable)"
         );
         assert!(!msg.contains("succeeded"));
+        assert!(
+            !msg.contains("unlock --force"),
+            "a transport failure is not an ownership problem: {msg}"
+        );
     }
 
     #[tokio::test]
