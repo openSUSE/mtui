@@ -2,8 +2,11 @@
 //!
 //! `mtui-mcp` executes maintenance actions on shared infrastructure; when the
 //! serving process goes away, stderr diagnostics and the in-memory `show_log`
-//! buffers go with it. This module is the file sink for the one record per
-//! call the server layer writes around its `call_tool` dispatch.
+//! buffers go with it. This module is the file sink for the one or two records
+//! per call the server layer writes around its `call_tool` dispatch — an
+//! `intent` before and an outcome after for a tool without `readOnlyHint`, an
+//! outcome alone for a read-only one — plus a terminal record per background
+//! job.
 //!
 //! Design notes (settled for #411):
 //!
@@ -11,11 +14,14 @@
 //!   `mtui-core` has no notion of a session key or a transport, and pushing
 //!   one down there purely to serve the MCP case would be the tail wagging
 //!   the dog. The REPL is therefore not covered by this record.
-//! * Fail mode is **refuse**: when the sink cannot be written the call is
-//!   refused instead of proceeding unrecorded. The pre-flight check refuses
-//!   before dispatching; a post-dispatch write failure refuses in place of
-//!   the result. Terminal records of background jobs are the exception — the
-//!   dispatch already answered, so a failed terminal write only warns.
+//! * Fail mode is **refuse before, report after**. A tool the surface does
+//!   not advertise `readOnlyHint` writes an `intent` record before it runs;
+//!   if that write fails the call is refused, which is honest because nothing
+//!   ran. Once the work is done the outcome record can no longer un-run it, so
+//!   a failed outcome write warns and the reply carries an in-band notice
+//!   rather than the result being discarded. Terminal records of background
+//!   jobs warn for the same reason — the dispatch already answered. Export is
+//!   best-effort throughout and never refuses anything.
 //! * Durable and append-only, but **not tamper-evident**: there is no hash
 //!   chain and no HMAC, so anyone writing as the sink's owner can rewrite
 //!   history undetected. Tamper evidence means shipping each record off-host
@@ -35,14 +41,27 @@
 //! causally even when a terminal record is appended before its cancel call's
 //! own record):
 //!
+//! * `intent`: a call about to run — `v`, `ts`, `seq`, `session`,
+//!   `transport`, `event`, `tool`, `args`, plus `trace` when the client
+//!   supplied one. No outcome, duration, scope or size: none of it exists yet.
+//!   An `intent` no later record points back at (via `intent`) reads as
+//!   "started, outcome not recorded" — a crash or kill, or a lost outcome
+//!   write the client was told about in band.
 //! * `call`: a foreground call — `v`, `ts` (epoch millis), `session`, `tool`,
 //!   `args`, `outcome` (`ok`/`error`/`unknown-tool`), `duration_ms`, `rrids`,
-//!   `hosts`.
+//!   `hosts`, plus `intent` (the seq of its intent record) when one was
+//!   written. `duration_ms` is measured from arrival like `ts`, so for a
+//!   mutating tool it includes the intent record's own open and fsync.
 //! * `dispatch`: a backgrounded start — as `call`, plus the started `job_ids`.
 //! * `terminal`: a background job reaching Done/Failed/Cancelled — `v`, `ts`,
 //!   `session`, `tool`, `job_id`, `job_state`, `outcome`, `duration_ms`,
 //!   `rrids`, `hosts`. No `args`: the dispatch record already carries them,
-//!   and omitting them keeps a secret out of reach by construction.
+//!   and omitting them keeps a secret out of reach by construction. No
+//!   `intent` either: it joins its dispatch by `job_id`. A terminal record's
+//!   seq is not ordered against the calls around it in either direction —
+//!   neither its own dispatch record, since a job that settles at once can be
+//!   minted first, nor a parked `wait_seconds` reply — so `job_id` is the
+//!   join, never `seq`.
 
 use std::io;
 use std::path::PathBuf;
@@ -112,10 +131,12 @@ impl AuditOutcome {
     }
 }
 
-/// The `event` token distinguishing a foreground call from a backgrounded
-/// job's dispatch record and its terminal-state record.
+/// The `event` token distinguishing the pre-dispatch intent record from a
+/// foreground call, a backgrounded job's dispatch record, and its
+/// terminal-state record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuditEvent {
+    Intent,
     Call,
     Dispatch,
     Terminal,
@@ -124,6 +145,7 @@ pub(crate) enum AuditEvent {
 impl AuditEvent {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
+            AuditEvent::Intent => "intent",
             AuditEvent::Call => "call",
             AuditEvent::Dispatch => "dispatch",
             AuditEvent::Terminal => "terminal",
@@ -293,14 +315,16 @@ impl AuditLog {
             .open(&self.path)
     }
 
-    /// Pre-flight check: fail when the sink cannot be opened for append, so
-    /// the caller can refuse before dispatching.
+    /// Start-up probe: fail when the sink cannot be opened for append, so the
+    /// server refuses to serve rather than meeting it on the first tool call.
     ///
     /// Opens the sink exactly as an append does, so a sink already at the cap
     /// rotates here too — [`rotate`](Self::rotate) cannot fail, so that adds
     /// nothing to the errors below.
     ///
-    /// Blocking; async dispatch uses [`check_writable_async`](Self::check_writable_async).
+    /// Blocking; the start-up probe calls
+    /// [`check_writable_async`](Self::check_writable_async) instead, so the
+    /// open runs on the blocking pool.
     ///
     /// # Errors
     ///
@@ -311,7 +335,9 @@ impl AuditLog {
     }
 
     /// [`check_writable`](Self::check_writable) on the blocking pool, so a
-    /// down/slow disk never stalls the dispatch worker.
+    /// down/slow disk never stalls the start-up probe's runtime. The probe in
+    /// `runner` is its only caller: dispatch proves the sink by writing an
+    /// `intent` record, which leaves the evidence behind.
     pub(crate) async fn check_writable_async(&self) -> io::Result<()> {
         let owned = self.clone();
         tokio::task::spawn_blocking(move || owned.check_writable())
@@ -443,8 +469,12 @@ pub(crate) fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// The refusal returned in place of a call's result when the sink cannot be
-/// written: the call does not proceed unrecorded.
+/// The refusal returned when the `intent` record cannot be written: the call
+/// does not proceed unrecorded.
+///
+/// The only refusal the audit seam still issues, and the only one that can be
+/// honest — nothing has run. Once a tool has run, a lost record is reported
+/// alongside its result, never in place of it.
 pub(crate) fn refuse_error(source: &io::Error) -> McpError {
     McpError::internal_error(
         format!("audit log unavailable ({source}): call refused"),
@@ -814,7 +844,7 @@ mod tests {
         let sink = AuditLog::new(dir.path().to_path_buf(), 0);
         assert!(
             sink.check_writable().is_err(),
-            "pre-flight must fail on a directory"
+            "the probe must fail on a directory"
         );
         assert!(
             sink.append(&json!({"v": 1})).is_err(),
@@ -1099,6 +1129,7 @@ mod tests {
         assert_eq!(AuditOutcome::Ok.as_str(), "ok");
         assert_eq!(AuditOutcome::Error.as_str(), "error");
         assert_eq!(AuditOutcome::UnknownTool.as_str(), "unknown-tool");
+        assert_eq!(AuditEvent::Intent.as_str(), "intent");
         assert_eq!(AuditEvent::Call.as_str(), "call");
         assert_eq!(AuditEvent::Dispatch.as_str(), "dispatch");
         assert_eq!(AuditEvent::Terminal.as_str(), "terminal");
@@ -1296,7 +1327,7 @@ mod tests {
         let sink = AuditLog::new(dir.path().to_path_buf(), 0);
         assert!(
             sink.check_writable_async().await.is_err(),
-            "pre-flight must fail on a directory"
+            "the probe must fail on a directory"
         );
         assert!(
             sink.append_async(json!({"v": 1})).await.is_err(),

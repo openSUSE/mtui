@@ -785,8 +785,11 @@ pub struct Config {
     pub mcp_tools_allow: Vec<String>,
     /// Tool names to remove regardless of profile/allow (deny wins last).
     pub mcp_tools_deny: Vec<String>,
-    /// Durable audit sink for `mtui-mcp` tool calls (JSONL, one record per
-    /// call). Unset (the default) disables auditing entirely.
+    /// Durable audit sink for `mtui-mcp` tool calls (JSONL): one or two records
+    /// per call — an `intent` before and an outcome after for a tool without
+    /// `readOnlyHint`, an outcome alone for a read-only one — plus a terminal
+    /// record per background job. Unset (the default) disables auditing
+    /// entirely.
     pub mcp_audit_log: Option<PathBuf>,
     /// Size (bytes) at which `mcp_audit_log` rotates to `<path>.1`, keeping
     /// five generations; the oldest is discarded. `0` disables rotation, which

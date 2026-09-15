@@ -70,6 +70,11 @@ pub struct McpServer {
     testreport_tools: Arc<HashSet<String>>,
     /// The set of hand-written in-band transfer tool names (`get`/`put`, #434).
     transfer_tools: Arc<HashSet<String>>,
+    /// Names advertised with `readOnlyHint: true`, taken from the same
+    /// descriptors that build [`tools`](Self::tools) so the classification and
+    /// the hint cannot drift. A tool outside this set writes an `intent`
+    /// record before it runs.
+    read_only_tools: Arc<HashSet<String>>,
     /// Last-touch timestamp (monotonic millis), bumped on every tool call and
     /// `list_tools`, read by the http registry's idle sweeper. Under stdio /
     /// tests it is a private throwaway atomic no sweeper observes.
@@ -192,6 +197,15 @@ impl McpServer {
             .filter(|n| kept.contains(n))
             .collect();
 
+        // From the post-profile descriptors, so membership is exactly what the
+        // surface advertises — the pin `read_only_tools_match_advertised_hints`
+        // holds the two together.
+        let read_only_tools: HashSet<String> = descriptors
+            .iter()
+            .filter(|d| d.read_only)
+            .map(|d| d.name.clone())
+            .collect();
+
         let tools: Vec<Tool> = descriptors.iter().map(descriptor_to_tool).collect();
 
         Self {
@@ -202,6 +216,7 @@ impl McpServer {
             job_tools: Arc::new(job_tools),
             testreport_tools: Arc::new(testreport_tools),
             transfer_tools: Arc::new(transfer_tools),
+            read_only_tools: Arc::new(read_only_tools),
             last_touch,
             _guard: guard,
             transport,
@@ -355,15 +370,26 @@ impl McpServer {
     /// The audited dispatch behind [`call_tool`](ServerHandler::call_tool):
     /// the single chokepoint every tool call funnels through.
     ///
-    /// With `[mcp] audit_log` set and/or the `OTEL_*` endpoint on, one record
-    /// per call is persisted before the response returns — for foreground and
-    /// backgrounded calls, for failures and unknown tools alike. The file is
-    /// the durable truth and a call it cannot record is refused instead of
-    /// proceeding unrecorded; OTLP export is secondary and never gates or
-    /// refuses a call. OTLP-only (endpoint set, `audit_log` unset) still
-    /// builds the JSONL line in memory and uses it verbatim as the OTLP body,
-    /// and then never refuses at all. With neither sink this is dispatch
-    /// verbatim: behaviour and output are byte-identical.
+    /// With `[mcp] audit_log` set and/or the `OTEL_*` endpoint on, a tool the
+    /// surface does not advertise `readOnlyHint` writes an `intent` record —
+    /// fsynced — *before* it runs, and every call writes an outcome record
+    /// (`call`, or `dispatch` for a backgrounded one) afterwards, failures and
+    /// unknown tools included. The outcome record carries `intent: <seq>` when
+    /// one was written.
+    ///
+    /// The refusal matrix, in one place:
+    ///
+    /// * intent write to the file fails → **refuse**; nothing ran, and no
+    ///   record exists to say otherwise.
+    /// * outcome write to the file fails → warn, append
+    ///   [`audit_lost_notice`] to the reply, and return the executed result.
+    ///   Discarding it would tell the client a refusal that did not happen.
+    /// * either record's export fails → warn only. OTLP is secondary, so
+    ///   OTLP-only mode never refuses anything.
+    ///
+    /// OTLP-only (endpoint set, `audit_log` unset) still builds the JSONL line
+    /// in memory and uses it verbatim as the OTLP body. With neither sink this
+    /// is dispatch verbatim: behaviour and output are byte-identical.
     ///
     /// Test seam: unit tests drive this directly with a fresh token and no
     /// sink, since a real `RequestContext` needs a peer.
@@ -387,33 +413,56 @@ impl McpServer {
         if traceparent.is_some() && trace.is_none() {
             tracing::debug!("ignoring invalid traceparent");
         }
-        let file_on = self.session.audit_log().is_some();
-        let otel_on = self.session.otel().is_some();
-        // Refuse before running when the file sink is already unwritable: a
-        // mutation this consequential must not proceed unrecorded. (A refused
-        // call leaves no record — there is nowhere to put one.) It runs on the
-        // blocking pool: a down/slow disk must not stall the worker. Export
-        // health is deliberately never consulted here — a collector outage is
-        // not a reason to refuse a maintenance action, and gating on it made
-        // every read-only tool unusable for the length of the outage.
-        if let Some(audit) = self.session.audit_log()
-            && let Err(err) = audit.check_writable_async().await
-        {
-            return Err(refuse_error(&err));
-        }
-        let seq = if file_on || otel_on {
-            Some(crate::audit::next_seq())
-        } else {
-            None
-        };
+        // Echoed as the record's `trace` only when it parsed.
+        let traced = trace.is_some().then_some(traceparent).flatten();
+        let auditing = self.session.auditing();
+        // The intent and outcome records carry the identical `args`, and
+        // building them is not free — a `put` body is hashed — so sanitise once
+        // per call rather than once per record.
+        let args = auditing.then(|| sanitize_args(name, kwargs));
 
-        // Every arm below resolves to one audited outcome; the record is
-        // written once at the tail.
+        // The intent record: a durable "this is about to run", fsynced before
+        // it does. Every tool the surface does not advertise `readOnlyHint`
+        // gets one, an unknown name included — an unclassified name is not
+        // known to be harmless, and one rule beats a second allow-list to keep
+        // in step. Read-only tools stay outcome-only, so a poll loop still
+        // costs one record per call.
+        //
+        // A failed intent write is the only refusal left in this function, and
+        // the one case where refusing is honest: nothing ran, and no record
+        // claims otherwise.
+        let mut intent_seq: Option<u64> = None;
+        if auditing && !self.read_only_tools.contains(name) {
+            let seq = crate::audit::next_seq();
+            let mut record = serde_json::json!({
+                "v": AUDIT_SCHEMA_VERSION,
+                "ts": started_ms,
+                "seq": seq,
+                "session": self.session.id(),
+                "transport": self.session.transport(),
+                "event": AuditEvent::Intent.as_str(),
+                "tool": crate::audit::cap_str(name),
+                "args": args.clone(),
+            });
+            if let Some(traceparent) = traced {
+                record["trace"] = serde_json::json!(traceparent);
+            }
+            if let Some(audit) = self.session.audit_log()
+                && let Err(err) = audit.append_async(record.clone()).await
+            {
+                return Err(refuse_error(&err));
+            }
+            self.export_best_effort(&record, name, kwargs, trace);
+            intent_seq = Some(seq);
+        }
+
+        // Every arm below resolves to one audited outcome; the outcome record
+        // is written once at the tail.
         let mut event = AuditEvent::Call;
         let mut rrids: Vec<String> = Vec::new();
         let mut job_ids: Vec<String> = Vec::new();
         let outcome: AuditOutcome;
-        let result: Result<CallToolResponse, McpError>;
+        let mut result: Result<CallToolResponse, McpError>;
 
         // A job-control tool: poll/control the session's background-job table.
         if self.job_tools.contains(name) {
@@ -457,7 +506,7 @@ impl McpServer {
         else if self.testreport_tools.contains(name) {
             // Audit-only scope: skipped when no sink is on, so unaudited
             // dispatch never takes the session mutex for the record (#613).
-            if seq.is_some() {
+            if auditing {
                 let template = kwargs.get("template").and_then(Value::as_str);
                 rrids = self.session.audit_template_scope(template).await;
             }
@@ -484,7 +533,7 @@ impl McpServer {
         }
         // A hand-written in-band transfer tool (get/put, #434).
         else if self.transfer_tools.contains(name) {
-            if seq.is_some() {
+            if auditing {
                 let template = kwargs.get("template").and_then(Value::as_str);
                 rrids = self.session.audit_template_scope(template).await;
             }
@@ -550,7 +599,10 @@ impl McpServer {
             >());
         }
 
-        if let Some(seq) = seq {
+        if auditing {
+            // Minted here, after the intent record, so `intent < outcome` holds
+            // per call and the file's order tracks `seq`.
+            let seq = crate::audit::next_seq();
             let hosts = self.session.audit_hosts(&rrids).await;
             let response_bytes = response_bytes_of(&result);
             let mut record = serde_json::json!({
@@ -561,66 +613,96 @@ impl McpServer {
                 "transport": self.session.transport(),
                 "event": event.as_str(),
                 "tool": crate::audit::cap_str(name),
-                "args": sanitize_args(name, kwargs),
+                "args": args,
                 "outcome": outcome.as_str(),
                 "duration_ms": start.elapsed().as_millis() as u64,
                 "rrids": rrids,
                 "hosts": hosts,
             });
+            if let Some(intent) = intent_seq {
+                record["intent"] = serde_json::json!(intent);
+            }
             if event == AuditEvent::Dispatch {
                 let capped: Vec<String> =
                     job_ids.iter().map(|id| crate::audit::cap_str(id)).collect();
                 record["job_ids"] = serde_json::json!(capped);
             }
-            if let Some(traceparent) = traceparent
-                && trace.is_some()
-            {
+            if let Some(traceparent) = traced {
                 record["trace"] = serde_json::json!(traceparent);
             }
             if let Some(bytes) = response_bytes {
                 record["response_bytes"] = serde_json::json!(bytes);
             }
-            // File first, seq order. The sink was writable at pre-flight, so
-            // this fails only on a race: refuse in place of the result rather
-            // than answering unrecorded. Off the worker via `spawn_blocking`.
+            // File first, seq order, off the worker via `spawn_blocking`. The
+            // work is already done, so losing this record can no longer un-run
+            // anything: warn, tell the client in band, and return what really
+            // happened. A `warn!` alone would leave the client believing a
+            // record exists that does not.
+            let mut lost: Option<String> = None;
             if let Some(audit) = self.session.audit_log()
                 && let Err(err) = audit.append_async(record.clone()).await
             {
-                return Err(refuse_error(&err));
+                tracing::warn!(
+                    seq,
+                    tool = %crate::audit::cap_str(name),
+                    error = %err,
+                    "audit log: outcome record lost"
+                );
+                lost = Some(err.to_string());
             }
-            // OTLP second, same seq and verbatim line — best-effort: a full or
-            // unhealthy exporter warns and the executed result still returns.
-            // The file stays the durable truth, the seq is gap-accounted, and
-            // the exporter reports an `audit_gap` on recovery.
-            if let Some(otel) = self.session.otel() {
-                let line = serde_json::to_string(&record).unwrap_or_default();
-                if line.is_empty() {
-                    // Inert (Value always serializes) but still accounts the seq.
-                    otel.note_rejected(seq);
-                    warn_export_lost(seq, crate::otel::ExportReason::Encode.as_str());
-                } else {
-                    let queued = crate::otel::QueuedAudit {
-                        seq,
-                        jsonl: line,
-                        tool: crate::audit::cap_str(name),
-                        outcome: outcome.as_str().to_owned(),
-                        event: event.as_str().to_owned(),
-                        transport: self.session.transport().to_owned(),
-                        session_id: self.session.id(),
-                        response_bytes,
-                        trace,
-                        time_nanos: crate::otel::now_nanos(),
-                        extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
-                    };
-                    // `enqueue_audit` already merged the seq into the rejected
-                    // gap; a second `note_rejected` here would double-count it.
-                    if let Err(reason) = otel.enqueue_audit(queued) {
-                        warn_export_lost(seq, enqueue_reason(reason));
-                    }
-                }
+            // OTLP second, same seq and verbatim line.
+            self.export_best_effort(&record, name, kwargs, trace);
+            if let Some(reason) = lost {
+                result = with_audit_notice(result, &reason);
             }
         }
         result
+    }
+
+    /// Hand one already-built record to the OTLP exporter, best-effort.
+    ///
+    /// Never refuses and never reports back: the `mtui.*` attributes are read
+    /// back out of `record`, so they cannot disagree with the JSONL body they
+    /// accompany. A rejected enqueue warns with a closed-vocabulary reason and
+    /// nothing more — `enqueue_audit` has already merged the seq into the gap
+    /// it reports on recovery, so accounting it again here would double-count.
+    /// The inert encode failure is the one arm that must account for itself.
+    fn export_best_effort(
+        &self,
+        record: &Value,
+        name: &str,
+        kwargs: &Map<String, Value>,
+        trace: Option<([u8; 16], [u8; 8], u8)>,
+    ) {
+        let Some(otel) = self.session.otel() else {
+            return;
+        };
+        let seq = record["seq"].as_u64().unwrap_or_default();
+        let line = serde_json::to_string(record).unwrap_or_default();
+        if line.is_empty() {
+            otel.note_rejected(seq);
+            warn_export_lost(seq, crate::otel::ExportReason::Encode.as_str());
+            return;
+        }
+        let queued = crate::otel::QueuedAudit {
+            seq,
+            jsonl: line,
+            tool: crate::audit::cap_str(name),
+            // Absent on an intent record: nothing has happened yet to judge.
+            outcome: record["outcome"].as_str().unwrap_or_default().to_owned(),
+            event: record["event"].as_str().unwrap_or_default().to_owned(),
+            transport: self.session.transport().to_owned(),
+            session_id: self.session.id(),
+            response_bytes: record["response_bytes"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok()),
+            trace,
+            time_nanos: crate::otel::now_nanos(),
+            extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
+        };
+        if let Err(reason) = otel.enqueue_audit(queued) {
+            warn_export_lost(seq, enqueue_reason(reason));
+        }
     }
 }
 
@@ -643,6 +725,41 @@ fn enqueue_reason(reason: crate::otel::EnqueueError) -> &'static str {
 /// as a second driver.
 fn warn_export_lost(seq: u64, reason: &'static str) {
     tracing::warn!(seq, reason, "audit otlp: record not exported");
+}
+
+/// The in-band notice appended to a reply whose outcome record could not be
+/// written.
+///
+/// A `tracing::warn!` never reaches an MCP client, and an executed result must
+/// never be thrown away to report a logging failure, so the client is told in
+/// the reply itself. `reason` is an `io::Error`'s `Display`, which std builds
+/// without the path.
+fn audit_lost_notice(reason: &str) -> String {
+    format!("[audit: outcome record lost ({reason})]")
+}
+
+/// Append [`audit_lost_notice`] to a result without changing its shape.
+///
+/// Always the **last** content block, so `content[0]` stays the verbatim
+/// payload a `--json` tool's caller parses; `is_error` is untouched, and the
+/// record's `response_bytes` is taken before this runs, so it sizes the payload
+/// rather than the notice.
+fn with_audit_notice(
+    result: Result<CallToolResponse, McpError>,
+    reason: &str,
+) -> Result<CallToolResponse, McpError> {
+    let notice = audit_lost_notice(reason);
+    match result {
+        Ok(CallToolResponse::Complete(mut completed)) => {
+            completed.content.push(ContentBlock::text(notice));
+            Ok(CallToolResponse::Complete(completed))
+        }
+        Ok(other) => Ok(other),
+        Err(mut err) => {
+            err.message = format!("{} {notice}", err.message).into();
+            Err(err)
+        }
+    }
 }
 
 /// Sized response length for the `mtui.response_bytes` attribute: the summed
@@ -838,6 +955,73 @@ mod tests {
         let versions = server.supported_protocol_versions();
         assert!(!versions.contains(&rmcp::model::ProtocolVersion::V_2026_07_28));
         assert!(versions.contains(&rmcp::model::ProtocolVersion::V_2025_11_25));
+    }
+
+    #[test]
+    fn read_only_tools_match_advertised_hints() {
+        // The intent record is written for every tool this set does not hold,
+        // so the classification must be exactly the advertised `readOnlyHint`
+        // — a drift either way silently changes what is recorded.
+        // Anti-vacuity probes are per profile, since `core` serves neither
+        // `whoami` nor `put`.
+        for (profile, read_only, mutating) in [
+            (
+                "full",
+                ["list_hosts", "job_status", "whoami", "get"],
+                ["run", "job_cancel", "put", "config_set"],
+            ),
+            (
+                "core",
+                ["list_hosts", "job_status", "show_log", "testreport_read"],
+                ["run", "job_cancel", "update", "testreport_write"],
+            ),
+        ] {
+            let mut config = Config::default();
+            config.mcp_profile = profile.to_owned();
+            let server = server_with(config);
+            for tool in server.tools.iter() {
+                let hinted = tool
+                    .annotations
+                    .as_ref()
+                    .and_then(|a| a.read_only_hint)
+                    .unwrap_or(false);
+                let name = tool.name.to_string();
+                assert_eq!(
+                    hinted,
+                    server.read_only_tools.contains(&name),
+                    "{profile}/{name}: classification must follow the advertised hint"
+                );
+            }
+            for name in read_only {
+                assert!(
+                    server.read_only_tools.contains(name),
+                    "{profile}: {name} is read-only"
+                );
+            }
+            for name in mutating {
+                assert!(
+                    !server.read_only_tools.contains(name),
+                    "{profile}: {name} mutates"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn with_audit_notice_appends_to_an_error_message() {
+        // Not an internal error, so "rebuild it as an internal error" cannot
+        // pass: the notice annotates the failure the tool reported, and
+        // relabelling a client's own bad request would be a second lie on top
+        // of the lost record.
+        let original = McpError::invalid_params("boom", None);
+        let code = original.code;
+        let notified = with_audit_notice(Err(original), "Is a directory (os error 21)")
+            .expect_err("an error stays an error");
+        assert_eq!(
+            notified.message.as_ref(),
+            "boom [audit: outcome record lost (Is a directory (os error 21))]"
+        );
+        assert_eq!(notified.code, code, "the error keeps its own code");
     }
 
     #[test]
@@ -1104,19 +1288,37 @@ mod tests {
         panic!("sink never reached {n} records");
     }
 
-    /// The one `audit otlp:` warning emitted during a capture, in full.
+    /// The one record carrying `event`.
+    ///
+    /// Position is not a contract between a `dispatch` record and its job's
+    /// `terminal` one: the worker's append races the dispatch's own, and a job
+    /// that settles at once can win. A reader joins by `event` and `job_id`,
+    /// so these tests do too.
+    fn only_event<'a>(records: &'a [Value], event: &str) -> &'a Value {
+        let mut hits = records.iter().filter(|r| r["event"] == json!(event));
+        let hit = hits
+            .next()
+            .unwrap_or_else(|| panic!("no {event:?} record: {records:?}"));
+        assert!(
+            hits.next().is_none(),
+            "exactly one {event:?} record: {records:?}"
+        );
+        hit
+    }
+
+    /// The one captured warning starting with `prefix`, in full.
     ///
     /// Selected by prefix rather than by position so an unrelated event cannot
     /// shift the pin, and required to be unique so a duplicated warning (the
     /// double-accounting shape) cannot pass.
-    fn otlp_warn_line(logs: &str) -> String {
-        let mut hits = logs.lines().filter(|l| l.starts_with("audit otlp:"));
-        let line = hits.next().unwrap_or_else(|| {
-            panic!("no `audit otlp:` warning was captured, got: {logs:?}");
-        });
+    fn warn_line(logs: &str, prefix: &str) -> String {
+        let mut hits = logs.lines().filter(|l| l.starts_with(prefix));
+        let line = hits
+            .next()
+            .unwrap_or_else(|| panic!("no {prefix:?} warning was captured, got: {logs:?}"));
         assert!(
             hits.next().is_none(),
-            "exactly one export warning per record: {logs:?}"
+            "exactly one {prefix:?} warning: {logs:?}"
         );
         line.to_owned()
     }
@@ -1164,9 +1366,11 @@ mod tests {
         .expect("failing calls answer with an error payload, not a protocol error");
 
         let records = audit_records(&path);
-        assert_eq!(records.len(), 1, "a failing call produces a record");
-        assert_eq!(records[0]["tool"], json!("config_set"));
-        assert_eq!(records[0]["outcome"], json!("error"));
+        assert_eq!(records.len(), 2, "a failing call still writes intent first");
+        assert_eq!(records[0]["event"], json!("intent"));
+        assert_eq!(records[1]["tool"], json!("config_set"));
+        assert_eq!(records[1]["outcome"], json!("error"));
+        assert_eq!(records[1]["intent"], records[0]["seq"]);
     }
 
     #[tokio::test]
@@ -1180,12 +1384,17 @@ mod tests {
             "method-not-found keeps its code: {err}"
         );
 
+        // An unknown name is not known to be read-only, so it takes the same
+        // intent path every unclassified tool does.
         let records = audit_records(&path);
-        assert_eq!(records.len(), 1, "a refused call produces a record");
+        assert_eq!(records.len(), 2, "a refused call produces both records");
+        assert_eq!(records[0]["event"], json!("intent"));
         assert_eq!(records[0]["tool"], json!("shell"));
-        assert_eq!(records[0]["outcome"], json!("unknown-tool"));
-        assert_eq!(records[0]["rrids"], json!(Value::Array(vec![])));
-        assert_eq!(records[0]["hosts"], json!(Value::Array(vec![])));
+        assert_eq!(records[1]["tool"], json!("shell"));
+        assert_eq!(records[1]["outcome"], json!("unknown-tool"));
+        assert_eq!(records[1]["intent"], records[0]["seq"]);
+        assert_eq!(records[1]["rrids"], json!(Value::Array(vec![])));
+        assert_eq!(records[1]["hosts"], json!(Value::Array(vec![])));
     }
 
     #[tokio::test]
@@ -1205,10 +1414,13 @@ mod tests {
             !raw.contains(secret),
             "secret value must be unrepresentable in the record"
         );
-        let record: Value = serde_json::from_str(raw.trim()).expect("one record");
-        assert_eq!(record["args"]["attribute"], json!("gitea_token"));
-        assert_eq!(record["args"]["value"], json!("<redacted>"));
-        assert_eq!(record["args"]["secret"], json!(true));
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "intent and outcome both redact");
+        for record in &records {
+            assert_eq!(record["args"]["attribute"], json!("gitea_token"));
+            assert_eq!(record["args"]["value"], json!("<redacted>"));
+            assert_eq!(record["args"]["secret"], json!(true));
+        }
     }
 
     #[tokio::test]
@@ -1227,17 +1439,26 @@ mod tests {
         assert_eq!(jobs.len(), 1, "one background job started");
         let job_id = jobs[0].id.clone();
 
-        let records = await_records(&path, 2).await;
-        assert_eq!(records.len(), 2, "dispatch + terminal, nothing else");
-        let dispatch = &records[0];
-        assert_eq!(dispatch["event"], json!("dispatch"));
+        let records = await_records(&path, 3).await;
+        assert_eq!(
+            records.len(),
+            3,
+            "intent + dispatch + terminal, nothing else"
+        );
+        let intent = only_event(&records, "intent");
+        assert_eq!(intent["tool"], json!("run"));
+        let dispatch = only_event(&records, "dispatch");
         assert_eq!(dispatch["tool"], json!("run"));
+        assert!(
+            intent["seq"].as_u64() < dispatch["seq"].as_u64(),
+            "the intent is minted first: {records:?}"
+        );
         assert_eq!(dispatch["outcome"], json!("ok"));
         assert_eq!(dispatch["job_ids"], json!([job_id]));
         assert_eq!(dispatch["rrids"], json!([AUDIT_RRID]));
         assert_eq!(dispatch["hosts"], json!([AUDIT_HOST]));
-        let terminal = &records[1];
-        assert_eq!(terminal["event"], json!("terminal"));
+        assert_eq!(dispatch["intent"], intent["seq"]);
+        let terminal = only_event(&records, "terminal");
         assert_eq!(terminal["tool"], json!("run"));
         assert_eq!(terminal["job_id"], json!(job_id));
         assert_eq!(terminal["job_state"], json!("done"));
@@ -1247,6 +1468,10 @@ mod tests {
         assert!(
             terminal.get("args").is_none(),
             "terminal carries no args: {terminal}"
+        );
+        assert!(
+            terminal.get("intent").is_none(),
+            "a terminal record joins by job_id, not by intent: {terminal}"
         );
     }
 
@@ -1264,12 +1489,17 @@ mod tests {
         assert_eq!(jobs.len(), 1, "one background job started");
         let job_id = jobs[0].id.clone();
 
-        let records = await_records(&path, 2).await;
-        assert_eq!(records.len(), 2, "dispatch + terminal, nothing else");
-        assert_eq!(records[0]["event"], json!("dispatch"));
-        assert_eq!(records[0]["job_ids"], json!([job_id]));
-        let terminal = &records[1];
-        assert_eq!(terminal["event"], json!("terminal"));
+        let records = await_records(&path, 3).await;
+        assert_eq!(
+            records.len(),
+            3,
+            "intent + dispatch + terminal, nothing else"
+        );
+        let intent = only_event(&records, "intent");
+        let dispatch = only_event(&records, "dispatch");
+        assert_eq!(dispatch["intent"], intent["seq"]);
+        assert_eq!(dispatch["job_ids"], json!([job_id]));
+        let terminal = only_event(&records, "terminal");
         assert_eq!(terminal["job_id"], json!(job_id));
         assert_eq!(terminal["job_state"], json!("failed"));
         assert_eq!(terminal["outcome"], json!("error"));
@@ -1309,16 +1539,22 @@ mod tests {
         audited_call(&server, "job_cancel", json!({"job_id": job_id}))
             .await
             .expect("cancel answers");
-        // Three records: the run dispatch, the run's terminal — written by the
-        // cancel path, which owns it once claimed, so it precedes the cancel
-        // call's own record in the file — and the job_cancel call. `ts` still
-        // orders them causally.
-        let records = await_records(&path, 3).await;
-        assert_eq!(records.len(), 3, "no duplicate terminal record");
-        assert_eq!(records[0]["event"], json!("dispatch"));
+        // Five records: the run's intent and dispatch, the cancel's intent, the
+        // run's terminal — written by the cancel path, which owns it once
+        // claimed, so it precedes the cancel call's own record in the file —
+        // and the job_cancel outcome. `ts` still orders them causally.
+        let records = await_records(&path, 5).await;
+        assert_eq!(records.len(), 5, "no duplicate terminal record");
+        assert_eq!(records[0]["event"], json!("intent"));
+        assert_eq!(records[0]["tool"], json!("run"));
+        assert_eq!(records[1]["event"], json!("dispatch"));
+        assert_eq!(records[1]["intent"], records[0]["seq"]);
+        assert_eq!(records[2]["event"], json!("intent"));
         assert_eq!(records[2]["tool"], json!("job_cancel"));
-        assert_eq!(records[2]["outcome"], json!("ok"));
-        let terminal = &records[1];
+        assert_eq!(records[4]["tool"], json!("job_cancel"));
+        assert_eq!(records[4]["outcome"], json!("ok"));
+        assert_eq!(records[4]["intent"], records[2]["seq"]);
+        let terminal = &records[3];
         assert_eq!(terminal["event"], json!("terminal"));
         assert_eq!(terminal["job_id"], json!(job_id));
         assert_eq!(terminal["job_state"], json!("cancelled"));
@@ -1331,13 +1567,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = Config::default();
         config.session_user = "testuser".to_owned();
-        // A directory as the sink path: every open fails, so the pre-flight
-        // refuses without running the call.
+        // A directory as the sink path: every open fails, so the intent write
+        // refuses the call before anything runs.
         config.mcp_audit_log = Some(dir.path().to_path_buf());
         let registry = Arc::new(register_all());
         let session = McpSession::new(config);
         let server = McpServer::new(registry, session.clone());
 
+        // The refusal is the intent write failing, so it only applies to a
+        // tool that is not advertised read-only.
+        assert!(!server.read_only_tools.contains("run"), "run mutates");
         let err = audited_call(
             &server,
             "run",
@@ -1353,30 +1592,346 @@ mod tests {
             session.job_list().is_empty(),
             "refused before dispatch: no job was started"
         );
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("sink dir").count(),
+            0,
+            "a refused call leaves no record: there is nowhere to put one"
+        );
     }
 
     #[tokio::test]
-    async fn audit_unset_sink_is_byte_identical() {
-        async fn whoami(audit: Option<std::path::PathBuf>) -> CallToolResult {
+    async fn audit_read_only_call_runs_with_an_unwritable_sink() {
+        // A read-only tool writes no intent record, so an unwritable sink can
+        // only cost its outcome record — never the call.
+        async fn whoami(audit: Option<std::path::PathBuf>) -> (CallToolResult, String) {
             let mut config = Config::default();
             config.session_user = "testuser".to_owned();
             config.mcp_audit_log = audit;
             let registry = Arc::new(register_all());
             let session = McpSession::new(config);
             let server = McpServer::new(registry, session);
-            let response = audited_call(&server, "whoami", json!({}))
+            assert!(server.read_only_tools.contains("whoami"));
+            let (response, logs) = capture_logs(audited_call(&server, "whoami", json!({}))).await;
+            let response = response.expect("a read-only call is never refused for the sink");
+            (complete_result(&response).clone(), logs)
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (plain, _) = whoami(None).await;
+        let (logged, logs) = whoami(Some(dir.path().to_path_buf())).await;
+
+        assert_eq!(logged.content.len(), 2, "payload plus the notice");
+        assert_eq!(
+            logged.content[0], plain.content[0],
+            "the payload block stays byte-identical to the unaudited reply"
+        );
+        let notice = logged.content[1]
+            .as_text()
+            .expect("the notice is a text block")
+            .text
+            .to_string();
+        assert!(
+            notice.starts_with("[audit: outcome record lost ("),
+            "got: {notice}"
+        );
+        assert!(notice.ends_with(")]"), "got: {notice}");
+        assert!(
+            !notice.contains(dir.path().to_str().expect("utf-8 tempdir")),
+            "the notice carries no path: {notice}"
+        );
+        assert!(
+            !logs.contains(dir.path().to_str().expect("utf-8 tempdir")),
+            "neither does the warning: {logs}"
+        );
+    }
+
+    /// Breaks the sink from inside the dispatch: moves the live sink aside and
+    /// plants a directory in its place, so the outcome append fails on the real
+    /// I/O path between the intent record and the outcome one — with no test
+    /// hook in production code.
+    struct SinkBreaker {
+        path: std::path::PathBuf,
+        moved: std::path::PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl mtui_core::Command for SinkBreaker {
+        fn name(&self) -> &'static str {
+            "sink_breaker"
+        }
+        fn scope(&self) -> mtui_core::Scope {
+            mtui_core::Scope::Fanout
+        }
+        async fn call(
+            &self,
+            _session: &mut mtui_core::Session,
+            _args: &clap::ArgMatches,
+        ) -> mtui_core::CommandResult {
+            std::fs::rename(&self.path, &self.moved).expect("move the sink aside");
+            std::fs::create_dir(&self.path).expect("plant a directory in its place");
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_outcome_write_failure_returns_the_result_with_a_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let moved = dir.path().join("audit.moved.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let mut registry = register_all();
+        registry.register(Arc::new(SinkBreaker {
+            path: path.clone(),
+            moved: moved.clone(),
+        }));
+        let session = McpSession::new(config);
+        let server = McpServer::new(Arc::new(registry), session);
+
+        let (response, logs) = capture_logs(audited_call(&server, "sink_breaker", json!({}))).await;
+        let response = response.expect("an executed call is never reported as refused");
+        let content = &complete_result(&response).content;
+        assert_eq!(content.len(), 2, "payload plus the notice");
+        let notice = content[1]
+            .as_text()
+            .expect("the notice is a text block")
+            .text
+            .to_string();
+        assert!(
+            notice.starts_with("[audit: outcome record lost ("),
+            "got: {notice}"
+        );
+        assert!(notice.ends_with(")]"), "got: {notice}");
+        let dir_path = dir.path().to_str().expect("utf-8 tempdir");
+        assert!(
+            !notice.contains(dir_path),
+            "the notice carries no path: {notice}"
+        );
+
+        let intent = audit_records(&moved);
+        assert_eq!(intent.len(), 1, "the intent record landed before dispatch");
+        assert_eq!(intent[0]["event"], json!("intent"));
+        assert_eq!(intent[0]["tool"], json!("sink_breaker"));
+        assert!(path.is_dir(), "the breaker really broke the sink");
+
+        // Pinned whole around the two varying tokens: the process-global `seq`
+        // and the platform's own errno text.
+        let line = warn_line(&logs, "audit log: outcome record lost");
+        let (head, _reason) = line
+            .split_once(" error=")
+            .unwrap_or_else(|| panic!("warn line shape: {line:?}"));
+        let seq = head
+            .strip_prefix("audit log: outcome record lost seq=")
+            .and_then(|rest| rest.strip_suffix(" tool=sink_breaker"))
+            .unwrap_or_else(|| panic!("warn line shape: {line:?}"));
+        assert!(seq.parse::<u64>().is_ok(), "seq is the join key: {seq:?}");
+        assert!(
+            !line.contains(dir_path),
+            "the warning carries no path: {line}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_intent_and_outcome_pair_by_seq() {
+        let (server, _session, _dir, path) = audited_server();
+        audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "gitea_token", "value": "pair-secret-4b2c"}),
+        )
+        .await
+        .expect("config_set answers");
+
+        let records = audit_records(&path);
+        assert_eq!(
+            records.len(),
+            2,
+            "a mutating call writes intent then outcome"
+        );
+        let (intent, call) = (&records[0], &records[1]);
+        assert_eq!(intent["event"], json!("intent"));
+        assert_eq!(call["event"], json!("call"));
+        assert_eq!(call["intent"], intent["seq"], "the pair joins by seq");
+        assert!(
+            intent["seq"].as_u64() < call["seq"].as_u64(),
+            "intent precedes its outcome: {intent} / {call}"
+        );
+        assert_eq!(intent["ts"], call["ts"], "both stamp the call's arrival");
+        assert_eq!(intent["tool"], json!("config_set"));
+        assert_eq!(intent["session"], call["session"]);
+        assert_eq!(intent["args"]["value"], json!("<redacted>"));
+        assert_eq!(call["args"]["value"], json!("<redacted>"));
+        for absent in ["outcome", "duration_ms", "response_bytes", "rrids", "hosts"] {
+            assert!(
+                intent.get(absent).is_none(),
+                "an intent record carries no {absent}: {intent}"
+            );
+        }
+
+        // A read-only tool writes the outcome record alone, with no `intent`.
+        audited_call(&server, "list_hosts", json!({}))
+            .await
+            .expect("list_hosts succeeds");
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 3, "one more record, not two");
+        assert_eq!(records[2]["event"], json!("call"));
+        assert_eq!(records[2]["tool"], json!("list_hosts"));
+        assert!(
+            records[2].get("intent").is_none(),
+            "a read-only call has no intent record to point at: {}",
+            records[2]
+        );
+    }
+
+    /// Register a never-finishing command and start it as a background job, so
+    /// a `job_status` wait has something to park on.
+    fn start_endless_job(session: &Arc<McpSession>) -> String {
+        use clap::ArgMatches;
+        use mtui_core::{Command, CommandResult, Scope};
+
+        struct EndlessAuditProbe;
+        #[async_trait::async_trait]
+        impl Command for EndlessAuditProbe {
+            fn name(&self) -> &'static str {
+                "endless_audit_probe"
+            }
+            // Session-level, so the worker dispatches on a fork and does not
+            // hold the canonical session mutex for the life of the job — which
+            // the outcome record's `audit_hosts` needs to take.
+            fn scope(&self) -> Scope {
+                Scope::Single
+            }
+            fn reads_resolved_report(&self) -> bool {
+                false
+            }
+            async fn call(
+                &self,
+                _session: &mut mtui_core::Session,
+                _args: &ArgMatches,
+            ) -> CommandResult {
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+        }
+
+        let mut registry = register_all();
+        registry.register(Arc::new(EndlessAuditProbe));
+        session
+            .start_job(Arc::new(registry), "endless_audit_probe", Vec::new())
+            .expect("start_job succeeds")
+    }
+
+    #[tokio::test]
+    async fn audit_plain_job_poll_writes_one_outcome_record() {
+        // The job branch answers a plain poll without the cancellable wrapper.
+        // It must still fall through to the record rather than returning early,
+        // or a poll loop would be the one dispatch path with no audit trail.
+        let (server, session, _dir, path) = audited_server();
+        assert!(
+            server.read_only_tools.contains("job_status"),
+            "job_status is advertised read-only, which is what makes one record right"
+        );
+        let job_id = start_endless_job(&session);
+
+        audited_call(&server, "job_status", json!({ "job_id": job_id }))
+            .await
+            .expect("a plain poll answers");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "one record per poll: {records:?}");
+        assert_eq!(records[0]["event"], json!("call"));
+        assert_eq!(records[0]["tool"], json!("job_status"));
+        assert_eq!(records[0]["outcome"], json!("ok"));
+        assert!(
+            records[0].get("intent").is_none(),
+            "a read-only tool writes no intent record: {}",
+            records[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_cancelled_job_wait_still_writes_its_outcome_record() {
+        // A client-cancelled park is the one arm that answers with an error it
+        // did not get from the tool. It is still a call that happened, so it is
+        // still recorded — and still without an intent, since `job_status` is
+        // read-only however long it parked.
+        let (server, session, _dir, path) = audited_server();
+        let job_id = start_endless_job(&session);
+        let ct = CancellationToken::new();
+        let kwargs = json!({ "job_id": job_id, "wait_seconds": 60 });
+
+        let dispatch = server.dispatch_audited(
+            "job_status",
+            kwargs.as_object().expect("kwargs object"),
+            None,
+            &ct,
+            None,
+        );
+        let cancel = async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            ct.cancel();
+        };
+        let (result, ()) = tokio::join!(dispatch, cancel);
+        result.expect_err("the cancel wins the park");
+
+        let records = audit_records(&path);
+        assert_eq!(
+            records.len(),
+            1,
+            "one record for the cancelled wait: {records:?}"
+        );
+        assert_eq!(records[0]["event"], json!("call"));
+        assert_eq!(records[0]["tool"], json!("job_status"));
+        assert_eq!(records[0]["outcome"], json!("error"));
+        assert!(
+            records[0].get("intent").is_none(),
+            "still read-only: {}",
+            records[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_unset_sink_is_byte_identical() {
+        async fn call(
+            tool: &str,
+            kwargs: Value,
+            audit: Option<std::path::PathBuf>,
+        ) -> CallToolResult {
+            let mut config = Config::default();
+            config.session_user = "testuser".to_owned();
+            config.mcp_audit_log = audit;
+            let registry = Arc::new(register_all());
+            let session = McpSession::new(config);
+            let server = McpServer::new(registry, session);
+            let response = audited_call(&server, tool, kwargs)
                 .await
-                .expect("whoami succeeds");
+                .expect("the call answers");
             complete_result(&response).clone()
         }
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let plain = whoami(None).await;
-        let logged = whoami(Some(dir.path().join("audit.jsonl"))).await;
-        assert_eq!(
-            plain, logged,
-            "enabling the sink must not change the wire response"
-        );
+        for (tool, kwargs) in [
+            ("whoami", json!({})),
+            // A mutating tool takes the intent path too, which must stay just
+            // as invisible on the wire.
+            (
+                "config_set",
+                json!({"attribute": "session_user", "value": "audited"}),
+            ),
+        ] {
+            let plain = call(tool, kwargs.clone(), None).await;
+            let logged = call(
+                tool,
+                kwargs,
+                Some(dir.path().join(format!("{tool}-audit.jsonl"))),
+            )
+            .await;
+            assert_eq!(
+                plain, logged,
+                "enabling the sink must not change the wire response for {tool}"
+            );
+        }
     }
 
     // ------------------------------------------------- OTLP export (#411 ext)
@@ -1536,8 +2091,91 @@ mod tests {
             "the refused enqueue is gap-accounted exactly once"
         );
         assert_eq!(
-            otlp_warn_line(&logs),
+            warn_line(&logs, "audit otlp:"),
             format!("audit otlp: record not exported seq={seq} reason=\"otlp unhealthy\"")
+        );
+        assert!(!logs.contains("127.0.0.1"), "no endpoint leaks: {logs}");
+        exporter.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unhealthy_otlp_never_gates_the_intent_record_either() {
+        // A mutating tool exports twice, and the intent export is the one that
+        // runs *before* dispatch — the one place an export failure could still
+        // be turned back into a refusal. It must not be: two refused enqueues,
+        // two warnings, two accounted seqs, and the call still runs.
+        let failing = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&failing)
+            .await;
+        let exporter = otlp_exporter(&format!("{}/v1/logs", failing.uri()));
+        exporter
+            .enqueue_audit(crate::otel::QueuedAudit {
+                seq: crate::audit::next_seq(),
+                jsonl: "{}".to_owned(),
+                tool: "run".to_owned(),
+                outcome: "ok".to_owned(),
+                event: "call".to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: crate::otel::now_nanos(),
+                extra_attrs: Vec::new(),
+            })
+            .expect("enqueue while healthy");
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        assert!(!exporter.is_healthy(), "failed batch latches");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
+        assert!(
+            !server.read_only_tools.contains("config_set"),
+            "config_set mutates, so it writes an intent record"
+        );
+
+        let lost_before = exporter.audit_lost();
+        let (response, logs) = capture_logs(audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "gitea_token", "value": "intent-export-secret"}),
+        ))
+        .await;
+        response.expect("a collector outage never gates a mutating call either");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "intent + outcome: {records:?}");
+        assert_eq!(records[0]["event"], json!("intent"));
+        assert_eq!(records[1]["event"], json!("call"));
+        assert_eq!(
+            exporter.audit_lost(),
+            lost_before + 2,
+            "both refused enqueues are gap-accounted, once each"
+        );
+        let warns: Vec<&str> = logs
+            .lines()
+            .filter(|line| line.starts_with("audit otlp:"))
+            .collect();
+        assert_eq!(
+            warns,
+            vec![
+                format!(
+                    "audit otlp: record not exported seq={} reason=\"otlp unhealthy\"",
+                    records[0]["seq"]
+                ),
+                format!(
+                    "audit otlp: record not exported seq={} reason=\"otlp unhealthy\"",
+                    records[1]["seq"]
+                ),
+            ],
+            "one warning per record, in seq order: {logs:?}"
         );
         assert!(!logs.contains("127.0.0.1"), "no endpoint leaks: {logs}");
         exporter.shutdown().await;
@@ -1642,7 +2280,7 @@ mod tests {
         );
         // The line is pinned whole around the one varying token: `seq` is a
         // process-global counter and this mode writes no file to read it from.
-        let line = otlp_warn_line(&logs);
+        let line = warn_line(&logs, "audit otlp:");
         let (head, reason) = line
             .rsplit_once(" reason=")
             .unwrap_or_else(|| panic!("warn line shape: {line:?}"));
@@ -1669,16 +2307,19 @@ mod tests {
         .expect("put dispatches (record pins args either way)");
         let raw = std::fs::read_to_string(&path).expect("sink readable");
         assert!(!raw.contains(secret), "payload never verbatim: {raw}");
-        let record: Value = serde_json::from_str(raw.trim()).expect("one record");
-        assert_eq!(record["args"]["content"]["bytes"], json!(secret.len()));
-        assert_eq!(
-            record["args"]["content"]["sha256"]
-                .as_str()
-                .expect("hex")
-                .len(),
-            64
-        );
-        assert_eq!(record["args"]["filename"], json!("id_rsa"));
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 2, "put mutates: intent then outcome");
+        for record in &records {
+            assert_eq!(record["args"]["content"]["bytes"], json!(secret.len()));
+            assert_eq!(
+                record["args"]["content"]["sha256"]
+                    .as_str()
+                    .expect("hex")
+                    .len(),
+                64
+            );
+            assert_eq!(record["args"]["filename"], json!("id_rsa"));
+        }
     }
 
     #[tokio::test]
@@ -1784,9 +2425,13 @@ mod tests {
             .await
             .expect_err("unknown tool rejected");
         let records = audit_records(&path);
-        assert_eq!(records.len(), 2);
+        assert_eq!(records.len(), 3, "whoami's record, then shell's pair");
         assert!(
             records[1].get("response_bytes").is_none(),
+            "an intent record is unsized: nothing has answered yet"
+        );
+        assert!(
+            records[2].get("response_bytes").is_none(),
             "protocol errors are unsized"
         );
     }
@@ -1857,22 +2502,28 @@ mod tests {
         });
 
         let start = Instant::now();
-        audited_call(&server, "whoami", json!({}))
-            .await
-            .expect("slow sink still answers");
+        // A mutating tool, so the two blocking opens under test are the intent
+        // append and the outcome append.
+        audited_call(
+            &server,
+            "config_set",
+            json!({"attribute": "session_user", "value": "slow"}),
+        )
+        .await
+        .expect("slow sink still answers");
         let ticks_during = ticks.load(Ordering::Relaxed);
         ticker.await.expect("ticker joins");
         let elapsed = start.elapsed();
 
-        // Anti-vacuity: the hook really slept (pre-flight + append).
+        // Anti-vacuity: the hook really slept, once per append.
         assert!(
-            elapsed >= Duration::from_millis(500),
-            "hook must fire, took only {elapsed:?}"
+            elapsed >= Duration::from_millis(600),
+            "hook must fire twice, took only {elapsed:?}"
         );
         assert!(
             ticks_during >= 10,
             "worker stalled on slow sink: only {ticks_during} ticks during {elapsed:?}"
         );
-        assert_eq!(audit_records(&path).len(), 1, "record still landed");
+        assert_eq!(audit_records(&path).len(), 2, "both records still landed");
     }
 }
