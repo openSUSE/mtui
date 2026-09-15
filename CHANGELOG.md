@@ -32,7 +32,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transport, tool name, arguments, outcome (`ok`/`error`/`unknown-tool`),
   duration, and the RRIDs and host names the call resolved to; an `intent`
   record carries the same header and the same arguments; a `terminal` record
-  carries no arguments and joins its dispatch by job id. Unset (the default)
+  carries no arguments and joins its dispatch by job id. Host names are
+  best-effort — empty while the session is busy with an exclusive background
+  job, because a record write never waits on the work it records; `rrids` are
+  always recorded. Unset (the default)
   disables auditing with byte-identical behaviour. A tool not advertised
   `readOnlyHint` writes an `intent` record before it runs and is refused if
   that write fails, so a refusal now means nothing ran; its outcome record
