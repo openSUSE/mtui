@@ -635,6 +635,38 @@ mod tests {
         assert!(ns.contains(&"config_set"), "config_set missing");
     }
 
+    /// A fanned-out tool's description is its subcommand's `about`, so `config
+    /// show`/`config set` must carry one or the client sees the bare tool name;
+    /// `set`'s positionals are described too (#597).
+    #[test]
+    fn config_tools_are_described() {
+        let tools = build_tools(&register_all());
+        let set = descriptor(&tools, "config_set");
+        assert_ne!(set.description, "config_set");
+        assert!(set.description.starts_with("Sets"), "{:?}", set.description);
+        let show = descriptor(&tools, "config_show");
+        assert_ne!(show.description, "config_show");
+        assert!(
+            show.description.starts_with("Shows"),
+            "{:?}",
+            show.description
+        );
+        let set_props = set
+            .input_schema
+            .get("properties")
+            .unwrap()
+            .as_object()
+            .unwrap();
+        for prop in ["attribute", "value"] {
+            let description = set_props
+                .get(prop)
+                .and_then(|p| p.get("description"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(!description.is_empty(), "{prop} has no description");
+        }
+    }
+
     #[test]
     fn config_set_schema_requires_attribute_and_value() {
         let tools = build_tools(&register_all());

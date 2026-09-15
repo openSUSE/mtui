@@ -72,6 +72,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   path) are refused, and endpoint URLs print userinfo-stripped. The REPL prints
   everything verbatim as before. No tool schema changed. `config set` of an
   endpoint URL acknowledges with the userinfo-stripped value.
+- `config show` and `config set` gained help text; the `config_show`/`config_set`
+  MCP tool descriptions are no longer the bare tool name, and `set`'s
+  `attribute`/`value` are described.
 
 ## [26.3.2] - 2026-09-04
 
