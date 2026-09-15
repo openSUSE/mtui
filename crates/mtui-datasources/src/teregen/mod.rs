@@ -34,8 +34,10 @@ use crate::http::{
     HTTP_TIMEOUT, HttpClient, MAX_API_BODY, VerifyPolicy, read_body_capped, resolve_verify,
 };
 
+pub mod auth;
 pub mod tokens;
 
+pub use auth::{DEFAULT_NAMESPACE, TeregenAuth, TeregenAuthError};
 pub use tokens::{CachedToken, TokenStore};
 
 /// The result of a regenerate-and-wait attempt (see
