@@ -228,6 +228,14 @@ Remote-lock behaviour on target hosts, so concurrent testers can share a fleet.
 | `profile` | string | `full` | Tool-surface profile: `full` (every synthesised tool) or `core` (curated everyday subset). Unknown → `full` with a warning. Agent clients should prefer `core` (36 vs 65 tools on every request); see [MCP server](mcp.md). |
 | `tools_allow` | array of strings | *(empty)* | Extra tool names to keep on top of the profile. |
 | `tools_deny` | array of strings | *(empty)* | Tool names to remove regardless of profile/allow (deny wins last). E.g. `["updates", "openqa_overview"]` for a workflow that never lists the queue or polls openQA. |
+| `audit_log` | path | *(unset)* | Durable audit sink for tool calls (versioned JSONL, `0600`): one or two records per call — an `intent` before and an outcome after for a tool without `readOnlyHint`, an outcome alone for a read-only one — plus a terminal record per background job. Unset disables auditing. A path that cannot be opened refuses to start the server; afterwards a failed pre-dispatch `intent` write refuses the call (nothing ran), while a failed outcome write returns the result with an in-band notice. See [MCP server](mcp.md#audit-log). |
+| `audit_log_max_bytes` | bytes | `268435456` | Size at which `audit_log` rotates to `<path>.1`, keeping five generations (`.1`…`.5`); the oldest is discarded, so archiving beyond it is yours to arrange. Rotation never blocks the dispatch worker and never refuses a call: it takes the file's advisory lock without waiting, and a lock it cannot take or a rename it cannot perform warns once and keeps appending past the cap. `0` disables rotation entirely; any other value below `4096` is raised to it with a warning. |
+
+> OTLP export of the same record needs no TOML key by design: it is env-only
+> (`OTEL_EXPORTER_OTLP_ENDPOINT` / `..._LOGS_ENDPOINT`, `..._HEADERS` /
+> `..._LOGS_HEADERS`, `..._PROTOCOL` / `..._LOGS_PROTOCOL`, `OTEL_SERVICE_NAME`).
+> Endpoint set with `audit_log` unset is OTLP-only; neither is auditing off.
+> See [MCP server](mcp.md#otlp-log-export).
 
 > The profile key is `profile`, not `tool_profile` — it already sits under the
 > tool-scoped `[mcp]` table. `tools_allow`/`tools_deny` are native TOML arrays,

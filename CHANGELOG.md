@@ -20,6 +20,76 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   interrupts the wait. **MCP schema note:** additive only — an optional
   `wait_seconds` on both.
 
+- New `[mcp] audit_log` key: a file path enabling a durable audit record of
+  `mtui-mcp` tool calls (versioned JSONL, created `0600` and fsynced before the
+  response returns): one or two records per call — an `intent` before and an
+  outcome after for a tool without `readOnlyHint`, an outcome alone for a
+  read-only one — plus a terminal record per background job. An outcome record
+  carries the schema version, arrival timestamp, sequence number, session id,
+  transport, tool name, arguments, outcome (`ok`/`error`/`unknown-tool`),
+  duration, and the RRIDs and host names the call resolved to; an `intent`
+  record carries the same header and the same arguments; a `terminal` record
+  carries no arguments and joins its dispatch by job id. Host names are
+  best-effort — empty while the session is busy with an exclusive background
+  job, because a record write never waits on the work it records; `rrids` are
+  always recorded. Unset (the default)
+  disables auditing with byte-identical behaviour. A tool not advertised
+  `readOnlyHint` writes an `intent` record before it runs and is refused if
+  that write fails, so a refusal now means nothing ran; its outcome record
+  carries `intent: <seq>`. A lost *outcome*
+  record is reported in band — the executed result comes back with a trailing
+  `[audit: outcome record lost (<reason>)]` block, or the same text appended to
+  an error message — never by discarding the result. A configured sink that
+  cannot be opened refuses to start the server, naming the path on stderr,
+  instead of loading quietly and failing on the first tool call. The sink is
+  opened `O_NOFOLLOW` and refused unless it is a regular file owned by the
+  serving user, so a planted symlink or FIFO cannot
+  divert the append — or the `0600` tightening — onto another file; that covers
+  the path's final component only, so the sink's directory must be writable by
+  the serving user alone. The record is durable and append-only but not
+  tamper-evident: there is no hash chain or HMAC, so ship it off-host (see the
+  OTLP bullet) if that is needed. `config_set` never records the value, so
+  secrets cannot leak into the log; file-body payloads (`put` `content`/`content_b64`,
+  `testreport_write` `content`, `testreport_patch` `replacement`) record
+  `{bytes, sha256}` instead of the bytes, always fingerprinted regardless of
+  size. Free-text arguments — `run`/`comment` argv included, at any nesting —
+  are masked rather than trusted: URL userinfo is stripped through the shared
+  `sanitize_url`, and the value of a secret-named flag or key (`--password`,
+  `DB_PASSWORD=`, `x-api-key:`, `Authorization: Bearer …`) becomes
+  `<redacted>`, through the quoting a shell line or a JSON payload wraps it in.
+  It keys on the name beside the value, so what it cannot catch is stated
+  rather than implied: a bare secret with no key beside it, a single-letter
+  flag whose meaning is per-program (`sshpass -p`, `curl -u user:pass`), a
+  value attached to one (`-pSECRET`, `-U user%pass`), and anything passed by
+  environment, stdin or a file. The seam is `mtui-mcp`'s `call_tool` dispatch
+  only — `mtui-core` has no session-key/transport notion, so the REPL is not
+  covered (#411).
+
+- New `[mcp] audit_log_max_bytes` key (default `268435456`, 256 MiB): the size
+  at which the audit sink rotates to `<path>.1`, keeping five generations and
+  discarding the oldest — archiving beyond that is the operator's job. `0`
+  disables rotation, which makes bounding the sink yours to arrange; any other
+  value below `4096` is raised to it with a warning. Rotation is housekeeping:
+  it happens on the next append past the cap, never blocks the dispatch worker
+  and never refuses a call. An advisory lock on the file serialises two
+  processes sharing one path, but it is never waited on, and a lock it cannot
+  take or a rename it cannot perform warns once and keeps appending past the
+  cap (#411).
+
+- OTLP/HTTP LOGS export of the same audit record (hand-rolled protobuf over the
+  workspace `reqwest`/rustls stack, no new shipped crates): one log record per
+  audit event, body = the verbatim JSONL line (already redacted and
+  fingerprinted as above), with closed `mtui.*` attributes
+  and resource `service.name`. Env-only configuration (`OTEL_EXPORTER_OTLP_ENDPOINT`
+  / `..._LOGS_ENDPOINT`, `..._HEADERS` / `..._LOGS_HEADERS`,
+  `..._PROTOCOL` / `..._LOGS_PROTOCOL` as `http/protobuf` only, `OTEL_SERVICE_NAME`
+  defaulting to `mtui`); unset-or-empty disables. OTLP-only (endpoint set,
+  `audit_log` unset) still builds the JSONL line in memory. Export never gates a
+  tool call: a startup probe latches collector health, but an unhealthy or full
+  exporter only warns and accounts the record's sequence number, which the
+  exporter reports as an `audit_gap` once the collector returns — the call itself
+  still runs and still answers. No new TOML keys (#411).
+
 ### Changed
 
 - Parallel fan-out outputs fold identical success spam: consecutive identical

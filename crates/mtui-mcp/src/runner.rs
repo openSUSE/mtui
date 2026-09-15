@@ -52,7 +52,10 @@ pub async fn run() -> anyhow::Result<()> {
 ///
 /// stdout is the JSON-RPC transport — logging goes to stderr only.
 async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
-    let (server, session) = build_stdio_server(args).await;
+    let config = args.resolve_config();
+    probe_audit_sink(&config).await?;
+    let otel = init_otel_exporter(&config).await;
+    let (server, session) = build_stdio_server(config).await;
 
     tracing::info!("mtui-mcp: serving on stdio");
 
@@ -71,7 +74,50 @@ async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
     }
     tracing::info!("mtui-mcp: shutting down; releasing pool claims and disconnecting hosts");
     session.close().await;
+    // 5s shutdown flush for any terminal records the close enqueued.
+    if let Some(otel) = otel {
+        otel.shutdown().await;
+    }
     Ok(())
+}
+
+/// Prove the configured `[mcp] audit_log` can be opened, before serving.
+///
+/// A sink that cannot take a record refuses every call it is asked to record,
+/// so a broken path is a start-up error, not a first-tool-call surprise. This
+/// runs before [`init_otel_exporter`] so a local misconfiguration is reported
+/// without waiting out a network probe, and the error goes to stderr only —
+/// naming the path there is what makes it actionable.
+///
+/// The open itself rides `spawn_blocking` inside `check_writable_async`.
+async fn probe_audit_sink(config: &mtui_config::Config) -> anyhow::Result<()> {
+    let Some(path) = config.mcp_audit_log.as_ref() else {
+        return Ok(());
+    };
+    crate::audit::AuditLog::new(path.clone(), config.mcp_audit_log_max_bytes)
+        .check_writable_async()
+        .await
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "audit log {}: {err}; refusing to serve unaudited",
+                path.display()
+            )
+        })
+}
+
+/// Build the global OTLP exporter from env plus the resolved TLS posture,
+/// install it for sessions to clone, and probe before serving.
+///
+/// The CA bundle read rides `spawn_blocking` inside the async constructor; the probe is
+/// async `reqwest`. Both run here at startup, never inline in dispatch.
+async fn init_otel_exporter(
+    config: &mtui_config::Config,
+) -> Option<Arc<crate::otel::OtelExporter>> {
+    let otel_config = crate::otel::OtelConfig::from_env()?;
+    let exporter = crate::otel::OtelExporter::new(otel_config, &config.ssl_verify).await?;
+    crate::otel::OtelExporter::install_global(Arc::clone(&exporter));
+    let _ = exporter.probe().await;
+    Some(exporter)
 }
 
 /// Resolves when the process receives a termination signal (Ctrl-C or, on unix,
@@ -117,6 +163,9 @@ async fn shutdown_signal() {
 /// server loop fails for a reason other than Ctrl-C.
 async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     let config = args.resolve_config();
+    probe_audit_sink(&config).await?;
+    // OTLP probe before serving; sessions minted below clone the global.
+    let otel = init_otel_exporter(&config).await;
     let keep_alive = session_keep_alive(config.mcp_session_idle_timeout);
     // Captured before `config` moves into the registry (usize is Copy).
     let body_limit = resolve_body_limit(config.mcp_max_request_bytes);
@@ -192,6 +241,9 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
     // cannot run the async pool-claim release), so tear them down explicitly.
     tracing::info!("mtui-mcp: shutting down; releasing pool claims and disconnecting hosts");
     sessions.close_all().await;
+    if let Some(otel) = otel {
+        otel.shutdown().await;
+    }
     Ok(())
 }
 
@@ -232,11 +284,19 @@ fn rmcp_body_limit(max_request_bytes: usize) -> usize {
 /// **stderr** because stdout carries the MCP JSON-RPC stream; `-d/--debug` and
 /// `RUST_LOG` select the level, ANSI follows the resolved [`ColorMode`].
 fn init_tracing(debug: bool, color: ColorMode) {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
     let (filter, notice) = startup_filter(debug);
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
-        .with_ansi(color.resolve())
+        .with_ansi(color.resolve());
+    // The diagnostics layer no-ops when OTLP is off and drops (with a
+    // counter, never refusing) when full; exporter/HTTP-stack targets are
+    // excluded inside the layer to break the feedback loop.
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt)
+        .with(crate::otel::OtelDiagLayer)
         .try_init();
     if let Some(notice) = notice {
         // Straight to stderr, not `tracing::warn!`: the opt-in that triggers
@@ -293,13 +353,16 @@ fn default_directives(debug: bool) -> String {
 
 /// Build the runtime-synthesised stdio server from resolved args.
 ///
-/// Resolves the [`Config`](mtui_config::Config) the same way the REPL does, then
-/// mints the single headless [`McpSession`] via [`StdioProvider`] and wires it
-/// into an [`McpServer`]. Factored out of [`run`] so the wiring is testable
-/// without the blocking serve loop. Returns the session handle too, so the serve
-/// loop can run [`McpSession::close`] on shutdown.
-async fn build_stdio_server(args: &McpArgs) -> (McpServer, Arc<McpSession>) {
-    let config = args.resolve_config();
+/// Mints the single headless [`McpSession`] via [`StdioProvider`] from an
+/// already-resolved [`Config`](mtui_config::Config) and wires it into an
+/// [`McpServer`]. Factored out of [`run`] so the wiring is testable without the
+/// blocking serve loop. Returns the session handle too, so the serve loop can
+/// run [`McpSession::close`] on shutdown.
+///
+/// The config is passed in rather than resolved here: [`serve_stdio`] already
+/// needs it for the probes above, and `Config::load` logs every malformed key
+/// it skips — resolving twice reports each of them twice.
+async fn build_stdio_server(config: mtui_config::Config) -> (McpServer, Arc<McpSession>) {
     let registry = Arc::new(register_all());
     let provider = StdioProvider::new(config);
     let session = provider.get_or_create("<default>").await;
@@ -319,9 +382,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn audit_sink_probe_passes_without_a_sink() {
+        use mtui_config::Config;
+        probe_audit_sink(&Config::default())
+            .await
+            .expect("no sink configured is nothing to probe");
+    }
+
+    #[tokio::test]
+    async fn audit_sink_probe_refuses_to_serve_on_a_broken_path() {
+        use mtui_config::Config;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = Config::default();
+        // A directory as the sink: every open fails, so the probe is the only
+        // thing between this config and an operator learning of it from a
+        // client, mid-task, on the first tool call.
+        config.mcp_audit_log = Some(dir.path().to_path_buf());
+
+        let err = probe_audit_sink(&config)
+            .await
+            .expect_err("an unusable sink must refuse to serve");
+        // Split around the OS error text, which differs by platform.
+        let msg = err.to_string();
+        let head = format!("audit log {}: ", dir.path().display());
+        assert!(msg.starts_with(&head), "the error names the path: {msg}");
+        assert!(
+            msg.ends_with("; refusing to serve unaudited"),
+            "the error says what it did: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_sink_probe_creates_a_writable_sink() {
+        use mtui_config::Config;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let mut config = Config::default();
+        config.mcp_audit_log = Some(path.clone());
+
+        probe_audit_sink(&config)
+            .await
+            .expect("a writable sink probes clean");
+        assert!(
+            path.exists(),
+            "the probe creates the sink, so serving starts with it proven"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                "the probe creates it as restrictively as a record would"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn build_stdio_server_wires_the_synthesised_surface() {
         // The tools capability is only advertised once the handler is wired.
-        let (server, _session) = build_stdio_server(&args(&[])).await;
+        let (server, _session) = build_stdio_server(args(&[]).resolve_config()).await;
         assert!(
             server.get_info().capabilities.tools.is_some(),
             "server should advertise the tools capability"
@@ -331,7 +455,7 @@ mod tests {
     #[tokio::test]
     async fn build_stdio_server_returns_a_closeable_session() {
         // `close()` with no loaded template is a harmless no-op.
-        let (_server, session) = build_stdio_server(&args(&[])).await;
+        let (_server, session) = build_stdio_server(args(&[]).resolve_config()).await;
         session.close().await;
     }
 

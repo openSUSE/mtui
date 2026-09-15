@@ -7,7 +7,9 @@
 //! * **description** is the command's [`about`](mtui_core::Command::about);
 //! * **`input_schema`** is derived from the command's built `clap` parser via
 //!   `crate::schema::command_input_schema`;
-//! * **`read_only`** hint is set conservatively from a name allow-list.
+//! * **`read_only`** hint is set conservatively from a name allow-list — which
+//!   the server also reads as its audit classification, so widening it drops
+//!   the pre-dispatch `intent` record for whatever is added.
 //!
 //! The subparser command (`config` today) is fanned out into one tool per
 //! subcommand; the bare `config` tool is not emitted, because a "show or set"
@@ -65,10 +67,16 @@ const SLOW_COMMANDS: &[&str] = &[
 const SUBPARSER_COMMANDS: &[&str] = &["config"];
 
 /// A command becomes `read_only` if its name starts with one of these prefixes.
+///
+/// These two lists do double duty: `McpServer` builds its audit classification
+/// from the same `read_only` hint, so a name added here for the client's
+/// benefit also stops writing a pre-dispatch `intent` record. Widen them only
+/// for something that really is side-effect-free.
 const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 
 /// Exact names that escape the prefix rule but are still side-effect-free.
 /// (`reload_products` is intentionally absent — it re-reads from the hosts.)
+/// Same double duty as [`READ_ONLY_PREFIXES`].
 const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs"];
 
 /// Tool-call keys still accepted, and ignored, after their property left the
@@ -321,7 +329,7 @@ pub(crate) async fn dispatch_tool(
     kwargs: &Map<String, Value>,
     sink: Option<&dyn ProgressSink>,
     client_ct: Option<&CancellationToken>,
-) -> ToolOutcome {
+) -> ToolDispatch {
     let mut kwargs = kwargs.clone();
     let background = if route.slow {
         matches!(kwargs.remove("background"), Some(Value::Bool(true)))
@@ -373,15 +381,41 @@ pub(crate) async fn dispatch_tool(
     // missing required positionals, `config show`'s filter vanished.
     let argv = crate::argv::kwargs_to_argv(arg_source, &kwargs, &route.argv_prefix);
 
+    // The template scope this call resolves to, for the audit record. Resolved
+    // with the same resolver the lock and background paths use, so the three
+    // cannot disagree. Audit-only: skipped when no sink is on, so unaudited
+    // dispatch never takes the session mutex a second time (#613).
+    let rrids = if session.auditing() {
+        session
+            .resolve_job_rrids(registry, route.command, &argv)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     if background {
-        return session
+        return match session
             .start_jobs(Arc::clone(registry), route.command, argv)
             .await
-            .map(|job_ids| started_jobs_reply(route.command, &job_ids))
-            .into();
+        {
+            Ok(job_ids) => {
+                let reply = started_jobs_reply(route.command, &job_ids);
+                ToolDispatch {
+                    outcome: ToolOutcome::Completed(Ok(reply)),
+                    jobs: job_ids,
+                    rrids,
+                }
+            }
+            Err(err) => ToolDispatch {
+                outcome: ToolOutcome::Completed(Err(err)),
+                jobs: Vec::new(),
+                rrids,
+            },
+        };
     }
 
-    match client_ct {
+    let outcome = match client_ct {
         Some(ct) => {
             session
                 .run_command_client_cancellable(
@@ -404,6 +438,37 @@ pub(crate) async fn dispatch_tool(
             )
             .await
             .into(),
+    };
+    ToolDispatch {
+        outcome,
+        jobs: Vec::new(),
+        rrids,
+    }
+}
+
+/// What [`dispatch_tool`] ran and what it touched: the engine outcome, the
+/// background job ids it minted (empty unless backgrounded), and the template
+/// scope its arguments resolved to (empty when the command addresses no
+/// template). The server layer records all three in the audit record.
+pub(crate) struct ToolDispatch {
+    pub outcome: ToolOutcome,
+    pub jobs: Vec<String>,
+    pub rrids: Vec<String>,
+}
+
+impl From<ToolOutcome> for ToolDispatch {
+    fn from(outcome: ToolOutcome) -> Self {
+        Self {
+            outcome,
+            jobs: Vec::new(),
+            rrids: Vec::new(),
+        }
+    }
+}
+
+impl From<Result<String, McpCommandError>> for ToolDispatch {
+    fn from(result: Result<String, McpCommandError>) -> Self {
+        ToolOutcome::from(result).into()
     }
 }
 
@@ -937,7 +1002,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect_err("template kwargs refused");
         assert_eq!(err.stderr, "unknown argument(s): all_templates, template");
@@ -974,7 +1040,8 @@ mod tests {
                         None,
                         None,
                     )
-                    .await,
+                    .await
+                    .outcome,
                 )
                 .unwrap_or_else(|e| panic!("{tool} with {kwargs}: {e}"));
                 assert!(out.contains(expected), "{tool} with {kwargs}: {out:?}");
@@ -1010,7 +1077,8 @@ mod tests {
                     None,
                     None,
                 )
-                .await,
+                .await
+                .outcome,
             )
             .expect_err("nothing loaded, so regenerate fails either way");
             assert!(
@@ -1048,7 +1116,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect_err("a misspelled key is not shimmed");
         assert_eq!(err.stderr, "unknown argument(s): temlate");
@@ -1207,7 +1276,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect("config show succeeds");
         assert!(out.contains("max_parallel"), "got: {out:?}");
@@ -1235,9 +1305,12 @@ mod tests {
         let route = routes.get("config_show").expect("config_show route");
 
         // No `attributes`: the bulk dump is refused, not leaked by default.
-        let err =
-            completed(dispatch_tool(&registry, &session, route, &Map::new(), None, None).await)
-                .expect_err("bulk dump refused");
+        let err = completed(
+            dispatch_tool(&registry, &session, route, &Map::new(), None, None)
+                .await
+                .outcome,
+        )
+        .expect_err("bulk dump refused");
         assert!(
             err.stderr.contains("name the attribute(s) explicitly"),
             "got: {err:?}"
@@ -1254,7 +1327,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect_err("local value refused");
         assert!(
@@ -1298,7 +1372,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect("config set succeeds");
         assert_eq!(out.trim(), "option: session_user set to value : via-tool");
@@ -1326,7 +1401,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect_err("typo refused");
         assert_eq!(err.exit_code, 1);
@@ -1354,7 +1430,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect("background start not rejected");
         assert!(out.contains("started job"), "got: {out:?}");
@@ -1381,7 +1458,8 @@ mod tests {
                 None,
                 None,
             )
-            .await,
+            .await
+            .outcome,
         )
         .expect("background start returns a reply, not an error");
         assert_eq!(reply, SINGLE_JOB_REPLY);

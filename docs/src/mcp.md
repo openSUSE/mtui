@@ -490,6 +490,171 @@ client never sees another's jobs). The per-session job budget
 (`max_output_bytes`) bound resource use so one client cannot exhaust the server or
 dwarf the client's context.
 
+## Audit log
+
+`mtui-mcp` executes consequential actions with nobody watching, so a configured
+server keeps a durable record of what ran. Set **`[mcp] audit_log`** to a file
+path; unset (the default) disables auditing and leaves behaviour byte-identical.
+
+The sink is versioned JSONL, one object per line, opened `O_APPEND` with mode
+`0600` and fsynced before the response returns — entries survive a server
+restart and are never truncated. The open is `O_NOFOLLOW` and the resulting
+descriptor is vetted: anything that is not a regular file owned by the serving
+user is refused, so a planted symlink or FIFO cannot divert the append (or the
+`0600` tightening) onto another file. `O_NOFOLLOW` covers the path's final
+component only — **the sink's directory must be writable by the serving user
+alone.** A same-user hardlink is allowed on purpose; it crosses no boundary.
+The record is durable and append-only but **not tamper-evident**: there is no
+hash chain and no HMAC, so anyone writing as the owner can rewrite history
+undetected. Tamper evidence means shipping each record off-host as it lands —
+see [OTLP log export](#otlp-log-export). An **outcome** record carries the schema
+version, the arrival timestamp, the sequence number, the session id, the
+transport, the tool name, the (redacted, see below) arguments, the outcome
+(`ok` / `error` / `unknown-tool`), the duration, and the RRIDs and host names
+the call resolved to. An **`intent`** record carries the same header and the
+same arguments, and nothing that only exists afterwards. A **`terminal`**
+record carries no arguments at all.
+
+Host names on a record are **best-effort**: they are empty when the session is
+busy with an exclusive background job (a backgrounded `load_template`,
+`add_host` or `config_set`), because a record write never waits on the work it
+records; `rrids` are always recorded.
+
+**`[mcp] audit_log_max_bytes`** (default 256 MiB) bounds the sink: the first
+open that finds the file at or over the cap rotates it to `<path>.1`, shifting
+`.1`…`.4` down one and discarding what was `.5`. That is usually an append, but
+the start-up probe opens the sink the same way, so a server can rotate before it
+answers anything. Archiving beyond `.5` is the operator's job. `0` disables rotation altogether; any other value below 4096 is
+raised to it with a warning, because a cap under one record's worth rotates the
+trail away.
+
+Rotation is housekeeping and never a gate: it neither blocks the dispatch worker
+nor refuses a call. Two servers may share one path, so it is serialised by an
+advisory lock on the file itself — taken **without waiting**. A writer that finds
+the lock held, or a filesystem that cannot take it at all (an NFS export without
+`lockd` answers `ENOLCK`), appends past the cap and rotates on a later call. A
+rename it cannot perform warns and keeps appending too, and that warning is not
+repeated until a rotation succeeds. Two consequences worth knowing when reading
+the files back: a writer that opened the sink just under the cap lands its line
+in `<path>.1`, so `seq` is monotonic overall but the order *across* the boundary
+file is not; and on NFS, Linux emulates `flock` with per-process POSIX locks, so
+two HTTP sessions in one process do not serialise there — at worst a second
+shift, never a refused call.
+
+A tool that is **not** advertised `readOnlyHint` writes an `intent` record
+before it runs — schema version, arrival timestamp, sequence number, session,
+transport, `event: "intent"`, tool, (redacted) arguments, and the `trace`
+correlation when the client supplied one. Nothing else, because nothing else
+exists yet. Its outcome record then carries `intent: <seq>`, and its
+`duration_ms` — measured from arrival, like `ts` — includes the intent record's
+own write. Read-only tools skip the intent and write only the outcome record, so
+a poll loop still costs one record per call.
+
+A backgrounded call therefore writes three records: the `intent`, a `dispatch`
+record naming the started `job_ids`, and a `terminal` record when the job reaches
+`done` / `failed` / `cancelled`, joinable by job id. The terminal record carries
+no arguments and no `intent` — it joins its dispatch by `job_id`, which also
+matters because a `terminal` record's `seq` is not ordered against the calls
+around it in either direction: neither against its own `dispatch` record, since
+a job that settles at once can be minted first, nor against a
+`job_result(wait_seconds)` reply that waited for it. Join by `job_id`, never by
+`seq`.
+
+A configured sink is probed once at start-up, before the OTLP probe: if it
+cannot be opened the server refuses to start and names the path on stderr,
+rather than loading quietly and failing on the first tool call.
+
+Afterwards the sink fails in two different ways, on purpose. If the **intent**
+write fails the call is **refused** and nothing ran — the guarantee the sink
+exists to make. If the **outcome** write fails the work has already happened, so
+the executed result is still returned with
+`[audit: outcome record lost (<reason>)]` appended — as a trailing text block on
+a successful reply, or to the message of an error one. Discarding a result to
+report a logging failure would tell the client a refusal that never happened.
+The notice is always the **last** content block, so `content[0]` stays the
+verbatim payload a `--json` caller parses, and it is not counted in the record's
+`response_bytes`. A failed terminal write can only warn — its dispatch already
+answered.
+
+Reading the log back: an `intent` that no later record points at means "started,
+outcome not recorded" — a crash or a kill, or a lost outcome write whose client
+was told in band (and which the OTLP stream may still hold).
+
+`config_set` never records the value for any attribute, so a future
+secret attribute cannot leak by omission; the record marks whether the attribute
+is a known secret. File-body payloads (`put` `content`/`content_b64`,
+`testreport_write` `content`, `testreport_patch` `replacement`) never land
+verbatim either: each records `{bytes, sha256}` over the original string, so a
+credentials file or SSH key uploaded via `put` stays correlatable without being
+persisted. Always fingerprinted, never inline, regardless of size — the same
+redaction feeds the file body, the OTLP body, and the size accounting, and no
+payload key is ever an indexed OTLP attribute.
+
+Everything else is **masked**, not trusted. Every recorded string, at any
+nesting — `run` and `comment` argv included — runs through a token scanner that
+strips URL userinfo (the same `sanitize_url` the rest of mtui logs through) and
+replaces the value of a secret-named flag or key: `--password secret`,
+`DB_PASSWORD=…`, `x-api-key: …`, `Authorization: Bearer …`,
+`Authorization: token …` and `'{"password":"…"}'` all record `<redacted>`,
+through the quoting a shell line or a JSON payload wraps them in, while
+`token_bucket=50`, `max_tokens=100`, `grep token file` and `ssh -p 22 host` are
+left legible. `Bearer`, `Basic` and `token` keep their place in front of the
+credential they name — but only after a key that is itself a credential name,
+so `Basic functionality verified` stays a sentence.
+
+The scanner keys on the name beside the value, so what it does **not** catch is
+worth knowing rather than discovering: a bare secret with no key beside it; a
+single-letter flag, whose meaning is per-program (`sshpass -p secret`,
+`curl -u user:pass`, `psql -U user`); a value attached to one (`-pSECRET`,
+`-U user%pass`); and anything passed by environment variable, stdin or a file
+the tool reads.
+
+All file I/O runs on the blocking pool (`spawn_blocking`), so a down or slow
+disk never stalls the dispatch worker or the other calls it is serving — the
+one call that waits is the one whose own records are being written.
+
+### OTLP log export
+
+The same record can also go to an OpenTelemetry collector as OTLP/HTTP LOGS
+(hand-rolled protobuf over the workspace `reqwest`/rustls stack — no
+`opentelemetry-*` crates): one log record per audit event, body = the verbatim
+JSONL line (already redacted and fingerprinted as above). Configuration is env-only (headers must never be CLI flags), so
+there are no new TOML keys:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (base URL, gains `/v1/logs`) or
+  `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` (full URL, wins verbatim). Unset-or-empty
+  disables export, as does an invalid endpoint or a non-`http/protobuf`
+  protocol (validated only when an endpoint exists).
+- `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_LOGS_HEADERS`
+  (`key=value,...`, values percent-decoded; logs-specific wins).
+- `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`: only
+  `http/protobuf` or unset.
+- `OTEL_SERVICE_NAME` (default `mtui`): resource `service.name`, the
+  multi-deployment join key.
+
+Sink matrix: file-only (`audit_log` set, no endpoint), OTLP-only (endpoint set,
+`audit_log` unset — the JSONL line is still built in memory and used verbatim),
+both (file first in `seq` order, then OTLP), neither (auditing off, dispatch
+byte-identical).
+
+Each record carries closed `mtui.*` attributes (`tool`, `event`, `seq`,
+`transport`, `session.id`, plus `outcome` when there is one, `response_bytes`
+when sized, and allowlisted kwarg keys) and the W3C trace ids when the client supplied a strict lowercase
+55-byte `traceparent` via `_meta` (also echoed as the record's `trace` field;
+`session.id` stays server-minted). A startup probe posts one real diagnostics
+record (~5x500 ms) before serving and latches export health; failed batches
+merge into a pending `audit_gap` sent on recovery. Batching: 2048/stream cap,
+512/batch, 500 ms interval, 10 s request timeout, 5 s shutdown flush, redirects
+off, `[mtui] ssl_verify` TLS posture.
+
+**Export never gates a tool call.** The health latch decides whether a record is
+enqueued, nothing more: an unhealthy or full exporter logs a warning, merges the
+record's `seq` into the `audit_gap` it will report on recovery, and the call
+still runs and still answers. The file sink stays the durable truth, so
+OTLP-only mode never refuses anything. Tracing diagnostics ride a separate
+best-effort queue (drop + counter; exporter/HTTP-stack targets excluded). The
+endpoint value never appears in logs, records, or errors.
+
 ## Cancelling a foreground call
 
 A client that sends an explicit `notifications/cancelled` for an in-flight

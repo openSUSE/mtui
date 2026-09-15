@@ -64,8 +64,10 @@ use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::audit::AuditLog;
 use crate::capture::{self, SharedBuf};
 use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
+use crate::otel::OtelExporter;
 use crate::slim::{cap_output, truncation_notice};
 
 /// Default interval between `notifications/progress` heartbeat frames.
@@ -599,6 +601,16 @@ pub struct McpSession {
     /// last). Per-session, so no cross-client leakage; the key carries the
     /// resolved path so templates never collide. Guard held only for the integer compare.
     reread: StdMutex<VecDeque<(RereadKey, RereadEntry)>>,
+    /// The durable audit sink (`config.mcp_audit_log`); `None` disables
+    /// auditing and leaves dispatch behaviour byte-identical.
+    audit: Option<AuditLog>,
+    /// Transport this session serves (`stdio`/`http`): the `mtui.transport`
+    /// OTLP attribute and the JSONL `transport` field. Set at mint time so a
+    /// terminal record agrees with its dispatch.
+    transport: &'static str,
+    /// OTLP exporter handle, if the process enabled one via the `OTEL_*`
+    /// environment. Cloned from the global at mint; tests inject a mock.
+    otel: Option<Arc<OtelExporter>>,
 }
 
 /// Bound on cached `testreport_read` windows per session (see `reread`).
@@ -659,6 +671,23 @@ impl McpSession {
     /// `capture::session`.
     #[must_use]
     pub fn new(config: Config) -> Arc<Self> {
+        Self::new_with_transport(config, "stdio")
+    }
+
+    /// [`new`](Self::new) with an explicit transport label.
+    #[must_use]
+    pub fn new_with_transport(config: Config, transport: &'static str) -> Arc<Self> {
+        let otel = OtelExporter::global();
+        Self::new_with_otel(config, transport, otel)
+    }
+
+    /// Test seam: explicit OTLP handle (mock endpoint) instead of the global.
+    #[must_use]
+    pub(crate) fn new_with_otel(
+        config: Config,
+        transport: &'static str,
+        otel: Option<Arc<OtelExporter>>,
+    ) -> Arc<Self> {
         let max_output_bytes = config.mcp_max_output_bytes;
         let max_input_bytes = config.mcp_max_input_bytes;
         let profile = config.mcp_profile.clone();
@@ -666,6 +695,11 @@ impl McpSession {
         let tools_deny = config.mcp_tools_deny.clone();
         let max_active_jobs = config.mcp_max_active_jobs;
         let max_completed_jobs = config.mcp_max_completed_jobs;
+        let audit_max_bytes = config.mcp_audit_log_max_bytes;
+        let audit = config
+            .mcp_audit_log
+            .clone()
+            .map(|path| AuditLog::new(path, audit_max_bytes));
         let (session, output) = capture::session(config);
         Arc::new(Self {
             id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
@@ -683,6 +717,9 @@ impl McpSession {
             max_active_jobs,
             max_completed_jobs,
             reread: StdMutex::new(VecDeque::new()),
+            audit,
+            transport,
+            otel,
         })
     }
 
@@ -791,6 +828,149 @@ impl McpSession {
     #[must_use]
     pub(crate) fn tools_deny(&self) -> &[String] {
         &self.tools_deny
+    }
+
+    /// The durable audit sink, if `[mcp] audit_log` set one.
+    pub(crate) fn audit_log(&self) -> Option<&AuditLog> {
+        self.audit.as_ref()
+    }
+
+    /// Transport label for the `mtui.transport` attribute (`stdio`/`http`).
+    pub(crate) fn transport(&self) -> &'static str {
+        self.transport
+    }
+
+    /// OTLP exporter handle, if the process enabled one via `OTEL_*`.
+    pub(crate) fn otel(&self) -> Option<&Arc<OtelExporter>> {
+        self.otel.as_ref()
+    }
+
+    /// Whether any audit sink is on (file or OTLP).
+    pub(crate) fn auditing(&self) -> bool {
+        self.audit.is_some() || self.otel.is_some()
+    }
+
+    /// Best-effort host-name snapshot for `rrids`: the union of each loaded
+    /// template's target names, sorted. An entry busy with a concurrent
+    /// dispatch is skipped rather than awaited, so auditing never blocks on
+    /// the work it records; an unloaded template contributes nothing.
+    ///
+    /// Best-effort down to the session itself: empty while an exclusive
+    /// dispatch holds the session, so a record write never waits on a running
+    /// job. The record always carries `rrids`, which need no lock (#613).
+    pub(crate) async fn audit_hosts(&self, rrids: &[String]) -> Vec<String> {
+        if rrids.is_empty() {
+            return Vec::new();
+        }
+        let Ok(session) = self.session.try_lock() else {
+            return Vec::new();
+        };
+        let mut hosts = std::collections::BTreeSet::new();
+        for rrid in rrids {
+            let Some(entry) = session.templates.handle(rrid) else {
+                continue;
+            };
+            let Ok(report) = entry.try_lock() else {
+                continue;
+            };
+            hosts.extend(report.base().targets.names());
+        }
+        hosts.into_iter().collect()
+    }
+
+    /// Template scope for a hand-written tool call carrying an optional
+    /// `template` kwarg (the testreport/transfer families): the named
+    /// template, else the active one, else nothing. Best-effort like
+    /// [`audit_hosts`](Self::audit_hosts): empty while an exclusive dispatch
+    /// holds the session, so a record write never waits on a running job. A
+    /// named template needs no lock at all.
+    pub(crate) async fn audit_template_scope(&self, template: Option<&str>) -> Vec<String> {
+        if let Some(rrid) = template {
+            return vec![rrid.to_owned()];
+        }
+        let Ok(session) = self.session.try_lock() else {
+            return Vec::new();
+        };
+        session
+            .templates
+            .active_rrid()
+            .map(|rrid| vec![rrid.to_owned()])
+            .unwrap_or_default()
+    }
+
+    /// Best-effort terminal-state audit record for a background job. No-op
+    /// without a sink; a failed write only warns — the dispatch already
+    /// answered, so there is nothing left to refuse. OTLP enqueue is equally
+    /// best-effort, as it is everywhere: export never refuses a call.
+    async fn audit_terminal(
+        &self,
+        tool: &str,
+        job_id: &str,
+        state: JobState,
+        rrids: &[String],
+        started: Instant,
+        finished: Instant,
+    ) {
+        if !self.auditing() {
+            return;
+        }
+        let hosts = self.audit_hosts(rrids).await;
+        let outcome = if state == JobState::Done {
+            crate::audit::AuditOutcome::Ok
+        } else {
+            crate::audit::AuditOutcome::Error
+        };
+        let seq = crate::audit::next_seq();
+        let record = serde_json::json!({
+            "v": crate::audit::AUDIT_SCHEMA_VERSION,
+            "ts": crate::audit::now_millis(),
+            "seq": seq,
+            "session": self.id,
+            "transport": self.transport,
+            "event": crate::audit::AuditEvent::Terminal.as_str(),
+            "tool": crate::audit::cap_str(tool),
+            "job_id": crate::audit::cap_str(job_id),
+            "job_state": state.to_string(),
+            "outcome": outcome.as_str(),
+            "duration_ms": finished.saturating_duration_since(started).as_millis() as u64,
+            "rrids": rrids,
+            "hosts": hosts,
+        });
+        // File first, seq order; warn-only on failure (already answered).
+        // Off the worker via `spawn_blocking`: a wedged disk must not stall
+        // the job table.
+        if let Some(audit) = self.audit_log()
+            && let Err(err) = audit.append_async(record.clone()).await
+        {
+            tracing::warn!(job_id, error = %err, "audit log: terminal record lost");
+        }
+        if let Some(otel) = self.otel() {
+            let line = serde_json::to_string(&record).unwrap_or_default();
+            if line.is_empty() {
+                // Inert (Value always serializes) but still accounts the seq.
+                otel.note_rejected(seq);
+                tracing::warn!(job_id, "audit otlp: terminal record lost");
+            } else {
+                // Best-effort audit enqueue: warn when full or unhealthy (the
+                // exporter's gap accounting covers the hole on recovery).
+                let queued = crate::otel::QueuedAudit {
+                    seq,
+                    jsonl: line,
+                    tool: crate::audit::cap_str(tool),
+                    outcome: outcome.as_str().to_owned(),
+                    event: crate::audit::AuditEvent::Terminal.as_str().to_owned(),
+                    transport: self.transport.to_owned(),
+                    session_id: self.id,
+                    response_bytes: None,
+                    trace: None,
+                    time_nanos: crate::otel::now_nanos(),
+                    extra_attrs: Vec::new(),
+                };
+                if otel.enqueue_audit(queued).is_err() {
+                    tracing::warn!(job_id, "audit otlp: terminal record lost");
+                }
+            }
+        }
     }
 
     /// Returns (creating on first use) the per-template lock for `rrid`,
@@ -1239,7 +1419,7 @@ impl McpSession {
     /// the caller keeps the single-job path. [`command_lock`](Self::command_lock)
     /// gates on the same [`addresses_template`]
     /// predicate, so the two resolvers cannot disagree.
-    async fn resolve_job_rrids(
+    pub(crate) async fn resolve_job_rrids(
         &self,
         registry: &Registry,
         name: &str,
@@ -1330,14 +1510,16 @@ impl McpSession {
         let session = Arc::clone(self);
         let name = name.to_owned();
         let worker_job = Arc::clone(&job);
+        let terminal_job_id = job_id.clone();
         let handle = tokio::spawn(async move {
             let outcome = session
                 .run_command_cancellable(&registry, &name, &argv, Some(cancel))
                 .await;
-            {
+            let settled = {
                 let mut j = worker_job.lock().expect("job record poisoned");
                 // A cancel may have already marked the record terminal; if so, do
-                // not overwrite it with the (aborted) worker's outcome.
+                // not overwrite it with the (aborted) worker's outcome — the
+                // cancel path owns that job's terminal audit record.
                 if j.state == JobState::Running {
                     match outcome {
                         Ok(out) => {
@@ -1353,18 +1535,33 @@ impl McpSession {
                     }
                     j.finished = Some(Instant::now());
                     j.done.cancel();
-                } else if j.state == JobState::Cancelled && j.error.is_none() {
-                    // The cancel claimed the record, but a cooperative stop still
-                    // produced a verdict naming what the flow managed to do.
-                    // Record it (without rewriting the settled state) so
-                    // `job_result` can hand back more than "was cancelled".
-                    if let Err(err) = outcome {
-                        j.error = Some(err.stderr);
-                        if !err.stdout.is_empty() {
-                            j.result = Some(err.stdout);
+                    Some((
+                        j.state,
+                        j.command.clone(),
+                        j.rrids.clone(),
+                        j.started,
+                        j.finished.expect("just set"),
+                    ))
+                } else {
+                    if j.state == JobState::Cancelled && j.error.is_none() {
+                        // The cancel claimed the record, but a cooperative stop still
+                        // produced a verdict naming what the flow managed to do.
+                        // Record it (without rewriting the settled state) so
+                        // `job_result` can hand back more than "was cancelled".
+                        if let Err(err) = outcome {
+                            j.error = Some(err.stderr);
+                            if !err.stdout.is_empty() {
+                                j.result = Some(err.stdout);
+                            }
                         }
                     }
+                    None
                 }
+            };
+            if let Some((state, command, rrids, started, finished)) = settled {
+                session
+                    .audit_terminal(&command, &terminal_job_id, state, &rrids, started, finished)
+                    .await;
             }
             session.evict_completed();
         });
@@ -1657,7 +1854,7 @@ impl McpSession {
         unlock_budget: Duration,
     ) -> Result<String, McpCommandError> {
         let job = self.job(job_id)?;
-        let (handle, token, rrids) = {
+        let (handle, token, command, rrids, started, finished) = {
             let mut j = job.lock().expect("job record poisoned");
             match j.state {
                 JobState::Running => {
@@ -1667,7 +1864,14 @@ impl McpSession {
                     j.state = JobState::Cancelled;
                     j.finished = Some(Instant::now());
                     j.done.cancel();
-                    (j.handle.take(), j.cancel.clone(), j.rrids.clone())
+                    (
+                        j.handle.take(),
+                        j.cancel.clone(),
+                        j.command.clone(),
+                        j.rrids.clone(),
+                        j.started,
+                        j.finished.expect("just set"),
+                    )
                 }
                 state => {
                     // Truthful no-op: nothing was cancelled.
@@ -1697,6 +1901,18 @@ impl McpSession {
             // state was already `Cancelled`), so reap history here.
             self.evict_completed();
         }
+        // The worker's terminal-write branch is disarmed by the claim above,
+        // so this is the job's one terminal record. Written after the stages
+        // so it follows the cancel call's own record.
+        self.audit_terminal(
+            &command,
+            job_id,
+            JobState::Cancelled,
+            &rrids,
+            started,
+            finished,
+        )
+        .await;
         if forced {
             Ok(format!(
                 "cancelled job {job_id} ({})",

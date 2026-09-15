@@ -56,6 +56,9 @@ mcp = [
     "dep:mtui-hosts",
     "dep:futures",
     "dep:base64ct",
+    "dep:reqwest",
+    "dep:sha2",
+    "dep:mtui-datasources",
 ]
 
 [dependencies]
@@ -65,6 +68,10 @@ mtui-testreport = { workspace = true, optional = true }
 # The post-abort unlock fan-out in `session.rs` classifies `LockOutcome`; the
 # crate is already in the tree via `mtui-core`, so this adds no build cost.
 mtui-hosts = { workspace = true, optional = true }
+# `sanitize_url` for the audit record's argument masking, so a credential in a
+# URL is stripped by the same code path the rest of the workspace uses. Already
+# in the tree via `mtui-core`, so this adds no build cost.
+mtui-datasources = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
@@ -76,6 +83,20 @@ tokio-util = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+# The audit sink's vetted open: `O_NOFOLLOW`/`O_NONBLOCK`/`O_CLOEXEC` from
+# `libc`, and `geteuid` from `nix` for the owner check (a safe wrapper — the
+# workspace warns on `unsafe_code`). Both are already direct unix deps of
+# `mtui-core`, so this adds no crate to the build.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+nix = { version = "0.31", features = ["user"] }
+
+# `mkfifo` plants the non-regular sink the vetted open must refuse.
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.31", features = ["user", "fs"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "test-util"] }

@@ -155,6 +155,18 @@
 # Tool names to remove regardless of profile/allow (deny wins last).
 # E.g. tools_deny = ["updates", "openqa_overview"] when the workflow never uses them.
 # tools_deny = []
+# Durable audit sink for mtui-mcp tool calls (versioned JSONL, created 0600,
+# fsynced before the response returns): one or two records per call, plus a
+# terminal record per background job. Unset disables
+# auditing; a path that cannot be opened refuses to start the server. A
+# mutating tool is refused if its pre-dispatch "intent" record cannot be
+# written; a lost outcome record is reported with the result, not instead of it.
+# The sink's directory must exist and be writable by the serving user alone.
+# audit_log = "~/.local/state/mtui/audit.jsonl"
+# Size at which the audit sink rotates to <path>.1, keeping five generations
+# (.1 through .5); the oldest is discarded. 0 disables rotation; any other
+# value below 4096 is raised to it.
+# audit_log_max_bytes = 268435456
 
 [obs]
 # The OBS/IBS API URL the native QAM review backend acts against. Must equal
