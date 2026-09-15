@@ -19,17 +19,18 @@
 //! * file-only: `audit_log` set, no endpoint (current behaviour).
 //! * OTLP-only: endpoint set, `audit_log` unset. The JSONL line is still
 //!   built in memory and used verbatim as the OTLP body.
-//! * both: file first, then OTLP enqueue in `seq` order. A pre-flight checks
-//!   both; an OTLP race after a file write keeps the file record and reports
-//!   an `audit_gap` on recovery.
+//! * both: file first, then OTLP enqueue in `seq` order. The file is the
+//!   durable truth; an OTLP rejection after a file write keeps the record and
+//!   reports an `audit_gap` on recovery.
 //! * neither: auditing off, dispatch byte-identical.
 //!
-//! Load-bearing semantics: a startup probe posts one real diagnostics record
-//! (`~5x500ms`) before serving; its latch feeds the existing refuse path.
-//! Lost batches merge into a pending `audit_gap` sent on recovery. Queue full
-//! refuses foreground calls, never drops; terminal records (already answered)
-//! warn instead. Diagnostics ride a separate best-effort queue (drop +
-//! counter, never refuse).
+//! Load-bearing semantics: **export never gates a tool call.** A startup probe
+//! posts one real diagnostics record (`~5x500ms`) before serving and latches
+//! health, but the latch only decides whether to enqueue — a call runs and
+//! answers either way. Lost batches merge into a pending `audit_gap` sent on
+//! recovery; a refused enqueue (unhealthy or full) merges its `seq` the same
+//! way and warns, never drops silently and never refuses. Diagnostics ride a
+//! separate best-effort queue (drop + counter, never refuse).
 //!
 //! Batching: 2048/stream cap, 512/batch, 500ms interval, 10s request timeout,
 //! 5s shutdown flush, redirects disabled. TLS reuses the workspace posture
@@ -687,45 +688,77 @@ impl OtelExporter {
         Self::spawn(config, client).expect("test exporter builds")
     }
 
-    fn spawn(config: OtelConfig, client: reqwest::Client) -> Option<Arc<Self>> {
+    // The exporter plus the receivers and config its background task needs,
+    // built without spawning anything: `spawn` wires the real flush loop, and
+    // the test seam below wires a task that only keeps the channels open.
+    fn assemble(
+        config: OtelConfig,
+        client: reqwest::Client,
+    ) -> (
+        Arc<Self>,
+        mpsc::Receiver<QueuedAudit>,
+        mpsc::Receiver<QueuedDiag>,
+        TaskConfig,
+    ) {
         let (audit_tx, audit_rx) = mpsc::channel(OTEL_QUEUE_CAP);
         let (diag_tx, diag_rx) = mpsc::channel(OTEL_QUEUE_CAP);
-        let rejected_gap = Arc::new(std::sync::Mutex::new(None));
         let exporter = Arc::new(Self {
             config_service: config.service_name.clone(),
             endpoint: config.endpoint,
             headers: config.headers,
-            client: client.clone(),
+            client,
             audit_tx,
             diag_tx,
             healthy: Arc::new(AtomicBool::new(true)),
             diag_dropped: Arc::new(AtomicU64::new(0)),
             audit_lost: Arc::new(AtomicU64::new(0)),
-            rejected_gap: Arc::clone(&rejected_gap),
+            rejected_gap: Arc::new(std::sync::Mutex::new(None)),
             shutdown: tokio_util::sync::CancellationToken::new(),
             task: std::sync::Mutex::new(None),
         });
+        // Move the endpoint/headers into the task without logging them.
+        let task_config = TaskConfig {
+            endpoint: exporter.endpoint.expose().to_owned(),
+            headers: exporter
+                .headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.expose().to_owned()))
+                .collect(),
+            service: exporter.config_service.clone(),
+        };
+        (exporter, audit_rx, diag_rx, task_config)
+    }
+
+    fn spawn(config: OtelConfig, client: reqwest::Client) -> Option<Arc<Self>> {
+        let (exporter, audit_rx, diag_rx, task_config) = Self::assemble(config, client.clone());
         let task = tokio::spawn(run_loop(
             audit_rx,
             diag_rx,
             client,
-            // Move the endpoint/headers into the task without logging them.
-            TaskConfig {
-                endpoint: exporter.endpoint.expose().to_owned(),
-                headers: exporter
-                    .headers
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.expose().to_owned()))
-                    .collect(),
-                service: exporter.config_service.clone(),
-            },
+            task_config,
             Arc::clone(&exporter.healthy),
             Arc::clone(&exporter.audit_lost),
-            Arc::clone(&rejected_gap),
+            Arc::clone(&exporter.rejected_gap),
             exporter.shutdown.clone(),
         ));
         *exporter.task.lock().expect("exporter task slot") = Some(task);
         Some(exporter)
+    }
+
+    // Test seam: the exporter without its flush loop. That loop is what makes a
+    // filled queue a race — it drains at the first runtime park — so this task
+    // only holds the receivers open until shutdown, leaving `Full` a property of
+    // the queue rather than of when the runtime last parked.
+    #[cfg(test)]
+    pub(crate) fn with_client_no_flush(config: OtelConfig, client: reqwest::Client) -> Arc<Self> {
+        let (exporter, audit_rx, diag_rx, _task_config) = Self::assemble(config, client);
+        let shutdown = exporter.shutdown.clone();
+        let task = tokio::spawn(async move {
+            let _receivers = (audit_rx, diag_rx);
+            shutdown.cancelled().await;
+        });
+        *exporter.task.lock().expect("exporter task slot") = Some(task);
+        exporter
     }
 
     // Global singleton for the serving process. Initialised once before
@@ -750,10 +783,11 @@ impl OtelExporter {
         self.audit_lost.load(Ordering::Relaxed)
     }
 
-    // Foreground path: refuse on unhealthy or full, never drop, never block.
-    // A refused record's minted seq merges into the rejected gap (plus the
-    // lost counter) so the background flush reports it as an `audit_gap`
-    // exactly like a failed batch.
+    // Foreground path: reject on unhealthy or full, never drop, never block.
+    // The caller warns and returns the result regardless; the refused record's
+    // minted seq merges into the rejected gap (plus the lost counter) so the
+    // background flush reports it as an `audit_gap` exactly like a failed
+    // batch.
     pub(crate) fn enqueue_audit(&self, record: QueuedAudit) -> Result<(), EnqueueError> {
         if !self.is_healthy() {
             self.note_rejected(record.seq);
@@ -1037,10 +1071,11 @@ async fn export_batch(
     let payload = export_request(&config.service, &scopes);
     match post_logs(client, &config.endpoint, &config.headers, payload).await {
         // A successful POST proves the collector reachable again: clear the
-        // fail-closed latch so foreground dispatch resumes.
+        // latch so enqueues resume.
         Ok(()) => healthy.store(true, Ordering::Relaxed),
         Err(reason) => {
-            // Sticky fail-closed latch for audit; diagnostics stay best-effort.
+            // Sticky latch. It decides whether a record is enqueued, never
+            // whether a call runs; diagnostics stay best-effort either way.
             healthy.store(false, Ordering::Relaxed);
             if audits.is_empty() {
                 // Gap-only or diagnostics-only batch failed: restore the taken
@@ -2267,7 +2302,8 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(900)).await;
         assert!(!exporter.is_healthy(), "failed batch must latch unhealthy");
         assert_eq!(exporter.audit_lost(), 1);
-        // Foreground calls now refuse instead of queuing into a dead sink.
+        // Foreground enqueues now refuse instead of queuing into a dead sink;
+        // the call they belong to still runs and still answers.
         assert_eq!(
             exporter.enqueue_audit(QueuedAudit {
                 seq: 12,

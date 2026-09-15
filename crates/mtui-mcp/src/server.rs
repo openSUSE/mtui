@@ -357,11 +357,13 @@ impl McpServer {
     ///
     /// With `[mcp] audit_log` set and/or the `OTEL_*` endpoint on, one record
     /// per call is persisted before the response returns — for foreground and
-    /// backgrounded calls, for failures and unknown tools alike — and a call
-    /// the sinks cannot record is refused instead of proceeding unrecorded.
-    /// OTLP-only (endpoint set, `audit_log` unset) still builds the JSONL
-    /// line in memory and uses it verbatim as the OTLP body. With neither
-    /// sink this is dispatch verbatim: behaviour and output are byte-identical.
+    /// backgrounded calls, for failures and unknown tools alike. The file is
+    /// the durable truth and a call it cannot record is refused instead of
+    /// proceeding unrecorded; OTLP export is secondary and never gates or
+    /// refuses a call. OTLP-only (endpoint set, `audit_log` unset) still
+    /// builds the JSONL line in memory and uses it verbatim as the OTLP body,
+    /// and then never refuses at all. With neither sink this is dispatch
+    /// verbatim: behaviour and output are byte-identical.
     ///
     /// Test seam: unit tests drive this directly with a fresh token and no
     /// sink, since a real `RequestContext` needs a peer.
@@ -387,20 +389,17 @@ impl McpServer {
         }
         let file_on = self.session.audit_log().is_some();
         let otel_on = self.session.otel().is_some();
-        // Refuse before running when a sink is already unwritable/unhealthy: a
+        // Refuse before running when the file sink is already unwritable: a
         // mutation this consequential must not proceed unrecorded. (A refused
-        // call leaves no record — there is nowhere to put one.) The file
-        // pre-flight runs on the blocking pool: a down/slow disk must not
-        // stall the worker.
+        // call leaves no record — there is nowhere to put one.) It runs on the
+        // blocking pool: a down/slow disk must not stall the worker. Export
+        // health is deliberately never consulted here — a collector outage is
+        // not a reason to refuse a maintenance action, and gating on it made
+        // every read-only tool unusable for the length of the outage.
         if let Some(audit) = self.session.audit_log()
             && let Err(err) = audit.check_writable_async().await
         {
             return Err(refuse_error(&err));
-        }
-        if let Some(otel) = self.session.otel()
-            && !otel.is_healthy()
-        {
-            return Err(otel_refuse_error("otlp unhealthy"));
         }
         let seq = if file_on || otel_on {
             Some(crate::audit::next_seq())
@@ -589,38 +588,35 @@ impl McpServer {
             {
                 return Err(refuse_error(&err));
             }
-            // OTLP second, same seq and verbatim line. A race here (full or
-            // newly unhealthy) refuses even though the file already holds the
-            // record — the file stays as the durable truth and the exporter
-            // reports an `audit_gap` on recovery.
+            // OTLP second, same seq and verbatim line — best-effort: a full or
+            // unhealthy exporter warns and the executed result still returns.
+            // The file stays the durable truth, the seq is gap-accounted, and
+            // the exporter reports an `audit_gap` on recovery.
             if let Some(otel) = self.session.otel() {
                 let line = serde_json::to_string(&record).unwrap_or_default();
                 if line.is_empty() {
                     // Inert (Value always serializes) but still accounts the seq.
                     otel.note_rejected(seq);
-                    return Err(otel_refuse_error(
-                        crate::otel::ExportReason::Encode.as_str(),
-                    ));
-                }
-                let queued = crate::otel::QueuedAudit {
-                    seq,
-                    jsonl: line,
-                    tool: crate::audit::cap_str(name),
-                    outcome: outcome.as_str().to_owned(),
-                    event: event.as_str().to_owned(),
-                    transport: self.session.transport().to_owned(),
-                    session_id: self.session.id(),
-                    response_bytes,
-                    trace,
-                    time_nanos: crate::otel::now_nanos(),
-                    extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
-                };
-                if let Err(reason) = otel.enqueue_audit(queued) {
-                    let closed = match reason {
-                        crate::otel::EnqueueError::Full => "otlp queue full",
-                        crate::otel::EnqueueError::Unhealthy => "otlp unhealthy",
+                    warn_export_lost(seq, crate::otel::ExportReason::Encode.as_str());
+                } else {
+                    let queued = crate::otel::QueuedAudit {
+                        seq,
+                        jsonl: line,
+                        tool: crate::audit::cap_str(name),
+                        outcome: outcome.as_str().to_owned(),
+                        event: event.as_str().to_owned(),
+                        transport: self.session.transport().to_owned(),
+                        session_id: self.session.id(),
+                        response_bytes,
+                        trace,
+                        time_nanos: crate::otel::now_nanos(),
+                        extra_attrs: crate::otel::kwarg_otlp_attrs(name, kwargs),
                     };
-                    return Err(otel_refuse_error(closed));
+                    // `enqueue_audit` already merged the seq into the rejected
+                    // gap; a second `note_rejected` here would double-count it.
+                    if let Err(reason) = otel.enqueue_audit(queued) {
+                        warn_export_lost(seq, enqueue_reason(reason));
+                    }
                 }
             }
         }
@@ -628,10 +624,25 @@ impl McpServer {
     }
 }
 
-/// Refuse via the existing audit path with a closed-vocabulary reason: never
-/// the endpoint, headers, or URL.
-fn otel_refuse_error(reason: &'static str) -> McpError {
-    crate::audit::refuse_error(&std::io::Error::other(reason))
+/// The closed-vocabulary reason for a refused OTLP enqueue: never the
+/// endpoint, headers, or URL.
+fn enqueue_reason(reason: crate::otel::EnqueueError) -> &'static str {
+    match reason {
+        crate::otel::EnqueueError::Full => "otlp queue full",
+        crate::otel::EnqueueError::Unhealthy => "otlp unhealthy",
+    }
+}
+
+/// Warn that one record did not reach the exporter.
+///
+/// The only report an unexported record gets: the call itself still answers.
+/// Recovery from a probe-latched exporter does not hang on this line — the
+/// refused enqueue already merged its `seq` into the rejected gap, which the
+/// flush absorbs and re-POSTs as a gap-only batch every tick. `mtui_mcp::server`
+/// is outside `DIAG_EXCLUDED_PREFIXES`, so the line rides the diagnostics queue
+/// as a second driver.
+fn warn_export_lost(seq: u64, reason: &'static str) {
+    tracing::warn!(seq, reason, "audit otlp: record not exported");
 }
 
 /// Sized response length for the `mtui.response_bytes` attribute: the summed
@@ -1093,6 +1104,100 @@ mod tests {
         panic!("sink never reached {n} records");
     }
 
+    /// The one `audit otlp:` warning emitted during a capture, in full.
+    ///
+    /// Selected by prefix rather than by position so an unrelated event cannot
+    /// shift the pin, and required to be unique so a duplicated warning (the
+    /// double-accounting shape) cannot pass.
+    fn otlp_warn_line(logs: &str) -> String {
+        let mut hits = logs.lines().filter(|l| l.starts_with("audit otlp:"));
+        let line = hits.next().unwrap_or_else(|| {
+            panic!("no `audit otlp:` warning was captured, got: {logs:?}");
+        });
+        assert!(
+            hits.next().is_none(),
+            "exactly one export warning per record: {logs:?}"
+        );
+        line.to_owned()
+    }
+
+    /// Run `fut` with this thread's tracing events collected, returning its
+    /// output and the captured lines (`message` first, then the event's own
+    /// fields as `name=value`), newline-joined.
+    ///
+    /// The subscriber is **global** because `tracing` caches callsite interest
+    /// process-wide: a callsite first reached from a thread with no subscriber
+    /// is cached `Interest::never()` and stays silent for every later capture,
+    /// so a thread-local default makes a log assertion pass or fail by test
+    /// order. Scoping moves to the thread-local sink instead; `#[tokio::test]`
+    /// is single-threaded, so the dispatch's own events land on this thread.
+    ///
+    /// Accepted cost: the unfiltered `Registry` reports no `max_level_hint`, so
+    /// `LevelFilter::current()` is `TRACE` for this test binary. The workspace's
+    /// fourth copy of the pattern — a `#[cfg(test)]` module cannot share an
+    /// integration test's file; the fullest write-up is
+    /// `mtui-datasources/tests/log_capture.rs`.
+    async fn capture_logs<T>(fut: impl std::future::Future<Output = T>) -> (T, String) {
+        install_capture_subscriber();
+        CAPTURE_SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
+        let out = fut.await;
+        let lines = CAPTURE_SINK
+            .with(|s| s.borrow_mut().take())
+            .unwrap_or_default();
+        (out, lines.join("\n"))
+    }
+
+    thread_local! {
+        /// Buffer for the capture in progress on this thread, or `None` when no
+        /// capture is active — events from a thread without one are dropped.
+        static CAPTURE_SINK: std::cell::RefCell<Option<Vec<String>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Install the permissive global subscriber backing [`capture_logs`], once
+    /// per test binary.
+    fn install_capture_subscriber() {
+        use std::fmt::Write as _;
+        use std::sync::OnceLock;
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+        use tracing_subscriber::registry::Registry;
+
+        struct CaptureLayer;
+
+        #[derive(Default)]
+        struct MessageVisitor {
+            message: String,
+            fields: String,
+        }
+        impl Visit for MessageVisitor {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    let _ = write!(self.message, "{value:?}");
+                } else {
+                    let _ = write!(self.fields, " {}={value:?}", field.name());
+                }
+            }
+        }
+
+        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                CAPTURE_SINK.with(|s| {
+                    if let Some(buf) = s.borrow_mut().as_mut() {
+                        let mut visitor = MessageVisitor::default();
+                        event.record(&mut visitor);
+                        buf.push(format!("{}{}", visitor.message, visitor.fields));
+                    }
+                });
+            }
+        }
+
+        static ONCE: OnceLock<()> = OnceLock::new();
+        ONCE.get_or_init(|| {
+            let _ = tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
+        });
+    }
+
     #[tokio::test]
     async fn audit_foreground_call_records_scope_and_outcome() {
         let (server, session, _dir, path) = audited_server();
@@ -1454,7 +1559,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unhealthy_otlp_refuses_before_dispatch() {
+    async fn unhealthy_otlp_never_gates_dispatch() {
         let failing = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .respond_with(wiremock::ResponseTemplate::new(500))
@@ -1480,19 +1585,34 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(900)).await;
         assert!(!exporter.is_healthy(), "failed batch latches");
 
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
         let mut config = Config::default();
         config.session_user = "testuser".to_owned();
+        config.mcp_audit_log = Some(path.clone());
         let registry = Arc::new(register_all());
         let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
         let server = McpServer::new(registry, session.clone());
-        let err = audited_call(&server, "whoami", json!({}))
-            .await
-            .expect_err("unhealthy OTLP refuses");
-        assert!(
-            err.to_string().contains("audit log unavailable"),
-            "refusal reuses the file-sink path: {err}"
+
+        let lost_before = exporter.audit_lost();
+        let (response, logs) = capture_logs(audited_call(&server, "whoami", json!({}))).await;
+        let response = response.expect("a collector outage never gates a tool call");
+        let text = response_text(&response);
+        assert!(text.contains("testuser"), "the call really ran: {text}");
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "the file sink still holds the record");
+        let seq = records[0]["seq"].as_u64().expect("seq in file");
+        assert_eq!(
+            exporter.audit_lost(),
+            lost_before + 1,
+            "the refused enqueue is gap-accounted exactly once"
         );
-        assert!(!err.to_string().contains("127.0.0.1"), "no endpoint leaks");
+        assert_eq!(
+            otlp_warn_line(&logs),
+            format!("audit otlp: record not exported seq={seq} reason=\"otlp unhealthy\"")
+        );
+        assert!(!logs.contains("127.0.0.1"), "no endpoint leaks: {logs}");
         exporter.shutdown().await;
     }
 
@@ -1533,21 +1653,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn otlp_queue_full_refuses_before_dispatch() {
-        // Mirror of the unhealthy refusal: a filled queue refuses through the
-        // same closed-vocabulary path, never leaking the endpoint.
+    async fn otlp_queue_full_never_discards_the_result() {
+        // Mirror of the unhealthy case: a filled queue warns through the same
+        // closed-vocabulary path and still answers with the executed result.
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("test client");
-        // Unreachable endpoint, but the fill below finishes before the first
-        // 500ms flush tick, so the latch is still healthy and the refusal is
-        // `Full`, not `Unhealthy`.
-        let exporter = crate::otel::OtelExporter::with_client(
+        // No flush loop: nothing ever drains the queue this test fills, and
+        // nothing ever POSTs, so the rejection is deterministically `Full`
+        // rather than depending on whether the runtime parked between the fill
+        // and the call.
+        let exporter = crate::otel::OtelExporter::with_client_no_flush(
             crate::otel::OtelConfig::for_tests("http://127.0.0.1:9/v1/logs", "mtui"),
             client,
         );
+        // OTLP-only on purpose: with no file sink the record's only path is the
+        // exporter, so the refused enqueue is the one accounted loss.
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let registry = Arc::new(register_all());
+        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
+        let server = McpServer::new(registry, session);
         for seq in 0..crate::otel::OTEL_QUEUE_CAP {
             exporter
                 .enqueue_audit(crate::otel::QueuedAudit {
@@ -1565,23 +1693,38 @@ mod tests {
                 })
                 .expect("queue accepts to capacity");
         }
-        assert!(exporter.is_healthy(), "fill races the first flush tick");
-
-        let mut config = Config::default();
-        config.session_user = "testuser".to_owned();
-        let registry = Arc::new(register_all());
-        let session = McpSession::new_with_otel(config, "stdio", Some(exporter.clone()));
-        let server = McpServer::new(registry, session);
-        let err = audited_call(&server, "whoami", json!({}))
-            .await
-            .expect_err("full OTLP queue refuses");
-        let msg = err.to_string();
         assert!(
-            msg.contains("audit log unavailable"),
-            "same refuse path: {msg}"
+            exporter.is_healthy(),
+            "nothing posted, so the latch is untouched and the refusal is `Full`"
         );
-        assert!(msg.contains("otlp queue full"), "closed reason: {msg}");
-        assert!(!msg.contains("127.0.0.1"), "no endpoint leaks: {msg}");
+
+        let lost_before = exporter.audit_lost();
+        let (response, logs) = capture_logs(audited_call(&server, "whoami", json!({}))).await;
+        let response = response.expect("a full export queue never discards the result");
+        let text = response_text(&response);
+        assert!(text.contains("testuser"), "the call really ran: {text}");
+        assert!(
+            !text.contains("[audit:"),
+            "export loss is not reported in band: {text}"
+        );
+
+        assert_eq!(
+            exporter.audit_lost(),
+            lost_before + 1,
+            "the refused enqueue is gap-accounted exactly once"
+        );
+        // The line is pinned whole around the one varying token: `seq` is a
+        // process-global counter and this mode writes no file to read it from.
+        let line = otlp_warn_line(&logs);
+        let (head, reason) = line
+            .rsplit_once(" reason=")
+            .unwrap_or_else(|| panic!("warn line shape: {line:?}"));
+        assert_eq!(reason, "\"otlp queue full\"");
+        let seq = head
+            .strip_prefix("audit otlp: record not exported seq=")
+            .unwrap_or_else(|| panic!("warn line shape: {line:?}"));
+        assert!(seq.parse::<u64>().is_ok(), "seq is the join key: {seq:?}");
+        assert!(!logs.contains("127.0.0.1"), "no endpoint leaks: {logs}");
         exporter.shutdown().await;
     }
 
