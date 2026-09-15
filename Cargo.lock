@@ -5565,13 +5565,16 @@ name = "xtask"
 version = "26.4.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "clap_complete",
  "clap_mangen",
+ "mtui-config",
  "mtui-core",
  "mtui-datasources",
  "mtui-mcp",
  "mtui-types",
+ "reqwest",
  "serde_json",
  "tempfile",
  "tokio",

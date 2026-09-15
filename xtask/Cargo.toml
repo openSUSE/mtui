@@ -38,10 +38,17 @@ anyhow.workspace = true
 # second HTTP stack — the cost is pulling tokio's runtime into this crate.
 mtui-types.workspace = true
 mtui-datasources.workspace = true
+# `teregen-login`: reads oscrc credentials via `[obs] api_url`.
+mtui-config.workspace = true
 tokio.workspace = true
 # `schema-check`: compares the live /api/v2/schema against the committed copy
 # by value.
 serde_json.workspace = true
+# `teregen-login`: issues the authenticated GET /schema probe directly
+# (mtui-datasources's HttpClient::inner() is crate-private) and renders the
+# cached token's age.
+reqwest.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 # Offline generation smoke test writes into an isolated temp dir (never `dist/`).
