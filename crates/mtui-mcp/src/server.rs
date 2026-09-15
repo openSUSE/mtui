@@ -1121,82 +1121,9 @@ mod tests {
         line.to_owned()
     }
 
-    /// Run `fut` with this thread's tracing events collected, returning its
-    /// output and the captured lines (`message` first, then the event's own
-    /// fields as `name=value`), newline-joined.
-    ///
-    /// The subscriber is **global** because `tracing` caches callsite interest
-    /// process-wide: a callsite first reached from a thread with no subscriber
-    /// is cached `Interest::never()` and stays silent for every later capture,
-    /// so a thread-local default makes a log assertion pass or fail by test
-    /// order. Scoping moves to the thread-local sink instead; `#[tokio::test]`
-    /// is single-threaded, so the dispatch's own events land on this thread.
-    ///
-    /// Accepted cost: the unfiltered `Registry` reports no `max_level_hint`, so
-    /// `LevelFilter::current()` is `TRACE` for this test binary. The workspace's
-    /// fourth copy of the pattern — a `#[cfg(test)]` module cannot share an
-    /// integration test's file; the fullest write-up is
-    /// `mtui-datasources/tests/log_capture.rs`.
-    async fn capture_logs<T>(fut: impl std::future::Future<Output = T>) -> (T, String) {
-        install_capture_subscriber();
-        CAPTURE_SINK.with(|s| *s.borrow_mut() = Some(Vec::new()));
-        let out = fut.await;
-        let lines = CAPTURE_SINK
-            .with(|s| s.borrow_mut().take())
-            .unwrap_or_default();
-        (out, lines.join("\n"))
-    }
-
-    thread_local! {
-        /// Buffer for the capture in progress on this thread, or `None` when no
-        /// capture is active — events from a thread without one are dropped.
-        static CAPTURE_SINK: std::cell::RefCell<Option<Vec<String>>> =
-            const { std::cell::RefCell::new(None) };
-    }
-
-    /// Install the permissive global subscriber backing [`capture_logs`], once
-    /// per test binary.
-    fn install_capture_subscriber() {
-        use std::fmt::Write as _;
-        use std::sync::OnceLock;
-        use tracing::field::{Field, Visit};
-        use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
-        use tracing_subscriber::registry::Registry;
-
-        struct CaptureLayer;
-
-        #[derive(Default)]
-        struct MessageVisitor {
-            message: String,
-            fields: String,
-        }
-        impl Visit for MessageVisitor {
-            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    let _ = write!(self.message, "{value:?}");
-                } else {
-                    let _ = write!(self.fields, " {}={value:?}", field.name());
-                }
-            }
-        }
-
-        impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-                CAPTURE_SINK.with(|s| {
-                    if let Some(buf) = s.borrow_mut().as_mut() {
-                        let mut visitor = MessageVisitor::default();
-                        event.record(&mut visitor);
-                        buf.push(format!("{}{}", visitor.message, visitor.fields));
-                    }
-                });
-            }
-        }
-
-        static ONCE: OnceLock<()> = OnceLock::new();
-        ONCE.get_or_init(|| {
-            let _ = tracing::subscriber::set_global_default(Registry::default().with(CaptureLayer));
-        });
-    }
+    /// The crate's one capture: `#[tokio::test]` is single-threaded, so the
+    /// dispatch's own events land on this thread.
+    use crate::test_log::capture_logs;
 
     #[tokio::test]
     async fn audit_foreground_call_records_scope_and_outcome() {

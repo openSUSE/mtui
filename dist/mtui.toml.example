@@ -160,6 +160,10 @@
 # auditing; a call the sink cannot record is refused.
 # The sink's directory must exist and be writable by the serving user alone.
 # audit_log = "~/.local/state/mtui/audit.jsonl"
+# Size at which the audit sink rotates to <path>.1, keeping five generations
+# (.1 through .5); the oldest is discarded. 0 disables rotation; any other
+# value below 4096 is raised to it.
+# audit_log_max_bytes = 268435456
 
 [obs]
 # The OBS/IBS API URL the native QAM review backend acts against. Must equal
