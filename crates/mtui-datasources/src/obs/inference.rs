@@ -64,7 +64,7 @@ impl Assignment {
 /// ISO-8601 timestamp (with or without a `Z`), falling back to a naive
 /// `YYYY-MM-DDTHH:MM:SS`; both normalise to a naive UTC instant so all
 /// instants compare.
-fn instant(when: &str) -> Option<NaiveDateTime> {
+pub(crate) fn instant(when: &str) -> Option<NaiveDateTime> {
     let trimmed = when.trim().replace('Z', "+00:00");
     if let Ok(dt) = DateTime::parse_from_rfc3339(&trimmed) {
         return Some(dt.naive_utc());
@@ -77,6 +77,8 @@ fn instant(when: &str) -> Option<NaiveDateTime> {
 ///
 /// Ordering only. Never compare two of these to place events against each
 /// other in time — the unparseable bucket would read as "later".
+/// `hold::latest_key` is the `max_by_key` counterpart, with the tie-break
+/// reversed.
 fn when_key(when: &str) -> (u8, Option<NaiveDateTime>) {
     let at = instant(when);
     (u8::from(at.is_none()), at)

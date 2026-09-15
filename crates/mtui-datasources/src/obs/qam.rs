@@ -2,11 +2,13 @@
 //!
 //! Each function performs the OBS calls for one operation and returns `Err` on
 //! any failure or refused precondition; the never-raise `OSC` facade folds that
-//! into the `false` its callers expect. Semantics mirror the `osc qam` plugin
-//! exactly, including the awkward parts: single-group auto-inference, the
-//! ">=1 own assignment" unassign guard, the refused group-approve, `by_user`
-//! reject with the `MAINT:RejectReason` read-modify-write, and the
-//! `qam.suse.de` preconditions (skipped for PI/SLFO). The `[oscqam] ` prefix
+//! into the `false` its callers expect. The workflow is deliberately
+//! conservative: single-group auto-inference, the ">=1 own assignment"
+//! unassign guard, the refused group-approve, `by_user` reject with the
+//! `MAINT:RejectReason` read-modify-write, the `qam.suse.de` preconditions
+//! (skipped for PI/SLFO), and `assign`'s refusal of a group review that is
+//! already approved or held, by someone else or by the caller (#599) — OBS's
+//! `assignreview` checks only that the request is open. The `[oscqam] ` prefix
 //! goes on approve/reject comments only.
 //!
 //! Like [`ObsClient`] itself, these functions take explicit URL values rather
@@ -18,6 +20,7 @@ use mtui_types::{RequestKind, RequestReviewID};
 
 use crate::obs::client::ObsClient;
 use crate::obs::errors::ObsError;
+use crate::obs::hold::{GroupHold, group_hold};
 use crate::obs::inference::assignments_for_user;
 use crate::obs::models::{
     self, REJECT_REASON_NAME, REJECT_REASON_NAMESPACE, build_reject_reason_body, is_qam_group,
@@ -164,6 +167,48 @@ async fn resolve_assign_groups(
     Ok(candidates)
 }
 
+/// Refuse to assign `group` when its review is already approved, or held by
+/// another user (unless `force`) or by `user` themselves: OBS's `assignreview`
+/// checks none of that and would open a fresh review on an approved request
+/// (#599).
+///
+/// `force` does not lift the caller's own hold, as Gitea's does: the re-assign
+/// changes no OBS state and only appends a reopen, which `inference` replays as
+/// a revert when the caller's user review carries no placeable assign event.
+fn refuse_held(
+    request: &models::Request,
+    group: &str,
+    user: &str,
+    force: bool,
+) -> Result<(), ObsError> {
+    let reqid = &request.reqid;
+    match group_hold(request, group, user) {
+        GroupHold::Free => Ok(()),
+        GroupHold::HeldBy { .. } if force => Ok(()),
+        GroupHold::Approved { by } => {
+            let by = by
+                .map(|(who, when)| format!(" by {who} on {when}"))
+                .unwrap_or_default();
+            Err(ObsError::Op(format!(
+                "{group} review on request {reqid} was already accepted{by}; refusing to \
+                 assign (it would open a new review for {user}). If the group must test it \
+                 again, re-request its review first — mtui has no command for that; \
+                 `osc review add -G {group} {reqid}` does it"
+            )))
+        }
+        GroupHold::HeldBy { user: holder } => Err(ObsError::Op(format!(
+            "{group} review on request {reqid} is accepted and {holder} has an open review \
+             on the request; refusing to assign (pass --force to override)"
+        ))),
+        GroupHold::HeldByMe => Err(ObsError::Op(format!(
+            "{user} already holds the {group} review on request {reqid}; nothing to do — \
+             `unassign` to hand it back, unless someone else assigned {user}: OBS records \
+             that against them, so `unassign` refuses too (--force does not re-assign your \
+             own review)"
+        ))),
+    }
+}
+
 /// Refuse if a related qam request was declined and `user` was not on it.
 async fn check_previous_rejects(
     client: &ObsClient,
@@ -215,14 +260,17 @@ async fn check_previous_rejects(
 /// # Errors
 ///
 /// Returns [`ObsError::Op`] if the request is not open for review, the group
-/// cannot be auto-inferred, no testreport exists (non-SLFO), or a previous
-/// decline blocks the re-review; or a transport/API error.
+/// cannot be auto-inferred, its review is already accepted or held by another
+/// user (unless `force`) or by `user` themselves, no testreport exists
+/// (non-SLFO), or a previous decline blocks the re-review; or a transport/API
+/// error.
 pub async fn assign(
     client: &ObsClient,
     reports_url: &str,
     rrid: &RequestReviewID,
     user: &str,
     groups: &[String],
+    force: bool,
 ) -> Result<(), ObsError> {
     let request = get_request(client, rrid).await?;
     // The plugin's Request.OPEN_STATES: OBS reports "new" while a request still
@@ -234,6 +282,11 @@ pub async fn assign(
         )));
     }
     let resolved = resolve_assign_groups(client, &request, user, groups).await?;
+    // Every group before any POST: one refusal must not leave the request
+    // half-assigned.
+    for group in &resolved {
+        refuse_held(&request, group, user, force)?;
+    }
     if !skips_maintenance_testreport(rrid) {
         if super::preconditions::fetch_testreport_log(client.http(), reports_url, rrid)
             .await

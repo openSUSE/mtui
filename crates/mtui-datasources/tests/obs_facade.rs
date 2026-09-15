@@ -122,8 +122,49 @@ async fn factory_error_folds_into_logged_err() {
         rrid(),
         Arc::new(|_cfg: &Config| Err(ObsError::Config("no credentials".to_owned()))),
     );
-    let err = osc.assign(&[]).await.unwrap_err();
+    let err = osc.assign(&[], false).await.unwrap_err();
     assert!(matches!(err, ObsError::Config(m) if m == "no credentials"));
+}
+
+/// #599: `force` reaches the op — a held group is refused bare and taken
+/// over with `force`. SLFO, so no qam.suse.de precondition round-trip.
+#[tokio::test]
+async fn assign_forwards_force_to_the_op() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let reviews = "<review state='accepted' by_group='qam-sle'>\
+         <history who='bob' when='2026-09-06T11:24:48'>\
+         <description>Review got accepted</description></history></review>\
+         <review state='new' when='2026-09-06T11:24:48' who='bob' by_user='bob'>\
+         <comment>reassigned review for group qam-sle to user bob</comment></review>";
+    Mock::given(method("GET"))
+        .and(path("/request/70000"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            "<request id='70000'><state name='review'/>{reviews}</request>"
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/request/70000"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<ok/>"))
+        .mount(&server)
+        .await;
+    let osc = Osc::with_factory(Config::default(), slfo_rrid(), factory_for(server.uri()));
+    let group = ["qam-sle".to_owned()];
+
+    let err = osc.assign(&group, false).await.unwrap_err();
+    assert!(err.to_string().contains("bob has an open review"), "{err}");
+    osc.assign(&group, true).await.expect("force takes over");
+    let posts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .count();
+    assert_eq!(posts, 1, "the forced call alone posts");
 }
 
 #[tokio::test]
@@ -381,7 +422,7 @@ async fn assign_precondition_get_uses_the_injected_http_client() {
     // SAFETY: serialised via `#[serial(osc_config_env)]`.
     unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
 
-    let res = osc.assign(&["qam-sle".to_owned()]).await;
+    let res = osc.assign(&["qam-sle".to_owned()], false).await;
     // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
     unsafe { std::env::remove_var("OSC_CONFIG") };
 
