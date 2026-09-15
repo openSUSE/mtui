@@ -1890,6 +1890,183 @@ mod tests {
             records[0]
         );
     }
+    /// Register a command forced onto the **exclusive** dispatch path
+    /// (`requires_canonical_session`, exactly as `load_template` does) that
+    /// parks in its body, and start it as a background job. The worker then
+    /// holds the canonical session mutex for the job's whole life — the hold
+    /// an audit record must never wait on (#613).
+    ///
+    /// Returns the job id, the entry signal, and the release handle.
+    fn start_parked_exclusive_job(
+        session: &Arc<McpSession>,
+    ) -> (
+        String,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        use clap::ArgMatches;
+        use mtui_core::{Command, CommandResult, Scope};
+
+        struct ExclusivePark {
+            entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+            release: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        }
+        #[async_trait::async_trait]
+        impl Command for ExclusivePark {
+            fn name(&self) -> &'static str {
+                "exclusive_park_probe"
+            }
+            fn scope(&self) -> Scope {
+                Scope::Single
+            }
+            fn reads_resolved_report(&self) -> bool {
+                false
+            }
+            fn requires_canonical_session(&self, _argv: &[String]) -> bool {
+                true
+            }
+            async fn call(
+                &self,
+                _session: &mut mtui_core::Session,
+                _args: &ArgMatches,
+            ) -> CommandResult {
+                if let Some(tx) = self.entered.lock().expect("probe poisoned").take() {
+                    let _ = tx.send(());
+                }
+                let release = self
+                    .release
+                    .lock()
+                    .expect("probe poisoned")
+                    .take()
+                    .expect("single dispatch");
+                let _ = release.await;
+                Ok(())
+            }
+        }
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut registry = register_all();
+        registry.register(Arc::new(ExclusivePark {
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+            release: std::sync::Mutex::new(Some(release_rx)),
+        }));
+        let job_id = session
+            .start_job(Arc::new(registry), "exclusive_park_probe", Vec::new())
+            .expect("start_job succeeds");
+        (job_id, entered_rx, release_tx)
+    }
+
+    #[tokio::test]
+    async fn audit_outcome_record_never_waits_on_a_parked_exclusive_job() {
+        // #613's contention class: the exclusive dispatch holds the canonical
+        // session mutex for the whole command, so a record that takes it makes
+        // every audited call — a poll of that very job included — wait for the
+        // job to finish.
+        let (server, session, _dir, path) = audited_server();
+        let (job_id, entered, release) = start_parked_exclusive_job(&session);
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered)
+            .await
+            .expect("the probe must reach its body")
+            .expect("the probe must signal entry");
+
+        // The exclusive arm's signature, and what makes this test non-vacuous:
+        // a shared/scoped dispatch would leave the mutex free and the record
+        // would never have waited.
+        assert!(
+            session.session().try_lock().is_err(),
+            "the probe must dispatch on the exclusive path, holding the session"
+        );
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            audited_call(&server, "job_status", json!({ "job_id": job_id })),
+        )
+        .await
+        .expect("a poll of a running exclusive job must not wait on the job")
+        .expect("job_status answers");
+        assert!(
+            response_text(&response).contains("running"),
+            "the poll sees the job still running: {}",
+            response_text(&response)
+        );
+
+        let records = audit_records(&path);
+        assert_eq!(records.len(), 1, "one record per poll: {records:?}");
+        assert_eq!(records[0]["tool"], json!("job_status"));
+        assert_eq!(records[0]["outcome"], json!("ok"));
+        assert_eq!(
+            records[0]["hosts"],
+            json!([]),
+            "no scope resolves for a job tool, so no host names: {}",
+            records[0]
+        );
+
+        let _ = release.send(());
+        let records = await_records(&path, 2).await;
+        let terminal = only_event(&records, "terminal");
+        assert_eq!(terminal["job_id"], json!(job_id));
+        assert_eq!(terminal["job_state"], json!("done"));
+    }
+
+    #[tokio::test]
+    async fn audit_scope_helpers_degrade_rather_than_wait() {
+        // The non-empty-`rrids` arm, which no tool call can reach while the
+        // exclusive gate is held: a *second* background job's terminal record
+        // resolves its own host names after releasing the gate, by which time
+        // another exclusive job may hold the session mutex.
+        let (_server, session, _dir, _path) = audited_server();
+        seed_audit_host(&session, MockConnection::new(AUDIT_HOST)).await;
+        let (_job_id, entered, release) = start_parked_exclusive_job(&session);
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered)
+            .await
+            .expect("the probe must reach its body")
+            .expect("the probe must signal entry");
+        assert!(
+            session.session().try_lock().is_err(),
+            "the probe must hold the session"
+        );
+
+        let rrids = vec![AUDIT_RRID.to_owned()];
+        let held = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            (
+                session.audit_hosts(&rrids).await,
+                session.audit_template_scope(None).await,
+                session.audit_template_scope(Some(AUDIT_RRID)).await,
+            )
+        })
+        .await
+        .expect("the audit helpers must not wait on a running job");
+        assert_eq!(held.0, Vec::<String>::new(), "host names are best-effort");
+        assert_eq!(held.1, Vec::<String>::new(), "so is the implied scope");
+        assert_eq!(
+            held.2,
+            vec![AUDIT_RRID.to_owned()],
+            "an explicit template never needed the session at all"
+        );
+
+        // The fixture can express the difference: released, the same calls
+        // answer with the real host and the real active template.
+        let _ = release.send(());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if session.session().try_lock().is_ok() {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the job releases the session");
+        assert_eq!(
+            session.audit_hosts(&rrids).await,
+            vec![AUDIT_HOST.to_owned()]
+        );
+        assert_eq!(
+            session.audit_template_scope(None).await,
+            vec![AUDIT_RRID.to_owned()]
+        );
+    }
 
     #[tokio::test]
     async fn audit_unset_sink_is_byte_identical() {

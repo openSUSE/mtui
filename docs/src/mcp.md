@@ -515,6 +515,11 @@ the call resolved to. An **`intent`** record carries the same header and the
 same arguments, and nothing that only exists afterwards. A **`terminal`**
 record carries no arguments at all.
 
+Host names on a record are **best-effort**: they are empty when the session is
+busy with an exclusive background job (a backgrounded `load_template`,
+`add_host` or `config_set`), because a record write never waits on the work it
+records; `rrids` are always recorded.
+
 **`[mcp] audit_log_max_bytes`** (default 256 MiB) bounds the sink: the first
 open that finds the file at or over the cap rotates it to `<path>.1`, shifting
 `.1`…`.4` down one and discarding what was `.5`. That is usually an append, but

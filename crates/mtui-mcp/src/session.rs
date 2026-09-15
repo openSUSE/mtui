@@ -854,8 +854,17 @@ impl McpSession {
     /// template's target names, sorted. An entry busy with a concurrent
     /// dispatch is skipped rather than awaited, so auditing never blocks on
     /// the work it records; an unloaded template contributes nothing.
+    ///
+    /// Best-effort down to the session itself: empty while an exclusive
+    /// dispatch holds the session, so a record write never waits on a running
+    /// job. The record always carries `rrids`, which need no lock (#613).
     pub(crate) async fn audit_hosts(&self, rrids: &[String]) -> Vec<String> {
-        let session = self.session.lock().await;
+        if rrids.is_empty() {
+            return Vec::new();
+        }
+        let Ok(session) = self.session.try_lock() else {
+            return Vec::new();
+        };
         let mut hosts = std::collections::BTreeSet::new();
         for rrid in rrids {
             let Some(entry) = session.templates.handle(rrid) else {
@@ -872,12 +881,16 @@ impl McpSession {
     /// Template scope for a hand-written tool call carrying an optional
     /// `template` kwarg (the testreport/transfer families): the named
     /// template, else the active one, else nothing. Best-effort like
-    /// [`audit_hosts`](Self::audit_hosts).
+    /// [`audit_hosts`](Self::audit_hosts): empty while an exclusive dispatch
+    /// holds the session, so a record write never waits on a running job. A
+    /// named template needs no lock at all.
     pub(crate) async fn audit_template_scope(&self, template: Option<&str>) -> Vec<String> {
         if let Some(rrid) = template {
             return vec![rrid.to_owned()];
         }
-        let session = self.session.lock().await;
+        let Ok(session) = self.session.try_lock() else {
+            return Vec::new();
+        };
         session
             .templates
             .active_rrid()
