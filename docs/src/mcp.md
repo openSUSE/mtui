@@ -583,10 +583,30 @@ verbatim either: each records `{bytes, sha256}` over the original string, so a
 credentials file or SSH key uploaded via `put` stays correlatable without being
 persisted. Always fingerprinted, never inline, regardless of size — the same
 redaction feeds the file body, the OTLP body, and the size accounting, and no
-payload key is ever an indexed OTLP attribute. All file I/O runs on the
-blocking pool (`spawn_blocking`), so a down or slow disk never stalls the
-dispatch worker or the other calls it is serving — the one call that waits is
-the one whose own records are being written.
+payload key is ever an indexed OTLP attribute.
+
+Everything else is **masked**, not trusted. Every recorded string, at any
+nesting — `run` and `comment` argv included — runs through a token scanner that
+strips URL userinfo (the same `sanitize_url` the rest of mtui logs through) and
+replaces the value of a secret-named flag or key: `--password secret`,
+`DB_PASSWORD=…`, `x-api-key: …`, `Authorization: Bearer …`,
+`Authorization: token …` and `'{"password":"…"}'` all record `<redacted>`,
+through the quoting a shell line or a JSON payload wraps them in, while
+`token_bucket=50`, `max_tokens=100`, `grep token file` and `ssh -p 22 host` are
+left legible. `Bearer`, `Basic` and `token` keep their place in front of the
+credential they name — but only after a key that is itself a credential name,
+so `Basic functionality verified` stays a sentence.
+
+The scanner keys on the name beside the value, so what it does **not** catch is
+worth knowing rather than discovering: a bare secret with no key beside it; a
+single-letter flag, whose meaning is per-program (`sshpass -p secret`,
+`curl -u user:pass`, `psql -U user`); a value attached to one (`-pSECRET`,
+`-U user%pass`); and anything passed by environment variable, stdin or a file
+the tool reads.
+
+All file I/O runs on the blocking pool (`spawn_blocking`), so a down or slow
+disk never stalls the dispatch worker or the other calls it is serving — the
+one call that waits is the one whose own records are being written.
 
 ### OTLP log export
 

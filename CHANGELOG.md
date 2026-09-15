@@ -52,8 +52,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   secrets cannot leak into the log; file-body payloads (`put` `content`/`content_b64`,
   `testreport_write` `content`, `testreport_patch` `replacement`) record
   `{bytes, sha256}` instead of the bytes, always fingerprinted regardless of
-  size (#411). The seam is `mtui-mcp`'s `call_tool` dispatch only —
-  `mtui-core` has no session-key/transport notion, so the REPL is not covered.
+  size. Free-text arguments — `run`/`comment` argv included, at any nesting —
+  are masked rather than trusted: URL userinfo is stripped through the shared
+  `sanitize_url`, and the value of a secret-named flag or key (`--password`,
+  `DB_PASSWORD=`, `x-api-key:`, `Authorization: Bearer …`) becomes
+  `<redacted>`, through the quoting a shell line or a JSON payload wraps it in.
+  It keys on the name beside the value, so what it cannot catch is stated
+  rather than implied: a bare secret with no key beside it, a single-letter
+  flag whose meaning is per-program (`sshpass -p`, `curl -u user:pass`), a
+  value attached to one (`-pSECRET`, `-U user%pass`), and anything passed by
+  environment, stdin or a file. The seam is `mtui-mcp`'s `call_tool` dispatch
+  only — `mtui-core` has no session-key/transport notion, so the REPL is not
+  covered (#411).
 
 - New `[mcp] audit_log_max_bytes` key (default `268435456`, 256 MiB): the size
   at which the audit sink rotates to `<path>.1`, keeping five generations and
