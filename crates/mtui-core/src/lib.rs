@@ -35,7 +35,7 @@ pub mod template_registry;
 pub mod template_scope;
 
 pub use args::{Args, ColorArg, Sut, Update};
-pub use command::{Command, Scope, resolve_command_rrids};
+pub use command::{Command, Scope, addresses_template, resolve_command_rrids};
 pub use display::{ColorMode, CommandPromptDisplay};
 pub use engine::{EngineError, command_parser, dispatch_argv, dispatch_command, dispatch_line};
 pub use entrypoint::ExitStatus;

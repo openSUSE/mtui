@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use crate::command::Command;
+use crate::command::{Command, Scope};
 use crate::error::CommandResult;
 use crate::session::Session;
 
@@ -21,6 +21,15 @@ impl Command for Whoami {
 
     fn about(&self) -> Option<&'static str> {
         Some("Displays the current user name and session PID.")
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::Single
+    }
+
+    fn reads_resolved_report(&self) -> bool {
+        // Session identity, independent of any loaded template.
+        false
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
@@ -41,6 +50,16 @@ mod tests {
     #[test]
     fn name_is_whoami() {
         assert_eq!(Whoami.name(), "whoami");
+    }
+
+    /// Session identity, independent of any loaded template: `Scope::Single`
+    /// plus `reads_resolved_report() == false` is what exempts it from the
+    /// #524 busy refusal and, over MCP, from taking a per-RRID lock
+    /// ([`mtui_core::addresses_template`]).
+    #[test]
+    fn addresses_no_template() {
+        assert_eq!(Whoami.scope(), Scope::Single);
+        assert!(!Whoami.reads_resolved_report());
     }
 
     #[tokio::test]

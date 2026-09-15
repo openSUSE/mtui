@@ -75,6 +75,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `config show` and `config set` gained help text; the `config_show`/`config_set`
   MCP tool descriptions are no longer the bare tool name, and `set`'s
   `attribute`/`value` are described.
+- `whoami` and `set_log_level` no longer take the active template's per-RRID
+  lock over MCP, and slow session-level I/O (`updates`, `list_refhosts`,
+  `list_templates`, `config show`) no longer holds the canonical session mutex
+  across the dispatch: they run on a per-call fork like a scoped one-template
+  call, so they neither serialise against commands acting on the active
+  template nor head-of-line-block a scoped resolve behind their own network
+  I/O. `set_log_level` mutates the session's log sink, which a fork discards,
+  so it still dispatches on the canonical session. Tool names, arguments and
+  schemas are unchanged.
 
 ## [26.3.2] - 2026-09-04
 

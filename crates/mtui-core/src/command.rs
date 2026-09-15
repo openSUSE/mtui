@@ -52,6 +52,19 @@ pub enum Scope {
     Single,
 }
 
+/// Whether `command` acts on the template [`Command::run`] resolves for it.
+///
+/// `false` only for a [`Scope::Single`] command that also declares
+/// [`Command::reads_resolved_report`] `false` — it ignores whatever template
+/// it is handed (`whoami`, `set_log_level`, `list_templates`, `list_refhosts`,
+/// `updates`, `config show`). Used by the MCP session (job-scope and
+/// concurrency-gate resolution, #603/#613) to treat such a call as
+/// session-level rather than serialising it against the active template.
+#[must_use]
+pub fn addresses_template<C: Command + ?Sized>(command: &C) -> bool {
+    !(command.scope() == Scope::Single && !command.reads_resolved_report())
+}
+
 /// An executable mtui command.
 ///
 /// Concrete commands implement [`name`](Command::name) and the abstract
@@ -641,6 +654,22 @@ mod tests {
                 .push(session.targets().len());
             Ok(())
         }
+    }
+
+    /// `addresses_template` is `false` only for a `Scope::Single` command that
+    /// also opts out of the resolved report; every other shape — a default
+    /// `Scope::Active` command, a `Fanout` one, and a `Single` one that still
+    /// reads what it was handed — addresses a template.
+    #[test]
+    fn addresses_template_is_false_only_for_single_and_report_independent() {
+        assert!(addresses_template(&NoopSingle));
+        assert!(addresses_template(&RecordingFanout(Arc::new(Mutex::new(
+            Vec::new()
+        )))));
+        assert!(addresses_template(&ReportReadingSingleScope(Arc::new(
+            Mutex::new(Vec::new())
+        ))));
+        assert!(!addresses_template(&NoopSingleScope));
     }
 
     /// A fork racing the canonical session for the same entry (mechanism 2 of

@@ -357,6 +357,8 @@ mod tests {
             ("config", &["-T", "SUSE:Maintenance:1:1", "show"][..], false),
             ("config", &[][..], true),
             ("config", &["frobnicate"][..], true),
+            // Mutates the session log sink, which an MCP per-call fork discards.
+            ("set_log_level", &["debug"][..], true),
             ("list_hosts", &[][..], false),
         ] {
             let argv: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
@@ -423,9 +425,11 @@ mod tests {
                 "list_templates",
                 "load_template",
                 "quit",
+                "set_log_level",
                 "switch",
                 "unload",
                 "updates",
+                "whoami",
             ]
         );
     }

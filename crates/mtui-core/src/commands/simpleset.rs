@@ -35,6 +35,20 @@ impl Command for SetLogLevel {
         Some("Changes the current mtui log level.")
     }
 
+    fn scope(&self) -> Scope {
+        Scope::Single
+    }
+
+    fn reads_resolved_report(&self) -> bool {
+        // Session log sink; no report involved.
+        false
+    }
+
+    fn requires_canonical_session(&self, _argv: &[String]) -> bool {
+        // Mutates the session's log sink, which an MCP per-call fork discards.
+        true
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("level")
@@ -265,6 +279,18 @@ mod tests {
     #[test]
     fn name_is_set_log_level() {
         assert_eq!(SetLogLevel.name(), "set_log_level");
+    }
+
+    /// Session log sink, independent of any loaded template — `Scope::Single`
+    /// plus `reads_resolved_report() == false` exempts it from the #524 busy
+    /// refusal and, over MCP, from a per-RRID lock
+    /// ([`mtui_core::addresses_template`]) — but the sink write must still land
+    /// on the canonical session, which `requires_canonical_session` forces.
+    #[test]
+    fn addresses_no_template_but_requires_the_canonical_session() {
+        assert_eq!(SetLogLevel.scope(), Scope::Single);
+        assert!(!SetLogLevel.reads_resolved_report());
+        assert!(SetLogLevel.requires_canonical_session(&["debug".to_owned()]));
     }
 
     #[test]
