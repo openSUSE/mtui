@@ -513,9 +513,10 @@ arguments, the outcome (`ok` / `error` / `unknown-tool`), the duration, and the
 RRIDs and host names the call resolved to.
 
 **`[mcp] audit_log_max_bytes`** (default 256 MiB) bounds the sink: the first
-append that finds the file at or over the cap rotates it to `<path>.1`, shifting
-`.1`…`.4` down one and discarding what was `.5`. Archiving beyond `.5` is the
-operator's job. `0` disables rotation altogether; any other value below 4096 is
+open that finds the file at or over the cap rotates it to `<path>.1`, shifting
+`.1`…`.4` down one and discarding what was `.5`. That is usually an append, but
+the start-up probe opens the sink the same way, so a server can rotate before it
+answers anything. Archiving beyond `.5` is the operator's job. `0` disables rotation altogether; any other value below 4096 is
 raised to it with a warning, because a cap under one record's worth rotates the
 trail away.
 
@@ -536,7 +537,10 @@ A backgrounded call writes two records: a `dispatch` record naming the started
 `job_ids`, and a `terminal` record when the job reaches `done` / `failed` /
 `cancelled`, joinable by job id. The terminal record carries no arguments.
 
-When the sink cannot be written the call is **refused** instead of proceeding
+A configured sink is probed once at start-up, before the OTLP probe: if it
+cannot be opened the server refuses to start and names the path on stderr,
+rather than loading quietly and failing on the first tool call. When the sink
+cannot be written *later* the call is **refused** instead of proceeding
 unrecorded. A failed terminal write can only warn — its dispatch already
 answered. `config_set` never records the value for any attribute, so a future
 secret attribute cannot leak by omission; the record marks whether the attribute

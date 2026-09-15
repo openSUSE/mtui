@@ -157,7 +157,8 @@
 # tools_deny = []
 # Durable audit sink for mtui-mcp tool calls (versioned JSONL, one record per
 # call, created 0600, fsynced before the response returns). Unset disables
-# auditing; a call the sink cannot record is refused.
+# auditing; a path that cannot be opened refuses to start the server, and a
+# call the sink cannot record later is refused.
 # The sink's directory must exist and be writable by the serving user alone.
 # audit_log = "~/.local/state/mtui/audit.jsonl"
 # Size at which the audit sink rotates to <path>.1, keeping five generations
