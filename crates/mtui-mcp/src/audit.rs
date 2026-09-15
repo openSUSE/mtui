@@ -46,7 +46,7 @@
 
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rmcp::ErrorData as McpError;
 use serde_json::{Map, Value};
@@ -63,6 +63,11 @@ pub(crate) const MAX_AUDIT_STRING_LEN: usize = 1024;
 /// Size-only reduction thresholds: longer arrays/objects become `{"_len": n}`.
 pub(crate) const MAX_AUDIT_ARRAY_LEN: usize = 100;
 pub(crate) const MAX_AUDIT_OBJECT_KEYS: usize = 100;
+
+/// Rotated generations kept beside the live sink (`<path>.1` .. `<path>.5`).
+/// The oldest is discarded on each rotation; archiving beyond it is the
+/// operator's job.
+pub(crate) const AUDIT_LOG_KEEP: u32 = 5;
 
 /// Process-global audit sequence: file-first, OTLP second, same `seq` on
 /// both so the two streams join. Only consumed when auditing is on.
@@ -132,15 +137,19 @@ impl AuditEvent {
 /// server restart) and `0600` (the file outlives the session and may name
 /// consequential actions), and vetted on the resulting fd — see
 /// [`open_vetted`](Self::open_vetted). Per-record open keeps concurrent
-/// sessions and background workers from sharing a file offset.
+/// sessions and background workers from sharing a file offset. At
+/// `max_bytes` the sink rotates through [`AUDIT_LOG_KEEP`] generations; see
+/// [`rotate`](Self::rotate).
 #[derive(Debug, Clone)]
 pub(crate) struct AuditLog {
     path: PathBuf,
+    /// `[mcp] audit_log_max_bytes`; `0` disables rotation.
+    max_bytes: u64,
 }
 
 impl AuditLog {
-    pub(crate) fn new(path: PathBuf) -> Self {
-        Self { path }
+    pub(crate) fn new(path: PathBuf, max_bytes: u64) -> Self {
+        Self { path, max_bytes }
     }
 
     /// Open the sink for append, creating it with restrictive permissions.
@@ -159,7 +168,89 @@ impl AuditLog {
                 ));
             }
         }
-        self.open_vetted()
+        let file = self.open_vetted()?;
+        if self.max_bytes == 0 || file.metadata()?.len() < self.max_bytes {
+            return Ok(file);
+        }
+        Ok(self.rotate(file))
+    }
+
+    /// `<path>.<n>`, the nth rotated generation.
+    fn generation(&self, n: u32) -> PathBuf {
+        let mut name = self.path.clone().into_os_string();
+        name.push(format!(".{n}"));
+        PathBuf::from(name)
+    }
+
+    /// Shift the generations down and hand back a live sink.
+    ///
+    /// **Infallible by policy, and it never waits.** The cap is housekeeping;
+    /// the record is the point. So every way this can go wrong — a lock another
+    /// writer holds, a mount whose `flock` is unimplemented (an NFS export
+    /// without `lockd` answers `ENOLCK`), a rename that cannot happen — warns
+    /// and hands back the oversize file to append to. An `Err` escaping here
+    /// would reach [`refuse_error`] and turn a directory left at `<path>.1`, or
+    /// one unlucky mount, into a refusal of every mutating call past the cap
+    /// and a server that will not start: the outage the cap exists to prevent.
+    ///
+    /// The advisory lock is taken on the **oversize file itself**, not on a
+    /// process-local mutex: two stdio servers pointed at one path are two
+    /// processes, and only a lock on the inode orders them. It is a `try_lock`,
+    /// never a blocking `lock` — whoever holds it rotates, and whoever does not
+    /// appends past the cap and rotates on a later call, so a contended
+    /// boundary costs the dispatch worker nothing and still rotates once.
+    fn rotate(&self, full: std::fs::File) -> std::fs::File {
+        match full.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => {
+                warn_rotation_failed("another writer holds the sink lock");
+                return full;
+            }
+            Err(std::fs::TryLockError::Error(err)) => {
+                warn_rotation_failed(err);
+                return full;
+            }
+        }
+        // Re-open the path under the lock: a different inode means someone else
+        // rotated first, so use theirs rather than rotate a second time.
+        let current = match self.open_vetted() {
+            Ok(current) => current,
+            Err(err) => {
+                warn_rotation_failed(err);
+                return full;
+            }
+        };
+        match same_file(&full, &current) {
+            Ok(false) => return current,
+            Ok(true) => drop(current),
+            Err(err) => {
+                warn_rotation_failed(err);
+                return full;
+            }
+        }
+        // A failed shift leaves the chain half-moved, so stop at the first one
+        // rather than reporting the same outage four more times.
+        for n in (1..AUDIT_LOG_KEEP).rev() {
+            let from = self.generation(n);
+            if from.exists() && !renamed(&from, &self.generation(n + 1)) {
+                return full;
+            }
+        }
+        if !renamed(&self.path, &self.generation(1)) {
+            return full;
+        }
+        match self.open_vetted() {
+            Ok(fresh) => {
+                ROTATION_WARNED.store(false, Ordering::Relaxed);
+                fresh
+            }
+            // The live sink is `<path>.1` now, so `full` is where this record
+            // lands: the documented boundary line, one file early.
+            Err(err) => {
+                warn_rotation_failed(err);
+                full
+            }
+        }
     }
 
     /// Open the sink and refuse anything that is not this user's own regular
@@ -205,6 +296,10 @@ impl AuditLog {
     /// Pre-flight check: fail when the sink cannot be opened for append, so
     /// the caller can refuse before dispatching.
     ///
+    /// Opens the sink exactly as an append does, so a sink already at the cap
+    /// rotates here too — [`rotate`](Self::rotate) cannot fail, so that adds
+    /// nothing to the errors below.
+    ///
     /// Blocking; async dispatch uses [`check_writable_async`](Self::check_writable_async).
     ///
     /// # Errors
@@ -249,6 +344,55 @@ impl AuditLog {
         tokio::task::spawn_blocking(move || owned.append(&record))
             .await
             .map_err(io::Error::other)?
+    }
+}
+
+/// Whether two open handles name the same file.
+///
+/// The rotation race check. Off unix there is no inode to compare, so it
+/// degrades to "assume nobody rotated underneath us" — the same answer the
+/// single-process case gives.
+#[cfg(unix)]
+fn same_file(a: &std::fs::File, b: &std::fs::File) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+    Ok(a.metadata()?.ino() == b.metadata()?.ino())
+}
+
+#[cfg(not(unix))]
+fn same_file(_a: &std::fs::File, _b: &std::fs::File) -> io::Result<bool> {
+    Ok(true)
+}
+
+/// Set while a rotation outage is already reported.
+///
+/// A sink that cannot be rotated stays that way, and the cap is re-tested on
+/// every append past it, so an unlatched warning would arrive once per mutating
+/// call for the life of the server — burying the log it exists to protect.
+/// Cleared by a rotation that completes, so the next outage is reported again.
+static ROTATION_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Report a rotation failure, at most once per outage.
+///
+/// Closed text: the reason, never the path — the line also rides the OTLP
+/// diagnostics queue.
+fn warn_rotation_failed(reason: impl std::fmt::Display) {
+    if ROTATION_WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    tracing::warn!(
+        reason = %reason,
+        "audit log: rotation failed; appending past the cap"
+    );
+}
+
+/// Rename one generation; `false` when it did not happen.
+fn renamed(from: &std::path::Path, to: &std::path::Path) -> bool {
+    match std::fs::rename(from, to) {
+        Ok(()) => true,
+        Err(err) => {
+            warn_rotation_failed(err);
+            false
+        }
     }
 }
 
@@ -421,6 +565,30 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+    use serial_test::serial;
+
+    use crate::test_log::capture_logs_blocking;
+
+    /// The one captured warning starting with `prefix`, in full; required to be
+    /// unique, so a warning emitted once per call cannot pass as one per
+    /// outage.
+    fn warn_line(logs: &str, prefix: &str) -> String {
+        let mut hits = logs.lines().filter(|l| l.starts_with(prefix));
+        let line = hits
+            .next()
+            .unwrap_or_else(|| panic!("no {prefix:?} warning was captured, got: {logs:?}"));
+        assert!(
+            hits.next().is_none(),
+            "exactly one {prefix:?} warning: {logs:?}"
+        );
+        line.to_owned()
+    }
+
+    /// Re-arm the process-global one-warning-per-outage latch. Every test that
+    /// reads or moves it runs `#[serial(audit_rotation)]`.
+    fn rearm_rotation_warning() {
+        ROTATION_WARNED.store(false, Ordering::Relaxed);
+    }
 
     /// Append through a fresh handle and read the lines back.
     fn read_lines(path: &Path) -> Vec<Value> {
@@ -437,10 +605,10 @@ mod tests {
 
         // Two instances over the same path model a server restart: the sink
         // is opened per record, never truncated.
-        AuditLog::new(path.clone())
+        AuditLog::new(path.clone(), 0)
             .append(&json!({"v": 1, "tool": "whoami"}))
             .expect("first append");
-        AuditLog::new(path.clone())
+        AuditLog::new(path.clone(), 0)
             .append(&json!({"v": 1, "tool": "run"}))
             .expect("second append");
 
@@ -466,7 +634,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
         std::fs::write(&path, "{\"v\":1,\"tool\":\"old\"}\n").expect("seed");
-        AuditLog::new(path.clone())
+        AuditLog::new(path.clone(), 0)
             .append(&json!({"v": 1, "tool": "new"}))
             .expect("append");
         let lines = read_lines(&path);
@@ -486,7 +654,7 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
                 .expect("loosen seed");
         }
-        AuditLog::new(path.clone())
+        AuditLog::new(path.clone(), 0)
             .append(&json!({"v": 1, "tool": "new"}))
             .expect("append");
         #[cfg(unix)]
@@ -513,7 +681,7 @@ mod tests {
         let link = dir.path().join("audit.jsonl");
         std::os::unix::fs::symlink(&target, &link).expect("plant symlink");
 
-        let err = AuditLog::new(link)
+        let err = AuditLog::new(link, 0)
             .append(&json!({"v": 1, "tool": "run"}))
             .expect_err("a planted symlink must not be followed");
         // `io::ErrorKind::FilesystemLoop` is still unstable, so pin the errno
@@ -541,7 +709,7 @@ mod tests {
         let link = dir.path().join("audit.jsonl");
         std::os::unix::fs::symlink(&missing, &link).expect("plant symlink");
 
-        let err = AuditLog::new(link)
+        let err = AuditLog::new(link, 0)
             .append(&json!({"v": 1}))
             .expect_err("a dangling symlink must not be created through");
         assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
@@ -565,7 +733,7 @@ mod tests {
         // a blocked probe thread simply never answers.
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(AuditLog::new(path).append(&json!({"v": 1})).is_err());
+            let _ = tx.send(AuditLog::new(path, 0).append(&json!({"v": 1})).is_err());
         });
         let refused = rx
             .recv_timeout(std::time::Duration::from_secs(5))
@@ -585,7 +753,7 @@ mod tests {
         let link = dir.path().join("backup.jsonl");
         std::fs::hard_link(&path, &link).expect("hardlink");
 
-        AuditLog::new(link)
+        AuditLog::new(link, 0)
             .append(&json!({"v": 1, "tool": "run"}))
             .expect("a same-user hardlink still appends");
         let lines = read_lines(&path);
@@ -619,7 +787,7 @@ mod tests {
     #[test]
     fn sink_on_a_directory_is_an_error() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let sink = AuditLog::new(dir.path().to_path_buf());
+        let sink = AuditLog::new(dir.path().to_path_buf(), 0);
         assert!(
             sink.check_writable().is_err(),
             "pre-flight must fail on a directory"
@@ -628,6 +796,277 @@ mod tests {
             sink.append(&json!({"v": 1})).is_err(),
             "append must fail on a directory"
         );
+    }
+
+    /// `<path>.<n>`, the rotated generation the assertions read back.
+    fn generation_path(path: &Path, n: u32) -> std::path::PathBuf {
+        let mut name = path.to_path_buf().into_os_string();
+        name.push(format!(".{n}"));
+        std::path::PathBuf::from(name)
+    }
+
+    #[test]
+    #[serial(audit_rotation)]
+    fn sink_rotates_when_the_cap_is_reached() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        // Cap 1: the first append lands on an empty file, the second finds it
+        // over the cap and rotates before writing.
+        let sink = AuditLog::new(path.clone(), 1);
+        sink.append(&json!({"v": 1, "tool": "first"}))
+            .expect("first");
+        sink.append(&json!({"v": 1, "tool": "second"}))
+            .expect("second");
+
+        let rotated = generation_path(&path, 1);
+        assert_eq!(read_lines(&rotated).len(), 1, "generation .1 holds line 1");
+        assert_eq!(read_lines(&rotated)[0]["tool"], json!("first"));
+        let live = read_lines(&path);
+        assert_eq!(live.len(), 1, "the live sink restarts after rotation");
+        assert_eq!(live[0]["tool"], json!("second"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial(audit_rotation)]
+    fn rotated_generations_keep_mode_0600() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = AuditLog::new(path.clone(), 1);
+        sink.append(&json!({"v": 1})).expect("first");
+        sink.append(&json!({"v": 1})).expect("second");
+
+        let mode = std::fs::metadata(generation_path(&path, 1))
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "a rotated generation is no less restricted");
+    }
+
+    #[test]
+    #[serial(audit_rotation)]
+    fn rotation_keeps_five_generations_and_no_more() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = AuditLog::new(path.clone(), 1);
+        for i in 0..7 {
+            sink.append(&json!({"v": 1, "n": i})).expect("append");
+        }
+
+        for n in 1..=AUDIT_LOG_KEEP {
+            assert!(
+                generation_path(&path, n).exists(),
+                "generation .{n} must exist"
+            );
+        }
+        assert!(
+            !generation_path(&path, AUDIT_LOG_KEEP + 1).exists(),
+            "archival past .{AUDIT_LOG_KEEP} is the operator's job"
+        );
+        // Newest first: the live file holds the last append, .1 the one before.
+        assert_eq!(read_lines(&path)[0]["n"], json!(6));
+        assert_eq!(read_lines(&generation_path(&path, 1))[0]["n"], json!(5));
+        assert_eq!(read_lines(&generation_path(&path, 5))[0]["n"], json!(1));
+    }
+
+    #[test]
+    fn a_zero_cap_never_rotates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let sink = AuditLog::new(path.clone(), 0);
+        for i in 0..4 {
+            sink.append(&json!({"v": 1, "n": i})).expect("append");
+        }
+        assert_eq!(read_lines(&path).len(), 4, "everything stays in one file");
+        assert!(
+            !generation_path(&path, 1).exists(),
+            "0 means unbounded, not 'rotate every time'"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial(audit_rotation)]
+    async fn concurrent_appends_over_the_cap_rotate_exactly_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let seed = json!({"v": 1, "tool": "seed"});
+        std::fs::write(&path, format!("{seed}\n")).expect("seed over the cap");
+        // The cap sits above one record and below the seed, so the rotated
+        // sink is under the cap again: whichever writer opens the fresh file
+        // must not find a second rotation waiting for it.
+        let cap = std::fs::metadata(&path).expect("metadata").len();
+        let sink = AuditLog::new(path.clone(), cap);
+
+        rearm_rotation_warning();
+        let (a, b) = tokio::join!(
+            sink.append_async(json!({"v": 1, "tool": "a"})),
+            sink.append_async(json!({"v": 1, "tool": "b"}))
+        );
+        a.expect("first append");
+        b.expect("second append");
+
+        let rotated = read_lines(generation_path(&path, 1).as_path());
+        assert_eq!(rotated[0], seed, "the seeded file rotated: {rotated:?}");
+        assert!(
+            !generation_path(&path, 2).exists(),
+            "the flock keeps the two rotations from becoming two shifts"
+        );
+        // The loser of the lock appends past the cap into the file the winner
+        // then renames, so its line lands in `.1` — the documented boundary
+        // case. Both records exist; which file holds which is not pinned.
+        let live = read_lines(&path);
+        let mut tools: Vec<&str> = rotated
+            .iter()
+            .chain(live.iter())
+            .filter_map(|l| l["tool"].as_str())
+            .filter(|t| *t != "seed")
+            .collect();
+        tools.sort_unstable();
+        assert_eq!(tools, vec!["a", "b"], "neither record was lost");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial(audit_rotation)]
+    async fn rotation_never_waits_for_a_lock_another_writer_holds() {
+        // The advisory lock exists for two *processes* sharing one sink path,
+        // which no same-process race can demonstrate: two threads reach the
+        // rename microseconds apart and usually miss each other. So hold the
+        // sink's lock from outside — the one state that is deterministic — and
+        // pin what a contended sink costs the call, which is nothing: the
+        // record still lands, past the cap, without a rotation and without a
+        // wait. A blocking `lock` here parks the blocking pool until the holder
+        // goes away, and dropping the lock altogether rotates under the holder.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        let seed = json!({"v": 1, "tool": "seed"});
+        std::fs::write(&path, format!("{seed}\n")).expect("seed over the cap");
+        let cap = std::fs::metadata(&path).expect("metadata").len();
+
+        let holder = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("second writer opens the same inode");
+        holder.lock().expect("hold the sink lock");
+
+        let sink = AuditLog::new(path.clone(), cap);
+        let append = tokio::spawn(async move { sink.append_async(json!({"v": 1})).await });
+        tokio::time::timeout(std::time::Duration::from_secs(5), append)
+            .await
+            .expect("a contended sink must not park the append")
+            .expect("the appending task did not panic")
+            .expect("the append lands while the lock is held");
+
+        assert!(
+            !generation_path(&path, 1).exists(),
+            "nothing was rotated while another writer held the lock"
+        );
+        assert_eq!(
+            read_lines(&path),
+            vec![seed, json!({"v": 1})],
+            "the record landed past the cap instead of being refused"
+        );
+        holder.unlock().expect("release");
+    }
+
+    /// Put a directory where the shift must rename a generation *to*.
+    ///
+    /// `<path>.5` is the one generation nothing shifts out of the way, so a
+    /// directory there makes the shift's first step (`.4` -> `.5`) fail
+    /// `EISDIR` however often it is retried.
+    fn block_the_shift(path: &Path) {
+        std::fs::write(generation_path(path, 4), "{\"v\":1,\"tool\":\"old\"}\n")
+            .expect("a previous generation to shift");
+        std::fs::create_dir(generation_path(path, 5)).expect("a directory in its way");
+    }
+
+    /// An over-cap sink whose rotation cannot rename anything. Cap 1, so every
+    /// append past the first re-tries the rotation — which is the point: the
+    /// warning must not follow the calls.
+    fn sink_with_a_blocked_shift(dir: &Path) -> (std::path::PathBuf, AuditLog, Value) {
+        let path = dir.join("audit.jsonl");
+        let seed = json!({"v": 1, "tool": "seed"});
+        std::fs::write(&path, format!("{seed}\n")).expect("seed over the cap");
+        block_the_shift(&path);
+        (path.clone(), AuditLog::new(path, 1), seed)
+    }
+
+    #[test]
+    #[serial(audit_rotation)]
+    fn a_rotation_that_cannot_rename_still_appends_past_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (path, sink, seed) = sink_with_a_blocked_shift(dir.path());
+
+        rearm_rotation_warning();
+        let (landed, logs) =
+            capture_logs_blocking(|| sink.append(&json!({"v": 1, "tool": "kept"})));
+        landed.expect("a rotation it cannot perform is not a failed append");
+
+        assert_eq!(
+            read_lines(&path),
+            vec![seed, json!({"v": 1, "tool": "kept"})],
+            "the record is the point; the cap is housekeeping"
+        );
+        assert_eq!(
+            read_lines(generation_path(&path, 4).as_path()),
+            vec![json!({"v": 1, "tool": "old"})],
+            "the generation that could not move is untouched"
+        );
+        assert!(
+            generation_path(&path, 5).is_dir(),
+            "and nothing was written over the directory in its way"
+        );
+        assert!(
+            !generation_path(&path, 1).exists(),
+            "the shift stopped at the first failure instead of half-rotating"
+        );
+        let line = warn_line(&logs, "audit log: rotation failed");
+        let (message, reason) = line
+            .rsplit_once(" reason=")
+            .unwrap_or_else(|| panic!("warn line shape: {line:?}"));
+        assert_eq!(
+            message,
+            "audit log: rotation failed; appending past the cap"
+        );
+        assert!(!reason.is_empty(), "the reason is reported: {line:?}");
+        assert!(
+            !line.contains(&*path.to_string_lossy()),
+            "closed text: the reason, never the path — it also rides the OTLP \
+             diagnostics queue: {line:?}"
+        );
+    }
+
+    #[test]
+    #[serial(audit_rotation)]
+    fn a_rotation_outage_warns_once_and_re_arms_on_recovery() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (path, sink, _seed) = sink_with_a_blocked_shift(dir.path());
+
+        rearm_rotation_warning();
+        let (_, logs) = capture_logs_blocking(|| {
+            sink.append(&json!({"v": 1, "tool": "a"})).expect("first");
+            sink.append(&json!({"v": 1, "tool": "b"})).expect("second");
+        });
+        // Every append past the cap re-tries the rotation, so without the latch
+        // this is one warning per mutating call for the life of the server.
+        warn_line(&logs, "audit log: rotation failed");
+
+        // Clear the obstruction: the next append rotates, and a rotation that
+        // completes re-arms the report so a later outage is not swallowed.
+        std::fs::remove_dir(generation_path(&path, 5)).expect("clear the way");
+        sink.append(&json!({"v": 1, "tool": "c"}))
+            .expect("rotation succeeds now");
+        assert!(
+            generation_path(&path, 1).exists(),
+            "the rotation really happened"
+        );
+
+        std::fs::remove_file(generation_path(&path, 5)).expect("the shifted generation");
+        block_the_shift(&path);
+        let (_, again) =
+            capture_logs_blocking(|| sink.append(&json!({"v": 1, "tool": "d"})).expect("fourth"));
+        warn_line(&again, "audit log: rotation failed");
     }
 
     #[test]
@@ -817,7 +1256,7 @@ mod tests {
     async fn async_wrappers_write_and_read_back() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("audit.jsonl");
-        let sink = AuditLog::new(path.clone());
+        let sink = AuditLog::new(path.clone(), 0);
         sink.check_writable_async().await.expect("writable");
         sink.append_async(json!({"v": 1, "tool": "whoami"}))
             .await
@@ -830,7 +1269,7 @@ mod tests {
     #[tokio::test]
     async fn async_wrappers_surface_sink_errors() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let sink = AuditLog::new(dir.path().to_path_buf());
+        let sink = AuditLog::new(dir.path().to_path_buf(), 0);
         assert!(
             sink.check_writable_async().await.is_err(),
             "pre-flight must fail on a directory"

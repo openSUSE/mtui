@@ -34,6 +34,10 @@ pub mod server;
 pub mod session;
 #[cfg(feature = "mcp")]
 pub mod slim;
+/// One `tracing` capture shared by the crate's unit tests: `set_global_default`
+/// succeeds once, so a second copy in a test module would capture nothing.
+#[cfg(all(test, feature = "mcp"))]
+pub(crate) mod test_log;
 #[cfg(feature = "mcp")]
 pub mod testreport_tools;
 #[cfg(feature = "mcp")]

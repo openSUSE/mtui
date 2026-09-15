@@ -695,7 +695,11 @@ impl McpSession {
         let tools_deny = config.mcp_tools_deny.clone();
         let max_active_jobs = config.mcp_max_active_jobs;
         let max_completed_jobs = config.mcp_max_completed_jobs;
-        let audit = config.mcp_audit_log.clone().map(AuditLog::new);
+        let audit_max_bytes = config.mcp_audit_log_max_bytes;
+        let audit = config
+            .mcp_audit_log
+            .clone()
+            .map(|path| AuditLog::new(path, audit_max_bytes));
         let (session, output) = capture::session(config);
         Arc::new(Self {
             id: NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed),
