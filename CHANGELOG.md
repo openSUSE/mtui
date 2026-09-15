@@ -43,9 +43,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   / `..._LOGS_ENDPOINT`, `..._HEADERS` / `..._LOGS_HEADERS`,
   `..._PROTOCOL` / `..._LOGS_PROTOCOL` as `http/protobuf` only, `OTEL_SERVICE_NAME`
   defaulting to `mtui`); unset-or-empty disables. OTLP-only (endpoint set,
-  `audit_log` unset) still builds the JSONL line in memory. A startup probe gates
-  serving via the existing refuse path; failed batches report an `audit_gap` on
-  recovery and a full queue refuses instead of dropping. No new TOML keys (#411).
+  `audit_log` unset) still builds the JSONL line in memory. Export never gates a
+  tool call: a startup probe latches collector health, but an unhealthy or full
+  exporter only warns and accounts the record's sequence number, which the
+  exporter reports as an `audit_gap` once the collector returns — the call itself
+  still runs and still answers. No new TOML keys (#411).
 
 ### Changed
 

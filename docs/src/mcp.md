@@ -549,14 +549,18 @@ Each record carries closed `mtui.*` attributes (`tool`, `outcome`, `event`,
 kwarg keys) and the W3C trace ids when the client supplied a strict lowercase
 55-byte `traceparent` via `_meta` (also echoed as the record's `trace` field;
 `session.id` stays server-minted). A startup probe posts one real diagnostics
-record (~5x500 ms) before serving and its health latch feeds the same refuse
-path; failed batches merge into a pending `audit_gap` sent on recovery. Batching:
-2048/stream cap, 512/batch, 500 ms interval, 10 s request timeout, 5 s shutdown
-flush, redirects off, `[mtui] ssl_verify` TLS posture. A full queue refuses
-foreground calls — never drops — while terminal records and tracing diagnostics
-(a separate best-effort queue, drop + counter; exporter/HTTP-stack targets
-excluded) only warn. The endpoint value never appears in logs, records, or
-errors.
+record (~5x500 ms) before serving and latches export health; failed batches
+merge into a pending `audit_gap` sent on recovery. Batching: 2048/stream cap,
+512/batch, 500 ms interval, 10 s request timeout, 5 s shutdown flush, redirects
+off, `[mtui] ssl_verify` TLS posture.
+
+**Export never gates a tool call.** The health latch decides whether a record is
+enqueued, nothing more: an unhealthy or full exporter logs a warning, merges the
+record's `seq` into the `audit_gap` it will report on recovery, and the call
+still runs and still answers. The file sink stays the durable truth, so
+OTLP-only mode never refuses anything. Tracing diagnostics ride a separate
+best-effort queue (drop + counter; exporter/HTTP-stack targets excluded). The
+endpoint value never appears in logs, records, or errors.
 
 ## Cancelling a foreground call
 

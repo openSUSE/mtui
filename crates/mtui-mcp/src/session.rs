@@ -884,8 +884,7 @@ impl McpSession {
     /// Best-effort terminal-state audit record for a background job. No-op
     /// without a sink; a failed write only warns — the dispatch already
     /// answered, so there is nothing left to refuse. OTLP enqueue is equally
-    /// best-effort here (foreground calls refuse on a full queue; a terminal
-    /// has nothing left to refuse with).
+    /// best-effort, as it is everywhere: export never refuses a call.
     async fn audit_terminal(
         &self,
         tool: &str,
