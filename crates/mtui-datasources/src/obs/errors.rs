@@ -9,6 +9,7 @@
 use thiserror::Error;
 
 use crate::error::HttpError;
+use crate::sshsig::SshSigError;
 
 /// The OBS backend error family.
 ///
@@ -74,6 +75,16 @@ pub enum ObsError {
     /// client-build failure (e.g. an unreadable CA bundle).
     #[error(transparent)]
     Http(#[from] HttpError),
+}
+
+impl From<SshSigError> for ObsError {
+    /// Folds an [`SshSigError`] into [`ObsError::Config`], preserving its
+    /// `Display` text verbatim — the native OBS backend's fail-closed
+    /// messages ("no key matching fingerprint", "passphrase-protected", the
+    /// agent's own error text) come from here unchanged.
+    fn from(e: SshSigError) -> Self {
+        Self::Config(e.to_string())
+    }
 }
 
 /// Render the `": {summary}"` suffix for [`ObsError::Api`], empty when the

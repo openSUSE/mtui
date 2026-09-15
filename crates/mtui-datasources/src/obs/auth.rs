@@ -15,14 +15,18 @@
 //! only usable via the agent; every unresolvable case fails closed with a typed
 //! [`ObsError::Config`].
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use ssh_key::public::KeyData;
-use ssh_key::{HashAlg, PrivateKey, PublicKey, Signature};
+use ssh_key::{HashAlg, PublicKey, Signature};
 
 use crate::obs::client::ObsAuth;
 use crate::obs::errors::ObsError;
 use crate::obs::sshsig;
+use crate::sshsig::Signer;
+
+/// The [`Signer`] context label for the native OBS backend's fail-closed
+/// hints ("… {context} never prompts for a passphrase").
+const CONTEXT: &str = "the native OBS backend";
 
 /// The current wall-clock Unix timestamp, seamed for deterministic tests.
 ///
@@ -110,42 +114,15 @@ impl AgentKeys for RusshAgent {
     }
 }
 
-/// Read the public-key blob from `<path>.pub`, or `None` if absent/malformed.
-///
-/// Identifies a passphrase-protected private key's counterpart among the
-/// agent's loaded keys by public-key data. Any read/parse failure yields `None`
-/// rather than an error.
-fn pubkey_data(path: &Path) -> Option<KeyData> {
-    let pub_path = format!("{}.pub", path.display());
-    let text = std::fs::read_to_string(pub_path).ok()?;
-    PublicKey::from_openssh(text.trim())
-        .ok()
-        .map(|k| k.key_data().clone())
-}
-
-/// The RSA signature-algorithm selector for the agent path.
-///
-/// Only RSA needs an explicit `rsa-sha2-512`; Ed25519/ECDSA have one algorithm.
-/// The file-key path gets this from `ssh-key`'s RSA signer, which defaults to
-/// SHA-512.
-fn agent_hash_alg(key: &KeyData) -> Option<HashAlg> {
-    if key.is_rsa() {
-        Some(HashAlg::Sha512)
-    } else {
-        None
-    }
-}
-
 /// A `requests`-style auth handler for OBS SSH-signature authentication.
 ///
 /// Exactly one of `sshkey_path` (a private-key file) or `sshkey_fingerprint`
 /// (an ssh-agent key's `SHA256:…` fingerprint) identifies the signing key —
-/// exactly the pair produced by [`crate::obs::oscrc`].
+/// exactly the pair produced by [`crate::obs::oscrc`]. Key resolution itself is
+/// [`Signer`], shared with teregen auth.
 pub struct ObsSignatureAuth<A: AgentKeys = RusshAgent> {
     user: String,
-    sshkey_path: Option<PathBuf>,
-    sshkey_fingerprint: Option<String>,
-    agent: tokio::sync::Mutex<A>,
+    signer: Signer<A>,
 }
 
 impl ObsSignatureAuth<RusshAgent> {
@@ -171,9 +148,7 @@ impl<A: AgentKeys> ObsSignatureAuth<A> {
     ) -> Self {
         Self {
             user,
-            sshkey_path,
-            sshkey_fingerprint,
-            agent: tokio::sync::Mutex::new(agent),
+            signer: Signer::with_agent(sshkey_path, sshkey_fingerprint, CONTEXT, agent),
         }
     }
 
@@ -196,110 +171,9 @@ impl<A: AgentKeys> ObsSignatureAuth<A> {
 
     /// Resolve the configured locator to a key and produce the base64 SSHSIG.
     async fn sign(&self, realm: &str, created: i64) -> Result<String, ObsError> {
-        if let Some(fingerprint) = &self.sshkey_fingerprint {
-            return self
-                .sign_with_agent_fingerprint(fingerprint, realm, created)
-                .await;
-        }
-        let Some(path) = &self.sshkey_path else {
-            return Err(ObsError::Config(
-                "no ssh key configured for OBS signature auth".to_owned(),
-            ));
-        };
-        self.sign_with_file(path, realm, created).await
-    }
-
-    /// Sign with a private-key file, falling back to the ssh-agent when the file
-    /// is encrypted or absent.
-    async fn sign_with_file(
-        &self,
-        path: &Path,
-        realm: &str,
-        created: i64,
-    ) -> Result<String, ObsError> {
-        match PrivateKey::read_openssh_file(path) {
-            Ok(key) if !key.is_encrypted() => sshsig::sign_created(&key, realm, created),
-            // Encrypted key: never prompt — use the agent counterpart.
-            Ok(_) => self.sign_with_agent_for_file(path, realm, created).await,
-            Err(ssh_key::Error::Io(std::io::ErrorKind::NotFound)) => {
-                // Missing file may still be an agent key identified by its .pub.
-                self.sign_with_agent_for_file(path, realm, created).await
-            }
-            Err(e) => Err(ObsError::Config(format!(
-                "ssh key {} is not a usable private key ({e})",
-                path.display()
-            ))),
-        }
-    }
-
-    /// Select an ssh-agent key by `SHA256:…` fingerprint and sign. The
-    /// `SHA256:` prefix is optional.
-    async fn sign_with_agent_fingerprint(
-        &self,
-        fingerprint: &str,
-        realm: &str,
-        created: i64,
-    ) -> Result<String, ObsError> {
-        let want = fingerprint.trim();
-        let mut agent = self.agent.lock().await;
-        let ids = agent.identities().await?;
-        for key in &ids {
-            let fp = key.fingerprint(HashAlg::Sha256).to_string();
-            let bare = fp.split_once(':').map_or(fp.as_str(), |(_, b)| b);
-            if fp == want || bare == want {
-                return self.agent_sign(&mut *agent, key, realm, created).await;
-            }
-        }
-        Err(ObsError::Config(format!(
-            "ssh-agent has no key matching fingerprint {want:?}; load it with \
-             'ssh-add' (the native OBS backend never prompts for a passphrase)"
-        )))
-    }
-
-    /// Find the ssh-agent key that is `path`'s decrypted counterpart, matched by
-    /// public-key data from `<path>.pub`.
-    async fn sign_with_agent_for_file(
-        &self,
-        path: &Path,
-        realm: &str,
-        created: i64,
-    ) -> Result<String, ObsError> {
-        let blob = pubkey_data(path);
-        if let Some(blob) = &blob {
-            let mut agent = self.agent.lock().await;
-            let ids = agent.identities().await?;
-            for key in &ids {
-                if key.key_data() == blob {
-                    return self.agent_sign(&mut *agent, key, realm, created).await;
-                }
-            }
-        }
-        let hint = if blob.is_some() {
-            String::new()
-        } else {
-            format!(" (no {}.pub found to identify it)", path.display())
-        };
-        Err(ObsError::Config(format!(
-            "ssh key {} is passphrase-protected and no matching key is loaded in \
-             the ssh-agent{hint}; run 'ssh-add {}' first — the native OBS backend \
-             never prompts for a passphrase",
-            path.display(),
-            path.display()
-        )))
-    }
-
-    /// Sign the SSHSIG-enveloped bytes via the agent and pack the outer blob.
-    async fn agent_sign(
-        &self,
-        agent: &mut A,
-        key: &PublicKey,
-        realm: &str,
-        created: i64,
-    ) -> Result<String, ObsError> {
-        let data = sshsig::agent_signed_data(realm, created)?;
-        let hash_alg = agent_hash_alg(key.key_data());
-        let signature = agent.sign(key, hash_alg, &data).await?;
-        sshsig::pack_agent_signature(key.key_data(), realm, signature)
+        let msg = sshsig::created_message(created);
+        let sig = self.signer.sign(realm, &msg).await?;
+        Ok(crate::sshsig::encode_bare(&sig)?)
     }
 }
 
@@ -367,11 +241,6 @@ fn parse_auth_params(rest: &str) -> std::collections::BTreeMap<String, String> {
 mod tests {
     use super::*;
 
-    /// A fixed OpenSSH Ed25519 public key (from the deterministic test seed),
-    /// used to exercise the algorithm selector without an RNG.
-    const ED25519_PUB: &str =
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4 test";
-
     #[test]
     fn challenge_params_parses_dual_scheme() {
         let mut headers = reqwest::header::HeaderMap::new();
@@ -411,28 +280,5 @@ mod tests {
         assert!(schemes["negotiate"].is_empty());
         assert!(schemes["signature"].is_empty());
         assert_eq!(schemes.len(), 2);
-    }
-
-    #[test]
-    fn agent_hash_alg_none_for_ed25519() {
-        let ed = PublicKey::from_openssh(ED25519_PUB)
-            .unwrap()
-            .key_data()
-            .clone();
-        assert!(!ed.is_rsa());
-        assert_eq!(agent_hash_alg(&ed), None);
-    }
-
-    #[test]
-    fn pubkey_data_none_for_absent_and_malformed() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("k");
-        assert!(pubkey_data(&base).is_none());
-        std::fs::write(dir.path().join("k.pub"), "only-one-field\n").unwrap();
-        assert!(pubkey_data(&base).is_none());
-        std::fs::write(dir.path().join("k.pub"), "ssh-rsa @@@not-base64@@@ me\n").unwrap();
-        assert!(pubkey_data(&base).is_none());
-        std::fs::write(dir.path().join("k.pub"), format!("{ED25519_PUB}\n")).unwrap();
-        assert!(pubkey_data(&base).is_some());
     }
 }
