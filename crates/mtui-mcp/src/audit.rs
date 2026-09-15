@@ -28,6 +28,15 @@
 //!   as it lands (OTLP). The sink is opened `O_NOFOLLOW`, which covers the
 //!   path's final component only, so the sink's *directory* must be writable
 //!   by the serving user alone.
+//! * Free-text arguments are **masked**, not trusted: [`mask_secrets`] strips
+//!   URL userinfo and replaces the value of a secret-named flag or key
+//!   wherever it appears — `run`/`comment` argv included, at any nesting, and
+//!   through the quoting a shell line or a JSON payload wraps it in. It keys
+//!   on the name beside the value, so what it cannot catch is worth stating: a
+//!   bare secret with no key next to it; a single-letter flag, whose meaning is
+//!   per-program (`sshpass -p secret`, `curl -u user:pass`, `psql -U user`); a
+//!   value attached to one (`-pSECRET`, `-U user%pass`); and anything passed by
+//!   environment variable, stdin, or a file the tool reads.
 //! * Secrets are **unrepresentable**, not filtered: [`sanitize_args`] never
 //!   records a `config_set` value at all, so a future secret attribute cannot
 //!   leak by forgetting to extend the classifier. File-body payloads (`put`
@@ -63,6 +72,7 @@
 //!   minted first, nor a parked `wait_seconds` reply — so `job_id` is the
 //!   join, never `seq`.
 
+use std::borrow::Cow;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -472,6 +482,146 @@ pub(crate) fn refuse_error(source: &io::Error) -> McpError {
     )
 }
 
+/// Key names whose value is a credential, matched on the key's last
+/// `_`/`-`/`.` segment (lowercased, leading dashes dropped).
+///
+/// Closed list rather than a regex: every entry is a word that *only* names a
+/// credential, so `token_bucket`, `max_tokens` and `compass` stay legible.
+/// `api` + `key` is handled separately, for `api_key` / `x-api-key`.
+const SECRET_KEYS: &[&str] = &[
+    "password",
+    "passwd",
+    "pass",
+    "pwd",
+    "token",
+    "secret",
+    "apikey",
+    "authorization",
+    "credential",
+    "credentials",
+    "bearer",
+];
+
+/// Quoting a shell line or a JSON payload wraps a key in, stripped before the
+/// key is looked up so `-H "Authorization: …"` and `'{"password":"…"}'` are
+/// still recognised. A credential name never contains any of them.
+const KEY_WRAPPERS: [char; 5] = ['\'', '"', '{', '[', '('];
+
+/// Whether `key` names a credential.
+///
+/// `auth` is deliberately absent: it is an ordinary word in prose, and
+/// `authorization`, `auth_token` and `x-auth-token` still match through the
+/// last-segment rule.
+fn is_secret_key(key: &str) -> bool {
+    let key = key.trim_matches(KEY_WRAPPERS).trim_start_matches('-');
+    if key.is_empty() {
+        return false;
+    }
+    let lower = key.to_ascii_lowercase();
+    let mut segments = lower.rsplit(['_', '-', '.']);
+    let Some(last) = segments.next() else {
+        return false;
+    };
+    SECRET_KEYS.contains(&last) || (last == "key" && segments.next() == Some("api"))
+}
+
+/// HTTP authentication scheme words, kept verbatim in front of the credential
+/// they introduce.
+///
+/// They never arm by themselves — only an already-armed scan carries past one.
+/// `Basic`, `Bearer` and `token` are all ordinary English words, and
+/// `["Basic", "functionality", "verified"]` is a sentence, not a header.
+const ARMED_SCHEMES: &[&str] = &["bearer", "basic", "token"];
+
+fn is_armed_scheme(token: &str) -> bool {
+    ARMED_SCHEMES
+        .iter()
+        .any(|scheme| token.eq_ignore_ascii_case(scheme))
+}
+
+/// Whether `token` puts its credential in the *next* token.
+///
+/// A dashed flag (`--password`, `--auth-token`), a key with its separator but
+/// no value (`password:`, `"Authorization:`), or a key whose value is the
+/// scheme word naming what follows (`Authorization:Bearer`). A bare word never
+/// arms: `grep token file` is a search, not a credential.
+///
+/// Single-letter flags are deliberately absent. Their meaning is per-program —
+/// `-p` is a password to `mysql` only when attached (`-pSECRET`), a port to
+/// `ssh` and `docker`, and `--parents` to `mkdir` — so arming on one redacts
+/// far more ordinary argv than it protects.
+fn arms_next(token: &str) -> bool {
+    if let Some(dashed) = token.strip_prefix('-') {
+        return is_secret_key(dashed);
+    }
+    let Some((key, value)) = token.split_once([':', '=']) else {
+        return false;
+    };
+    is_secret_key(key) && (value.is_empty() || is_armed_scheme(value))
+}
+
+/// Mask one whitespace-delimited token in place.
+fn mask_token(token: &str) -> Cow<'_, str> {
+    if token.contains("://") {
+        let stripped = mtui_datasources::sanitize_url(token);
+        return if stripped == token {
+            Cow::Borrowed(token)
+        } else {
+            Cow::Owned(stripped)
+        };
+    }
+    if let Some((key, value)) = token.split_once(['=', ':'])
+        && !value.is_empty()
+        // `Authorization:Bearer` names the credential in the *next* token; the
+        // scheme word itself is not one.
+        && !is_armed_scheme(value)
+        && is_secret_key(key)
+    {
+        let separator = &token[key.len()..=key.len()];
+        return Cow::Owned(format!("{key}{separator}{REDACTED}"));
+    }
+    Cow::Borrowed(token)
+}
+
+/// Replace credentials in a free-text string, preserving its whitespace.
+///
+/// Runs **before** the [`cap_str`] truncation so a secret can never be half
+/// recorded by falling across the cap. Returns the input untouched when
+/// nothing matched, which is the common case.
+pub(crate) fn mask_secrets(raw: &str) -> Cow<'_, str> {
+    let mut out = String::new();
+    let mut changed = false;
+    let mut armed = false;
+    for piece in raw.split_inclusive(char::is_whitespace) {
+        let token = piece.trim_end();
+        let spacing = &piece[token.len()..];
+        if token.is_empty() {
+            out.push_str(piece);
+            continue;
+        }
+        if armed && is_armed_scheme(token) {
+            // The scheme word names the credential that follows, so it is kept
+            // and the arming carries past it.
+            out.push_str(token);
+        } else if armed {
+            armed = false;
+            changed = true;
+            out.push_str(REDACTED);
+        } else {
+            let masked = mask_token(token);
+            changed |= masked != token;
+            armed = arms_next(token);
+            out.push_str(&masked);
+        }
+        out.push_str(spacing);
+    }
+    if changed {
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(raw)
+    }
+}
+
 /// Recursively bound an argument value for the record: strings cap at
 /// [`MAX_AUDIT_STRING_LEN`] chars, arrays/objects beyond their thresholds
 /// reduce to `{"_len": n}`, and object keys longer than the string cap are
@@ -479,12 +629,36 @@ pub(crate) fn refuse_error(source: &io::Error) -> McpError {
 /// size). Small values pass through unchanged.
 pub(crate) fn sanitize_value(value: Value) -> Value {
     match value {
-        Value::String(s) => Value::String(cap_str(&s)),
+        Value::String(s) => Value::String(cap_str(&mask_secrets(&s))),
         Value::Array(items) => {
             if items.len() > MAX_AUDIT_ARRAY_LEN {
                 return serde_json::json!({"_len": items.len()});
             }
-            Value::Array(items.into_iter().map(sanitize_value).collect())
+            // argv splits a flag from its value across two elements, so the
+            // arming carries between them. A non-string breaks the pairing and
+            // disarms, or `["--token", 5, "path"]` would redact the path.
+            let mut armed = false;
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    Value::String(s) if armed && is_armed_scheme(&s) => {
+                        out.push(Value::String(s));
+                    }
+                    Value::String(_) if armed => {
+                        armed = false;
+                        out.push(Value::String(REDACTED.to_owned()));
+                    }
+                    Value::String(s) => {
+                        armed = arms_next(&s);
+                        out.push(Value::String(cap_str(&mask_secrets(&s))));
+                    }
+                    other => {
+                        armed = false;
+                        out.push(sanitize_value(other));
+                    }
+                }
+            }
+            Value::Array(out)
         }
         Value::Object(map) => {
             let total = map.len();
@@ -496,6 +670,10 @@ pub(crate) fn sanitize_value(value: Value) -> Value {
             for (key, val) in map {
                 if key.chars().count() > MAX_AUDIT_STRING_LEN {
                     overlong.push(Value::String(cap_str(&key)));
+                } else if is_secret_key(&key) {
+                    // The key already says what the value is; no shape of it
+                    // is worth recording.
+                    out.insert(key, Value::String(REDACTED.to_owned()));
                 } else {
                     out.insert(key, sanitize_value(val));
                 }
@@ -1143,10 +1321,127 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_other_tools_pass_arguments_through() {
+    fn mask_secrets_table() {
+        for (raw, expected) in [
+            // Flagged values, in every shape a command line puts them in.
+            ("--password secret", "--password <redacted>"),
+            ("DB_PASSWORD=hunter2", "DB_PASSWORD=<redacted>"),
+            ("--auth-token=abc", "--auth-token=<redacted>"),
+            ("GITEA_TOKEN=ghp_example", "GITEA_TOKEN=<redacted>"),
+            ("apiKey=abc", "apiKey=<redacted>"),
+            ("x-api-key: abc123", "x-api-key: <redacted>"),
+            // `auth` is not a key on its own, but every compound of it is.
+            ("x-auth-token: abc", "x-auth-token: <redacted>"),
+            ("auth_token=abc", "auth_token=<redacted>"),
+            ("Authorization=abc", "Authorization=<redacted>"),
+            // A scheme word after a credential key keeps its place; the
+            // credential after *it* is what goes.
+            (
+                "Authorization: Bearer abc.def",
+                "Authorization: Bearer <redacted>",
+            ),
+            (
+                "Authorization: token ghp_example",
+                "Authorization: token <redacted>",
+            ),
+            (
+                "Authorization:Bearer abc",
+                "Authorization:Bearer <redacted>",
+            ),
+            // Through the quoting a shell line or a JSON payload wraps it in.
+            (
+                "-H \"Authorization: token ghp_example\"",
+                "-H \"Authorization: token <redacted>",
+            ),
+            ("'password=hunter2&user=bob'", "'password=<redacted>"),
+            ("'{\"password\":\"hunter2\"}'", "'{\"password\":<redacted>"),
+            // Userinfo in a URL goes through the shared stripper.
+            (
+                "https://alice:pw@example.test/x",
+                "https://***@example.test/x",
+            ),
+            // Negatives. A single-letter flag means something different in
+            // every program, so none of them arms.
+            ("ssh -p 22 host", "ssh -p 22 host"),
+            ("mkdir -p /var/tmp/x", "mkdir -p /var/tmp/x"),
+            ("docker run -p 8080:80", "docker run -p 8080:80"),
+            // A bare scheme word is an ordinary English word.
+            ("Basic dXNlcjpwdw==", "Basic dXNlcjpwdw=="),
+            (
+                "Basic functionality verified",
+                "Basic functionality verified",
+            ),
+            ("auth: works after the fix", "auth: works after the fix"),
+            // A key that merely contains a secret word, and a bare word that is
+            // a search term rather than a credential.
+            ("token_bucket=50", "token_bucket=50"),
+            ("max_tokens=100", "max_tokens=100"),
+            ("compass", "compass"),
+            ("--verbose", "--verbose"),
+            ("grep token file", "grep token file"),
+            ("secret", "secret"),
+            ("https://example.test/x", "https://example.test/x"),
+        ] {
+            assert_eq!(
+                sanitize_value(json!(raw)),
+                json!(expected),
+                "masking {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_run_argv_masks_flagged_secrets() {
+        // argv splits the flag from its value across two elements, so the
+        // flag has to arm the element after it.
+        let kwargs: Map<String, Value> = serde_json::from_value(
+            json!({"command": ["mysql", "--password", "s3cret", "-e", "select 1"]}),
+        )
+        .expect("object");
+        assert_eq!(
+            sanitize_args("run", &kwargs),
+            json!({"command": ["mysql", "--password", "<redacted>", "-e", "select 1"]})
+        );
+    }
+
+    #[test]
+    fn sanitize_plain_argv_passes_through_unchanged() {
         let kwargs: Map<String, Value> =
-            serde_json::from_value(json!({"command": ["true"]})).expect("object");
+            serde_json::from_value(json!({"command": ["ls", "-la", "/var/log"]})).expect("object");
         assert_eq!(sanitize_args("run", &kwargs), Value::Object(kwargs.clone()));
+    }
+
+    #[test]
+    fn sanitize_redacts_values_under_secret_named_keys() {
+        assert_eq!(
+            sanitize_value(json!({"token": "abc", "note": "fine"})),
+            json!({"token": "<redacted>", "note": "fine"})
+        );
+    }
+
+    #[test]
+    fn sanitize_argv_keeps_a_scheme_word_and_redacts_what_follows_it() {
+        // argv splits the header across elements, so the scheme word has to
+        // carry the arming across them exactly as it does inside one string.
+        assert_eq!(
+            sanitize_value(json!(["-H", "Authorization:", "token", "ghp_example"])),
+            json!(["-H", "Authorization:", "token", "<redacted>"])
+        );
+        // And a scheme word that no credential key armed stays a word.
+        assert_eq!(
+            sanitize_value(json!(["comment", "Basic", "functionality", "verified"])),
+            json!(["comment", "Basic", "functionality", "verified"])
+        );
+    }
+
+    #[test]
+    fn a_non_string_element_disarms_the_next_value() {
+        // Otherwise `["--token", 5, "path"]` would redact the path: an armed
+        // flag only ever covers the element immediately after it.
+        assert_eq!(
+            sanitize_value(json!(["--token", 5, "still-visible"])),
+            json!(["--token", 5, "still-visible"])
+        );
     }
 
     #[test]

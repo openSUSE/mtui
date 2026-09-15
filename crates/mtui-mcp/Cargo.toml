@@ -58,6 +58,7 @@ mcp = [
     "dep:base64ct",
     "dep:reqwest",
     "dep:sha2",
+    "dep:mtui-datasources",
 ]
 
 [dependencies]
@@ -67,6 +68,10 @@ mtui-testreport = { workspace = true, optional = true }
 # The post-abort unlock fan-out in `session.rs` classifies `LockOutcome`; the
 # crate is already in the tree via `mtui-core`, so this adds no build cost.
 mtui-hosts = { workspace = true, optional = true }
+# `sanitize_url` for the audit record's argument masking, so a credential in a
+# URL is stripped by the same code path the rest of the workspace uses. Already
+# in the tree via `mtui-core`, so this adds no build cost.
+mtui-datasources = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
