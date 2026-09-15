@@ -507,10 +507,13 @@ alone.** A same-user hardlink is allowed on purpose; it crosses no boundary.
 The record is durable and append-only but **not tamper-evident**: there is no
 hash chain and no HMAC, so anyone writing as the owner can rewrite history
 undetected. Tamper evidence means shipping each record off-host as it lands —
-see [OTLP log export](#otlp-log-export). Each record carries the schema version, the
-arrival timestamp, the session id, the tool name, the (redacted, see below)
-arguments, the outcome (`ok` / `error` / `unknown-tool`), the duration, and the
-RRIDs and host names the call resolved to.
+see [OTLP log export](#otlp-log-export). An **outcome** record carries the schema
+version, the arrival timestamp, the sequence number, the session id, the
+transport, the tool name, the (redacted, see below) arguments, the outcome
+(`ok` / `error` / `unknown-tool`), the duration, and the RRIDs and host names
+the call resolved to. An **`intent`** record carries the same header and the
+same arguments, and nothing that only exists afterwards. A **`terminal`**
+record carries no arguments at all.
 
 **`[mcp] audit_log_max_bytes`** (default 256 MiB) bounds the sink: the first
 open that finds the file at or over the cap rotates it to `<path>.1`, shifting
@@ -533,16 +536,46 @@ file is not; and on NFS, Linux emulates `flock` with per-process POSIX locks, so
 two HTTP sessions in one process do not serialise there — at worst a second
 shift, never a refused call.
 
-A backgrounded call writes two records: a `dispatch` record naming the started
-`job_ids`, and a `terminal` record when the job reaches `done` / `failed` /
-`cancelled`, joinable by job id. The terminal record carries no arguments.
+A tool that is **not** advertised `readOnlyHint` writes an `intent` record
+before it runs — schema version, arrival timestamp, sequence number, session,
+transport, `event: "intent"`, tool, (redacted) arguments, and the `trace`
+correlation when the client supplied one. Nothing else, because nothing else
+exists yet. Its outcome record then carries `intent: <seq>`, and its
+`duration_ms` — measured from arrival, like `ts` — includes the intent record's
+own write. Read-only tools skip the intent and write only the outcome record, so
+a poll loop still costs one record per call.
+
+A backgrounded call therefore writes three records: the `intent`, a `dispatch`
+record naming the started `job_ids`, and a `terminal` record when the job reaches
+`done` / `failed` / `cancelled`, joinable by job id. The terminal record carries
+no arguments and no `intent` — it joins its dispatch by `job_id`, which also
+matters because a `terminal` record's `seq` is not ordered against the calls
+around it in either direction: neither against its own `dispatch` record, since
+a job that settles at once can be minted first, nor against a
+`job_result(wait_seconds)` reply that waited for it. Join by `job_id`, never by
+`seq`.
 
 A configured sink is probed once at start-up, before the OTLP probe: if it
 cannot be opened the server refuses to start and names the path on stderr,
-rather than loading quietly and failing on the first tool call. When the sink
-cannot be written *later* the call is **refused** instead of proceeding
-unrecorded. A failed terminal write can only warn — its dispatch already
-answered. `config_set` never records the value for any attribute, so a future
+rather than loading quietly and failing on the first tool call.
+
+Afterwards the sink fails in two different ways, on purpose. If the **intent**
+write fails the call is **refused** and nothing ran — the guarantee the sink
+exists to make. If the **outcome** write fails the work has already happened, so
+the executed result is still returned with
+`[audit: outcome record lost (<reason>)]` appended — as a trailing text block on
+a successful reply, or to the message of an error one. Discarding a result to
+report a logging failure would tell the client a refusal that never happened.
+The notice is always the **last** content block, so `content[0]` stays the
+verbatim payload a `--json` caller parses, and it is not counted in the record's
+`response_bytes`. A failed terminal write can only warn — its dispatch already
+answered.
+
+Reading the log back: an `intent` that no later record points at means "started,
+outcome not recorded" — a crash or a kill, or a lost outcome write whose client
+was told in band (and which the OTLP stream may still hold).
+
+`config_set` never records the value for any attribute, so a future
 secret attribute cannot leak by omission; the record marks whether the attribute
 is a known secret. File-body payloads (`put` `content`/`content_b64`,
 `testreport_write` `content`, `testreport_patch` `replacement`) never land
@@ -550,8 +583,10 @@ verbatim either: each records `{bytes, sha256}` over the original string, so a
 credentials file or SSH key uploaded via `put` stays correlatable without being
 persisted. Always fingerprinted, never inline, regardless of size — the same
 redaction feeds the file body, the OTLP body, and the size accounting, and no
-payload key is ever an indexed OTLP attribute. All file I/O runs off the
-dispatch worker (`spawn_blocking`), so a down/slow disk never stalls a call.
+payload key is ever an indexed OTLP attribute. All file I/O runs on the
+blocking pool (`spawn_blocking`), so a down or slow disk never stalls the
+dispatch worker or the other calls it is serving — the one call that waits is
+the one whose own records are being written.
 
 ### OTLP log export
 
@@ -577,9 +612,9 @@ Sink matrix: file-only (`audit_log` set, no endpoint), OTLP-only (endpoint set,
 both (file first in `seq` order, then OTLP), neither (auditing off, dispatch
 byte-identical).
 
-Each record carries closed `mtui.*` attributes (`tool`, `outcome`, `event`,
-`seq`, `transport`, `session.id`, `response_bytes` when sized, plus allowlisted
-kwarg keys) and the W3C trace ids when the client supplied a strict lowercase
+Each record carries closed `mtui.*` attributes (`tool`, `event`, `seq`,
+`transport`, `session.id`, plus `outcome` when there is one, `response_bytes`
+when sized, and allowlisted kwarg keys) and the W3C trace ids when the client supplied a strict lowercase
 55-byte `traceparent` via `_meta` (also echoed as the record's `trace` field;
 `session.id` stays server-minted). A startup probe posts one real diagnostics
 record (~5x500 ms) before serving and latches export health; failed batches

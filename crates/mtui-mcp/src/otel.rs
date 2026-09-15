@@ -7,9 +7,9 @@
 //! rather than pulling `prost` even as a dev oracle.
 //!
 //! Body is the verbatim JSONL line the file sink writes; attributes are a
-//! closed `mtui.*` vocabulary (`tool`, `outcome`, `event`, `seq`,
-//! `transport`, `session.id`, `response_bytes` when sized) plus the W3C
-//! trace correlation when the client supplied one. Resource carries only
+//! closed `mtui.*` vocabulary (`tool`, `event`, `seq`, `transport`,
+//! `session.id`, plus `outcome` when there is one and `response_bytes` when
+//! sized) plus the W3C trace correlation when the client supplied one. Resource carries only
 //! `service.name` (the multi-deployment join key, default `mtui`).
 //!
 //! Configuration is env-only (container convention; headers must never be CLI
@@ -493,21 +493,25 @@ pub(crate) struct QueuedDiag {
 }
 
 fn audit_record(q: &QueuedAudit) -> Vec<u8> {
-    let mut attrs = vec![
-        str_attr("mtui.tool", &q.tool),
-        str_attr("mtui.outcome", &q.outcome),
-        str_attr("mtui.event", &q.event),
-        str_attr("mtui.transport", &q.transport),
-        int_attr("mtui.seq", q.seq as i64),
-        int_attr("mtui.session.id", q.session_id as i64),
-    ];
+    let mut attrs = vec![str_attr("mtui.tool", &q.tool)];
+    // An `intent` record has no outcome yet; an empty attribute would read as
+    // one rather than as its absence.
+    if !q.outcome.is_empty() {
+        attrs.push(str_attr("mtui.outcome", &q.outcome));
+    }
+    attrs.push(str_attr("mtui.event", &q.event));
+    attrs.push(str_attr("mtui.transport", &q.transport));
+    attrs.push(int_attr("mtui.seq", q.seq as i64));
+    attrs.push(int_attr("mtui.session.id", q.session_id as i64));
     attrs.extend(q.extra_attrs.iter().cloned());
     if let Some(bytes) = q.response_bytes {
         attrs.push(int_attr("mtui.response_bytes", bytes as i64));
     }
-    let (severity_number, severity_text) = match q.outcome.as_str() {
-        "ok" => (9u32, "INFO"),
-        "unknown-tool" => (13u32, "WARN"),
+    // "About to run" is information, not a failure: without the first arm every
+    // intent would export as ERROR and page whoever alerts on severity.
+    let (severity_number, severity_text) = match (q.event.as_str(), q.outcome.as_str()) {
+        ("intent", _) | (_, "ok") => (9u32, "INFO"),
+        (_, "unknown-tool") => (13u32, "WARN"),
         _ => (17u32, "ERROR"),
     };
     LogRecord {
@@ -1526,6 +1530,47 @@ mod tests {
                 payload.windows(attr.len()).any(|w| w == attr.as_bytes()),
                 "attr {attr} present"
             );
+        }
+    }
+
+    #[test]
+    fn intent_records_export_as_info_without_an_outcome_attr() {
+        fn queued(event: &str, outcome: &str) -> QueuedAudit {
+            QueuedAudit {
+                seq: 5,
+                jsonl: r#"{"v":1,"tool":"run"}"#.to_owned(),
+                tool: "run".to_owned(),
+                outcome: outcome.to_owned(),
+                event: event.to_owned(),
+                transport: "stdio".to_owned(),
+                session_id: 1,
+                response_bytes: None,
+                trace: None,
+                time_nanos: 1,
+                extra_attrs: Vec::new(),
+            }
+        }
+        fn holds(haystack: &[u8], needle: &str) -> bool {
+            haystack
+                .windows(needle.len())
+                .any(|w| w == needle.as_bytes())
+        }
+
+        // An intent has no outcome to report, so it must neither carry an
+        // empty `mtui.outcome` nor fall through to the failure severity.
+        let intent = audit_record(&queued("intent", ""));
+        assert!(holds(&intent, "INFO"), "an intent is not a failure");
+        assert!(
+            !holds(&intent, "mtui.outcome"),
+            "nothing has happened yet to judge"
+        );
+        assert!(holds(&intent, "mtui.event"), "the event token still rides");
+
+        // The outcome vocabulary is unchanged.
+        for (outcome, severity) in [("ok", "INFO"), ("unknown-tool", "WARN"), ("error", "ERROR")] {
+            let record = audit_record(&queued("call", outcome));
+            assert!(holds(&record, severity), "{outcome} exports as {severity}");
+            assert!(holds(&record, "mtui.outcome"), "{outcome} is reported");
         }
     }
 

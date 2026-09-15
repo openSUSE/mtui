@@ -21,17 +21,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `wait_seconds` on both.
 
 - New `[mcp] audit_log` key: a file path enabling a durable audit record of
-  `mtui-mcp` tool calls (versioned JSONL, one record per call, created `0600`
-  and fsynced before the response returns). Each record carries the schema
-  version, arrival timestamp, session id, tool name, arguments, outcome
-  (`ok`/`error`/`unknown-tool`), duration, and the RRIDs and host names the
-  call resolved to; a backgrounded call adds a terminal-state record joinable
-  by job id. Unset (the default) disables auditing with byte-identical
-  behaviour. A call the sink cannot record is refused rather than proceeding
-  unrecorded, and a configured sink that cannot be opened now refuses to start
-  the server — naming the path on stderr — instead of loading quietly and
-  failing on the first tool call. The sink is opened `O_NOFOLLOW` and refused unless it is a
-  regular file owned by the serving user, so a planted symlink or FIFO cannot
+  `mtui-mcp` tool calls (versioned JSONL, created `0600` and fsynced before the
+  response returns): one or two records per call — an `intent` before and an
+  outcome after for a tool without `readOnlyHint`, an outcome alone for a
+  read-only one — plus a terminal record per background job. An outcome record
+  carries the schema version, arrival timestamp, sequence number, session id,
+  transport, tool name, arguments, outcome (`ok`/`error`/`unknown-tool`),
+  duration, and the RRIDs and host names the call resolved to; an `intent`
+  record carries the same header and the same arguments; a `terminal` record
+  carries no arguments and joins its dispatch by job id. Unset (the default)
+  disables auditing with byte-identical behaviour. A tool not advertised
+  `readOnlyHint` writes an `intent` record before it runs and is refused if
+  that write fails, so a refusal now means nothing ran; its outcome record
+  carries `intent: <seq>`. A lost *outcome*
+  record is reported in band — the executed result comes back with a trailing
+  `[audit: outcome record lost (<reason>)]` block, or the same text appended to
+  an error message — never by discarding the result. A configured sink that
+  cannot be opened refuses to start the server, naming the path on stderr,
+  instead of loading quietly and failing on the first tool call. The sink is
+  opened `O_NOFOLLOW` and refused unless it is a regular file owned by the
+  serving user, so a planted symlink or FIFO cannot
   divert the append — or the `0600` tightening — onto another file; that covers
   the path's final component only, so the sink's directory must be writable by
   the serving user alone. The record is durable and append-only but not
