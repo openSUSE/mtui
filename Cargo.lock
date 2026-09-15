@@ -2584,6 +2584,7 @@ dependencies = [
  "libc",
  "mtui-config",
  "mtui-core",
+ "mtui-datasources",
  "mtui-hosts",
  "mtui-testreport",
  "mtui-types",
