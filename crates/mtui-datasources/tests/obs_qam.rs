@@ -7,8 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mtui_config::SslVerify;
-use mtui_datasources::http::VerifyPolicy;
+use mtui_datasources::http::{HttpClient, VerifyPolicy};
 use mtui_datasources::obs::client::{NoAuth, ObsClient};
 use mtui_datasources::obs::qam;
 use mtui_types::RequestReviewID;
@@ -36,13 +35,12 @@ fn slfo_rrid() -> RequestReviewID {
 }
 
 fn client_for(server: &MockServer) -> ObsClient {
-    ObsClient::new(
+    ObsClient::with_http(
+        HttpClient::new(VerifyPolicy::Default(true)).unwrap(),
         &server.uri(),
         Duration::from_secs(180),
-        VerifyPolicy::Default(true),
         Arc::new(NoAuth),
     )
-    .unwrap()
 }
 
 fn request_xml(state: &str, reviews: &str) -> String {
@@ -194,7 +192,6 @@ async fn assign_explicit_group() {
     qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -220,16 +217,9 @@ async fn assign_auto_infers_single_group() {
     mount_collection(&api, "<collection/>").await;
     mount_post_request(&api, "56789").await;
 
-    qam::assign(
-        &client_for(&api),
-        &reports.uri(),
-        &SslVerify::Enabled,
-        &rrid(),
-        USER,
-        &[],
-    )
-    .await
-    .unwrap();
+    qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[])
+        .await
+        .unwrap();
 
     let q = query_of(&api, wiremock::http::Method::POST, "/request/56789").await;
     assert_eq!(query_val(&q, "by_group"), Some("qam-sle"));
@@ -248,16 +238,9 @@ async fn assign_auto_infer_ambiguous_refused() {
     )
     .await;
 
-    let err = qam::assign(
-        &client_for(&api),
-        &reports.uri(),
-        &SslVerify::Enabled,
-        &rrid(),
-        USER,
-        &[],
-    )
-    .await
-    .unwrap_err();
+    let err = qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[])
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("auto-infer a single"), "{err}");
 }
 
@@ -269,7 +252,6 @@ async fn assign_refused_when_not_open() {
     let err = qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -291,7 +273,6 @@ async fn assign_accepts_state_new() {
     qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -312,7 +293,6 @@ async fn assign_refused_when_no_testreport() {
     let err = qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -336,7 +316,6 @@ async fn assign_previous_reject_refused() {
     let err = qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -363,7 +342,6 @@ async fn assign_previous_reject_proceeds_when_user_was_prior_reviewer() {
     qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -386,7 +364,6 @@ async fn assign_previous_reject_proceeds_when_none_declined() {
     qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -406,16 +383,9 @@ async fn assign_pins_get_queries() {
     mount_collection(&api, "<collection/>").await;
     mount_post_request(&api, "56789").await;
 
-    qam::assign(
-        &client_for(&api),
-        &reports.uri(),
-        &SslVerify::Enabled,
-        &rrid(),
-        USER,
-        &[],
-    )
-    .await
-    .unwrap();
+    qam::assign(&client_for(&api), &reports.uri(), &rrid(), USER, &[])
+        .await
+        .unwrap();
 
     let get_req = query_of(&api, wiremock::http::Method::GET, "/request/56789").await;
     assert_eq!(query_val(&get_req, "withfullhistory"), Some("1"));
@@ -437,7 +407,6 @@ async fn assign_previous_reject_ignores_non_qam_declined() {
     qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -464,7 +433,6 @@ async fn assert_assign_skips_preconditions(rrid: &RequestReviewID) {
     qam::assign(
         &client_for(&api),
         &reports.uri(),
-        &SslVerify::Enabled,
         rrid,
         USER,
         &["qam-sle".to_owned()],
@@ -562,7 +530,6 @@ async fn approve_user_path_prefixed() {
         &client_for(&api),
         &reports.uri(),
         "https://qam.suse.de/reports",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &[],
@@ -584,7 +551,6 @@ async fn approve_group_refused() {
         &client_for(&api),
         "http://unused",
         "http://unused",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -605,7 +571,6 @@ async fn approve_refused_when_not_assigned() {
         &client_for(&api),
         "http://unused",
         "http://unused",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &[],
@@ -631,7 +596,6 @@ async fn approve_refused_when_not_passed() {
         &client_for(&api),
         &reports.uri(),
         "http://unused",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &[],
@@ -657,7 +621,6 @@ async fn approve_refused_when_summary_has_trailing_qualifier() {
         &client_for(&api),
         &reports.uri(),
         "http://unused",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &[],
@@ -693,7 +656,6 @@ async fn reject_writes_reason_and_declines() {
         &client_for(&api),
         &reports.uri(),
         "http://unused",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &[],
@@ -739,7 +701,6 @@ async fn reject_appends_to_existing_reject_reason() {
         &client_for(&api),
         &reports.uri(),
         "http://unused",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &[],
@@ -765,7 +726,6 @@ async fn reject_refused_when_not_failed() {
         &client_for(&api),
         &reports.uri(),
         "http://unused",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &[],
@@ -788,7 +748,6 @@ async fn reject_refused_without_comment() {
         &client_for(&api),
         &reports.uri(),
         "http://unused",
-        &SslVerify::Enabled,
         &rrid(),
         USER,
         &[],
@@ -815,7 +774,6 @@ async fn reject_pi_skips_attribute_and_summary() {
         &client_for(&api),
         &reports.uri(),
         "http://unused",
-        &SslVerify::Enabled,
         &pi_rrid(),
         USER,
         &[],
@@ -846,7 +804,6 @@ async fn reject_ignores_group() {
         &client_for(&api),
         &reports.uri(),
         "http://unused",
-        &SslVerify::Enabled,
         &pi_rrid(),
         USER,
         &["qam-sle".to_owned()],
@@ -859,4 +816,39 @@ async fn reject_ignores_group() {
     let q = query_of(&api, wiremock::http::Method::POST, "/request/70000").await;
     assert_eq!(query_val(&q, "newstate"), Some("declined"));
     assert_eq!(query_val(&q, "by_user"), Some(USER));
+}
+
+// --------------------------------------------------------------------------- //
+// #594: the precondition GET reuses the injected client's pool               //
+// --------------------------------------------------------------------------- //
+
+#[tokio::test]
+async fn precondition_get_rides_the_injected_clients_pooled_connection() {
+    use super::keepalive_host::{counting_host, warm_pool};
+
+    let api = MockServer::start().await;
+    mount_get_request(&api, request_xml("review", "")).await;
+    mount_collection(&api, "<collection/>").await;
+    mount_post_request(&api, "56789").await;
+    let reports = counting_host("SUMMARY: PASSED\n").await;
+
+    let http = HttpClient::new(VerifyPolicy::Default(true)).unwrap();
+    warm_pool(&http, &reports).await;
+
+    let client = ObsClient::with_http(http, &api.uri(), Duration::from_secs(180), Arc::new(NoAuth));
+    qam::assign(
+        &client,
+        &reports.base,
+        &rrid(),
+        USER,
+        &["qam-sle".to_owned()],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        reports.accepts(),
+        1,
+        "the testreport GET opened its own connection instead of reusing the pool"
+    );
 }

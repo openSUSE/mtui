@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::{Gitea, GiteaError, Osc, TeReGen};
-use mtui_types::UpdateSource;
+use mtui_types::{RequestReviewID, UpdateSource};
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, template_completion};
@@ -69,6 +69,17 @@ pub(crate) fn gitea_client(session: &Session) -> Result<Gitea, CommandError> {
         None,
     )
     .map_err(|e| CommandError::Other(format!("could not build Gitea client: {e}")))
+}
+
+/// The native OBS backend for `rrid` over the session-scoped
+/// [`HttpClient`](mtui_datasources::HttpClient), like [`gitea_client`]: the
+/// concurrent MCP forks share one connection pool instead of each operation
+/// building its own (#594).
+pub(crate) fn osc_client(session: &Session, rrid: &RequestReviewID) -> Result<Osc, CommandError> {
+    let http = session
+        .http_client()
+        .map_err(|e| CommandError::Other(format!("could not build OBS client: {e}")))?;
+    Ok(Osc::new(session.config.clone(), rrid.clone(), http))
 }
 
 /// Builds a TeReGen client for the loaded report, reusing the session-scoped
@@ -222,7 +233,7 @@ impl Command for Assign {
                 .map_err(|e| CommandError::Other(format!("gitea assign failed: {e}")))?;
         } else {
             tracing::info!("Assign request {}", rrid.review_id);
-            let osc = Osc::new(session.config.clone(), rrid.clone());
+            let osc = osc_client(session, &rrid)?;
             osc.assign(&groups(args))
                 .await
                 .map_err(|e| CommandError::Other(format!("osc assign failed: {e}")))?;
@@ -266,7 +277,7 @@ impl Command for Unassign {
                 .map_err(|e| CommandError::Other(format!("gitea unassign failed: {e}")))?;
         } else {
             tracing::info!("Unassign request {}", rrid.review_id);
-            let osc = Osc::new(session.config.clone(), rrid.clone());
+            let osc = osc_client(session, &rrid)?;
             osc.unassign(&groups(args))
                 .await
                 .map_err(|e| CommandError::Other(format!("osc unassign failed: {e}")))?;
@@ -345,7 +356,7 @@ impl Command for Reject {
                 .map_err(|e| CommandError::Other(format!("gitea reject failed: {e}")))?;
         } else {
             tracing::info!("Reject request {}", rrid.review_id);
-            let osc = Osc::new(session.config.clone(), rrid.clone());
+            let osc = osc_client(session, &rrid)?;
             osc.reject(&groups(args), &reason, &message)
                 .await
                 .map_err(|e| CommandError::Other(format!("osc reject failed: {e}")))?;
@@ -411,7 +422,7 @@ impl Command for Comment {
                 .await
                 .map_err(|e| CommandError::Other(format!("gitea comment failed: {e}")))?;
         } else {
-            let osc = Osc::new(session.config.clone(), rrid.clone());
+            let osc = osc_client(session, &rrid)?;
             osc.comment(&comment)
                 .await
                 .map_err(|e| CommandError::Other(format!("osc comment failed: {e}")))?;
@@ -810,5 +821,79 @@ mod tests {
             "got: {out}"
         );
         assert!(!out.contains("not-a-dict"), "got: {out}");
+    }
+
+    /// #594: the OBS backend rides the session-scoped `HttpClient` (one build,
+    /// shared with every `fork_for_call`), not a transport of its own. `comment`
+    /// is the probe because it makes no other HTTP call that would count.
+    #[tokio::test]
+    #[serial_test::serial(osc_config_env)]
+    // `set_var`/`remove_var` are `unsafe` in edition 2024; `#[serial]` makes the
+    // mutation of the process-global `$OSC_CONFIG` exclusive.
+    #[allow(unsafe_code)]
+    async fn osc_dispatch_builds_the_backend_over_the_session_http_client() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/comments/request/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<ok/>"))
+            .mount(&server)
+            .await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let key = dir.path().join("id_unused");
+        std::fs::write(&key, "never read: no 401 is served\n").unwrap();
+        let oscrc = dir.path().join("oscrc");
+        std::fs::write(
+            &oscrc,
+            format!(
+                "[{}]\nuser = qamuser\nsshkey = {}\n",
+                server.uri(),
+                key.display()
+            ),
+        )
+        .unwrap();
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.config.obs_api_url = server.uri();
+        assert_eq!(session.http_builds(), 0, "premise: no client built yet");
+        let args = matches(&Comment, &["-m", "hi"]);
+        // SAFETY: inside the `#[serial(osc_config_env)]` critical section.
+        unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
+        let res = Comment.call(&mut session, &args).await;
+        // SAFETY: still inside that critical section.
+        unsafe { std::env::remove_var("OSC_CONFIG") };
+
+        res.expect("comment posts over the session client");
+        assert_eq!(
+            session.http_builds(),
+            1,
+            "the backend must be built over the session's shared client"
+        );
+        let posts = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.method == wiremock::http::Method::POST)
+            .count();
+        assert_eq!(posts, 1, "exactly one comment POST");
+    }
+
+    /// The session client fails to build before any oscrc is read, so the
+    /// error names the OBS client, as the Gitea sibling names its own.
+    #[tokio::test]
+    async fn osc_dispatch_reports_an_unbuildable_session_client() {
+        use mtui_config::SslVerify;
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.config.ssl_verify = SslVerify::CaBundle("/nonexistent/mtui-594-ca.pem".into());
+        let args = matches(&Comment, &["-m", "hi"]);
+        let err = Comment.call(&mut session, &args).await.unwrap_err();
+        assert!(
+            matches!(&err, CommandError::Other(m) if m.starts_with("could not build OBS client: ")),
+            "got {err:?}"
+        );
     }
 }

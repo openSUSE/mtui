@@ -12,6 +12,8 @@
 mod gitea;
 #[path = "http_client.rs"]
 mod http_client;
+#[path = "keepalive_host.rs"]
+mod keepalive_host;
 #[path = "log_capture.rs"]
 mod log_capture;
 #[path = "obs_auth.rs"]

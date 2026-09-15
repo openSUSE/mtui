@@ -13,14 +13,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mtui_config::Config;
-use mtui_datasources::http::VerifyPolicy;
+use mtui_config::{Config, SslVerify};
+use mtui_datasources::HttpError;
+use mtui_datasources::http::{HttpClient, VerifyPolicy};
 use mtui_datasources::obs::client::{NoAuth, ObsClient};
 use mtui_datasources::obs::errors::ObsError;
 use mtui_datasources::obs::facade::Osc;
 use mtui_types::RequestReviewID;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// The session-scoped transport the production path injects.
+fn http() -> HttpClient {
+    HttpClient::new(VerifyPolicy::Default(true)).expect("client builds")
+}
 
 fn rrid() -> RequestReviewID {
     RequestReviewID::parse("SUSE:Maintenance:1:56789").unwrap()
@@ -39,12 +45,12 @@ type Factory = Arc<dyn Fn(&Config) -> Result<(ObsClient, String), ObsError> + Se
 /// A factory that hands the facade an unauthenticated ObsClient pointed at `uri`.
 fn factory_for(uri: String) -> Factory {
     Arc::new(move |_cfg: &Config| {
-        let client = ObsClient::new(
+        let client = ObsClient::with_http(
+            HttpClient::new(VerifyPolicy::Default(true))?,
             &uri,
             Duration::from_secs(180),
-            VerifyPolicy::Default(true),
             Arc::new(NoAuth),
-        )?;
+        );
         Ok((client, "qamuser".to_owned()))
     })
 }
@@ -70,12 +76,12 @@ async fn comment_happy_path_posts_via_injected_client() {
         Config::default(),
         rrid(),
         Arc::new(move |_cfg: &Config| {
-            let client = ObsClient::new(
+            let client = ObsClient::with_http(
+                HttpClient::new(VerifyPolicy::Default(true))?,
                 &uri,
                 Duration::from_secs(180),
-                VerifyPolicy::Default(true),
                 Arc::new(NoAuth),
-            )?;
+            );
             Ok((client, "qamuser".to_owned()))
         }),
     );
@@ -94,12 +100,12 @@ async fn empty_comment_is_refused_not_panicked() {
         Config::default(),
         rrid(),
         Arc::new(|_cfg: &Config| {
-            let client = ObsClient::new(
+            let client = ObsClient::with_http(
+                HttpClient::new(VerifyPolicy::Default(true))?,
                 "https://api.invalid",
                 Duration::from_secs(180),
-                VerifyPolicy::Default(true),
                 Arc::new(NoAuth),
-            )?;
+            );
             Ok((client, "qamuser".to_owned()))
         }),
     );
@@ -226,7 +232,7 @@ async fn non_pem_key_yields_logged_failure_not_panic() {
     unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
 
     // unassign hits GET request/{id} first, triggering the 401 -> sign -> fail.
-    let osc = Osc::new(config, rrid());
+    let osc = Osc::new(config, rrid(), http());
     let err = osc.unassign(&[]).await.unwrap_err();
     // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
     unsafe { std::env::remove_var("OSC_CONFIG") };
@@ -247,7 +253,7 @@ async fn expanduser_oscrc_yields_logged_failure_not_panic() {
     let config = Config::default();
     // SAFETY: serialised via `#[serial(osc_config_env)]`.
     unsafe { std::env::set_var("OSC_CONFIG", "~/.oscrc-mtui-rs-facade-test-does-not-exist") };
-    let osc = Osc::new(config, rrid());
+    let osc = Osc::new(config, rrid(), http());
     let err = osc.comment("hi").await.unwrap_err();
     // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
     unsafe { std::env::remove_var("OSC_CONFIG") };
@@ -265,5 +271,168 @@ fn lone_surrogate_body_is_rejected_at_the_json_boundary() {
     assert!(
         decoded.is_err(),
         "serde_json must reject a lone surrogate before it reaches the facade"
+    );
+}
+
+// --------------------------------------------------------------------------- //
+// #594: the operation rides the injected transport, never one of its own      //
+// --------------------------------------------------------------------------- //
+
+/// A config whose own TLS posture cannot be built into a client, so a
+/// transport re-derived from `config.ssl_verify` cannot carry the operation.
+/// (A rebuild with a hard-coded posture would; the pooled-connection test
+/// below is what rules that out.)
+fn config_with_unbuildable_posture(apiurl: &str) -> Config {
+    let mut config = Config::default();
+    config.obs_api_url = apiurl.to_owned();
+    config.ssl_verify = SslVerify::CaBundle("/nonexistent/mtui-594-ca.pem".into());
+    // Premise guard: a client built from this config must fail, or the
+    // assertions below could pass with a transport rebuilt from `config`.
+    assert!(
+        matches!(
+            HttpClient::new(VerifyPolicy::from_config(&config.ssl_verify)),
+            Err(HttpError::CaBundle { .. })
+        ),
+        "premise gone: the fixture posture builds a client"
+    );
+    config
+}
+
+#[tokio::test]
+#[serial_test::serial(osc_config_env)]
+// `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+// `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+#[allow(unsafe_code)]
+async fn comment_uses_the_injected_http_client_not_one_rebuilt_from_config() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/comments/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<ok/>"))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let key = dir.path().join("id_unused");
+    std::fs::write(&key, "never read: no 401 is served\n").unwrap();
+    let apiurl = server.uri();
+    let oscrc = write_oscrc(dir.path(), &apiurl, &key);
+    let osc = Osc::new(config_with_unbuildable_posture(&apiurl), rrid(), http());
+    // SAFETY: serialised via `#[serial(osc_config_env)]`.
+    unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
+
+    let res = osc.comment("hi").await;
+    // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+    unsafe { std::env::remove_var("OSC_CONFIG") };
+
+    res.expect("the comment rides the injected transport");
+    let posts = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.method == wiremock::http::Method::POST)
+        .count();
+    assert_eq!(posts, 1, "exactly one comment POST");
+}
+
+#[tokio::test]
+#[serial_test::serial(osc_config_env)]
+// `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+// `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+#[allow(unsafe_code)]
+async fn assign_precondition_get_uses_the_injected_http_client() {
+    // One server plays both the OBS API and the qam.suse.de reports host; the
+    // testreport GET is the hop that used to build a second client of its own.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "<request id='56789'><state name='review'/>\
+             <action type='maintenance_release'>\
+             <source project='SUSE:Maintenance:1' package='p'/></action>\
+             <review state='new' by_group='qam-sle'/></request>",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/SUSE:Maintenance:1:56789/log"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("SUMMARY: PASSED\n"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/request"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<collection/>"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/request/56789"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<status code='ok'/>"))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let key = dir.path().join("id_unused");
+    std::fs::write(&key, "never read: no 401 is served\n").unwrap();
+    let apiurl = server.uri();
+    let oscrc = write_oscrc(dir.path(), &apiurl, &key);
+    let mut config = config_with_unbuildable_posture(&apiurl);
+    config.reports_url = apiurl.clone();
+    let osc = Osc::new(config, rrid(), http());
+    // SAFETY: serialised via `#[serial(osc_config_env)]`.
+    unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
+
+    let res = osc.assign(&["qam-sle".to_owned()]).await;
+    // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+    unsafe { std::env::remove_var("OSC_CONFIG") };
+
+    res.expect("the testreport GET rides the injected transport");
+    let received = server.received_requests().await.unwrap();
+    assert!(
+        received
+            .iter()
+            .any(|r| r.url.path() == "/SUSE:Maintenance:1:56789/log"),
+        "the testreport precondition GET was never made"
+    );
+    assert!(
+        received
+            .iter()
+            .any(|r| r.method == wiremock::http::Method::POST && r.url.path() == "/request/56789"),
+        "the assignreview POST was never made"
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial(osc_config_env)]
+// `std::env::set_var`/`remove_var` are `unsafe` in edition 2024; the
+// `#[serial(osc_config_env)]` guard makes the mutation exclusive.
+#[allow(unsafe_code)]
+async fn comment_rides_the_injected_clients_pooled_connection() {
+    use super::keepalive_host::{counting_host, warm_pool};
+
+    // The one shape the unbuildable-posture guard cannot catch: a rebuild
+    // with a hard-coded posture. Only the injected client owns the warm
+    // pooled connection, so a second socket means a second client.
+    let api = counting_host("<ok/>").await;
+    let http = http();
+    warm_pool(&http, &api).await;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let key = dir.path().join("id_unused");
+    std::fs::write(&key, "never read: no 401 is served\n").unwrap();
+    let oscrc = write_oscrc(dir.path(), &api.base, &key);
+    let mut config = Config::default();
+    config.obs_api_url = api.base.clone();
+    // SAFETY: serialised via `#[serial(osc_config_env)]`.
+    unsafe { std::env::set_var("OSC_CONFIG", &oscrc) };
+
+    let res = Osc::new(config, rrid(), http).comment("hi").await;
+    // SAFETY: still inside the `#[serial(osc_config_env)]` critical section.
+    unsafe { std::env::remove_var("OSC_CONFIG") };
+
+    res.expect("the comment rides the injected transport");
+    assert_eq!(
+        api.accepts(),
+        1,
+        "the comment opened its own connection instead of reusing the pool"
     );
 }

@@ -29,7 +29,7 @@ use std::time::Duration;
 use mtui_config::Config;
 use mtui_types::RequestReviewID;
 
-use crate::http::{VerifyPolicy, resolve_verify};
+use crate::http::HttpClient;
 use crate::obs::auth::ObsSignatureAuth;
 use crate::obs::client::ObsClient;
 use crate::obs::errors::ObsError;
@@ -52,8 +52,9 @@ type ClientFactory = Arc<dyn Fn(&Config) -> Result<Built, ObsError> + Send + Syn
 /// reject).
 ///
 /// Construction ([`Osc::new`]) cannot fail. Each operation reads credentials,
-/// builds an authenticated client and runs the corresponding
-/// [`crate::obs::qam`] op, folding any failure into a logged `Err(ObsError)`.
+/// wraps the injected transport in an authenticated client and runs the
+/// corresponding [`crate::obs::qam`] op, folding any failure into a logged
+/// `Err(ObsError)`.
 #[derive(Clone)]
 pub struct Osc {
     config: Config,
@@ -62,16 +63,17 @@ pub struct Osc {
 }
 
 impl Osc {
-    /// Build an [`Osc`] seam for `config` and the target `rrid`.
+    /// Build an [`Osc`] seam for `config` and the target `rrid` over the
+    /// caller's shared transport `http`.
     ///
-    /// Construction cannot fail; the credential/transport build is deferred to
-    /// each operation (and folded into its never-raise result).
+    /// Construction cannot fail; the credential read is deferred to each
+    /// operation (and folded into its never-raise result).
     #[must_use]
-    pub fn new(config: Config, rrid: RequestReviewID) -> Self {
+    pub fn new(config: Config, rrid: RequestReviewID, http: HttpClient) -> Self {
         Self {
             config,
             rrid,
-            factory: Arc::new(build_client),
+            factory: Arc::new(move |cfg: &Config| build_client(cfg, &http)),
         }
     }
 
@@ -124,7 +126,6 @@ impl Osc {
                 &client,
                 &cfg.reports_url,
                 &cfg.fancy_reports_url,
-                &cfg.ssl_verify,
                 &rrid,
                 &user,
                 &groups,
@@ -145,15 +146,7 @@ impl Osc {
         let rrid = self.rrid.clone();
         let groups = groups.to_vec();
         self.run(move |client, user| async move {
-            qam::assign(
-                &client,
-                &cfg.reports_url,
-                &cfg.ssl_verify,
-                &rrid,
-                &user,
-                &groups,
-            )
-            .await
+            qam::assign(&client, &cfg.reports_url, &rrid, &user, &groups).await
         })
         .await
     }
@@ -209,7 +202,6 @@ impl Osc {
                 &client,
                 &cfg.reports_url,
                 &cfg.fancy_reports_url,
-                &cfg.ssl_verify,
                 &rrid,
                 &user,
                 &groups,
@@ -225,26 +217,23 @@ impl Osc {
 /// The production client factory: read oscrc and attach SSH signature auth.
 ///
 /// Reads the credentials for `obs_api_url` from the oscrc located like `osc`
-/// (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`), builds an
-/// [`ObsClient`] against `obs_api_url` with the coarse `obs_request_timeout`
-/// budget and the resolved TLS posture, and injects an [`ObsSignatureAuth`]
-/// signer for the acting user's key.
-fn build_client(config: &Config) -> Result<Built, ObsError> {
+/// (`$OSC_CONFIG` → `$XDG_CONFIG_HOME/osc/oscrc` → `~/.oscrc`), wraps `http`
+/// in an [`ObsClient`] against `obs_api_url` with the coarse
+/// `obs_request_timeout` budget, and injects an [`ObsSignatureAuth`] signer
+/// for the acting user's key. The TLS posture is `http`'s, not re-derived
+/// from `config.ssl_verify`.
+fn build_client(config: &Config, http: &HttpClient) -> Result<Built, ObsError> {
     let credentials = read_credentials(&config.obs_api_url)?;
-    let verify: VerifyPolicy = resolve_verify(
-        VerifyPolicy::Default(true),
-        Some(VerifyPolicy::from_config(&config.ssl_verify)),
-    );
     let auth = ObsSignatureAuth::new(
         credentials.user.clone(),
         credentials.sshkey_path.clone(),
         credentials.sshkey_fingerprint.clone(),
     );
-    let client = ObsClient::new(
+    let client = ObsClient::with_http(
+        http.clone(),
         &config.obs_api_url,
         Duration::from_secs(config.obs_request_timeout),
-        verify,
         Arc::new(auth),
-    )?;
+    );
     Ok((client, credentials.user))
 }

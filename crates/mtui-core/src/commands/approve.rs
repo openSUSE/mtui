@@ -2,11 +2,11 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
-use mtui_datasources::{Osc, Slack, is_ack_reaction};
+use mtui_datasources::{Slack, is_ack_reaction};
 use mtui_testreport::{HashCheck, TokioSvnRunner, svn_commit_testreport};
 
 use crate::command::{Command, Scope};
-use crate::commands::apicall::{gitea_client, is_gitea_workflow};
+use crate::commands::apicall::{gitea_client, is_gitea_workflow, osc_client};
 use crate::commands::support::{require_update, template_completion};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -103,7 +103,7 @@ impl Command for Approve {
                 .map_err(|e| CommandError::Other(format!("gitea approve failed: {e}")))?;
         } else {
             tracing::info!("Approving request {}", rrid.review_id);
-            let osc = Osc::new(session.config.clone(), rrid.clone());
+            let osc = osc_client(session, &rrid)?;
             osc.approve(&groups)
                 .await
                 .map_err(|e| CommandError::Other(format!("osc approve failed: {e}")))?;

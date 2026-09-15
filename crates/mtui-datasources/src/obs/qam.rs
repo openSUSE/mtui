@@ -9,11 +9,10 @@
 //! `qam.suse.de` preconditions (skipped for PI/SLFO). The `[oscqam] ` prefix
 //! goes on approve/reject comments only.
 //!
-//! Like [`ObsClient`] itself, these functions take explicit URL/verify values
-//! rather than a `Config`, which keeps them self-contained and testable; the
-//! facade binds them from a resolved `Config`.
-
-use mtui_config::SslVerify;
+//! Like [`ObsClient`] itself, these functions take explicit URL values rather
+//! than a `Config`, which keeps them self-contained and testable; the facade
+//! binds them from a resolved `Config`. The TLS posture travels with the
+//! injected client.
 
 use mtui_types::{RequestKind, RequestReviewID};
 
@@ -221,7 +220,6 @@ async fn check_previous_rejects(
 pub async fn assign(
     client: &ObsClient,
     reports_url: &str,
-    ssl_verify: &SslVerify,
     rrid: &RequestReviewID,
     user: &str,
     groups: &[String],
@@ -237,7 +235,7 @@ pub async fn assign(
     }
     let resolved = resolve_assign_groups(client, &request, user, groups).await?;
     if !skips_maintenance_testreport(rrid) {
-        if super::preconditions::fetch_testreport_log(reports_url, ssl_verify, rrid)
+        if super::preconditions::fetch_testreport_log(client.http(), reports_url, rrid)
             .await
             .is_none()
         {
@@ -328,7 +326,6 @@ pub async fn approve(
     client: &ObsClient,
     reports_url: &str,
     fancy_reports_url: &str,
-    ssl_verify: &SslVerify,
     rrid: &RequestReviewID,
     user: &str,
     groups: &[String],
@@ -349,7 +346,8 @@ pub async fn approve(
         )));
     }
     if !skips_maintenance_testreport(rrid) {
-        let log = super::preconditions::fetch_testreport_log(reports_url, ssl_verify, rrid).await;
+        let log =
+            super::preconditions::fetch_testreport_log(client.http(), reports_url, rrid).await;
         if log.is_none_or(|log| super::preconditions::summary(&log) != "PASSED") {
             return Err(ObsError::Op(format!(
                 "testreport for {rrid} is not PASSED; refusing to approve"
@@ -405,7 +403,6 @@ pub async fn reject(
     client: &ObsClient,
     reports_url: &str,
     fancy_reports_url: &str,
-    ssl_verify: &SslVerify,
     rrid: &RequestReviewID,
     user: &str,
     groups: &[String],
@@ -417,7 +414,8 @@ pub async fn reject(
     }
     let request = get_request(client, rrid).await?;
     if !skips_maintenance_testreport(rrid) {
-        let log = super::preconditions::fetch_testreport_log(reports_url, ssl_verify, rrid).await;
+        let log =
+            super::preconditions::fetch_testreport_log(client.http(), reports_url, rrid).await;
         let log = match log {
             Some(log) if super::preconditions::summary(&log) == "FAILED" => log,
             _ => {

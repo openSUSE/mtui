@@ -438,7 +438,7 @@ impl Session {
     /// Test-only count of clients actually built by
     /// [`http_client`](Self::http_client).
     #[cfg(test)]
-    fn http_builds(&self) -> usize {
+    pub(crate) fn http_builds(&self) -> usize {
         self.http_builds.load(std::sync::atomic::Ordering::SeqCst)
     }
 

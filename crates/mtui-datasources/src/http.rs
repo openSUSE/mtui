@@ -368,9 +368,9 @@ fn rest_after_at(s: &str) -> Option<&str> {
 ///
 /// Taking [`HttpError`] rather than `&dyn Error` makes "already crossed the
 /// conversion boundary" a compile-time precondition, so neither branch can
-/// render a URL (#431). `HttpError::Request` is `#[error(transparent)]`, so
-/// `source()` forwards past reqwest's own `Display` (only "error sending
-/// request") straight to the actionable rustls/IO cause.
+/// render a URL (#431). `HttpError::Request` keeps reqwest as its `#[source]`,
+/// so the walk reaches past reqwest's kind text ("error sending request") to
+/// the actionable rustls/IO cause.
 #[must_use]
 pub(crate) fn ssl_error_detail(e: &HttpError) -> String {
     root_cause(e).unwrap_or_else(|| e.to_string())
@@ -710,9 +710,9 @@ mod tests {
     }
 
     /// Driven by a *real* `HttpError`, because the property is one of the real
-    /// type: `Request` is `#[error(transparent)]`, so `source()` forwards past
-    /// reqwest's own `Display` — the layer carrying the URL — to the transport
-    /// cause. Nothing listens on the loopback discard port (RFC 863).
+    /// type: `Request` keeps reqwest as its `#[source]`, so the walk reaches
+    /// past reqwest's own `Display` — the layer carrying the URL — to the
+    /// transport cause. Nothing listens on the loopback discard port (RFC 863).
     #[tokio::test]
     async fn ssl_error_detail_reports_the_transport_cause_without_a_url() {
         let e: HttpError = reqwest::Client::new()
@@ -727,8 +727,8 @@ mod tests {
             !detail.contains(" for url ("),
             "detail rendered reqwest's URL: {detail}"
         );
-        // The recovered cause is the actionable half; `e`'s own Display is
-        // only "error sending request" — which is why the walk exists.
+        // The recovered cause is the actionable half; `e`'s own Display
+        // carries the kind prefix, the walk returns the bare cause.
         assert!(
             detail.to_lowercase().contains("connection refused"),
             "detail lost the transport cause: {detail}"
