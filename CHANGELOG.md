@@ -31,7 +31,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   call resolved to; a backgrounded call adds a terminal-state record joinable
   by job id. Unset (the default) disables auditing with byte-identical
   behaviour. A call the sink cannot record is refused rather than proceeding
-  unrecorded. The sink is opened `O_NOFOLLOW` and refused unless it is a
+  unrecorded, and a configured sink that cannot be opened now refuses to start
+  the server — naming the path on stderr — instead of loading quietly and
+  failing on the first tool call. The sink is opened `O_NOFOLLOW` and refused unless it is a
   regular file owned by the serving user, so a planted symlink or FIFO cannot
   divert the append — or the `0600` tightening — onto another file; that covers
   the path's final component only, so the sink's directory must be writable by
