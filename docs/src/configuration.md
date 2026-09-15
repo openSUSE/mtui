@@ -230,6 +230,7 @@ Remote-lock behaviour on target hosts, so concurrent testers can share a fleet.
 | `tools_allow` | array of strings | *(empty)* | Extra tool names to keep on top of the profile. |
 | `tools_deny` | array of strings | *(empty)* | Tool names to remove regardless of profile/allow (deny wins last). E.g. `["updates", "openqa_overview"]` for a workflow that never lists the queue or polls openQA. |
 | `audit_log` | path | *(unset)* | Durable audit sink for tool calls (versioned JSONL, one record per call, `0600`). Unset disables auditing. A call the sink cannot record is refused. See [MCP server](mcp.md#audit-log). |
+| `audit_log_max_bytes` | bytes | `268435456` | Size at which `audit_log` rotates to `<path>.1`, keeping five generations (`.1`…`.5`); the oldest is discarded, so archiving beyond it is yours to arrange. Rotation never blocks the dispatch worker and never refuses a call: it takes the file's advisory lock without waiting, and a lock it cannot take or a rename it cannot perform warns once and keeps appending past the cap. `0` disables rotation entirely; any other value below `4096` is raised to it with a warning. |
 
 > OTLP export of the same record needs no TOML key by design: it is env-only
 > (`OTEL_EXPORTER_OTLP_ENDPOINT` / `..._LOGS_ENDPOINT`, `..._HEADERS` /

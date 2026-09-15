@@ -512,6 +512,26 @@ arrival timestamp, the session id, the tool name, the (redacted, see below)
 arguments, the outcome (`ok` / `error` / `unknown-tool`), the duration, and the
 RRIDs and host names the call resolved to.
 
+**`[mcp] audit_log_max_bytes`** (default 256 MiB) bounds the sink: the first
+append that finds the file at or over the cap rotates it to `<path>.1`, shifting
+`.1`…`.4` down one and discarding what was `.5`. Archiving beyond `.5` is the
+operator's job. `0` disables rotation altogether; any other value below 4096 is
+raised to it with a warning, because a cap under one record's worth rotates the
+trail away.
+
+Rotation is housekeeping and never a gate: it neither blocks the dispatch worker
+nor refuses a call. Two servers may share one path, so it is serialised by an
+advisory lock on the file itself — taken **without waiting**. A writer that finds
+the lock held, or a filesystem that cannot take it at all (an NFS export without
+`lockd` answers `ENOLCK`), appends past the cap and rotates on a later call. A
+rename it cannot perform warns and keeps appending too, and that warning is not
+repeated until a rotation succeeds. Two consequences worth knowing when reading
+the files back: a writer that opened the sink just under the cap lands its line
+in `<path>.1`, so `seq` is monotonic overall but the order *across* the boundary
+file is not; and on NFS, Linux emulates `flock` with per-process POSIX locks, so
+two HTTP sessions in one process do not serialise there — at worst a second
+shift, never a refused call.
+
 A backgrounded call writes two records: a `dispatch` record naming the started
 `job_ids`, and a `terminal` record when the job reaches `done` / `failed` /
 `cancelled`, joinable by job id. The terminal record carries no arguments.

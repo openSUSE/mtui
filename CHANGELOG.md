@@ -44,6 +44,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   size (#411). The seam is `mtui-mcp`'s `call_tool` dispatch only —
   `mtui-core` has no session-key/transport notion, so the REPL is not covered.
 
+- New `[mcp] audit_log_max_bytes` key (default `268435456`, 256 MiB): the size
+  at which the audit sink rotates to `<path>.1`, keeping five generations and
+  discarding the oldest — archiving beyond that is the operator's job. `0`
+  disables rotation, which makes bounding the sink yours to arrange; any other
+  value below `4096` is raised to it with a warning. Rotation is housekeeping:
+  it happens on the next append past the cap, never blocks the dispatch worker
+  and never refuses a call. An advisory lock on the file serialises two
+  processes sharing one path, but it is never waited on, and a lock it cannot
+  take or a rename it cannot perform warns once and keeps appending past the
+  cap (#411).
+
 - OTLP/HTTP LOGS export of the same audit record (hand-rolled protobuf over the
   workspace `reqwest`/rustls stack, no new shipped crates): one log record per
   audit event, body = the verbatim JSONL line (already redacted and
