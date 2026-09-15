@@ -7,7 +7,9 @@
 //! * **description** is the command's [`about`](mtui_core::Command::about);
 //! * **`input_schema`** is derived from the command's built `clap` parser via
 //!   `crate::schema::command_input_schema`;
-//! * **`read_only`** hint is set conservatively from a name allow-list.
+//! * **`read_only`** hint is set conservatively from a name allow-list — which
+//!   the server also reads as its audit classification, so widening it drops
+//!   the pre-dispatch `intent` record for whatever is added.
 //!
 //! The subparser command (`config` today) is fanned out into one tool per
 //! subcommand; the bare `config` tool is not emitted, because a "show or set"
@@ -65,10 +67,16 @@ const SLOW_COMMANDS: &[&str] = &[
 const SUBPARSER_COMMANDS: &[&str] = &["config"];
 
 /// A command becomes `read_only` if its name starts with one of these prefixes.
+///
+/// These two lists do double duty: `McpServer` builds its audit classification
+/// from the same `read_only` hint, so a name added here for the client's
+/// benefit also stops writing a pre-dispatch `intent` record. Widen them only
+/// for something that really is side-effect-free.
 const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 
 /// Exact names that escape the prefix rule but are still side-effect-free.
 /// (`reload_products` is intentionally absent — it re-reads from the hosts.)
+/// Same double duty as [`READ_ONLY_PREFIXES`].
 const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs"];
 
 /// Tool-call keys still accepted, and ignored, after their property left the
