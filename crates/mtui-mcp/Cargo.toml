@@ -81,6 +81,18 @@ tracing-subscriber = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 
+# The audit sink's vetted open: `O_NOFOLLOW`/`O_NONBLOCK`/`O_CLOEXEC` from
+# `libc`, and `geteuid` from `nix` for the owner check (a safe wrapper — the
+# workspace warns on `unsafe_code`). Both are already direct unix deps of
+# `mtui-core`, so this adds no crate to the build.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+nix = { version = "0.31", features = ["user"] }
+
+# `mkfifo` plants the non-regular sink the vetted open must refuse.
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.31", features = ["user", "fs"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util", "test-util"] }
 insta.workspace = true

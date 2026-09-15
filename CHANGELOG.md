@@ -28,8 +28,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   call resolved to; a backgrounded call adds a terminal-state record joinable
   by job id. Unset (the default) disables auditing with byte-identical
   behaviour. A call the sink cannot record is refused rather than proceeding
-  unrecorded. `config_set` never records the value, so secrets cannot leak
-  into the log; file-body payloads (`put` `content`/`content_b64`,
+  unrecorded. The sink is opened `O_NOFOLLOW` and refused unless it is a
+  regular file owned by the serving user, so a planted symlink or FIFO cannot
+  divert the append — or the `0600` tightening — onto another file; that covers
+  the path's final component only, so the sink's directory must be writable by
+  the serving user alone. The record is durable and append-only but not
+  tamper-evident: there is no hash chain or HMAC, so ship it off-host (see the
+  OTLP bullet) if that is needed. `config_set` never records the value, so
+  secrets cannot leak into the log; file-body payloads (`put` `content`/`content_b64`,
   `testreport_write` `content`, `testreport_patch` `replacement`) record
   `{bytes, sha256}` instead of the bytes, always fingerprinted regardless of
   size (#411). The seam is `mtui-mcp`'s `call_tool` dispatch only —

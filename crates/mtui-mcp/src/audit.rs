@@ -16,6 +16,12 @@
 //!   before dispatching; a post-dispatch write failure refuses in place of
 //!   the result. Terminal records of background jobs are the exception — the
 //!   dispatch already answered, so a failed terminal write only warns.
+//! * Durable and append-only, but **not tamper-evident**: there is no hash
+//!   chain and no HMAC, so anyone writing as the sink's owner can rewrite
+//!   history undetected. Tamper evidence means shipping each record off-host
+//!   as it lands (OTLP). The sink is opened `O_NOFOLLOW`, which covers the
+//!   path's final component only, so the sink's *directory* must be writable
+//!   by the serving user alone.
 //! * Secrets are **unrepresentable**, not filtered: [`sanitize_args`] never
 //!   records a `config_set` value at all, so a future secret attribute cannot
 //!   leak by forgetting to extend the classifier. File-body payloads (`put`
@@ -124,8 +130,9 @@ impl AuditEvent {
 ///
 /// Opened per record with `O_APPEND` (never truncated, so entries survive a
 /// server restart) and `0600` (the file outlives the session and may name
-/// consequential actions). Per-record open keeps concurrent sessions and
-/// background workers from sharing a file offset.
+/// consequential actions), and vetted on the resulting fd — see
+/// [`open_vetted`](Self::open_vetted). Per-record open keeps concurrent
+/// sessions and background workers from sharing a file offset.
 #[derive(Debug, Clone)]
 pub(crate) struct AuditLog {
     path: PathBuf,
@@ -138,7 +145,7 @@ impl AuditLog {
 
     /// Open the sink for append, creating it with restrictive permissions.
     ///
-    /// Blocking (open/chmod): async callers must go through
+    /// Blocking (open/stat/chmod): async callers must go through
     /// [`check_writable_async`](Self::check_writable_async) /
     /// [`append_async`](Self::append_async), never call this inline.
     fn open_sink(&self) -> io::Result<std::fs::File> {
@@ -152,32 +159,47 @@ impl AuditLog {
                 ));
             }
         }
-        // Atomically restrictive create: mode 0600 applies at creation, so a
-        // new sink is never visible with umask-derived group/other bits in
-        // the window before the hardening below. Mode is masked by the umask,
-        // which can only remove bits from 0600, never add.
-        #[cfg(unix)]
-        let file = {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .mode(0o600)
-                .open(&self.path)?
-        };
-        #[cfg(not(unix))]
+        self.open_vetted()
+    }
+
+    /// Open the sink and refuse anything that is not this user's own regular
+    /// file, before a single byte or permission bit is written to it.
+    ///
+    /// `O_NOFOLLOW` makes a planted symlink fail rather than divert the append
+    /// — and the `0600` tightening below — onto whatever it names.
+    /// `O_NONBLOCK` makes a planted FIFO fail `ENXIO` instead of blocking
+    /// `open(2)` forever on the blocking pool; a regular file ignores it.
+    /// `O_CLOEXEC` keeps the fd out of every subprocess mtui spawns.
+    ///
+    /// Mode `0600` at creation is what makes the create atomically restrictive:
+    /// a new sink is never visible with umask-derived group/other bits in the
+    /// window before the tightening. The umask can only remove bits from
+    /// `0600`, never add.
+    #[cfg(unix)]
+    fn open_vetted(&self) -> io::Result<std::fs::File> {
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(&self.path)?;
+        vet_sink(&file.metadata()?, nix::unistd::geteuid().as_raw())?;
         // Harden a pre-existing sink (created by an older release or by hand)
-        // via the open fd, not the path, so a swapped symlink cannot divert it.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
+        // through the open fd, not the path — and only now that the fd is known
+        // to be our own regular file, so we never chmod a file we did not make.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         Ok(file)
+    }
+
+    /// Non-unix fallback: no `O_NOFOLLOW`/owner notion to vet against.
+    #[cfg(not(unix))]
+    fn open_vetted(&self) -> io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
     }
 
     /// Pre-flight check: fail when the sink cannot be opened for append, so
@@ -228,6 +250,35 @@ impl AuditLog {
             .await
             .map_err(io::Error::other)?
     }
+}
+
+/// Refuse an opened sink that is not a regular file owned by this process.
+///
+/// Pure, so the boundary is testable without planting a device or a foreign
+/// file. `O_NOFOLLOW` covers only the path's final component, so these two
+/// checks close what is left of it: a planted FIFO or device node, and a file
+/// another user owns — which is also the reachable hardlink variant, since a
+/// link to someone else's file keeps their uid.
+///
+/// A *same-uid* hardlink is deliberately allowed. It crosses no boundary, and
+/// refusing it (an `nlink > 1` check) would turn an operator's
+/// `ln audit.jsonl backup` into an outage.
+#[cfg(unix)]
+fn vet_sink(meta: &std::fs::Metadata, euid: u32) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    if !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "audit sink is not a regular file",
+        ));
+    }
+    if meta.uid() != euid {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "audit sink is owned by another user",
+        ));
+    }
+    Ok(())
 }
 
 /// Current time as whole milliseconds since the unix epoch, for `ts`.
@@ -448,6 +499,121 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600, "pre-existing sink hardened");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sink_refuses_to_follow_a_symlink_and_leaves_its_target_alone() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("victim.txt");
+        std::fs::write(&target, "VICTIM\n").expect("seed");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+            .expect("loosen target");
+        let link = dir.path().join("audit.jsonl");
+        std::os::unix::fs::symlink(&target, &link).expect("plant symlink");
+
+        let err = AuditLog::new(link)
+            .append(&json!({"v": 1, "tool": "run"}))
+            .expect_err("a planted symlink must not be followed");
+        // `io::ErrorKind::FilesystemLoop` is still unstable, so pin the errno
+        // `O_NOFOLLOW` raises on a symlink directly.
+        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
+
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("target readable"),
+            "VICTIM\n",
+            "the symlink's target must not be appended to"
+        );
+        let mode = std::fs::metadata(&target)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o644, "the target's mode must not be tightened");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sink_refuses_a_dangling_symlink_and_creates_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("nowhere.jsonl");
+        let link = dir.path().join("audit.jsonl");
+        std::os::unix::fs::symlink(&missing, &link).expect("plant symlink");
+
+        let err = AuditLog::new(link)
+            .append(&json!({"v": 1}))
+            .expect_err("a dangling symlink must not be created through");
+        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
+        assert!(
+            !missing.exists(),
+            "nothing was created at the link's target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sink_refuses_a_planted_fifo_without_blocking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::from_bits_truncate(0o600))
+            .expect("plant fifo");
+
+        // Without `O_NONBLOCK`, `open(2)` on a reader-less FIFO blocks forever,
+        // and in production it runs on the blocking pool — so the failure mode
+        // is a wedged worker, not an error. Probe it off-thread with a deadline;
+        // a blocked probe thread simply never answers.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(AuditLog::new(path).append(&json!({"v": 1})).is_err());
+        });
+        let refused = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("opening a planted FIFO must fail, not block");
+        assert!(refused, "a FIFO is not a regular file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sink_appends_through_a_same_user_hardlink() {
+        // The boundary the owner check draws. A link the serving user made to
+        // its own file crosses nothing, so refusing it (an `nlink > 1` check)
+        // would turn an operator's `ln audit.jsonl backup` into an outage.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        std::fs::write(&path, "").expect("seed");
+        let link = dir.path().join("backup.jsonl");
+        std::fs::hard_link(&path, &link).expect("hardlink");
+
+        AuditLog::new(link)
+            .append(&json!({"v": 1, "tool": "run"}))
+            .expect("a same-user hardlink still appends");
+        let lines = read_lines(&path);
+        assert_eq!(lines.len(), 1, "the record landed on the shared inode");
+        assert_eq!(lines[0]["tool"], json!("run"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vet_sink_refuses_a_non_regular_file_and_a_foreign_owner() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let meta = std::fs::metadata("/dev/null").expect("/dev/null");
+        let euid = nix::unistd::geteuid().as_raw();
+        let err = vet_sink(&meta, euid).expect_err("a device is not a regular file");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), "audit sink is not a regular file");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("audit.jsonl");
+        std::fs::write(&path, "").expect("seed");
+        let meta = std::fs::metadata(&path).expect("metadata");
+        // Creating a foreign-owned file needs `CAP_CHOWN`, so the honest way to
+        // exercise the check is to move the expected uid instead.
+        let err = vet_sink(&meta, meta.uid() + 1).expect_err("a foreign owner is refused");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(err.to_string(), "audit sink is owned by another user");
+        vet_sink(&meta, meta.uid()).expect("our own regular file passes");
     }
 
     #[test]
