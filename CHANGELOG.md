@@ -8,6 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [26.3.3] - 2026-09-15
+
 ### Fixed
 
 - Transport failures from every datasource on the shared HTTP client (OBS/IBS,
