@@ -14,6 +14,7 @@ pub mod oqa_search;
 pub mod qem_dashboard;
 pub mod refhost;
 pub mod slack;
+pub mod sshsig;
 pub mod teregen;
 
 pub use error::{
