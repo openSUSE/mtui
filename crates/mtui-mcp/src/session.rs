@@ -3394,6 +3394,32 @@ mod tests {
         );
     }
 
+    /// An empty `by` (an unparseable or blank lockfile owner field) must not be
+    /// presented as a stranger named "" — the arm names the ambiguity instead.
+    #[test]
+    fn abort_unlock_contended_empty_owner_reads_as_unknown() {
+        let mut summary = AbortUnlock {
+            session_user: "alice".to_owned(),
+            ..Default::default()
+        };
+        summary.absorb(BTreeMap::from([(
+            "h1".to_owned(),
+            LockOutcome::Contended(LockOwner {
+                by: String::new(),
+                since: "Tuesday, 14.11.2023 22:13 UTC".to_owned(),
+            }),
+        )]));
+        let clause = summary.clause().expect("a contended host must render");
+        assert!(
+            clause.contains("held by an unknown owner, possibly a live mtui"),
+            "got: {clause}"
+        );
+        assert!(
+            clause.contains("`unlock --force` releases the whole group of every loaded template"),
+            "got: {clause}"
+        );
+    }
+
     /// The caller's own name as owner is most likely a second live mtui of
     /// theirs, not a strand: the arm must branch instead of presenting it as a
     /// stranger's.

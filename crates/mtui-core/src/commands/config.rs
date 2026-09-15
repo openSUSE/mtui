@@ -830,6 +830,18 @@ mod tests {
         assert!(matches!(err, CommandError::Other(m) if m.contains("unknown attribute")));
     }
 
+    /// The REPL `show` path calls `attr_value` directly (not through
+    /// `show_headless`'s own registry check), so its internal
+    /// `!ATTRS.contains` guard must refuse an unrecognised name too.
+    #[tokio::test]
+    async fn show_unknown_attr_errors_in_repl() {
+        let (mut session, _buf) = empty_session();
+        session.is_repl = true;
+        let args = matches(&ConfigCmd, &["show", "nope"]);
+        let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("unknown attribute")));
+    }
+
     #[tokio::test]
     async fn set_string_updates_value() {
         let (mut session, _buf) = empty_session();
