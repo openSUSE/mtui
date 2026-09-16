@@ -12,6 +12,12 @@ autotests = false
 [lints]
 workspace = true
 
+# Dev-only switch: retargets report ingest onto the teregen v2 JSON document
+# instead of the SVN metadata.json/log pair. Off by default in every build;
+# compiled by CI's `--all-features` job.
+[features]
+api-ingest = []
+
 [[test]]
 name = "it"
 path = "tests/it.rs"

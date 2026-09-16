@@ -8,6 +8,8 @@
 
 pub mod checkout;
 pub mod export;
+#[cfg(feature = "api-ingest")]
+pub mod ingest;
 pub mod lifecycle;
 pub mod metadata_parsers;
 pub mod products;
@@ -25,6 +27,8 @@ pub use export::{
     AutoExport, BytesFetcher, DenyOverwrite, DownloadError, ErrorMode, ExportContext, KernelExport,
     ManualExport, ManualHost, OverwritePrompt, ResultsMissingError, download_logs, inject_overview,
 };
+#[cfg(feature = "api-ingest")]
+pub use ingest::apply_document;
 pub use lifecycle::{UpdateKind, make_testreport};
 pub use metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_titles};
 pub use products::{normalize, normalize_16};
