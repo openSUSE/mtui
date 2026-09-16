@@ -2602,6 +2602,7 @@ name = "mtui-testreport"
 version = "26.4.0"
 dependencies = [
  "async-trait",
+ "boon",
  "chrono",
  "criterion",
  "futures",

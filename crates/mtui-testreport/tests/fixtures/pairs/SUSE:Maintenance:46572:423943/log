@@ -1,0 +1,369 @@
+SUMMARY: PASSED
+
+comment: (none)
+
+Test Plan Reviewer: someone
+
+BUGS SUMMARY:
+=============
+=> references:
+    * bnc#1248946 (VUL-0: CVE-2025-58058: containerized-data-importer: github.com/ulikunitz/xz: github.com/ulikunitz/xz leaks memory)
+    * bnc#1262952 (VUL-0: CVE-2026-34986: containerized-data-importer: github.com/go-jose/go-jose/v3:  crafted JWE input with a missing encrypted key can lead to a denial of service)
+    * bnc#1265799 (VUL-0: CVE-2026-33814: containerized-data-importer: golang.org/x/net/http2: infinite loop in HTTP/2 transport when given bad SETTINGS_MAX_FRAME_SIZE)
+    * bnc#1266179 (VUL-0: CVE-2026-39827,CVE-2026-39834,CVE-2026-39828,CVE-2026-39829,CVE-2026-39831,CVE-2026-42508,CVE-2026-39833,CVE-2026-39830,CVE-2026-39832,CVE-2026-46597,CVE-2026-46598,CVE-2026-46595,CVE-2026-39835: containerized-data-importer: golang.org/x/crypto/ssh)
+    * bnc#1266639 (VUL-0: CVE-2026-39821: containerized-data-importer: golang.org/x/net/idna: failure to reject ASCII-only Punycode-encoded labels allows for validation bypass and privilege escalation)
+    * bnc#1276687 (VUL-0: CVE-2026-41178: containerized-data-importer,containerized-data-importer1.66: go.opentelemetry.io/otel/baggage: no rejection of raw-length headers in baggage parsing allows for DoS via oversized inputs)
+
+INSTALL TESTS SUMMARY:
+======================
+PASSED
+All installation tests passed successfully on both architectures.
+
+REGRESSION TEST SUMMARY:
+========================
+PASSED
+All regression and functional tests passed successfully on both architectures.
+
+#############################
+Test results by product-arch:
+#############################
+
+sles-modules-15-SP7-aarch64 (reference host: rhea.qam.suse.cz)
+--------------
+before:
+	containerized-data-importer-api-not installed
+	containerized-data-importer-cloner-not installed
+	containerized-data-importer-controller-not installed
+	containerized-data-importer-importer-not installed
+	containerized-data-importer-manifests-1.64.0-150700.9.11.1
+	containerized-data-importer-operator-not installed
+	containerized-data-importer-uploadproxy-not installed
+	containerized-data-importer-uploadserver-not installed
+	obs-service-cdi_containers_meta-not installed
+after:
+	containerized-data-importer-api-not installed
+	containerized-data-importer-cloner-not installed
+	containerized-data-importer-controller-not installed
+	containerized-data-importer-importer-not installed
+	containerized-data-importer-manifests-1.64.0-150700.9.14.1
+	containerized-data-importer-operator-not installed
+	containerized-data-importer-uploadproxy-not installed
+	containerized-data-importer-uploadserver-not installed
+	obs-service-cdi_containers_meta-not installed
+
+=> PASSED
+
+comment: Manually added missing update repository on-host to install and test all packages.
+
+
+sles-modules-15-SP7-x86_64 (reference host: ganymede.qam.suse.cz)
+--------------
+before:
+	containerized-data-importer-api-1.64.0-150700.9.11.1
+	containerized-data-importer-cloner-1.64.0-150700.9.11.1
+	containerized-data-importer-controller-1.64.0-150700.9.11.1
+	containerized-data-importer-importer-1.64.0-150700.9.11.1
+	containerized-data-importer-manifests-1.64.0-150700.9.11.1
+	containerized-data-importer-operator-1.64.0-150700.9.11.1
+	containerized-data-importer-uploadproxy-1.64.0-150700.9.11.1
+	containerized-data-importer-uploadserver-1.64.0-150700.9.11.1
+	obs-service-cdi_containers_meta-1.64.0-150700.9.11.1
+after:
+	containerized-data-importer-api-1.64.0-150700.9.14.1
+	containerized-data-importer-cloner-1.64.0-150700.9.14.1
+	containerized-data-importer-controller-1.64.0-150700.9.14.1
+	containerized-data-importer-importer-1.64.0-150700.9.14.1
+	containerized-data-importer-manifests-1.64.0-150700.9.14.1
+	containerized-data-importer-operator-1.64.0-150700.9.14.1
+	containerized-data-importer-uploadproxy-1.64.0-150700.9.14.1
+	containerized-data-importer-uploadserver-1.64.0-150700.9.14.1
+	obs-service-cdi_containers_meta-1.64.0-150700.9.14.1
+
+=> PASSED
+
+comment: (none)
+
+########################
+notes for/by the tester:
+########################
+
+bnc#1262952 ("VUL-0: CVE-2026-34986: containerized-data-importer: github.c..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1262952
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: A crafted JWE input with a missing encrypted key can lead to a denial of service in github.com/go-jose/go-jose/v3. Fixed by re-vendoring go-jose to version 3.0.5.
+
+bnc#1266179 ("VUL-0: CVE-2026-39827,CVE-2026-39834,CVE-2026-39828,CVE-2026..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1266179
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: Multiple security issues in golang.org/x/crypto/ssh. Fixed by re-vendoring golang.org/x/crypto to version 0.56.0.
+
+bnc#1266639 ("VUL-0: CVE-2026-39821: containerized-data-importer: golang.o..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1266639
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: Failure to reject ASCII-only Punycode-encoded labels allows for validation bypass and privilege escalation in golang.org/x/net/idna. Fixed by re-vendoring golang.org/x/net to version 0.57.0.
+
+bnc#1267176 ("VUL-0: CVE-2026-25680,CVE-2026-42502,CVE-2026-27136,CVE-2026..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1267176
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: Multiple issues when parsing HTML files in golang.org/x/net/html. Fixed by re-vendoring golang.org/x/net to version 0.57.0.
+
+bnc#1278621 ("VUL-0: CVE-2026-56855,CVE-2026-56854,CVE-2026-78662: contain..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1278621
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: Authentication bypass and deadlocks in the crypto/ssh library. Fixed by re-vendoring golang.org/x/crypto to version 0.56.0.
+
+bnc#1248946 ("VUL-0: CVE-2025-58058: containerized-data-importer: github.c..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1248946
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: Memory leak in github.com/ulikunitz/xz. Fixed by re-vendoring github.com/ulikunitz/xz to version 0.5.15.
+
+bnc#1265799 ("VUL-0: CVE-2026-33814: containerized-data-importer: golang.o..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1265799
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: Infinite loop in HTTP/2 transport when given bad SETTINGS_MAX_FRAME_SIZE in golang.org/x/net/http2. Fixed by re-vendoring golang.org/x/net to version 0.57.0.
+
+bnc#1272064 ("VUL-0: CVE-2026-56852: containerized-data-importer: golang.o..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1272064
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: Infinite loop on truncated/invalid UTF-8 input in golang.org/x/text/unicode/norm. Fixed by re-vendoring golang.org/x/text to version 0.41.0.
+
+bnc#1276687 ("VUL-0: CVE-2026-41178: containerized-data-importer,container..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1276687
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+Summary: No rejection of raw-length headers in baggage parsing allows for DoS via oversized inputs in go.opentelemetry.io/otel/baggage. Fixed by re-vendoring go.opentelemetry.io/otel to version 1.44.0.
+
+regression tests:
+-----------------
+
+We conducted comprehensive, production-grade functional regression testing for all containerized-data-importer components on both x86_64 and aarch64 architectures.
+
+1. Validation of Kubernetes Manifests (aarch64 & x86_64):
+We verified that the Kubernetes manifests shipped in the containerized-data-importer-manifests package are syntactically valid and can be parsed successfully by Python's YAML parser.
+
+On aarch64:
+```
+$ python3 -c "import yaml; [doc for doc in yaml.safe_load_all(open('/usr/share/cdi/manifests/release/cdi-operator.yaml'))]; print('cdi-operator.yaml is valid')"
+cdi-operator.yaml is valid
+```
+
+```
+$ python3 -c "import yaml; [doc for doc in yaml.safe_load_all(open('/usr/share/cdi/manifests/release/cdi-cr.yaml'))]; print('cdi-cr.yaml is valid')"
+cdi-cr.yaml is valid
+```
+
+On x86_64:
+```
+$ python3 -c "import yaml; [doc for doc in yaml.safe_load_all(open('/usr/share/cdi/manifests/release/cdi-operator.yaml'))]; print('cdi-operator.yaml is valid')"
+cdi-operator.yaml is valid
+```
+
+```
+$ python3 -c "import yaml; [doc for doc in yaml.safe_load_all(open('/usr/share/cdi/manifests/release/cdi-cr.yaml'))]; print('cdi-cr.yaml is valid')"
+cdi-cr.yaml is valid
+```
+
+2. Verification of Operator and Controller Binaries (x86_64):
+We verified that the operator, controller, uploadproxy, and uploadserver binaries execute correctly and print their usage/help messages on x86_64.
+
+```
+$ /usr/bin/virt-cdi-operator --help; echo "exit=$?"
+Usage of /usr/bin/virt-cdi-operator:
+  -kubeconfig string
+    	Paths to a kubeconfig. Only required if out-of-cluster.
+exit=0
+```
+
+```
+$ /usr/bin/virt-cdi-controller --help; echo "exit=$?"
+Usage of /usr/bin/virt-cdi-controller:
+  -add_dir_header
+    	If true, adds the file directory to the header of the log messages
+  -alsologtostderr
+    	log to standard error as well as files (no effect when -logtostderr=true)
+  -kubeconfig string
+    	Paths to a kubeconfig. Only required if out-of-cluster.
+  -log_backtrace_at value
+    	when logging hits line file:N, emit a stack trace
+  -log_dir string
+    	If non-empty, write log files in this directory (no effect when -logtostderr=true)
+  -log_file string
+    	If non-empty, use this log file (no effect when -logtostderr=true)
+  -log_file_max_size uint
+    	Defines the maximum size a log file can grow to (no effect when -logtostderr=true). Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
+  -logtostderr
+    	log to standard error instead of files (default true)
+  -one_output
+    	If true, only write logs to their native severity level (vs also writing to each lower severity level; no effect when -logtostderr=true)
+  -server string
+    	(Optional) URL address of a remote api server.  Do not set for local clusters.
+  -skip_headers
+    	If true, avoid header prefixes in the log messages
+  -skip_log_headers
+    	If true, avoid headers when opening log files (no effect when -logtostderr=true)
+  -stderrthreshold value
+    	logs at or above this threshold go to stderr when writing to files and stderr (no effect when -logtostderr=true or -alsologtostderr=true) (default 2)
+  -v value
+    	number for the log level verbosity
+  -vmodule value
+    	comma-separated list of pattern=N settings for file-filtered logging
+exit=0
+```
+
+```
+$ /usr/bin/virt-cdi-uploadproxy --help; echo "exit=$?"
+Usage of /usr/bin/virt-cdi-uploadproxy:
+  -add_dir_header
+    	If true, adds the file directory to the header of the log messages
+  -alsologtostderr
+    	log to standard error as well as files (no effect when -logtostderr=true)
+  -kubeconfig string
+    	(Optional) Overrides $KUBECONFIG
+  -log_backtrace_at value
+    	when logging hits line file:N, emit a stack trace
+  -log_dir string
+    	If non-empty, write log files in this directory (no effect when -logtostderr=true)
+  -log_file string
+    	If non-empty, use this log file (no effect when -logtostderr=true)
+  -log_file_max_size uint
+    	Defines the maximum size a log file can grow to (no effect when -logtostderr=true). Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
+  -logtostderr
+    	log to standard error instead of files (default true)
+  -one_output
+    	If true, only write logs to their native severity level (vs also writing to each lower severity level; no effect when -logtostderr=true)
+  -server string
+    	(Optional) URL address of a remote api server.  Do not set for local clusters.
+  -skip_headers
+    	If true, avoid header prefixes in the log messages
+  -skip_log_headers
+    	If true, avoid headers when opening log files (no effect when -logtostderr=true)
+  -stderrthreshold value
+    	logs at or above this threshold go to stderr when writing to files and stderr (no effect when -logtostderr=true or -alsologtostderr=true) (default 2)
+  -v value
+    	number for the log level verbosity
+  -vmodule value
+    	comma-separated list of pattern=N settings for file-filtered logging
+exit=0
+```
+
+```
+$ /usr/bin/virt-cdi-uploadserver --help; echo "exit=$?"
+Usage of /usr/bin/virt-cdi-uploadserver:
+  -add_dir_header
+    	If true, adds the file directory to the header of the log messages
+  -alsologtostderr
+    	log to standard error as well as files (no effect when -logtostderr=true)
+  -log_backtrace_at value
+    	when logging hits line file:N, emit a stack trace
+  -log_dir string
+    	If non-empty, write log files in this directory (no effect when -logtostderr=true)
+  -log_file string
+    	If non-empty, use this log file (no effect when -logtostderr=true)
+  -log_file_max_size uint
+    	Defines the maximum size a log file can grow to (no effect when -logtostderr=true). Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
+  -logtostderr
+    	log to standard error instead of files (default true)
+  -one_output
+    	If true, only write logs to their native severity level (vs also writing to each lower severity level; no effect when -logtostderr=true)
+  -skip_headers
+    	If true, avoid header prefixes in the log messages
+  -skip_log_headers
+    	If true, avoid headers when opening log files (no effect when -logtostderr=true)
+  -stderrthreshold value
+    	logs at or above this threshold go to stderr when writing to files and stderr (no effect when -logtostderr=true or -alsologtostderr=true) (default 2)
+  -v value
+    	number for the log level verbosity
+  -vmodule value
+    	comma-separated list of pattern=N settings for file-filtered logging
+exit=0
+```
+
+build log review:
+-----------------
+No build checks or checkers are available for this containerized update.
+
+TEST_SUITE_PRESENT:    NO
+
+
+Results from openQA jobs:
+=========================
+
+Incident jobs:
+  Summary:
+      version: 15-SP7 - flavor: Server-DVD-Incidents - archs: x86_64 -> passed: 9, total: 9 (1 arch)
+      version: 15-SP7 - flavor: Server-DVD-Incidents-VIRT-Kubevirt - archs: x86_64 -> passed: 2, total: 2 (1 arch)
+      version: 15-SP7 - flavor: Server-DVD-Incidents-Install - archs: aarch64, x86_64 -> passed: 2, total: 2 (2 arches)
+  All jobs passed.
+
+End of openQA Incidents results
+
+source code change review:
+--------------------------
+NEW_VERSION_OR_NEW_PACKAGE:    NO
+ALL_TRACKED_ISSUES_DOCUMENTED: YES
+HAS_UNTRACKED_CHANGES:         NO
+
+comment: Security update that re-vendors Go dependencies (golang.org/x/crypto, golang.org/x/net, golang.org/x/text, github.com/go-jose/go-jose, github.com/ulikunitz/xz, go.opentelemetry.io/otel) to fix multiple CVEs. All changes are fully documented and tracked.
+
+##############
+Install tests:
+##############
+
+Installation tests done in openQA with following results: PASSED
+
+sle_15-SP7_aarch64 => PASSED: https://openqa.suse.de/tests/24386528
+sle_15-SP7_x86_64 => PASSED: https://openqa.suse.de/tests/24386526
+
+
+Links for update logs:
+
+https://qam.suse.de/testreports/SUSE:Maintenance:46572:423943/install_logs/sle_15-SP7_aarch64.log
+https://qam.suse.de/testreports/SUSE:Maintenance:46572:423943/install_logs/sle_15-SP7_x86_64.log
+https://qam.suse.de/testreports/SUSE:Maintenance:46572:423943/install_logs/ganymede.qam.suse.cz.log
+https://qam.suse.de/testreports/SUSE:Maintenance:46572:423943/install_logs/rhea.qam.suse.cz.log
+
+## export MTUI:26.4.0 on openSUSE Tumbleweed-20260430 (kernel: 7.0.2-1-default) by skliu

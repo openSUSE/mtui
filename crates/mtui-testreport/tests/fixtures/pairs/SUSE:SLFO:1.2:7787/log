@@ -1,0 +1,259 @@
+SUMMARY: PASSED
+
+comment: (none)
+
+Test Plan Reviewer: someone
+
+BUGS SUMMARY:
+=============
+=> references:
+    * bnc#1273133 (VUL-0: CVE-2026-11770: 389-ds: pre-auth LDAP filter injection in CleanAllRUV status check)
+    * bnc#1279572 (VUL-0: CVE-2026-18453: 389-ds: 389-ds-base: 389-ds-base: pre-authentication NULL pointer dereference via paged results and USE_ONE_BACKEND control in op_shared_search)
+    * bnc#1279864 (VUL-0: CVE-2026-18355: 389-ds: heap buffer overflow in the SASL I/O layer allows a remote authenticated attacker to cause a denial of service or potentially achieve remote code execution)
+    * bnc#1279865 (VUL-0: CVE-2026-18922: 389-ds: stale identity carried in a Cyrus SASL auxiliary property during SASL PLAIN authentication allows unauthenticated attackers to achieve privilege escalation to Directory Manager)
+    * bnc#1279866 (VUL-0: CVE-2026-19843: 389-ds: unescaped LDAP DN in Cockpit 389 Console LDAP editor allows an LDAP user with delegated privileges to execute shell commands with root privileges on the directory server host)
+    * bnc#1279867 (VUL-0: CVE-2026-76560: 389-ds: incorrect matching in the SELFDN ACI bind-rule evaluator allows an anonymous LDAP client to bypass access controls on directory entries containing empty SELFDN attributes)
+
+=> new bugs:
+
+INSTALL TESTS SUMMARY:
+======================
+PASSED
+Manual installation and package updates succeeded on all 3 reference hosts (aarch64, s390x, x86_64). openQA incident-install tests passed on all architectures.
+
+REGRESSION TEST SUMMARY:
+========================
+PASSED
+389 Directory Server is active and functional on all reference hosts. The ns-slapd binary successfully reports the correct updated version (3.0.7) on all architectures.
+
+#############################
+Test results by product-arch:
+#############################
+
+sles-16.0-x86_64 (reference host: vanga.qam.suse.cz)
+--------------
+before:
+	389-ds-3.0.6~git337.647f49042-160000.1.1
+	389-ds-devel-3.0.6~git337.647f49042-160000.1.1
+	389-ds-snmp-3.0.6~git337.647f49042-160000.1.1
+	lib389-3.0.6~git337.647f49042-160000.1.1
+	libsvrcore0-3.0.6~git337.647f49042-160000.1.1
+after:
+	389-ds-3.0.7~git2.2846d5288-999999_stage.1.1
+	389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1
+	389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1
+	lib389-3.0.7~git2.2846d5288-999999_stage.1.1
+	libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1
+
+=> PASSED
+
+comment: (none)
+
+
+sles-16.0-s390x (reference host: thalassa.qam.suse.cz)
+--------------
+before:
+	389-ds-3.0.6~git382.7a51ea5f5-160000.1.1
+	package 389-ds-devel is not installed
+	389-ds-snmp-3.0.6~git382.7a51ea5f5-160000.1.1
+	lib389-3.0.6~git382.7a51ea5f5-160000.1.1
+	libsvrcore0-3.0.6~git382.7a51ea5f5-160000.1.1
+after:
+	389-ds-3.0.7~git2.2846d5288-999999_stage.1.1
+	package 389-ds-devel is not installed
+	389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1
+	lib389-3.0.7~git2.2846d5288-999999_stage.1.1
+	libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1
+
+=> PASSED
+
+comment: (none)
+
+
+sles-16.0-aarch64 (reference host: tapaculo.qam.suse.cz)
+--------------
+before:
+	389-ds-3.0.6~git337.647f49042-160000.1.1
+	389-ds-devel-3.0.6~git337.647f49042-160000.1.1
+	389-ds-snmp-3.0.6~git337.647f49042-160000.1.1
+	lib389-3.0.6~git337.647f49042-160000.1.1
+	libsvrcore0-3.0.6~git337.647f49042-160000.1.1
+after:
+	389-ds-3.0.7~git2.2846d5288-999999_stage.1.1
+	389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1
+	389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1
+	lib389-3.0.7~git2.2846d5288-999999_stage.1.1
+	libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1
+
+=> PASSED
+
+comment: (none)
+
+
+########################
+notes for/by the tester:
+########################
+
+bnc#1273133 ("VUL-0: CVE-2026-11770: 389-ds: pre-auth LDAP filter injection in CleanAllRUV status check"):
+---------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1273133
+
+REPRODUCER_PRESENT: NO
+STATUS:             OTHER
+
+comment: security bug, verified via build-time tests and functional smoke.
+
+Summary: Fixes a pre-auth LDAP filter injection vulnerability in CleanAllRUV status check.
+
+
+bnc#1279572 ("VUL-0: CVE-2026-18453: 389-ds: 389-ds-base: 389-ds-base: pre-authentication NULL pointer reference via paged results and USE_ONE_BACKEND control in op_shared_search"):
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1279572
+
+REPRODUCER_PRESENT: NO
+STATUS:             OTHER
+
+comment: security bug, verified via build-time tests and functional smoke.
+
+Summary: Fixes a pre-authentication NULL pointer dereference vulnerability via paged results and USE_ONE_BACKEND control in op_shared_search.
+
+
+bnc#1279864 ("VUL-0: CVE-2026-18355: 389-ds: heap buffer overflow in the SASL I/O layer allows a remote authenticated attacker to cause a denial of service or potentially achieve remote code execution"):
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1279864
+
+REPRODUCER_PRESENT: NO
+STATUS:             OTHER
+
+comment: security bug, verified via build-time tests and functional smoke.
+
+Summary: Fixes a heap buffer overflow vulnerability in the SASL I/O layer that could allow a remote authenticated attacker to cause a DoS or potentially achieve RCE.
+
+
+bnc#1279865 ("VUL-0: CVE-2026-18922: 389-ds: stale identity carried in a Cyrus SASL auxiliary property during SASL PLAIN authentication allows unauthenticated attackers to achieve privilege escalation to Directory Manager"):
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1279865
+
+REPRODUCER_PRESENT: NO
+STATUS:             OTHER
+
+comment: security bug, verified via build-time tests and functional smoke.
+
+Summary: Fixes a stale identity vulnerability during SASL PLAIN authentication that could allow unauthenticated attackers to achieve privilege escalation to Directory Manager.
+
+
+bnc#1279866 ("VUL-0: CVE-2026-19843: 389-ds: unescaped LDAP DN in Cockpit 389 Console LDAP editor allows an LDAP user with delegated privileges to execute shell commands with root privileges on the directory server host"):
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1279866
+
+REPRODUCER_PRESENT: NO
+STATUS:             OTHER
+
+comment: security bug, verified via build-time tests and functional smoke.
+
+Summary: Fixes an unescaped LDAP DN vulnerability in Cockpit 389 Console LDAP editor that could allow an LDAP user with delegated privileges to execute shell commands with root privileges.
+
+
+bnc#1279867 ("VUL-0: CVE-2026-76560: 389-ds: incorrect matching in the SELFDN ACI bind-rule evaluator allows an anonymous LDAP client to bypass access controls on directory entries containing empty SELFDN attributes"):
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1279867
+
+REPRODUCER_PRESENT: NO
+STATUS:             OTHER
+
+comment: security bug, verified via build-time tests and functional smoke.
+
+Summary: Fixes an incorrect matching vulnerability in the SELFDN ACI bind-rule evaluator that could allow an anonymous LDAP client to bypass access controls.
+
+
+regression tests:
+-----------------
+We performed thorough regression testing across all 3 reference hosts representing all supported architectures (aarch64, s390x, x86_64).
+
+1. Verified 389 Directory Server version and binary functionality on all hosts:
+Command:
+/usr/sbin/ns-slapd -v ; echo "exit=$?"
+Output:
+389 Project
+389-Directory/3.0.7 B2026.252.0204
+exit=1
+
+Note on openQA failures:
+All failed aggregate openQA jobs are known infrastructure or test suite issues unrelated to 389-ds (e.g., sudo and quota command timeouts on aarch64, and auditd aureport test suite failures on x86_64).
+
+build log review:
+-----------------
+All build logs were assessed and verified. The build-time test suites are present and passed successfully on all architectures.
+
+TEST_SUITE_PRESENT:    YES
+TEST_SUITE_SUFFICIENT: YES
+TEST_SUITE_PASSED:     YES
+
+comment: Following build logs were assessed
+    - 389-ds.SUSE_SLFO-1.2_Update / aarch64: PASSED
+    - 389-ds.SUSE_SLFO-1.2_Update / ppc64le: PASSED
+    - 389-ds.SUSE_SLFO-1.2_Update / s390x: PASSED
+    - 389-ds.SUSE_SLFO-1.2_Update / x86_64: PASSED
+
+Results from openQA jobs:
+=========================
+
+Incident jobs:
+  Summary:
+      version: 16.0 - flavor: Online-Security-Updates-Staging - arch: aarch64 -> passed: 35, failed: 1, total: 36
+      version: 16.0 - flavor: Online-Security-Updates-Staging - arch: x86_64 -> passed: 43, failed: 1, total: 44
+      version: 16.0 - flavor: Online-Security-Updates-Staging - archs: ppc64le, s390x -> passed: 20, total: 20 (2 arches)
+      version: 16.0 - flavor: Online-Updates-Staging - archs: aarch64, x86_64, ppc64le, s390x -> passed: 111, total: 111 (4 arches)
+      version: 16.0 - flavor: Online-Updates-Staging-Install - archs: aarch64, ppc64le, s390x, x86_64 -> passed: 4, total: 4 (4 arches)
+      version: 16.0 - flavor: Server-DVD-SAP-Staging-Install - archs: ppc64le, x86_64 -> passed: 2, total: 2 (2 arches)
+      version: 16.0 - flavor: Online-SAP-Updates-Staging - archs: x86_64, ppc64le -> passed: 10, total: 10 (2 arches)
+      version: 6.2 - flavor: Base-ppc-512-Updates-Staging - archs: ppc64le -> passed: 2, total: 2 (1 arch)
+      version: 6.2 - flavor: Default-qcow-Updates-Staging - archs: x86_64, aarch64, s390x -> passed: 8, total: 8 (3 arches)
+      version: 16.0 - flavor: Server-DVD-HA-Staging-Install - archs: s390x, ppc64le, x86_64 -> passed: 3, total: 3 (3 arches)
+      version: 16.0 - flavor: Online-HA-Updates-Staging - archs: s390x, ppc64le, x86_64 -> passed: 11, total: 11 (3 arches)
+  Failed jobs:
+    16.0 / Online-Security-Updates-Staging / aarch64 (1 failed):
+      sle-16.0-Online-Security-Updates-Staging-aarch64-Build:git:7787:389-ds-fips_ker_mode_textmode_extra@aarch64  https://openqa.suse.de/tests/24320859
+    16.0 / Online-Security-Updates-Staging / x86_64 (1 failed):
+      sle-16.0-Online-Security-Updates-Staging-x86_64-Build:git:7787:389-ds-security_audit@64bit  https://openqa.suse.de/tests/24320836
+
+End of openQA Incidents results
+
+source code change review:
+--------------------------
+The source changes were reviewed. The update includes security fixes for multiple CVEs.
+
+NEW_VERSION_OR_NEW_PACKAGE:    NO
+ALL_TRACKED_ISSUES_DOCUMENTED: YES
+HAS_UNTRACKED_CHANGES:         NO
+
+comment: Source changes are clean and address the reported security issues.
+
+##############
+Install tests:
+##############
+
+Installation tests done in openQA with following results: PASSED
+
+sle_16.0_aarch64 => PASSED: https://openqa.suse.de/tests/24320733
+sle_16.0_ppc64le => PASSED: https://openqa.suse.de/tests/24320682
+sle_16.0_s390x => PASSED: https://openqa.suse.de/tests/24320593
+sle_16.0_x86_64 => PASSED: https://openqa.suse.de/tests/24320518
+
+Links for update logs:
+
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7787/install_logs/sle_16.0_aarch64.log
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7787/install_logs/sle_16.0_ppc64le.log
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7787/install_logs/sle_16.0_s390x.log
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7787/install_logs/sle_16.0_x86_64.log
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7787/install_logs/tapaculo.qam.suse.cz.log
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7787/install_logs/thalassa.qam.suse.cz.log
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7787/install_logs/vanga.qam.suse.cz.log
+
+## export MTUI:26.4.0 on openSUSE Tumbleweed-20260430 (kernel: 7.0.2-1-default) by skliu

@@ -47,6 +47,12 @@ thiserror.workspace = true
 [dev-dependencies]
 insta.workspace = true
 tempfile = "3"
+# Schema-conformance smoke test for the committed paired fixtures
+# (tests/fixtures/pairs/*/document.json) — mirrors `mtui-types`'
+# `tests/schema_conformance.rs` helper rather than reusing it (that helper
+# lives in another crate's integration-test binary and cannot be imported
+# across the crate boundary); dev-only, never a dependency of `mtui`/`mtui-mcp`.
+boon.workspace = true
 # `test-util` for `#[tokio::test(start_paused = true)]`: the prepare loop's
 # cancellation checkpoint is a boundary between two awaited fan-outs, and
 # virtual time is the only way to land a cancel *between* two of them without a

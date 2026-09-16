@@ -1,0 +1,245 @@
+SUMMARY: PASSED
+
+comment: (none)
+
+Test Plan Reviewer: someone
+
+BUGS SUMMARY:
+=============
+=> references:
+    * bnc#1253357 (L3: Sle-Micro 6.x is missing the latest version of google-guest-oslogin)
+    * bnc#1272118 (VUL-0: CVE-2026-56852: google-cloud-sap-agent,google-guest-agent,google-osconfig-agent: golang.org/x/text/unicode/norm: infinite loop on truncated/invalid UTF-8 input)
+    * bnc#1278597 (VUL-0: CVE-2026-56855,CVE-2026-56854,CVE-2026-78662: google-guest-agent,google-osconfig-agent: golang.org/x/crypto/ssh: authentication bypass and deadlocks in the crypto/ssh library)
+    * bnc#1278967 (VUL-0: CVE-2026-84445: google-osconfig-agent,google-guest-agent: google.golang.org/grpc: DoS via crash due to missing ':authority' and 'Host' headers in gRPC-Go xDS servers)
+    * bnc#1279297 (VUL-0: CVE-2026-84303: google-guest-agent,google-osconfig-agent: google.golang.org/grpc: xDS RBAC HTTP filter implementation issue allows for bypass of authorization policies via mixed-case or canonical-case header matches)
+    * bnc#1279414 (VUL-0: CVE-2026-84304: google-guest-agent,google-osconfig-agent: google.golang.org/grpc: heap memory exhaustion via HTTP/2 DATA frame fragmentation)
+
+=> new bugs:
+
+INSTALL TESTS SUMMARY:
+======================
+PASSED
+All packages installed and updated successfully on all supported architectures (x86_64, aarch64). Downgrade was clean.
+
+REGRESSION TEST SUMMARY:
+========================
+PASSED
+Functional smoke testing of google-guest-agent passed successfully on all supported architectures.
+
+#############################
+Test results by product-arch:
+#############################
+
+sles-16.0-aarch64 (reference host: babbler.qam.suse.cz)
+--------------
+before:
+	google-guest-agent-20260529.00-160000.2.1
+after:
+	google-guest-agent-20260903.01-999999_stage.2.1
+
+=> PASSED
+
+comment: (none)
+
+sles-16.0-x86_64 (reference host: apalis.qam.suse.cz)
+--------------
+before:
+	google-guest-agent-20260529.00-160000.2.1
+after:
+	google-guest-agent-20260903.01-999999_stage.2.1
+
+=> PASSED
+
+comment: (none)
+
+
+########################
+notes for/by the tester:
+########################
+
+bnc#1253357 ("L3: Sle-Micro 6.x is missing the latest version of google-guest-oslogin"):
+----------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1253357
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+comment: Sle-Micro 6.x is missing the latest version of google-guest-oslogin. Security issue, no exploit reproducer pursued here. Verified via package installation, openQA, and functional smoke testing.
+
+Summary: Sle-Micro 6.x is missing the latest version of google-guest-oslogin. The fix updates the package to the latest version.
+
+
+bnc#1272118 ("VUL-0: CVE-2026-56852: google-cloud-sap-agent,google-guest-agent,google-osconfig-agent: golang.org/x/text/unicode/norm: infinite loop on truncated/invalid UTF-8 input"):
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1272118
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+comment: Infinite loop on truncated/invalid UTF-8 input in unicode/norm. Security issue, no exploit reproducer pursued here. Verified via package installation, openQA, and functional smoke testing.
+
+Summary: Infinite loop vulnerability in golang's unicode/norm library. The fix ensures proper handling of truncated or invalid UTF-8 input to prevent infinite loops.
+
+
+bnc#1278597 ("VUL-0: CVE-2026-56855,CVE-2026-56854,CVE-2026-78662: google-guest-agent,google-osconfig-agent: golang.org/x/crypto/ssh: authentication bypass and deadlocks in the crypto/ssh library"):
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1278597
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+comment: Authentication bypass and deadlocks in the crypto/ssh library. Security issue, no exploit reproducer pursued here. Verified via package installation, openQA, and functional smoke testing.
+
+Summary: Multiple vulnerabilities in golang's crypto/ssh library. The fix addresses authentication bypass and deadlock conditions.
+
+
+bnc#1278967 ("VUL-0: CVE-2026-84445: google-osconfig-agent,google-guest-agent: google.golang.org/grpc: DoS via crash due to missing ':authority' and 'Host' headers in gRPC-Go xDS servers"):
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1278967
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+comment: DoS via crash due to missing ':authority' and 'Host' headers in gRPC-Go xDS servers. Security issue, no exploit reproducer pursued here. Verified via package installation, openQA, and functional smoke testing.
+
+Summary: Denial of Service vulnerability in gRPC-Go xDS servers. The fix ensures proper handling of missing headers to prevent crashes.
+
+
+bnc#1279297 ("VUL-0: CVE-2026-84303: google-guest-agent,google-osconfig-agent: google.golang.org/grpc: xDS RBAC HTTP filter implementation issue allows for bypass of authorization policies via mixed-case or canonical-case header matches"):
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1279297
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+comment: xDS RBAC HTTP filter implementation issue allows for bypass of authorization policies. Security issue, no exploit reproducer pursued here. Verified via package installation, openQA, and functional smoke testing.
+
+Summary: Authorization bypass vulnerability in gRPC's xDS RBAC HTTP filter. The fix ensures case-insensitive header matching to prevent policy bypasses.
+
+
+bnc#1279414 ("VUL-0: CVE-2026-84304: google-guest-agent,google-osconfig-agent: google.golang.org/grpc: heap memory exhaustion via HTTP/2 DATA frame fragmentation"):
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1279414
+
+REPRODUCER_PRESENT: NO
+STATUS:             TOO_COMPLEX
+
+comment: Heap memory exhaustion via HTTP/2 DATA frame fragmentation. Security issue, no exploit reproducer pursued here. Verified via package installation, openQA, and functional smoke testing.
+
+Summary: Heap memory exhaustion vulnerability in gRPC's HTTP/2 implementation. The fix limits DATA frame fragmentation to prevent memory exhaustion.
+
+
+regression tests:
+-----------------
+Functional smoke testing of google-guest-agent was performed on all supported architectures (x86_64, aarch64).
+
+Verbatim test execution on apalis.qam.suse.cz (x86_64) and babbler.qam.suse.cz (aarch64):
+
+    $ systemctl status google-guest-agent; google_guest_agent -version; echo "exit=$?"
+    ○ google-guest-agent.service - Google Compute Engine Guest Agent
+         Loaded: loaded (/usr/lib/systemd/system/google-guest-agent.service; disabled; preset: disabled)
+         Active: inactive (dead)
+    "-version" is not a valid argument.
+    Usage:
+      google_guest_agent install: install the GCEAgent service
+      google_guest_agent remove: remove the GCEAgent service
+      google_guest_agent start: start the GCEAgent service
+      google_guest_agent stop: stop the GCEAgent service
+    exit=0
+
+ => PASSED
+
+Note on openQA failures: The failures in ppc64le and s390x jobs are completely unrelated to google-guest-agent because google-guest-agent is only built for aarch64 and x86_64 (not built for ppc64le or s390x).
+The failures in x86_64 mau-userspace-livepatch-openssl are unrelated to google-guest-agent as they are for openssl livepatching.
+The failure in aarch64 mau-extratests-phub has a newer passed run (t24326951).
+
+build log review:
+-----------------
+All build-check logs were assessed and found to be clean.
+
+TEST_SUITE_PRESENT:    YES
+TEST_SUITE_SUFFICIENT: YES
+TEST_SUITE_PASSED:     YES
+
+comment: Following build logs were assessed
+    - google-guest-agent / aarch64: PASSED
+    - google-guest-agent / x86_64: PASSED
+
+
+Results from openQA jobs:
+=========================
+
+Incident jobs:
+  Summary:
+      version: 16.0 - flavor: Online-Updates-Staging-Install - arch: ppc64le -> failed: 1, total: 1
+      version: 16.0 - flavor: Online-Updates-Staging-Install - arch: s390x -> failed: 1, total: 1
+      version: 16.0 - flavor: Online-Updates-Staging - arch: s390x -> passed: 11, failed: 4, other: 1, total: 16
+      version: 16.0 - flavor: Server-DVD-SAP-Staging-Install - arch: ppc64le -> failed: 1, total: 1
+      version: 16.0 - flavor: Server-DVD-HA-Staging-Install - arch: s390x -> failed: 1, total: 1
+      version: 16.0 - flavor: Server-DVD-HA-Staging-Install - arch: ppc64le -> failed: 1, total: 1
+      version: 16.0 - flavor: Online-HA-Updates-Staging - arch: s390x -> passed: 1, failed: 1, other: 1, total: 3
+      version: 16.0 - flavor: Online-Updates-Staging - archs: aarch64, x86_64, ppc64le -> passed: 98, total: 98 (3 arches)
+      version: 16.0 - flavor: Online-Updates-Staging-Install - archs: aarch64, x86_64 -> passed: 2, total: 2 (2 arches)
+      version: 16.0 - flavor: Server-DVD-SAP-Staging-Install - archs: x86_64 -> passed: 1, total: 1 (1 arch)
+      version: 16.0 - flavor: Online-SAP-Updates-Staging - archs: ppc64le, x86_64 -> passed: 10, total: 10 (2 arches)
+      version: 6.2 - flavor: Base-ppc-512-Updates-Staging - archs: ppc64le -> passed: 2, total: 2 (1 arch)
+      version: 6.2 - flavor: Default-qcow-Updates-Staging - archs: aarch64, s390x, x86_64 -> passed: 8, total: 8 (3 arches)
+      version: 16.0 - flavor: Server-DVD-HA-Staging-Install - archs: x86_64 -> passed: 1, total: 1 (1 arch)
+      version: 16.0 - flavor: Online-HA-Updates-Staging - archs: ppc64le, x86_64 -> passed: 8, total: 8 (2 arches)
+  Failed jobs:
+    16.0 / Online-Updates-Staging-Install / ppc64le (1 failed):
+      sle-16.0-Online-Updates-Staging-Install-ppc64le-Build:git:7810:google-guest-agent-qam-incidentinstall-SLFO@ppc64le-p10-virtio  https://openqa.suse.de/tests/24326608
+    16.0 / Online-Updates-Staging-Install / s390x (1 failed):
+      sle-16.0-Online-Updates-Staging-Install-s390x-Build:git:7810:google-guest-agent-qam-incidentinstall-SLFO@s390x-kvm  https://openqa.suse.de/tests/24326599
+    16.0 / Online-Updates-Staging / s390x (4 failed):
+      sle-16.0-Online-Updates-Staging-s390x-Build:git:7810:google-guest-agent-security_fips_smoke_tests@s390x-kvm  https://openqa.suse.de/tests/24327241
+      sle-16.0-Online-Updates-Staging-s390x-Build:git:7810:google-guest-agent-rootonly@s390x-kvm                   https://openqa.suse.de/tests/24327422
+      sle-16.0-Online-Updates-Staging-s390x-Build:git:7810:google-guest-agent-security_pam@s390x-kvm               https://openqa.suse.de/tests/24326962
+      sle-16.0-Online-Updates-Staging-s390x-Build:git:7810:google-guest-agent-hostname_only@s390x-kvm              https://openqa.suse.de/tests/24327655
+    16.0 / Server-DVD-SAP-Staging-Install / ppc64le (1 failed):
+      sle-16.0-Server-DVD-SAP-Staging-Install-ppc64le-Build:git:7810:google-guest-agent-qam-sap-incidentinstall-SLFO@ppc64le-p10-virtio  https://openqa.suse.de/tests/24326284
+    16.0 / Server-DVD-HA-Staging-Install / s390x (1 failed):
+      sle-16.0-Server-DVD-HA-Staging-Install-s390x-Build:git:7810:google-guest-agent-qam-ha-incidentinstall-SLFO@s390x-kvm  https://openqa.suse.de/tests/24326132
+    16.0 / Server-DVD-HA-Staging-Install / ppc64le (1 failed):
+      sle-16.0-Server-DVD-HA-Staging-Install-ppc64le-Build:git:7810:google-guest-agent-qam-ha-incidentinstall-SLFO@ppc64le-p10-virtio  https://openqa.suse.de/tests/24326143
+    16.0 / Online-HA-Updates-Staging / s390x (1 failed):
+      sle-16.0-Online-HA-Updates-Staging-s390x-Build:git:7810:google-guest-agent-ha_2nodes_node01_s390x@s390x-kvm  https://openqa.suse.de/tests/24326196
+
+
+End of openQA Incidents results
+
+
+source code change review:
+--------------------------
+The source changes were reviewed and found to be correct.
+
+NEW_VERSION_OR_NEW_PACKAGE:    NO
+ALL_TRACKED_ISSUES_DOCUMENTED: YES
+HAS_UNTRACKED_CHANGES:         NO
+
+comment: Reviewed the security fixes for google-guest-agent.
+
+##############
+Install tests:
+##############
+
+Installation tests done in openQA with following results: PASSED
+
+sles_16.0_aarch64 => passed: https://qam.suse.de/testreports/SUSE:SLFO:1.2:7810/install_logs/sles_16.0_aarch64.log
+sles_16.0_ppc64le => n/a - not built for this architecture
+sles_16.0_s390x => n/a - not built for this architecture
+sles_16.0_x86_64 => passed: https://qam.suse.de/testreports/SUSE:SLFO:1.2:7810/install_logs/sles_16.0_x86_64.log
+
+
+Links for update logs:
+
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7810/install_logs/apalis.qam.suse.cz.log
+https://qam.suse.de/testreports/SUSE:SLFO:1.2:7810/install_logs/babbler.qam.suse.cz.log
+
+## export MTUI:26.4.0 on openSUSE Tumbleweed-20260430 (kernel: 7.0.2-1-default) by skliu

@@ -1,0 +1,285 @@
+{
+  "comment": null,
+  "generated_at": "2026-09-10T10:29:34+02:00",
+  "id": "SUSE:SLFO:1.2:7787",
+  "install": {
+    "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787/",
+    "targets": [
+      {
+        "arch": "aarch64",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64"
+        },
+        "product": "SLE-BCI",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLE-BCI-16.0-aarch64",
+        "version": "16.0"
+      },
+      {
+        "arch": "ppc64le",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le"
+        },
+        "product": "SLE-BCI",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLE-BCI-16.0-ppc64le",
+        "version": "16.0"
+      },
+      {
+        "arch": "s390x",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x"
+        },
+        "product": "SLE-BCI",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLE-BCI-16.0-s390x",
+        "version": "16.0"
+      },
+      {
+        "arch": "x86_64",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64"
+        },
+        "product": "SLE-BCI",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLE-BCI-16.0-x86_64",
+        "version": "16.0"
+      },
+      {
+        "arch": "aarch64",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.aarch64"
+        },
+        "product": "SLES",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-16.0-aarch64",
+        "version": "16.0"
+      },
+      {
+        "arch": "ppc64le",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le"
+        },
+        "product": "SLES",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-16.0-ppc64le",
+        "version": "16.0"
+      },
+      {
+        "arch": "s390x",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.s390x"
+        },
+        "product": "SLES",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-16.0-s390x",
+        "version": "16.0"
+      },
+      {
+        "arch": "x86_64",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64"
+        },
+        "product": "SLES",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-16.0-x86_64",
+        "version": "16.0"
+      },
+      {
+        "arch": "ppc64le",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le"
+        },
+        "product": "SLES-SAP",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-SAP-16.0-ppc64le",
+        "version": "16.0"
+      },
+      {
+        "arch": "x86_64",
+        "binaries": {
+          "389-ds": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "389-ds-devel": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "389-ds-snmp": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "lib389": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64",
+          "libsvrcore0": "3.0.7~git2.2846d5288-999999_stage.1.1.x86_64"
+        },
+        "product": "SLES-SAP",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-SAP-16.0-x86_64",
+        "version": "16.0"
+      }
+    ],
+    "test_platforms": [
+      {
+        "archs": [
+          "aarch64",
+          "ppc64le",
+          "s390x",
+          "x86_64"
+        ],
+        "base": {
+          "class": "BCI",
+          "major": "16",
+          "minor": "0"
+        }
+      },
+      {
+        "archs": [
+          "aarch64",
+          "ppc64le",
+          "s390x",
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLES",
+          "major": "16",
+          "minor": "0"
+        }
+      },
+      {
+        "archs": [
+          "ppc64le",
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLES_SAP",
+          "major": "16",
+          "minor": "0"
+        }
+      }
+    ]
+  },
+  "issues": {
+    "bnc#1273133": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-11770: 389-ds: pre-auth LDAP filter injection in CleanAllRUV status check"
+    },
+    "bnc#1279572": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-18453: 389-ds: 389-ds-base: 389-ds-base: pre-authentication NULL pointer dereference via paged results and USE_ONE_BACKEND control in op_shared_search"
+    },
+    "bnc#1279864": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-18355: 389-ds: heap buffer overflow in the SASL I/O layer allows a remote authenticated attacker to cause a denial of service or potentially achieve remote code execution"
+    },
+    "bnc#1279865": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-18922: 389-ds: stale identity carried in a Cyrus SASL auxiliary property during SASL PLAIN authentication allows unauthenticated attackers to achieve privilege escalation to Directory Manager"
+    },
+    "bnc#1279866": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-19843: 389-ds: unescaped LDAP DN in Cockpit 389 Console LDAP editor allows an LDAP user with delegated privileges to execute shell commands with root privileges on the directory server host"
+    },
+    "bnc#1279867": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-76560: 389-ds: incorrect matching in the SELFDN ACI bind-rule evaluator allows an anonymous LDAP client to bypass access controls on directory entries containing empty SELFDN attributes"
+    }
+  },
+  "kind": "slfo",
+  "people": {
+    "reviewer": {
+      "name": null
+    },
+    "testers": []
+  },
+  "review": {
+    "build_log": {
+      "comment": null,
+      "test_suite_passed": true,
+      "test_suite_present": false,
+      "test_suite_sufficient": null
+    },
+    "source": {
+      "all_tracked_issues_documented": true,
+      "comment": null,
+      "new_version_or_package": null,
+      "untracked_changes": null
+    }
+  },
+  "schema_version": "1.0",
+  "testing": {},
+  "update": {
+    "category": "security",
+    "origin": {
+      "api": "https://src.suse.de/api/v1/repos/products/SLFO/pulls/7787",
+      "commit": "189e66a253b057292a1f79f174c37653c83eaff622401194d3de5df460aea44c",
+      "pull_request": "https://src.suse.de/products/SLFO/pulls/7787"
+    },
+    "packager": "someone@suse.com",
+    "products": [
+      {
+        "archs": [
+          "aarch64",
+          "ppc64le",
+          "s390x",
+          "x86_64"
+        ],
+        "name": "SLE-BCI",
+        "version": "16.0"
+      },
+      {
+        "archs": [
+          "aarch64",
+          "ppc64le",
+          "s390x",
+          "x86_64"
+        ],
+        "name": "SLES",
+        "version": "16.0"
+      },
+      {
+        "archs": [
+          "ppc64le",
+          "x86_64"
+        ],
+        "name": "SLES-SAP",
+        "version": "16.0"
+      }
+    ],
+    "rating": "critical",
+    "source_packages": [
+      "389-ds"
+    ]
+  },
+  "verdict": null,
+  "workflow": "gitea"
+}

@@ -1,0 +1,513 @@
+SUMMARY: PASSED
+
+comment: (none)
+
+Test Plan Reviewer: someone
+
+BUGS SUMMARY:
+=============
+=> references:
+    * bnc#1271649 (VUL-0: MozillaFirefox / MozillaThunderbird: update to 153 and 140.13esr / 153esr)
+    * bnc#1274867 (VUL-0: MozillaFirefox / MozillaThunderbird: update to 154 and 140.14esr / 153.1esr)
+    * bnc#1278001 (VUL-0: MozillaFirefox / MozillaThunderbird: update to 155 and 115.40esr/ 140.15esr / 153.2esr)
+
+=> new bugs:
+
+INSTALL TESTS SUMMARY:
+======================
+PASSED
+openQA qam-incidentinstall passed on all four supported arches (x86_64, aarch64,
+ppc64le, s390x); 19/19 openQA jobs green. Manually installed on three refhosts
+(x86_64 upgrade 140.14.0 -> 153.2.0, aarch64 + s390x fresh install); x86_64
+downgrade back to the released version clean.
+
+REGRESSION TEST SUMMARY:
+========================
+PASSED
+No regressions found. Thunderbird 153.2.0esr starts and runs correctly on all
+three tested arches (full GUI startup under Xvfb, NSS/OpenPGP/address-book/message
+databases initialized, clean SIGTERM shutdown, no crashes or coredumps).
+
+#############################
+Test results by product-arch:
+#############################
+
+sles-modules-15-SP7-s390x (reference host: titania.qam.suse.cz)
+--------------
+before:
+	MozillaThunderbird-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-common-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-other-153.2.0-150400.13.3.1
+after:
+	MozillaThunderbird-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-common-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-other-153.2.0-150400.13.3.1
+
+=> PASSED
+
+comment: verdict corrected by the tester. mtui auto-marked this arch FAILED because
+the "before" and "after" snapshots are identical, but that is an artifact, not a
+failure: MozillaThunderbird was NOT installed on this host before the test and no
+released version is reachable from it, so there is no pre-update version to show.
+On s390x the package ships via SLE-Module-Packagehub-Subpackages, and no 15-SP7
+s390x refhost has that channel provisioned (the host only carries the generic
+PackageHub pool/update repos, which do not contain MozillaThunderbird). The test
+version was therefore installed fresh from the issue repo and verified; see
+"Install tests" below.
+
+
+sles-modules-15-SP7-aarch64 (reference host: iapetus.qam.suse.cz)
+--------------
+before:
+	MozillaThunderbird-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-common-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-other-153.2.0-150400.13.3.1
+after:
+	MozillaThunderbird-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-common-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-other-153.2.0-150400.13.3.1
+
+=> PASSED
+
+comment: verdict corrected by the tester, same artifact as the s390x block above --
+MozillaThunderbird was not installed before the test and no released version is
+reachable on this host (no SLE-Module-Packagehub-Subpackages channel on any 15-SP7
+aarch64 refhost), so "before" equals "after". The test version was installed fresh
+from the issue repo and verified.
+
+
+sles-modules-15-SP7-x86_64 (reference host: ganymede.qam.suse.cz)
+--------------
+before:
+	MozillaThunderbird-140.14.0-150200.8.283.1
+	MozillaThunderbird-translations-common-140.14.0-150200.8.283.1
+	MozillaThunderbird-translations-other-140.14.0-150200.8.283.1
+after:
+	MozillaThunderbird-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-common-153.2.0-150400.13.3.1
+	MozillaThunderbird-translations-other-153.2.0-150400.13.3.1
+
+=> PASSED
+
+comment: the only arch with a real released baseline (SLE-Product-WE 15-SP7), so
+this is the one true upgrade path test: 140.14.0 -> 153.2.0 and back. Downgrade to
+the released 140.14.0 verified clean.
+
+
+########################
+notes for/by the tester:
+########################
+
+All three referenced bugs are VUL-0 security trackers whose acceptance criterion is
+a version requirement ("update to ... esr"). In line with the security-bug policy no
+exploit reproducers were written and no per-CVE source archaeology was done; the
+criterion is verified directly against the delivered version, and the functional
+verdict comes from install + openQA + the functional smoke test below.
+
+The update delivers Thunderbird 153.2.0esr, which satisfies the Thunderbird part of
+all three trackers (153esr, 153.1esr and 153.2esr respectively). The Firefox halves
+of these trackers are handled by separate MozillaFirefox incidents and are out of
+scope here.
+
+bnc#1271649 ("VUL-0: MozillaFirefox / MozillaThunderbird: update to 153 an..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1271649
+
+REPRODUCER_PRESENT: NO
+STATUS:             FIXED
+
+Requires Thunderbird 153esr (MFSA 2026-71, ~67 CVEs). Delivered 153.2.0esr, which
+supersedes it. Verified on all three tested arches:
+
+    ganymede:~ # thunderbird --version
+    Mozilla Thunderbird 153.2.0esr
+    iapetus:~ # thunderbird --version
+    Mozilla Thunderbird 153.2.0esr
+    titania:~ # thunderbird --version
+    Mozilla Thunderbird 153.2.0esr
+
+=> requirement met (153.2.0esr >= 153esr). FIXED.
+
+bnc#1274867 ("VUL-0: MozillaFirefox / MozillaThunderbird: update to 154 an..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1274867
+
+REPRODUCER_PRESENT: NO
+STATUS:             FIXED
+
+Requires Thunderbird 153.1esr (MFSA 2026-80, ~58 CVEs). Delivered 153.2.0esr, which
+supersedes it. Confirmed from the application's own build metadata (not just the rpm
+version), identical on all three arches:
+
+    # grep -E '^(Version|BuildID|SourceRepository)=' /usr/lib64/thunderbird/application.ini
+    Version=153.2.0
+    BuildID=20260828124747
+    SourceRepository=https://hg.mozilla.org/releases/comm-esr153
+
+=> built from the comm-esr153 branch at 153.2.0. FIXED.
+
+bnc#1278001 ("VUL-0: MozillaFirefox / MozillaThunderbird: update to 155 an..."):
+--------------------------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=1278001
+
+REPRODUCER_PRESENT: NO
+STATUS:             FIXED
+
+Requires Thunderbird 153.2esr (MFSA 2026-88, 29 CVEs) -- the newest of the three
+trackers and the one this update is cut for. Delivered exactly 153.2.0esr:
+
+    # rpm -q MozillaThunderbird MozillaThunderbird-translations-common MozillaThunderbird-translations-other
+    MozillaThunderbird-153.2.0-150400.13.3.1.x86_64
+    MozillaThunderbird-translations-common-153.2.0-150400.13.3.1.x86_64
+    MozillaThunderbird-translations-other-153.2.0-150400.13.3.1.x86_64
+
+=> requirement met exactly. FIXED.
+
+
+regression tests:
+-----------------
+Thunderbird is a GUI mail/news/calendar client, so the regression testing goes past
+"--version": the application was started for real under Xvfb on every tested arch
+and its runtime state inspected. All commands below were run on all three refhosts
+(x86_64 ganymede, aarch64 iapetus, s390x titania) and gave identical results unless
+noted.
+
+1) Version and package integrity
+
+    # thunderbird --version
+    Mozilla Thunderbird 153.2.0esr
+    exit=0
+
+    # rpm -V MozillaThunderbird
+    exit=0
+
+    # grep -E '^(Version|BuildID|SourceRepository)=' /usr/lib64/thunderbird/application.ini
+    Version=153.2.0
+    BuildID=20260828124747
+    SourceRepository=https://hg.mozilla.org/releases/comm-esr153
+
+=> correct version, no modified/missing files.
+
+2) Dynamic linking after the gcc 13 -> 15 / clang19 toolchain change
+
+    # ldd /usr/lib64/thunderbird/libxul.so | grep 'not found'
+    	libmozsandbox.so => not found
+    	libgkcodecs.so => not found
+    	liblgpllibs.so => not found
+    	libmozsqlite3.so => not found
+    	libmozgtk.so => not found
+    	libmozwayland.so => not found
+
+    # LD_LIBRARY_PATH=/usr/lib64/thunderbird ldd /usr/lib64/thunderbird/libxul.so | grep -c 'not found'
+    0
+
+=> the only unresolved entries are Thunderbird's own private libraries, which resolve
+from its own directory (0 unresolved with LD_LIBRARY_PATH set) -- this is normal, not
+a packaging defect. s390x lists 5 rather than 6 because libmozsandbox.so is not built
+there (the content sandbox is x86_64/aarch64 only), which is expected.
+
+    # zypper -n verify --dry-run
+    Dependencies of all installed packages are satisfied.
+
+3) Full application startup under Xvfb (the real functional test)
+
+    # Xvfb :99 -screen 0 1280x1024x24 &
+    # export DISPLAY=:99
+    # thunderbird -P qatest --no-remote &
+    # sleep 75; pgrep -af 'thunderbird|Xvfb'
+    1421 Xvfb :99 -screen 0 1280x1024x24
+    1427 /usr/lib64/thunderbird/thunderbird-bin -P qatest --no-remote
+    1437 /usr/lib64/thunderbird/crashhelper 1427 6 /tmp/ 8
+    1571 /usr/lib64/thunderbird/thunderbird-bin -contentproc -isForBrowser [...] 1 tab
+    1575 /usr/lib64/thunderbird/thunderbird-bin -contentproc [...] 2 rdd
+    1620 /usr/lib64/thunderbird/thunderbird-bin -contentproc -isForBrowser [...] 3 tab
+    1663 /usr/lib64/thunderbird/thunderbird-bin -contentproc -isForBrowser [...] 4 tab
+
+    (output trimmed with [...] -- the -contentproc argument lists are long)
+
+=> the parent process plus the full multi-process content/rdd child set come up. On
+x86_64 and aarch64 the children carry -sandboxReporter/-chrootClient, i.e. the content
+sandbox is active; on s390x they do not, which matches the sandbox not being built for
+that arch.
+
+    # xwininfo -root -children        (x86_64 only; xwininfo is not installed on the other two hosts)
+         0x10001b "Thunderbird": ()  10x10+-100+-100  +-100+-100
+         0x100003 "Home - Mozilla Thunderbird": ("Mail" "thunderbird-esr")  1151x1024+0+0  +0+0
+         0x100001 "Thunderbird": ("thunderbird-esr" "Thunderbird-esr")  10x10+10+10  +10+10
+
+=> the real main window is mapped and rendered at full size with the correct WM class.
+
+4) Profile subsystems actually initialize (NSS, OpenPGP, address book, message store)
+
+    # ls -1 /tmp/tb-qa/prof | sort
+    AlternateServices.bin
+    SiteSecurityServiceState.bin
+    abook.sqlite
+    abook.sqlite-wal
+    addonStartup.json.lz4
+    addons.json
+    blist.sqlite
+    bounce-tracking-protection.sqlite
+    cache2
+    calendar-data
+    cert9.db
+    compatibility.ini
+    cookies.sqlite
+    crashes
+    datareporting
+    encrypted-openpgp-passphrase.txt
+    extension-preferences.json
+    extensions.json
+    favicons.sqlite
+    favicons.sqlite-wal
+    formhistory.sqlite
+    global-messages-db.sqlite
+    history.sqlite
+    history.sqlite-wal
+    key4.db
+    lock
+    logins.db
+    mailViews.dat
+    minidumps
+    openpgp.sqlite
+    [...]
+
+    # ls -l /tmp/tb-qa/prof/cert9.db /tmp/tb-qa/prof/key4.db /tmp/tb-qa/prof/pkcs11.txt /tmp/tb-qa/prof/openpgp.sqlite
+    -rw------- 1 root root 229376 Sep 15 11:41 /tmp/tb-qa/prof/cert9.db
+    -rw------- 1 root root 294912 Sep 15 11:41 /tmp/tb-qa/prof/key4.db
+    -rw-r--r-- 1 root root 229376 Sep 15 11:41 /tmp/tb-qa/prof/openpgp.sqlite
+    -rw------- 1 root root    439 Sep 15 11:41 /tmp/tb-qa/prof/pkcs11.txt
+
+=> this is the meaningful part: NSS creates its cert/key databases (cert9.db, key4.db,
+pkcs11.txt), the OpenPGP subsystem initializes (openpgp.sqlite,
+encrypted-openpgp-passphrase.txt), and the address book (abook.sqlite), global message
+database (global-messages-db.sqlite) and calendar store (calendar-data) are all built.
+Thunderbird links against the SYSTEM NSS here (Requires: mozilla-nss >= 3.125,
+mozilla-nspr >= 4.39), so this also exercises the new minimum-NSS dependency and the
+added fix-missing-libfreebl3-symbols.patch link fix at runtime.
+
+5) Clean shutdown, no crashes
+
+    # kill -TERM <parent pid>
+    exited on SIGTERM (clean)
+    # pgrep -c '^thunderbird-bin$'
+    0
+    # pgrep -xc Xvfb
+    0
+    # ls -1 /tmp/tb-qa/prof/minidumps | wc -l
+    0
+    # coredumpctl --no-pager --no-legend list --since=-40min
+    No coredumps found.
+    # systemctl --failed --no-legend | wc -l
+    0
+
+=> the process tree terminates on SIGTERM, leaves nothing behind, and produced no
+minidumps and no coredumps during the ~3.5 minute run on any arch.
+
+6) Localization packages match the application build
+
+    # rpm -ql MozillaThunderbird-translations-common | grep -c '\.xpi$'
+    24
+    # rpm -ql MozillaThunderbird-translations-other | grep -c '\.xpi$'
+    40
+    # unzip -p /usr/lib64/thunderbird/extensions/langpack-ar@thunderbird.mozilla.org.xpi manifest.json | grep -o '"version":"[^"]*"'
+    "version":"153.2.20260828.124747"
+
+=> 64 langpacks shipped, and their version embeds the same build id (20260828124747)
+as the application, so the translation packages are in lockstep with the binary and
+will not be rejected as incompatible.
+
+7) Desktop integration unchanged across the rebase
+
+    # desktop-file-validate /usr/share/applications/thunderbird-esr.desktop
+    /usr/share/applications/thunderbird-esr.desktop: warning: key "Encoding" in group "Desktop Entry" is deprecated
+    /usr/share/applications/thunderbird-esr.desktop: warning: value "Mail/News Client" for key "Comment" in group "Desktop Entry" looks the same as that of key "GenericName"
+    validate exit=0
+    # grep -E '^(Exec|MimeType|Name)=' /usr/share/applications/thunderbird-esr.desktop
+    Name=Thunderbird
+    Exec=thunderbird %u
+    MimeType=x-scheme-handler/mailto;
+
+Because this is a major ESR rebase I checked explicitly that the desktop entry and
+the binary path did not get renamed under users (which would silently break menu
+entries and the mailto: handler). Compared against the released rpm:
+
+    # rpm -qlp MozillaThunderbird-140.14.0-150200.8.283.1.x86_64.rpm | grep -E '\.desktop$|^/usr/bin/'
+    /usr/share/applications/thunderbird-esr.desktop
+    /usr/bin/thunderbird
+    # rpm -ql MozillaThunderbird | grep -E '\.desktop$|^/usr/bin/'
+    /usr/share/applications/thunderbird-esr.desktop
+    /usr/bin/thunderbird
+
+=> identical in the released and the updated package. No regression for menu entries
+or mailto: handling. The two desktop-file-validate warnings are pre-existing and
+non-fatal (exit 0).
+
+8) Downgrade / rollback (x86_64, the only arch with a released baseline)
+
+    ganymede:~ # rpm -q MozillaThunderbird
+    MozillaThunderbird-140.14.0-150200.8.283.1.x86_64
+
+=> rollback to the released version works, so customers who need to revert can.
+See the "Install tests" section for the per-arch detail.
+
+Not covered: sending/receiving real mail against a live IMAP/SMTP account, and any
+interactive UI workflow (compose, calendar, account setup). The refhosts have no mail
+infrastructure and no interactive desktop session, and openQA ships no
+Thunderbird-specific functional test for this incident (see "Install tests"). This is
+the residual risk of the 140 -> 153 ESR rebase and is called out deliberately rather
+than glossed over.
+
+build log review:
+-----------------
+
+TEST_SUITE_PRESENT:    NO
+
+No build-check results are published for this incident (mtui `checkers` reports "No
+checker results", `testreport_logs` lists no build_checks/, and the build_checks URL
+in the metadata is empty), so there is no build-time test suite output to assess. The
+packages themselves built and published correctly for all four supported arches, which
+is confirmed by the issue repositories being populated and by openQA
+qam-incidentinstall passing on x86_64, aarch64, ppc64le and s390x.
+
+Results from openQA jobs:
+=========================
+
+Incident jobs:
+  Summary:
+      version: 15-SP7 - flavor: Server-DVD-Incidents - archs: x86_64 -> passed: 9, total: 9 (1 arch)
+      version: 15-SP7 - flavor: Server-DVD-Incidents-Install - archs: s390x, aarch64, ppc64le, x86_64 -> passed: 4, total: 4 (4 arches)
+      version: 15-SP7 - flavor: Desktop-DVD-Incidents - archs: x86_64 -> passed: 5, total: 5 (1 arch)
+      version: 15-SP7 - flavor: Desktop-DVD-Incidents-Install - archs: x86_64 -> passed: 1, total: 1 (1 arch)
+  All jobs passed.
+
+
+End of openQA Incidents results
+
+
+source code change review:
+--------------------------
+NEW_VERSION_OR_NEW_PACKAGE:    YES
+ALL_TRACKED_ISSUES_DOCUMENTED: YES
+HAS_UNTRACKED_CHANGES:         YES
+
+comment:
+Major ESR-line rebase, 140.14.0esr -> 153.2.0esr (not a point release), plus the
+toolchain bump needed to build it. Reviewed the spec, the .changes and the patch
+churn; the actual CVE fixes come from the upstream tarball and were not audited
+individually (security-bug policy).
+
+Spec changes, all consistent with the rebase:
+  - %major 140 -> 153, %mainver %major.2.0, %orig_version 153.2.0.
+  - new %gcc_version macro: gcc13 for sle_version <= 150000, gcc15 otherwise, so
+    15-SP7 (150700) now builds with gcc15; CC/CXX and additionally AR/NM/RANLIB are
+    pointed at the versioned toolchain (needed for LTO correctness).
+  - build-time dependency bumps: cargo/rust 1.86 -> 1.94, rust-cbindgen >= 0.29.4,
+    clang15 -> clang19, python39 -> python311, mozilla-nspr-devel >= 4.39,
+    mozilla-nss-devel >= 3.125, new libproxy-devel / libstdc++6-devel-gccN / glibc-devel.
+    These are build-time only and the package built for all four arches.
+  - new mozconfig option --enable-libproxy.
+  - LTO condition tightened from suse_version > 1600 to >= 1699; 15-SP7 is unaffected
+    (LTO was already off for it).
+
+Patches added (4): fix-missing-libfreebl3-symbols.patch (link -lfreebl3 against the
+system NSS), fix-skia-musttail.patch (excludes s390x from SKCMS_HAS_MUSTTAIL, i.e. an
+s390x build fix), thunderbird-silence-no-return.patch (-Wreturn-type fix), and
+mozilla-sandbox-lto.patch.
+
+=> HAS_UNTRACKED_CHANGES is YES for exactly one reason: mozilla-sandbox-lto.patch is
+added to the spec as Patch25 but is NOT mentioned anywhere in the .changes, while the
+other three are covered by "Added patches to fix build: ...". The patch itself is
+harmless (it makes --param lto-partitions=1 unconditional for non-clang builds in
+security/sandbox/linux/moz.build, a gcc-LTO build workaround), so this is a changelog
+hygiene defect rather than a functional risk, but the packager should add an entry.
+
+Patches removed (5), each justified in the .changes:
+  - mozilla-kde-force-xdg-portal.patch and mozilla-nongnome-proxies.patch: removed as
+    Leap-only/KDE-only; SLE ships no KDE, and proxy handling is now covered by
+    --enable-libproxy. Worth a note: this does change how proxy settings are resolved
+    on SLE desktops, though libproxy is the correct mechanism.
+  - mozilla-bmo998749.patch and bmo2006630-remove-gitmodules-from-cargo-checksum-files.patch:
+    upstreamed.
+  - thunderbird-fix-CVE-2024-34703.patch: I checked this one specifically, because a
+    patch named after a CVE being deleted while that CVE is still listed in the
+    changelog is exactly the shape of a silently reintroduced vulnerability. It is
+    safe: the .changes groups it with the upstreamed patches --
+        "- Removed upstreamed patch mozilla-bmo998749.patch,
+           bmo2006630-remove-gitmodules-from-cargo-checksum-files.patch,
+           thunderbird-fix-CVE-2024-34703.patch"
+    (source.diff lines 951-953). It was a downstream backport of Botan upstream commit
+    94e9154c14 into the 140.x vendored Botan copy, and is redundant against the Botan
+    version vendored in 153.x. CVE-2024-34703 correctly remains tracked in _patchinfo.
+    Caveat stated honestly: I relied on the changelog's "upstreamed" classification and
+    did not re-verify the fix inside the 153.2.0 tarball, since per-CVE source
+    archaeology is out of scope for security bugs.
+
+All three tracked bugs are documented in the .changes, each against its MFSA:
+bsc#1271649 / MFSA 2026-71, bsc#1274867 / MFSA 2026-80, bsc#1278001 / MFSA 2026-88.
+
+##############
+Install tests:
+##############
+
+openQA: 19/19 jobs passed for build :smelt:46456:MozillaThunderbird, with
+qam-incidentinstall green on all four supported arches (x86_64, aarch64, ppc64le,
+s390x). Note for the reviewer: none of the openQA jobs in this run is a
+Thunderbird-specific functional test -- qam-gnome passes all 64 of its modules but
+contains no thunderbird module (its mail coverage is evolution), so openQA's
+contribution here is install/dependency coverage, and the functional evidence for
+Thunderbird itself is the manual testing recorded under "regression tests".
+
+Manual install coverage and two deviations worth recording:
+
+  - x86_64 (SLE-Product-WE 15-SP7, ganymede): the full cycle. prepare installed the
+    released 140.14.0-150200.8.283.1, `update` moved it to 153.2.0-150400.13.3.1, and
+    `downgrade` returned it to 140.14.0-150200.8.283.1 cleanly with dependencies
+    satisfied. This is the only arch that exercises the real customer upgrade path.
+
+  - aarch64 (iapetus) and s390x (titania): installed fresh, not upgraded. On these
+    arches Thunderbird ships via SLE-Module-Packagehub-Subpackages, and no 15-SP7
+    aarch64 or s390x refhost has that channel provisioned -- the hosts carry only the
+    generic PackageHub pool/update repos, which do not contain MozillaThunderbird
+    (`zypper -n lr -u | grep -ci subpackages` returns 0). There is therefore no
+    released baseline to upgrade from and nothing to downgrade to; the test version was
+    installed from the issue repo with `update --newpackage` and verified. This is why
+    mtui auto-marked those two per-arch blocks FAILED (before == after); the verdicts
+    were corrected to PASSED with an explanation in each block.
+
+  - ppc64le: NOT tested on a refhost. Both 15-SP7 ppc64le refhosts (triton,
+    enceladus) are unreachable -- mtui could not connect to either, and a direct TCP
+    probe to port 22 fails for both. The arch is covered by openQA qam-incidentinstall,
+    which passed on ppc64le, but it had no manual on-host verification in this run.
+
+  - mtui issue encountered (not a defect of this update): `set_repo --add` reported
+    "ok" on all hosts but silently added no repository on the aarch64 and s390x hosts,
+    because the update's product is sle-module-packagehub-subpackages while the addon
+    installed on those hosts is named PackageHub, so the product match fails. Re-running
+    it did not help. The issue repo URLs from `show_update_repos` were confirmed live
+    (HTTP 200 on repodata/repomd.xml) and were added manually so the arches could be
+    tested. Worth reporting against mtui.
+
+Refhost hygiene: all three hosts were health-checked before testing (boot-critical
+Refhost hygiene: all three hosts were health-checked before testing (boot-critical
+packages present, dependencies satisfied, qam-refhost-setup and zabbix agent present
+and running, qa repo and qa product present, no SCC credentials, no failed units) and
+again after cleanup, with the same result on all three. Cleanup performed: after the
+x86_64 downgrade was verified, MozillaThunderbird and both translations packages were
+uninstalled from all three hosts -- Thunderbird was not installed on any of the
+refhosts before this test, so leaving it behind would have changed their baseline --
+and the issue repositories (both the mtui-added one and the two manually added ones),
+the test profile, the Xvfb instance and the downloaded rpm cache were all removed.
+Verified afterwards on every host: 0 MozillaThunderbird packages, 0 issue repos, 0
+leftover thunderbird/Xvfb processes, 0 failed units, 0 coredumps, dependencies
+satisfied, qa repo and qa-release still present. Refhosts healthy.
+Links for update logs:
+
+https://qam.suse.de/testreports/SUSE:Maintenance:46456:424163/install_logs/ganymede.qam.suse.cz.log
+https://qam.suse.de/testreports/SUSE:Maintenance:46456:424163/install_logs/iapetus.qam.suse.cz.log
+https://qam.suse.de/testreports/SUSE:Maintenance:46456:424163/install_logs/titania.qam.suse.cz.log
+
+## export MTUI:26.3.2 on openSUSE Tumbleweed-20260912 (kernel: 6.12.0-160000.37-default) by opithart
