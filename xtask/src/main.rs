@@ -54,8 +54,9 @@ fn print_usage() {
          CORPUS-SURVEY:\n    \
          cargo xtask corpus-survey [--v1-base <URL>] [--v2-base <URL>]\n    \
          Read-only: GETs the testing update queue, then GETs each id's v2\n    \
-         document, and reports the 200/404/503/other split by RRID kind.\n    \
-         Defaults to https://qam.suse.de/api/{{v1,v2}}.\n\n\
+         document, and reports the 200/404/409-stale/503/other split by RRID\n    \
+         kind. Defaults to the configured `[teregen] api`/`api_v2`\n    \
+         (https://qam.suse.de/api/{{v1,v2}} unless overridden in mtui.toml).\n\n\
          SCHEMA-CHECK:\n    \
          cargo xtask schema-check [--url <URL>]\n    \
          Read-only: GETs the live schema and compares it BY VALUE (not bytes)\n    \
@@ -135,8 +136,13 @@ fn run_package() -> Result<()> {
 /// Run the Phase 0.3 corpus survey: `cargo xtask corpus-survey [--v1-base
 /// <URL>] [--v2-base <URL>]`. Read-only; see [`xtask::corpus_survey::run`].
 fn run_corpus_survey() -> Result<()> {
-    let mut v1_base = xtask::corpus_survey::DEFAULT_V1_BASE.to_owned();
-    let mut v2_base = xtask::corpus_survey::DEFAULT_V2_BASE.to_owned();
+    // Read the configured base URLs (`mtui.toml`, if any) rather than a bare
+    // literal, so a non-default deployment (staging, a container) is probed
+    // correctly; `Config::default()`'s own values match the module constants
+    // when no file overrides them.
+    let cfg = mtui_config::Config::load(None);
+    let mut v1_base = cfg.teregen_api;
+    let mut v2_base = cfg.teregen_api_v2;
     let mut args = std::env::args().skip(2);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -160,7 +166,9 @@ fn run_corpus_survey() -> Result<()> {
 /// Run the schema drift check: `cargo xtask schema-check [--url
 /// <URL>]`. Read-only; see [`xtask::schema_check::run`].
 fn run_schema_check() -> Result<()> {
-    let mut url = xtask::schema_check::DEFAULT_SCHEMA_URL.to_owned();
+    // Same base resolution as corpus-survey: derive the default from the
+    // configured `[teregen] api_v2`, not a bare literal.
+    let mut url = format!("{}/schema", mtui_config::Config::load(None).teregen_api_v2);
     let mut args = std::env::args().skip(2);
     while let Some(arg) = args.next() {
         match arg.as_str() {

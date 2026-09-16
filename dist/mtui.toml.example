@@ -77,6 +77,8 @@
 [teregen]
 # TeReGen report/queue API base URL.
 # api = "https://qam.suse.de/api/v1"
+# TeReGen v2 report/queue API base URL (the JSON-document read path).
+# api_v2 = "https://qam.suse.de/api/v2"
 
 [openqa]
 # openQA instance URL.

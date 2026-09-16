@@ -196,6 +196,9 @@ fn default_qem_dashboard_api() -> String {
 fn default_teregen_api() -> String {
     "https://qam.suse.de/api/v1".to_owned()
 }
+fn default_teregen_api_v2() -> String {
+    "https://qam.suse.de/api/v2".to_owned()
+}
 fn default_openqa_instance() -> String {
     "https://openqa.suse.de".to_owned()
 }
@@ -384,6 +387,7 @@ pub(crate) struct QemDashboardSection {
 #[serde(default)]
 pub(crate) struct TeregenSection {
     pub api: Option<String>,
+    pub api_v2: Option<String>,
 }
 
 /// `[openqa]` table — openQA instance URLs and the install distri.
@@ -541,6 +545,7 @@ impl RawConfig {
         take!(url, fancy_reports);
         take!(qem_dashboard, api);
         take!(teregen, api);
+        take!(teregen, api_v2);
         take!(openqa, openqa);
         take!(openqa, baremetal);
         take!(openqa, distri);
@@ -646,6 +651,8 @@ pub struct Config {
     // [teregen]
     /// TeReGen report/queue API base URL.
     pub teregen_api: String,
+    /// TeReGen v2 report/queue API base URL (the JSON-document read path).
+    pub teregen_api_v2: String,
 
     // [openqa]
     /// openQA instance URL.
@@ -798,6 +805,7 @@ impl Default for Config {
             fancy_reports_url: default_fancy_reports_url(),
             qem_dashboard_api: default_qem_dashboard_api(),
             teregen_api: default_teregen_api(),
+            teregen_api_v2: default_teregen_api_v2(),
             openqa_instance: default_openqa_instance(),
             openqa_instance_baremetal: default_openqa_instance_baremetal(),
             openqa_install_distri: default_openqa_install_distri(),
@@ -953,6 +961,7 @@ impl Config {
                 d.qem_dashboard_api
             ),
             teregen_api: validated_url!(raw.teregen.api, "teregen_api", d.teregen_api),
+            teregen_api_v2: validated_url!(raw.teregen.api_v2, "teregen_api_v2", d.teregen_api_v2),
             openqa_instance: validated_url!(
                 raw.openqa.openqa,
                 "openqa_instance",
@@ -1076,6 +1085,7 @@ mod tests {
         assert_eq!(c.lock_wait_poll, 15);
         assert_eq!(c.qem_dashboard_api, "http://dashboard.qam.suse.de/api");
         assert_eq!(c.teregen_api, "https://qam.suse.de/api/v1");
+        assert_eq!(c.teregen_api_v2, "https://qam.suse.de/api/v2");
         assert_eq!(c.openqa_instance, "https://openqa.suse.de");
         assert_eq!(c.openqa_instance_baremetal, "http://openqa.qam.suse.cz");
         assert_eq!(c.openqa_install_distri, "sle");
@@ -1130,6 +1140,7 @@ mod tests {
             api = "http://dash.local/api"
             [teregen]
             api = "http://tere.local/api/v1"
+            api_v2 = "http://tere.local/api/v2"
             [openqa]
             openqa = "http://oqa.local"
             baremetal = "http://oqa-bm.local"
@@ -1140,9 +1151,19 @@ mod tests {
         let c = Config::from_raw(raw);
         assert_eq!(c.qem_dashboard_api, "http://dash.local/api");
         assert_eq!(c.teregen_api, "http://tere.local/api/v1");
+        assert_eq!(c.teregen_api_v2, "http://tere.local/api/v2");
         assert_eq!(c.openqa_instance, "http://oqa.local");
         assert_eq!(c.openqa_instance_baremetal, "http://oqa-bm.local");
         assert_eq!(c.openqa_install_distri, "sle-micro");
+    }
+
+    #[test]
+    fn teregen_api_v2_invalid_url_falls_back_to_default() {
+        let raw: RawConfig = toml::from_str("[teregen]\napi_v2 = \"not-a-url\"\n").unwrap();
+        assert_eq!(
+            Config::from_raw(raw).teregen_api_v2,
+            "https://qam.suse.de/api/v2"
+        );
     }
 
     #[test]

@@ -10,6 +10,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New config key `[teregen] api_v2` (default `https://qam.suse.de/api/v2`):
+  the TeReGen v2 report/queue API base URL, read by `config show`/`config set`
+  and by `xtask corpus-survey`/`xtask schema-check`.
 - `job_status`/`job_result` accept `wait_seconds` (0-120, default 0): the call
   blocks until the job is terminal or the budget lapses, then replies exactly as
   before in shape (the `running` snapshot, the output, or a "still running"
