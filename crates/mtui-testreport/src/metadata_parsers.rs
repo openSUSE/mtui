@@ -417,7 +417,7 @@ fn index_binaries(
 ///
 /// An empty `names` still creates the keys: "composes nothing here" is a
 /// statement, distinct from an absent key's "nothing is known here".
-fn register(
+pub(crate) fn register(
     out: &mut HashMap<SystemProduct, BTreeSet<String>>,
     raw: SystemProduct,
     names: &BTreeSet<String>,

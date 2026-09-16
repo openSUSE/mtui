@@ -72,6 +72,20 @@ New or changed code needs **≥80% patch coverage**. For a genuinely un-coverabl
 best-effort network/error path, add a focused test or a justified `allow` — never
 leave coverage silently red.
 
+## Dev-only feature flags
+
+`mtui-testreport/api-ingest` is off in every default build; it exists only so
+CI's `--all-features` job compiles it and a developer can opt in locally
+(`cargo test -p mtui-testreport --features api-ingest`). It switches
+`make_testreport`'s report-loading path from the SVN `metadata.json`/`log`
+checkout onto TeReGen's v2 JSON report document (`[teregen] api_v2`), retiring
+`ReducedMetadataParser`/`JSONParser`/`patchinfo_titles` for that path while the
+SVN checkout itself still runs (the scratch directory `export`/`commit`/
+`showdiff` need). It is dev-only scaffolding for an in-progress migration of
+report ingest onto TeReGen's JSON document API, and is deleted, along with the
+SVN path it sits beside, once that migration finishes — never gate a released
+feature on it, and never assume it exists in a released binary.
+
 ## Command architecture
 
 Every interactive command implements one `Command` trait

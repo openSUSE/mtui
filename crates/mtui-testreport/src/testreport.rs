@@ -147,6 +147,14 @@ pub struct TestReportBase {
     /// Empty until `reload_openqa` / `set_workflow` populate it; consumed by
     /// the exporters for openQA-enriched templates.
     pub openqa: ReportOpenQA,
+    /// The v2 report document this report was loaded from, when loaded via
+    /// the `api-ingest` feature's ingest path. `None` on every default (SVN)
+    /// load, and on every build without that feature.
+    pub document: Option<mtui_types::report_document::ReportDocument>,
+    /// The [`document`](Self::document)'s response `ETag`, when the server
+    /// sent one — the conditional-GET/`If-Match` key a later write path would
+    /// need. `None` alongside `document`.
+    pub document_etag: Option<String>,
 }
 
 impl TestReportBase {
@@ -195,6 +203,8 @@ impl TestReportBase {
             update_source: UpdateSource::default(),
             product_warnings: HashMap::new(),
             openqa: ReportOpenQA::new(),
+            document: None,
+            document_etag: None,
         }
     }
 
@@ -1019,6 +1029,9 @@ mod tests {
         assert!(base.giteacohash.is_none());
         assert_eq!(base.update_source, UpdateSource::Obs);
         assert!(base.product_warnings.is_empty());
+        // Unset on every default (SVN) load.
+        assert!(base.document.is_none());
+        assert!(base.document_etag.is_none());
     }
 
     #[test]
