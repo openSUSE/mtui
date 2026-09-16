@@ -1,0 +1,245 @@
+{
+  "comment": null,
+  "generated_at": "2026-09-14T10:07:08+02:00",
+  "id": "SUSE:Maintenance:46572:423943",
+  "install": {
+    "repository": "http://download.suse.de/ibs/SUSE:/Maintenance:/46572/",
+    "targets": [
+      {
+        "arch": "aarch64",
+        "binaries": {
+          "containerized-data-importer-manifests": "1.64.0-150700.9.14.1.aarch64"
+        },
+        "product": "SLE-Module-Containers",
+        "repository": "http://download.suse.de/ibs/SUSE:/Maintenance:/46572/SUSE_Updates_SLE-Module-Containers_15-SP7_aarch64",
+        "version": "15-SP7"
+      },
+      {
+        "arch": "x86_64",
+        "binaries": {
+          "containerized-data-importer-manifests": "1.64.0-150700.9.14.1.x86_64"
+        },
+        "product": "SLE-Module-Containers",
+        "repository": "http://download.suse.de/ibs/SUSE:/Maintenance:/46572/SUSE_Updates_SLE-Module-Containers_15-SP7_x86_64",
+        "version": "15-SP7"
+      },
+      {
+        "arch": "x86_64",
+        "binaries": {
+          "containerized-data-importer-api": "1.64.0-150700.9.14.1.x86_64",
+          "containerized-data-importer-cloner": "1.64.0-150700.9.14.1.x86_64",
+          "containerized-data-importer-controller": "1.64.0-150700.9.14.1.x86_64",
+          "containerized-data-importer-importer": "1.64.0-150700.9.14.1.x86_64",
+          "containerized-data-importer-operator": "1.64.0-150700.9.14.1.x86_64",
+          "containerized-data-importer-uploadproxy": "1.64.0-150700.9.14.1.x86_64",
+          "containerized-data-importer-uploadserver": "1.64.0-150700.9.14.1.x86_64",
+          "obs-service-cdi_containers_meta": "1.64.0-150700.9.14.1.x86_64"
+        },
+        "product": "SLE-Module-Development-Tools-OBS",
+        "repository": "http://download.suse.de/ibs/SUSE:/Maintenance:/46572/SUSE_Updates_SLE-Module-Development-Tools-OBS_15-SP7_x86_64",
+        "version": "15-SP7"
+      }
+    ],
+    "test_platforms": [
+      {
+        "addon": {
+          "class": "sle-module-containers",
+          "major": "15",
+          "minor": "SP7"
+        },
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLE_HPC",
+          "major": "15",
+          "minor": "SP7"
+        }
+      },
+      {
+        "addon": {
+          "class": "sle-module-containers",
+          "major": "15",
+          "minor": "SP7"
+        },
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLE_RT",
+          "major": "15",
+          "minor": "SP7"
+        }
+      },
+      {
+        "addon": {
+          "class": "sle-module-containers",
+          "major": "15",
+          "minor": "SP7"
+        },
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLES",
+          "major": "15",
+          "minor": "SP7"
+        }
+      },
+      {
+        "addon": {
+          "class": "sle-module-development-tools-obs",
+          "major": "15",
+          "minor": "SP7"
+        },
+        "archs": [
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLES",
+          "major": "15",
+          "minor": "SP7"
+        }
+      },
+      {
+        "addon": {
+          "class": "sle-module-containers",
+          "major": "15",
+          "minor": "SP7"
+        },
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLES_SAP",
+          "major": "15",
+          "minor": "SP7"
+        }
+      }
+    ]
+  },
+  "issues": {
+    "bnc#1248946": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "normal",
+      "status": null,
+      "title": "VUL-0: CVE-2025-58058: containerized-data-importer: github.com/ulikunitz/xz: github.com/ulikunitz/xz leaks memory"
+    },
+    "bnc#1262952": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "major",
+      "status": null,
+      "title": "VUL-0: CVE-2026-34986: containerized-data-importer: github.com/go-jose/go-jose/v3:  crafted JWE input with a missing encrypted key can lead to a denial of service"
+    },
+    "bnc#1265799": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "normal",
+      "status": null,
+      "title": "VUL-0: CVE-2026-33814: containerized-data-importer: golang.org/x/net/http2: infinite loop in HTTP/2 transport when given bad SETTINGS_MAX_FRAME_SIZE"
+    },
+    "bnc#1266179": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "major",
+      "status": null,
+      "title": "VUL-0: CVE-2026-39827,CVE-2026-39834,CVE-2026-39828,CVE-2026-39829,CVE-2026-39831,CVE-2026-42508,CVE-2026-39833,CVE-2026-39830,CVE-2026-39832,CVE-2026-46597,CVE-2026-46598,CVE-2026-46595,CVE-2026-39835: containerized-data-importer: golang.org/x/crypto/ssh"
+    },
+    "bnc#1266639": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "major",
+      "status": null,
+      "title": "VUL-0: CVE-2026-39821: containerized-data-importer: golang.org/x/net/idna: failure to reject ASCII-only Punycode-encoded labels allows for validation bypass and privilege escalation"
+    },
+    "bnc#1267176": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "major",
+      "status": null,
+      "title": "VUL-0: CVE-2026-25680,CVE-2026-42502,CVE-2026-27136,CVE-2026-25681,CVE-2026-42506: containerized-data-importer: golang.org/x/net/html: multiple issues when parsing HTML files"
+    },
+    "bnc#1272064": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "normal",
+      "status": null,
+      "title": "VUL-0: CVE-2026-56852: containerized-data-importer: golang.org/x/text/unicode/norm: infinite loop on truncated/invalid UTF-8 input"
+    },
+    "bnc#1276687": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "normal",
+      "status": null,
+      "title": "VUL-0: CVE-2026-41178: containerized-data-importer,containerized-data-importer1.66: go.opentelemetry.io/otel/baggage: no rejection of raw-length headers in baggage parsing allows for DoS via oversized inputs"
+    },
+    "bnc#1278621": {
+      "comment": null,
+      "reproducer": null,
+      "severity": "major",
+      "status": null,
+      "title": "VUL-0: CVE-2026-56855,CVE-2026-56854,CVE-2026-78662: containerized-data-importer: golang.org/x/crypto/ssh: authentication bypass and deadlocks in the crypto/ssh library"
+    }
+  },
+  "kind": "maintenance",
+  "people": {
+    "reviewer": {
+      "name": null
+    },
+    "testers": []
+  },
+  "review": {
+    "build_log": {
+      "comment": null,
+      "test_suite_passed": true,
+      "test_suite_present": false,
+      "test_suite_sufficient": null
+    },
+    "source": {
+      "all_tracked_issues_documented": true,
+      "comment": null,
+      "new_version_or_package": false,
+      "untracked_changes": null
+    }
+  },
+  "schema_version": "1.0",
+  "testing": {},
+  "update": {
+    "category": "security",
+    "origin": {
+      "project": "SUSE:Maintenance:46572",
+      "request": 423943,
+      "review_url": "https://build.suse.de/request/show/423943"
+    },
+    "packager": "someone@suse.com",
+    "products": [
+      {
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "name": "SLE-Module-Containers",
+        "version": "15-SP7"
+      },
+      {
+        "archs": [
+          "x86_64"
+        ],
+        "name": "SLE-Module-Development-Tools-OBS",
+        "version": "15-SP7"
+      }
+    ],
+    "rating": "important",
+    "source_packages": [
+      "containerized-data-importer"
+    ]
+  },
+  "verdict": null,
+  "workflow": "obs"
+}

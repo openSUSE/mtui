@@ -1,0 +1,57 @@
+{
+  "SRCRPMs": [
+    "containerized-data-importer"
+  ],
+  "bugs": [
+    "1248946",
+    "1262952",
+    "1265799",
+    "1266179",
+    "1266639",
+    "1267176",
+    "1272064",
+    "1276687",
+    "1278621"
+  ],
+  "category": "security",
+  "deadline": "2026-09-28T07:37:56+00:00",
+  "generated_at": "2026-09-14T10:07:08+0200",
+  "id": "SUSE:Maintenance:46572:423943",
+  "jira": [],
+  "packager": "someone@suse.com",
+  "packages": {
+    "15-SP7": [
+      "containerized-data-importer-api = 1.64.0-150700.9.14.1",
+      "containerized-data-importer-cloner = 1.64.0-150700.9.14.1",
+      "containerized-data-importer-controller = 1.64.0-150700.9.14.1",
+      "containerized-data-importer-importer = 1.64.0-150700.9.14.1",
+      "containerized-data-importer-manifests = 1.64.0-150700.9.14.1",
+      "containerized-data-importer-operator = 1.64.0-150700.9.14.1",
+      "containerized-data-importer-uploadproxy = 1.64.0-150700.9.14.1",
+      "containerized-data-importer-uploadserver = 1.64.0-150700.9.14.1",
+      "obs-service-cdi_containers_meta = 1.64.0-150700.9.14.1"
+    ]
+  },
+  "priority": 941,
+  "products": [
+    "SLE-Module-Containers 15-SP7 (aarch64, x86_64)",
+    "SLE-Module-Development-Tools-OBS 15-SP7 (x86_64)"
+  ],
+  "rating": "important",
+  "repository": "http://download.suse.de/ibs/SUSE:/Maintenance:/46572/",
+  "review_groups": [
+    "autobuild-team",
+    "maintenance-release-approver",
+    "qam-openqa",
+    "qam-sle"
+  ],
+  "rrid": "SUSE:Maintenance:46572:423943",
+  "testplatform": [
+    "base=SLE_HPC(major=15,minor=SP7);arch=[aarch64,x86_64];addon=sle-module-containers(major=15,minor=SP7)",
+    "base=SLE_RT(major=15,minor=SP7);arch=[aarch64,x86_64];addon=sle-module-containers(major=15,minor=SP7)",
+    "base=SLES(major=15,minor=SP7);arch=[aarch64,x86_64];addon=sle-module-containers(major=15,minor=SP7)",
+    "base=SLES(major=15,minor=SP7);arch=[x86_64];addon=sle-module-development-tools-obs(major=15,minor=SP7)",
+    "base=SLES_SAP(major=15,minor=SP7);arch=[aarch64,x86_64];addon=sle-module-containers(major=15,minor=SP7)"
+  ],
+  "workflow": "obs"
+}

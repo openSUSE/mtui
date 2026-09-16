@@ -1,0 +1,229 @@
+{
+  "comment": null,
+  "generated_at": "2026-09-10T17:36:38+02:00",
+  "id": "SUSE:SLFO:1.2:7810",
+  "install": {
+    "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810/",
+    "targets": [
+      {
+        "arch": "aarch64",
+        "binaries": {
+          "google-guest-agent": "20260903.01-999999_stage.2.1.aarch64"
+        },
+        "product": "SLE-BCI",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLE-BCI-16.0-aarch64",
+        "version": "16.0"
+      },
+      {
+        "arch": "x86_64",
+        "binaries": {
+          "google-guest-agent": "20260903.01-999999_stage.2.1.x86_64"
+        },
+        "product": "SLE-BCI",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLE-BCI-16.0-x86_64",
+        "version": "16.0"
+      },
+      {
+        "arch": "aarch64",
+        "binaries": {
+          "google-guest-agent": "20260903.01-999999_stage.2.1.aarch64"
+        },
+        "product": "SLES",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLES-16.0-aarch64",
+        "version": "16.0"
+      },
+      {
+        "arch": "x86_64",
+        "binaries": {
+          "google-guest-agent": "20260903.01-999999_stage.2.1.x86_64"
+        },
+        "product": "SLES",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLES-16.0-x86_64",
+        "version": "16.0"
+      },
+      {
+        "arch": "x86_64",
+        "binaries": {
+          "google-guest-agent": "20260903.01-999999_stage.2.1.x86_64"
+        },
+        "product": "SLES-SAP",
+        "repository": "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLES-SAP-16.0-x86_64",
+        "version": "16.0"
+      }
+    ],
+    "test_platforms": [
+      {
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "base": {
+          "class": "BCI",
+          "major": "16",
+          "minor": "0"
+        }
+      },
+      {
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLES",
+          "major": "16",
+          "minor": "0"
+        }
+      },
+      {
+        "archs": [
+          "x86_64"
+        ],
+        "base": {
+          "class": "SLES_SAP",
+          "major": "16",
+          "minor": "0"
+        }
+      }
+    ]
+  },
+  "issues": {
+    "bnc#1253357": {
+      "comment": null,
+      "l3": {
+        "component": "Base",
+        "incident": 71197,
+        "platform": "Other",
+        "priority": "P2",
+        "product": "SUSE Linux Enterprise Micro 6.1",
+        "requires_thirdparty": false,
+        "scriptability": "impossible",
+        "severity": "Major"
+      },
+      "reproducer": null,
+      "severity": "major",
+      "status": null,
+      "title": "L3: Sle-Micro 6.x is missing the latest version of google-guest-oslogin"
+    },
+    "bnc#1272118": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-56852: google-cloud-sap-agent,google-guest-agent,google-osconfig-agent: golang.org/x/text/unicode/norm: infinite loop on truncated/invalid UTF-8 input"
+    },
+    "bnc#1278597": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-56855,CVE-2026-56854,CVE-2026-78662: google-guest-agent,google-osconfig-agent: golang.org/x/crypto/ssh: authentication bypass and deadlocks in the crypto/ssh library"
+    },
+    "bnc#1278967": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-84445: google-osconfig-agent,google-guest-agent: google.golang.org/grpc: DoS via crash due to missing ':authority' and 'Host' headers in gRPC-Go xDS servers"
+    },
+    "bnc#1279297": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-84303: google-guest-agent,google-osconfig-agent: google.golang.org/grpc: xDS RBAC HTTP filter implementation issue allows for bypass of authorization policies via mixed-case or canonical-case header matches"
+    },
+    "bnc#1279414": {
+      "comment": null,
+      "reproducer": null,
+      "status": null,
+      "title": "VUL-0: CVE-2026-84304: google-guest-agent,google-osconfig-agent: google.golang.org/grpc: heap memory exhaustion via HTTP/2 DATA frame fragmentation"
+    }
+  },
+  "kind": "slfo",
+  "people": {
+    "reviewer": {
+      "name": null
+    },
+    "testers": []
+  },
+  "review": {
+    "build_log": {
+      "comment": null,
+      "test_suite_passed": true,
+      "test_suite_present": false,
+      "test_suite_sufficient": null
+    },
+    "source": {
+      "all_tracked_issues_documented": true,
+      "comment": null,
+      "new_version_or_package": null,
+      "untracked_changes": null
+    }
+  },
+  "schema_version": "1.0",
+  "testing": {
+    "openqa": {
+      "install": {
+        "jobs": [
+          {
+            "job": 24325356,
+            "result": "passed",
+            "scenario": "sles_16.0_aarch64"
+          },
+          {
+            "job": 24325343,
+            "result": "failed",
+            "scenario": "sles_16.0_ppc64le"
+          },
+          {
+            "job": 24326016,
+            "result": "none",
+            "scenario": "sles_16.0_s390x"
+          },
+          {
+            "job": 24325296,
+            "result": "passed",
+            "scenario": "sles_16.0_x86_64"
+          }
+        ],
+        "verdict": "failed"
+      }
+    }
+  },
+  "update": {
+    "category": "security",
+    "origin": {
+      "api": "https://src.suse.de/api/v1/repos/products/SLFO/pulls/7810",
+      "commit": "00319d3cb42e221157205765000f74904103bba7df44fe7dc1b8445141be6358",
+      "pull_request": "https://src.suse.de/products/SLFO/pulls/7810"
+    },
+    "packager": "someone@suse.com",
+    "products": [
+      {
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "name": "SLE-BCI",
+        "version": "16.0"
+      },
+      {
+        "archs": [
+          "aarch64",
+          "x86_64"
+        ],
+        "name": "SLES",
+        "version": "16.0"
+      },
+      {
+        "archs": [
+          "x86_64"
+        ],
+        "name": "SLES-SAP",
+        "version": "16.0"
+      }
+    ],
+    "rating": "important",
+    "source_packages": [
+      "google-guest-agent"
+    ]
+  },
+  "verdict": null,
+  "workflow": "gitea"
+}

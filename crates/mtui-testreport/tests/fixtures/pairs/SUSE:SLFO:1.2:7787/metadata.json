@@ -1,0 +1,136 @@
+{
+  "SRCRPMs": [
+    "389-ds"
+  ],
+  "binaries": {
+    "SLE-BCI-16.0": {
+      "aarch64": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm"
+      ],
+      "ppc64le": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm"
+      ],
+      "s390x": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm"
+      ],
+      "x86_64": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm"
+      ]
+    },
+    "SLES-16.0": {
+      "aarch64": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.aarch64.rpm"
+      ],
+      "ppc64le": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm"
+      ],
+      "s390x": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.s390x.rpm"
+      ],
+      "x86_64": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm"
+      ]
+    },
+    "SLES-SAP-16.0": {
+      "ppc64le": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.ppc64le.rpm"
+      ],
+      "x86_64": [
+        "389-ds-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "389-ds-devel-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "389-ds-snmp-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "lib389-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm",
+        "libsvrcore0-3.0.7~git2.2846d5288-999999_stage.1.1.x86_64.rpm"
+      ]
+    }
+  },
+  "bugs": [
+    "1273133",
+    "1279572",
+    "1279864",
+    "1279865",
+    "1279866",
+    "1279867"
+  ],
+  "category": "security",
+  "deadline": "2026-08-30T12:00:15.122Z",
+  "generated_at": "2026-09-10T10:29:34+0200",
+  "gitea_commit_hash": "189e66a253b057292a1f79f174c37653c83eaff622401194d3de5df460aea44c",
+  "gitea_pr": "https://src.suse.de/products/SLFO/pulls/7787",
+  "gitea_pr_api": "https://src.suse.de/api/v1/repos/products/SLFO/pulls/7787",
+  "id": "SUSE:SLFO:1.2:7787",
+  "jira": [],
+  "packager": "someone@suse.com",
+  "packages": {
+    "standard": [
+      "389-ds = 3.0.7~git2.2846d5288-999999_stage.1.1",
+      "389-ds-devel = 3.0.7~git2.2846d5288-999999_stage.1.1",
+      "389-ds-snmp = 3.0.7~git2.2846d5288-999999_stage.1.1",
+      "lib389 = 3.0.7~git2.2846d5288-999999_stage.1.1",
+      "libsvrcore0 = 3.0.7~git2.2846d5288-999999_stage.1.1"
+    ]
+  },
+  "priority": 885,
+  "products": [
+    "SLE-BCI 16.0 (aarch64, ppc64le, s390x, x86_64)",
+    "SLES 16.0 (aarch64, ppc64le, s390x, x86_64)",
+    "SLES-SAP 16.0 (ppc64le, x86_64)"
+  ],
+  "rating": "critical",
+  "repositories": [
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLE-BCI-16.0-aarch64",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLE-BCI-16.0-ppc64le",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLE-BCI-16.0-s390x",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLE-BCI-16.0-x86_64",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-16.0-aarch64",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-16.0-ppc64le",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-16.0-s390x",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-16.0-x86_64",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-SAP-16.0-ppc64le",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787:/SLES/product/repo/SLES-SAP-16.0-x86_64"
+  ],
+  "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7787/",
+  "rrid": "SUSE:SLFO:1.2:7787",
+  "testplatform": [
+    "base=BCI(major=16,minor=0);arch=[aarch64,ppc64le,s390x,x86_64]",
+    "base=SLES(major=16,minor=0);arch=[aarch64,ppc64le,s390x,x86_64]",
+    "base=SLES_SAP(major=16,minor=0);arch=[ppc64le,x86_64]"
+  ],
+  "workflow": "gitea"
+}

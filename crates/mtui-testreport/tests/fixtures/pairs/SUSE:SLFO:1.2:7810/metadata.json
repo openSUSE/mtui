@@ -1,0 +1,72 @@
+{
+  "SRCRPMs": [
+    "google-guest-agent"
+  ],
+  "binaries": {
+    "SLE-BCI-16.0": {
+      "aarch64": [
+        "google-guest-agent-20260903.01-999999_stage.2.1.aarch64.rpm"
+      ],
+      "x86_64": [
+        "google-guest-agent-20260903.01-999999_stage.2.1.x86_64.rpm"
+      ]
+    },
+    "SLES-16.0": {
+      "aarch64": [
+        "google-guest-agent-20260903.01-999999_stage.2.1.aarch64.rpm"
+      ],
+      "x86_64": [
+        "google-guest-agent-20260903.01-999999_stage.2.1.x86_64.rpm"
+      ]
+    },
+    "SLES-SAP-16.0": {
+      "x86_64": [
+        "google-guest-agent-20260903.01-999999_stage.2.1.x86_64.rpm"
+      ]
+    }
+  },
+  "bugs": [
+    "1253357",
+    "1272118",
+    "1278597",
+    "1278967",
+    "1279297",
+    "1279414"
+  ],
+  "category": "security",
+  "deadline": "2026-06-26T14:19:53.040Z",
+  "generated_at": "2026-09-10T17:36:38+0200",
+  "gitea_commit_hash": "00319d3cb42e221157205765000f74904103bba7df44fe7dc1b8445141be6358",
+  "gitea_pr": "https://src.suse.de/products/SLFO/pulls/7810",
+  "gitea_pr_api": "https://src.suse.de/api/v1/repos/products/SLFO/pulls/7810",
+  "id": "SUSE:SLFO:1.2:7810",
+  "jira": [],
+  "packager": "someone@suse.com",
+  "packages": {
+    "standard": [
+      "google-guest-agent = 20260903.01-999999_stage.2.1"
+    ]
+  },
+  "priority": 521,
+  "products": [
+    "SLE-BCI 16.0 (aarch64, x86_64)",
+    "SLES 16.0 (aarch64, x86_64)",
+    "SLES-SAP 16.0 (x86_64)"
+  ],
+  "rating": "important",
+  "repositories": [
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLE-BCI-16.0-aarch64",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLE-BCI-16.0-x86_64",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLES-16.0-aarch64",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLES-16.0-x86_64",
+    "https://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810:/SLES/product/repo/SLES-SAP-16.0-x86_64"
+  ],
+  "repository": "http://download.suse.de/ibs/SUSE:/SLFO:/1.2:/PullRequest:/7810/",
+  "rrid": "SUSE:SLFO:1.2:7810",
+  "testplatform": [
+    "base=BCI(major=16,minor=0);arch=[aarch64,x86_64]",
+    "base=SLES(major=16,minor=0);arch=[aarch64,x86_64]",
+    "base=SLES_SAP(major=16,minor=0);arch=[x86_64]"
+  ],
+  "workflow": "gitea"
+}
