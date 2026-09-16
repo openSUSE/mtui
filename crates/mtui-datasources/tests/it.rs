@@ -40,6 +40,8 @@ mod refhost;
 mod slack;
 #[path = "teregen_auth.rs"]
 mod teregen_auth;
+#[path = "teregen_document.rs"]
+mod teregen_document;
 #[path = "teregen_sshsig_golden.rs"]
 mod teregen_sshsig_golden;
 #[path = "teregen_tokens.rs"]
