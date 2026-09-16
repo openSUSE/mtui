@@ -114,6 +114,7 @@ Defaults below are the built-in values.
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `api` | URL | `https://qam.suse.de/api/v1` | TeReGen report/queue API base URL. |
+| `api_v2` | URL | `https://qam.suse.de/api/v2` | TeReGen v2 report/queue API base URL (the JSON-document read path). |
 
 ### `[openqa]`
 

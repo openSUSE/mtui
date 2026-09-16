@@ -78,6 +78,38 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.fancy_reports_url, "https://qam.suse.de/reports");
 }
 
+/// `[teregen] api_v2` defaults, overrides, and falls back on an invalid URL —
+/// exercised via `Config::load` rather than `from_raw` directly, so the file
+/// round-trip is pinned end to end. `Config::default()` (not `load(None)`,
+/// which would also pick up any real `/etc`/XDG/home file on the machine
+/// running the test) pins the default.
+#[test]
+fn teregen_api_v2_defaults_overrides_and_falls_back() {
+    assert_eq!(
+        Config::default().teregen_api_v2,
+        "https://qam.suse.de/api/v2"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let overridden = dir.path().join("mtui.toml");
+    std::fs::write(
+        &overridden,
+        "[teregen]\napi_v2 = \"https://tere.example/api/v2\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        Config::load(Some(overridden)).teregen_api_v2,
+        "https://tere.example/api/v2"
+    );
+
+    let invalid = dir.path().join("invalid.toml");
+    std::fs::write(&invalid, "[teregen]\napi_v2 = \"not-a-url\"\n").unwrap();
+    assert_eq!(
+        Config::load(Some(invalid)).teregen_api_v2,
+        "https://qam.suse.de/api/v2"
+    );
+}
+
 /// An `mtui.toml` still carrying the retired `[mtui] tempdir` key must keep
 /// loading — and applying its other keys — rather than erroring on the
 /// now-unknown field.
