@@ -8,6 +8,14 @@ extend-exclude = [
   # SSH key + signature fixtures for the OBS backend tests: base64 key material,
   # not prose to spell-check (e.g. "...NdOUL...", "...jkd9...").
   "crates/mtui-datasources/tests/fixtures/obs/id_*",
+  # Captured data fixtures: API response bodies and build/testreport logs taken
+  # verbatim from production and committed byte-for-byte, so their wording is not
+  # mtui's to fix (e.g. the LDAP "SELFDN ACI bind-rule" inside a real CVE title).
+  # The bare `log` glob is the testreport checkout's extensionless file. Authored
+  # prose living alongside them (PROVENANCE.md) stays spell-checked.
+  "crates/*/tests/fixtures/**/*.json",
+  "crates/*/tests/fixtures/**/*.log",
+  "crates/*/tests/fixtures/**/log",
 ]
 
 [default.extend-words]
