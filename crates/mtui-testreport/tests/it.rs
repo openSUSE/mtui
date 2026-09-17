@@ -22,6 +22,12 @@ mod ingest;
 #[cfg(not(feature = "api-ingest"))]
 #[path = "lifecycle.rs"]
 mod lifecycle;
+// The document-driven `make_testreport` end-to-end coverage — the public
+// entry point's `#[cfg(feature = "api-ingest")]` wiring, exercised on top of
+// (not instead of) the colocated `ingest_tests` unit tests above.
+#[cfg(feature = "api-ingest")]
+#[path = "lifecycle_ingest.rs"]
+mod lifecycle_ingest;
 // Shared test support rather than a test module: it installs a *global*
 // subscriber, so the whole `it` binary must share one copy.
 #[path = "log_capture.rs"]
