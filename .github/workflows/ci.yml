@@ -141,8 +141,20 @@ jobs:
       # This is CI's only run of the test suite: `cargo llvm-cov` builds and
       # runs it once, instrumented, replacing the separate uninstrumented
       # `cargo test --workspace` that used to run here.
+      #
+      # A second, narrower run adds the `api-ingest` feature: its tests are
+      # `cfg`-ed out of the default-feature run (see `tests/it.rs`), so
+      # without this, `ingest.rs` never appears in the coverage report and
+      # `lifecycle.rs`'s feature-gated branches go unmeasured. The feature
+      # declares no dependencies, so this recompiles one crate against the
+      # already-warm instrumented target dir (~2.3s). Both `--no-report` runs
+      # merge into one `lcov.info`. Remove this second run when `api-ingest`
+      # is removed once that migration finishes.
       - name: Generate coverage
-        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+        run: |
+          cargo llvm-cov --no-report --workspace --locked
+          cargo llvm-cov --no-report -p mtui-testreport --features api-ingest --locked
+          cargo llvm-cov report --lcov --output-path lcov.info
       - name: Upload coverage to CodeCov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:

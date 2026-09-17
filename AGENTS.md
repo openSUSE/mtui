@@ -148,6 +148,11 @@ next actionable task before working on a subsystem.
   compilation, not the test run itself, so give the first `cargo test --workspace`
   (and the feature-matrix builds) a generous timeout (≥300000 ms) and don't treat
   an early timeout as a failure.
+- **While the `api-ingest` feature exists** (removed once the TeReGen JSON
+  ingest migration finishes), the gate also runs `cargo test -p mtui-testreport
+  --features api-ingest`: its tests are `cfg`-ed out of the default-feature run
+  above, and CI measures this run's coverage too
+  (`.github/workflows/ci.yml`'s `test` job).
 - **"Done" means CI observed green, not predicted green.** Report status from the
   actual run.
 - **A regression test must be observed failing** against the unfixed code before
