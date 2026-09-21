@@ -138,6 +138,58 @@ mod tests {
     }
 
     #[test]
+    fn an_ijsc_issue_key_validates_against_the_committed_schema() {
+        let mut doc = serde_json::json!({
+            "schema_version": "1.0",
+            "id": "SUSE:Maintenance:1:2",
+            "kind": "maintenance",
+            "workflow": "obs",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "verdict": null,
+            "comment": null,
+            "people": {"testers": [], "reviewer": {"name": null}},
+            "update": {
+                "packager": "someone@suse.com",
+                "source_packages": ["pkg"],
+                "origin": {},
+                "products": [{"name": "SLES", "version": "15", "archs": ["x86_64"]}]
+            },
+            "install": {
+                "repository": "http://example.com/",
+                "targets": [{
+                    "product": "SLES", "version": "15", "arch": "x86_64",
+                    "repository": "http://example.com/repo",
+                    "binaries": {"pkg": "1.0-1.x86_64"}
+                }],
+                "test_platforms": []
+            },
+            "issues": {},
+            "testing": {},
+            "review": {
+                "source": {
+                    "new_version_or_package": null,
+                    "all_tracked_issues_documented": null,
+                    "untracked_changes": null,
+                    "comment": null
+                },
+                "build_log": {
+                    "test_suite_present": null,
+                    "test_suite_sufficient": null,
+                    "test_suite_passed": null,
+                    "comment": null
+                }
+            }
+        });
+        doc["issues"]["ijsc#PED-12345"] = serde_json::json!({
+            "title": "example",
+            "reproducer": null,
+            "status": null,
+            "comment": null
+        });
+        assert_eq!(validate_against_schema(&doc), Ok(()));
+    }
+
+    #[test]
     fn a_bad_generated_at_is_rejected_by_format_assertions() {
         let doc = serde_json::json!({
             "schema_version": "1.0",

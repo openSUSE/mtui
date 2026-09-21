@@ -15,12 +15,12 @@ use super::Req;
 /// CVEs.
 pub type Issues = BTreeMap<IssueKey, Issue>;
 
-/// The four bug-tracker prefixes the schema's `issues` `propertyNames`
+/// The five bug-tracker prefixes the schema's `issues` `propertyNames`
 /// pattern allows.
-const VALID_PREFIXES: [&str; 4] = ["bsc", "bnc", "boo", "jsc"];
+const VALID_PREFIXES: [&str; 5] = ["bsc", "bnc", "boo", "jsc", "ijsc"];
 
 /// A validated `issues` map key, e.g. `bsc#1234567`
-/// (`^(bsc|bnc|boo|jsc)#[A-Za-z0-9-]+$`). Parsing — and therefore
+/// (`^(bsc|bnc|boo|jsc|ijsc)#[A-Za-z0-9-]+$`). Parsing — and therefore
 /// deserializing — an invalid key is a typed error rather than a `422` on the
 /// next `PUT`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -35,7 +35,7 @@ impl IssueKey {
 }
 
 /// Error returned when an issue key does not match
-/// `^(bsc|bnc|boo|jsc)#[A-Za-z0-9-]+$`.
+/// `^(bsc|bnc|boo|jsc|ijsc)#[A-Za-z0-9-]+$`.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("invalid issue key: {raw:?}")]
 pub struct IssueKeyParseError {
@@ -210,6 +210,19 @@ mod tests {
         let key: IssueKey = "bnc#1273133".parse().unwrap();
         assert_eq!(key.as_str(), "bnc#1273133");
         assert_eq!(key.to_string(), "bnc#1273133");
+    }
+
+    #[test]
+    fn issue_key_accepts_ijsc() {
+        let key: IssueKey = "ijsc#PED-12345".parse().unwrap();
+        assert_eq!(key.as_str(), "ijsc#PED-12345");
+        assert_eq!(key.to_string(), "ijsc#PED-12345");
+    }
+
+    #[test]
+    fn issue_key_rejects_prefixes_that_merely_contain_ijsc() {
+        assert!("ijsc2#1".parse::<IssueKey>().is_err());
+        assert!("zsc#1".parse::<IssueKey>().is_err());
     }
 
     #[test]

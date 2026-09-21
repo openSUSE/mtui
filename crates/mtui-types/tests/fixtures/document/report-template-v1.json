@@ -266,7 +266,7 @@
     "issues": {
       "description": "Referenced bugs and Jira features keyed `<tracker>#<number>`, excluding CVEs.",
       "type": "object",
-      "propertyNames": { "pattern": "^(bsc|bnc|boo|jsc)#[A-Za-z0-9-]+$" },
+      "propertyNames": { "pattern": "^(bsc|bnc|boo|jsc|ijsc)#[A-Za-z0-9-]+$" },
       "additionalProperties": { "$ref": "#/$defs/issue" }
     },
 

@@ -38,6 +38,10 @@ Repo automation lives in the `xtask` crate, invoked through the alias in
 The `.deb`/`.rpm` on the release page have no xtask equivalent — they are built
 only by the `package` job in `.github/workflows/release.yml`.
 
+`schema-check` needs `qam.suse.de`, unreachable from GitHub-hosted runners, so
+it stays a manual dev tool: run `cargo xtask schema-check` when starting or
+resuming report-document work, and treat drift as blocking.
+
 ## Quality gates
 
 CI (`.github/workflows/`) mirrors the local gate. Run the **whole workspace**
